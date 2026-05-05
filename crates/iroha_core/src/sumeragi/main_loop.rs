@@ -20419,6 +20419,19 @@ impl Actor {
         response_wire_len(response) <= payload_cap
     }
 
+    fn direct_block_sync_update_fallback_for_body_response(
+        &self,
+        response: &super::message::BlockBodyResponse,
+    ) -> Option<BlockMessage> {
+        let super::message::BlockBodyData::BlockSyncUpdate(update) = &response.body else {
+            return None;
+        };
+
+        let mut update = update.clone();
+        self.trim_block_sync_update_for_frame_cap(&mut update)
+            .then_some(BlockMessage::BlockSyncUpdate(update))
+    }
+
     fn block_message_frame_cap(&self, msg: &BlockMessage) -> usize {
         match msg {
             BlockMessage::BlockCreated(_)
@@ -20462,6 +20475,8 @@ impl Actor {
                     wire_len = consensus_block_wire_len_wire(origin, msg);
                 }
                 BlockMessage::BlockBodyResponse(response) => {
+                    let direct_update_fallback =
+                        self.direct_block_sync_update_fallback_for_body_response(response);
                     if !self.trim_block_body_response_for_frame_cap(response) {
                         warn!(
                             kind = Self::block_message_kind(msg.as_ref()),
@@ -20470,6 +20485,17 @@ impl Actor {
                         return false;
                     }
                     wire_len = consensus_block_wire_len_wire(origin, msg);
+                    if matches!(
+                        msg.as_ref(),
+                        BlockMessage::BlockBodyResponse(super::message::BlockBodyResponse {
+                            body: super::message::BlockBodyData::BlockCreated(_),
+                            ..
+                        })
+                    ) && let Some(fallback) = direct_update_fallback
+                    {
+                        *msg = BlockMessageWire::new(fallback);
+                        wire_len = consensus_block_wire_len_wire(origin, msg);
+                    }
                 }
                 _ => {}
             }

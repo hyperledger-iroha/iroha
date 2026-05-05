@@ -11169,6 +11169,9 @@ pub struct Nexus {
     /// Universal Nexus fee schedule.
     #[config(nested)]
     pub fees: NexusFees,
+    /// Asynchronous lane-relay proof and sponsor-budget worker.
+    #[config(nested)]
+    pub relay_worker: NexusRelayWorker,
     /// Shared Hugging Face lease policy.
     #[config(nested)]
     pub hf_shared_leases: NexusHfSharedLeases,
@@ -11220,6 +11223,7 @@ impl Default for Nexus {
             dataspace_catalog: Vec::new(),
             staking: NexusStaking::default(),
             fees: NexusFees::default(),
+            relay_worker: NexusRelayWorker::default(),
             hf_shared_leases: NexusHfSharedLeases::default(),
             uploaded_models: NexusUploadedModels::default(),
             endorsement: NexusEndorsement::default(),
@@ -11749,6 +11753,14 @@ pub struct NexusFees {
     /// Maximum fee a sponsor can cover per transaction (0 = unlimited).
     #[config(default = "defaults::nexus::fees::sponsor_max_fee()")]
     pub sponsor_max_fee: Numeric,
+    /// Minimum verified sponsor balance left unused by lane-relay-burn admission.
+    #[config(default = "defaults::nexus::fees::sponsor_verified_balance_safety_floor()")]
+    pub sponsor_verified_balance_safety_floor: Numeric,
+    /// Canonical sponsor account required by activated lane-relay-burn fee settlement.
+    pub canonical_sponsor_account_id: Option<String>,
+    /// First block height whose lane commitments include Nexus fee receipts.
+    #[config(default = "defaults::nexus::fees::FEE_RECEIPTS_ACTIVATION_HEIGHT")]
+    pub fee_receipts_activation_height: u64,
     /// Burn fees at or after this block timestamp; earlier blocks use legacy fee transfer semantics.
     #[config(default = "defaults::nexus::fees::BURN_FROM_UNIX_TIMESTAMP_MS")]
     pub burn_from_unix_timestamp_ms: u64,
@@ -11943,6 +11955,11 @@ impl Default for NexusFees {
             per_gas_unit_fee: defaults::nexus::fees::per_gas_unit_fee(),
             sponsorship_enabled: defaults::nexus::fees::SPONSORSHIP_ENABLED,
             sponsor_max_fee: defaults::nexus::fees::sponsor_max_fee(),
+            sponsor_verified_balance_safety_floor:
+                defaults::nexus::fees::sponsor_verified_balance_safety_floor(),
+            canonical_sponsor_account_id: defaults::nexus::fees::CANONICAL_SPONSOR_ACCOUNT_ID
+                .map(str::to_owned),
+            fee_receipts_activation_height: defaults::nexus::fees::FEE_RECEIPTS_ACTIVATION_HEIGHT,
             burn_from_unix_timestamp_ms: defaults::nexus::fees::BURN_FROM_UNIX_TIMESTAMP_MS,
             settlement_mode: defaults::nexus::fees::SETTLEMENT_MODE.to_string(),
             successful_claim_fee_exempt_authorities: Vec::new(),
@@ -11979,6 +11996,26 @@ impl NexusFees {
                 return None;
             }
         };
+        let canonical_sponsor_account_id = self.canonical_sponsor_account_id.and_then(|raw| {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_owned())
+            }
+        });
+        if settlement_mode == actual::NexusFeeSettlementMode::LaneRelayBurn
+            && self.fee_receipts_activation_height != u64::MAX
+            && canonical_sponsor_account_id.is_none()
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig).attach(
+                    "nexus.fees.canonical_sponsor_account_id must be set when lane-relay-burn fee receipts are activated"
+                        .to_string(),
+                ),
+            );
+            return None;
+        }
 
         Some(actual::NexusFees {
             fee_asset_id,
@@ -11989,6 +12026,9 @@ impl NexusFees {
             per_gas_unit_fee: self.per_gas_unit_fee,
             sponsorship_enabled: self.sponsorship_enabled,
             sponsor_max_fee: self.sponsor_max_fee,
+            sponsor_verified_balance_safety_floor: self.sponsor_verified_balance_safety_floor,
+            canonical_sponsor_account_id,
+            fee_receipts_activation_height: self.fee_receipts_activation_height,
             burn_from_unix_timestamp_ms: self.burn_from_unix_timestamp_ms,
             settlement_mode,
             successful_claim_fee_exempt_authorities: self
@@ -11997,6 +12037,99 @@ impl NexusFees {
                 .map(|authority| authority.trim().to_string())
                 .filter(|authority| !authority.is_empty())
                 .collect(),
+        })
+    }
+}
+
+/// User-level configuration for the asynchronous Nexus lane-relay worker.
+#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
+pub struct NexusRelayWorker {
+    /// Enable the protocol worker that proves and submits lane relays and fee budgets.
+    #[config(default = "defaults::nexus::relay_worker::ENABLED")]
+    pub enabled: bool,
+    /// Optional relayer account id; when set it must match the node signing key account.
+    pub authority_account_id: Option<String>,
+    /// Maximum relay envelopes retained for retry.
+    #[config(default = "defaults::nexus::relay_worker::MAX_PENDING_RELAYS")]
+    pub max_pending_relays: usize,
+    /// Delay between proof/submission retry passes.
+    #[config(default = "defaults::nexus::relay_worker::RETRY_BACKOFF_MS")]
+    pub retry_backoff_ms: u64,
+    /// Maximum proof/submission attempts before local worker retry stops.
+    #[config(default = "defaults::nexus::relay_worker::MAX_RETRY_ATTEMPTS")]
+    pub max_retry_attempts: u32,
+    /// Block interval between sponsor budget proof refreshes.
+    #[config(default = "defaults::nexus::relay_worker::BUDGET_REFRESH_INTERVAL_BLOCKS")]
+    pub budget_refresh_interval_blocks: u64,
+}
+
+impl Default for NexusRelayWorker {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::nexus::relay_worker::ENABLED,
+            authority_account_id: defaults::nexus::relay_worker::AUTHORITY_ACCOUNT_ID
+                .map(str::to_owned),
+            max_pending_relays: defaults::nexus::relay_worker::MAX_PENDING_RELAYS,
+            retry_backoff_ms: defaults::nexus::relay_worker::RETRY_BACKOFF_MS,
+            max_retry_attempts: defaults::nexus::relay_worker::MAX_RETRY_ATTEMPTS,
+            budget_refresh_interval_blocks:
+                defaults::nexus::relay_worker::BUDGET_REFRESH_INTERVAL_BLOCKS,
+        }
+    }
+}
+
+impl NexusRelayWorker {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusRelayWorker> {
+        let authority_account_id = self.authority_account_id.and_then(|raw| {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_owned())
+            }
+        });
+        let max_pending_relays = NonZeroUsize::new(self.max_pending_relays).unwrap_or_else(|| {
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.relay_worker.max_pending_relays must be > 0"),
+            );
+            NonZeroUsize::new(1).expect("placeholder non-zero")
+        });
+        let budget_refresh_interval_blocks = NonZeroU64::new(self.budget_refresh_interval_blocks)
+            .unwrap_or_else(|| {
+                emitter.emit(
+                    Report::new(ParseError::InvalidNexusConfig)
+                        .attach("nexus.relay_worker.budget_refresh_interval_blocks must be > 0"),
+                );
+                NonZeroU64::new(1).expect("placeholder non-zero")
+            });
+        if self.retry_backoff_ms == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.relay_worker.retry_backoff_ms must be > 0"),
+            );
+            return None;
+        }
+        let max_retry_attempts = NonZeroU32::new(self.max_retry_attempts).unwrap_or_else(|| {
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.relay_worker.max_retry_attempts must be > 0"),
+            );
+            NonZeroU32::new(1).expect("placeholder non-zero")
+        });
+        if self.max_pending_relays == 0
+            || self.budget_refresh_interval_blocks == 0
+            || self.max_retry_attempts == 0
+        {
+            return None;
+        }
+        Some(actual::NexusRelayWorker {
+            enabled: self.enabled,
+            authority_account_id,
+            max_pending_relays,
+            retry_backoff: Duration::from_millis(self.retry_backoff_ms),
+            max_retry_attempts,
+            budget_refresh_interval_blocks,
         })
     }
 }
@@ -13137,6 +13270,7 @@ impl Nexus {
             dataspace_catalog,
             staking,
             fees,
+            relay_worker,
             hf_shared_leases,
             uploaded_models,
             endorsement: endorsement_cfg,
@@ -13170,6 +13304,7 @@ impl Nexus {
         let lane_relay_emergency = lane_relay_emergency.parse(emitter)?;
         let staking = staking.parse(emitter)?;
         let fees = fees.parse(emitter)?;
+        let relay_worker = relay_worker.parse(emitter)?;
         let hf_shared_leases = hf_shared_leases.parse(emitter)?;
         let uploaded_models = uploaded_models.parse(emitter)?;
         let endorsement = endorsement_cfg.parse(emitter)?;
@@ -13194,6 +13329,24 @@ impl Nexus {
             );
             return None;
         }
+        if relay_worker.enabled && !enabled {
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.relay_worker.enabled requires nexus.enabled = true"),
+            );
+            return None;
+        }
+        if relay_worker.enabled
+            && (fees.settlement_mode != actual::NexusFeeSettlementMode::LaneRelayBurn
+                || fees.canonical_sponsor_account_id.is_none())
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig).attach(
+                    "nexus.relay_worker.enabled requires lane-relay-burn settlement and nexus.fees.canonical_sponsor_account_id",
+                ),
+            );
+            return None;
+        }
         let has_lane_overrides = !enabled
             && (lane_catalog != LaneCatalog::default()
                 || dataspace_catalog != DataSpaceCatalog::default()
@@ -13212,6 +13365,7 @@ impl Nexus {
             storage,
             staking,
             fees,
+            relay_worker,
             hf_shared_leases,
             uploaded_models,
             endorsement,

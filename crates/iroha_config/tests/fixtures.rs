@@ -363,7 +363,7 @@ fn minimal_config_snapshot() {
                     event_buffer_capacity: 4096,
                 },
                 soranet_vpn: SoranetVpn {
-                    enabled: true,
+                    enabled: false,
                     cell_size_bytes: 1024,
                     flow_label_bits: 24,
                     cover_to_data_per_mille: 250,
@@ -377,6 +377,20 @@ fn minimal_config_snapshot() {
                     exit_class: "standard",
                     meter_family: "soranet.vpn.standard",
                     helper_ticket_secret: None,
+                    fee_asset_id: "xor#universal.universal",
+                    escrow_account_id: sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB,
+                    operator_account_id: sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB,
+                    lease_fee_nanos: 1000000,
+                    settlement_grace: 60s,
+                    route_pushes: [
+                        "0.0.0.0/0",
+                        "::/0",
+                    ],
+                    excluded_routes: [],
+                    dns_servers: [
+                        "1.1.1.1",
+                    ],
+                    relay_tls_spki_sha256_hex: None,
                 },
                 lane_profile: Core,
                 require_sm_handshake_match: true,
@@ -629,7 +643,9 @@ fn minimal_config_snapshot() {
                 preauth_max_connections: Some(
                     1024,
                 ),
-                preauth_max_connections_per_ip: None,
+                preauth_max_connections_per_ip: Some(
+                    64,
+                ),
                 preauth_rate_per_ip_per_sec: Some(
                     20,
                 ),
@@ -1027,6 +1043,14 @@ fn minimal_config_snapshot() {
                     async_job_ttl_secs: 300,
                     async_job_max_entries: 2000,
                 },
+                cors: ToriiCors {
+                    enabled: false,
+                    allowed_origins: [],
+                    allowed_methods: [],
+                    allowed_headers: [],
+                    exposed_headers: [],
+                    max_age_secs: 3600,
+                },
                 proof_api: ProofApi {
                     rate_per_minute: Some(
                         120,
@@ -1423,7 +1447,7 @@ fn minimal_config_snapshot() {
             logger: Logger {
                 level: INFO,
                 filter: None,
-                format: Full,
+                format: Json,
                 terminal_colors: false,
             },
             queue: Queue {
@@ -1490,9 +1514,23 @@ fn minimal_config_snapshot() {
                         mantissa: 0,
                         scale: 0,
                     },
+                    sponsor_verified_balance_safety_floor: Numeric {
+                        mantissa: 0,
+                        scale: 0,
+                    },
+                    canonical_sponsor_account_id: None,
+                    fee_receipts_activation_height: 18446744073709551615,
                     burn_from_unix_timestamp_ms: 18446744073709551615,
-                    settlement_mode: NexusFeeSettlementMode::Direct,
+                    settlement_mode: Direct,
                     successful_claim_fee_exempt_authorities: [],
+                },
+                relay_worker: NexusRelayWorker {
+                    enabled: false,
+                    authority_account_id: None,
+                    max_pending_relays: 1024,
+                    retry_backoff: 5s,
+                    max_retry_attempts: 10,
+                    budget_refresh_interval_blocks: 10,
                 },
                 hf_shared_leases: NexusHfSharedLeases {
                     drain_grace: 5s,
@@ -2608,6 +2646,85 @@ fn nexus_rejects_zero_axt_slot_length() {
 
     assert!(nexus.parse(&mut emitter).is_none());
     assert!(emitter.into_result().is_err());
+}
+
+#[test]
+fn nexus_lane_relay_burn_activation_requires_canonical_sponsor() {
+    use iroha_config::parameters::user::{Nexus, NexusFees};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        enabled: true,
+        fees: NexusFees {
+            settlement_mode: "lane_relay_burn".to_owned(),
+            fee_receipts_activation_height: 42,
+            canonical_sponsor_account_id: None,
+            ..NexusFees::default()
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let error = format!("{:?}", emitter.into_result().expect_err("invalid config"));
+    assert!(error.contains("canonical_sponsor_account_id"));
+}
+
+#[test]
+fn nexus_relay_worker_requires_lane_relay_burn_and_canonical_sponsor() {
+    use iroha_config::parameters::user::{Nexus, NexusRelayWorker};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        enabled: true,
+        relay_worker: NexusRelayWorker {
+            enabled: true,
+            ..NexusRelayWorker::default()
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let error = format!("{:?}", emitter.into_result().expect_err("invalid config"));
+    assert!(error.contains("nexus.relay_worker.enabled"));
+}
+
+#[test]
+fn nexus_relay_worker_parses_with_activated_canonical_sponsor() {
+    use iroha_config::parameters::actual::NexusFeeSettlementMode;
+    use iroha_config::parameters::user::{Nexus, NexusFees, NexusRelayWorker};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        enabled: true,
+        fees: NexusFees {
+            settlement_mode: "lane_relay_burn".to_owned(),
+            fee_receipts_activation_height: 42,
+            canonical_sponsor_account_id: Some("ed0120abcdef@wonderland".to_owned()),
+            ..NexusFees::default()
+        },
+        relay_worker: NexusRelayWorker {
+            enabled: true,
+            max_retry_attempts: 3,
+            ..NexusRelayWorker::default()
+        },
+        ..Nexus::default()
+    };
+
+    let parsed = nexus.parse(&mut emitter).expect("valid config");
+    emitter.into_result().expect("no parse errors");
+    assert!(parsed.relay_worker.enabled);
+    assert_eq!(parsed.relay_worker.max_retry_attempts.get(), 3);
+    assert_eq!(
+        parsed.fees.settlement_mode,
+        NexusFeeSettlementMode::LaneRelayBurn
+    );
+    assert_eq!(
+        parsed.fees.canonical_sponsor_account_id.as_deref(),
+        Some("ed0120abcdef@wonderland")
+    );
 }
 
 #[test]

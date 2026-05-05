@@ -1941,6 +1941,22 @@ impl Actor {
                 &highest.subject_block_hash,
                 MissingBlockClearReason::PayloadAvailable,
             );
+            if matches!(highest.phase, crate::sumeragi::consensus::Phase::Commit) {
+                let targets = self.known_block_commit_qc_recovery_targets(
+                    highest.subject_block_hash,
+                    highest.height,
+                    highest.view,
+                    &[],
+                );
+                return self.maybe_request_known_block_commit_qc_recovery(
+                    highest.subject_block_hash,
+                    highest.height,
+                    highest.view,
+                    &targets,
+                    None,
+                    "highest_qc_dependency_payload_available",
+                );
+            }
             return false;
         }
         let (consensus_mode, mode_tag, _) = self.consensus_context_for_height(highest.height);

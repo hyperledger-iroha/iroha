@@ -13,6 +13,8 @@
 mod genesis_bootstrap;
 /// Iroha server command-line interface and node bootstrap entrypoint.
 mod i18n;
+/// Asynchronous Nexus DPN fee settlement relay.
+mod nexus_fee_relay_worker;
 /// Embedded Soracloud runtime-manager reconciliation.
 #[cfg(feature = "embedded-soracloud-runtime")]
 #[path = "soracloud_runtime.rs"]
@@ -4919,6 +4921,30 @@ impl Iroha {
         let shared_sorafs_cache = build_shared_sorafs_provider_cache(&config);
 
         let chain_id = Arc::new(config.common.chain.clone());
+        if config.nexus.relay_worker.enabled {
+            let relay_worker_authority = AccountId::new(config.common.key_pair.public_key().clone());
+            let relay_worker_storage_root = config
+                .kura
+                .store_dir
+                .resolve_relative_path()
+                .join("nexus_fee_relay_worker");
+            let relay_worker = nexus_fee_relay_worker::NexusFeeRelayWorker::new(
+                config.nexus.relay_worker.clone(),
+                relay_worker_storage_root,
+                Arc::clone(&chain_id),
+                Arc::clone(&queue),
+                Arc::clone(&state),
+                sumeragi.clone(),
+                relay_worker_authority,
+                config.common.key_pair.clone(),
+                config.zk.fastpq.clone(),
+            )
+            .map_err(|error| {
+                Report::new(StartError::InitKura)
+                    .attach(format!("failed to start Nexus fee relay worker: {error:?}"))
+            })?;
+            supervisor.monitor(relay_worker.start(supervisor.shutdown_signal()));
+        }
         let local_validator_account_id =
             AccountId::new(config.common.key_pair.public_key().clone());
         let local_peer_id = config.common.trusted_peers.value().myself.id().to_string();

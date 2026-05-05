@@ -1181,14 +1181,185 @@ fn ensure_state_is_backed_by_kura(state: &State) -> Result<(), TryWriteError> {
 
 /// Canonical bytes for the committed WSV surface used by replay parity tests.
 pub(crate) fn canonical_state_snapshot_bytes(state: &State) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    json::to_writer(&mut bytes, state).expect("state snapshot serialization must succeed");
-    bytes
+    json::to_json(&canonical_state_snapshot_value(state))
+        .expect("state snapshot serialization must succeed")
+        .into_bytes()
 }
 
 /// Canonical hash for the committed WSV surface.
 pub(crate) fn canonical_state_snapshot_hash(state: &State) -> iroha_crypto::Hash {
     iroha_crypto::Hash::new(canonical_state_snapshot_bytes(state))
+}
+
+fn canonical_state_snapshot_value(state: &State) -> json::Value {
+    let mut value = json::to_value(state).expect("state snapshot serialization must succeed");
+    normalize_mv_cell_fields_in_state_value(&mut value);
+    normalize_set_like_parameter_fields_in_state_value(&mut value);
+    redact_consensus_sidecars_from_state_value(&mut value);
+    value
+}
+
+fn normalize_mv_cell_fields_in_state_value(value: &mut json::Value) {
+    let Some(state) = value.as_object_mut() else {
+        return;
+    };
+
+    normalize_serialized_cell_field(state, "commit_topology");
+    normalize_serialized_cell_field(state, "prev_commit_topology");
+
+    let Some(world) = state.get_mut("world").and_then(json::Value::as_object_mut) else {
+        return;
+    };
+
+    for key in [
+        "parameters",
+        "peers",
+        "viral_reward_budget",
+        "viral_campaign_budget",
+        "executor",
+        "executor_data_model",
+        "merge_hint_roots",
+        "merge_global_state_root",
+        "governance_last_unlock_sweep_height",
+        "external_event_buf",
+    ] {
+        normalize_serialized_cell_field(world, key);
+    }
+}
+
+fn normalize_serialized_cell_field(map: &mut json::Map, key: &str) {
+    let Some(value) = map.get_mut(key) else {
+        return;
+    };
+    let replacement = value
+        .as_object()
+        .filter(|cell| cell.contains_key("revert"))
+        .and_then(|cell| cell.get("blocks"))
+        .cloned();
+    if let Some(current_value) = replacement {
+        *value = current_value;
+    }
+}
+
+fn normalize_set_like_parameter_fields_in_state_value(value: &mut json::Value) {
+    let Some(sumeragi) = value
+        .get_mut("world")
+        .and_then(|world| world.get_mut("parameters"))
+        .and_then(|parameters| parameters.get_mut("sumeragi"))
+        .and_then(json::Value::as_object_mut)
+    else {
+        return;
+    };
+
+    sort_dedup_json_array_field(sumeragi, "key_allowed_algorithms");
+    sort_dedup_json_array_field(sumeragi, "key_allowed_hsm_providers");
+}
+
+fn sort_dedup_json_array_field(map: &mut json::Map, key: &str) {
+    let Some(values) = map.get_mut(key).and_then(json::Value::as_array_mut) else {
+        return;
+    };
+
+    values.sort_by_cached_key(canonical_json_sort_key);
+    values.dedup();
+}
+
+fn canonical_json_sort_key(value: &json::Value) -> String {
+    let mut out = String::new();
+    json::JsonSerialize::json_serialize(value, &mut out);
+    out
+}
+
+fn redact_consensus_sidecars_from_state_value(value: &mut json::Value) {
+    let Some(world) = value.get_mut("world") else {
+        return;
+    };
+    redact_consensus_sidecars_from_world_value(world);
+}
+
+fn redact_consensus_sidecars_from_world_value(world: &mut json::Value) {
+    let Some(world) = world.as_object_mut() else {
+        return;
+    };
+    // These stores are asynchronously enriched recovery evidence, not WSV
+    // data committed by the block itself. Including them makes historical
+    // checkpoints depend on which peer supplied later, richer certificates.
+    world.remove("commit_qcs");
+    world.remove("consensus_evidence");
+    // VRF epoch snapshots are maintained by consensus message handling outside
+    // block application. Kura replay verifies block-applied WSV data only.
+    world.remove("vrf_epochs");
+}
+
+pub(crate) fn canonical_state_snapshot_component_hashes(
+    state: &State,
+) -> Vec<(String, iroha_crypto::Hash)> {
+    fn component_hash(
+        name: impl Into<String>,
+        value: &json::Value,
+    ) -> (String, iroha_crypto::Hash) {
+        let mut out = String::new();
+        json::JsonSerialize::json_serialize(value, &mut out);
+        (name.into(), iroha_crypto::Hash::new(out.into_bytes()))
+    }
+
+    let value = canonical_state_snapshot_value(state);
+    let mut components = Vec::new();
+    let Some(state_map) = value.as_object() else {
+        return components;
+    };
+    for (key, value) in state_map {
+        components.push(component_hash(key.clone(), value));
+    }
+    if let Some(world) = state_map.get("world").and_then(json::Value::as_object) {
+        for (key, value) in world {
+            components.push(component_hash(format!("world.{key}"), value));
+            if key == "parameters" {
+                push_nested_component_hashes(format!("world.{key}"), value, &mut components);
+            }
+        }
+    }
+    components
+}
+
+fn push_nested_component_hashes(
+    prefix: String,
+    value: &json::Value,
+    components: &mut Vec<(String, iroha_crypto::Hash)>,
+) {
+    let Some(map) = value.as_object() else {
+        return;
+    };
+    for (key, value) in map {
+        let name = format!("{prefix}.{key}");
+        let mut out = String::new();
+        json::JsonSerialize::json_serialize(value, &mut out);
+        components.push((name.clone(), iroha_crypto::Hash::new(out.into_bytes())));
+        push_nested_component_hashes(name, value, components);
+    }
+}
+
+pub(crate) fn canonical_state_commit_qc_summaries(
+    state: &State,
+) -> Vec<(String, u64, u64, String, String, String, String)> {
+    state
+        .world
+        .commit_qcs
+        .view()
+        .iter()
+        .map(|(hash, qc)| {
+            let qc_debug_hash = iroha_crypto::Hash::new(format!("{qc:?}").into_bytes());
+            (
+                hash.to_string(),
+                qc.height,
+                qc.view,
+                format!("{:?}", qc.phase),
+                qc.validator_set_hash.to_string(),
+                hex::encode(&qc.aggregate.signers_bitmap),
+                qc_debug_hash.to_string(),
+            )
+        })
+        .collect()
 }
 
 /// Canonical bytes for the committed WSV surface used by replay parity tests.
@@ -1380,7 +1551,7 @@ mod tests {
     use std::{fs::File, io::Write, num::NonZeroUsize, sync::Arc};
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
-    use iroha_data_model::{ChainId, peer::PeerId};
+    use iroha_data_model::{ChainId, block::BlockHeader, consensus::Qc, peer::PeerId};
     use nonzero_ext::nonzero;
     use tempfile::tempdir;
     use tokio::test;
@@ -1406,6 +1577,185 @@ mod tests {
 
     fn state_factory() -> State {
         state_factory_with_kura(Kura::blank_kura_for_testing())
+    }
+
+    #[test]
+    async fn canonical_wsv_hash_ignores_commit_qc_sidecars() {
+        let mut state = state_factory();
+        let before = canonical_state_snapshot_bytes_for_tests(&state);
+        let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer = PeerId::new(key_pair.public_key().clone());
+        let roster = vec![peer];
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC7; Hash::LENGTH]));
+        let zero_root = Hash::prehashed([0_u8; Hash::LENGTH]);
+        let qc = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height: 2,
+            view: 0,
+            epoch: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster,
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: vec![0b0000_0001],
+                bls_aggregate_signature: vec![0xAA; 96],
+            },
+        };
+
+        state.insert_commit_qc_for_testing(block_hash, qc);
+
+        let after = canonical_state_snapshot_bytes_for_tests(&state);
+        assert_eq!(
+            before, after,
+            "commit-QC recovery evidence must not affect replay WSV checkpoints"
+        );
+        let canonical_json =
+            String::from_utf8(after).expect("canonical state snapshot should be utf8 json");
+        assert!(
+            !canonical_json.contains("\"commit_qcs\""),
+            "canonical WSV checkpoint surface should omit commit-QC sidecars"
+        );
+    }
+
+    #[test]
+    async fn canonical_wsv_hash_uses_current_mv_cell_values() {
+        let state = state_factory();
+        let before = canonical_state_snapshot_bytes_for_tests(&state);
+
+        {
+            let mut parameters = state.world.parameters.block();
+            let current = parameters.get().clone();
+            *parameters.get_mut() = current;
+            parameters.commit();
+        }
+
+        let after = canonical_state_snapshot_bytes_for_tests(&state);
+        assert_eq!(
+            before, after,
+            "MV cell history must not affect replay WSV checkpoints when the current value is unchanged"
+        );
+
+        let value = canonical_state_snapshot_value(&state);
+        let parameters = value
+            .get("world")
+            .and_then(|world| world.get("parameters"))
+            .and_then(json::Value::as_object)
+            .expect("canonical snapshot should contain parameters as a plain object");
+        assert!(
+            !parameters.contains_key("revert") && !parameters.contains_key("blocks"),
+            "canonical WSV checkpoint surface should serialize current cell values"
+        );
+    }
+
+    fn test_vrf_epoch_record(epoch: u64) -> iroha_data_model::consensus::VrfEpochRecord {
+        iroha_data_model::consensus::VrfEpochRecord {
+            epoch,
+            seed: [0_u8; 32],
+            epoch_length: 1,
+            commit_deadline_offset: 0,
+            reveal_deadline_offset: 0,
+            roster_len: 0,
+            finalized: false,
+            updated_at_height: 0,
+            participants: Vec::new(),
+            late_reveals: Vec::new(),
+            committed_no_reveal: Vec::new(),
+            no_participation: Vec::new(),
+            penalties_applied: false,
+            penalties_applied_at_height: None,
+            validator_election: None,
+        }
+    }
+
+    #[test]
+    async fn canonical_wsv_hash_ignores_vrf_epoch_sidecars() {
+        let state = state_factory();
+        let before = canonical_state_snapshot_bytes_for_tests(&state);
+
+        {
+            let mut world = state.world.block();
+            world.vrf_epochs.insert(0, test_vrf_epoch_record(0));
+            world.commit();
+        }
+        let after = canonical_state_snapshot_bytes_for_tests(&state);
+
+        assert_eq!(
+            before, after,
+            "VRF epoch sidecars must not affect replay WSV checkpoints"
+        );
+
+        let value = canonical_state_snapshot_value(&state);
+        let world = value
+            .get("world")
+            .and_then(json::Value::as_object)
+            .expect("canonical snapshot should contain world as an object");
+        assert!(
+            !world.contains_key("vrf_epochs"),
+            "canonical WSV checkpoint surface should omit VRF epoch sidecars"
+        );
+    }
+
+    #[test]
+    async fn canonical_wsv_hash_sorts_sumeragi_key_policy_sets() {
+        let state = state_factory();
+
+        {
+            let mut parameters = state.world.parameters.block();
+            parameters.sumeragi.key_allowed_algorithms = vec![
+                Algorithm::Secp256k1,
+                Algorithm::Ed25519,
+                Algorithm::Secp256k1,
+            ];
+            parameters.sumeragi.key_allowed_hsm_providers = vec![
+                "yubihsm".to_owned(),
+                "pkcs11".to_owned(),
+                "softkey".to_owned(),
+                "pkcs11".to_owned(),
+            ];
+            parameters.commit();
+        }
+        let first = canonical_state_snapshot_bytes_for_tests(&state);
+
+        {
+            let mut parameters = state.world.parameters.block();
+            parameters.sumeragi.key_allowed_algorithms =
+                vec![Algorithm::Ed25519, Algorithm::Secp256k1];
+            parameters.sumeragi.key_allowed_hsm_providers = vec![
+                "pkcs11".to_owned(),
+                "softkey".to_owned(),
+                "yubihsm".to_owned(),
+            ];
+            parameters.commit();
+        }
+        let second = canonical_state_snapshot_bytes_for_tests(&state);
+
+        assert_eq!(
+            first, second,
+            "set-like Sumeragi key policy fields must not make WSV checkpoints order-sensitive"
+        );
+
+        let value = canonical_state_snapshot_value(&state);
+        let providers = value
+            .get("world")
+            .and_then(|world| world.get("parameters"))
+            .and_then(|parameters| parameters.get("sumeragi"))
+            .and_then(|sumeragi| sumeragi.get("key_allowed_hsm_providers"))
+            .and_then(json::Value::as_array)
+            .expect("canonical snapshot should contain normalized HSM providers");
+        let providers = providers
+            .iter()
+            .map(|value| match value {
+                json::Value::String(provider) => provider.as_str(),
+                _ => panic!("HSM provider should serialize as a string"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(providers, ["pkcs11", "softkey", "yubihsm"]);
     }
 
     #[test]

@@ -394,10 +394,12 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - The 2026-05-03 `cargo test -p iroha_core --lib` rerun is green
     (`5129` passed, `22` ignored) after fixing execution-witness recorder
     isolation and hardening the RBC sidecar cooldown fixture.
-  - The later 2026-05-03 restarted-peer commit-QC recovery fix is covered by a
-    focused unit regression and the confidential downtime plus timeout localnet
-    scenario. Rerun the full `cargo test -p iroha_core --lib` corridor after
-    the next main-loop edit or before opening the next full workspace sweep.
+  - The later 2026-05-03 restarted-peer commit-QC recovery fix is covered by
+    focused block-body response regressions and the confidential downtime plus
+    timeout localnet scenario, now passing without the restarted-peer catch-up
+    waiver warning. Rerun the full `cargo test -p iroha_core --lib` corridor
+    after the next main-loop edit or before opening the next full workspace
+    sweep.
   - For the next consensus change, rerun the same broad window so the collector
     fallback, exact-frontier repair, cached-target, vote replay, roster
     recovery, future-new-view, and model-backed reschedule fixtures continue to

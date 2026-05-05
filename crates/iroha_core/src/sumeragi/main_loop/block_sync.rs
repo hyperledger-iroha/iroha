@@ -4603,6 +4603,32 @@ impl Actor {
             evidence_hash: super::block_body_response_evidence_hash(&response),
         };
         if !self.frontier_slot_is_exact_height(response.height) {
+            if let super::message::BlockBodyData::BlockSyncUpdate(update) = response.body {
+                let header = update.block.header();
+                if update.block.hash() != response.block_hash
+                    || header.height().get() != response.height
+                    || header.view_change_index() != response.view
+                {
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::BlockBodyResponse,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::InvalidPayload,
+                    );
+                    self.release_block_payload_dedup(&dedup_key);
+                    return Ok(());
+                }
+                if update.commit_qc.is_some() || update.validator_checkpoint.is_some() {
+                    debug!(
+                        height = response.height,
+                        view = response.view,
+                        block = %response.block_hash,
+                        committed_height = self.committed_height_snapshot(),
+                        "routing non-exact QC-bearing BlockBodyResponse through block-sync update path"
+                    );
+                    self.release_block_payload_dedup(&dedup_key);
+                    return self.handle_block_sync_update(update, sender);
+                }
+            }
             self.release_block_payload_dedup(&dedup_key);
             return Ok(());
         }
@@ -4624,6 +4650,12 @@ impl Actor {
             &response.body,
             super::message::BlockBodyData::BlockCreated(_)
         );
+        let repairs_missing_highest_qc_dependency = self
+            .subsystems
+            .propose
+            .highest_qc_missing_defer_markers
+            .iter()
+            .any(|(_, _, hash)| *hash == response.block_hash);
         if allow_same_height_repair {
             info!(
                 height = response.height,
@@ -4688,6 +4720,34 @@ impl Actor {
             }
         };
         let body_materialized = self.frontier_block_materialized_locally(response.block_hash);
+        if body_materialized
+            && repairs_missing_highest_qc_dependency
+            && self
+                .cached_commit_qc_for_block(response.block_hash, response.height, response.view)
+                .is_none()
+        {
+            let targets = self.known_block_commit_qc_recovery_targets(
+                response.block_hash,
+                response.height,
+                response.view,
+                &[],
+            );
+            let requested = self.maybe_request_known_block_commit_qc_recovery(
+                response.block_hash,
+                response.height,
+                response.view,
+                &targets,
+                None,
+                "highest_qc_dependency_body_materialized",
+            );
+            debug!(
+                height = response.height,
+                view = response.view,
+                block = %response.block_hash,
+                requested,
+                "tracked known-block commit-QC recovery after highest-QC dependency body repair"
+            );
+        }
         let slot_matches_after = self.frontier_slot.as_ref().is_some_and(|slot| {
             slot.block_hash == response.block_hash
                 && slot.height == response.height
@@ -4702,9 +4762,9 @@ impl Actor {
                     sender: sender_for_slot,
                 },
             );
-            // Plain exact-body fallbacks share the dedup key with their
-            // QC-bearing companion. While commit-QC repair is pending, release
-            // the key so the certificate response is still admitted.
+            // Plain exact-body fallbacks carry no certificate evidence. While
+            // commit-QC repair is pending, release their dedup key so repeated
+            // plain payload repair cannot suppress a later evidence-bearing retry.
             if plain_body_response
                 && self.missing_commit_qc_request_pending_for_round(
                     response.block_hash,

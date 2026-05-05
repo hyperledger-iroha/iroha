@@ -669,7 +669,13 @@ impl<W: WorldReadOnly> QueueAdmissionStateAccess for EagerAdmissionStateAccess<'
         tx: &AcceptedTransaction<'static>,
         route_dataspace_id: Option<DataSpaceId>,
     ) -> Result<(), Error> {
-        queue.recheck_external_nexus_fee_admission(tx, self.world, self.nexus, route_dataspace_id)
+        queue.recheck_external_nexus_fee_admission(
+            tx,
+            self.world,
+            self.nexus,
+            self.next_block_height,
+            route_dataspace_id,
+        )
     }
 
     fn extract_lane_identity_metadata(
@@ -739,10 +745,14 @@ impl QueueAdmissionStateAccess for LazyAdmissionStateAccess<'_> {
         route_dataspace_id: Option<DataSpaceId>,
     ) -> Result<(), Error> {
         self.ensure_world_and_nexus();
+        let next_block_height = u64::try_from(self.state.committed_height())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
         queue.recheck_external_nexus_fee_admission(
             tx,
             self.world.as_ref().expect("world initialized above"),
             self.nexus.as_ref().expect("nexus initialized above"),
+            next_block_height,
             route_dataspace_id,
         )
     }
@@ -1660,6 +1670,7 @@ impl Queue {
         tx: &AcceptedTransaction<'static>,
         world: &impl WorldReadOnly,
         nexus: &Nexus,
+        next_block_height: u64,
         route_dataspace_id: Option<DataSpaceId>,
     ) -> Result<(), Error> {
         let Some(transaction) = tx.external() else {
@@ -1671,6 +1682,7 @@ impl Queue {
             nexus,
             transaction,
             observation_time_ms,
+            next_block_height,
             route_dataspace_id,
         )
         .map_err(Self::map_nexus_fee_admission_error)
@@ -2827,6 +2839,9 @@ impl Queue {
         let backpressure_telemetry: Option<&StateTelemetry> = Some(state_view.telemetry);
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
+        let next_block_height = u64::try_from(state_view.height())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
         loop {
             let hash = if let Some(hash) = self.tx_hashes.pop() {
                 hash
@@ -2898,6 +2913,7 @@ impl Queue {
                     tx_arc.as_accepted(),
                     state_view.world(),
                     &state_view.nexus,
+                    next_block_height,
                     routing_ledger::get(&hash).map(|decision| decision.dataspace_id),
                 )
             {

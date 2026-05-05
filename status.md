@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-05-04
+Last updated: 2026-05-05
 
 ## 2026-05-04 UAID workspace-test corridor follow-up
 
@@ -938,26 +938,31 @@ Last updated: 2026-05-04
   frontier payload locally while repeatedly requesting the missing commit QC,
   even though the other validators had already finalized later heights.
 - Root cause: exact block-body repair sends a plain `BlockBodyResponse` before
-  the richer `BlockSyncUpdate` companion. Both messages used the same
-  height/view/hash dedup key, so if the plain body arrived first it could leave
-  the key occupied and suppress the QC-bearing companion that would retire the
-  missing commit-QC request.
-- `handle_block_body_response(...)` now releases the shared dedup key when a
-  plain exact-body response materializes the active slot while a same-round
-  missing commit-QC request is still pending. This keeps normal duplicate
-  suppression for ordinary exact-body responses, but lets the certificate
-  companion through during known-block commit-QC repair.
-- Added a focused regression that reproduces the message order: plain exact
-  body first, then QC-bearing `BlockSyncUpdate`. The test proves the plain body
-  does not clear the missing-QC request by itself, releases dedup, and the
-  companion records the recovered commit certificate.
+  the richer `BlockSyncUpdate` companion. The first repair bug was network
+  ingress deduplication: the plain body and QC-bearing companion shared only a
+  height/view/hash key, so the plain body could suppress the certificate
+  response. The second bug was receiver-side admission order: a QC-bearing
+  companion for height `H + 2` could arrive while the restarted peer was still
+  committing height `H + 1`, get classified as non-exact, and be dropped before
+  the normal block-sync deferral path could retain the commit QC.
+- `BlockBodyResponse` dedup now includes a response-evidence hash, so plain
+  bodies and certificate-bearing companions are separately admissible.
+  `handle_block_body_response(...)` also releases a plain exact-body key when a
+  same-round missing commit-QC request remains pending, routes non-exact
+  QC-bearing companions through `handle_block_sync_update(...)`, and preserves
+  oversized QC companions as direct `BlockSyncUpdate` fallbacks when that form
+  fits the payload frame cap.
+- Added focused regressions for the observed message orders: plain exact body
+  first, then QC-bearing `BlockSyncUpdate`; dedup separation for plain versus
+  evidence-bearing companions; non-exact QC-bearing companion admission; and
+  oversized wrapper fallback that preserves the commit certificate.
 - The NPoS 1s/K=3 performance harness now separates host jitter from consensus
   liveness by raising the propose EMA ceiling slightly and adding an explicit
   bounded-progress check on observed block spacing.
 - Validation:
   - `cargo test -p iroha_core plain_block_body_response_releases_dedup_for_active_missing_commit_qc_repair -- --nocapture`
   - `cargo test -p iroha_core --lib block_body_response -- --nocapture`
-  - `cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet -- --nocapture --test-threads=1`
+  - `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet -- --nocapture --test-threads=1` (passed without the restarted-peer catch-up warning)
   - `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_performance::npos_baseline_1s_k3_captures_metrics -- --nocapture --test-threads=1`
   - `bash ci/check_sumeragi_formal.sh`
 

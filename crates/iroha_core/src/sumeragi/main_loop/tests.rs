@@ -15540,6 +15540,93 @@ async fn block_body_response_routes_block_sync_update_through_commit_sidecar_pat
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn non_exact_block_body_response_routes_qc_update_through_block_sync_path() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let parent_height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let parent_block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        parent_height,
+        view,
+        Some(genesis_hash),
+    );
+    let parent_hash = insert_validated_pending(actor, parent_block);
+    let height = parent_height.saturating_add(1);
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers: BTreeSet<ValidatorIndex> = topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let epoch = actor.epoch_for_height(height);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let mut update = super::message::BlockSyncUpdate::from(&block);
+    update.commit_qc = Some(qc);
+    let response = super::message::BlockBodyResponse {
+        block_hash,
+        height,
+        view,
+        body: super::message::BlockBodyData::BlockSyncUpdate(update),
+    };
+    let dedup_key = crate::sumeragi::BlockPayloadDedupKey::BlockBodyResponse {
+        height,
+        view,
+        block_hash,
+        evidence_hash: crate::sumeragi::block_body_response_evidence_hash(&response),
+    };
+    {
+        let mut guard = actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        guard.insert(dedup_key, Instant::now());
+    }
+
+    let sender = actor
+        .effective_commit_topology()
+        .into_iter()
+        .find(|peer| peer != actor.common_config.peer.id())
+        .expect("remote sender");
+
+    actor
+        .handle_block_body_response(response, Some(sender))
+        .expect("non-exact QC-bearing block body response handled");
+
+    assert!(
+        actor.block_known_locally(block_hash),
+        "non-exact QC-bearing BlockBodyResponse should be routed into block sync instead of being dropped"
+    );
+    assert!(
+        actor
+            .qc_cache
+            .contains_key(&(Phase::Commit, block_hash, height, view, epoch)),
+        "routed BlockSyncUpdate companion should preserve the commit QC"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn plain_block_body_response_releases_dedup_for_active_missing_commit_qc_repair() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -15711,6 +15798,93 @@ async fn plain_block_body_response_releases_dedup_for_active_missing_commit_qc_r
             .get(&block_hash)
             .is_some(),
         "QC-bearing BlockSyncUpdate companion should record the recovered certificate"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn plain_block_body_response_tracks_commit_qc_repair_for_missing_highest_dependency() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let now = Instant::now();
+
+    assert!(actor.update_frontier_slot(
+        block_hash,
+        height,
+        view,
+        None,
+        BTreeSet::new(),
+        /*block_created_seen*/ true,
+        /*exact_fetch_armed*/ true,
+        /*body_present*/ false,
+        None,
+        None,
+        now,
+    ));
+    actor
+        .subsystems
+        .propose
+        .highest_qc_missing_defer_markers
+        .insert((height.saturating_add(1), view, block_hash));
+
+    let response = super::message::BlockBodyResponse {
+        block_hash,
+        height,
+        view,
+        body: super::message::BlockBodyData::BlockCreated(super::message::BlockCreated::from(
+            &block,
+        )),
+    };
+    let dedup_key = crate::sumeragi::BlockPayloadDedupKey::BlockBodyResponse {
+        height,
+        view,
+        block_hash,
+        evidence_hash: crate::sumeragi::block_body_response_evidence_hash(&response),
+    };
+    {
+        let mut guard = actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        guard.insert(dedup_key, Instant::now());
+    }
+    let sender = actor
+        .effective_commit_topology()
+        .into_iter()
+        .find(|peer| peer != actor.common_config.peer.id())
+        .expect("remote sender");
+
+    actor
+        .handle_block_body_response(response, Some(sender))
+        .expect("plain block body response handled");
+
+    assert!(
+        actor.frontier_block_materialized_locally(block_hash),
+        "plain highest-QC dependency repair should materialize the frontier block"
+    );
+    let request = actor
+        .pending
+        .missing_commit_qc_requests
+        .get(&block_hash)
+        .expect("plain highest-QC dependency repair should start known-block commit-QC recovery");
+    assert_eq!(request.height, height);
+    assert_eq!(request.view, view);
+    assert_eq!(request.phase, Phase::Commit);
+    assert!(
+        !actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned")
+            .contains(&dedup_key),
+        "plain response must release its dedup key once it arms commit-QC repair"
     );
 
     harness.shutdown.send();
@@ -49067,6 +49241,78 @@ async fn trim_block_sync_update_drops_commit_votes_to_fit() {
             <= actor.consensus_payload_frame_cap,
         "trimmed block sync update should fit"
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn oversized_block_body_response_preserves_qc_as_direct_block_sync_update() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block = sample_block(1, 0, None);
+    let block_hash = block.hash();
+    let roster = actor.effective_commit_topology();
+    let mut update = super::message::BlockSyncUpdate::from(&block);
+    update.commit_qc = Some(Qc {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: block.header().height().get(),
+        view: block.header().view_change_index(),
+        epoch: actor.epoch_for_height(block.header().height().get()),
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: roster,
+        aggregate: QcAggregate {
+            signers_bitmap: vec![0x07],
+            bls_aggregate_signature: vec![0xAB; 96],
+        },
+    });
+    update.validator_checkpoint = None;
+    update.commit_votes.clear();
+    update.stake_snapshot = None;
+
+    let direct_len = super::block_sync_update_wire_len(actor.common_config.peer.id(), &update);
+    let response = super::message::BlockBodyResponse {
+        block_hash,
+        height: block.header().height().get(),
+        view: block.header().view_change_index(),
+        body: super::message::BlockBodyData::BlockSyncUpdate(update),
+    };
+    let response_len = super::consensus_block_wire_len(
+        actor.common_config.peer.id(),
+        &BlockMessage::BlockBodyResponse(response.clone()),
+    );
+    assert!(
+        response_len > direct_len,
+        "test requires wrapper overhead so the direct update can fit while the response cannot"
+    );
+    actor.consensus_payload_frame_cap = direct_len;
+
+    let mut msg = BlockMessageWire::new(BlockMessage::BlockBodyResponse(response));
+    assert!(actor.prepare_background_block_message(&mut msg));
+    assert!(
+        super::consensus_block_wire_len_wire(actor.common_config.peer.id(), &msg)
+            <= actor.consensus_payload_frame_cap,
+        "prepared fallback must fit the payload cap"
+    );
+
+    match msg.into_message() {
+        BlockMessage::BlockSyncUpdate(update) => {
+            assert!(
+                update.commit_qc.is_some(),
+                "direct fallback must preserve the commit certificate"
+            );
+        }
+        other => panic!(
+            "oversized QC-bearing BlockBodyResponse should become a direct BlockSyncUpdate, got {}",
+            Actor::block_message_kind(&other)
+        ),
+    }
 
     harness.shutdown.send();
 }

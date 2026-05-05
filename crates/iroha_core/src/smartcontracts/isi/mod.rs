@@ -268,6 +268,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::staking::ExitPublicLaneValidator>,
     dispatch_instruction::<iroha_data_model::isi::nexus::SetLaneRelayEmergencyValidators>,
     dispatch_instruction::<iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay>,
+    dispatch_instruction::<iroha_data_model::isi::nexus::RegisterVerifiedNexusFeeBudget>,
     dispatch_instruction::<iroha_data_model::isi::staking::RegisterPublicLaneValidator>,
     dispatch_instruction::<iroha_data_model::isi::staking::BondPublicLaneStake>,
     dispatch_instruction::<iroha_data_model::isi::staking::SchedulePublicLaneUnbond>,
@@ -561,12 +562,16 @@ mod tests {
         events::execute_trigger::ExecuteTriggerEventFilter,
         isi::error::{InstructionExecutionError, InvalidParameterError},
         nexus::{
-            AxtFastpqBinding, AxtProofEnvelope, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata,
-            LaneCatalog, LaneConfig, LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, ProofBlob,
+            AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, DataSpaceCatalog, DataSpaceId,
+            DataSpaceMetadata, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneConfig,
+            LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, ProofBlob,
+            VerifiedNexusFeeBudgetRecord, lane_relay_fastpq_claim_digest,
+            nexus_fee_budget_claim_digest,
         },
         permission,
     };
     use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
+    use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
         gen_account_in,
@@ -632,31 +637,40 @@ mod tests {
         (artifact, verified.manifest)
     }
 
-    fn axt_proof_blob_for(
-        dsid: DataSpaceId,
-        manifest_root: [u8; 32],
+    fn axt_lane_relay_proof_blob_for(
+        envelope: &LaneRelayEnvelope,
         proof_seed: &[u8],
         expiry_slot: u64,
     ) -> ProofBlob {
-        let source_tx_commitment = axt_test_digest(b"axt-isi-test:source-tx", &[proof_seed]);
-        let claim_digest = axt_test_digest(b"axt-isi-test:claim", &[proof_seed]);
-        let witness_commitment = axt_test_digest(b"axt-isi-test:witness", &[proof_seed]);
-        let policy_commitment = axt_test_digest(b"axt-isi-test:policy", &[&manifest_root]);
+        let manifest_root = envelope.manifest_root.expect("test relay manifest root");
+        let relay_ref = envelope.relay_ref();
+        let relay_ref_bytes = norito::to_bytes(&relay_ref).expect("encode relay ref");
+        let source_tx_commitment =
+            axt_test_digest(b"axt-isi-test:lane-relay-source-tx", &[&relay_ref_bytes]);
+        let claim_digest =
+            lane_relay_fastpq_claim_digest(envelope).expect("lane relay claim digest");
+        let witness_commitment = axt_test_digest(
+            b"axt-isi-test:lane-relay-witness",
+            &[envelope.settlement_hash.as_ref()],
+        );
+        let policy_commitment =
+            axt_test_digest(b"axt-isi-test:lane-relay-policy", &[&manifest_root]);
+        let dsid = envelope.dataspace_id;
         let binding = AxtFastpqBinding {
             parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_owned(),
             source_dsid: dsid.as_u64(),
             source_dataspace: format!("isi-test-dataspace-{}", dsid.as_u64()),
-            source_receipt_id: format!("receipt-{}", hex::encode(source_tx_commitment.as_ref())),
+            source_receipt_id: format!("relay-{}", hex::encode(relay_ref_bytes)),
             source_tx_commitment: hex::encode(source_tx_commitment.as_ref()),
             claim_type: "authorization".to_owned(),
             claim_digest: hex::encode(claim_digest.as_ref()),
             witness_commitment: hex::encode(witness_commitment.as_ref()),
             policy_commitment: hex::encode(policy_commitment.as_ref()),
-            verified_effect_type: "test_effect".to_owned(),
-            corridor: "isi-test-corridor".to_owned(),
+            verified_effect_type: LANE_RELAY_FASTPQ_EFFECT_TYPE.to_owned(),
+            corridor: "isi-test-lane-relay".to_owned(),
             verifier_id: "fastpq".to_owned(),
             verifier_version: "v1".to_owned(),
-            target_dsids: vec![dsid.as_u64()],
+            target_dsids: vec![DataSpaceId::UNIVERSAL.as_u64()],
             effect_binding: None,
         };
         let mut dsid_bytes = [0_u8; 16];
@@ -666,16 +680,22 @@ mod tests {
             fastpq_prover::PublicInputs {
                 dsid: dsid_bytes,
                 slot: expiry_slot,
-                old_root: axt_test_digest(b"axt-isi-test:old-root", &[proof_seed]).into(),
+                old_root: axt_test_digest(b"axt-isi-test:lane-relay-old-root", &[proof_seed])
+                    .into(),
                 new_root: manifest_root,
-                perm_root: axt_test_digest(b"axt-isi-test:perm-root", &[proof_seed]).into(),
-                tx_set_hash: axt_test_digest(b"axt-isi-test:tx-set", &[proof_seed]).into(),
+                perm_root: axt_test_digest(b"axt-isi-test:lane-relay-perm-root", &[proof_seed])
+                    .into(),
+                tx_set_hash: axt_test_digest(
+                    b"axt-isi-test:lane-relay-tx-set",
+                    &[claim_digest.as_ref()],
+                )
+                .into(),
             },
         );
         batch.push(fastpq_prover::StateTransition::new(
-            b"axt/isi/proof".to_vec(),
+            b"axt/isi/lane-relay".to_vec(),
             proof_seed.to_vec(),
-            manifest_root.to_vec(),
+            claim_digest.as_ref().to_vec(),
             fastpq_prover::OperationKind::MetaSet,
         ));
         batch.sort();
@@ -683,7 +703,116 @@ mod tests {
             "entry_hash".to_owned(),
             source_tx_commitment.as_ref().to_vec(),
         );
-        fastpq_prover::bind_axt_batch(&mut batch, &binding).expect("bind AXT ISI test batch");
+        fastpq_prover::bind_axt_batch(&mut batch, &binding).expect("bind AXT lane relay batch");
+        let proof = fastpq_prover::Prover::canonical_with_modes(
+            fastpq_prover::AXT_DEFAULT_PARAMETER,
+            fastpq_prover::ExecutionMode::Cpu,
+            fastpq_prover::PoseidonExecutionMode::Cpu,
+        )
+        .expect("FASTPQ prover")
+        .prove(&batch)
+        .expect("FASTPQ proof");
+        let fastpq_payload =
+            fastpq_prover::encode_axt_fastpq_payload(&batch, proof).expect("AXT FASTPQ payload");
+        let proof_envelope = AxtProofEnvelope {
+            dsid,
+            manifest_root,
+            da_commitment: None,
+            proof: fastpq_payload,
+            fastpq_binding: Some(binding),
+            committed_amount: None,
+            amount_commitment: None,
+        };
+        ProofBlob {
+            payload: norito::to_bytes(&proof_envelope).expect("encode proof envelope"),
+            expiry_slot: Some(expiry_slot),
+        }
+    }
+
+    fn axt_fee_budget_proof_blob_for(
+        sponsor: &AccountId,
+        fee_asset_id: &str,
+        verified_balance: &Numeric,
+        manifest_root: [u8; 32],
+        expiry_slot: u64,
+    ) -> ProofBlob {
+        let fee_asset_id = fee_asset_id.trim();
+        let sponsor_bytes = sponsor.to_string();
+        let balance_bytes = verified_balance.to_string();
+        let source_tx_commitment = axt_test_digest(
+            b"axt-isi-test:budget-source-tx",
+            &[sponsor_bytes.as_bytes(), fee_asset_id.as_bytes()],
+        );
+        let claim_digest = nexus_fee_budget_claim_digest(sponsor, fee_asset_id, verified_balance);
+        let witness_commitment = axt_test_digest(
+            b"axt-isi-test:budget-witness",
+            &[sponsor_bytes.as_bytes(), balance_bytes.as_bytes()],
+        );
+        let policy_commitment = axt_test_digest(b"axt-isi-test:budget-policy", &[&manifest_root]);
+        let dsid = DataSpaceId::UNIVERSAL;
+        let binding = AxtFastpqBinding {
+            parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_owned(),
+            source_dsid: dsid.as_u64(),
+            source_dataspace: "universal".to_owned(),
+            source_receipt_id: format!("budget-{}", hex::encode(source_tx_commitment.as_ref())),
+            source_tx_commitment: hex::encode(source_tx_commitment.as_ref()),
+            claim_type: "authorization".to_owned(),
+            claim_digest: hex::encode(claim_digest.as_ref()),
+            witness_commitment: hex::encode(witness_commitment.as_ref()),
+            policy_commitment: hex::encode(policy_commitment.as_ref()),
+            verified_effect_type: "nexus_fee_budget".to_owned(),
+            corridor: "isi-test-fee-budget".to_owned(),
+            verifier_id: "fastpq".to_owned(),
+            verifier_version: "v1".to_owned(),
+            target_dsids: vec![dsid.as_u64()],
+            effect_binding: Some(AxtEffectBinding {
+                destination_domain: None,
+                destination_account_id: Some(sponsor.to_string()),
+                vault_account_id: None,
+                issuance_account_id: None,
+                source_asset_definition_id: Some(fee_asset_id.to_owned()),
+                destination_asset_definition_id: None,
+                source_amount_i64: None,
+                destination_amount_i64: None,
+            }),
+        };
+        let mut dsid_bytes = [0_u8; 16];
+        dsid_bytes[..8].copy_from_slice(&dsid.as_u64().to_le_bytes());
+        let mut batch = fastpq_prover::TransitionBatch::new(
+            fastpq_prover::AXT_DEFAULT_PARAMETER,
+            fastpq_prover::PublicInputs {
+                dsid: dsid_bytes,
+                slot: expiry_slot,
+                old_root: axt_test_digest(
+                    b"axt-isi-test:budget-old-root",
+                    &[fee_asset_id.as_bytes()],
+                )
+                .into(),
+                new_root: manifest_root,
+                perm_root: axt_test_digest(
+                    b"axt-isi-test:budget-perm-root",
+                    &[sponsor_bytes.as_bytes()],
+                )
+                .into(),
+                tx_set_hash: axt_test_digest(
+                    b"axt-isi-test:budget-tx-set",
+                    &[balance_bytes.as_bytes()],
+                )
+                .into(),
+            },
+        );
+        batch.push(fastpq_prover::StateTransition::new(
+            b"axt/isi/nexus-fee-budget".to_vec(),
+            sponsor_bytes.as_bytes().to_vec(),
+            balance_bytes.as_bytes().to_vec(),
+            fastpq_prover::OperationKind::MetaSet,
+        ));
+        batch.sort();
+        batch.metadata.insert(
+            "entry_hash".to_owned(),
+            source_tx_commitment.as_ref().to_vec(),
+        );
+        fastpq_prover::bind_axt_batch(&mut batch, &binding).expect("bind AXT fee budget batch");
         let proof = fastpq_prover::Prover::canonical_with_modes(
             fastpq_prover::AXT_DEFAULT_PARAMETER,
             fastpq_prover::ExecutionMode::Cpu,
@@ -700,7 +829,11 @@ mod tests {
             da_commitment: None,
             proof: fastpq_payload,
             fastpq_binding: Some(binding),
-            committed_amount: None,
+            committed_amount: Some(
+                verified_balance
+                    .try_mantissa_u128()
+                    .expect("test balance is an integer u128"),
+            ),
             amount_commitment: None,
         };
         ProofBlob {
@@ -790,6 +923,7 @@ mod tests {
             total_xor_variance_micro: 0,
             swap_metadata: None,
             receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
         };
         let envelope = LaneRelayEnvelope::new(block_header, None, None, settlement_commitment, 0)
             .expect("valid lane relay envelope")
@@ -825,15 +959,14 @@ mod tests {
             nexus_fee_receipts: Vec::new(),
         };
         let manifest_root = [0x42; 32];
-        let proof_blob = axt_proof_blob_for(
-            DataSpaceId::new(10),
-            manifest_root,
-            b"register-lane-relay",
-            block_header.height().get() + 10,
-        );
-        let proof_digest = iroha_crypto::Hash::new(&proof_blob.payload);
         let envelope = LaneRelayEnvelope::new(block_header, None, None, settlement_commitment, 0)?
             .with_manifest_root(Some(manifest_root));
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay",
+            envelope.block_height + 10,
+        );
+        let proof_digest = iroha_crypto::Hash::new(&proof_blob.payload);
         let verified_at_height = envelope.block_height;
         let envelope = envelope.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
             proof_digest,
@@ -857,6 +990,62 @@ mod tests {
     }
 
     #[test]
+    async fn register_verified_nexus_fee_budget_persists_verified_cache_record() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_test_domains(&kura)?;
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+
+        let sponsor = ALICE_ID.clone();
+        let fee_asset_id = "xor#universal";
+        let verified_balance = Numeric::from(10_u32);
+        let manifest_root = [0x63; 32];
+        state_transaction.nexus.enabled = true;
+        state_transaction.nexus.fees.fee_asset_id = fee_asset_id.to_owned();
+
+        let proof_blob = axt_fee_budget_proof_blob_for(
+            &sponsor,
+            fee_asset_id,
+            &verified_balance,
+            manifest_root,
+            block_header.height().get() + 10,
+        );
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedNexusFeeBudget {
+            sponsor_account_id: sponsor.clone(),
+            fee_asset_id: fee_asset_id.to_owned(),
+            verified_balance: verified_balance.clone(),
+            manifest_root,
+            proof_blob,
+        };
+
+        instruction.execute(&ALICE_ID, &mut state_transaction)?;
+        state_transaction.apply();
+        state_block.commit().unwrap();
+
+        let key: Name =
+            VerifiedNexusFeeBudgetRecord::state_key_for(&sponsor, fee_asset_id).parse()?;
+        let view = state.view();
+        let payload = view
+            .world
+            .smart_contract_state()
+            .get(&key)
+            .expect("verified fee budget cache record");
+        let json: Json = norito::decode_from_bytes(payload)?;
+        let record: VerifiedNexusFeeBudgetRecord = norito::json::from_slice(json.get().as_bytes())?;
+        assert_eq!(record.sponsor_account_id, sponsor);
+        assert_eq!(record.fee_asset_id, fee_asset_id);
+        assert_eq!(record.verified_balance, verified_balance);
+        assert_eq!(record.manifest_root, manifest_root);
+        assert_eq!(
+            record.fastpq_binding.verified_effect_type,
+            "nexus_fee_budget"
+        );
+        Ok(())
+    }
+
+    #[test]
     async fn register_verified_lane_relay_rejects_mismatched_fastpq_digest() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -870,18 +1059,18 @@ mod tests {
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
 
         let manifest_root = [0x42; 32];
-        let proof_blob = axt_proof_blob_for(
-            dsid,
-            manifest_root,
-            b"register-lane-relay-digest-mismatch",
-            block_header.height().get() + 10,
-        );
+        let expiry_slot = block_header.height().get() + 10;
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
             dsid,
             manifest_root,
             iroha_crypto::Hash::new(b"wrong-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-digest-mismatch",
+            expiry_slot,
         );
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
@@ -901,6 +1090,61 @@ mod tests {
     }
 
     #[test]
+    async fn register_verified_lane_relay_rejects_mismatched_claim_digest() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let manifest_root = [0x42; 32];
+        let expiry_slot = block_header.height().get() + 10;
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            manifest_root,
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let mut proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-claim-mismatch",
+            expiry_slot,
+        );
+        let mut proof_envelope: AxtProofEnvelope = norito::decode_from_bytes(&proof_blob.payload)?;
+        proof_envelope
+            .fastpq_binding
+            .as_mut()
+            .expect("test fastpq binding")
+            .claim_digest = "ee".repeat(32);
+        proof_blob.payload = norito::to_bytes(&proof_envelope)?;
+        let envelope = envelope.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+            proof_digest: iroha_crypto::Hash::new(&proof_blob.payload),
+            verified_at_height: state_transaction.block_height(),
+        }));
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("mismatched claim digest must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("claim_digest mismatch")
+        ));
+        Ok(())
+    }
+
+    #[test]
     async fn register_verified_lane_relay_rejects_future_fastpq_height() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -914,24 +1158,23 @@ mod tests {
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
 
         let manifest_root = [0x42; 32];
-        let proof_blob = axt_proof_blob_for(
-            dsid,
-            manifest_root,
-            b"register-lane-relay-future-height",
-            block_header.height().get() + 10,
-        );
-        let mut envelope = sample_lane_relay_envelope(
+        let expiry_slot = block_header.height().get() + 10;
+        let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
             dsid,
             manifest_root,
-            iroha_crypto::Hash::new(&proof_blob.payload),
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
         );
-        envelope
-            .fastpq_proof
-            .as_mut()
-            .expect("proof material")
-            .verified_at_height = state_transaction.block_height().saturating_add(1);
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-future-height",
+            expiry_slot,
+        );
+        let envelope = envelope.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+            proof_digest: iroha_crypto::Hash::new(&proof_blob.payload),
+            verified_at_height: state_transaction.block_height().saturating_add(1),
+        }));
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,

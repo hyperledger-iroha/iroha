@@ -12,6 +12,7 @@ use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
 use crate::{
+    account::AccountId,
     block::{BlockHeader, consensus::LaneBlockCommitment},
     consensus::Qc,
     da::commitment::DaCommitmentBundle,
@@ -19,9 +20,14 @@ use crate::{
     peer::PeerId,
     prelude::Metadata,
 };
+use iroha_primitives::numeric::Numeric;
 
 /// Prefix for contract-visible verified relay state keys.
 pub const VERIFIED_LANE_RELAY_STATE_KEY_PREFIX: &str = "pkdeploy_verified_lane_relay";
+/// Prefix for contract-visible verified Nexus fee-budget cache keys.
+pub const VERIFIED_NEXUS_FEE_BUDGET_STATE_KEY_PREFIX: &str = "pkdeploy_verified_nexus_fee_budget";
+/// FASTPQ business effect expected for verified lane-relay block commitments.
+pub const LANE_RELAY_FASTPQ_EFFECT_TYPE: &str = "lane_relay_block";
 
 /// Relay envelope broadcast by Nexus lanes for merge validation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -133,6 +139,34 @@ pub struct VerifiedLaneRelayRecord {
     pub fastpq_binding: AxtFastpqBinding,
 }
 
+/// Verified Nexus XOR fee-budget cache record persisted by the relay protocol.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct VerifiedNexusFeeBudgetRecord {
+    /// Sponsor or payer account whose public Nexus XOR balance was verified.
+    pub sponsor_account_id: AccountId,
+    /// Fee asset selector used for the verified balance, fixed operationally to public XOR.
+    pub fee_asset_id: String,
+    /// Latest verified public Nexus balance for `fee_asset_id`.
+    pub verified_balance: Numeric,
+    /// Deterministic hash of the proof payload used during registration.
+    pub proof_payload_hash: Hash,
+    /// `FastPQ` statement digest verified during registration.
+    #[norito(default)]
+    pub fastpq_statement_digest: [u8; 32],
+    /// Deterministic digest of the embedded `FastPQ` proof payload.
+    pub fastpq_proof_digest: Hash,
+    /// Block height where the balance proof was verified and persisted.
+    pub verified_at_height: u64,
+    /// Manifest root enforced during registration.
+    pub manifest_root: [u8; 32],
+    /// FASTPQ binding that admission consumes on-ledger.
+    pub fastpq_binding: AxtFastpqBinding,
+}
+
 /// `FastPQ` proof metadata attached to a lane relay envelope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -144,6 +178,67 @@ pub struct LaneFastpqProofMaterial {
     pub proof_digest: Hash,
     /// Block height where the proof was verified.
     pub verified_at_height: u64,
+}
+
+#[derive(Clone, Debug, Encode)]
+struct LaneRelayFastpqClaim {
+    version: u8,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    block_height: u64,
+    block_header: BlockHeader,
+    qc: Option<Qc>,
+    da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
+    manifest_root: [u8; 32],
+    settlement_commitment: LaneBlockCommitment,
+    settlement_hash: HashOf<LaneBlockCommitment>,
+}
+
+/// Compute the canonical claim digest that a FASTPQ lane-relay proof must bind.
+///
+/// The encoded claim includes the relayed block coordinates, header/QC, manifest
+/// root, settlement commitment, and settlement hash. Because fee receipts are
+/// part of [`LaneBlockCommitment`], any receipt mutation changes this digest.
+///
+/// # Errors
+/// Returns [`LaneRelayError::InvalidFastpqProof`] when the relay lacks a
+/// manifest root, or [`LaneRelayError::Encode`] if canonical encoding fails.
+pub fn lane_relay_fastpq_claim_digest(
+    envelope: &LaneRelayEnvelope,
+) -> Result<Hash, LaneRelayError> {
+    let manifest_root = envelope
+        .manifest_root
+        .ok_or(LaneRelayError::InvalidFastpqProof)?;
+    let claim = LaneRelayFastpqClaim {
+        version: 1,
+        lane_id: envelope.lane_id,
+        dataspace_id: envelope.dataspace_id,
+        block_height: envelope.block_height,
+        block_header: envelope.block_header.clone(),
+        qc: envelope.qc.clone(),
+        da_commitment_hash: envelope.da_commitment_hash.clone(),
+        manifest_root,
+        settlement_commitment: envelope.settlement_commitment.clone(),
+        settlement_hash: envelope.settlement_hash.clone(),
+    };
+    let bytes = norito::to_bytes(&claim)?;
+    Ok(Hash::new(bytes))
+}
+
+/// Compute the canonical claim digest for a verified Nexus sponsor fee-budget proof.
+#[must_use]
+pub fn nexus_fee_budget_claim_digest(
+    sponsor: &AccountId,
+    fee_asset_id: &str,
+    verified_balance: &Numeric,
+) -> Hash {
+    Hash::new(
+        format!(
+            "nexus_fee_budget:v1:{sponsor}:{}:{verified_balance}",
+            fee_asset_id.trim()
+        )
+        .as_bytes(),
+    )
 }
 
 /// Operator evidence bundle captured when ingesting a lane relay envelope fails.
@@ -481,6 +576,45 @@ impl VerifiedLaneRelayRecord {
     }
 }
 
+impl VerifiedNexusFeeBudgetRecord {
+    /// Construct a verified fee-budget cache record from canonical verified inputs.
+    #[must_use]
+    pub fn new(
+        sponsor_account_id: AccountId,
+        fee_asset_id: String,
+        verified_balance: Numeric,
+        proof_payload_hash: Hash,
+        fastpq_statement_digest: [u8; 32],
+        fastpq_proof_digest: Hash,
+        verified_at_height: u64,
+        manifest_root: [u8; 32],
+        fastpq_binding: AxtFastpqBinding,
+    ) -> Self {
+        Self {
+            sponsor_account_id,
+            fee_asset_id,
+            verified_balance,
+            proof_payload_hash,
+            fastpq_statement_digest,
+            fastpq_proof_digest,
+            verified_at_height,
+            manifest_root,
+            fastpq_binding,
+        }
+    }
+
+    /// Return the canonical contract-state key for this sponsor/asset budget cache.
+    #[must_use]
+    pub fn state_key_for(sponsor_account_id: &AccountId, fee_asset_id: &str) -> String {
+        let material = format!("{sponsor_account_id}|{}", fee_asset_id.trim());
+        let suffix = Hash::new(material.as_bytes());
+        format!(
+            "{VERIFIED_NEXUS_FEE_BUDGET_STATE_KEY_PREFIX}_{}",
+            hex::encode(suffix.as_ref())
+        )
+    }
+}
+
 /// Compute the Norito hash of a settlement commitment for relay envelopes.
 ///
 /// # Errors
@@ -734,12 +868,15 @@ impl LaneRelayError {
 mod tests {
     use std::num::NonZeroU64;
 
-    use iroha_crypto::{Hash, HashOf};
+    use iroha_crypto::{Hash, HashOf, KeyPair};
 
     use super::*;
     use crate::{
-        PeerId,
-        block::{BlockHeader, consensus::LaneBlockCommitment},
+        AccountId, PeerId,
+        block::{
+            BlockHeader,
+            consensus::{LaneBlockCommitment, NexusFeeReceipt, NexusFeeScheduleInputs},
+        },
         consensus::{CertPhase, QcAggregate},
     };
 
@@ -925,6 +1062,68 @@ mod tests {
             .verify_fastpq_proof_material()
             .expect_err("stale verification height must be rejected");
         assert_eq!(err, LaneRelayError::InvalidFastpqProof);
+    }
+
+    #[test]
+    fn lane_relay_fastpq_claim_digest_binds_fee_receipts() {
+        let mut envelope = build_envelope(8, None).with_manifest_root(Some([0x42; 32]));
+        let original = lane_relay_fastpq_claim_digest(&envelope).expect("lane relay claim digest");
+
+        envelope
+            .settlement_commitment
+            .nexus_fee_receipts
+            .push(NexusFeeReceipt {
+                version: 1,
+                source_id: [0x11; 32],
+                payer_account_id: AccountId::new(KeyPair::random().public_key().clone()),
+                fee_asset_id: "xor#universal".to_owned(),
+                fee_amount: Numeric::from(1_u32),
+                schedule: NexusFeeScheduleInputs {
+                    tx_bytes_len: 1,
+                    instruction_count: 1,
+                    gas_used: 0,
+                    base_fee: Numeric::zero(),
+                    per_byte_fee: Numeric::zero(),
+                    per_instruction_fee: Numeric::from(1_u32),
+                    per_gas_unit_fee: Numeric::zero(),
+                },
+                lane_id: envelope.lane_id,
+                dataspace_id: envelope.dataspace_id,
+                block_height: envelope.block_height,
+            });
+        envelope.settlement_hash =
+            compute_settlement_hash(&envelope.settlement_commitment).expect("settlement hash");
+        let changed = lane_relay_fastpq_claim_digest(&envelope).expect("changed claim digest");
+
+        assert_ne!(original, changed);
+    }
+
+    #[test]
+    fn nexus_fee_budget_claim_digest_binds_sponsor_asset_and_balance() {
+        let sponsor = AccountId::new(KeyPair::random().public_key().clone());
+        let original =
+            nexus_fee_budget_claim_digest(&sponsor, "xor#universal", &Numeric::from(10_u32));
+
+        assert_ne!(
+            original,
+            nexus_fee_budget_claim_digest(&sponsor, "xor#universal", &Numeric::from(11_u32))
+        );
+        assert_ne!(
+            original,
+            nexus_fee_budget_claim_digest(
+                &sponsor,
+                "xor#universal.universal",
+                &Numeric::from(10_u32)
+            )
+        );
+        assert_ne!(
+            original,
+            nexus_fee_budget_claim_digest(
+                &AccountId::new(KeyPair::random().public_key().clone()),
+                "xor#universal",
+                &Numeric::from(10_u32),
+            )
+        );
     }
 
     #[test]

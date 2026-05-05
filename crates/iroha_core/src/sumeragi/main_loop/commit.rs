@@ -559,6 +559,18 @@ pub(super) fn execute_commit_work(
             timings.state_commit_ms = Some(to_ms(state_commit_start.elapsed()));
             log_stage_end("state_commit", state_commit_start);
             let wsv_checkpoint_hash = crate::snapshot::canonical_state_snapshot_hash(state);
+            if std::env::var_os("IROHA_DEBUG_WSV_COMPONENTS").is_some() {
+                let components = crate::snapshot::canonical_state_snapshot_component_hashes(state);
+                let commit_qcs = crate::snapshot::canonical_state_commit_qc_summaries(state);
+                info!(
+                    height = block_height,
+                    block = %block_hash,
+                    checkpoint = %wsv_checkpoint_hash,
+                    ?components,
+                    ?commit_qcs,
+                    "computed committed WSV checkpoint components"
+                );
+            }
             if let Err(err) =
                 kura.store_wsv_checkpoint(block_height, block_hash, wsv_checkpoint_hash)
             {

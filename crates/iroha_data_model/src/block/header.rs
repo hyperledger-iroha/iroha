@@ -718,8 +718,6 @@ mod tests {
         core::NoritoSerialize,
     };
 
-    use crate::block::ExternalExecutionContext;
-
     use super::*;
 
     struct SamplePayload {

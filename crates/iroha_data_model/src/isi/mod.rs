@@ -374,6 +374,12 @@ impl From<crate::isi::nexus::RegisterVerifiedLaneRelay> for InstructionBox {
     }
 }
 
+impl From<crate::isi::nexus::RegisterVerifiedNexusFeeBudget> for InstructionBox {
+    fn from(i: crate::isi::nexus::RegisterVerifiedNexusFeeBudget) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::identifier::RegisterIdentifierPolicy> for InstructionBox {
     fn from(i: crate::isi::identifier::RegisterIdentifierPolicy) -> Self {
         InstructionBox(Box::new(i))

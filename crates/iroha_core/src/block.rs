@@ -7390,6 +7390,10 @@ pub(crate) mod valid {
             let mut dataspace_summaries: BTreeMap<(LaneId, DataSpaceId), u64> = BTreeMap::new();
             let mut pending_settlements = state_block.drain_settlement_records();
             let mut pending_nexus_fee_receipts = state_block.drain_nexus_fee_records();
+            let nexus_fee_receipts_active = state_block
+                .nexus
+                .fees
+                .lane_relay_burn_receipts_active_at(block.header().height().get());
 
             let mut lane_settlement_builders: BTreeMap<
                 (LaneId, DataSpaceId),
@@ -7473,6 +7477,14 @@ pub(crate) mod valid {
                     if let Some(record) =
                         pending_nexus_fee_receipts.remove(&prepared_txs[idx].metadata.signed_hash)
                     {
+                        if !nexus_fee_receipts_active {
+                            iroha_logger::warn!(
+                                height = block.header().height().get(),
+                                tx = %prepared_txs[idx].metadata.signed_hash,
+                                "dropping staged Nexus fee receipt before fee receipt activation height"
+                            );
+                            continue;
+                        }
                         let builder = lane_settlement_builders
                             .entry((decision.lane_id, decision.dataspace_id))
                             .or_default();

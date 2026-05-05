@@ -270,6 +270,13 @@ impl SettlementAccumulator {
         self.nexus_fee_records.insert(tx_hash, record);
     }
 
+    /// Iterate accumulated Nexus fee receipts without draining them.
+    pub fn nexus_fee_records(
+        &self,
+    ) -> impl Iterator<Item = (&HashOf<SignedTransaction>, &PendingNexusFeeReceipt)> {
+        self.nexus_fee_records.iter()
+    }
+
     /// Drain the accumulated receipts, returning ownership of the internal map.
     pub fn drain(&mut self) -> BTreeMap<HashOf<SignedTransaction>, PendingSettlement> {
         core::mem::take(&mut self.records)
