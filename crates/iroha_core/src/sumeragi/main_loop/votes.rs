@@ -2682,26 +2682,52 @@ impl Actor {
                 vote.block_hash,
                 signer_peer,
             ) {
-                self.note_double_vote(Some(&existing), vote, evidence_context);
-                warn!(
-                    phase = ?vote.phase,
-                    height = vote.height,
-                    view = vote.view,
-                    epoch = vote.epoch,
-                    signer = vote.signer,
-                    block_hash = %vote.block_hash,
-                    existing_view = existing.view,
-                    existing_block = %existing.block_hash,
-                    signer_peer = ?signer_peer,
-                    "dropping slot-conflicting vote for signer peer"
-                );
-                self.record_consensus_message_handling(
-                    super::status::ConsensusMessageKind::QcVote,
-                    super::status::ConsensusMessageOutcome::Dropped,
-                    super::status::ConsensusMessageReason::ConflictingVote,
-                );
-                record_drop(super::status::VoteValidationDropReason::ConflictingVote);
-                return false;
+                let new_view_qc_supersedes = self
+                    .proposal_highest_qc_for_slot(vote.height, vote.view)
+                    .is_some_and(|highest_qc| {
+                        self.new_view_qc_supersedes_same_height_vote_conflict(
+                            vote.height,
+                            vote.view,
+                            highest_qc,
+                            existing.block_hash,
+                            existing.view,
+                        )
+                    });
+                if new_view_qc_supersedes {
+                    info!(
+                        phase = ?vote.phase,
+                        height = vote.height,
+                        view = vote.view,
+                        epoch = vote.epoch,
+                        signer = vote.signer,
+                        block_hash = %vote.block_hash,
+                        existing_view = existing.view,
+                        existing_block = %existing.block_hash,
+                        signer_peer = ?signer_peer,
+                        "accepting vote: NEW_VIEW QC supersedes raw same-height signer vote"
+                    );
+                } else {
+                    self.note_double_vote(Some(&existing), vote, evidence_context);
+                    warn!(
+                        phase = ?vote.phase,
+                        height = vote.height,
+                        view = vote.view,
+                        epoch = vote.epoch,
+                        signer = vote.signer,
+                        block_hash = %vote.block_hash,
+                        existing_view = existing.view,
+                        existing_block = %existing.block_hash,
+                        signer_peer = ?signer_peer,
+                        "dropping slot-conflicting vote for signer peer"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::QcVote,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::ConflictingVote,
+                    );
+                    record_drop(super::status::VoteValidationDropReason::ConflictingVote);
+                    return false;
+                }
             }
         }
         if let Some(existing) = identity_key
