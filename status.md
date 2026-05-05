@@ -11,16 +11,17 @@ Last updated: 2026-05-05
 - Snapshot restore decodes the manifest registry and runs the existing storage
   migration pass so UAID dataspace bindings are rebuilt from active manifest
   records before the node resumes.
-- Legacy snapshots that are missing the new section are treated as recoverable
-  when Kura history up to the snapshot height contains Space Directory manifest
-  instructions, allowing startup to discard the incomplete snapshot and rebuild
-  from the block log.
+- Legacy snapshots that are missing the new section now restore Space Directory
+  manifest instructions from Kura history up to the snapshot height, including
+  instructions reloaded from persisted blocks as opaque payloads. Legacy
+  snapshots with no Space Directory history remain readable.
 - Kura replay checkpoint validation accepts the pre-upgrade WSV checkpoint hash
   only when it matches the legacy snapshot surface without the new manifest
   registry, then logs the upgrade compatibility path. New checkpoints continue
   to hash the full durable snapshot surface.
 - Validation:
   - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib legacy_snapshot_missing_space_directory_section -- --nocapture`
   - `cargo test -p iroha_core --lib snapshot_roundtrip_preserves_space_directory_manifests_and_rebuilds_bindings -- --nocapture`
   - `cargo test -p iroha_core --lib can_read_snapshot_after_writing -- --nocapture`
   - `cargo test -p irohad snapshot_read_error_is_recoverable_classifies_errors -- --nocapture`

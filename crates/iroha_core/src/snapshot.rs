@@ -32,7 +32,7 @@ use iroha_data_model::{
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
 use mv::storage::StorageReadOnly;
-use norito::codec::Encode as NoritoEncode;
+use norito::codec::{DecodeAll, Encode as NoritoEncode};
 use norito::json::{self, JsonSerialize, JsonSerialize as JsonSerializeTrait};
 use sha2::{Digest, Sha256};
 
@@ -840,6 +840,50 @@ fn snapshot_has_space_directory_manifest_section(value: &json::Value) -> bool {
     )
 }
 
+fn decode_instruction_by_id<T>(instruction: &InstructionBox) -> Option<T>
+where
+    T: DecodeAll + 'static,
+{
+    let instruction_id = instruction.id();
+    if instruction_id != std::any::type_name::<T>() {
+        return None;
+    }
+
+    let encoded = instruction.dyn_encode();
+    let mut cursor = encoded.as_slice();
+    match T::decode_all(&mut cursor) {
+        Ok(decoded) => Some(decoded),
+        Err(err) => {
+            warn!(
+                instruction_id,
+                error = %err,
+                "Failed to decode Space Directory instruction while restoring a legacy snapshot"
+            );
+            None
+        }
+    }
+}
+
+fn restore_published_space_directory_manifest(
+    state: &mut State,
+    manifest: iroha_data_model::nexus::AssetPermissionManifest,
+    touched_uaids: &mut BTreeSet<UniversalAccountId>,
+) -> bool {
+    let uaid = manifest.uaid;
+    let mut record = SpaceDirectoryManifestRecord::new(manifest);
+    record
+        .lifecycle
+        .mark_activated(record.manifest.activation_epoch);
+    let mut set = {
+        let view = state.world.space_directory_manifests.view();
+        view.get(&uaid).cloned().unwrap_or_default()
+    };
+    set.upsert(record);
+    state.world.space_directory_manifests.insert(uaid, set);
+    touched_uaids.insert(uaid);
+    true
+}
+
 fn restore_space_directory_manifest_instruction(
     state: &mut State,
     instruction: &InstructionBox,
@@ -847,20 +891,20 @@ fn restore_space_directory_manifest_instruction(
 ) -> bool {
     let any = instruction.as_any();
     if let Some(instruction) = any.downcast_ref::<PublishSpaceDirectoryManifest>() {
-        let manifest = instruction.manifest.clone();
-        let uaid = manifest.uaid;
-        let mut record = SpaceDirectoryManifestRecord::new(manifest);
-        record
-            .lifecycle
-            .mark_activated(record.manifest.activation_epoch);
-        let mut set = {
-            let view = state.world.space_directory_manifests.view();
-            view.get(&uaid).cloned().unwrap_or_default()
-        };
-        set.upsert(record);
-        state.world.space_directory_manifests.insert(uaid, set);
-        touched_uaids.insert(uaid);
-        return true;
+        return restore_published_space_directory_manifest(
+            state,
+            instruction.manifest.clone(),
+            touched_uaids,
+        );
+    }
+    if let Some(instruction) =
+        decode_instruction_by_id::<PublishSpaceDirectoryManifest>(instruction)
+    {
+        return restore_published_space_directory_manifest(
+            state,
+            instruction.manifest,
+            touched_uaids,
+        );
     }
 
     if let Some(instruction) = any.downcast_ref::<ExpireSpaceDirectoryManifest>() {
@@ -873,6 +917,16 @@ fn restore_space_directory_manifest_instruction(
         ) {
             return true;
         }
+    }
+    if let Some(instruction) = decode_instruction_by_id::<ExpireSpaceDirectoryManifest>(instruction)
+    {
+        return update_space_directory_manifest_record(
+            state,
+            instruction.uaid,
+            instruction.dataspace,
+            touched_uaids,
+            |record| record.lifecycle.mark_expired(instruction.expired_epoch),
+        );
     }
 
     if let Some(instruction) = any.downcast_ref::<RevokeSpaceDirectoryManifest>() {
@@ -889,6 +943,20 @@ fn restore_space_directory_manifest_instruction(
         ) {
             return true;
         }
+    }
+    if let Some(instruction) = decode_instruction_by_id::<RevokeSpaceDirectoryManifest>(instruction)
+    {
+        return update_space_directory_manifest_record(
+            state,
+            instruction.uaid,
+            instruction.dataspace,
+            touched_uaids,
+            |record| {
+                record
+                    .lifecycle
+                    .mark_revoked(instruction.revoked_epoch, instruction.reason);
+            },
+        );
     }
 
     false
@@ -1594,15 +1662,18 @@ enum TryWriteError {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, io::Write, num::NonZeroUsize, sync::Arc};
+    use std::{borrow::Cow, fs::File, io::Write, num::NonZeroUsize, sync::Arc};
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
-        ChainId,
+        ChainId, Level,
         account::{AccountDetails, AccountId, AccountValue},
+        block::SignedBlock,
+        isi::{Log, space_directory::PublishSpaceDirectoryManifest},
         metadata::Metadata,
         nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
         peer::PeerId,
+        transaction::TransactionBuilder,
     };
     use nonzero_ext::nonzero;
     use tempfile::tempdir;
@@ -1610,7 +1681,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        block::ValidBlock, query::store::LiveQueryStore, sumeragi::network_topology::Topology,
+        block::{BlockBuilder, ValidBlock},
+        query::store::LiveQueryStore,
+        sumeragi::network_topology::Topology,
+        tx::AcceptedTransaction,
     };
 
     const TEST_CHUNK_SIZE: NonZeroUsize = nonzero!(1024_usize);
@@ -1659,6 +1733,105 @@ mod tests {
         state.world.space_directory_manifests.insert(uaid, set);
 
         (uaid, dataspace, account_id)
+    }
+
+    fn sample_space_directory_manifest() -> AssetPermissionManifest {
+        AssetPermissionManifest {
+            version: ManifestVersion::default(),
+            uaid: UniversalAccountId::from_hash(Hash::new(b"snapshot-legacy-manifest")),
+            dataspace: DataSpaceId::new(11),
+            issued_ms: 1,
+            activation_epoch: 1,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        }
+    }
+
+    fn insert_account_with_uaid(state: &mut State, uaid: UniversalAccountId) -> AccountId {
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
+        state
+            .world
+            .accounts
+            .insert(account_id.clone(), AccountValue::new(details));
+        account_id
+    }
+
+    fn accepted_manifest_transaction() -> AcceptedTransaction<'static> {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let transaction = TransactionBuilder::new(ChainId::from(TEST_CHAIN_ID), authority)
+            .with_instructions([PublishSpaceDirectoryManifest {
+                manifest: sample_space_directory_manifest(),
+            }])
+            .sign(key_pair.private_key());
+        AcceptedTransaction::new_unchecked(Cow::Owned(transaction))
+    }
+
+    fn accepted_log_transaction(message: &str) -> AcceptedTransaction<'static> {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let transaction = TransactionBuilder::new(ChainId::from(TEST_CHAIN_ID), authority)
+            .with_instructions([Log::new(Level::INFO, message.to_owned())])
+            .sign(key_pair.private_key());
+        AcceptedTransaction::new_unchecked(Cow::Owned(transaction))
+    }
+
+    fn signed_block_with_transaction(
+        transaction: AcceptedTransaction<'static>,
+    ) -> Arc<SignedBlock> {
+        let block_signer = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        Arc::new(
+            BlockBuilder::new(vec![transaction])
+                .chain(0, None)
+                .sign(block_signer.private_key())
+                .unpack(|_| {})
+                .into(),
+        )
+    }
+
+    fn legacy_snapshot_bytes_without_space_directory_section(state: &State) -> Vec<u8> {
+        let mut payload = String::new();
+        serialize_state_snapshot(state, &mut payload, false);
+        payload.into_bytes()
+    }
+
+    fn write_snapshot_bundle_from_bytes(
+        store_dir: &std::path::Path,
+        bytes: &[u8],
+        key_pair: &KeyPair,
+    ) {
+        std::fs::create_dir_all(store_dir).expect("snapshot dir");
+        std::fs::write(store_dir.join(SNAPSHOT_FILE_NAME), bytes).expect("snapshot data");
+
+        let digest_bytes = Sha256::digest(bytes);
+        let digest_vec = digest_bytes.to_vec();
+        std::fs::write(
+            store_dir.join(SNAPSHOT_DIGEST_FILE_NAME),
+            hex::encode(&digest_vec),
+        )
+        .expect("snapshot digest");
+
+        let signature = Signature::new(key_pair.private_key(), &digest_vec);
+        std::fs::write(
+            store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME),
+            hex::encode(signature.payload()),
+        )
+        .expect("snapshot signature");
+
+        let merkle = SnapshotMerkleMetadata::from_bytes(bytes, TEST_CHUNK_SIZE);
+        let mut merkle_file =
+            File::create(store_dir.join(SNAPSHOT_MERKLE_FILE_NAME)).expect("merkle file");
+        json::to_writer(&mut merkle_file, &merkle).expect("snapshot merkle");
+    }
+
+    fn store_block_and_mark_state_height(
+        state: &mut State,
+        kura: &Arc<Kura>,
+        block: Arc<SignedBlock>,
+    ) {
+        kura.store_block(Arc::clone(&block)).expect("store block");
+        state.push_block_hash_for_testing(block.hash());
     }
 
     #[test]
@@ -1763,6 +1936,82 @@ mod tests {
             uaid_bindings.is_bound_to(dataspace, &account_id),
             "restored active manifest should bind the account to the dataspace"
         );
+    }
+
+    #[test]
+    async fn legacy_snapshot_missing_space_directory_section_restores_manifest_history_from_kura() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = state_factory_with_kura(Arc::clone(&kura));
+        let manifest = sample_space_directory_manifest();
+        let uaid = manifest.uaid;
+        let dataspace = manifest.dataspace;
+        let account_id = insert_account_with_uaid(&mut state, uaid);
+        let block = signed_block_with_transaction(accepted_manifest_transaction());
+        store_block_and_mark_state_height(&mut state, &kura, block);
+        let key_pair = KeyPair::random();
+        let legacy_bytes = legacy_snapshot_bytes_without_space_directory_section(&state);
+
+        write_snapshot_bundle_from_bytes(&store_dir, &legacy_bytes, &key_pair);
+
+        let snapshot_state = try_read_snapshot(
+            &store_dir,
+            &kura,
+            LiveQueryStore::start_test,
+            BlockCount(state.view().height()),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::new(<_>::default(), true),
+        )
+        .expect("legacy snapshot should restore Space Directory manifests from Kura");
+
+        let manifests = snapshot_state.world.space_directory_manifests.view();
+        let restored = manifests
+            .get(&uaid)
+            .and_then(|set| set.get(&dataspace))
+            .expect("manifest should be restored from Kura");
+        assert!(restored.is_active());
+        drop(manifests);
+
+        let bindings = snapshot_state.world.uaid_dataspaces.view();
+        assert!(
+            bindings
+                .get(&uaid)
+                .is_some_and(|bindings| bindings.is_bound_to(dataspace, &account_id)),
+            "restored manifest should rebuild account dataspace bindings"
+        );
+    }
+
+    #[test]
+    async fn legacy_snapshot_missing_space_directory_section_loads_without_manifest_history() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = state_factory_with_kura(Arc::clone(&kura));
+        let block = signed_block_with_transaction(accepted_log_transaction("legacy"));
+        store_block_and_mark_state_height(&mut state, &kura, block);
+        let key_pair = KeyPair::random();
+        let legacy_bytes = legacy_snapshot_bytes_without_space_directory_section(&state);
+
+        write_snapshot_bundle_from_bytes(&store_dir, &legacy_bytes, &key_pair);
+
+        let snapshot_state = try_read_snapshot(
+            &store_dir,
+            &kura,
+            LiveQueryStore::start_test,
+            BlockCount(state.view().height()),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::new(<_>::default(), true),
+        )
+        .expect("legacy snapshot without Space Directory history should remain readable");
+
+        assert_eq!(snapshot_state.view().height(), 1);
     }
 
     #[test]
