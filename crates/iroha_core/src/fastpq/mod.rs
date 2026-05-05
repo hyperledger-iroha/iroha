@@ -45,7 +45,7 @@ pub const FASTPQ_CANONICAL_PARAMETER_SET: &str = "fastpq-lane-balanced";
 const DIGEST_FINALIZE_PARALLEL_THRESHOLD: usize = 32;
 const DIGEST_FINALIZE_GPU_THRESHOLD: usize = 64;
 const POSEIDON_DIGEST_WORDS_PER_TRANSCRIPT_HINT: usize = 24;
-static DIGEST_ACCELERATION_ENABLED: AtomicBool = AtomicBool::new(true);
+static DIGEST_ACCELERATION_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Base fields for FASTPQ public inputs shared across batches in a block.
 #[derive(Debug, Clone, Copy)]
@@ -88,9 +88,16 @@ impl FastpqPublicInputsTemplate {
     }
 }
 
-pub(crate) fn configure_poseidon_digest_acceleration(cfg: &Fastpq) {
-    let enabled = !matches!(cfg.execution_mode, FastpqExecutionMode::Cpu)
-        && !matches!(cfg.poseidon_mode, FastpqPoseidonMode::Cpu);
+pub(crate) fn configure_poseidon_digest_acceleration(_cfg: &Fastpq) {
+    DIGEST_ACCELERATION_ENABLED.store(false, Ordering::Release);
+}
+
+pub(crate) fn poseidon_digest_acceleration_configured(cfg: &Fastpq) -> bool {
+    !matches!(cfg.execution_mode, FastpqExecutionMode::Cpu)
+        && !matches!(cfg.poseidon_mode, FastpqPoseidonMode::Cpu)
+}
+
+pub(crate) fn set_poseidon_digest_acceleration_enabled(enabled: bool) {
     DIGEST_ACCELERATION_ENABLED.store(enabled, Ordering::Release);
 }
 
@@ -1160,6 +1167,28 @@ mod tests {
     }
 
     #[test]
+    fn digest_acceleration_stays_disabled_until_preflight_enables_it() {
+        let _guard = DigestAccelerationGuard::new();
+        let auto = fastpq_cfg(FastpqExecutionMode::Auto, FastpqPoseidonMode::Auto);
+        assert!(poseidon_digest_acceleration_configured(&auto));
+
+        set_poseidon_digest_acceleration_enabled(true);
+        configure_poseidon_digest_acceleration(&auto);
+        assert!(!poseidon_digest_acceleration_enabled());
+
+        set_poseidon_digest_acceleration_enabled(true);
+        assert!(poseidon_digest_acceleration_enabled());
+
+        let cpu = fastpq_cfg(FastpqExecutionMode::Cpu, FastpqPoseidonMode::Auto);
+        assert!(!poseidon_digest_acceleration_configured(&cpu));
+        configure_poseidon_digest_acceleration(&cpu);
+        assert!(!poseidon_digest_acceleration_enabled());
+
+        let poseidon_cpu = fastpq_cfg(FastpqExecutionMode::Gpu, FastpqPoseidonMode::Cpu);
+        assert!(!poseidon_digest_acceleration_configured(&poseidon_cpu));
+    }
+
+    #[test]
     fn finalize_transfer_transcripts_fills_only_single_delta_digests() {
         let mut single = sample_transcript();
         let expected = poseidon_preimage_digest(&single.deltas[0], &single.batch_hash);
@@ -1663,6 +1692,44 @@ mod tests {
         let mut chunk = [0u8; 8];
         chunk[..bytes.len()].copy_from_slice(bytes);
         u64::from_le_bytes(chunk)
+    }
+
+    struct DigestAccelerationGuard {
+        previous: bool,
+    }
+
+    impl DigestAccelerationGuard {
+        fn new() -> Self {
+            Self {
+                previous: poseidon_digest_acceleration_enabled(),
+            }
+        }
+    }
+
+    impl Drop for DigestAccelerationGuard {
+        fn drop(&mut self) {
+            set_poseidon_digest_acceleration_enabled(self.previous);
+        }
+    }
+
+    fn fastpq_cfg(
+        execution_mode: FastpqExecutionMode,
+        poseidon_mode: FastpqPoseidonMode,
+    ) -> Fastpq {
+        Fastpq {
+            execution_mode,
+            poseidon_mode,
+            device_class: None,
+            chip_family: None,
+            gpu_kind: None,
+            metal_queue_fanout: None,
+            metal_queue_column_threshold: None,
+            metal_max_in_flight: None,
+            metal_threadgroup_width: None,
+            metal_trace: iroha_config::parameters::defaults::zk::fastpq::METAL_TRACE,
+            metal_debug_enum: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_ENUM,
+            metal_debug_fused: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
+        }
     }
 
     fn sample_template() -> FastpqPublicInputsTemplate {

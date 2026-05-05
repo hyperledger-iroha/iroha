@@ -2,7 +2,10 @@
 //! drives the Stage 6 prover in the background.
 
 use std::{
-    sync::{Arc, OnceLock},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Instant,
 };
 
@@ -27,11 +30,20 @@ use crate::fastpq::{
 pub struct FastpqLaneHandle {
     tx: mpsc::Sender<FastpqWitnessJob>,
     backpressure: Option<crate::queue::BackpressureHandle>,
+    ready: Arc<AtomicBool>,
 }
 
 impl FastpqLaneHandle {
     /// Submit a prover job to the lane.
     pub fn submit(&self, job: FastpqWitnessJob) -> bool {
+        if !self.ready.load(Ordering::Acquire) {
+            debug!(
+                height = job.height,
+                view = job.view,
+                "fastpq lane: deferring background prover job while backend is initialising"
+            );
+            return false;
+        }
         if self
             .backpressure
             .as_ref()
@@ -45,6 +57,11 @@ impl FastpqLaneHandle {
             return false;
         }
         self.tx.try_send(job).is_ok()
+    }
+
+    #[cfg(test)]
+    fn is_ready_for_test(&self) -> bool {
+        self.ready.load(Ordering::Acquire)
     }
 }
 
@@ -122,29 +139,18 @@ pub fn start_with_backpressure(
     if let Some(existing) = GLOBAL_SENDER.get() {
         return Some((existing.clone(), tokio::spawn(async {})));
     }
-    let engine = if let Some(engine) = build_engine(cfg) {
-        engine
-    } else {
-        warn!("fastpq lane: failed to initialise prover backend; lane disabled");
-        return None;
-    };
-    let (tx, mut rx) = mpsc::channel::<FastpqWitnessJob>(32);
+    let (tx, rx) = mpsc::channel::<FastpqWitnessJob>(32);
+    let ready = Arc::new(AtomicBool::new(false));
     let handle = FastpqLaneHandle {
         tx: tx.clone(),
         backpressure,
+        ready: Arc::clone(&ready),
     };
     if GLOBAL_SENDER.set(handle.clone()).is_err() {
         return Some((GLOBAL_SENDER.get().unwrap().clone(), tokio::spawn(async {})));
     }
-    let task = tokio::spawn(async move {
-        while let Some(job) = rx.recv().await {
-            let engine = Arc::clone(&engine);
-            if let Err(err) = tokio::task::spawn_blocking(move || process_job(&engine, &job)).await
-            {
-                warn!(?err, "fastpq lane: prover task panicked");
-            }
-        }
-    });
+    let cfg = cfg.clone();
+    let task = spawn_worker(rx, ready, move || build_engine(&cfg));
     Some((handle, task))
 }
 
@@ -169,15 +175,7 @@ fn build_engine(cfg: &Fastpq) -> Option<Arc<dyn FastpqProofEngine>> {
     let mode = map_execution_mode(cfg.execution_mode);
     let poseidon_mode = map_poseidon_mode(cfg.poseidon_mode);
     #[cfg(feature = "fastpq-gpu")]
-    if should_preflight_poseidon(mode, poseidon_mode) {
-        let started_at = Instant::now();
-        let ok = fastpq_prover::preflight_poseidon_gpu_backend();
-        info!(
-            ok,
-            elapsed_ms = started_at.elapsed().as_millis(),
-            "fastpq lane: Poseidon GPU preflight completed"
-        );
-    }
+    let (mode, poseidon_mode) = preflight_prover_modes(cfg, mode, poseidon_mode);
     match Prover::canonical_with_modes(FASTPQ_CANONICAL_PARAMETER_SET, mode, poseidon_mode) {
         Ok(prover) => Some(Arc::new(RealProofEngine { prover })),
         Err(err) => {
@@ -185,6 +183,79 @@ fn build_engine(cfg: &Fastpq) -> Option<Arc<dyn FastpqProofEngine>> {
             None
         }
     }
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn preflight_prover_modes(
+    cfg: &Fastpq,
+    mode: ProverExecutionMode,
+    poseidon_mode: ProverPoseidonMode,
+) -> (ProverExecutionMode, ProverPoseidonMode) {
+    if !should_preflight_poseidon(mode, poseidon_mode) {
+        return (mode, poseidon_mode);
+    }
+    let started_at = Instant::now();
+    let poseidon_ok = fastpq_prover::preflight_poseidon_gpu_backend();
+    info!(
+        ok = poseidon_ok,
+        elapsed_ms = started_at.elapsed().as_millis(),
+        "fastpq lane: Poseidon GPU preflight completed"
+    );
+    if poseidon_ok {
+        preflight_digest_acceleration(cfg);
+    } else {
+        crate::fastpq::set_poseidon_digest_acceleration_enabled(false);
+        warn!("fastpq lane: using CPU prover backend after Poseidon GPU preflight failed");
+        return (ProverExecutionMode::Cpu, ProverPoseidonMode::Cpu);
+    }
+    (mode, poseidon_mode)
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn preflight_digest_acceleration(cfg: &Fastpq) {
+    if !crate::fastpq::poseidon_digest_acceleration_configured(cfg) {
+        crate::fastpq::set_poseidon_digest_acceleration_enabled(false);
+        return;
+    }
+    let started_at = Instant::now();
+    let ok = fastpq_prover::preflight_bn254_poseidon_word_batches();
+    crate::fastpq::set_poseidon_digest_acceleration_enabled(ok);
+    info!(
+        ok,
+        elapsed_ms = started_at.elapsed().as_millis(),
+        "fastpq lane: BN254 Poseidon digest GPU preflight completed"
+    );
+}
+
+fn spawn_worker(
+    mut rx: mpsc::Receiver<FastpqWitnessJob>,
+    ready: Arc<AtomicBool>,
+    build_engine: impl FnOnce() -> Option<Arc<dyn FastpqProofEngine>> + Send + 'static,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let engine = match tokio::task::spawn_blocking(build_engine).await {
+            Ok(Some(engine)) => engine,
+            Ok(None) => {
+                warn!("fastpq lane: failed to initialise prover backend; lane disabled");
+                return;
+            }
+            Err(err) => {
+                warn!(
+                    ?err,
+                    "fastpq lane: prover backend initialisation task panicked"
+                );
+                return;
+            }
+        };
+        ready.store(true, Ordering::Release);
+        while let Some(job) = rx.recv().await {
+            let engine = Arc::clone(&engine);
+            if let Err(err) = tokio::task::spawn_blocking(move || process_job(&engine, &job)).await
+            {
+                warn!(?err, "fastpq lane: prover task panicked");
+            }
+        }
+    })
 }
 
 fn metal_overrides_from_config(cfg: &Fastpq) -> MetalOverrides {
@@ -321,7 +392,7 @@ pub fn install_test_engine(engine: Arc<dyn FastpqProofEngine>) {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, sync::atomic::AtomicBool, time::Duration};
 
     use crate::fastpq::{
         FastpqPublicInputsTemplate, authority_digest, batches_from_bundles, transition_batch_to_dto,
@@ -337,7 +408,7 @@ mod tests {
 
     #[tokio::test]
     async fn lane_processes_transcripts_with_mock_engine() {
-        use tokio::time::{Duration, Instant, sleep};
+        use tokio::time::{Instant, sleep};
 
         let calls = Arc::new(std::sync::Mutex::new(0usize));
         install_test_engine(Arc::new(MockEngine {
@@ -357,7 +428,18 @@ mod tests {
             metal_debug_enum: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_ENUM,
             metal_debug_fused: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
         };
-        let _ = start(&cfg);
+        let (handle, _task) = start(&cfg).expect("lane starts");
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            if handle.is_ready_for_test() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "fastpq lane mock engine did not initialise"
+            );
+            sleep(Duration::from_millis(10)).await;
+        }
         let bundle = sample_bundle();
         let template = FastpqPublicInputsTemplate {
             dsid: [0u8; 16],
@@ -399,6 +481,29 @@ mod tests {
             );
             sleep(Duration::from_millis(10)).await;
         }
+    }
+
+    #[tokio::test]
+    async fn worker_start_does_not_wait_for_backend_initialisation() {
+        use std::time::Instant as StdInstant;
+        use tokio::time::sleep;
+
+        let (_tx, rx) = mpsc::channel::<FastpqWitnessJob>(1);
+        let ready = Arc::new(AtomicBool::new(false));
+        let started_at = StdInstant::now();
+        let task = spawn_worker(rx, Arc::clone(&ready), || {
+            std::thread::sleep(Duration::from_millis(200));
+            None
+        });
+
+        assert!(
+            started_at.elapsed() < Duration::from_millis(100),
+            "worker startup waited for backend initialisation"
+        );
+        assert!(!ready.load(Ordering::Acquire));
+        sleep(Duration::from_millis(250)).await;
+        assert!(!ready.load(Ordering::Acquire));
+        task.await.expect("worker task joins");
     }
 
     #[test]

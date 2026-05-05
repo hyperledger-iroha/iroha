@@ -805,6 +805,34 @@ Last updated: 2026-05-05
   reallocation and `memmove`, SHA-256/Blake2/CRC64 helpers, queue admission
   bookkeeping, and world-view/access preparation. Scalar FASTPQ/Poseidon
   fallback is not the current steady-state bottleneck.
+- The FASTPQ lane startup/preflight follow-up now publishes the lane handle
+  before backend construction, initializes the real prover on a blocking worker,
+  defers background proof jobs until that worker marks the lane ready, and keeps
+  host-side BN254 Poseidon digest acceleration disabled until the lane observes
+  successful Poseidon GPU and BN254 digest preflights. A failed prover Poseidon
+  preflight now keeps the deterministic CPU fallback for the lane instead of
+  letting first proof work resolve back onto the GPU hot path. Focused
+  validation passed with
+  `ENABLE_RANS_BUNDLES=1 NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-20k-queue cargo test -p iroha_core fastpq --features fastpq-gpu -- --nocapture`
+  (`43` matching tests passed) and the release rebuild
+  `ENABLE_RANS_BUNDLES=1 NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-20k-queue cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`
+  passed in `4m48s` with only the known `fastpq_prover` Metal dead-code
+  warnings and existing `PenaltyApplier::telemetry` warning.
+- The fresh 4-peer no-fault prebuilt `20k TPS` / `120s` `fastpq-gpu` return
+  gate at
+  `dist/izanami-prebuilt-20k-fastpq-gpu-return-preflight-gate-120s-20260505-124838`
+  exited `0`, offered, accepted, and succeeded all `2,400,000` submissions,
+  used all `2,400,000` prebuilt transactions with no fallback or build
+  failures, and reported `0` submit failures, validation rejects, confirmation
+  failures, confirmation queue drops, ingress failovers, or unhealthy endpoints.
+  Final quorum/strict height was `13/13`, final quorum/strict approved
+  transactions were `45,191/45,191`, max peer height and approved-transaction
+  skew were both `0`, and submit latency was `p50=3ms`, `p95=11ms`,
+  `p99=60ms`, `max=200ms`. The queue remained saturated
+  (`877,135 / 2,400,000`) with `95` pacemaker backpressure deferrals, so this
+  restores the 20k ingress/strict-progress gate above the prior `36,967`
+  baseline while committed 20k TPS still needs the validation/serialization and
+  queue-drain work identified in the latest 30s/60s profiles.
 
 ## 2026-05-03 IVM WSV mock mutation gas hardening
 

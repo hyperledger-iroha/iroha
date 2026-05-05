@@ -7134,52 +7134,19 @@ impl Actor {
         let mut consensus_applied = 0_u64;
         for action in &effects.penalty_actions {
             match action {
-                iroha_data_model::consensus::NposPenaltyAction::VrfJail { .. } => {
+                iroha_data_model::consensus::NposPenaltyAction::VrfJail(_) => {
                     vrf_applied = vrf_applied.saturating_add(1);
                 }
-                iroha_data_model::consensus::NposPenaltyAction::ConsensusSlash { .. } => {
+                iroha_data_model::consensus::NposPenaltyAction::ConsensusSlash(_) => {
                     consensus_applied = consensus_applied.saturating_add(1);
                 }
-                iroha_data_model::consensus::NposPenaltyAction::MarkVrfPenaltiesApplied {
-                    ..
-                }
-                | iroha_data_model::consensus::NposPenaltyAction::MarkConsensusEvidenceApplied {
-                    ..
-                } => {}
+                iroha_data_model::consensus::NposPenaltyAction::MarkVrfPenaltiesApplied(_)
+                | iroha_data_model::consensus::NposPenaltyAction::MarkConsensusEvidenceApplied(_) =>
+                    {}
             }
         }
         super::status::inc_vrf_penalties_applied(vrf_applied);
         super::status::inc_consensus_penalties_applied(consensus_applied);
-    }
-
-    fn apply_penalties(&mut self, current_height: u64) -> Result<()> {
-        if !matches!(self.consensus_mode, ConsensusMode::Npos) {
-            return Ok(());
-        }
-        let telemetry = {
-            #[cfg(feature = "telemetry")]
-            {
-                Some(self.state.metrics())
-            }
-            #[cfg(not(feature = "telemetry"))]
-            {
-                None
-            }
-        };
-        let applier = PenaltyApplier::new(
-            self.state.as_ref(),
-            &self.config,
-            #[cfg(feature = "telemetry")]
-            telemetry,
-            #[cfg(not(feature = "telemetry"))]
-            telemetry,
-        );
-        let vrf = applier.apply_vrf_penalties(current_height);
-        let evidence = applier.apply_consensus_penalties(current_height)?;
-        super::status::inc_vrf_penalties_applied(vrf.applied);
-        super::status::inc_consensus_penalties_applied(evidence.applied);
-        super::status::set_penalties_pending(evidence.pending, vrf.pending);
-        Ok(())
     }
 
     #[allow(clippy::unnecessary_wraps)]

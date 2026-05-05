@@ -33,7 +33,7 @@ use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
 use mv::storage::StorageReadOnly;
 use norito::codec::Encode as NoritoEncode;
-use norito::json::{self, FastJsonWrite, JsonSerialize, JsonSerialize as JsonSerializeTrait};
+use norito::json::{self, JsonSerialize, JsonSerialize as JsonSerializeTrait};
 use sha2::{Digest, Sha256};
 
 #[cfg(feature = "telemetry")]

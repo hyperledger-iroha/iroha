@@ -2170,7 +2170,6 @@ mod chained {
         pub(super) da_proof_policies: Option<DaProofPolicyBundle>,
         pub(super) da_pin_intents: Option<DaPinIntentBundle>,
         pub(super) previous_roster_evidence: Option<PreviousRosterEvidence>,
-        npos_consensus_effects: None,
         pub(super) npos_consensus_effects: Option<NposConsensusEffects>,
         pub(super) execution_context: Option<BlockExecutionContextBundle>,
     }
@@ -2340,7 +2339,6 @@ mod new {
         pub(super) da_proof_policies: Option<DaProofPolicyBundle>,
         pub(super) da_pin_intents: Option<DaPinIntentBundle>,
         pub(super) previous_roster_evidence: Option<PreviousRosterEvidence>,
-        npos_consensus_effects: None,
         pub(super) npos_consensus_effects: Option<NposConsensusEffects>,
         pub(super) execution_context: Option<BlockExecutionContextBundle>,
     }

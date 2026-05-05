@@ -8,7 +8,9 @@ use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
     block::consensus::{Evidence, EvidencePayload, EvidenceRecord},
     consensus::{
-        NposConsensusEffects, NposPenaltyAction, Qc, ValidatorSetCheckpoint, VrfEpochRecord,
+        NposConsensusEffects, NposConsensusEvidenceAppliedMarker, NposConsensusSlashPenalty,
+        NposPenaltyAction, NposVrfJailPenalty, NposVrfPenaltiesAppliedMarker, Qc,
+        ValidatorSetCheckpoint, VrfEpochRecord,
     },
     nexus::{DataSpaceCatalog, LaneId, PublicLaneValidatorStatus},
     prelude::{AccountId, PeerId},
@@ -29,6 +31,7 @@ use crate::{
 #[derive(Clone, Copy, Default)]
 pub struct PenaltyOutcome {
     pub applied: u64,
+    #[cfg(test)]
     pub pending: u64,
     pub slashed: u64,
     pub jailed: u64,
@@ -157,20 +160,22 @@ impl<'a> PenaltyApplier<'a> {
                     all_offenders_mapped = false;
                     continue;
                 };
-                actions.push(NposPenaltyAction::VrfJail {
+                actions.push(NposPenaltyAction::VrfJail(NposVrfJailPenalty {
                     epoch: record.epoch,
                     signer,
                     peer_id,
                     lane_id: locator.lane_id,
                     validator: locator.validator,
                     reason: format!("vrf_penalty_epoch_{}", record.epoch),
-                });
+                }));
             }
             if offenders.is_empty() || all_offenders_mapped {
-                actions.push(NposPenaltyAction::MarkVrfPenaltiesApplied {
-                    epoch: record.epoch,
-                    height: current_height,
-                });
+                actions.push(NposPenaltyAction::MarkVrfPenaltiesApplied(
+                    NposVrfPenaltiesAppliedMarker {
+                        epoch: record.epoch,
+                        height: current_height,
+                    },
+                ));
             }
         }
         actions
@@ -261,10 +266,12 @@ impl<'a> PenaltyApplier<'a> {
             );
             if offenders.is_empty() {
                 if !is_censorship && evidence_has_legitimate_empty_offenders(&record.evidence) {
-                    actions.push(NposPenaltyAction::MarkConsensusEvidenceApplied {
-                        evidence_key: key,
-                        height: current_height,
-                    });
+                    actions.push(NposPenaltyAction::MarkConsensusEvidenceApplied(
+                        NposConsensusEvidenceAppliedMarker {
+                            evidence_key: key,
+                            height: current_height,
+                        },
+                    ));
                 }
                 continue;
             }
@@ -284,27 +291,32 @@ impl<'a> PenaltyApplier<'a> {
                 else {
                     continue;
                 };
-                actions.push(NposPenaltyAction::ConsensusSlash {
-                    evidence_key: key.clone(),
-                    signer,
-                    peer_id,
-                    lane_id: locator.lane_id,
-                    validator: locator.validator,
-                    slash_id,
-                    amount,
-                });
+                actions.push(NposPenaltyAction::ConsensusSlash(
+                    NposConsensusSlashPenalty {
+                        evidence_key: key.clone(),
+                        signer,
+                        peer_id,
+                        lane_id: locator.lane_id,
+                        validator: locator.validator,
+                        slash_id,
+                        amount,
+                    },
+                ));
                 slashes = slashes.saturating_add(1);
             }
             if slashes > 0 {
-                actions.push(NposPenaltyAction::MarkConsensusEvidenceApplied {
-                    evidence_key: key,
-                    height: current_height,
-                });
+                actions.push(NposPenaltyAction::MarkConsensusEvidenceApplied(
+                    NposConsensusEvidenceAppliedMarker {
+                        evidence_key: key,
+                        height: current_height,
+                    },
+                ));
             }
         }
         Ok(actions)
     }
 
+    #[cfg(test)]
     pub(crate) fn apply_vrf_penalties(&self, current_height: u64) -> PenaltyOutcome {
         let mut outcome = PenaltyOutcome::default();
         let activation_lag = {
@@ -391,6 +403,7 @@ impl<'a> PenaltyApplier<'a> {
     }
 
     #[allow(clippy::too_many_lines)]
+    #[cfg(test)]
     pub(crate) fn apply_consensus_penalties(&self, current_height: u64) -> Result<PenaltyOutcome> {
         let mut outcome = PenaltyOutcome::default();
         let slashing_delay = {
@@ -600,20 +613,15 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
     }
     for action in &effects.penalty_actions {
         match action {
-            NposPenaltyAction::VrfJail {
-                lane_id,
-                validator,
-                reason,
-                ..
-            } => {
+            NposPenaltyAction::VrfJail(action) => {
                 let locator = ValidatorLocator {
-                    lane_id: *lane_id,
-                    validator: validator.clone(),
+                    lane_id: action.lane_id,
+                    validator: action.validator.clone(),
                 };
                 if jail_in_transaction(
                     tx,
                     &locator,
-                    reason,
+                    &action.reason,
                     #[cfg(feature = "telemetry")]
                     telemetry,
                     #[cfg(not(feature = "telemetry"))]
@@ -623,45 +631,36 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
                     outcome.jailed = outcome.jailed.saturating_add(1);
                 }
             }
-            NposPenaltyAction::ConsensusSlash {
-                lane_id,
-                validator,
-                slash_id,
-                amount,
-                ..
-            } => {
+            NposPenaltyAction::ConsensusSlash(action) => {
                 apply_slash_to_validator(
                     tx,
                     dataspace_catalog,
                     staking_cfg,
-                    *lane_id,
-                    validator,
-                    *slash_id,
-                    amount,
+                    action.lane_id,
+                    &action.validator,
+                    action.slash_id,
+                    &action.amount,
                     now_ms,
                     telemetry,
                 )?;
                 outcome.applied = outcome.applied.saturating_add(1);
                 outcome.slashed = outcome.slashed.saturating_add(1);
             }
-            NposPenaltyAction::MarkVrfPenaltiesApplied { epoch, height } => {
-                let mut record = tx.vrf_epochs.get(epoch).cloned();
+            NposPenaltyAction::MarkVrfPenaltiesApplied(action) => {
+                let mut record = tx.vrf_epochs.get(&action.epoch).cloned();
                 if let Some(record) = record.as_mut() {
                     record.penalties_applied = true;
-                    record.penalties_applied_at_height = Some(*height);
-                    tx.vrf_epochs.insert(*epoch, record.clone());
+                    record.penalties_applied_at_height = Some(action.height);
+                    tx.vrf_epochs.insert(action.epoch, record.clone());
                 }
             }
-            NposPenaltyAction::MarkConsensusEvidenceApplied {
-                evidence_key,
-                height,
-            } => {
-                let mut record = tx.consensus_evidence.get(evidence_key).cloned();
+            NposPenaltyAction::MarkConsensusEvidenceApplied(action) => {
+                let mut record = tx.consensus_evidence.get(&action.evidence_key).cloned();
                 if let Some(record) = record.as_mut() {
                     record.penalty_applied = true;
-                    record.penalty_applied_at_height = Some(*height);
+                    record.penalty_applied_at_height = Some(action.height);
                     tx.consensus_evidence
-                        .insert(evidence_key.clone(), record.clone());
+                        .insert(action.evidence_key.clone(), record.clone());
                 }
             }
         }
@@ -890,6 +889,7 @@ fn bitmap_indices(bitmap: &[u8]) -> Vec<ValidatorIndex> {
     indices
 }
 
+#[cfg(test)]
 fn max_slash_amount_for_validator(
     tx: &WorldTransaction<'_, '_>,
     locator: &ValidatorLocator,
@@ -2368,6 +2368,7 @@ mod tests {
         let locator = applier
             .locate_validator_in_roster_cached(0, &[peer], &map)
             .expect("locator resolved");
+        let (_peer, locator) = locator;
         assert_eq!(locator.lane_id, LaneId::new(1));
         assert_eq!(locator.validator, validator);
     }

@@ -563,11 +563,20 @@ Completed history lives in `status.md`. This file should only track unfinished w
     path, while the delayed post-warm `60s` sample at
     `dist/izanami-profile-20k-fastpq-gpu-current-peer-postwarm-sampled-60s-20260504-195720`
     moves the steady-state bottleneck back to validation and serialization.
-    Prioritize moving Metal context/pipeline preflight out of the first proof,
-    then reduce Ed25519/public-key parse and verify work, Norito transaction and
-    transfer encode/decode/length accounting, allocation/copy churn, and
-    queue-admission/world-view preparation. Do not spend the next pass on
-    scalar FASTPQ/Poseidon fallback unless a later profile reintroduces it.
+    The 2026-05-05 FASTPQ lane preflight follow-up moves backend construction
+    off the startup/submission path, keeps digest acceleration disabled until
+    the lane observes successful GPU preflights, and falls back to CPU prover
+    modes after a failed Poseidon GPU preflight. Its fresh `20k TPS` / `120s`
+    gate at
+    `dist/izanami-prebuilt-20k-fastpq-gpu-return-preflight-gate-120s-20260505-124838`
+    accepted and succeeded all `2,400,000` submissions with no safety failures
+    and reached `45,191` strict-approved transactions at height `13`, above the
+    prior `36,967` gate baseline. Treat first-proof FASTPQ GPU preflight as
+    addressed for now; the next open work is Ed25519/public-key parse and verify
+    work, Norito transaction and transfer encode/decode/length accounting,
+    allocation/copy churn, queue-admission/world-view preparation, and queue
+    drain under saturated 20k ingress. Do not spend the next pass on scalar
+    FASTPQ/Poseidon fallback unless a later profile reintroduces it.
   - Avoid repeating the rejected process-wide Ed25519 public-key parse cache
     approach without new evidence: the 2026-05-03 sharded shared-cache
     experiment regressed short-gate commit progress and was backed out. Keep
