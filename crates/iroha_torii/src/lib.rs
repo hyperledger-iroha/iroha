@@ -14731,6 +14731,24 @@ fn filter_non_authoritative_global_portfolio_rows(
 }
 
 #[cfg(feature = "app_api")]
+fn list_items_from_payload<'a>(
+    payload: &'a Value,
+    context: &'static str,
+) -> Result<&'a [Value], Response> {
+    if let Some(items) = payload.as_array() {
+        return Ok(items);
+    }
+    if let Some(items) = payload
+        .as_object()
+        .and_then(|obj| obj.get("items"))
+        .and_then(Value::as_array)
+    {
+        return Ok(items);
+    }
+    Err(torii_internal_json_error(context))
+}
+
+#[cfg(feature = "app_api")]
 fn merged_list_response(
     payloads: Vec<Value>,
     routed_by: &'static str,
@@ -14738,16 +14756,10 @@ fn merged_list_response(
     let mut seen = BTreeSet::<Vec<u8>>::new();
     let mut merged_items = Vec::new();
     for payload in payloads {
-        let Some(obj) = payload.as_object() else {
-            return Err(torii_internal_json_error(
-                "expected JSON object payload while merging list response",
-            ));
-        };
-        let Some(payload_items) = obj.get("items").and_then(Value::as_array) else {
-            return Err(torii_internal_json_error(
-                "expected `items` array while merging list response",
-            ));
-        };
+        let payload_items = list_items_from_payload(
+            &payload,
+            "expected JSON object with `items` or JSON array payload while merging list response",
+        )?;
         for item in payload_items {
             let key = canonical_json_bytes(item)?;
             if seen.insert(key) {
@@ -16110,6 +16122,28 @@ mod torii_routed_read_tests {
             .expect("all list routes should succeed");
         assert_eq!(collected.payloads.len(), route_count);
         assert_eq!(collected.diagnostics.succeeded_routes, route_count);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn merged_list_response_accepts_array_payloads_from_legacy_list_handlers() {
+        let payloads = vec![
+            norito::json!([{"id": "alpha"}]),
+            norito::json!([{"id": "alpha"}, {"id": "beta"}]),
+        ];
+
+        let response =
+            merged_list_response(payloads, "fanout").expect("raw array list payloads should merge");
+        let body = response_json(response).await;
+        let root = body
+            .as_object()
+            .expect("merged list response should be an object");
+        assert_eq!(root.get("total").and_then(Value::as_u64), Some(2));
+        let items = root
+            .get("items")
+            .and_then(Value::as_array)
+            .expect("merged list response should include items");
+        assert_eq!(items.len(), 2);
     }
 
     #[cfg(feature = "app_api")]

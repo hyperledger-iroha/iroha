@@ -147,7 +147,7 @@ pub struct PreviousRosterEvidence {
 ///
 /// These effects are applied as part of the committed block transition so every
 /// peer replays the same VRF epoch records and penalty state.
-#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -177,53 +177,85 @@ impl NposConsensusEffects {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+pub struct NposVrfJailAction {
+    /// Epoch that produced the penalty.
+    pub epoch: u64,
+    /// Signer index in the epoch roster.
+    pub signer: u32,
+    /// Peer identity resolved from the epoch/commit roster.
+    pub peer_id: crate::peer::PeerId,
+    /// Public lane containing the validator registration.
+    pub lane_id: crate::nexus::LaneId,
+    /// Validator account to update.
+    pub validator: crate::account::AccountId,
+    /// Stable jail reason.
+    pub reason: String,
+}
+
+/// A deterministic consensus-evidence slash action.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct NposConsensusSlashAction {
+    /// Consensus evidence key.
+    pub evidence_key: Vec<u8>,
+    /// Signer index in the evidence roster.
+    pub signer: u32,
+    /// Peer identity resolved from the evidence roster.
+    pub peer_id: crate::peer::PeerId,
+    /// Public lane containing the validator registration.
+    pub lane_id: crate::nexus::LaneId,
+    /// Validator account to slash.
+    pub validator: crate::account::AccountId,
+    /// Slash identifier recorded in validator status.
+    pub slash_id: Hash,
+    /// Amount to slash.
+    pub amount: Numeric,
+}
+
+/// Marker that a VRF epoch's penalties were applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct NposMarkVrfPenaltiesAppliedAction {
+    /// Epoch to mark.
+    pub epoch: u64,
+    /// Block height that applied the marker.
+    pub height: u64,
+}
+
+/// Marker that a consensus evidence record's penalty was applied.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct NposMarkConsensusEvidenceAppliedAction {
+    /// Consensus evidence key.
+    pub evidence_key: Vec<u8>,
+    /// Block height that applied the marker.
+    pub height: u64,
+}
+/// Penalty or marker action applied by a committed `NPoS` effects bundle.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub enum NposPenaltyAction {
     /// Jail a validator for missing VRF participation requirements.
-    VrfJail {
-        /// Epoch that produced the penalty.
-        epoch: u64,
-        /// Signer index in the epoch roster.
-        signer: u32,
-        /// Peer identity resolved from the epoch/commit roster.
-        peer_id: crate::peer::PeerId,
-        /// Public lane containing the validator registration.
-        lane_id: crate::nexus::LaneId,
-        /// Validator account to update.
-        validator: crate::account::AccountId,
-        /// Stable jail reason.
-        reason: String,
-    },
+    VrfJail(NposVrfJailAction),
     /// Slash a validator from consensus evidence.
-    ConsensusSlash {
-        /// Consensus evidence key.
-        evidence_key: Vec<u8>,
-        /// Signer index in the evidence roster.
-        signer: u32,
-        /// Peer identity resolved from the evidence roster.
-        peer_id: crate::peer::PeerId,
-        /// Public lane containing the validator registration.
-        lane_id: crate::nexus::LaneId,
-        /// Validator account to slash.
-        validator: crate::account::AccountId,
-        /// Slash identifier recorded in validator status.
-        slash_id: Hash,
-        /// Amount to slash.
-        amount: Numeric,
-    },
+    ConsensusSlash(NposConsensusSlashAction),
     /// Mark a VRF epoch's penalties as applied.
-    MarkVrfPenaltiesApplied {
-        /// Epoch to mark.
-        epoch: u64,
-        /// Block height that applied the marker.
-        height: u64,
-    },
+    MarkVrfPenaltiesApplied(NposMarkVrfPenaltiesAppliedAction),
     /// Mark a consensus evidence record's penalty as applied.
-    MarkConsensusEvidenceApplied {
-        /// Consensus evidence key.
-        evidence_key: Vec<u8>,
-        /// Block height that applied the marker.
-        height: u64,
-    },
+    MarkConsensusEvidenceApplied(NposMarkConsensusEvidenceAppliedAction),
 }
 
 /// Snapshot of the election parameters used when selecting validators for an epoch.

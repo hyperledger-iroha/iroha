@@ -2835,6 +2835,7 @@ fn validation_reject_reason_label(err: &BlockValidationError) -> &'static str {
         | BlockValidationError::BlockInThePast
         | BlockValidationError::BlockInTheFuture
         | BlockValidationError::TransactionInTheFuture
+        | BlockValidationError::NposEffectsInvalid(_)
         | BlockValidationError::PreviousRosterEvidenceInvalid(_) => VALIDATION_REASON_STATELESS,
     }
 }
