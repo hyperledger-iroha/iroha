@@ -59,6 +59,7 @@ use std::{
     time::Duration,
 };
 
+use iroha_config::parameters::actual::{ConsensusMode, SumeragiNpos};
 use iroha_crypto::{HashOf, KeyPair, MerkleTree, PublicKey};
 #[cfg(feature = "bls")]
 use iroha_data_model::metadata::Metadata;
@@ -4683,6 +4684,16 @@ pub(crate) mod valid {
                 let _ = ev; // avoid unused warning if optimized out
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
+            if let Err(error) = Self::validate_npos_effects_with_state(&block, state) {
+                let stateless_elapsed = stateless_start.elapsed();
+                record_timings(&mut timings, stateless_elapsed, None);
+                let ev = PipelineEventBox::from(BlockEvent {
+                    header: block.header(),
+                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
+                });
+                let _ = ev;
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
             if let Some(context) = cache_context {
                 let mut cache = state.stateless_validation_cache().lock();
                 cache.set_cap(cache_cap);
@@ -4870,6 +4881,14 @@ pub(crate) mod valid {
                 false,
                 metrics,
             ) {
+                let ev = PipelineEventBox::from(BlockEvent {
+                    header: block.header(),
+                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
+                });
+                send_events(ev);
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
+            if let Err(error) = Self::validate_npos_effects_with_state(&block, state) {
                 let ev = PipelineEventBox::from(BlockEvent {
                     header: block.header(),
                     status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
@@ -5144,6 +5163,113 @@ pub(crate) mod valid {
                     Ok(())
                 }
             }
+        }
+
+        fn validate_npos_effects_with_state(
+            block: &SignedBlock,
+            state: &State,
+        ) -> Result<(), BlockValidationError> {
+            Self::validate_npos_effects_header(block)?;
+
+            let block_height = block.header().height().get();
+            let actual_effects = block.npos_consensus_effects();
+            if let Some(effects) = actual_effects {
+                let mut sorted_actions = effects.penalty_actions.clone();
+                sorted_actions.sort();
+                sorted_actions.dedup();
+                if sorted_actions != effects.penalty_actions {
+                    return Err(Self::npos_effects_error(
+                        "NPoS penalty actions are not canonical",
+                    ));
+                }
+
+                let mut seen_epochs = BTreeSet::new();
+                for record in &effects.vrf_epoch_seals {
+                    if !seen_epochs.insert(record.epoch) {
+                        return Err(Self::npos_effects_error(
+                            "duplicate VRF epoch seal in NPoS effects",
+                        ));
+                    }
+                    if record.penalties_applied_at_height.is_some() && !record.penalties_applied {
+                        return Err(Self::npos_effects_error(
+                            "VRF epoch seal has applied height without applied marker",
+                        ));
+                    }
+                    if !record.finalized
+                        && (!record.committed_no_reveal.is_empty()
+                            || !record.no_participation.is_empty())
+                    {
+                        return Err(Self::npos_effects_error(
+                            "unfinalized VRF epoch seal includes penalty offenders",
+                        ));
+                    }
+
+                    let mut offenders = record
+                        .committed_no_reveal
+                        .iter()
+                        .chain(record.no_participation.iter())
+                        .copied()
+                        .collect::<Vec<_>>();
+                    offenders.sort();
+                    offenders.dedup();
+                    if offenders.len()
+                        != record.committed_no_reveal.len() + record.no_participation.len()
+                    {
+                        return Err(Self::npos_effects_error(
+                            "VRF epoch seal contains duplicate offender indices",
+                        ));
+                    }
+                    if offenders.iter().any(|signer| *signer >= record.roster_len) {
+                        return Err(Self::npos_effects_error(
+                            "VRF epoch seal contains offender outside roster",
+                        ));
+                    }
+
+                    let world = state.world_view();
+                    if let Some(existing) = world.vrf_epochs().get(&record.epoch)
+                        && existing != record
+                    {
+                        return Err(Self::npos_effects_error(
+                            "VRF epoch seal conflicts with pre-block state",
+                        ));
+                    }
+                }
+            }
+
+            let consensus_mode = {
+                let world = state.world_view();
+                crate::sumeragi::effective_consensus_mode_for_height_from_world(
+                    &world,
+                    block_height,
+                    ConsensusMode::Permissioned,
+                )
+            };
+            let fallback_npos = SumeragiNpos::default();
+            let applier = crate::sumeragi::penalties::PenaltyApplier::from_parts(
+                state,
+                &fallback_npos,
+                consensus_mode,
+                #[cfg(feature = "telemetry")]
+                Some(state.metrics()),
+                #[cfg(not(feature = "telemetry"))]
+                None,
+            );
+            let expected_actions = applier
+                .derive_npos_consensus_effects(block_height, std::iter::empty())
+                .map_err(|err| {
+                    Self::npos_effects_error(format!("failed to derive NPoS effects: {err}"))
+                })?
+                .penalty_actions;
+            let actual_actions = actual_effects
+                .map(|effects| effects.penalty_actions.as_slice())
+                .unwrap_or(&[]);
+            if expected_actions.as_slice() != actual_actions {
+                return Err(Self::npos_effects_error(
+                    "NPoS penalty actions do not match pre-block state",
+                ));
+            }
+
+            Ok(())
         }
 
         fn validate_previous_roster_evidence(
@@ -5607,10 +5733,10 @@ pub(crate) mod valid {
                     )
                 }
 
-                let mut items = Vec::new();
-                let mut messages = Vec::new();
-                let mut signatures = Vec::new();
-                let mut public_keys = Vec::new();
+                let mut items = Vec::with_capacity(prepared_txs.len());
+                let mut messages = Vec::with_capacity(prepared_txs.len());
+                let mut signatures = Vec::with_capacity(prepared_txs.len());
+                let mut public_keys = Vec::with_capacity(prepared_txs.len());
                 let mut scratch = iroha_crypto::Ed25519BatchScratch::default();
                 for (idx, (tx, prepared)) in signed_txs
                     .iter()
@@ -6323,7 +6449,7 @@ pub(crate) mod valid {
                         msg: [u8; 32],
                         sig: [u8; 64],
                     }
-                    let mut items: Vec<EdItem> = Vec::new();
+                    let mut items: Vec<EdItem> = Vec::with_capacity(txs.len());
                     for (idx, tx) in txs.iter().enumerate() {
                         if cached_ok[idx] {
                             continue;
@@ -6362,7 +6488,7 @@ pub(crate) mod valid {
                         state_block.pipeline.signature_batch_max
                     };
                     if cap > 0 && !items.is_empty() {
-                        let derive_seed = |slice: &[&EdItem]| -> [u8; 32] {
+                        let derive_seed = |slice: &[EdItem]| -> [u8; 32] {
                             let mut tuples: Vec<Vec<u8>> = slice
                                 .iter()
                                 .map(|it| {
@@ -6384,7 +6510,7 @@ pub(crate) mod valid {
                             seed.copy_from_slice(&out);
                             seed
                         };
-                        let verify_batch_slice = |slice: &[&EdItem]| -> bool {
+                        let verify_batch_slice = |slice: &[EdItem]| -> bool {
                             let seed = derive_seed(slice);
                             let msgs: Vec<&[u8]> =
                                 slice.iter().map(|it| it.msg.as_slice()).collect();
@@ -6400,8 +6526,7 @@ pub(crate) mod valid {
                         while start < items.len() {
                             let end = usize::min(start + cap, items.len());
                             let batch = &items[start..end];
-                            let refs: Vec<&EdItem> = batch.iter().collect();
-                            if verify_batch_slice(&refs) {
+                            if verify_batch_slice(batch) {
                                 for it in batch {
                                     prechecked_signature_results[it.idx] = Some(Ok(()));
                                 }
@@ -9998,7 +10123,11 @@ pub(crate) mod valid {
         use iroha_data_model::{
             Registrable,
             block::error::BlockRejectionReason as Reason,
-            consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
+            consensus::{
+                ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
+                NposConsensusEffects, NposMarkVrfPenaltiesAppliedAction, NposPenaltyAction,
+                VrfEpochRecord,
+            },
             da::{
                 commitment::{
                     DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment,
@@ -11279,6 +11408,107 @@ pub(crate) mod valid {
                 metrics,
             )
             .expect("static snapshot validation should succeed");
+        }
+
+        fn npos_marker(epoch: u64, height: u64) -> NposPenaltyAction {
+            NposPenaltyAction::MarkVrfPenaltiesApplied(NposMarkVrfPenaltiesAppliedAction {
+                epoch,
+                height,
+            })
+        }
+
+        fn npos_effects_block(
+            leader_private_key: &PrivateKey,
+            height: u64,
+            effects: Option<NposConsensusEffects>,
+        ) -> SignedBlock {
+            let valid = ValidBlock::new_dummy_and_modify_header(leader_private_key, |header| {
+                header.set_height(NonZeroU64::new(height).expect("non-zero height"));
+            });
+            let mut block: SignedBlock = valid.into();
+            block.set_npos_consensus_effects(effects);
+            block
+        }
+
+        #[test]
+        fn validate_npos_effects_rejects_missing_required_actions() {
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let mut world = World::new();
+            world.vrf_epochs.insert(
+                7,
+                VrfEpochRecord {
+                    epoch: 7,
+                    seed: [0x42; 32],
+                    epoch_length: 10,
+                    commit_deadline_offset: 3,
+                    reveal_deadline_offset: 6,
+                    roster_len: 1,
+                    finalized: true,
+                    updated_at_height: 1,
+                    participants: Vec::new(),
+                    late_reveals: Vec::new(),
+                    committed_no_reveal: Vec::new(),
+                    no_participation: Vec::new(),
+                    penalties_applied: false,
+                    penalties_applied_at_height: None,
+                    validator_election: None,
+                },
+            );
+            let state = State::new_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = npos_effects_block(leader.private_key(), 20, None);
+
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state)
+                .expect_err("missing deterministic NPoS marker must be rejected");
+            assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
+        }
+
+        #[test]
+        fn validate_npos_effects_rejects_extra_actions() {
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = npos_effects_block(
+                leader.private_key(),
+                2,
+                Some(NposConsensusEffects {
+                    vrf_epoch_seals: Vec::new(),
+                    penalty_actions: vec![npos_marker(99, 2)],
+                }),
+            );
+
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state)
+                .expect_err("extra deterministic NPoS action must be rejected");
+            assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
+        }
+
+        #[test]
+        fn validate_npos_effects_rejects_malformed_actions() {
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let action = npos_marker(1, 2);
+            let block = npos_effects_block(
+                leader.private_key(),
+                2,
+                Some(NposConsensusEffects {
+                    vrf_epoch_seals: Vec::new(),
+                    penalty_actions: vec![action.clone(), action],
+                }),
+            );
+
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state)
+                .expect_err("duplicate NPoS actions must be rejected");
+            assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
         }
 
         #[test]

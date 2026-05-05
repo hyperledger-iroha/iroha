@@ -143,7 +143,7 @@ pub fn authority_digest(authority: &AccountId) -> Hash {
 }
 
 /// Compute the Poseidon digest of a transfer delta preimage.
-#[inline]
+#[inline(always)]
 #[must_use]
 pub fn poseidon_preimage_digest(delta: &TransferDeltaTranscript, batch_hash: &Hash) -> Hash {
     let mut hasher = halo2_poseidon::PoseidonByteHasher::new();
@@ -155,7 +155,7 @@ pub fn poseidon_preimage_digest(delta: &TransferDeltaTranscript, batch_hash: &Ha
     Hash::prehashed(hasher.finalize())
 }
 
-#[inline]
+#[inline(always)]
 fn append_encoded_words<W, T>(writer: &mut W, value: &T)
 where
     W: Write,
@@ -238,11 +238,13 @@ impl<'a> PoseidonWordPacker<'a> {
 }
 
 impl Write for PoseidonWordPacker<'_> {
+    #[inline(always)]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.update(buf);
         Ok(buf.len())
     }
 
+    #[inline(always)]
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
@@ -302,6 +304,10 @@ impl PoseidonDigestBatch {
         }
         try_hash_bn254_poseidon_word_batches(&self.words, &self.slices)
             .map(|digests| digests.into_iter().map(Hash::prehashed).collect::<Vec<_>>())
+    }
+
+    fn hash_cpu_or_gpu(&self) -> Vec<Hash> {
+        self.try_hash_gpu().unwrap_or_else(|| self.hash_cpu())
     }
 
     fn try_submit_gpu(&self) -> Option<PendingBn254PoseidonWordBatch> {
@@ -382,7 +388,7 @@ pub(crate) fn finalize_transfer_transcript_digests_in_map_with_pending(
             "pending FASTPQ transcript digest batch must match current transcript map",
         );
     }
-    if digest_count >= DIGEST_FINALIZE_GPU_THRESHOLD
+    if digest_count >= DIGEST_FINALIZE_PARALLEL_THRESHOLD
         && try_finalize_transfer_transcript_digests_in_map_batched(transcripts, digest_count)
     {
         return;
@@ -439,7 +445,7 @@ pub(crate) fn finalize_transfer_transcript_bundle_digests_in_place(
     if digest_count == 0 {
         return;
     }
-    if digest_count >= DIGEST_FINALIZE_GPU_THRESHOLD
+    if digest_count >= DIGEST_FINALIZE_PARALLEL_THRESHOLD
         && try_finalize_transfer_transcript_bundle_digests_batched(bundles, digest_count)
     {
         return;
@@ -461,15 +467,12 @@ fn try_finalize_transfer_transcript_digests_in_map_batched(
     transcripts: &mut BTreeMap<Hash, Vec<TransferTranscript>>,
     digest_count: usize,
 ) -> bool {
-    if !poseidon_digest_acceleration_enabled() {
-        return false;
-    }
-    debug_assert!(digest_count >= DIGEST_FINALIZE_GPU_THRESHOLD);
+    debug_assert!(digest_count >= DIGEST_FINALIZE_PARALLEL_THRESHOLD);
     let mut batch = PoseidonDigestBatch::with_capacity(digest_count);
     for entries in transcripts.values() {
         collect_transfer_transcript_digests(entries, &mut batch);
     }
-    let digests = batch.try_hash_gpu().unwrap_or_else(|| batch.hash_cpu());
+    let digests = batch.hash_cpu_or_gpu();
     let mut digests = digests.into_iter();
     for entries in transcripts.values_mut() {
         apply_transfer_transcript_digests(entries, &mut digests);
@@ -485,15 +488,12 @@ fn try_finalize_transfer_transcript_bundle_digests_batched(
     bundles: &mut [TransferTranscriptBundle],
     digest_count: usize,
 ) -> bool {
-    if !poseidon_digest_acceleration_enabled() {
-        return false;
-    }
-    debug_assert!(digest_count >= DIGEST_FINALIZE_GPU_THRESHOLD);
+    debug_assert!(digest_count >= DIGEST_FINALIZE_PARALLEL_THRESHOLD);
     let mut batch = PoseidonDigestBatch::with_capacity(digest_count);
     for bundle in bundles.iter() {
         collect_transfer_transcript_digests(&bundle.transcripts, &mut batch);
     }
-    let digests = batch.try_hash_gpu().unwrap_or_else(|| batch.hash_cpu());
+    let digests = batch.hash_cpu_or_gpu();
     let mut digests = digests.into_iter();
     for bundle in bundles {
         apply_transfer_transcript_digests(&mut bundle.transcripts, &mut digests);
@@ -1216,6 +1216,37 @@ mod tests {
             bundles[0].transcripts[0].poseidon_preimage_digest,
             Some(expected)
         );
+    }
+
+    #[test]
+    fn finalize_transfer_transcripts_batched_cpu_matches_canonical_oracle() {
+        let _guard = DigestAccelerationGuard::new();
+        set_poseidon_digest_acceleration_enabled(false);
+
+        let mut entries = Vec::with_capacity(DIGEST_FINALIZE_PARALLEL_THRESHOLD);
+        let mut expected = Vec::with_capacity(DIGEST_FINALIZE_PARALLEL_THRESHOLD);
+        for idx in 0..DIGEST_FINALIZE_PARALLEL_THRESHOLD {
+            let mut transcript = sample_transcript();
+            transcript.batch_hash = Hash::prehashed([idx as u8; Hash::LENGTH]);
+            transcript.poseidon_preimage_digest = None;
+            expected.push(poseidon_preimage_digest(
+                &transcript.deltas[0],
+                &transcript.batch_hash,
+            ));
+            entries.push(transcript);
+        }
+
+        let mut map = BTreeMap::from([(Hash::prehashed([0x79; Hash::LENGTH]), entries)]);
+        finalize_transfer_transcript_digests_in_map(&mut map);
+
+        let actual = map
+            .values()
+            .next()
+            .expect("entries")
+            .iter()
+            .map(|transcript| transcript.poseidon_preimage_digest)
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected.into_iter().map(Some).collect::<Vec<_>>());
     }
 
     #[test]

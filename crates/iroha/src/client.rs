@@ -14203,6 +14203,7 @@ mod tests {
                 xor_variance_micro: 10_000,
                 timestamp_ms: 1_724_000_000_000,
             }],
+            nexus_fee_receipts: Vec::new(),
         };
         let da_hash = Some(HashOf::from_untyped_unchecked(Hash::prehashed(
             [0xDD; Hash::LENGTH],
@@ -14469,6 +14470,7 @@ mod tests {
             total_xor_variance_micro: 1,
             swap_metadata: None,
             receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
         };
         let block_header = BlockHeader::new(
             NonZeroU64::new(block_height).expect("nonzero height"),
@@ -17484,6 +17486,7 @@ mod tests {
             total_xor_variance_micro: 0,
             swap_metadata: None,
             receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
         };
         let relay = LaneRelayEnvelope::new(block_header, None, None, settlement.clone(), 0)
             .expect("construct relay envelope");
@@ -17639,6 +17642,7 @@ mod tests {
                 xor_variance_micro: 10_000,
                 timestamp_ms: 1_724_000_000_000,
             }],
+            nexus_fee_receipts: Vec::new(),
         };
         let da_hash = Some(HashOf::from_untyped_unchecked(Hash::prehashed(
             [0xDD; Hash::LENGTH],

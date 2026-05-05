@@ -3,7 +3,7 @@
 
 use iroha_data_model::{
     asset::definition::ConfidentialPolicyMode,
-    fastpq::{TransferDeltaTranscript, TransferSmtWitness},
+    fastpq::{TransferDeltaTranscript, TransferSmtWitness, normalized_numeric_to_u64},
     isi::error::{InstructionExecutionError, MathError, Mismatch, TypeError},
     prelude::*,
     query::error::FindError,
@@ -776,6 +776,105 @@ pub mod isi {
         NativeEscrowCustody,
     }
 
+    struct PreparedNumericTransferPlan {
+        source_id: AssetId,
+        destination_id: AssetId,
+        event_source_id: AssetId,
+        event_destination_id: AssetId,
+        amount: Numeric,
+        control_update: Option<AssetTransferControlRecord>,
+        numeric_spec: NumericSpec,
+        normalized_scale: u32,
+        normalized_amount: Option<u64>,
+    }
+
+    struct AppliedNumericTransfer {
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Numeric,
+        delta: TransferDeltaTranscript,
+    }
+
+    impl PreparedNumericTransferPlan {
+        fn prepare_user(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            authority: &AccountId,
+            event_source_id: AssetId,
+            event_destination_id: AssetId,
+            amount: Numeric,
+        ) -> Result<Self, Error> {
+            let control_update = prepare_outbound_asset_transfer_control_update(
+                state_transaction,
+                &event_source_id,
+                &amount,
+            )?;
+            let _created = ensure_receiving_account(
+                authority,
+                event_destination_id.account(),
+                Some((event_destination_id.definition(), &amount)),
+                state_transaction,
+            )?;
+            let (source_id, destination_id) = ensure_numeric_asset_transfer_policies(
+                state_transaction,
+                &event_source_id,
+                &event_destination_id,
+                &amount,
+                NumericAssetTransferSourcePolicy::User,
+            )?;
+            let numeric_spec = state_transaction
+                .numeric_spec_for(source_id.definition())
+                .map_err(Error::from)?;
+            debug_assert!(
+                numeric_spec.check(&amount).is_ok(),
+                "prepared numeric transfer amount must satisfy cached spec",
+            );
+            let normalized_scale = numeric_spec.scale().unwrap_or_else(|| amount.scale());
+            let normalized_amount = normalized_numeric_to_u64(&amount, normalized_scale);
+
+            Ok(Self {
+                source_id,
+                destination_id,
+                event_source_id,
+                event_destination_id,
+                amount,
+                control_update,
+                numeric_spec,
+                normalized_scale,
+                normalized_amount,
+            })
+        }
+
+        fn apply(
+            self,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<AppliedNumericTransfer, Error> {
+            debug_assert!(
+                self.numeric_spec.check(&self.amount).is_ok(),
+                "prepared numeric transfer amount must still satisfy cached spec",
+            );
+            debug_assert_eq!(
+                self.normalized_amount,
+                normalized_numeric_to_u64(&self.amount, self.normalized_scale),
+                "prepared numeric transfer normalization must be stable",
+            );
+            let delta = apply_resolved_numeric_asset_transfer_delta(
+                state_transaction,
+                &self.source_id,
+                &self.destination_id,
+                &self.amount,
+            )?;
+            if let Some(record) = self.control_update {
+                update_control_record(state_transaction, self.source_id.account(), record)?;
+            }
+            Ok(AppliedNumericTransfer {
+                source_id: self.event_source_id,
+                destination_id: self.event_destination_id,
+                amount: self.amount,
+                delta,
+            })
+        }
+    }
+
     /// Validate policy gates for a transparent numeric asset balance movement.
     pub(crate) fn ensure_numeric_asset_transfer_policies(
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -857,27 +956,17 @@ pub mod isi {
         Ok((source_id, destination_id))
     }
 
-    /// Apply a validated transparent numeric balance movement and return the transcript delta.
-    pub(crate) fn apply_numeric_asset_transfer_delta(
+    fn apply_resolved_numeric_asset_transfer_delta(
         state_transaction: &mut StateTransaction<'_, '_>,
         source_id: &AssetId,
         destination_id: &AssetId,
         amount: &Numeric,
-        source_policy: NumericAssetTransferSourcePolicy,
-    ) -> Result<(AssetId, AssetId, TransferDeltaTranscript), Error> {
-        let (source_id, destination_id) = ensure_numeric_asset_transfer_policies(
-            state_transaction,
-            source_id,
-            destination_id,
-            amount,
-            source_policy,
-        )?;
-
+    ) -> Result<TransferDeltaTranscript, Error> {
         let remove_source_asset;
         let from_balance_before;
         let from_balance_after;
         {
-            let asset = state_transaction.world.asset_mut(&source_id)?;
+            let asset = state_transaction.world.asset_mut(source_id)?;
             let current = asset.clone().into_inner();
             ensure_non_negative(&current)?;
             from_balance_before = current.clone();
@@ -895,7 +984,7 @@ pub mod isi {
             assert!(
                 state_transaction
                     .world
-                    .remove_asset_and_metadata(&source_id)
+                    .remove_asset_and_metadata(source_id)
                     .is_some()
             );
         }
@@ -905,7 +994,7 @@ pub mod isi {
         {
             let dst = state_transaction
                 .world
-                .asset_or_insert_exact(&destination_id, Numeric::zero())?;
+                .asset_or_insert_exact(destination_id, Numeric::zero())?;
             let current = dst.clone().into_inner();
             ensure_non_negative(&current)?;
             to_balance_before = current.clone();
@@ -916,7 +1005,7 @@ pub mod isi {
             **dst = to_balance_after.clone();
         }
 
-        let delta = TransferDeltaTranscript {
+        Ok(TransferDeltaTranscript {
             from_account: source_id.account().clone(),
             to_account: destination_id.account().clone(),
             asset_definition: source_id.definition().clone(),
@@ -927,7 +1016,31 @@ pub mod isi {
             to_balance_after,
             from_smt_witness: TransferSmtWitness::default(),
             to_smt_witness: TransferSmtWitness::default(),
-        };
+        })
+    }
+
+    /// Apply a validated transparent numeric balance movement and return the transcript delta.
+    pub(crate) fn apply_numeric_asset_transfer_delta(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        source_id: &AssetId,
+        destination_id: &AssetId,
+        amount: &Numeric,
+        source_policy: NumericAssetTransferSourcePolicy,
+    ) -> Result<(AssetId, AssetId, TransferDeltaTranscript), Error> {
+        let (source_id, destination_id) = ensure_numeric_asset_transfer_policies(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            source_policy,
+        )?;
+
+        let delta = apply_resolved_numeric_asset_transfer_delta(
+            state_transaction,
+            &source_id,
+            &destination_id,
+            amount,
+        )?;
         Ok((source_id, destination_id, delta))
     }
 
@@ -1082,43 +1195,30 @@ pub mod isi {
             let destination_id =
                 AssetId::new(source_id.definition().clone(), self.destination().clone());
             let amount = self.object().clone();
-            let control_update = prepare_outbound_asset_transfer_control_update(
+            let plan = PreparedNumericTransferPlan::prepare_user(
                 state_transaction,
-                &source_id,
-                &amount,
-            )?;
-            let _created = ensure_receiving_account(
                 authority,
-                destination_id.account(),
-                Some((destination_id.definition(), &amount)),
-                state_transaction,
+                source_id,
+                destination_id,
+                amount,
             )?;
-            let (_, _, delta) = apply_numeric_asset_transfer_delta(
-                state_transaction,
-                &source_id,
-                &destination_id,
-                &amount,
-                NumericAssetTransferSourcePolicy::User,
-            )?;
-            if let Some(record) = control_update {
-                update_control_record(state_transaction, source_id.account(), record)?;
-            }
-            state_transaction.record_transfer_transcript(authority, delta)?;
+            let applied = plan.apply(state_transaction)?;
+            state_transaction.record_transfer_transcript(authority, applied.delta)?;
 
             #[allow(clippy::float_arithmetic)]
             #[cfg(feature = "telemetry")]
             state_transaction
                 .telemetry
-                .observe_tx_amount(amount.clone().to_f64());
+                .observe_tx_amount(applied.amount.clone().to_f64());
 
             state_transaction.world.emit_events([
                 AssetEvent::Removed(AssetChanged {
-                    asset: source_id,
-                    amount: amount.clone(),
+                    asset: applied.source_id,
+                    amount: applied.amount.clone(),
                 }),
                 AssetEvent::Added(AssetChanged {
-                    asset: destination_id,
-                    amount,
+                    asset: applied.destination_id,
+                    amount: applied.amount,
                 }),
             ]);
 
@@ -1252,41 +1352,28 @@ pub mod isi {
                 let destination_id =
                     AssetId::new(entry.asset_definition().clone(), entry.to().clone());
                 let amount = entry.amount().clone();
-                let control_update = prepare_outbound_asset_transfer_control_update(
+                let plan = PreparedNumericTransferPlan::prepare_user(
                     state_transaction,
-                    &source_id,
-                    &amount,
-                )?;
-                let _created = ensure_receiving_account(
                     authority,
-                    destination_id.account(),
-                    Some((destination_id.definition(), &amount)),
-                    state_transaction,
+                    source_id,
+                    destination_id,
+                    amount,
                 )?;
-                let (_, _, delta) = apply_numeric_asset_transfer_delta(
-                    state_transaction,
-                    &source_id,
-                    &destination_id,
-                    &amount,
-                    NumericAssetTransferSourcePolicy::User,
-                )?;
-                if let Some(record) = control_update {
-                    update_control_record(state_transaction, source_id.account(), record)?;
-                }
-                deltas.push(delta);
+                let applied = plan.apply(state_transaction)?;
+                deltas.push(applied.delta);
                 #[allow(clippy::float_arithmetic)]
                 #[cfg(feature = "telemetry")]
                 state_transaction
                     .telemetry
-                    .observe_tx_amount(amount.to_f64());
+                    .observe_tx_amount(applied.amount.to_f64());
                 state_transaction.world.emit_events([
                     AssetEvent::Removed(AssetChanged {
-                        asset: source_id,
-                        amount: amount.clone(),
+                        asset: applied.source_id,
+                        amount: applied.amount.clone(),
                     }),
                     AssetEvent::Added(AssetChanged {
-                        asset: destination_id,
-                        amount,
+                        asset: applied.destination_id,
+                        amount: applied.amount,
                     }),
                 ]);
             }

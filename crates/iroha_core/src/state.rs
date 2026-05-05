@@ -523,6 +523,9 @@ macro_rules! build_world_block {
             soradns_last_publish_ms: $state.soradns_last_publish_ms.$method(),
             soradns_history_len: $state.soradns_history_len.$method(),
             repo_agreements: $state.repo_agreements.$method(),
+            repo_agreements_by_initiator: $state.repo_agreements_by_initiator.$method(),
+            repo_agreements_by_counterparty: $state.repo_agreements_by_counterparty.$method(),
+            repo_agreements_by_custodian: $state.repo_agreements_by_custodian.$method(),
             settlement_ledgers: $state.settlement_ledgers.$method(),
             offline_note_v2_replay_keys: $state.offline_note_v2_replay_keys.$method(),
             public_lane_validators: $state.public_lane_validators.$method(),
@@ -734,6 +737,9 @@ macro_rules! build_world_transaction {
             soradns_last_publish_ms: $state.soradns_last_publish_ms.transaction(),
             soradns_history_len: $state.soradns_history_len.transaction(),
             repo_agreements: $state.repo_agreements.transaction(),
+            repo_agreements_by_initiator: $state.repo_agreements_by_initiator.transaction(),
+            repo_agreements_by_counterparty: $state.repo_agreements_by_counterparty.transaction(),
+            repo_agreements_by_custodian: $state.repo_agreements_by_custodian.transaction(),
             settlement_ledgers: $state.settlement_ledgers.transaction(),
             offline_note_v2_replay_keys: $state.offline_note_v2_replay_keys.transaction(),
             public_lane_validators: $state.public_lane_validators.transaction(),
@@ -1937,6 +1943,15 @@ pub struct World {
     pub(crate) soradns_history_len: Cell<u64>,
     /// Active repo agreements keyed by agreement id.
     pub(crate) repo_agreements: Storage<RepoAgreementId, RepoAgreement>,
+    /// Repo agreement ids keyed by initiating account.
+    #[norito(skip)]
+    pub(crate) repo_agreements_by_initiator: Storage<AccountId, BTreeSet<RepoAgreementId>>,
+    /// Repo agreement ids keyed by counterparty account.
+    #[norito(skip)]
+    pub(crate) repo_agreements_by_counterparty: Storage<AccountId, BTreeSet<RepoAgreementId>>,
+    /// Repo agreement ids keyed by custodian account.
+    #[norito(skip)]
+    pub(crate) repo_agreements_by_custodian: Storage<AccountId, BTreeSet<RepoAgreementId>>,
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers: Storage<SettlementId, SettlementLedger>,
     /// Offline V2 replay keys used for issued notes, certificates, nullifiers, and audit tokens.
@@ -2372,6 +2387,15 @@ pub struct WorldBlock<'world> {
     pub(crate) soradns_history_len: CellBlock<'world, u64>,
     /// Active repo agreements keyed by agreement id.
     pub(crate) repo_agreements: StorageBlock<'world, RepoAgreementId, RepoAgreement>,
+    /// Repo agreement ids keyed by initiating account.
+    pub(crate) repo_agreements_by_initiator:
+        StorageBlock<'world, AccountId, BTreeSet<RepoAgreementId>>,
+    /// Repo agreement ids keyed by counterparty account.
+    pub(crate) repo_agreements_by_counterparty:
+        StorageBlock<'world, AccountId, BTreeSet<RepoAgreementId>>,
+    /// Repo agreement ids keyed by custodian account.
+    pub(crate) repo_agreements_by_custodian:
+        StorageBlock<'world, AccountId, BTreeSet<RepoAgreementId>>,
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers: StorageBlock<'world, SettlementId, SettlementLedger>,
     /// Offline V2 replay keys used for issued notes, certificates, nullifiers, and audit tokens.
@@ -3008,6 +3032,15 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) soradns_history_len: CellTransaction<'block, 'world, u64>,
     /// Active repo agreements keyed by agreement id.
     pub(crate) repo_agreements: StorageTransaction<'block, 'world, RepoAgreementId, RepoAgreement>,
+    /// Repo agreement ids keyed by initiating account.
+    pub(crate) repo_agreements_by_initiator:
+        StorageTransaction<'block, 'world, AccountId, BTreeSet<RepoAgreementId>>,
+    /// Repo agreement ids keyed by counterparty account.
+    pub(crate) repo_agreements_by_counterparty:
+        StorageTransaction<'block, 'world, AccountId, BTreeSet<RepoAgreementId>>,
+    /// Repo agreement ids keyed by custodian account.
+    pub(crate) repo_agreements_by_custodian:
+        StorageTransaction<'block, 'world, AccountId, BTreeSet<RepoAgreementId>>,
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers:
         StorageTransaction<'block, 'world, SettlementId, SettlementLedger>,
@@ -3633,6 +3666,101 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         previous
     }
 
+    fn track_repo_agreement_index(
+        storage: &mut StorageTransaction<'block, 'world, AccountId, BTreeSet<RepoAgreementId>>,
+        account_id: &AccountId,
+        agreement_id: &RepoAgreementId,
+    ) {
+        if let Some(agreements) = storage.get_mut(account_id) {
+            agreements.insert(agreement_id.clone());
+        } else {
+            storage.insert(account_id.clone(), BTreeSet::from([agreement_id.clone()]));
+        }
+    }
+
+    fn untrack_repo_agreement_index(
+        storage: &mut StorageTransaction<'block, 'world, AccountId, BTreeSet<RepoAgreementId>>,
+        account_id: &AccountId,
+        agreement_id: &RepoAgreementId,
+    ) {
+        let remove_entry = storage.get_mut(account_id).is_some_and(|agreements| {
+            agreements.remove(agreement_id);
+            agreements.is_empty()
+        });
+        if remove_entry {
+            storage.remove(account_id.clone());
+        }
+    }
+
+    /// Record a repo agreement in all read-side indexes.
+    pub(crate) fn track_repo_agreement_indexes(&mut self, agreement: &RepoAgreement) {
+        Self::track_repo_agreement_index(
+            &mut self.repo_agreements_by_initiator,
+            agreement.initiator(),
+            agreement.id(),
+        );
+        Self::track_repo_agreement_index(
+            &mut self.repo_agreements_by_counterparty,
+            agreement.counterparty(),
+            agreement.id(),
+        );
+        if let Some(custodian) = agreement.custodian().as_ref() {
+            Self::track_repo_agreement_index(
+                &mut self.repo_agreements_by_custodian,
+                custodian,
+                agreement.id(),
+            );
+        }
+    }
+
+    /// Drop a repo agreement from all read-side indexes.
+    pub(crate) fn untrack_repo_agreement_indexes(&mut self, agreement: &RepoAgreement) {
+        Self::untrack_repo_agreement_index(
+            &mut self.repo_agreements_by_initiator,
+            agreement.initiator(),
+            agreement.id(),
+        );
+        Self::untrack_repo_agreement_index(
+            &mut self.repo_agreements_by_counterparty,
+            agreement.counterparty(),
+            agreement.id(),
+        );
+        if let Some(custodian) = agreement.custodian().as_ref() {
+            Self::untrack_repo_agreement_index(
+                &mut self.repo_agreements_by_custodian,
+                custodian,
+                agreement.id(),
+            );
+        }
+    }
+
+    /// Insert a repo agreement and keep derived indexes consistent.
+    pub(crate) fn insert_repo_agreement_entry(
+        &mut self,
+        agreement: RepoAgreement,
+    ) -> Option<RepoAgreement> {
+        let previous = self
+            .repo_agreements
+            .insert(agreement.id().clone(), agreement.clone());
+        if let Some(previous) = previous.as_ref() {
+            self.untrack_repo_agreement_indexes(previous);
+        }
+        self.track_repo_agreement_indexes(&agreement);
+        previous
+    }
+
+    /// Remove a repo agreement and keep derived indexes consistent.
+    pub(crate) fn remove_repo_agreement_entry(
+        &mut self,
+        agreement_id: &RepoAgreementId,
+    ) -> Option<RepoAgreement> {
+        let previous = self.repo_agreements.remove(agreement_id.clone());
+        if let Some(previous) = previous.as_ref() {
+            self.untrack_repo_agreement_indexes(previous);
+        }
+        previous
+    }
+
     fn track_proof_status_index(&mut self, record: &iroha_data_model::proof::ProofRecord) {
         if let Some(ids) = self.proofs_by_status.get_mut(&record.status) {
             ids.insert(record.id.clone());
@@ -4220,6 +4348,15 @@ pub struct WorldView<'world> {
     pub(crate) soradns_history_len: CellView<'world, u64>,
     /// Active repo agreements keyed by agreement id.
     pub(crate) repo_agreements: StorageView<'world, RepoAgreementId, RepoAgreement>,
+    /// Repo agreement ids keyed by initiating account.
+    pub(crate) repo_agreements_by_initiator:
+        StorageView<'world, AccountId, BTreeSet<RepoAgreementId>>,
+    /// Repo agreement ids keyed by counterparty account.
+    pub(crate) repo_agreements_by_counterparty:
+        StorageView<'world, AccountId, BTreeSet<RepoAgreementId>>,
+    /// Repo agreement ids keyed by custodian account.
+    pub(crate) repo_agreements_by_custodian:
+        StorageView<'world, AccountId, BTreeSet<RepoAgreementId>>,
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers: StorageView<'world, SettlementId, SettlementLedger>,
     /// Offline V2 replay keys used for issued notes, certificates, nullifiers, and audit tokens.
@@ -11846,6 +11983,9 @@ impl World {
             manifest_aliases: Storage::default(),
             replication_orders: Storage::default(),
             repo_agreements: Storage::default(),
+            repo_agreements_by_initiator: Storage::default(),
+            repo_agreements_by_counterparty: Storage::default(),
+            repo_agreements_by_custodian: Storage::default(),
             settlement_ledgers: Storage::default(),
             ministry_agenda_proposals: Storage::default(),
             governance_proposals: Storage::default(),
@@ -11884,6 +12024,7 @@ impl World {
         world.rebuild_nft_owner_index();
         world.rebuild_rwa_owner_index();
         world.rebuild_escrow_indexes();
+        world.rebuild_repo_agreement_indexes();
         world.rebuild_proof_status_index();
         world
             .rebuild_opaque_uaid_index()
@@ -12310,6 +12451,31 @@ impl World {
         self.anonymous_asset_escrows_by_status = anonymous_by_status.into_iter().collect();
     }
 
+    fn rebuild_repo_agreement_indexes(&mut self) {
+        let mut by_initiator = BTreeMap::<AccountId, BTreeSet<RepoAgreementId>>::new();
+        let mut by_counterparty = BTreeMap::<AccountId, BTreeSet<RepoAgreementId>>::new();
+        let mut by_custodian = BTreeMap::<AccountId, BTreeSet<RepoAgreementId>>::new();
+        for (agreement_id, agreement) in self.repo_agreements.view().iter() {
+            by_initiator
+                .entry(agreement.initiator().clone())
+                .or_default()
+                .insert(agreement_id.clone());
+            by_counterparty
+                .entry(agreement.counterparty().clone())
+                .or_default()
+                .insert(agreement_id.clone());
+            if let Some(custodian) = agreement.custodian().as_ref() {
+                by_custodian
+                    .entry(custodian.clone())
+                    .or_default()
+                    .insert(agreement_id.clone());
+            }
+        }
+        self.repo_agreements_by_initiator = by_initiator.into_iter().collect();
+        self.repo_agreements_by_counterparty = by_counterparty.into_iter().collect();
+        self.repo_agreements_by_custodian = by_custodian.into_iter().collect();
+    }
+
     fn rebuild_proof_status_index(&mut self) {
         let mut by_status = BTreeMap::<
             iroha_data_model::proof::ProofStatus,
@@ -12587,6 +12753,9 @@ impl World {
             soradns_last_publish_ms: self.soradns_last_publish_ms.view(),
             soradns_history_len: self.soradns_history_len.view(),
             repo_agreements: self.repo_agreements.view(),
+            repo_agreements_by_initiator: self.repo_agreements_by_initiator.view(),
+            repo_agreements_by_counterparty: self.repo_agreements_by_counterparty.view(),
+            repo_agreements_by_custodian: self.repo_agreements_by_custodian.view(),
             settlement_ledgers: self.settlement_ledgers.view(),
             offline_note_v2_replay_keys: self.offline_note_v2_replay_keys.view(),
             public_lane_validators: self.public_lane_validators.view(),
@@ -13154,6 +13323,18 @@ pub trait WorldReadOnly {
     fn soracloud_runtime_receipts(&self) -> &impl StorageReadOnly<Hash, SoraRuntimeReceiptV1>;
     /// Repo agreement registry (read-only).
     fn repo_agreements(&self) -> &impl StorageReadOnly<RepoAgreementId, RepoAgreement>;
+    /// Repo agreement ids keyed by initiating account (read-only).
+    fn repo_agreements_by_initiator(
+        &self,
+    ) -> &impl StorageReadOnly<AccountId, BTreeSet<RepoAgreementId>>;
+    /// Repo agreement ids keyed by counterparty account (read-only).
+    fn repo_agreements_by_counterparty(
+        &self,
+    ) -> &impl StorageReadOnly<AccountId, BTreeSet<RepoAgreementId>>;
+    /// Repo agreement ids keyed by custodian account (read-only).
+    fn repo_agreements_by_custodian(
+        &self,
+    ) -> &impl StorageReadOnly<AccountId, BTreeSet<RepoAgreementId>>;
     /// Settlement audit trails (read-only).
     fn settlement_ledgers(&self) -> &impl StorageReadOnly<SettlementId, SettlementLedger>;
     /// Offline V2 replay keys (read-only).
@@ -14418,6 +14599,21 @@ macro_rules! impl_world_ro {
             fn repo_agreements(&self) -> &impl StorageReadOnly<RepoAgreementId, RepoAgreement> {
                 &self.repo_agreements
             }
+            fn repo_agreements_by_initiator(
+                &self,
+            ) -> &impl StorageReadOnly<AccountId, BTreeSet<RepoAgreementId>> {
+                &self.repo_agreements_by_initiator
+            }
+            fn repo_agreements_by_counterparty(
+                &self,
+            ) -> &impl StorageReadOnly<AccountId, BTreeSet<RepoAgreementId>> {
+                &self.repo_agreements_by_counterparty
+            }
+            fn repo_agreements_by_custodian(
+                &self,
+            ) -> &impl StorageReadOnly<AccountId, BTreeSet<RepoAgreementId>> {
+                &self.repo_agreements_by_custodian
+            }
             fn settlement_ledgers(&self) -> &impl StorageReadOnly<SettlementId, SettlementLedger> {
                 &self.settlement_ledgers
             }
@@ -14874,6 +15070,9 @@ impl<'world> WorldBlock<'world> {
             soradns_last_publish_ms,
             soradns_history_len,
             repo_agreements,
+            repo_agreements_by_initiator,
+            repo_agreements_by_counterparty,
+            repo_agreements_by_custodian,
             settlement_ledgers,
             offline_note_v2_replay_keys,
             public_lane_validators,
@@ -14979,6 +15178,9 @@ impl<'world> WorldBlock<'world> {
         soradns_last_publish_ms.commit();
         soradns_history_len.commit();
         repo_agreements.commit();
+        repo_agreements_by_initiator.commit();
+        repo_agreements_by_counterparty.commit();
+        repo_agreements_by_custodian.commit();
         settlement_ledgers.commit();
         offline_note_v2_replay_keys.commit();
         domain_committees.commit();
@@ -16105,6 +16307,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             public_lane_reward_claims,
             lane_relay_emergency_validators,
             repo_agreements,
+            repo_agreements_by_initiator,
+            repo_agreements_by_counterparty,
+            repo_agreements_by_custodian,
             zk_assets,
             elections,
             citizens,
@@ -16212,6 +16417,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         public_lane_reward_claims.apply();
         lane_relay_emergency_validators.apply();
         repo_agreements.apply();
+        repo_agreements_by_initiator.apply();
+        repo_agreements_by_counterparty.apply();
+        repo_agreements_by_custodian.apply();
         zk_assets.apply();
         elections.apply();
         citizens.apply();
@@ -19805,6 +20013,48 @@ impl State {
     ) {
         let params = self.world.parameters.view();
         (params.sumeragi().max_clock_drift(), params.transaction())
+    }
+
+    /// Warm the block stateless-validation cache after Torii locally admits a prechecked tx.
+    #[doc(hidden)]
+    #[track_caller]
+    pub fn warm_stateless_validation_cache_for_torii_prechecked(
+        &self,
+        tx: &crate::tx::AcceptedTransaction<'_>,
+    ) {
+        let cache_cap = self.pipeline.stateless_cache_cap;
+        if cache_cap == 0 {
+            return;
+        }
+        let Some(prepared) = tx.stateless_cache_metadata() else {
+            return;
+        };
+        if prepared.single_ed25519_key.is_none() {
+            return;
+        }
+
+        let (max_clock_drift, tx_params) = self.transaction_admission_limits();
+        let max_clock_drift_ms = max_clock_drift.as_millis();
+        let allowed_signing = self.crypto.read().allowed_signing.clone();
+        let context = StatelessValidationContext::new(
+            self.chain_id.clone(),
+            u64::try_from(max_clock_drift_ms).unwrap_or(u64::MAX),
+            tx_params,
+            allowed_signing,
+        );
+        let expires_at_ms = tx
+            .time_to_live()
+            .and_then(|ttl| tx.creation_time().checked_add(ttl))
+            .map(|expires_at| expires_at.as_millis());
+        let not_before_ms = tx
+            .creation_time()
+            .as_millis()
+            .saturating_sub(max_clock_drift_ms);
+
+        let mut cache = self.stateless_validation_cache.lock();
+        cache.set_cap(cache_cap);
+        cache.ensure_context(context);
+        cache.insert_ok(prepared.signed_hash, expires_at_ms, not_before_ms);
     }
 
     /// Effective block time from current Sumeragi parameters.
@@ -29199,11 +29449,15 @@ impl StateTransaction<'_, '_> {
             )
         })?;
         let authority_digest = crate::fastpq::authority_digest(authority);
+        let poseidon_preimage_digest = match deltas.as_slice() {
+            [delta] => Some(crate::fastpq::poseidon_preimage_digest(delta, &batch_hash)),
+            _ => None,
+        };
         let transcript = TransferTranscript {
             batch_hash,
             deltas: core::mem::take(&mut deltas),
             authority_digest,
-            poseidon_preimage_digest: None,
+            poseidon_preimage_digest,
         };
         crate::sumeragi::witness::record_fastpq_transcript(&transcript);
         self.pending_transfer_transcripts.push(transcript);
@@ -31350,6 +31604,9 @@ pub(crate) mod deserialize {
             soradns_last_publish_ms: Cell::default(),
             soradns_history_len: Cell::default(),
             repo_agreements,
+            repo_agreements_by_initiator: Storage::default(),
+            repo_agreements_by_counterparty: Storage::default(),
+            repo_agreements_by_custodian: Storage::default(),
             settlement_ledgers,
             offline_note_v2_replay_keys,
             domain_committees: Storage::default(),
@@ -31426,6 +31683,7 @@ pub(crate) mod deserialize {
         world.rebuild_nft_owner_index();
         world.rebuild_rwa_owner_index();
         world.rebuild_escrow_indexes();
+        world.rebuild_repo_agreement_indexes();
         world.rebuild_proof_status_index();
         world
             .rebuild_opaque_uaid_index()

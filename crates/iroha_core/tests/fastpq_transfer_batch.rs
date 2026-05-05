@@ -2,6 +2,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use iroha_core::{
+    fastpq,
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
@@ -11,6 +12,66 @@ use iroha_data_model::prelude::*;
 use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use nonzero_ext::nonzero;
+
+#[test]
+fn single_transfer_precomputes_canonical_poseidon_digest() {
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+    let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+
+    let (bob_id, _) = gen_account_in("wonderland");
+    let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+    let bob_account = Account::new(bob_id.clone()).build(&ALICE_ID);
+
+    let asset_def_id: AssetDefinitionId = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal").expect("domain id"),
+        "rose".parse().expect("asset name"),
+    );
+    let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
+    let alice_asset = Asset::new(
+        AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
+        Numeric::from(100_u32),
+    );
+
+    let world = World::with_assets(
+        [domain],
+        [alice_account, bob_account],
+        [asset_def],
+        [alice_asset],
+        [],
+    );
+    let kura = Kura::blank_kura_for_testing();
+    let query_store = LiveQueryStore::start_test();
+    let state = State::new_for_testing(world, kura, query_store);
+
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut tx = block.transaction();
+    tx.tx_call_hash = Some(Hash::prehashed([0xCD; Hash::LENGTH]));
+
+    Transfer::asset_numeric(
+        AssetId::new(asset_def_id, ALICE_ID.clone()),
+        Numeric::from(10_u32),
+        bob_id,
+    )
+    .execute(&ALICE_ID, &mut tx)
+    .expect("transfer executes successfully");
+    tx.apply();
+
+    let transcripts = block.drain_transfer_transcripts();
+    let entry = transcripts
+        .values()
+        .next()
+        .expect("transcript recorded for transfer");
+    assert_eq!(entry.len(), 1, "single transfer transcript recorded");
+    assert_eq!(entry[0].deltas.len(), 1, "single delta recorded");
+    assert_eq!(
+        entry[0].poseidon_preimage_digest,
+        Some(fastpq::poseidon_preimage_digest(
+            &entry[0].deltas[0],
+            &entry[0].batch_hash,
+        ))
+    );
+}
 
 #[test]
 fn transfer_asset_batch_records_multi_delta_transcript() {

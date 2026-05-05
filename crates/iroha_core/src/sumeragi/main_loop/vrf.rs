@@ -479,7 +479,7 @@ impl Actor {
                 self.telemetry.inc_vrf_commit_emitted();
                 let snapshot = manager.snapshot_current_epoch(roster_len_hint, height);
                 let seed = manager.seed();
-                self.persist_vrf_snapshot(snapshot, false, None)?;
+                self.stage_vrf_snapshot(snapshot, false, None)?;
                 self.refresh_npos_seed(seed, height, super::commit::EpochRefreshPhase::PreCommit);
                 VrfNoteResult::Accepted
             }
@@ -487,7 +487,7 @@ impl Actor {
                 #[cfg(feature = "telemetry")]
                 self.telemetry.inc_vrf_commit_emitted();
                 let snapshot = manager.snapshot_current_epoch(roster_len_hint, height);
-                self.persist_vrf_snapshot(snapshot, false, None)?;
+                self.stage_vrf_snapshot(snapshot, false, None)?;
                 VrfNoteResult::AcceptedLate
             }
             VrfNoteResult::RejectedEpochMismatch => {
@@ -557,7 +557,7 @@ impl Actor {
                 let snapshot = manager.snapshot_current_epoch(roster_len_hint, height);
                 let late_reveals_total = snapshot.late_reveals.len() as u64;
                 let seed = manager.seed();
-                self.persist_vrf_snapshot(snapshot, false, None)?;
+                self.stage_vrf_snapshot(snapshot, false, None)?;
                 super::status::set_vrf_late_reveals_total(late_reveals_total);
                 self.refresh_npos_seed(seed, height, super::commit::EpochRefreshPhase::PreCommit);
                 super::status::set_prf_context(seed, height, 0);
@@ -570,7 +570,7 @@ impl Actor {
                 self.telemetry.inc_vrf_reveal_late();
                 let snapshot = manager.snapshot_current_epoch(roster_len_hint, height);
                 let late_reveals_total = snapshot.late_reveals.len() as u64;
-                self.persist_vrf_snapshot(snapshot, false, None)?;
+                self.stage_vrf_snapshot(snapshot, false, None)?;
                 super::status::set_vrf_late_reveals_total(late_reveals_total);
                 VrfNoteResult::AcceptedLate
             }
@@ -627,16 +627,14 @@ impl Actor {
     }
 
     #[allow(clippy::unnecessary_wraps)]
-    pub(super) fn persist_vrf_snapshot(
-        &self,
+    pub(super) fn stage_vrf_snapshot(
+        &mut self,
         snapshot: EpochSnapshot,
         finalized: bool,
         election: Option<ValidatorElectionOutcome>,
     ) -> Result<()> {
         let record = self.snapshot_to_vrf_record(snapshot, finalized, election);
-        let mut world = self.state.world.block();
-        world.vrf_epochs.insert(record.epoch, record);
-        world.commit();
+        self.pending_npos_vrf_records.insert(record.epoch, record);
         Ok(())
     }
 

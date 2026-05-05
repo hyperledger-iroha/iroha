@@ -44,10 +44,20 @@ fn sample_public_inputs() -> FastpqPublicInputs {
 }
 
 fn sample_transfer_transcripts(count: usize, precompute_digest: bool) -> Vec<TransferTranscript> {
-    let delta = sample_transfer_delta();
     let authority_digest = fastpq::authority_digest(&ALICE_ID);
     (0..count)
         .map(|idx| {
+            let idx_u64 =
+                u64::try_from(idx).expect("crypto hotpath bench sample count fits in u64");
+            let amount = 42u64;
+            let from_before = 100_000u64 - amount * idx_u64;
+            let to_before = 1u64 + amount * idx_u64;
+            let mut delta = sample_transfer_delta();
+            delta.amount = Numeric::from(amount);
+            delta.from_balance_before = Numeric::from(from_before);
+            delta.from_balance_after = Numeric::from(from_before - amount);
+            delta.to_balance_before = Numeric::from(to_before);
+            delta.to_balance_after = Numeric::from(to_before + amount);
             let batch_hash = Hash::prehashed(
                 [u8::try_from(idx).expect("crypto hotpath bench sample count fits in u8"); 32],
             );

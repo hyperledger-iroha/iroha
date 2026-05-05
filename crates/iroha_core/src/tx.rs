@@ -3026,6 +3026,27 @@ impl<'tx> AcceptedTransaction<'tx> {
         })
     }
 
+    pub(crate) fn stateless_cache_metadata(&self) -> Option<PreparedTransactionMetadata> {
+        let signed = self.external()?;
+        let payload_hash = *self
+            .payload_hash
+            .get_or_init(|| Some(HashOf::new(signed.payload())))
+            .as_ref()?;
+        let single_ed25519_key = *self
+            .single_ed25519_key
+            .get_or_init(|| Self::parsed_single_ed25519_key(signed));
+        Some(PreparedTransactionMetadata {
+            signed_hash: self.hash(),
+            entrypoint_hash: self.hash_as_entrypoint(),
+            payload_hash,
+            encoded_len: self.encoded_len(),
+            signed_bytes: None,
+            entrypoint_bytes: None,
+            single_ed25519_key,
+            metadata_depths: prepare_metadata_depths(self.metadata()?),
+        })
+    }
+
     /// Borrow the transaction authority account identifier when present.
     #[must_use]
     pub fn authority_opt(&self) -> Option<&AccountId> {

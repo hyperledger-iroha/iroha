@@ -2431,35 +2431,31 @@ impl Queue {
     ) -> Result<Vec<QueueAdmissionNotification>, (Vec<QueueAdmissionNotification>, Failure)> {
         let mut notifications = Vec::with_capacity(prepared.len());
         let mut failure = None;
+        #[cfg(feature = "telemetry")]
+        let mut teu_dirty = false;
         {
             let _guard = self.push_remove_lock.lock();
-            for admission in prepared {
-                let PreparedQueueAdmission {
-                    checked,
-                    hash,
-                    routing_decision,
-                    encoded_len,
-                    gossip_payload,
-                    proposal_gas_cost,
-                    enqueued_at_ms,
-                    #[cfg(feature = "telemetry")]
-                    pending_teu,
-                } = admission;
-                let lane_id = routing_decision.lane_id;
-                let dataspace_id = routing_decision.dataspace_id;
-                let txs_len = self.active_len();
-                let entry = match self.txs.entry(hash) {
-                    Entry::Occupied(_) => {
-                        failure = Some(Failure {
-                            tx: checked.as_accepted().clone().into(),
-                            err: Error::IsInQueue,
-                        });
-                        break;
-                    }
-                    Entry::Vacant(entry) => entry,
-                };
+            let base_len = self.active_len();
+            let capacity = self.capacity.get();
+            let mut accepted_count = 0usize;
+            let mut seen_hashes = BTreeSet::new();
+            let mut checked_user_increments = BTreeMap::<AccountId, usize>::new();
 
-                if txs_len >= self.capacity.get() {
+            for admission in &prepared {
+                let checked = &admission.checked;
+                let hash = admission.hash;
+                let lane_id = admission.routing_decision.lane_id;
+                let dataspace_id = admission.routing_decision.dataspace_id;
+
+                if self.txs.contains_key(&hash) || !seen_hashes.insert(hash) {
+                    failure = Some(Failure {
+                        tx: checked.as_accepted().clone().into(),
+                        err: Error::IsInQueue,
+                    });
+                    break;
+                }
+
+                if base_len.saturating_add(accepted_count) >= capacity {
                     warn!(
                         lane_id = %lane_id,
                         dataspace_id = %dataspace_id,
@@ -2474,14 +2470,56 @@ impl Queue {
                 }
 
                 if let Some(authority) = checked.as_ref().authority_opt() {
-                    if let Err(err) = self.check_and_increase_per_user_tx_count(authority) {
+                    let queued = self.queued_tx_count_for_user(authority);
+                    let pending = checked_user_increments.get(authority).copied().unwrap_or(0);
+                    if queued.saturating_add(pending) >= self.capacity_per_user.get() {
+                        warn!(
+                            max_txs_per_user = self.capacity_per_user,
+                            %authority,
+                            "Account reached maximum allowed number of transactions in the queue per user"
+                        );
                         failure = Some(Failure {
                             tx: checked.as_accepted().clone().into(),
-                            err,
+                            err: Error::MaximumTransactionsPerUser,
                         });
                         break;
                     }
+                    checked_user_increments
+                        .entry(authority.clone())
+                        .and_modify(|count| *count = count.saturating_add(1))
+                        .or_insert(1);
                 }
+
+                accepted_count = accepted_count.saturating_add(1);
+            }
+
+            let mut applied_user_increments = BTreeMap::<AccountId, usize>::new();
+            for admission in prepared.into_iter().take(accepted_count) {
+                let PreparedQueueAdmission {
+                    checked,
+                    hash,
+                    routing_decision,
+                    encoded_len,
+                    gossip_payload,
+                    proposal_gas_cost,
+                    enqueued_at_ms,
+                    #[cfg(feature = "telemetry")]
+                    pending_teu,
+                } = admission;
+                let lane_id = routing_decision.lane_id;
+                let dataspace_id = routing_decision.dataspace_id;
+                let entry = match self.txs.entry(hash) {
+                    Entry::Occupied(_) => {
+                        failure = Some(Failure {
+                            tx: checked.as_accepted().clone().into(),
+                            err: Error::IsInQueue,
+                        });
+                        break;
+                    }
+                    Entry::Vacant(entry) => entry,
+                };
+
+                let authority = checked.as_ref().authority_opt().cloned();
 
                 let tx_arc = Arc::new(checked);
                 entry.insert(Arc::clone(&tx_arc));
@@ -2510,9 +2548,6 @@ impl Queue {
                     }
                     self.tx_enqueued_at_ms.remove(&hash);
                     self.remove_queued_age(&hash);
-                    if let Some(authority) = err_tx.as_ref().as_ref().authority_opt() {
-                        self.decrease_per_user_tx_count(authority);
-                    }
                     failure = Some(Failure {
                         tx: Box::new(
                             Arc::try_unwrap(err_tx)
@@ -2534,23 +2569,35 @@ impl Queue {
                 }
                 self.tx_gas_cost.insert(hash, proposal_gas_cost);
                 self.track_expiry_hash(hash);
+                if let Some(authority) = authority {
+                    applied_user_increments
+                        .entry(authority)
+                        .and_modify(|count| *count = count.saturating_add(1))
+                        .or_insert(1);
+                }
                 #[cfg(feature = "telemetry")]
-                self.record_teu_enqueue(
-                    hash,
-                    TxTeuInfo {
-                        lane_id,
-                        dataspace_id,
-                        teu: pending_teu,
-                    },
-                    telemetry
-                        .expect("telemetry handle is present when telemetry feature is enabled"),
-                );
+                {
+                    self.record_teu_enqueue_locked(
+                        hash,
+                        TxTeuInfo {
+                            lane_id,
+                            dataspace_id,
+                            teu: pending_teu,
+                        },
+                    );
+                    teu_dirty = true;
+                }
                 notifications.push(QueueAdmissionNotification {
                     hash,
                     lane_id,
                     dataspace_id,
                 });
             }
+            self.apply_per_user_tx_count_increments(applied_user_increments);
+        }
+        #[cfg(feature = "telemetry")]
+        if teu_dirty {
+            self.publish_teu_backlog_metrics(telemetry);
         }
         self.publish_backpressure_state(self.active_len(), telemetry);
         match failure {
@@ -2893,6 +2940,8 @@ impl Queue {
         let backpressure_telemetry: Option<&StateTelemetry> = Some(telemetry_handle);
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
+        #[cfg(feature = "telemetry")]
+        let mut teu_dirty = false;
 
         let encoded_len = Self::compute_tx_encoded_len(checked.as_accepted());
         let proposal_gas_cost = Self::compute_proposal_gas_cost(checked.as_accepted());
@@ -2984,15 +3033,21 @@ impl Queue {
             self.tx_gas_cost.insert(hash, proposal_gas_cost);
             self.track_expiry_hash(hash);
             #[cfg(feature = "telemetry")]
-            self.record_teu_enqueue(
-                hash,
-                TxTeuInfo {
-                    lane_id,
-                    dataspace_id,
-                    teu: pending_teu,
-                },
-                telemetry_handle,
-            );
+            {
+                self.record_teu_enqueue_locked(
+                    hash,
+                    TxTeuInfo {
+                        lane_id,
+                        dataspace_id,
+                        teu: pending_teu,
+                    },
+                );
+                teu_dirty = true;
+            }
+        }
+        #[cfg(feature = "telemetry")]
+        if teu_dirty {
+            self.publish_teu_backlog_metrics(Some(telemetry_handle));
         }
         iroha_logger::debug!(
             tx = %hash,
@@ -4164,6 +4219,24 @@ impl Queue {
         }
     }
 
+    fn queued_tx_count_for_user(&self, account_id: &AccountId) -> usize {
+        self.txs_per_user
+            .get(account_id)
+            .map_or(0, |count| *count.value())
+    }
+
+    fn apply_per_user_tx_count_increments(&self, increments: BTreeMap<AccountId, usize>) {
+        for (account_id, delta) in increments {
+            if delta == 0 {
+                continue;
+            }
+            self.txs_per_user
+                .entry(account_id)
+                .and_modify(|count| *count = count.saturating_add(delta))
+                .or_insert(delta);
+        }
+    }
+
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
     fn publish_backpressure_state(&self, queued: usize, telemetry: Option<&StateTelemetry>) {
         let _ = self.refresh_backpressure_state(queued, telemetry);
@@ -4244,12 +4317,7 @@ impl Queue {
     }
 
     #[cfg(feature = "telemetry")]
-    fn record_teu_enqueue(
-        &self,
-        hash: SignedTxHash,
-        info: TxTeuInfo,
-        telemetry: &crate::telemetry::StateTelemetry,
-    ) {
+    fn record_teu_enqueue_locked(&self, hash: SignedTxHash, info: TxTeuInfo) {
         self.tx_teu.insert(hash, info);
 
         self.lane_teu_pending
@@ -4273,8 +4341,6 @@ impl Queue {
                 teu: info.teu,
                 tx_count: 1,
             });
-
-        self.publish_teu_backlog_metrics(Some(telemetry));
     }
 
     #[cfg(feature = "telemetry")]
@@ -8160,7 +8226,7 @@ pub mod tests {
         let first = accepted_tx_by(account_id.clone(), &key_pair, &time_source);
         let first_hash = first.as_ref().hash();
         time_handle.advance(Duration::from_millis(1));
-        let second = accepted_tx_by(account_id, &key_pair, &time_source);
+        let second = accepted_tx_by(account_id.clone(), &key_pair, &time_source);
 
         let result = queue.push_batch_with_lane_with_state_and_routing(
             vec![(first, routing), (second, routing)],
@@ -8179,6 +8245,7 @@ pub mod tests {
         );
         assert_eq!(queue.active_len(), 1);
         assert_eq!(queue.queued_len(), 1);
+        assert_eq!(queue.queued_tx_count_for_user(&account_id), 1);
         assert_eq!(queue.current_backpressure().queued(), 1);
         let batch = queue.gossip_batch_with_state(2, &state);
         assert_eq!(batch.len(), 1);

@@ -5624,6 +5624,7 @@ impl Actor {
         rbc_payload_matches(sessions, handle, block_hash, height, view, payload_hash)
     }
 
+    #[cfg(test)]
     fn local_payload_matches_hash(block: &SignedBlock, payload_hash: &Hash) -> bool {
         let payload_bytes = super::proposals::block_payload_bytes(block);
         Hash::new(&payload_bytes) == *payload_hash
@@ -5635,7 +5636,7 @@ impl Actor {
         handle: &rbc_status::Handle,
         pending: &PendingBlock,
     ) -> bool {
-        if Self::local_payload_matches_hash(&pending.block, &pending.payload_hash) {
+        if Hash::new(pending.payload_bytes()) == pending.payload_hash {
             return true;
         }
         Self::ensure_block_matches_rbc_payload(

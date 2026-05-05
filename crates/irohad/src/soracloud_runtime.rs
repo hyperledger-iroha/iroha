@@ -2710,6 +2710,28 @@ struct SorafsHydratedFileLayout {
     size: u64,
 }
 
+fn stable_inrou_runtime_state_submission_view(
+    state: &SoraInrouReplicaRuntimeStateV1,
+) -> SoraInrouReplicaRuntimeStateV1 {
+    let mut stable_state = state.clone();
+    stable_state.updated_at_ms = 0;
+    stable_state
+}
+
+fn inrou_runtime_state_submission_commitment(state: &SoraInrouReplicaRuntimeStateV1) -> Hash {
+    Hash::new(Encode::encode(&stable_inrou_runtime_state_submission_view(
+        state,
+    )))
+}
+
+fn inrou_runtime_state_matches_authoritative_snapshot(
+    authoritative: &SoraInrouReplicaRuntimeStateV1,
+    desired: &SoraInrouReplicaRuntimeStateV1,
+) -> bool {
+    stable_inrou_runtime_state_submission_view(authoritative)
+        == stable_inrou_runtime_state_submission_view(desired)
+}
+
 impl SoracloudRuntimeManager {
     /// Construct the runtime manager for the supplied node state.
     #[must_use]
@@ -3086,7 +3108,9 @@ impl SoracloudRuntimeManager {
                         updated_at_ms: soracloud_runtime_observed_at_ms(),
                         last_error: replica.last_error.clone(),
                     };
-                    if authoritative_state == Some(&desired_state) {
+                    if authoritative_state.is_some_and(|state| {
+                        inrou_runtime_state_matches_authoritative_snapshot(state, &desired_state)
+                    }) {
                         self.last_runtime_state_submission_commitments
                             .lock()
                             .remove(&(
@@ -3097,7 +3121,7 @@ impl SoracloudRuntimeManager {
                         continue;
                     }
 
-                    let commitment = Hash::new(Encode::encode(&desired_state));
+                    let commitment = inrou_runtime_state_submission_commitment(&desired_state);
                     let key = (
                         service_name.clone(),
                         service_version.clone(),
@@ -14617,6 +14641,48 @@ mod tests {
         Ok(bundle)
     }
 
+    fn insert_inrou_service_placement_fixture(
+        state: &mut Arc<State>,
+        bundle: &SoraDeploymentBundleV1,
+        local_peer_id: &str,
+        replica_slots: impl IntoIterator<Item = u16>,
+    ) {
+        let selected_guest_isa = current_host_inrou_guest_isa();
+        let placements = replica_slots
+            .into_iter()
+            .map(|replica_slot| SoraInrouReplicaPlacementV1 {
+                replica_slot,
+                validator_account_id: ALICE_ID.clone(),
+                peer_id: local_peer_id.to_owned(),
+                selected_backend: SoraInrouRuntimeBackendV1::PortableVm,
+                selected_guest_isa,
+                selected_geography_tag: None,
+                selection_latency_ms: None,
+            })
+            .collect::<Vec<_>>();
+        Arc::get_mut(state)
+            .expect("unique test state")
+            .world
+            .soracloud_inrou_service_placements_mut_for_testing()
+            .insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                iroha_data_model::soracloud::SoraInrouServicePlacementRecordV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
+                    service_name: bundle.service.service_name.clone(),
+                    service_version: bundle.service.service_version.clone(),
+                    desired_replica_count: bundle.service.replicas.get(),
+                    eligible_validator_count: 1,
+                    placements,
+                    reconciled_at_ms: 1,
+                    last_error: None,
+                },
+            );
+    }
+
     fn materialize_inrou_replica_plan_for_tests(
         bundle: &SoraDeploymentBundleV1,
     ) -> Result<(
@@ -17717,6 +17783,7 @@ mod tests {
         config.hf.api_base_url = format!("{}/api", server.base_url);
         config.hf.inference_base_url = format!("{}/hf-inference/models", server.base_url);
         config.hf.local_execution_enabled = false;
+        config.hf.allow_inference_bridge_fallback = true;
         let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
         manager.reconcile_once()?;
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
@@ -19175,6 +19242,7 @@ mod tests {
         config.hf.api_base_url = format!("{}/api", server.base_url);
         config.hf.inference_base_url = format!("{}/hf-inference/models", server.base_url);
         config.hf.local_execution_enabled = false;
+        config.hf.allow_inference_bridge_fallback = true;
         config.hf.import_file_allowlist = vec!["config.json".to_owned()];
         config.hf.inference_token = Some("hf-test-token".to_owned());
 
@@ -19335,10 +19403,18 @@ mod tests {
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(bundle.service.service_name.clone(), deployment_state);
         }
+        let local_peer_id = "12D3KooWHttpServiceInrouRuntimeHost";
+        insert_inrou_service_placement_fixture(
+            &mut state,
+            &bundle,
+            local_peer_id,
+            1..=bundle.service.replicas.get(),
+        );
 
         let temp_dir = tempfile::tempdir()?;
         let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            test_runtime_manager_config(temp_dir.path().to_path_buf())
+                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
             Arc::clone(&state),
         );
         manager.reconcile_once()?;
@@ -19538,6 +19614,19 @@ mod tests {
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(active_bundle.service.service_name.clone(), deployment);
         }
+        let local_peer_id = "12D3KooWCanaryHttpServiceInrouRuntimeHost";
+        insert_inrou_service_placement_fixture(
+            &mut state,
+            &active_bundle,
+            local_peer_id,
+            [1_u16],
+        );
+        insert_inrou_service_placement_fixture(
+            &mut state,
+            &canary_bundle,
+            local_peer_id,
+            [1_u16],
+        );
 
         let temp_dir = tempfile::tempdir()?;
         let artifacts_root = temp_dir.path().join("artifacts");
@@ -19552,7 +19641,8 @@ mod tests {
         )?;
 
         let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            test_runtime_manager_config(temp_dir.path().to_path_buf())
+                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
             Arc::clone(&state),
         );
         manager.reconcile_once()?;
@@ -19651,6 +19741,8 @@ mod tests {
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(bundle.service.service_name.clone(), deployment_state);
         }
+        let local_peer_id = "12D3KooWMultiReplicaHttpServiceInrouRuntimeHost";
+        insert_inrou_service_placement_fixture(&mut state, &bundle, local_peer_id, [1_u16, 2]);
 
         let temp_dir = tempfile::tempdir()?;
         let artifacts_root = temp_dir.path().join("artifacts");
@@ -19661,7 +19753,8 @@ mod tests {
         )?;
 
         let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            test_runtime_manager_config(temp_dir.path().to_path_buf())
+                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
             Arc::clone(&state),
         );
         manager.reconcile_once()?;
@@ -23051,6 +23144,11 @@ exec python3 /tmp/inrou-shared-volume.py
             "main",
             "gpt2",
         )?;
+        set_generated_hf_service_route_visibility(
+            &mut state,
+            &fixture,
+            SoraRouteVisibilityV1::Public,
+        );
         let apartment_name: Name = "hf_agent".parse().expect("valid apartment name");
         let manifest = iroha_core::soracloud_runtime::build_soracloud_hf_generated_agent_manifest(
             apartment_name.clone(),
@@ -23114,6 +23212,14 @@ exec python3 /tmp/inrou-shared-volume.py
                 .soracloud_agent_apartments_mut_for_testing()
                 .insert(apartment_name.to_string(), apartment.clone());
         }
+        let local_peer_id = "12D3KooWHfAgentAutonomyRuntimeHost";
+        insert_generated_hf_placement_fixture(
+            &mut state,
+            &fixture,
+            SoraHfPlacementHostRoleV1::Primary,
+            SoraHfPlacementHostStatusV1::Warm,
+            local_peer_id,
+        );
 
         let temp_dir = tempfile::tempdir()?;
         let source_root = temp_dir
@@ -23158,7 +23264,8 @@ exec python3 /tmp/inrou-shared-volume.py
         )?;
 
         let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            test_runtime_manager_config(temp_dir.path().to_path_buf())
+                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
             Arc::clone(&state),
         );
         manager.reconcile_once()?;
@@ -23266,6 +23373,11 @@ exec python3 /tmp/inrou-shared-volume.py
             "main",
             "gpt2",
         )?;
+        set_generated_hf_service_route_visibility(
+            &mut state,
+            &fixture,
+            SoraRouteVisibilityV1::Public,
+        );
         let apartment_name: Name = "hf_workflow_agent".parse().expect("valid apartment name");
         let manifest = iroha_core::soracloud_runtime::build_soracloud_hf_generated_agent_manifest(
             apartment_name.clone(),
@@ -23332,6 +23444,14 @@ exec python3 /tmp/inrou-shared-volume.py
                 .soracloud_agent_apartments_mut_for_testing()
                 .insert(apartment_name.to_string(), apartment.clone());
         }
+        let local_peer_id = "12D3KooWHfWorkflowAutonomyRuntimeHost";
+        insert_generated_hf_placement_fixture(
+            &mut state,
+            &fixture,
+            SoraHfPlacementHostRoleV1::Primary,
+            SoraHfPlacementHostStatusV1::Warm,
+            local_peer_id,
+        );
 
         let temp_dir = tempfile::tempdir()?;
         let source_root = temp_dir
@@ -23376,7 +23496,8 @@ exec python3 /tmp/inrou-shared-volume.py
         )?;
 
         let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            test_runtime_manager_config(temp_dir.path().to_path_buf())
+                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
             Arc::clone(&state),
         );
         manager.reconcile_once()?;

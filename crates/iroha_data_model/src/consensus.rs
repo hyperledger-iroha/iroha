@@ -183,13 +183,13 @@ impl PartialOrd for NposConsensusEffects {
     }
 }
 
-/// Payload for jailing a validator for missing VRF participation requirements.
+/// A deterministic VRF jail action.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-pub struct NposVrfJailPenalty {
+pub struct NposVrfJailAction {
     /// Epoch that produced the penalty.
     pub epoch: u64,
     /// Signer index in the epoch roster.
@@ -204,13 +204,13 @@ pub struct NposVrfJailPenalty {
     pub reason: String,
 }
 
-/// Payload for slashing a validator from consensus evidence.
+/// A deterministic consensus-evidence slash action.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-pub struct NposConsensusSlashPenalty {
+pub struct NposConsensusSlashAction {
     /// Consensus evidence key.
     pub evidence_key: Vec<u8>,
     /// Signer index in the evidence roster.
@@ -227,48 +227,48 @@ pub struct NposConsensusSlashPenalty {
     pub amount: Numeric,
 }
 
-/// Payload for marking a VRF epoch's penalties as applied.
+/// Marker that a VRF epoch's penalties were applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-pub struct NposVrfPenaltiesAppliedMarker {
+pub struct NposMarkVrfPenaltiesAppliedAction {
     /// Epoch to mark.
     pub epoch: u64,
     /// Block height that applied the marker.
     pub height: u64,
 }
 
-/// Payload for marking a consensus evidence record's penalty as applied.
+/// Marker that a consensus evidence record's penalty was applied.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-pub struct NposConsensusEvidenceAppliedMarker {
+pub struct NposMarkConsensusEvidenceAppliedAction {
     /// Consensus evidence key.
     pub evidence_key: Vec<u8>,
     /// Block height that applied the marker.
     pub height: u64,
 }
 
-/// A deterministic `NPoS` penalty state transition.
+/// Penalty or marker action applied by a committed `NPoS` effects bundle.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum NposPenaltyAction {
     /// Jail a validator for missing VRF participation requirements.
-    VrfJail(NposVrfJailPenalty),
+    VrfJail(NposVrfJailAction),
     /// Slash a validator from consensus evidence.
-    ConsensusSlash(NposConsensusSlashPenalty),
+    ConsensusSlash(NposConsensusSlashAction),
     /// Mark a VRF epoch's penalties as applied.
-    MarkVrfPenaltiesApplied(NposVrfPenaltiesAppliedMarker),
+    MarkVrfPenaltiesApplied(NposMarkVrfPenaltiesAppliedAction),
     /// Mark a consensus evidence record's penalty as applied.
-    MarkConsensusEvidenceApplied(NposConsensusEvidenceAppliedMarker),
+    MarkConsensusEvidenceApplied(NposMarkConsensusEvidenceAppliedAction),
 }
 
 /// Snapshot of the election parameters used when selecting validators for an epoch.

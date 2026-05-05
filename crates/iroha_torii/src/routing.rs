@@ -45827,6 +45827,7 @@ mod status_tests {
                 total_xor_variance_micro: 1u128,
                 swap_metadata: None,
                 receipts: Vec::new(),
+                nexus_fee_receipts: Vec::new(),
             }],
             lane_relay_envelopes: {
                 let settlement = LaneBlockCommitment {
@@ -45840,6 +45841,7 @@ mod status_tests {
                     total_xor_variance_micro: 0,
                     swap_metadata: None,
                     receipts: Vec::new(),
+                    nexus_fee_receipts: Vec::new(),
                 };
                 let header =
                     BlockHeader::new(NonZeroU64::new(1).expect("nonzero"), None, None, None, 0, 0);
@@ -46143,6 +46145,7 @@ mod status_tests {
                 volatility_class: LaneVolatilityClass::Stable,
             }),
             receipts: vec![receipt.clone()],
+            nexus_fee_receipts: Vec::new(),
         };
         let snap = sumeragi::StatusSnapshot {
             lane_settlement_commitments: vec![commitment.clone()],
@@ -46337,6 +46340,7 @@ mod status_tests {
                 xor_variance_micro: 500,
                 timestamp_ms: 1_700_000_000_456,
             }],
+            nexus_fee_receipts: Vec::new(),
         };
         let validator_set: Vec<PeerId> = Vec::new();
         let commit_qc = iroha_data_model::consensus::Qc {

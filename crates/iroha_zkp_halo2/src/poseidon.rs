@@ -412,7 +412,7 @@ impl PoseidonByteHasher {
     }
 
     /// Add one already-packed little-endian `u64` byte word to the Poseidon sponge.
-    #[inline]
+    #[inline(always)]
     pub fn update_u64_le_word(&mut self, word: u64) {
         if self.pending_len == 0 {
             self.absorb_word(Fr::from(word));
@@ -422,7 +422,7 @@ impl PoseidonByteHasher {
     }
 
     /// Add bytes to the Poseidon sponge.
-    #[inline]
+    #[inline(always)]
     pub fn update(&mut self, mut bytes: &[u8]) {
         if self.pending_len > 0 {
             let needed = self.pending_bytes.len() - self.pending_len;
@@ -463,7 +463,7 @@ impl PoseidonByteHasher {
 
     /// Finish hashing and return canonical BN254 field bytes.
     #[must_use]
-    #[inline]
+    #[inline(always)]
     pub fn finalize(mut self) -> [u8; 32] {
         if self.pending_len > 0 {
             self.absorb_word(Fr::from(partial_u64_from_le_bytes(
@@ -472,26 +472,23 @@ impl PoseidonByteHasher {
             )));
         }
         match self.rate_len {
-            0 => {
-                self.state[0] += Fr::ONE;
-                poseidon3_permute(&mut self.state);
-            }
-            1 => {
-                self.state[1] += Fr::ONE;
-                poseidon3_permute(&mut self.state);
-            }
+            0 => self.state[0] += Fr::ONE,
+            1 => self.state[1] += Fr::ONE,
             _ => unreachable!("Poseidon byte hasher rate length cannot exceed the rate"),
         }
+        poseidon3_permute(&mut self.state);
         field_to_bytes(self.state[0])
     }
 }
 
 impl Write for PoseidonByteHasher {
+    #[inline(always)]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.update(buf);
         Ok(buf.len())
     }
 
+    #[inline(always)]
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }

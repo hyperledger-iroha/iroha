@@ -2326,15 +2326,14 @@ impl Actor {
             if da_enabled {
                 let session_key = Self::session_key(&block_hash, height, view);
                 if self.frontier_slot_is_exact_height(height) {
-                    let payload_hash = self
-                        .pending
-                        .pending_blocks
-                        .get(&block_hash)
-                        .map(|pending| pending.payload_hash)
-                        .unwrap_or_else(|| {
-                            Hash::new(&super::proposals::block_payload_bytes(&block))
-                        });
-                    let payload_bytes = super::proposals::block_payload_bytes(&block);
+                    let (payload_hash, payload_bytes) =
+                        self.pending.pending_blocks.get(&block_hash).map_or_else(
+                            || {
+                                let payload_bytes = super::proposals::block_payload_bytes(&block);
+                                (Hash::new(&payload_bytes), payload_bytes)
+                            },
+                            |pending| (pending.payload_hash, pending.payload_bytes().to_vec()),
+                        );
                     self.retain_exact_frontier_rbc_session_for_block_created(
                         session_key,
                         &block,
@@ -2344,14 +2343,14 @@ impl Actor {
                     )?;
                     self.publish_rbc_backlog_snapshot();
                 } else {
-                    let payload_hash = self
-                        .pending
-                        .pending_blocks
-                        .get(&block_hash)
-                        .map(|pending| pending.payload_hash)
-                        .unwrap_or_else(|| {
-                            Hash::new(&super::proposals::block_payload_bytes(&block))
-                        });
+                    let (payload_hash, payload_bytes) =
+                        self.pending.pending_blocks.get(&block_hash).map_or_else(
+                            || {
+                                let payload_bytes = super::proposals::block_payload_bytes(&block);
+                                (Hash::new(&payload_bytes), payload_bytes)
+                            },
+                            |pending| (pending.payload_hash, pending.payload_bytes().to_vec()),
+                        );
                     let rebroadcast_missing_init = self
                         .subsystems
                         .da_rbc
@@ -2381,12 +2380,11 @@ impl Actor {
                             .contains_key(&session_key)
                     {
                         if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
-                            let payload_bytes = super::proposals::block_payload_bytes(&block);
                             let payload_len = payload_bytes.len();
                             let work = super::rbc::RbcSeedWork {
                                 key: session_key,
                                 payload_hash,
-                                payload_bytes,
+                                payload_bytes: payload_bytes.clone(),
                                 chunking: super::rbc::RbcChunkingSpec::from_config(
                                     &self.config.rbc,
                                 ),
@@ -2446,9 +2444,10 @@ impl Actor {
                             }
                         }
                         if !queued_seed {
-                            self.seed_rbc_session_from_block(
+                            self.seed_rbc_session_from_payload(
                                 session_key,
                                 &block,
+                                &payload_bytes,
                                 payload_hash,
                                 rebroadcast_missing_init,
                                 true,
@@ -2466,7 +2465,6 @@ impl Actor {
                                 super::rbc_session_needs_payload(session, payload_hash)
                             })
                     {
-                        let payload_bytes = super::proposals::block_payload_bytes(&block);
                         self.hydrate_rbc_session_from_block(
                             session_key,
                             &payload_bytes,
@@ -2510,11 +2508,10 @@ impl Actor {
                             })
                     {
                         if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
-                            let payload_bytes = super::proposals::block_payload_bytes(&block);
                             let work = super::rbc::RbcSeedWork {
                                 key: session_key,
                                 payload_hash,
-                                payload_bytes,
+                                payload_bytes: payload_bytes.clone(),
                                 chunking: super::rbc::RbcChunkingSpec::from_config(
                                     &self.config.rbc,
                                 ),
@@ -2549,7 +2546,6 @@ impl Actor {
                                 }
                             }
                         }
-                        let payload_bytes = super::proposals::block_payload_bytes(&block);
                         self.hydrate_rbc_session_from_block(
                             session_key,
                             &payload_bytes,
@@ -3541,9 +3537,10 @@ impl Actor {
                         }
                     }
                     if !queued_seed {
-                        self.seed_rbc_session_from_block(
+                        self.seed_rbc_session_from_payload(
                             session_key,
                             &block,
+                            &payload_bytes,
                             payload_hash,
                             rebroadcast_missing_init,
                             true,
