@@ -806,6 +806,25 @@ impl Queue {
             .collect()
     }
 
+    fn publishes_only_space_directory_manifests(tx: &CheckedTransaction<'_>) -> bool {
+        let Some(signed) = tx.external() else {
+            return false;
+        };
+        match signed.instructions() {
+            Executable::Instructions(instructions) if !instructions.is_empty() => {
+                instructions.iter().all(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<
+                            iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest,
+                        >()
+                        .is_some()
+                })
+            }
+            _ => false,
+        }
+    }
+
     fn compute_tx_encoded_len(tx: &AcceptedTransaction<'_>) -> usize {
         tx.encoded_len()
     }
@@ -2235,16 +2254,35 @@ impl Queue {
             Some(lane_privacy_registry_handle)
         };
 
-        let lane_compliance = self.lane_compliance.read().clone();
-        if let (Some(engine), Some(authority)) =
-            (lane_compliance.as_ref(), checked.as_ref().authority_opt())
-        {
-            let (uaid_value, capability_tags) = state_access
-                .extract_lane_identity_metadata(authority, dataspace_id, &lane_alias)
+        let publishes_space_directory_manifest =
+            Self::publishes_only_space_directory_manifests(&checked);
+        let lane_identity = if publishes_space_directory_manifest {
+            (None, Vec::new())
+        } else {
+            checked
+                .as_ref()
+                .authority_opt()
+                .map(|authority| {
+                    state_access.extract_lane_identity_metadata(
+                        authority,
+                        dataspace_id,
+                        &lane_alias,
+                    )
+                })
+                .transpose()
                 .map_err(|err| Failure {
                     tx: Box::new(checked.as_accepted().clone()),
                     err,
-                })?;
+                })?
+                .unwrap_or((None, Vec::new()))
+        };
+
+        let lane_compliance = self.lane_compliance.read().clone();
+        if !publishes_space_directory_manifest
+            && let (Some(engine), Some(authority)) =
+                (lane_compliance.as_ref(), checked.as_ref().authority_opt())
+        {
+            let (uaid_value, capability_tags) = lane_identity;
             let authority_domains = state_access
                 .extract_lane_authority_domains(authority, &lane_alias)
                 .map_err(|err| Failure {
@@ -7018,6 +7056,50 @@ pub mod tests {
             ),
             other => panic!("expected missing dataspace binding rejection, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn space_directory_manifest_publish_bypasses_uaid_binding_admission() {
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::manifest-publish"));
+        let manifest_dataspace = DataSpaceId::new(10);
+        let (world, account_id, key_pair) =
+            world_with_uaid_account(uaid, manifest_dataspace, false);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world, kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test_with_router(
+            config_factory(),
+            &time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace: DataSpaceId::UNIVERSAL,
+            }),
+        );
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::default(),
+            uaid,
+            dataspace: manifest_dataspace,
+            issued_ms: 1,
+            activation_epoch: 0,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let tx = accepted_tx_with(
+            account_id,
+            &key_pair,
+            &time_source,
+            vec![
+                iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest { manifest }
+                    .into(),
+            ],
+            Metadata::default(),
+        );
+
+        queue
+            .push(tx, state.view())
+            .expect("manifest publication creates the UAID dataspace binding");
     }
 
     #[tokio::test]

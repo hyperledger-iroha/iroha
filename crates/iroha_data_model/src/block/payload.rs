@@ -7,7 +7,7 @@ use norito::codec::{Decode, Encode};
 
 use super::{SignedBlock, execution_context::BlockExecutionContextBundle, header::BlockHeader};
 use crate::{
-    consensus::PreviousRosterEvidence,
+    consensus::{NposConsensusEffects, PreviousRosterEvidence},
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
@@ -23,7 +23,10 @@ use crate::{
 #[model]
 mod model {
     use super::*;
-    use crate::{consensus::PreviousRosterEvidence, da::commitment::DaCommitmentBundle};
+    use crate::{
+        consensus::{NposConsensusEffects, PreviousRosterEvidence},
+        da::commitment::DaCommitmentBundle,
+    };
 
     /// Core contents of a block.
     #[derive(Debug, Clone, Encode, IntoSchema, Decode)]
@@ -65,6 +68,10 @@ mod model {
         #[norito(default)]
         #[norito(skip_serializing_if = "Option::is_none")]
         pub previous_roster_evidence: Option<PreviousRosterEvidence>,
+        /// Deterministic NPoS effects embedded in this block.
+        #[norito(default)]
+        #[norito(skip_serializing_if = "Option::is_none")]
+        pub npos_consensus_effects: Option<NposConsensusEffects>,
         /// Durable execution context for external entrypoints.
         ///
         /// New committed blocks include this context so replay does not need to
@@ -117,6 +124,7 @@ impl PartialEq for BlockPayload {
             && self.da_proof_policies == other.da_proof_policies
             && self.da_pin_intents == other.da_pin_intents
             && self.previous_roster_evidence == other.previous_roster_evidence
+            && self.npos_consensus_effects == other.npos_consensus_effects
     }
 }
 
@@ -138,6 +146,7 @@ impl Ord for BlockPayload {
             &self.da_proof_policies,
             &self.da_pin_intents,
             &self.previous_roster_evidence,
+            &self.npos_consensus_effects,
         )
             .cmp(&(
                 &other.header,
@@ -147,6 +156,7 @@ impl Ord for BlockPayload {
                 &other.da_proof_policies,
                 &other.da_pin_intents,
                 &other.previous_roster_evidence,
+                &other.npos_consensus_effects,
             ))
     }
 }
@@ -344,6 +354,20 @@ impl SignedBlock {
         self.payload.header.set_prev_roster_evidence_hash(hash);
     }
 
+    /// Deterministic NPoS effects embedded in this block.
+    #[inline]
+    pub fn npos_consensus_effects(&self) -> Option<&NposConsensusEffects> {
+        self.payload.npos_consensus_effects.as_ref()
+    }
+
+    /// Set or clear deterministic NPoS effects and update the header hash accordingly.
+    pub fn set_npos_consensus_effects(&mut self, effects: Option<NposConsensusEffects>) {
+        let effects = effects.filter(|bundle| !bundle.is_empty());
+        let hash = effects.as_ref().map(HashOf::new);
+        self.payload.npos_consensus_effects = effects;
+        self.payload.header.set_npos_effects_hash(hash);
+    }
+
     /// Set or clear the SCCP commitment root finalized in this block.
     pub fn set_sccp_commitment_root(&mut self, root: Option<[u8; 32]>) {
         self.payload.header.set_sccp_commitment_root(root);
@@ -404,6 +428,14 @@ impl SignedBlock {
             return false;
         }
         if self.payload.previous_roster_evidence.is_some() {
+            return false;
+        }
+        if self
+            .payload
+            .npos_consensus_effects
+            .as_ref()
+            .is_some_and(|bundle| !bundle.is_empty())
+        {
             return false;
         }
         if self.payload.header.sccp_commitment_root().is_some() {

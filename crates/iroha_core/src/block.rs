@@ -71,7 +71,10 @@ use iroha_data_model::{
         *,
     },
     confidential::ConfidentialFeatureDigest,
-    consensus::{ConsensusKeyRole, PreviousRosterEvidence, Qc, VALIDATOR_SET_HASH_VERSION_V1},
+    consensus::{
+        ConsensusKeyRole, NposConsensusEffects, PreviousRosterEvidence, Qc,
+        VALIDATOR_SET_HASH_VERSION_V1,
+    },
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
@@ -1825,6 +1828,8 @@ pub enum BlockValidationError {
     DaShardCursor(#[from] DaShardCursorError),
     /// AXT envelope export contained invalid or inconsistent fragments: {0}
     AxtEnvelopeValidationFailed(AxtEnvelopeValidationDetails),
+    /// NPoS consensus effects are invalid: {0}
+    NposEffectsInvalid(String),
 }
 
 /// Error during signature verification
@@ -2143,6 +2148,7 @@ mod pending {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
                 execution_context: None,
             })
         }
@@ -2164,6 +2170,8 @@ mod chained {
         pub(super) da_proof_policies: Option<DaProofPolicyBundle>,
         pub(super) da_pin_intents: Option<DaPinIntentBundle>,
         pub(super) previous_roster_evidence: Option<PreviousRosterEvidence>,
+            npos_consensus_effects: None,
+        pub(super) npos_consensus_effects: Option<NposConsensusEffects>,
         pub(super) execution_context: Option<BlockExecutionContextBundle>,
     }
 
@@ -2212,6 +2220,19 @@ mod chained {
             let hash = evidence.as_ref().map(HashOf::new);
             self.0.header.set_prev_roster_evidence_hash(hash);
             self.0.previous_roster_evidence = evidence;
+            self
+        }
+
+        /// Attach deterministic NPoS effects and update the header hash accordingly.
+        #[must_use]
+        pub fn with_npos_consensus_effects(
+            mut self,
+            effects: Option<NposConsensusEffects>,
+        ) -> Self {
+            let effects = effects.filter(|bundle| !bundle.is_empty());
+            let hash = effects.as_ref().map(HashOf::new);
+            self.0.header.set_npos_effects_hash(hash);
+            self.0.npos_consensus_effects = effects;
             self
         }
 
@@ -2291,6 +2312,7 @@ mod chained {
                 da_proof_policies: builder.0.da_proof_policies,
                 da_pin_intents: builder.0.da_pin_intents,
                 previous_roster_evidence: builder.0.previous_roster_evidence,
+                npos_consensus_effects: builder.0.npos_consensus_effects,
                 execution_context: builder.0.execution_context,
             })
         }
@@ -2318,6 +2340,8 @@ mod new {
         pub(super) da_proof_policies: Option<DaProofPolicyBundle>,
         pub(super) da_pin_intents: Option<DaPinIntentBundle>,
         pub(super) previous_roster_evidence: Option<PreviousRosterEvidence>,
+            npos_consensus_effects: None,
+        pub(super) npos_consensus_effects: Option<NposConsensusEffects>,
         pub(super) execution_context: Option<BlockExecutionContextBundle>,
     }
 
@@ -2368,6 +2392,11 @@ mod new {
             self.previous_roster_evidence.as_ref()
         }
 
+        /// NPoS consensus effects embedded in this block, if any.
+        pub fn npos_consensus_effects(&self) -> Option<&NposConsensusEffects> {
+            self.npos_consensus_effects.as_ref()
+        }
+
         #[cfg(test)]
         #[allow(dead_code)]
         pub(crate) fn update_header(self, header: &BlockHeader, private_key: &PrivateKey) -> Self {
@@ -2384,6 +2413,7 @@ mod new {
                 da_proof_policies: self.da_proof_policies,
                 da_pin_intents: self.da_pin_intents,
                 previous_roster_evidence: self.previous_roster_evidence,
+                npos_consensus_effects: self.npos_consensus_effects,
                 execution_context: self.execution_context,
             }
         }
@@ -2409,6 +2439,7 @@ mod new {
             signed_block.set_da_proof_policies(block.da_proof_policies);
             signed_block.set_da_pin_intents(block.da_pin_intents);
             signed_block.set_previous_roster_evidence(block.previous_roster_evidence);
+            signed_block.set_npos_consensus_effects(block.npos_consensus_effects);
             signed_block.set_execution_context(block.execution_context);
             signed_block
         }
@@ -5018,6 +5049,7 @@ pub(crate) mod valid {
                 block.header().height().get(),
                 actual_prev_block_hash,
             )?;
+            Self::validate_npos_effects_header(block)?;
             Self::validate_execution_context_with_state(
                 block,
                 state,
@@ -5088,6 +5120,32 @@ pub(crate) mod valid {
                 pipeline_cfg,
                 aggregate_lane,
             })
+        }
+
+        fn npos_effects_error(message: impl Into<String>) -> BlockValidationError {
+            BlockValidationError::NposEffectsInvalid(message.into())
+        }
+
+        fn validate_npos_effects_header(block: &SignedBlock) -> Result<(), BlockValidationError> {
+            match (
+                block.header().npos_effects_hash(),
+                block.npos_consensus_effects(),
+            ) {
+                (None, None) => Ok(()),
+                (Some(_), None) => Err(Self::npos_effects_error(
+                    "header references NPoS effects but payload is missing",
+                )),
+                (None, Some(_)) => Err(Self::npos_effects_error(
+                    "payload includes NPoS effects but header hash is absent",
+                )),
+                (Some(expected), Some(effects)) => {
+                    let actual = HashOf::new(effects);
+                    if actual != expected {
+                        return Err(Self::npos_effects_error("NPoS effects hash mismatch"));
+                    }
+                    Ok(())
+                }
+            }
         }
 
         fn validate_previous_roster_evidence(
@@ -9864,6 +9922,7 @@ pub(crate) mod valid {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
                 execution_context: None,
             });
             let default_policies = crate::da::proof_policy_bundle(
@@ -15266,6 +15325,7 @@ mod event {
             BlockValidationError::AxtEnvelopeValidationFailed(_) => {
                 Reason::TransactionValidationFailed
             }
+            BlockValidationError::NposEffectsInvalid(_) => Reason::NposEffectsMismatch,
         }
     }
 

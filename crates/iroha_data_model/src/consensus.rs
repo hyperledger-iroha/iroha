@@ -1,7 +1,7 @@
 //! Consensus-related data model DTOs for on-chain persistence.
 use std::str::FromStr;
 
-use iroha_crypto::PublicKey;
+use iroha_crypto::{Hash, PublicKey};
 use iroha_primitives::numeric::Numeric;
 use iroha_schema::{Ident, IntoSchema};
 #[cfg(feature = "json")]
@@ -141,6 +141,91 @@ pub struct PreviousRosterEvidence {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub stake_snapshot: Option<CommitStakeSnapshot>,
+}
+
+/// Deterministic `NPoS` state effects embedded in a signed block.
+///
+/// These effects are applied as part of the committed block transition so every
+/// peer replays the same VRF epoch records and penalty state.
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct NposConsensusEffects {
+    /// VRF epoch records sealed by this block.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    pub vrf_epoch_seals: Vec<VrfEpochRecord>,
+    /// Penalty and marker actions applied by this block.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    pub penalty_actions: Vec<NposPenaltyAction>,
+}
+
+impl NposConsensusEffects {
+    /// Returns true when the bundle carries no committed state changes.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.vrf_epoch_seals.is_empty() && self.penalty_actions.is_empty()
+    }
+}
+
+/// A deterministic `NPoS` penalty state transition.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub enum NposPenaltyAction {
+    /// Jail a validator for missing VRF participation requirements.
+    VrfJail {
+        /// Epoch that produced the penalty.
+        epoch: u64,
+        /// Signer index in the epoch roster.
+        signer: u32,
+        /// Peer identity resolved from the epoch/commit roster.
+        peer_id: crate::peer::PeerId,
+        /// Public lane containing the validator registration.
+        lane_id: crate::nexus::LaneId,
+        /// Validator account to update.
+        validator: crate::account::AccountId,
+        /// Stable jail reason.
+        reason: String,
+    },
+    /// Slash a validator from consensus evidence.
+    ConsensusSlash {
+        /// Consensus evidence key.
+        evidence_key: Vec<u8>,
+        /// Signer index in the evidence roster.
+        signer: u32,
+        /// Peer identity resolved from the evidence roster.
+        peer_id: crate::peer::PeerId,
+        /// Public lane containing the validator registration.
+        lane_id: crate::nexus::LaneId,
+        /// Validator account to slash.
+        validator: crate::account::AccountId,
+        /// Slash identifier recorded in validator status.
+        slash_id: Hash,
+        /// Amount to slash.
+        amount: Numeric,
+    },
+    /// Mark a VRF epoch's penalties as applied.
+    MarkVrfPenaltiesApplied {
+        /// Epoch to mark.
+        epoch: u64,
+        /// Block height that applied the marker.
+        height: u64,
+    },
+    /// Mark a consensus evidence record's penalty as applied.
+    MarkConsensusEvidenceApplied {
+        /// Consensus evidence key.
+        evidence_key: Vec<u8>,
+        /// Block height that applied the marker.
+        height: u64,
+    },
 }
 
 /// Snapshot of the election parameters used when selecting validators for an epoch.

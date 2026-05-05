@@ -2003,6 +2003,9 @@ impl Actor {
                     ));
                 }
                 builder = builder.with_previous_roster_evidence(previous_roster_evidence.clone());
+                let npos_effects =
+                    self.build_npos_consensus_effects_for_proposal(proposal_height)?;
+                builder = builder.with_npos_consensus_effects(npos_effects);
                 let sccp_messages =
                     crate::bridge::collect_sccp_messages_from_accepted_transactions(&tx_batch);
                 builder = builder.with_sccp_commitment_root(
