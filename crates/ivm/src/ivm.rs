@@ -1212,6 +1212,8 @@ pub struct IVM {
     use_cuda: bool,
     /// Flag indicating if zero-knowledge mode is active.
     pub zk_mode: bool,
+    /// Collect formal proof traces while preserving ZK-mode execution semantics.
+    zk_trace_enabled: bool,
     entrypoint_pc: Option<u64>,
     program_prefix_len: u64,
     last_diagnostic: Option<VmExecutionDiagnostic>,
@@ -1277,6 +1279,7 @@ impl Clone for IVM {
             use_metal: self.use_metal,
             use_cuda: self.use_cuda,
             zk_mode: self.zk_mode,
+            zk_trace_enabled: self.zk_trace_enabled,
             entrypoint_pc: self.entrypoint_pc,
             program_prefix_len: self.program_prefix_len,
             last_diagnostic: self.last_diagnostic.clone(),
@@ -1598,6 +1601,7 @@ impl IVM {
             use_metal: false,
             use_cuda: false,
             zk_mode: false,
+            zk_trace_enabled: true,
             entrypoint_pc: None,
             program_prefix_len: 0,
             last_diagnostic: None,
@@ -2227,6 +2231,24 @@ impl IVM {
         }
     }
 
+    /// Enable or disable formal ZK trace collection.
+    ///
+    /// This does not change ZK-mode execution semantics: ZK opcodes, privacy
+    /// tags, assertion handling, max-cycle padding, and gas accounting remain
+    /// active. Disabling this only suppresses proof/telemetry artifacts.
+    pub fn set_zk_trace_enabled(&mut self, enabled: bool) {
+        self.zk_trace_enabled = enabled;
+        if !enabled {
+            self.clear_zk_trace_logs();
+        }
+    }
+
+    /// Returns `true` when formal ZK trace collection is enabled.
+    #[inline]
+    pub fn zk_trace_enabled(&self) -> bool {
+        self.zk_trace_enabled
+    }
+
     /// Set the maximum cycle count used for zero-knowledge padding and enforcement.
     pub fn set_max_cycles(&mut self, max: u64) {
         self.max_cycles = max;
@@ -2504,6 +2526,19 @@ impl IVM {
     #[inline]
     pub fn zk_mode_enabled(&self) -> bool {
         self.zk_mode
+    }
+
+    #[inline]
+    fn zk_trace_collection_enabled(&self) -> bool {
+        self.zk_mode && self.zk_trace_enabled
+    }
+
+    fn clear_zk_trace_logs(&mut self) {
+        self.constraints = zk::ConstraintLog::default();
+        self.mem_log = MemLog::default();
+        self.reg_log = zk::RegLog::default();
+        self.trace_log = DeltaTraceLog::default();
+        self.step_log = zk::StepLog::default();
     }
 
     #[inline]
@@ -3384,11 +3419,13 @@ impl IVM {
 
     #[inline]
     fn flush_cycle_logs(&mut self, last_logged_cycle: &mut u64) {
-        // Cycle-by-cycle trace logging is only required for ZK execution.
+        // Cycle-by-cycle trace logging is only required for ZK proof/telemetry
+        // collection. ZK semantic execution can remain enabled without forcing
+        // consensus validators to snapshot every padded cycle.
         // Leaving it enabled for non-ZK programs (when `max_cycles` is set)
         // makes validation orders of magnitude slower due to per-cycle
         // snapshotting and Merkle proof bookkeeping.
-        if !self.zk_mode || self.max_cycles == 0 {
+        if !self.zk_trace_collection_enabled() || self.max_cycles == 0 {
             return;
         }
         while *last_logged_cycle < self.cycles {
@@ -3449,8 +3486,9 @@ impl IVM {
     /// This is the heart of the VM: a classic fetch‑decode‑execute loop.  For
     /// each instruction we deduct gas, perform the operation and then advance
     /// the program counter by the actual length of the instruction (16 or
-    /// 32 bits).  When zero‑knowledge mode is active the register state is
-    /// logged on every cycle so that a prover can later reconstruct a trace.
+    /// 32 bits). When zero-knowledge trace collection is active the register
+    /// state is logged on every cycle so that a prover can later reconstruct a
+    /// trace.
     /// The loop terminates on `HALT` or when an error is encountered.
     pub fn run(&mut self) -> Result<(), VMError> {
         let Some(mut host) = self.host.take() else {
@@ -3474,7 +3512,7 @@ impl IVM {
         let result = (|| {
             let _pointer_policy_guard =
                 PointerPolicyGuard::install(self.syscall_policy(), self.abi_version());
-            let _reg_logger_guard = if self.zk_mode {
+            let _reg_logger_guard = if self.zk_trace_collection_enabled() {
                 Some(zk::RegLoggerGuard::install(&mut self.reg_log))
             } else {
                 None
@@ -3485,7 +3523,7 @@ impl IVM {
             // sequentially.
             let enable_ilp = false;
             let mut ilp_block: Vec<SimpleInstruction> = Vec::new();
-            if self.zk_mode {
+            if self.zk_trace_collection_enabled() {
                 self.trace_log = DeltaTraceLog::default();
                 self.step_log = zk::StepLog::default();
             }
@@ -4828,7 +4866,7 @@ impl IVM {
                         let addr = self.registers.get(ptr_reg);
                         let mut block = [0u8; 64];
                         self.memory.load_bytes(addr, &mut block)?;
-                        if self.zk_mode {
+                        if self.zk_trace_collection_enabled() {
                             for (i, b) in block.iter().enumerate() {
                                 let (root, path) =
                                     self.memory.merkle_root_and_path(addr + i as u64);
@@ -5028,7 +5066,7 @@ impl IVM {
                         let addr = (self.registers.get(base) as i64).wrapping_add(imm) as u64;
                         let a = self.memory.load_u64(addr)?;
                         let b = self.memory.load_u64(addr + 8)?;
-                        if self.zk_mode {
+                        if self.zk_trace_collection_enabled() {
                             let (root, path_a) = self.memory.merkle_root_and_path(addr);
                             let (_root2, path_b) = self.memory.merkle_root_and_path(addr + 8);
                             self.mem_log.record(MemEvent::Load {
@@ -5072,7 +5110,7 @@ impl IVM {
                         for (i, slot) in vals.iter_mut().enumerate() {
                             let off = i * 8;
                             let word = u64::from_le_bytes(bytes[off..off + 8].try_into().unwrap());
-                            if self.zk_mode {
+                            if self.zk_trace_collection_enabled() {
                                 let (root, path) =
                                     self.memory.merkle_root_and_path(addr + off as u64);
                                 self.mem_log.record(MemEvent::Load {
@@ -5377,10 +5415,12 @@ impl IVM {
                             return Err(VMError::ZkExtensionDisabled);
                         }
                         let rs = instruction::wide::rs1(instr);
-                        self.constraints.record(Constraint::Zero {
-                            reg: rs,
-                            cycle: self.cycles,
-                        });
+                        if self.zk_trace_collection_enabled() {
+                            self.constraints.record(Constraint::Zero {
+                                reg: rs,
+                                cycle: self.cycles,
+                            });
+                        }
                         let value = self.registers.get(rs);
                         if value != 0 {
                             self.constraint_failed = true;
@@ -5395,11 +5435,13 @@ impl IVM {
                         }
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        self.constraints.record(Constraint::Eq {
-                            reg1: rs1,
-                            reg2: rs2,
-                            cycle: self.cycles,
-                        });
+                        if self.zk_trace_collection_enabled() {
+                            self.constraints.record(Constraint::Eq {
+                                reg1: rs1,
+                                reg2: rs2,
+                                cycle: self.cycles,
+                            });
+                        }
                         let v1 = self.registers.get(rs1);
                         let v2 = self.registers.get(rs2);
                         if v1 != v2 {
@@ -5477,11 +5519,13 @@ impl IVM {
                         }
                         let rs = instruction::wide::rs1(instr);
                         let imm = instruction::wide::imm8(instr) as u8;
-                        self.constraints.record(Constraint::Range {
-                            reg: rs,
-                            bits: imm,
-                            cycle: self.cycles,
-                        });
+                        if self.zk_trace_collection_enabled() {
+                            self.constraints.record(Constraint::Range {
+                                reg: rs,
+                                bits: imm,
+                                cycle: self.cycles,
+                            });
+                        }
                         if imm <= 64 {
                             let mask = if imm == 64 {
                                 u64::MAX

@@ -1177,6 +1177,7 @@ where
                 .map_err(OverlayBuildError::IvmRun)?;
             vm.set_gas_limit(gas_limit);
             apply_contract_call_execution_context(&mut vm, Some(&contract_call_context))?;
+            vm.set_zk_trace_enabled(false);
             run_vm_with_host(&mut vm, &mut host)?;
             let ivm_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
@@ -1295,6 +1296,7 @@ where
                 .map_err(OverlayBuildError::IvmRun)?;
             vm.set_gas_limit(gas_limit);
             apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
+            vm.set_zk_trace_enabled(false);
             run_vm_with_host(&mut vm, &mut host)?;
             let ivm_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
@@ -1578,6 +1580,7 @@ where
                 .map_err(OverlayBuildError::IvmLoad)?;
             vm.set_gas_limit(tx_gas_limit);
             apply_contract_call_execution_context(&mut vm, Some(&contract_call_context))?;
+            vm.set_zk_trace_enabled(false);
             run_vm_with_host(&mut vm, &mut host)?;
             let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
@@ -1683,6 +1686,7 @@ where
                 .map_err(OverlayBuildError::IvmLoad)?;
             vm.set_gas_limit(tx_gas_limit);
             apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
+            vm.set_zk_trace_enabled(false);
             run_vm_with_host(&mut vm, &mut host)?;
             let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
