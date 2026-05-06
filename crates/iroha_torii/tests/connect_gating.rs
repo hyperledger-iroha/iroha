@@ -605,6 +605,14 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                 missing_fetch_aggressive_after_attempts:
                     iroha_config::parameters::defaults::sumeragi::
                         RECOVERY_MISSING_FETCH_AGGRESSIVE_AFTER_ATTEMPTS,
+                authoritative_body_ingress_fetch_grace: core::time::Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::
+                        RECOVERY_AUTHORITATIVE_BODY_INGRESS_FETCH_GRACE_MS,
+                ),
+                exact_body_fetch_retry_floor: core::time::Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::
+                        RECOVERY_EXACT_BODY_FETCH_RETRY_FLOOR_MS,
+                ),
             },
             fanout: A::SumeragiFanout {
                 large_set_threshold:
