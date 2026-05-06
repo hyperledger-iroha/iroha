@@ -233,21 +233,7 @@ fn run_bn254_poseidon_self_test() -> bool {
         return false;
     };
 
-    let cases: [&[u64]; 6] = [
-        &[],
-        &[0],
-        &[1],
-        &[u64::MAX],
-        &[1, 2],
-        &[3, 5, 8, 13, 21, u64::MAX - 7],
-    ];
-    let mut words = Vec::new();
-    let mut slices = Vec::with_capacity(cases.len());
-    for case in cases {
-        let offset = words.len();
-        words.extend_from_slice(case);
-        slices.push(Bn254PoseidonBatchSlice::new(offset, case.len()));
-    }
+    let (words, slices) = bn254_poseidon_self_test_batch();
 
     let actual = match backend {
         GpuBackend::Cuda => crate::fastpq_cuda::fastpq_bn254_poseidon_hash_words(&words, &slices)
@@ -266,15 +252,14 @@ fn run_bn254_poseidon_self_test() -> bool {
     };
     match actual {
         Ok(actual) => {
-            let expected = slices
-                .iter()
-                .map(|slice| scalar_hash_words_u64(&words[slice.offset()..][..slice.len()]))
-                .collect::<Vec<_>>();
+            let expected = expected_bn254_poseidon_word_hashes(&words, &slices);
             let passed = actual == expected;
             if !passed {
+                let mismatch = first_bn254_poseidon_mismatch(&expected, &actual);
                 warn!(
                     target: "fastpq::bn254_poseidon",
                     backend = backend.as_str(),
+                    ?mismatch,
                     "BN254 Poseidon GPU self-test mismatch; falling back to scalar hashing"
                 );
             }
@@ -290,6 +275,60 @@ fn run_bn254_poseidon_self_test() -> bool {
             false
         }
     }
+}
+
+#[cfg(any(test, feature = "fastpq-gpu"))]
+fn bn254_poseidon_self_test_batch() -> (Vec<u64>, Vec<Bn254PoseidonBatchSlice>) {
+    let cases: [&[u64]; 10] = [
+        &[],
+        &[0],
+        &[1],
+        &[u64::MAX],
+        &[1, 2],
+        &[1, 2, 3],
+        &[3, 5, 8, 13, 21, u64::MAX - 7],
+        &[u64::MAX, u64::MAX - 1, u64::MAX - 2, u64::MAX - 3],
+        &[0, u64::MAX, 1, u64::MAX - 1, 2],
+        &[42; 17],
+    ];
+    let mut words = Vec::new();
+    let mut slices = Vec::with_capacity(cases.len());
+    for case in cases {
+        let offset = words.len();
+        words.extend_from_slice(case);
+        slices.push(Bn254PoseidonBatchSlice::new(offset, case.len()));
+    }
+    (words, slices)
+}
+
+#[cfg(any(test, feature = "fastpq-gpu"))]
+fn expected_bn254_poseidon_word_hashes(
+    words: &[u64],
+    slices: &[Bn254PoseidonBatchSlice],
+) -> Vec<[u8; 32]> {
+    slices
+        .iter()
+        .map(|slice| scalar_hash_words_u64(&words[slice.offset()..][..slice.len()]))
+        .collect()
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn first_bn254_poseidon_mismatch(
+    expected: &[[u8; 32]],
+    actual: &[[u8; 32]],
+) -> Option<(usize, [u8; 32], Option<[u8; 32]>)> {
+    let mismatch = expected
+        .iter()
+        .zip(actual.iter().map(Some).chain(core::iter::repeat(None)))
+        .enumerate()
+        .find_map(|(idx, (expected, actual))| {
+            (actual != Some(expected)).then_some((idx, *expected, actual.copied()))
+        });
+    mismatch.or_else(|| {
+        actual
+            .get(expected.len())
+            .map(|actual| (expected.len(), [0; 32], Some(*actual)))
+    })
 }
 
 #[cfg(not(feature = "fastpq-gpu"))]
@@ -324,6 +363,32 @@ mod tests {
             scalar_hash_words_u64(&words),
             iroha_zkp_halo2::poseidon::hash_words_bytes(&fr_words)
         );
+    }
+
+    #[test]
+    fn bn254_poseidon_self_test_batch_covers_edge_shapes() {
+        let (words, slices) = bn254_poseidon_self_test_batch();
+        assert_eq!(slices.len(), 10);
+        assert!(slices.iter().any(|slice| slice.is_empty()));
+        assert!(slices.iter().any(|slice| slice.len() > 16));
+        assert!(words.contains(&u64::MAX));
+        assert_eq!(
+            expected_bn254_poseidon_word_hashes(&words, &slices).len(),
+            slices.len()
+        );
+    }
+
+    #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+    #[test]
+    fn metal_bn254_poseidon_word_batch_matches_cpu_self_test_cases() {
+        if crate::backend::current_gpu_backend() != Some(crate::backend::GpuBackend::Metal) {
+            return;
+        }
+        let (words, slices) = bn254_poseidon_self_test_batch();
+        let actual = crate::metal::bn254_poseidon_hash_words(&words, &slices)
+            .expect("Metal BN254 Poseidon word batch should run");
+        let expected = expected_bn254_poseidon_word_hashes(&words, &slices);
+        assert_eq!(actual, expected);
     }
 
     #[cfg(not(feature = "fastpq-gpu"))]

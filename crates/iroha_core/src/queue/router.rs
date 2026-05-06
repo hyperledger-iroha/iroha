@@ -2137,6 +2137,19 @@ pub fn resolve_query_routing_decision(
     authority: &AccountId,
     state_view: Option<&StateView<'_>>,
 ) -> Result<RoutingDecision, RoutingResolveError> {
+    if let Some(state_view) = state_view {
+        let matched_rule = policy
+            .rules
+            .iter()
+            .find(|rule| query_rule_matches(rule, authority, Some(state_view)));
+        return resolve_policy_routing_decision(
+            policy,
+            matched_rule,
+            account_dataspace_target(Some(state_view.world()), authority),
+            lane_catalog,
+            dataspace_catalog,
+        );
+    }
     let decision = evaluate_query_policy_with_view(policy, authority, state_view);
     resolve_routing_decision(decision, lane_catalog, dataspace_catalog)
 }
@@ -2825,21 +2838,7 @@ impl LaneRouter for ConfigLaneRouter {
     }
 
     fn route_without_state(&self, tx: &AcceptedTransaction<'_>) -> Option<RoutingDecision> {
-        if policy_needs_state(self.policy.as_ref())
-            || dataspace_scoped_permission_routing_requires_state(tx)
-            || transaction_target_routing_requires_state(tx)
-        {
-            return None;
-        }
-        match self.catalog_only_routing_decision(tx) {
-            Ok(Some(decision)) => return Some(decision),
-            Ok(None) => {}
-            Err(_) => return None,
-        }
-        if self.authority_scope_routing_requires_state(tx).ok()? {
-            return None;
-        }
-        self.try_route(tx).ok()
+        self.try_route_without_state(tx).ok().flatten()
     }
 
     fn try_route(
@@ -2950,6 +2949,15 @@ impl LaneRouter for ConfigLaneRouter {
         }
         if let Some(decision) = self.catalog_only_routing_decision(tx)? {
             return Ok(Some(decision));
+        }
+        if let Some(account_id) = account_permission_holder_routing_target(tx)
+            && !self
+                .policy
+                .rules
+                .iter()
+                .any(|rule| query_rule_matches(rule, account_id, None))
+        {
+            return Ok(None);
         }
         if self.authority_scope_routing_requires_state(tx)? {
             return Ok(None);
@@ -3067,7 +3075,7 @@ mod tests {
     };
     use iroha_executor_data_model::permission::{
         account::{AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias},
-        nexus::CanPublishSpaceDirectoryManifest,
+        nexus::{CanPublishSpaceDirectoryManifest, CanUseFeeSponsor},
         trigger::CanRegisterTrigger,
     };
     use iroha_primitives::numeric::{Numeric, NumericSpec};
@@ -8002,6 +8010,123 @@ mod tests {
             )
             .expect("validation routing should use account scope"),
             expected
+        );
+    }
+
+    #[test]
+    fn fee_sponsor_account_permission_grant_routes_to_holder_single_scope() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (holder_id, _) = gen_account_in("wonderland");
+        let (sponsor_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        let catalog = dataspace_catalog(&[(dataspace_id, "bpng")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                CanUseFeeSponsor {
+                    sponsor: sponsor_id,
+                },
+                holder_id.clone(),
+            ))],
+        );
+        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        scope_entry.ensure_dataspace(dataspace_id);
+        let state = state_with_account_scope_entries(&[(holder_id, scope_entry)], catalog);
+        state.nexus.write().lane_catalog = lane_catalog.clone();
+        let state_view = state.view();
+        let expected = RoutingDecision::new(lane_id, dataspace_id);
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("fee sponsor grants should defer without account scope state"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state_view)
+                .expect("state-view routing should use holder account scope"),
+            expected
+        );
+        assert_eq!(
+            evaluate_policy_with_catalog_and_world(
+                &policy,
+                &lane_catalog,
+                &state_view.nexus().dataspace_catalog,
+                &tx,
+                state_view.world(),
+            )
+            .expect("validation routing should use holder account scope"),
+            expected
+        );
+    }
+
+    #[test]
+    fn account_permission_query_ignores_instruction_rule_but_uses_state_scope_fallback() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (holder_id, _) = gen_account_in("wonderland");
+        let (sponsor_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        let catalog = dataspace_catalog(&[(dataspace_id, "bpng")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (LaneId::new(1), DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(1),
+                dataspace: None,
+                matcher: LaneRoutingMatcher {
+                    account: None,
+                    instruction: Some("grant::permission".to_string()),
+                    description: None,
+                },
+            }],
+        };
+        let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                CanUseFeeSponsor {
+                    sponsor: sponsor_id,
+                },
+                holder_id.clone(),
+            ))],
+        );
+        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        scope_entry.ensure_dataspace(dataspace_id);
+        let state = state_with_account_scope_entries(&[(holder_id, scope_entry)], catalog);
+        state.nexus.write().lane_catalog = lane_catalog;
+        let state_view = state.view();
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("instruction-only query route should defer without account scope state"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state_view)
+                .expect("instruction matcher should be ignored for account-permission query route"),
+            RoutingDecision::new(lane_id, dataspace_id)
         );
     }
 

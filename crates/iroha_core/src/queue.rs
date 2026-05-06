@@ -1741,6 +1741,13 @@ impl Queue {
                     iroha_data_model::ValidationFail::InternalError(reason.clone()),
                 ),
             ),
+            Error::UnresolvedRoute { reason } => Some(
+                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                    iroha_data_model::ValidationFail::InternalError(format!(
+                        "transaction routing could not be resolved: {reason}"
+                    )),
+                ),
+            ),
             _ => None,
         }
     }
@@ -1764,37 +1771,76 @@ impl Queue {
 
     /// Returns `n` transactions in a batch for gossiping
     pub fn gossip_batch(&self, n: u32, state_view: &StateView) -> Vec<GossipBatchEntry> {
-        self.gossip_batch_inner(n, |_, tx_ref| self.is_pending(tx_ref, state_view))
+        #[cfg(feature = "telemetry")]
+        let backpressure_telemetry: Option<&StateTelemetry> = Some(state_view.telemetry);
+        #[cfg(not(feature = "telemetry"))]
+        let backpressure_telemetry: Option<&StateTelemetry> = None;
+        self.gossip_batch_inner(
+            n,
+            |_, tx_ref| self.is_pending(tx_ref, state_view),
+            |hash, tx_ref| self.refresh_routing_decision_with_view(hash, tx_ref, state_view),
+            backpressure_telemetry,
+        )
     }
 
     /// Returns `n` transactions in a batch for gossiping using narrow state accessors.
     pub fn gossip_batch_with_state(&self, n: u32, state: &State) -> Vec<GossipBatchEntry> {
+        #[cfg(feature = "telemetry")]
+        let telemetry_handle = state.metrics();
+        #[cfg(feature = "telemetry")]
+        let backpressure_telemetry: Option<&StateTelemetry> = Some(&telemetry_handle);
+        #[cfg(not(feature = "telemetry"))]
+        let backpressure_telemetry: Option<&StateTelemetry> = None;
         let committed_transactions = state.transactions.view();
-        self.gossip_batch_inner(n, |hash, tx_ref| {
-            !self.is_expired(tx_ref.as_accepted()) && committed_transactions.get(&hash).is_none()
-        })
+        self.gossip_batch_inner(
+            n,
+            |hash, tx_ref| {
+                !self.is_expired(tx_ref.as_accepted())
+                    && committed_transactions.get(&hash).is_none()
+            },
+            |hash, tx_ref| self.refresh_routing_decision_with_state(hash, tx_ref, state),
+            backpressure_telemetry,
+        )
     }
 
-    fn gossip_batch_inner<F>(&self, n: u32, mut is_pending: F) -> Vec<GossipBatchEntry>
+    fn gossip_batch_inner<F, R>(
+        &self,
+        n: u32,
+        mut is_pending: F,
+        mut refresh_routing: R,
+        backpressure_telemetry: Option<&StateTelemetry>,
+    ) -> Vec<GossipBatchEntry>
     where
         F: FnMut(SignedTxHash, &CheckedTransaction<'static>) -> bool,
+        R: FnMut(
+            SignedTxHash,
+            &CheckedTransaction<'static>,
+        ) -> Result<RoutingDecision, RoutingResolveError>,
     {
         let mut batch = Vec::with_capacity(n as usize);
         while let Some(hash) = self.tx_gossip.pop() {
-            let Some(tx) = self.txs.get(&hash) else {
+            let Some(tx_arc) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) else {
                 // NOTE: Transaction already in the blockchain
                 continue;
             };
-            let tx_ref = tx.value().as_ref();
+            let tx_ref = tx_arc.as_ref();
             if is_pending(hash, tx_ref) {
-                let routing = if let Some(decision) = self.routing_decisions.get(&hash) {
-                    *decision.value()
-                } else {
-                    warn!(
-                        tx = %hash,
-                        "missing routing decision for queued transaction, skipping gossip"
-                    );
-                    continue;
+                let routing = match refresh_routing(hash, tx_ref) {
+                    Ok(routing) => routing,
+                    Err(err) => {
+                        warn!(
+                            tx = %hash,
+                            reason = %err,
+                            reason_label = err.as_label(),
+                            "dropping queued transaction before gossip due to unresolved route"
+                        );
+                        self.reject_queued_transaction_for_unresolved_route(
+                            hash,
+                            err.to_string(),
+                            backpressure_telemetry,
+                        );
+                        continue;
+                    }
                 };
                 let payload = if let Some(entry) = self.tx_gossip_payloads.get(&hash) {
                     Arc::clone(entry.value())
@@ -1849,6 +1895,89 @@ impl Queue {
     ) -> Result<RoutingDecision, RoutingResolveError> {
         let decision = self.router.read().try_route_with_state(tx, state)?;
         self.resolve_queue_routing_decision(decision)
+    }
+
+    fn record_refreshed_routing_decision(&self, hash: SignedTxHash, routing: RoutingDecision) {
+        self.routing_decisions.insert(hash, routing);
+        routing_ledger::record(hash, routing);
+    }
+
+    fn refresh_routing_decision_with_view(
+        &self,
+        hash: SignedTxHash,
+        tx: &CheckedTransaction<'static>,
+        state_view: &StateView<'_>,
+    ) -> Result<RoutingDecision, RoutingResolveError> {
+        let decision = self
+            .router
+            .read()
+            .try_route_with_view(tx.as_accepted(), state_view)?;
+        let routing = self.resolve_queue_routing_decision(decision)?;
+        self.record_refreshed_routing_decision(hash, routing);
+        Ok(routing)
+    }
+
+    fn refresh_routing_decision_with_state(
+        &self,
+        hash: SignedTxHash,
+        tx: &CheckedTransaction<'static>,
+        state: &State,
+    ) -> Result<RoutingDecision, RoutingResolveError> {
+        let decision = self
+            .router
+            .read()
+            .try_route_with_state(tx.as_accepted(), state)?;
+        let routing = self.resolve_queue_routing_decision(decision)?;
+        self.record_refreshed_routing_decision(hash, routing);
+        Ok(routing)
+    }
+
+    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+    fn reject_queued_transaction_for_unresolved_route(
+        &self,
+        hash: SignedTxHash,
+        reason: String,
+        telemetry: Option<&StateTelemetry>,
+    ) {
+        let routing = if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
+            routing_ledger::discard_if_matches(&hash, decision);
+            decision
+        } else {
+            routing_ledger::take(&hash).unwrap_or_default()
+        };
+
+        let removed_tx = self.txs.remove(&hash).map(|(_, tx)| tx);
+        if let Some(removed_tx) = removed_tx {
+            self.untrack_active_transaction();
+            self.untrack_expiry_hash(&hash);
+            self.removed_hashes.insert(hash, ());
+            if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
+                self.decrease_per_user_tx_count(authority);
+            }
+            #[cfg(feature = "telemetry")]
+            self.record_teu_dequeue(&hash, telemetry);
+        }
+
+        self.tx_encoded_len.remove(&hash);
+        self.tx_gas_cost.remove(&hash);
+        self.tx_enqueued_at_ms.remove(&hash);
+        self.remove_queued_age(&hash);
+        self.tx_gossip_payloads.remove(&hash);
+
+        let err = Error::UnresolvedRoute { reason };
+        if let Some(reason) = Self::queue_rejection_reason(&err) {
+            let _ = self.events_sender.send(
+                TransactionEvent {
+                    hash,
+                    block_height: None,
+                    lane_id: routing.lane_id,
+                    dataspace_id: routing.dataspace_id,
+                    status: TransactionStatus::Rejected(Box::new(reason)),
+                }
+                .into(),
+            );
+        }
+        self.publish_backpressure_state(self.active_len(), telemetry);
     }
 
     /// Resolve routing for an admitted transaction against the current state.
@@ -3213,13 +3342,33 @@ impl Queue {
                 continue;
             }
 
+            let routing =
+                match self.refresh_routing_decision_with_view(hash, tx_arc.as_ref(), state_view) {
+                    Ok(routing) => routing,
+                    Err(err) => {
+                        warn!(
+                            tx = %hash,
+                            reason = %err,
+                            reason_label = err.as_label(),
+                            "dropping transaction during queue pop (routing refresh)"
+                        );
+                        drop(tx_arc);
+                        self.reject_queued_transaction_for_unresolved_route(
+                            hash,
+                            err.to_string(),
+                            backpressure_telemetry,
+                        );
+                        continue;
+                    }
+                };
+
             if tx_arc.as_accepted().external().is_some()
                 && let Err(e) = self.recheck_external_nexus_fee_admission(
                     tx_arc.as_accepted(),
                     state_view.world(),
                     &state_view.nexus,
                     next_block_height,
-                    routing_ledger::get(&hash).map(|decision| decision.dataspace_id),
+                    Some(routing.dataspace_id),
                 )
             {
                 iroha_logger::warn!(
@@ -3266,11 +3415,6 @@ impl Queue {
                 continue;
             }
 
-            let routing = self
-                .routing_decisions
-                .get(&hash)
-                .map(|entry| *entry.value())
-                .unwrap_or_default();
             let queue_position = self.guard_sequence.fetch_add(1, Ordering::Relaxed);
             let encoded_len = self
                 .tx_encoded_len
@@ -3381,11 +3525,26 @@ impl Queue {
                 continue;
             }
 
-            let route_dataspace_id = self
-                .routing_decisions
-                .get(&hash)
-                .map(|decision| decision.dataspace_id)
-                .or_else(|| routing_ledger::get(&hash).map(|decision| decision.dataspace_id));
+            let routing =
+                match self.refresh_routing_decision_with_state(hash, tx_arc.as_ref(), state) {
+                    Ok(routing) => routing,
+                    Err(err) => {
+                        warn!(
+                            tx = %hash,
+                            reason = %err,
+                            reason_label = err.as_label(),
+                            "dropping transaction during queue pop (routing refresh)"
+                        );
+                        drop(tx_arc);
+                        self.reject_queued_transaction_for_unresolved_route(
+                            hash,
+                            err.to_string(),
+                            backpressure_telemetry,
+                        );
+                        continue;
+                    }
+                };
+            let route_dataspace_id = Some(routing.dataspace_id);
             if tx_arc.as_accepted().external().is_some()
                 && let Err(e) = state_access.recheck_external_nexus_fee_admission(
                     self,
@@ -3437,11 +3596,6 @@ impl Queue {
                 continue;
             }
 
-            let routing = self
-                .routing_decisions
-                .get(&hash)
-                .map(|entry| *entry.value())
-                .unwrap_or_default();
             let queue_position = self.guard_sequence.fetch_add(1, Ordering::Relaxed);
             let encoded_len = self
                 .tx_encoded_len
@@ -5190,6 +5344,71 @@ pub mod tests {
     impl LaneRouter for StaticRouter {
         fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
             RoutingDecision::new(self.lane, self.dataspace)
+        }
+    }
+
+    struct MutableRouter {
+        decision: Arc<parking_lot::RwLock<Result<RoutingDecision, RoutingResolveError>>>,
+    }
+
+    impl MutableRouter {
+        fn new(decision: RoutingDecision) -> Self {
+            Self {
+                decision: Arc::new(parking_lot::RwLock::new(Ok(decision))),
+            }
+        }
+
+        fn set(&self, decision: RoutingDecision) {
+            *self.decision.write() = Ok(decision);
+        }
+
+        fn set_error(&self, err: RoutingResolveError) {
+            *self.decision.write() = Err(err);
+        }
+
+        fn current(&self) -> Result<RoutingDecision, RoutingResolveError> {
+            *self.decision.read()
+        }
+    }
+
+    impl LaneRouter for MutableRouter {
+        fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+            self.current()
+                .expect("mutable test router should have a route")
+        }
+
+        fn try_route(
+            &self,
+            _tx: &AcceptedTransaction<'_>,
+        ) -> Result<RoutingDecision, RoutingResolveError> {
+            self.current()
+        }
+
+        fn route_with_view(
+            &self,
+            tx: &AcceptedTransaction<'_>,
+            _state_view: &StateView<'_>,
+        ) -> RoutingDecision {
+            self.route(tx)
+        }
+
+        fn try_route_with_view(
+            &self,
+            _tx: &AcceptedTransaction<'_>,
+            _state_view: &StateView<'_>,
+        ) -> Result<RoutingDecision, RoutingResolveError> {
+            self.current()
+        }
+
+        fn route_without_state(&self, tx: &AcceptedTransaction<'_>) -> Option<RoutingDecision> {
+            Some(self.route(tx))
+        }
+
+        fn try_route_without_state(
+            &self,
+            _tx: &AcceptedTransaction<'_>,
+        ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
+            self.current().map(Some)
         }
     }
 
@@ -7996,6 +8215,51 @@ pub mod tests {
     }
 
     #[test]
+    fn gossip_batch_refreshes_stale_routing_metadata() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let refreshed = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(10));
+        let router = Arc::new(MutableRouter::new(RoutingDecision::default()));
+        let queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            router.clone(),
+            &[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (refreshed.lane_id, refreshed.dataspace_id),
+            ],
+        );
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        queue.push(tx, state.view()).expect("push tx");
+        assert_eq!(
+            queue
+                .routing_decisions
+                .get(&hash)
+                .map(|entry| *entry.value()),
+            Some(RoutingDecision::default())
+        );
+
+        router.set(refreshed);
+        let batch = queue.gossip_batch(1, &state.view());
+
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].routing, refreshed);
+        assert_eq!(
+            queue
+                .routing_decisions
+                .get(&hash)
+                .map(|entry| *entry.value()),
+            Some(refreshed)
+        );
+        assert_eq!(crate::queue::routing_ledger::get(&hash), Some(refreshed));
+        let _ = crate::queue::routing_ledger::take(&hash);
+    }
+
+    #[test]
     fn route_for_gossip_with_state_uses_router_decision() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -8634,6 +8898,8 @@ pub mod tests {
             decisions: parking_lot::Mutex::new(vec![
                 RoutingDecision::new(lane_a, dataspace_a),
                 RoutingDecision::new(lane_b, dataspace_b),
+                RoutingDecision::new(lane_a, dataspace_a),
+                RoutingDecision::new(lane_b, dataspace_b),
             ]),
         });
 
@@ -9217,6 +9483,139 @@ pub mod tests {
 
         assert_eq!(tx_event.lane_id(), expected_lane);
         assert_eq!(tx_event.dataspace_id(), expected_dataspace);
+    }
+
+    #[test]
+    fn proposal_pop_refreshes_stale_routing_metadata() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let refreshed = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(10));
+        let router = Arc::new(MutableRouter::new(RoutingDecision::default()));
+        let queue = Arc::new(Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            router.clone(),
+            &[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (refreshed.lane_id, refreshed.dataspace_id),
+            ],
+        ));
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        queue.push(tx, state.view()).expect("push tx");
+        assert_eq!(
+            queue
+                .routing_decisions
+                .get(&hash)
+                .map(|entry| *entry.value()),
+            Some(RoutingDecision::default())
+        );
+
+        router.set(refreshed);
+        let state_view = state.view();
+        let mut expired = Vec::new();
+        let guard = queue
+            .pop_from_queue(&state_view, &mut expired)
+            .expect("proposal pop should return refreshed tx");
+        drop(state_view);
+
+        assert!(expired.is_empty());
+        assert_eq!(guard.routing(), refreshed);
+        assert_eq!(
+            queue
+                .routing_decisions
+                .get(&hash)
+                .map(|entry| *entry.value()),
+            Some(refreshed)
+        );
+        assert_eq!(crate::queue::routing_ledger::get(&hash), Some(refreshed));
+
+        let transactions = vec![guard.clone_accepted()];
+        let new_block = BlockBuilder::new(transactions)
+            .chain(0, None)
+            .sign(ALICE_KEYPAIR.private_key())
+            .unpack(|_| {});
+        let header = new_block.header();
+        let signed_block: SignedBlock = new_block.into();
+        let mut state_block = state.block(header);
+        let valid_block =
+            ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+
+        drop(guard);
+        assert_eq!(crate::queue::routing_ledger::get(&hash), Some(refreshed));
+
+        let tx_event = valid_block
+            .produce_events()
+            .find_map(|event| match event {
+                PipelineEventBox::Transaction(event) if event.hash() == &hash => Some(event),
+                _ => None,
+            })
+            .expect("missing transaction event for refreshed routed transaction");
+
+        assert_eq!(tx_event.lane_id(), refreshed.lane_id);
+        assert_eq!(tx_event.dataspace_id(), refreshed.dataspace_id);
+        let _ = crate::queue::routing_ledger::take(&hash);
+    }
+
+    #[test]
+    fn proposal_pop_rejects_transaction_that_becomes_unroutable() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router = Arc::new(MutableRouter::new(RoutingDecision::default()));
+        let mut queue =
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router.clone(), &[]);
+        let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(8);
+        queue.events_sender = event_sender;
+        let queue = Arc::new(queue);
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        queue.push(tx, state.view()).expect("push tx");
+        router.set_error(RoutingResolveError::UnknownLane {
+            lane_id: LaneId::new(99),
+        });
+
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut guards);
+
+        assert!(guards.is_empty());
+        assert_eq!(queue.queued_len(), 0);
+        assert_eq!(queue.active_len(), 0);
+        assert!(!queue.routing_decisions.contains_key(&hash));
+        assert_eq!(crate::queue::routing_ledger::get(&hash), None);
+
+        let mut saw_rejected = false;
+        while let Ok(event) = event_receiver.try_recv() {
+            let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = event else {
+                continue;
+            };
+            if event.hash != hash {
+                continue;
+            }
+            let TransactionStatus::Rejected(reason) = &event.status else {
+                continue;
+            };
+            assert_eq!(event.lane_id, LaneId::SINGLE);
+            assert_eq!(event.dataspace_id, DataSpaceId::UNIVERSAL);
+            assert!(matches!(
+                reason.as_ref(),
+                TransactionRejectionReason::Validation(
+                    iroha_data_model::ValidationFail::InternalError(message)
+                ) if message.contains("transaction routing could not be resolved")
+                    && message.contains("lane 99")
+            ));
+            saw_rejected = true;
+            break;
+        }
+        assert!(
+            saw_rejected,
+            "expected rejected pipeline event for unroutable queued tx"
+        );
     }
 
     #[tokio::test]

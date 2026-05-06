@@ -6486,13 +6486,58 @@ pub(crate) mod valid {
             if !skip_stateless_checks {
                 // Ed25519 deterministic micro-batching for stateless pre-pass.
                 {
-                    struct EdItem {
-                        idx: usize,
+                    fn flush_ed25519_precheck_batch<'a>(
+                        txs: &[&SignedTransaction],
+                        prechecked_signature_results: &mut [Option<
+                            Result<(), crate::tx::SignatureVerificationFail>,
+                        >],
+                        item_indices: &mut Vec<usize>,
+                        messages: &mut Vec<&'a [u8]>,
+                        signatures: &mut Vec<&'a [u8]>,
+                        public_keys: &mut Vec<iroha_crypto::Ed25519ParsedPublicKey>,
+                        scratch: &mut iroha_crypto::Ed25519BatchScratch<'a>,
+                    ) {
+                        if item_indices.is_empty() {
+                            return;
+                        }
+                        if iroha_crypto::ed25519_verify_batch_preparsed_deterministic_with_scratch(
+                            messages,
+                            signatures,
+                            public_keys,
+                            [0; 32],
+                            scratch,
+                        )
+                        .is_ok()
+                        {
+                            for idx in item_indices.iter().copied() {
+                                prechecked_signature_results[idx] = Some(Ok(()));
+                            }
+                        } else {
+                            for idx in item_indices.iter().copied() {
+                                prechecked_signature_results[idx] = Some(
+                                    crate::tx::AcceptedTransaction::signature_verification_result(
+                                        txs[idx],
+                                    ),
+                                );
+                            }
+                        }
+                        item_indices.clear();
+                        messages.clear();
+                        signatures.clear();
+                        public_keys.clear();
                     }
-                    let mut items: Vec<EdItem> = Vec::with_capacity(txs.len());
-                    let mut messages = Vec::with_capacity(txs.len());
-                    let mut signatures = Vec::with_capacity(txs.len());
-                    let mut public_keys = Vec::with_capacity(txs.len());
+
+                    let cap = if state_block.pipeline.signature_batch_max_ed25519 > 0 {
+                        state_block.pipeline.signature_batch_max_ed25519
+                    } else {
+                        state_block.pipeline.signature_batch_max
+                    };
+                    let chunk_capacity = cap.max(1).min(txs.len().max(1));
+                    let mut item_indices = Vec::with_capacity(chunk_capacity);
+                    let mut messages = Vec::with_capacity(chunk_capacity);
+                    let mut signatures = Vec::with_capacity(chunk_capacity);
+                    let mut public_keys = Vec::with_capacity(chunk_capacity);
+                    let mut scratch = iroha_crypto::Ed25519BatchScratch::default();
                     for (idx, (tx, prepared)) in txs.iter().zip(prepared_txs.iter()).enumerate() {
                         if cached_ok[idx] {
                             continue;
@@ -6518,45 +6563,34 @@ pub(crate) mod valid {
                             }
                             continue;
                         };
-                        items.push(EdItem { idx });
+                        if cap == 0 {
+                            continue;
+                        }
+                        item_indices.push(idx);
                         messages.push(prepared.metadata.payload_hash.as_ref().as_slice());
                         signatures.push(sig_bytes);
                         public_keys.push(public_key);
-                    }
-                    let cap = if state_block.pipeline.signature_batch_max_ed25519 > 0 {
-                        state_block.pipeline.signature_batch_max_ed25519
-                    } else {
-                        state_block.pipeline.signature_batch_max
-                    };
-                    if cap > 0 && !items.is_empty() {
-                        let mut scratch = iroha_crypto::Ed25519BatchScratch::default();
-                        let mut start = 0;
-                        while start < items.len() {
-                            let end = usize::min(start + cap, items.len());
-                            let batch_messages = &messages[start..end];
-                            let batch_signatures = &signatures[start..end];
-                            let batch_public_keys = &public_keys[start..end];
-                            if iroha_crypto::ed25519_verify_batch_preparsed_deterministic_with_scratch(
-                                batch_messages,
-                                batch_signatures,
-                                batch_public_keys,
-                                [0; 32],
+                        if item_indices.len() == cap {
+                            flush_ed25519_precheck_batch(
+                                &txs,
+                                &mut prechecked_signature_results,
+                                &mut item_indices,
+                                &mut messages,
+                                &mut signatures,
+                                &mut public_keys,
                                 &mut scratch,
-                            )
-                            .is_ok()
-                            {
-                                for it in &items[start..end] {
-                                    prechecked_signature_results[it.idx] = Some(Ok(()));
-                                }
-                            } else {
-                                for it in &items[start..end] {
-                                    prechecked_signature_results[it.idx] =
-                                        Some(signature_result_for_tx(txs[it.idx]));
-                                }
-                            }
-                            start = end;
+                            );
                         }
                     }
+                    flush_ed25519_precheck_batch(
+                        &txs,
+                        &mut prechecked_signature_results,
+                        &mut item_indices,
+                        &mut messages,
+                        &mut signatures,
+                        &mut public_keys,
+                        &mut scratch,
+                    );
                 }
 
                 // Secp256k1 deterministic micro-batching for stateless pre-pass.

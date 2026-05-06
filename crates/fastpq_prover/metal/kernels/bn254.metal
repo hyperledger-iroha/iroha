@@ -84,6 +84,24 @@ inline Bn254 bn254_add(Bn254 a, Bn254 b) {
     return sum;
 }
 
+inline ulong bn254_add_small(thread ulong (&limbs)[9], uint idx, ulong value) {
+    if (value == 0UL) {
+        return 0UL;
+    }
+    ulong prior = limbs[idx];
+    limbs[idx] += value;
+    return limbs[idx] < prior ? 1UL : 0UL;
+}
+
+inline void bn254_add_carry_to_limbs(thread ulong (&limbs)[9], uint idx, ulong value) {
+    ulong carry = bn254_add_small(limbs, idx, value);
+    ++idx;
+    while (carry != 0UL && idx < 9U) {
+        carry = bn254_add_small(limbs, idx, carry);
+        ++idx;
+    }
+}
+
 inline Bn254 bn254_sub(Bn254 a, Bn254 b) {
     ulong borrow = 0UL;
     ulong x0 = sub_with_borrow(a.limbs.x, b.limbs.x, borrow);
@@ -104,7 +122,8 @@ inline void bn254_mul_add(
     ulong x,
     ulong y,
     thread ulong &acc,
-    thread ulong &carry
+    thread ulong &carry,
+    thread ulong &carry_hi
 ) {
     ulong lo = x * y;
     ulong hi = mulhi(x, y);
@@ -115,29 +134,34 @@ inline void bn254_mul_add(
     ulong carry1 = sum < carry ? 1UL : 0UL;
 
     acc = sum;
-    carry = hi + carry0 + carry1;
+    ulong next_carry = hi;
+    ulong overflow = 0UL;
+    ulong prior = next_carry;
+    next_carry += carry0;
+    overflow += next_carry < prior ? 1UL : 0UL;
+    prior = next_carry;
+    next_carry += carry1;
+    overflow += next_carry < prior ? 1UL : 0UL;
+    prior = next_carry;
+    next_carry += carry_hi;
+    overflow += next_carry < prior ? 1UL : 0UL;
+    carry = next_carry;
+    carry_hi = overflow;
 }
 
-inline void bn254_montgomery_reduce(thread ulong (&t)[8], thread ulong (&out)[4]) {
+inline void bn254_montgomery_reduce(thread ulong (&t)[9], thread ulong (&out)[4]) {
     for (uint i = 0U; i < 4U; ++i) {
         ulong m = t[i] * BN254_MODULUS_INV;
         ulong carry = 0UL;
+        ulong carry_hi = 0UL;
 
-        bn254_mul_add(m, BN254_MODULUS[0], t[i + 0], carry);
-        bn254_mul_add(m, BN254_MODULUS[1], t[i + 1], carry);
-        bn254_mul_add(m, BN254_MODULUS[2], t[i + 2], carry);
-        bn254_mul_add(m, BN254_MODULUS[3], t[i + 3], carry);
+        bn254_mul_add(m, BN254_MODULUS[0], t[i + 0], carry, carry_hi);
+        bn254_mul_add(m, BN254_MODULUS[1], t[i + 1], carry, carry_hi);
+        bn254_mul_add(m, BN254_MODULUS[2], t[i + 2], carry, carry_hi);
+        bn254_mul_add(m, BN254_MODULUS[3], t[i + 3], carry, carry_hi);
 
-        ulong idx = i + 4U;
-        ulong sum = t[idx] + carry;
-        ulong carry_out = sum < t[idx] ? 1UL : 0UL;
-        t[idx] = sum;
-        while (carry_out != 0UL) {
-            ++idx;
-            ulong prior = t[idx];
-            t[idx] += carry_out;
-            carry_out = t[idx] < prior ? 1UL : 0UL;
-        }
+        bn254_add_carry_to_limbs(t, i + 4U, carry);
+        bn254_add_carry_to_limbs(t, i + 5U, carry_hi);
     }
 
     out[0] = t[4];
@@ -156,25 +180,18 @@ inline void bn254_montgomery_reduce(thread ulong (&t)[8], thread ulong (&out)[4]
 }
 
 inline Bn254 bn254_montgomery_mul(Bn254 a, Bn254 b) {
-    thread ulong t[8] = {0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL};
+    thread ulong t[9] = {0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL};
     ulong a_words[4] = {a.limbs.x, a.limbs.y, a.limbs.z, a.limbs.w};
     ulong b_words[4] = {b.limbs.x, b.limbs.y, b.limbs.z, b.limbs.w};
 
     for (uint i = 0U; i < 4U; ++i) {
         ulong carry = 0UL;
+        ulong carry_hi = 0UL;
         for (uint j = 0U; j < 4U; ++j) {
-            bn254_mul_add(a_words[i], b_words[j], t[i + j], carry);
+            bn254_mul_add(a_words[i], b_words[j], t[i + j], carry, carry_hi);
         }
-        ulong idx = i + 4U;
-        ulong sum = t[idx] + carry;
-        ulong carry_out = sum < t[idx] ? 1UL : 0UL;
-        t[idx] = sum;
-        while (carry_out != 0UL) {
-            ++idx;
-            ulong prior = t[idx];
-            t[idx] += carry_out;
-            carry_out = t[idx] < prior ? 1UL : 0UL;
-        }
+        bn254_add_carry_to_limbs(t, i + 4U, carry);
+        bn254_add_carry_to_limbs(t, i + 5U, carry_hi);
     }
 
     thread ulong reduced[4];
@@ -195,11 +212,12 @@ inline Bn254 bn254_from_canonical_value(Bn254 value) {
 }
 
 inline Bn254 bn254_to_canonical(Bn254 value) {
-    thread ulong t[8] = {
+    thread ulong t[9] = {
         value.limbs.x,
         value.limbs.y,
         value.limbs.z,
         value.limbs.w,
+        0UL,
         0UL,
         0UL,
         0UL,
