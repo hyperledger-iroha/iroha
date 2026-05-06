@@ -77965,6 +77965,32 @@ async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
     harness.shutdown.send();
 }
 
+fn record_test_worker_slot_ingress(
+    queue: super::status::WorkerQueueKind,
+    height: u64,
+    view: u64,
+    kind: super::status::ConsensusMessageKind,
+    block_hash: Option<HashOf<BlockHeader>>,
+) {
+    super::status::record_worker_queue_enqueue_with_metadata(
+        queue,
+        super::status::WorkerQueueIngressMetadata::new(height, view, kind, block_hash),
+    );
+}
+
+fn drain_test_worker_slot_ingress(
+    queue: super::status::WorkerQueueKind,
+    height: u64,
+    view: u64,
+    kind: super::status::ConsensusMessageKind,
+    block_hash: Option<HashOf<BlockHeader>>,
+) {
+    super::status::record_worker_queue_drain_with_metadata(
+        queue,
+        super::status::WorkerQueueIngressMetadata::new(height, view, kind, block_hash),
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn force_view_change_if_idle_defers_empty_frontier_while_block_ingress_is_queued() {
     use std::borrow::Cow;
@@ -78033,7 +78059,13 @@ async fn force_view_change_if_idle_defers_empty_frontier_while_block_ingress_is_
             actor.state.latest_block_hash_fast(),
         ));
 
-    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Blocks);
+    record_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::Blocks,
+        height,
+        current_view,
+        super::status::ConsensusMessageKind::FetchPendingBlock,
+        Some(stale_cached_hash),
+    );
 
     assert!(
         !actor.force_view_change_if_idle(now),
@@ -78045,7 +78077,13 @@ async fn force_view_change_if_idle_defers_empty_frontier_while_block_ingress_is_
         "the view must remain unchanged while block ingress is queued"
     );
 
-    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::Blocks, 1);
+    drain_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::Blocks,
+        height,
+        current_view,
+        super::status::ConsensusMessageKind::FetchPendingBlock,
+        Some(stale_cached_hash),
+    );
     super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
@@ -78107,7 +78145,13 @@ async fn force_view_change_if_idle_allows_empty_frontier_after_stale_block_ingre
     actor.pending.missing_block_requests.clear();
     actor.frontier_recovery = None;
 
-    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Blocks);
+    record_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::Blocks,
+        height,
+        current_view,
+        super::status::ConsensusMessageKind::FetchPendingBlock,
+        None,
+    );
 
     assert!(
         actor.force_view_change_if_idle(now),
@@ -78121,7 +78165,13 @@ async fn force_view_change_if_idle_allows_empty_frontier_after_stale_block_ingre
         "idle recovery should advance beyond the stale block-ingress view"
     );
 
-    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::Blocks, 1);
+    drain_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::Blocks,
+        height,
+        current_view,
+        super::status::ConsensusMessageKind::FetchPendingBlock,
+        None,
+    );
     super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
@@ -101750,6 +101800,102 @@ async fn pacemaker_bootstraps_missing_qc_frontier_from_committed_qc_without_new_
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn pacemaker_bootstraps_missing_qc_frontier_despite_proposal_ingress_deferral() {
+    use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_block = sample_block(1, 0, None);
+    actor
+        .kura
+        .store_block(committed_block.clone())
+        .expect("store committed block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(committed_block.hash());
+
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    let committed_height = actor.state.view().height() as u64;
+    let tracked_height = committed_height.saturating_add(1);
+    let mut committed_qc = actor
+        .latest_committed_qc()
+        .unwrap_or_else(|| sample_qc_ref(committed_height, 0));
+    committed_qc.phase = Phase::Commit;
+    actor.highest_qc = Some(committed_qc);
+
+    let search_limit = u64::try_from(actor.effective_commit_topology().len().saturating_mul(8))
+        .unwrap_or(0)
+        .max(2);
+    let view = (1..search_limit)
+        .find(|candidate_view| actor.local_is_round_leader(tracked_height, *candidate_view))
+        .expect("find non-zero view where local peer is leader");
+
+    let now = Instant::now();
+    actor
+        .phase_tracker
+        .on_view_change(tracked_height, view, now);
+    actor.mark_proposal_liveness_state(
+        tracked_height,
+        view,
+        super::ProposalLivenessState::AwaitingProposalAfterMissingQc,
+        now,
+    );
+    record_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::BlockPayload,
+        tracked_height,
+        view,
+        super::status::ConsensusMessageKind::Proposal,
+        None,
+    );
+
+    assert_eq!(
+        actor
+            .subsystems
+            .propose
+            .new_view_tracker
+            .count(tracked_height, view),
+        0,
+        "test setup requires no NEW_VIEW quorum for the frontier view"
+    );
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        proposed,
+        "active missing-QC recovery should not be indefinitely vetoed by stale proposal ingress"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(tracked_height, view)
+            .is_some(),
+        "forced frontier self-proposal should populate the exact proposal slot"
+    );
+
+    drain_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::BlockPayload,
+        tracked_height,
+        view,
+        super::status::ConsensusMessageKind::Proposal,
+        None,
+    );
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn pacemaker_bootstraps_frontier_from_committed_qc_when_liveness_slot_was_not_retained() {
     use std::borrow::Cow;
 
@@ -102121,7 +102267,19 @@ async fn pacemaker_defers_fresh_frontier_proposal_while_vote_ingress_is_queued()
         "test setup should advance to the post-missing-QC view"
     );
 
-    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Votes);
+    actor.mark_proposal_liveness_state(
+        tracked_height,
+        1,
+        super::ProposalLivenessState::AwaitingProposalAfterMissingQc,
+        now,
+    );
+    record_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::Votes,
+        tracked_height,
+        1,
+        super::status::ConsensusMessageKind::QcVote,
+        Some(highest_qc.subject_block_hash),
+    );
 
     let proposed = actor.on_pacemaker_propose_ready(Instant::now());
     assert!(
@@ -102138,7 +102296,13 @@ async fn pacemaker_defers_fresh_frontier_proposal_while_vote_ingress_is_queued()
         "deferred proposal should not populate the post-rotation proposal cache"
     );
 
-    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::Votes, 1);
+    drain_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::Votes,
+        tracked_height,
+        1,
+        super::status::ConsensusMessageKind::QcVote,
+        Some(highest_qc.subject_block_hash),
+    );
     super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
@@ -102466,7 +102630,13 @@ async fn pacemaker_allows_fresh_frontier_proposal_when_ingress_wait_starves_prop
         now.checked_sub(ingress_grace.saturating_add(Duration::from_millis(1)))
             .unwrap_or(now),
     );
-    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Votes);
+    record_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::Votes,
+        tracked_height,
+        1,
+        super::status::ConsensusMessageKind::QcVote,
+        Some(highest_qc.subject_block_hash),
+    );
 
     let proposed = actor.on_pacemaker_propose_ready(now);
     assert!(
@@ -102483,7 +102653,13 @@ async fn pacemaker_allows_fresh_frontier_proposal_when_ingress_wait_starves_prop
         "proposal-starvation override should populate the post-rotation proposal cache"
     );
 
-    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::Votes, 1);
+    drain_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::Votes,
+        tracked_height,
+        1,
+        super::status::ConsensusMessageKind::QcVote,
+        Some(highest_qc.subject_block_hash),
+    );
     super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
@@ -102543,7 +102719,13 @@ async fn pacemaker_defers_fresh_frontier_proposal_while_block_payload_ingress_is
         now.checked_sub(ingress_grace.saturating_add(Duration::from_millis(1)))
             .unwrap_or(now),
     );
-    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
+    record_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::BlockPayload,
+        tracked_height,
+        1,
+        super::status::ConsensusMessageKind::Proposal,
+        None,
+    );
 
     let proposed = actor.on_pacemaker_propose_ready(now);
     assert!(
@@ -102560,7 +102742,13 @@ async fn pacemaker_defers_fresh_frontier_proposal_while_block_payload_ingress_is
         "deferred proposal should not populate the post-rotation proposal cache"
     );
 
-    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::BlockPayload, 1);
+    drain_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::BlockPayload,
+        tracked_height,
+        1,
+        super::status::ConsensusMessageKind::Proposal,
+        None,
+    );
     super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
@@ -102634,7 +102822,13 @@ async fn pacemaker_allows_fresh_frontier_proposal_after_stale_block_payload_ingr
             1,
             actor.state.latest_block_hash_fast(),
         ));
-    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
+    record_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::BlockPayload,
+        tracked_height,
+        1,
+        super::status::ConsensusMessageKind::Proposal,
+        None,
+    );
 
     let proposed = actor.on_pacemaker_propose_ready(now);
     assert!(
@@ -102651,7 +102845,13 @@ async fn pacemaker_allows_fresh_frontier_proposal_after_stale_block_payload_ingr
         "stale-ingress liveness escape should populate the post-rotation proposal cache"
     );
 
-    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::BlockPayload, 1);
+    drain_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::BlockPayload,
+        tracked_height,
+        1,
+        super::status::ConsensusMessageKind::Proposal,
+        None,
+    );
     super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
@@ -131004,7 +131204,13 @@ async fn zero_vote_quorum_timeout_does_not_drop_while_same_height_missing_block_
     actor.note_proposal_seen(height, 0, payload_hash);
 
     let _ = insert_unresolved_missing_request_for_tests(actor, 0xC7, height, 1, now, now);
-    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
+    record_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::BlockPayload,
+        height,
+        1,
+        super::status::ConsensusMessageKind::Proposal,
+        None,
+    );
 
     assert!(
         actor.frontier_recovery.is_none(),
@@ -131071,7 +131277,13 @@ async fn zero_vote_quorum_timeout_does_not_drop_while_same_height_missing_block_
     actor.note_proposal_seen(height, 0, payload_hash);
 
     let _ = insert_unresolved_missing_request_for_tests(actor, 0xC6, height, 1, now, now);
-    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Blocks);
+    record_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::Blocks,
+        height,
+        1,
+        super::status::ConsensusMessageKind::FetchPendingBlock,
+        None,
+    );
     actor.frontier_recovery = Some(super::FrontierRecoveryState {
         frontier_height: height,
         phase: super::FrontierRecoveryPhase::RotateArmed,
@@ -131150,7 +131362,13 @@ async fn zero_vote_quorum_timeout_does_not_drop_while_same_slot_ingress_backlog_
         actor.frontier_recovery.is_none(),
         "test setup requires same-slot ingress suppression to start without an owner"
     );
-    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
+    record_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::BlockPayload,
+        height,
+        0,
+        super::status::ConsensusMessageKind::Proposal,
+        None,
+    );
 
     assert!(
         !actor.reschedule_stale_pending_blocks_with_now(now, None),

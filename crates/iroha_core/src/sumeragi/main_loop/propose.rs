@@ -3248,6 +3248,18 @@ impl Actor {
         let active_topology_peers = topology_peers.clone();
         let tracked_view = self.phase_tracker.current_view(tracked_height).unwrap_or(0);
         let queue_depths = super::status::worker_queue_depth_snapshot();
+        let tracked_slot_ingress =
+            super::status::worker_queue_slot_ingress_snapshot(tracked_height, tracked_view);
+        let missing_qc_frontier_self_proposal_qc = self
+            .missing_qc_liveness_allows_frontier_self_proposal(
+                tracked_height,
+                tracked_view,
+                committed_height,
+                pending_queue_len,
+                precommit_qc,
+            );
+        let missing_qc_frontier_self_proposal_ready =
+            missing_qc_frontier_self_proposal_qc.is_some();
         let frontier_proposal_ingress_deferring = self.config.resilience.enabled
             && tracked_height == committed_height.saturating_add(1)
             && tracked_view > 0
@@ -3573,7 +3585,10 @@ impl Actor {
             }
         }
 
-        if candidate.is_none() && frontier_proposal_ingress_deferring {
+        if candidate.is_none()
+            && frontier_proposal_ingress_deferring
+            && !missing_qc_frontier_self_proposal_ready
+        {
             self.maybe_rebroadcast_new_view_votes(tracked_height, now);
             self.subsystems.propose.pacemaker.next_deadline = now
                 .checked_add(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
@@ -3587,19 +3602,43 @@ impl Actor {
                 block_payload_rx_depth = queue_depths.block_payload_rx,
                 rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
                 block_rx_depth = queue_depths.block_rx,
+                slot_vote_rx_depth = tracked_slot_ingress.queue_depths.vote_rx,
+                slot_block_payload_rx_depth = tracked_slot_ingress.queue_depths.block_payload_rx,
+                slot_rbc_chunk_rx_depth = tracked_slot_ingress.queue_depths.rbc_chunk_rx,
+                slot_block_rx_depth = tracked_slot_ingress.queue_depths.block_rx,
+                oldest_ingress_age_ms = tracked_slot_ingress.oldest_age_ms,
+                oldest_ingress_kind = tracked_slot_ingress.oldest_kind.map(|kind| kind.as_str()),
+                oldest_ingress_block = ?tracked_slot_ingress.oldest_block_hash,
                 "deferring committed-QC frontier fallback while proposal ingress drains"
             );
             return false;
         }
+        if candidate.is_none()
+            && frontier_proposal_ingress_deferring
+            && missing_qc_frontier_self_proposal_ready
+        {
+            debug!(
+                height = tracked_height,
+                view = tracked_view,
+                committed_height,
+                queue_len = pending_queue_len,
+                vote_rx_depth = queue_depths.vote_rx,
+                block_payload_rx_depth = queue_depths.block_payload_rx,
+                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                block_rx_depth = queue_depths.block_rx,
+                slot_vote_rx_depth = tracked_slot_ingress.queue_depths.vote_rx,
+                slot_block_payload_rx_depth = tracked_slot_ingress.queue_depths.block_payload_rx,
+                slot_rbc_chunk_rx_depth = tracked_slot_ingress.queue_depths.rbc_chunk_rx,
+                slot_block_rx_depth = tracked_slot_ingress.queue_depths.block_rx,
+                oldest_ingress_age_ms = tracked_slot_ingress.oldest_age_ms,
+                oldest_ingress_kind = tracked_slot_ingress.oldest_kind.map(|kind| kind.as_str()),
+                oldest_ingress_block = ?tracked_slot_ingress.oldest_block_hash,
+                "allowing committed-QC frontier fallback during missing-QC recovery despite queued proposal ingress"
+            );
+        }
 
         if candidate.is_none()
-            && let Some(qc) = self.missing_qc_liveness_allows_frontier_self_proposal(
-                tracked_height,
-                tracked_view,
-                committed_height,
-                pending_queue_len,
-                precommit_qc,
-            )
+            && let Some(qc) = missing_qc_frontier_self_proposal_qc
         {
             candidate = Some(NewViewSelection {
                 key: (tracked_height, tracked_view),
@@ -4228,26 +4267,44 @@ impl Actor {
             return false;
         }
 
-        if height == self.committed_height_snapshot().saturating_add(1) && view_idx > 0 {
+        let committed_height = self.committed_height_snapshot();
+        if height == committed_height.saturating_add(1) && view_idx > 0 {
             let queue_depths = super::status::worker_queue_depth_snapshot();
-            if Self::frontier_consensus_ingress_queued(queue_depths) {
-                if self.frontier_proposal_ingress_defer_active(
+            let slot_ingress = super::status::worker_queue_slot_ingress_snapshot(height, view_idx);
+            let slot_queue_depths = slot_ingress.queue_depths;
+            if Self::frontier_consensus_ingress_queued(slot_queue_depths) {
+                let missing_qc_frontier_self_proposal_ready = self
+                    .missing_qc_liveness_allows_frontier_self_proposal(
+                        height,
+                        view_idx,
+                        committed_height,
+                        pending_queue_len,
+                        Some(highest_qc),
+                    )
+                    .is_some();
+                let proposal_ingress_deferring = self.frontier_proposal_ingress_defer_active(
                     height,
                     view_idx,
                     now,
                     queue_depths,
                     self.frontier_ingress_drain_grace(da_enabled),
-                ) {
+                );
+                let allow_missing_qc_proposal_ingress_recovery =
+                    proposal_ingress_deferring && missing_qc_frontier_self_proposal_ready;
+                if proposal_ingress_deferring && !allow_missing_qc_proposal_ingress_recovery {
                     self.subsystems.propose.pacemaker.next_deadline = now
                         .checked_add(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
                         .unwrap_or(now);
                     debug!(
                         height,
                         view = view_idx,
-                        vote_rx_depth = queue_depths.vote_rx,
-                        block_payload_rx_depth = queue_depths.block_payload_rx,
-                        rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
-                        block_rx_depth = queue_depths.block_rx,
+                        vote_rx_depth = slot_queue_depths.vote_rx,
+                        block_payload_rx_depth = slot_queue_depths.block_payload_rx,
+                        rbc_chunk_rx_depth = slot_queue_depths.rbc_chunk_rx,
+                        block_rx_depth = slot_queue_depths.block_rx,
+                        oldest_ingress_age_ms = slot_ingress.oldest_age_ms,
+                        oldest_ingress_kind = slot_ingress.oldest_kind.map(|kind| kind.as_str()),
+                        oldest_ingress_block = ?slot_ingress.oldest_block_hash,
                         queue_len = pending_queue_len,
                         "deferring fresh frontier proposal while proposal ingress drains"
                     );
@@ -4261,11 +4318,29 @@ impl Actor {
                     );
                     return false;
                 }
+                if allow_missing_qc_proposal_ingress_recovery {
+                    debug!(
+                        height,
+                        view = view_idx,
+                        vote_rx_depth = slot_queue_depths.vote_rx,
+                        block_payload_rx_depth = slot_queue_depths.block_payload_rx,
+                        rbc_chunk_rx_depth = slot_queue_depths.rbc_chunk_rx,
+                        block_rx_depth = slot_queue_depths.block_rx,
+                        oldest_ingress_age_ms = slot_ingress.oldest_age_ms,
+                        oldest_ingress_kind = slot_ingress.oldest_kind.map(|kind| kind.as_str()),
+                        oldest_ingress_block = ?slot_ingress.oldest_block_hash,
+                        queue_len = pending_queue_len,
+                        "allowing fresh frontier proposal during missing-QC recovery despite queued proposal ingress"
+                    );
+                }
                 let view_age = self.phase_tracker.view_age(height, now).unwrap_or_default();
                 let ingress_grace = self.frontier_ingress_drain_grace(da_enabled);
                 let proposal_starved =
                     self.frontier_proposal_starved_past_ingress_grace(now, ingress_grace);
-                if view_age < ingress_grace && !proposal_starved {
+                if view_age < ingress_grace
+                    && !proposal_starved
+                    && !allow_missing_qc_proposal_ingress_recovery
+                {
                     self.subsystems.propose.pacemaker.next_deadline = now
                         .checked_add(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
                         .unwrap_or(now);
@@ -4274,10 +4349,13 @@ impl Actor {
                         view = view_idx,
                         view_age_ms = view_age.as_millis(),
                         ingress_grace_ms = ingress_grace.as_millis(),
-                        vote_rx_depth = queue_depths.vote_rx,
-                        block_payload_rx_depth = queue_depths.block_payload_rx,
-                        rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
-                        block_rx_depth = queue_depths.block_rx,
+                        vote_rx_depth = slot_queue_depths.vote_rx,
+                        block_payload_rx_depth = slot_queue_depths.block_payload_rx,
+                        rbc_chunk_rx_depth = slot_queue_depths.rbc_chunk_rx,
+                        block_rx_depth = slot_queue_depths.block_rx,
+                        oldest_ingress_age_ms = slot_ingress.oldest_age_ms,
+                        oldest_ingress_kind = slot_ingress.oldest_kind.map(|kind| kind.as_str()),
+                        oldest_ingress_block = ?slot_ingress.oldest_block_hash,
                         queue_len = pending_queue_len,
                         "deferring fresh frontier proposal while consensus ingress drains"
                     );
@@ -4292,18 +4370,39 @@ impl Actor {
                     return false;
                 }
                 if view_age < ingress_grace {
-                    debug!(
-                        height,
-                        view = view_idx,
-                        view_age_ms = view_age.as_millis(),
-                        ingress_grace_ms = ingress_grace.as_millis(),
-                        vote_rx_depth = queue_depths.vote_rx,
-                        block_payload_rx_depth = queue_depths.block_payload_rx,
-                        rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
-                        block_rx_depth = queue_depths.block_rx,
-                        queue_len = pending_queue_len,
-                        "allowing fresh frontier proposal after proposal starvation despite queued consensus ingress"
-                    );
+                    if allow_missing_qc_proposal_ingress_recovery {
+                        debug!(
+                            height,
+                            view = view_idx,
+                            view_age_ms = view_age.as_millis(),
+                            ingress_grace_ms = ingress_grace.as_millis(),
+                            vote_rx_depth = slot_queue_depths.vote_rx,
+                            block_payload_rx_depth = slot_queue_depths.block_payload_rx,
+                            rbc_chunk_rx_depth = slot_queue_depths.rbc_chunk_rx,
+                            block_rx_depth = slot_queue_depths.block_rx,
+                            oldest_ingress_age_ms = slot_ingress.oldest_age_ms,
+                            oldest_ingress_kind = slot_ingress.oldest_kind.map(|kind| kind.as_str()),
+                            oldest_ingress_block = ?slot_ingress.oldest_block_hash,
+                            queue_len = pending_queue_len,
+                            "allowing committed-QC frontier proposal during missing-QC recovery despite queued consensus ingress"
+                        );
+                    } else {
+                        debug!(
+                            height,
+                            view = view_idx,
+                            view_age_ms = view_age.as_millis(),
+                            ingress_grace_ms = ingress_grace.as_millis(),
+                            vote_rx_depth = slot_queue_depths.vote_rx,
+                            block_payload_rx_depth = slot_queue_depths.block_payload_rx,
+                            rbc_chunk_rx_depth = slot_queue_depths.rbc_chunk_rx,
+                            block_rx_depth = slot_queue_depths.block_rx,
+                            oldest_ingress_age_ms = slot_ingress.oldest_age_ms,
+                            oldest_ingress_kind = slot_ingress.oldest_kind.map(|kind| kind.as_str()),
+                            oldest_ingress_block = ?slot_ingress.oldest_block_hash,
+                            queue_len = pending_queue_len,
+                            "allowing fresh frontier proposal after proposal starvation despite queued consensus ingress"
+                        );
+                    }
                 }
             }
         }

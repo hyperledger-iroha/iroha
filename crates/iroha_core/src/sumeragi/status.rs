@@ -1161,6 +1161,8 @@ static WORKER_QUEUE_BLOCK_DROPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static WORKER_QUEUE_CONSENSUS_DROPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static WORKER_QUEUE_LANE_RELAY_DROPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static WORKER_QUEUE_BACKGROUND_DROPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
+type WorkerQueueSlotIngressMap = BTreeMap<WorkerQueueSlot, VecDeque<WorkerQueueIngressEntry>>;
+static WORKER_QUEUE_SLOT_INGRESS: OnceLock<Mutex<WorkerQueueSlotIngressMap>> = OnceLock::new();
 static WORKER_STAGE_ID: AtomicU64 = AtomicU64::new(0);
 static WORKER_STAGE_STARTED_MS: AtomicU64 = AtomicU64::new(0);
 static WORKER_LAST_ITERATION_MS: AtomicU64 = AtomicU64::new(0);
@@ -3188,6 +3190,76 @@ pub struct WorkerQueueDepthSnapshot {
     pub lane_relay_rx: u64,
     /// Queue depth for background post requests.
     pub background_rx: u64,
+}
+
+/// Height/view coordinates for slot-scoped worker ingress accounting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct WorkerQueueSlot {
+    /// Consensus height associated with the queued message.
+    pub height: u64,
+    /// Consensus view associated with the queued message.
+    pub view: u64,
+}
+
+impl WorkerQueueSlot {
+    /// Build a worker ingress slot key.
+    #[must_use]
+    pub const fn new(height: u64, view: u64) -> Self {
+        Self { height, view }
+    }
+}
+
+/// Slot metadata captured when a consensus message enters a worker queue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WorkerQueueIngressMetadata {
+    /// Consensus slot associated with the queued message.
+    pub slot: WorkerQueueSlot,
+    /// Message kind used for diagnostics.
+    pub kind: ConsensusMessageKind,
+    /// Block hash when the message is tied to an exact block.
+    pub block_hash: Option<HashOf<BlockHeader>>,
+}
+
+impl WorkerQueueIngressMetadata {
+    /// Build slot-scoped worker ingress metadata.
+    #[must_use]
+    pub const fn new(
+        height: u64,
+        view: u64,
+        kind: ConsensusMessageKind,
+        block_hash: Option<HashOf<BlockHeader>>,
+    ) -> Self {
+        Self {
+            slot: WorkerQueueSlot::new(height, view),
+            kind,
+            block_hash,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct WorkerQueueIngressEntry {
+    queue: WorkerQueueKind,
+    kind: ConsensusMessageKind,
+    block_hash: Option<HashOf<BlockHeader>>,
+    enqueued_at: Instant,
+}
+
+/// Slot- or height-scoped snapshot of queued consensus ingress.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WorkerQueueIngressSnapshot {
+    /// Queue depths for messages matching the snapshot scope.
+    pub queue_depths: WorkerQueueDepthSnapshot,
+    /// Oldest queued ingress age in milliseconds.
+    pub oldest_age_ms: Option<u64>,
+    /// Slot of the oldest queued ingress.
+    pub oldest_slot: Option<WorkerQueueSlot>,
+    /// Queue of the oldest queued ingress.
+    pub oldest_queue: Option<WorkerQueueKind>,
+    /// Message kind of the oldest queued ingress.
+    pub oldest_kind: Option<ConsensusMessageKind>,
+    /// Block hash for the oldest queued ingress when available.
+    pub oldest_block_hash: Option<HashOf<BlockHeader>>,
 }
 
 /// Per-queue totals for enqueue diagnostics.
@@ -7454,6 +7526,58 @@ fn worker_queue_dropped_total_counter(kind: WorkerQueueKind) -> &'static AtomicU
     }
 }
 
+fn worker_queue_slot_ingress() -> &'static Mutex<WorkerQueueSlotIngressMap> {
+    WORKER_QUEUE_SLOT_INGRESS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn increment_queue_depth(depths: &mut WorkerQueueDepthSnapshot, queue: WorkerQueueKind) {
+    match queue {
+        WorkerQueueKind::Votes => depths.vote_rx = depths.vote_rx.saturating_add(1),
+        WorkerQueueKind::BlockPayload => {
+            depths.block_payload_rx = depths.block_payload_rx.saturating_add(1);
+        }
+        WorkerQueueKind::RbcChunks => {
+            depths.rbc_chunk_rx = depths.rbc_chunk_rx.saturating_add(1);
+        }
+        WorkerQueueKind::Blocks => depths.block_rx = depths.block_rx.saturating_add(1),
+        WorkerQueueKind::Consensus => depths.consensus_rx = depths.consensus_rx.saturating_add(1),
+        WorkerQueueKind::LaneRelay => {
+            depths.lane_relay_rx = depths.lane_relay_rx.saturating_add(1);
+        }
+        WorkerQueueKind::Background => {
+            depths.background_rx = depths.background_rx.saturating_add(1);
+        }
+    }
+}
+
+fn worker_queue_ingress_snapshot_from_entries(
+    entries: impl Iterator<Item = (WorkerQueueSlot, WorkerQueueIngressEntry)>,
+) -> WorkerQueueIngressSnapshot {
+    let now = Instant::now();
+    let mut snapshot = WorkerQueueIngressSnapshot::default();
+    let mut oldest: Option<(WorkerQueueSlot, WorkerQueueIngressEntry)> = None;
+    for (slot, entry) in entries {
+        increment_queue_depth(&mut snapshot.queue_depths, entry.queue);
+        if oldest
+            .as_ref()
+            .is_none_or(|(_, current)| entry.enqueued_at < current.enqueued_at)
+        {
+            oldest = Some((slot, entry));
+        }
+    }
+    if let Some((slot, entry)) = oldest {
+        snapshot.oldest_age_ms = Some(
+            u64::try_from(now.saturating_duration_since(entry.enqueued_at).as_millis())
+                .unwrap_or(u64::MAX),
+        );
+        snapshot.oldest_slot = Some(slot);
+        snapshot.oldest_queue = Some(entry.queue);
+        snapshot.oldest_kind = Some(entry.kind);
+        snapshot.oldest_block_hash = entry.block_hash;
+    }
+    snapshot
+}
+
 fn worker_queue_totals_snapshot(
     counter: fn(WorkerQueueKind) -> &'static AtomicU64,
 ) -> WorkerQueueTotalsSnapshot {
@@ -7475,6 +7599,30 @@ pub fn record_worker_queue_enqueue(kind: WorkerQueueKind) {
         return;
     };
     worker_queue_counter(kind).fetch_add(1, Ordering::Relaxed);
+}
+
+/// Record an enqueue for the given worker-loop queue with slot metadata.
+pub fn record_worker_queue_enqueue_with_metadata(
+    kind: WorkerQueueKind,
+    metadata: WorkerQueueIngressMetadata,
+) {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&WORKER_QUEUE_TEST_LOCK) else {
+        return;
+    };
+    record_worker_queue_enqueue(kind);
+    let mut guard = worker_queue_slot_ingress()
+        .lock()
+        .expect("worker queue slot ingress lock poisoned");
+    guard
+        .entry(metadata.slot)
+        .or_default()
+        .push_back(WorkerQueueIngressEntry {
+            queue: kind,
+            kind: metadata.kind,
+            block_hash: metadata.block_hash,
+            enqueued_at: Instant::now(),
+        });
 }
 
 /// Record a blocking enqueue duration for the given worker-loop queue.
@@ -7520,6 +7668,37 @@ pub fn record_worker_queue_drain(kind: WorkerQueueKind, drained: usize) {
     });
 }
 
+/// Record a drain of one slot-scoped entry from the given worker-loop queue.
+pub fn record_worker_queue_drain_with_metadata(
+    kind: WorkerQueueKind,
+    metadata: WorkerQueueIngressMetadata,
+) {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&WORKER_QUEUE_TEST_LOCK) else {
+        return;
+    };
+    record_worker_queue_drain(kind, 1);
+    let mut guard = worker_queue_slot_ingress()
+        .lock()
+        .expect("worker queue slot ingress lock poisoned");
+    let Some(entries) = guard.get_mut(&metadata.slot) else {
+        return;
+    };
+    let pos = entries
+        .iter()
+        .position(|entry| {
+            entry.queue == kind
+                && entry.kind == metadata.kind
+                && entry.block_hash == metadata.block_hash
+        })
+        .or_else(|| entries.iter().position(|entry| entry.queue == kind))
+        .unwrap_or(0);
+    entries.remove(pos);
+    if entries.is_empty() {
+        guard.remove(&metadata.slot);
+    }
+}
+
 /// Update the worker-loop stage marker for diagnostics.
 pub fn set_worker_stage(stage: WorkerLoopStage) {
     WORKER_STAGE_ID.store(stage.as_id(), Ordering::Relaxed);
@@ -7550,6 +7729,44 @@ pub(crate) fn worker_queue_depth_snapshot() -> WorkerQueueDepthSnapshot {
         lane_relay_rx: WORKER_QUEUE_LANE_RELAY_DEPTH.load(Ordering::Relaxed),
         background_rx: WORKER_QUEUE_BACKGROUND_DEPTH.load(Ordering::Relaxed),
     }
+}
+
+pub(crate) fn worker_queue_slot_ingress_snapshot(
+    height: u64,
+    view: u64,
+) -> WorkerQueueIngressSnapshot {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&WORKER_QUEUE_TEST_LOCK) else {
+        return WorkerQueueIngressSnapshot::default();
+    };
+
+    let slot = WorkerQueueSlot::new(height, view);
+    let guard = worker_queue_slot_ingress()
+        .lock()
+        .expect("worker queue slot ingress lock poisoned");
+    worker_queue_ingress_snapshot_from_entries(
+        guard
+            .get(&slot)
+            .into_iter()
+            .flat_map(|entries| entries.iter().cloned().map(move |entry| (slot, entry))),
+    )
+}
+
+pub(crate) fn worker_queue_height_ingress_snapshot(height: u64) -> WorkerQueueIngressSnapshot {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&WORKER_QUEUE_TEST_LOCK) else {
+        return WorkerQueueIngressSnapshot::default();
+    };
+
+    let guard = worker_queue_slot_ingress()
+        .lock()
+        .expect("worker queue slot ingress lock poisoned");
+    worker_queue_ingress_snapshot_from_entries(
+        guard
+            .iter()
+            .filter(move |(slot, _)| slot.height == height)
+            .flat_map(|(slot, entries)| entries.iter().cloned().map(move |entry| (*slot, entry))),
+    )
 }
 
 fn commit_inflight_hash_slot() -> &'static Mutex<Option<UntypedHash>> {
@@ -7716,6 +7933,10 @@ pub(crate) fn reset_worker_loop_snapshot_for_tests() {
     WORKER_QUEUE_CONSENSUS_DROPPED_TOTAL.store(0, Ordering::Relaxed);
     WORKER_QUEUE_LANE_RELAY_DROPPED_TOTAL.store(0, Ordering::Relaxed);
     WORKER_QUEUE_BACKGROUND_DROPPED_TOTAL.store(0, Ordering::Relaxed);
+    worker_queue_slot_ingress()
+        .lock()
+        .expect("worker queue slot ingress lock poisoned")
+        .clear();
 }
 
 #[cfg(test)]
@@ -9767,6 +9988,76 @@ mod tests {
                 .background_rx,
             1
         );
+    }
+
+    #[test]
+    fn worker_queue_ingress_snapshot_tracks_slot_and_height_scope() {
+        let _guard = super::worker_queue_test_guard();
+        super::reset_worker_loop_snapshot_for_tests();
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0x51; UntypedHash::LENGTH],
+        ));
+
+        super::record_worker_queue_enqueue_with_metadata(
+            WorkerQueueKind::BlockPayload,
+            super::WorkerQueueIngressMetadata::new(
+                7,
+                2,
+                super::ConsensusMessageKind::Proposal,
+                Some(block_hash),
+            ),
+        );
+        super::record_worker_queue_enqueue_with_metadata(
+            WorkerQueueKind::Votes,
+            super::WorkerQueueIngressMetadata::new(
+                8,
+                0,
+                super::ConsensusMessageKind::QcVote,
+                Some(block_hash),
+            ),
+        );
+
+        let slot_snapshot = super::worker_queue_slot_ingress_snapshot(7, 2);
+        assert_eq!(slot_snapshot.queue_depths.block_payload_rx, 1);
+        assert_eq!(slot_snapshot.queue_depths.vote_rx, 0);
+        assert_eq!(
+            slot_snapshot.oldest_slot,
+            Some(super::WorkerQueueSlot::new(7, 2))
+        );
+        assert_eq!(
+            slot_snapshot.oldest_kind,
+            Some(super::ConsensusMessageKind::Proposal)
+        );
+        assert_eq!(slot_snapshot.oldest_block_hash, Some(block_hash));
+        assert!(slot_snapshot.oldest_age_ms.is_some());
+
+        let height_snapshot = super::worker_queue_height_ingress_snapshot(7);
+        assert_eq!(height_snapshot.queue_depths.block_payload_rx, 1);
+        assert_eq!(height_snapshot.queue_depths.vote_rx, 0);
+
+        super::record_worker_queue_drain_with_metadata(
+            WorkerQueueKind::BlockPayload,
+            super::WorkerQueueIngressMetadata::new(
+                7,
+                2,
+                super::ConsensusMessageKind::Proposal,
+                Some(block_hash),
+            ),
+        );
+        super::record_worker_queue_drain_with_metadata(
+            WorkerQueueKind::Votes,
+            super::WorkerQueueIngressMetadata::new(
+                8,
+                0,
+                super::ConsensusMessageKind::QcVote,
+                Some(block_hash),
+            ),
+        );
+
+        let slot_snapshot = super::worker_queue_slot_ingress_snapshot(7, 2);
+        assert_eq!(slot_snapshot.queue_depths.block_payload_rx, 0);
+        assert_eq!(slot_snapshot.oldest_slot, None);
+        super::reset_worker_loop_snapshot_for_tests();
     }
 
     #[test]

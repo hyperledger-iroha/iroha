@@ -623,10 +623,10 @@ impl Actor {
                                 now,
                             )
                     });
+            let pending_height_ingress =
+                super::status::worker_queue_height_ingress_snapshot(pending.height);
             let same_height_missing_block_recovery_backlog_active = contiguous_frontier
-                && (queue_depths.block_payload_rx > 0
-                    || queue_depths.rbc_chunk_rx > 0
-                    || queue_depths.block_rx > 0)
+                && Self::frontier_proposal_ingress_queued(pending_height_ingress.queue_depths)
                 && self
                     .pending
                     .missing_block_requests
@@ -866,6 +866,16 @@ impl Actor {
                         block_payload_rx_depth = queue_depths.block_payload_rx,
                         rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
                         block_rx_depth = queue_depths.block_rx,
+                        height_block_payload_rx_depth =
+                            pending_height_ingress.queue_depths.block_payload_rx,
+                        height_rbc_chunk_rx_depth =
+                            pending_height_ingress.queue_depths.rbc_chunk_rx,
+                        height_block_rx_depth = pending_height_ingress.queue_depths.block_rx,
+                        oldest_ingress_slot = ?pending_height_ingress.oldest_slot,
+                        oldest_ingress_age_ms = pending_height_ingress.oldest_age_ms,
+                        oldest_ingress_kind =
+                            pending_height_ingress.oldest_kind.map(|kind| kind.as_str()),
+                        oldest_ingress_block = ?pending_height_ingress.oldest_block_hash,
                         consensus_rx_depth = queue_depths.consensus_rx,
                         "deferring quorum reschedule: zero-vote block still has same-height recovery progress in flight"
                     );
@@ -879,8 +889,13 @@ impl Actor {
                         now,
                         queue_depths,
                     );
-                let availability_ingress_active =
-                    queue_depths.block_payload_rx > 0 || queue_depths.rbc_chunk_rx > 0;
+                let pending_slot_ingress =
+                    super::status::worker_queue_slot_ingress_snapshot(pending.height, pending.view);
+                let availability_ingress_active = pending_slot_ingress
+                    .queue_depths
+                    .block_payload_rx
+                    .saturating_add(pending_slot_ingress.queue_depths.rbc_chunk_rx)
+                    > 0;
                 if same_slot_ingress_active
                     && (availability_ingress_active
                         || progress_stall_age < zero_vote_backlog_deadline)
@@ -1679,8 +1694,9 @@ impl Actor {
                 &self.subsystems.da_rbc.rbc.status_handle,
                 &pending,
             );
+        let height_ingress = super::status::worker_queue_height_ingress_snapshot(height);
         let resilience_ingress_backlog_active = self.config.resilience.enabled
-            && (Self::frontier_consensus_ingress_queued(queue_depths)
+            && (Self::frontier_consensus_ingress_queued(height_ingress.queue_depths)
                 || queue_depths.consensus_rx > 0
                 || queue_depths.lane_relay_rx > 0);
         let authoritative_frontier_rotation_candidate = contiguous_frontier
@@ -1703,6 +1719,14 @@ impl Actor {
                 block_payload_rx_depth = queue_depths.block_payload_rx,
                 rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
                 block_rx_depth = queue_depths.block_rx,
+                height_vote_rx_depth = height_ingress.queue_depths.vote_rx,
+                height_block_payload_rx_depth = height_ingress.queue_depths.block_payload_rx,
+                height_rbc_chunk_rx_depth = height_ingress.queue_depths.rbc_chunk_rx,
+                height_block_rx_depth = height_ingress.queue_depths.block_rx,
+                oldest_ingress_slot = ?height_ingress.oldest_slot,
+                oldest_ingress_age_ms = height_ingress.oldest_age_ms,
+                oldest_ingress_kind = height_ingress.oldest_kind.map(|kind| kind.as_str()),
+                oldest_ingress_block = ?height_ingress.oldest_block_hash,
                 consensus_rx_depth = queue_depths.consensus_rx,
                 lane_relay_rx_depth = queue_depths.lane_relay_rx,
                 "suppressing immediate payload-backed frontier rotation while consensus ingress drains"
@@ -1712,8 +1736,8 @@ impl Actor {
             .frontier_recovery_window()
             .max(Duration::from_millis(1));
         let authoritative_payload_can_bypass_reassembly = authoritative_payload_present
-            && queue_depths.block_payload_rx == 0
-            && queue_depths.block_rx == 0
+            && height_ingress.queue_depths.block_payload_rx == 0
+            && height_ingress.queue_depths.block_rx == 0
             && !self.frontier_recovery_same_height_rbc_sender_activity_active(height, now);
         let authoritative_payload_can_bypass_recovery_window =
             authoritative_payload_can_bypass_reassembly

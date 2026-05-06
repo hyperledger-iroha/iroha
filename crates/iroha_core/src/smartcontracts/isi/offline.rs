@@ -214,8 +214,6 @@ pub mod isi {
 
     const OFFLINE_NOTE_V2_VERIFIER_NAMESPACE: &str = "offline_note_v2";
     const OFFLINE_NOTE_V2_REPLAY_ISSUE_DOMAIN: &str = "offline-note-v2-issued-note-v1";
-    const OFFLINE_NOTE_V2_REPLAY_KEY_CERTIFICATE_DOMAIN: &str =
-        "offline-note-v2-issued-key-certificate-v1";
     const OFFLINE_NOTE_V2_REPLAY_ISSUED_CLAIM_DOMAIN: &str = "offline-note-v2-issued-claim-v1";
     const OFFLINE_NOTE_V2_REPLAY_SPENT_CLAIM_DOMAIN: &str = "offline-note-v2-spent-claim-v1";
     const OFFLINE_NOTE_V2_REPLAY_NULLIFIER_DOMAIN: &str = "offline-note-v2-spent-nullifier-v1";
@@ -228,10 +226,10 @@ pub mod isi {
     fn validate_offline_note_v2_key_certificate(
         certificate: &OfflineNoteKeyCertificateV2,
     ) -> Result<(), InstructionExecutionError> {
-        if certificate.version != 2 || !certificate.one_use {
+        if certificate.version != 2 {
             return Err(labeled_invariant(
                 "invalid_issuer_cert",
-                "offline V2 note operation requires a compact one-use key certificate",
+                "offline V2 note operation requires a compact V2 key certificate",
             ));
         }
         if certificate.public_key.is_empty() {
@@ -504,13 +502,6 @@ pub mod isi {
         offline_note_v2_replay_key(OFFLINE_NOTE_V2_REPLAY_ISSUE_DOMAIN, note_commitment)
     }
 
-    fn offline_note_v2_key_certificate_key(certificate_payload_hash: &Hash) -> Hash {
-        offline_note_v2_replay_key(
-            OFFLINE_NOTE_V2_REPLAY_KEY_CERTIFICATE_DOMAIN,
-            certificate_payload_hash,
-        )
-    }
-
     fn offline_note_v2_issued_claim_key(claim_hash: &Hash) -> Hash {
         offline_note_v2_replay_key(OFFLINE_NOTE_V2_REPLAY_ISSUED_CLAIM_DOMAIN, claim_hash)
     }
@@ -643,6 +634,44 @@ pub mod isi {
         })
     }
 
+    fn offline_note_v2_certificate_payload_hash(
+        certificate: &OfflineNoteKeyCertificateV2,
+        context: &str,
+    ) -> Result<Hash, Error> {
+        certificate.payload_hash().map_err(|err| {
+            labeled_invariant(
+                "invalid_issuer_cert",
+                format!("failed to encode Offline V2 {context} key certificate payload: {err}"),
+            )
+            .into()
+        })
+    }
+
+    fn ensure_offline_note_v2_input_claims_bound_to_sender(
+        sender_key_certificate: &OfflineNoteKeyCertificateV2,
+        input_claims: &[OfflineNoteIssuedClaimV2],
+    ) -> Result<Hash, Error> {
+        let sender_certificate_payload_hash =
+            offline_note_v2_certificate_payload_hash(sender_key_certificate, "sender")?;
+        for input_claim in input_claims {
+            if input_claim.key_certificate_payload_hash != sender_certificate_payload_hash {
+                return Err(labeled_invariant(
+                    "invalid_issuer_cert",
+                    "offline V2 audit input claim certificate must match the sender key certificate",
+                )
+                .into());
+            }
+            if input_claim.asset.account() != &sender_key_certificate.account_id {
+                return Err(labeled_invariant(
+                    "invalid_issuer_cert",
+                    "offline V2 audit input claim account must match the sender key certificate",
+                )
+                .into());
+            }
+        }
+        Ok(sender_certificate_payload_hash)
+    }
+
     impl Execute for IssueOfflineNoteV2 {
         fn execute(
             self,
@@ -669,14 +698,7 @@ pub mod isi {
             ensure_offline_note_v2_certificate_signature(&issue.key_certificate, authority)?;
             let spec = state_transaction.numeric_spec_for(issue.asset.definition())?;
             assert_numeric_spec_with(&issue.amount, spec)?;
-            let certificate_payload_hash = issue.key_certificate.payload_hash().map_err(|err| {
-                labeled_invariant(
-                    "invalid_issuer_cert",
-                    format!("failed to encode Offline V2 key certificate payload: {err}"),
-                )
-            })?;
             let issue_key = offline_note_v2_issue_key(&issue.note_commitment);
-            let certificate_key = offline_note_v2_key_certificate_key(&certificate_payload_hash);
             let issued_claim_hash = offline_note_v2_issued_claim_hash(
                 OfflineNoteIssuedClaimV2::from_issue(&issue).map_err(|err| {
                     labeled_invariant(
@@ -698,27 +720,11 @@ pub mod isi {
                 )
                 .into());
             }
-            if state_transaction
-                .world
-                .offline_note_v2_replay_keys
-                .get(&certificate_key)
-                .is_some()
-            {
-                return Err(labeled_invariant(
-                    "duplicate_key_certificate",
-                    "offline V2 key certificate is already issued",
-                )
-                .into());
-            }
             reserve_offline_note_escrow(state_transaction, &issue.asset, &issue.amount)?;
             state_transaction
                 .world
                 .offline_note_v2_replay_keys
                 .insert(issue_key, ());
-            state_transaction
-                .world
-                .offline_note_v2_replay_keys
-                .insert(certificate_key, ());
             state_transaction
                 .world
                 .offline_note_v2_replay_keys
@@ -983,26 +989,10 @@ pub mod isi {
                 authority,
                 state_transaction,
             )?;
-            let certificate_payload_hash =
-                audit.sender_key_certificate.payload_hash().map_err(|err| {
-                    labeled_invariant(
-                        "invalid_issuer_cert",
-                        format!("failed to encode Offline V2 key certificate payload: {err}"),
-                    )
-                })?;
-            let certificate_key = offline_note_v2_key_certificate_key(&certificate_payload_hash);
-            if state_transaction
-                .world
-                .offline_note_v2_replay_keys
-                .get(&certificate_key)
-                .is_none()
-            {
-                return Err(labeled_invariant(
-                    "invalid_issuer_cert",
-                    "offline V2 audit key certificate was not issued",
-                )
-                .into());
-            }
+            ensure_offline_note_v2_input_claims_bound_to_sender(
+                &audit.sender_key_certificate,
+                &audit.input_claims,
+            )?;
             let expected_public_inputs_hash = audit.public_inputs_hash().map_err(|err| {
                 labeled_invariant(
                     "invalid_proof",
@@ -1481,12 +1471,12 @@ pub mod isi {
         }
 
         #[test]
-        fn key_certificate_requires_v2_one_use_ed25519_key() {
+        fn key_certificate_requires_v2_ed25519_key() {
             let mut certificate = sample_certificate();
             assert!(validate_offline_note_v2_key_certificate(&certificate).is_ok());
 
             certificate.one_use = false;
-            assert!(validate_offline_note_v2_key_certificate(&certificate).is_err());
+            assert!(validate_offline_note_v2_key_certificate(&certificate).is_ok());
 
             certificate.one_use = true;
             certificate.public_key.clear();
@@ -1618,6 +1608,35 @@ pub mod isi {
                 .len(),
                 5
             );
+        }
+
+        #[test]
+        fn audit_input_claims_can_be_bound_by_issued_claim_without_certificate_replay_key() {
+            let sender_certificate = sample_certificate();
+            let issued_claim = sample_issued_claim();
+
+            let payload_hash = ensure_offline_note_v2_input_claims_bound_to_sender(
+                &sender_certificate,
+                std::slice::from_ref(&issued_claim),
+            )
+            .expect("issued claim must bind to sender certificate");
+
+            assert_eq!(payload_hash, issued_claim.key_certificate_payload_hash);
+        }
+
+        #[test]
+        fn audit_input_claims_reject_sender_certificate_mismatch() {
+            let mut sender_certificate = sample_certificate();
+            sender_certificate.key_id = "different-one-use-key".to_owned();
+            let issued_claim = sample_issued_claim();
+
+            let err = ensure_offline_note_v2_input_claims_bound_to_sender(
+                &sender_certificate,
+                std::slice::from_ref(&issued_claim),
+            )
+            .expect_err("mismatched sender certificate must reject the audit input claim");
+
+            assert_offline_rejection(err, "invalid_issuer_cert", "must match");
         }
     }
 }

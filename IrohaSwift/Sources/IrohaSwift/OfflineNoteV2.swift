@@ -746,9 +746,7 @@ enum OfflineNoteV2Validation {
         guard version == 2 else {
             throw OfflineNoteV2Error.invalidCertificateVersion(version)
         }
-        guard oneUse else {
-            throw OfflineNoteV2Error.certificateMustBeOneUse
-        }
+        _ = oneUse
         guard publicKey.count == 32 else {
             throw OfflineNoteV2Error.invalidNotePublicKeyLength(expected: 32, actual: publicKey.count)
         }

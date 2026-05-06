@@ -5929,12 +5929,24 @@ impl Actor {
 
     fn frontier_recovery_inbound_backlog_active(
         &self,
-        _frontier_height: u64,
-        queue_depths: super::status::WorkerQueueDepthSnapshot,
+        frontier_height: u64,
+        _queue_depths: super::status::WorkerQueueDepthSnapshot,
     ) -> bool {
-        queue_depths.block_payload_rx > 0
-            || queue_depths.rbc_chunk_rx > 0
-            || queue_depths.block_rx > 0
+        let queue_depths =
+            super::status::worker_queue_height_ingress_snapshot(frontier_height).queue_depths;
+        Self::frontier_proposal_ingress_queued(queue_depths)
+    }
+
+    fn frontier_recovery_inbound_slot_backlog_active(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+        _queue_depths: super::status::WorkerQueueDepthSnapshot,
+    ) -> bool {
+        let queue_depths =
+            super::status::worker_queue_slot_ingress_snapshot(frontier_height, frontier_view)
+                .queue_depths;
+        Self::frontier_proposal_ingress_queued(queue_depths)
     }
 
     fn frontier_proposal_ingress_defer_active(
@@ -5945,7 +5957,11 @@ impl Actor {
         queue_depths: super::status::WorkerQueueDepthSnapshot,
         unobserved_ingress_window: Duration,
     ) -> bool {
-        if !self.frontier_recovery_inbound_backlog_active(frontier_height, queue_depths) {
+        if !self.frontier_recovery_inbound_slot_backlog_active(
+            frontier_height,
+            frontier_view,
+            queue_depths,
+        ) {
             return false;
         }
 
@@ -5964,6 +5980,14 @@ impl Actor {
     ) -> bool {
         queue_depths.vote_rx > 0
             || queue_depths.block_payload_rx > 0
+            || queue_depths.rbc_chunk_rx > 0
+            || queue_depths.block_rx > 0
+    }
+
+    fn frontier_proposal_ingress_queued(
+        queue_depths: super::status::WorkerQueueDepthSnapshot,
+    ) -> bool {
+        queue_depths.block_payload_rx > 0
             || queue_depths.rbc_chunk_rx > 0
             || queue_depths.block_rx > 0
     }
@@ -6129,7 +6153,11 @@ impl Actor {
         now: Instant,
         queue_depths: super::status::WorkerQueueDepthSnapshot,
     ) -> bool {
-        if !self.frontier_recovery_inbound_backlog_active(frontier_height, queue_depths) {
+        if !self.frontier_recovery_inbound_slot_backlog_active(
+            frontier_height,
+            frontier_view,
+            queue_depths,
+        ) {
             return false;
         }
 
@@ -6488,9 +6516,9 @@ impl Actor {
             .frontier_recovery_window()
             .max(Duration::from_millis(1));
         let recent = |at: Instant| now.saturating_duration_since(at) < window;
-        let payload_inbound_backlog_active = queue_depths.block_payload_rx > 0
-            || queue_depths.rbc_chunk_rx > 0
-            || queue_depths.block_rx > 0;
+        let height_ingress = super::status::worker_queue_height_ingress_snapshot(frontier_height);
+        let payload_inbound_backlog_active =
+            Self::frontier_proposal_ingress_queued(height_ingress.queue_depths);
         let dependency_progress_at = match (
             self.frontier_recovery
                 .filter(|state| state.frontier_height == frontier_height)
@@ -33132,6 +33160,7 @@ impl Actor {
         if already_forced {
             return false;
         }
+        let slot_ingress = super::status::worker_queue_slot_ingress_snapshot(height, view);
 
         warn!(
             height,
@@ -33153,6 +33182,13 @@ impl Actor {
             queue_active_backlog,
             residual_round_backlog,
             consensus_queue_backlog,
+            slot_vote_rx_depth = slot_ingress.queue_depths.vote_rx,
+            slot_block_payload_rx_depth = slot_ingress.queue_depths.block_payload_rx,
+            slot_rbc_chunk_rx_depth = slot_ingress.queue_depths.rbc_chunk_rx,
+            slot_block_rx_depth = slot_ingress.queue_depths.block_rx,
+            oldest_ingress_age_ms = slot_ingress.oldest_age_ms,
+            oldest_ingress_kind = slot_ingress.oldest_kind.map(|kind| kind.as_str()),
+            oldest_ingress_block = ?slot_ingress.oldest_block_hash,
             rbc_backlog,
             near_quorum_queue_backlog,
             near_quorum_queue_backlog_raw,
@@ -33170,8 +33206,8 @@ impl Actor {
                     .max(Duration::from_millis(1)),
             )
             .max(effective_timeout);
-        let resilience_ingress_backlog_active =
-            self.config.resilience.enabled && Self::frontier_consensus_ingress_queued(queue_depths);
+        let resilience_ingress_backlog_active = self.config.resilience.enabled
+            && Self::frontier_consensus_ingress_queued(slot_ingress.queue_depths);
         let force_frontier_view_advance_after_repair = self.config.resilience.enabled
             && height == frontier_height
             && recovery_backlog_stalled
@@ -33727,6 +33763,7 @@ impl Actor {
             return false;
         }
         let contiguous_frontier_height = committed_height.saturating_add(1);
+        let slot_ingress = super::status::worker_queue_slot_ingress_snapshot(height, current_view);
         let empty_frontier_vote_evidence_for_current_view =
             self.slot_has_vote_backed_consensus_evidence(height, current_view);
         let missing_qc_recovery_already_armed =
@@ -33752,6 +33789,13 @@ impl Actor {
                 block_payload_rx_depth = queue_depths.block_payload_rx,
                 rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
                 block_rx_depth = queue_depths.block_rx,
+                slot_vote_rx_depth = slot_ingress.queue_depths.vote_rx,
+                slot_block_payload_rx_depth = slot_ingress.queue_depths.block_payload_rx,
+                slot_rbc_chunk_rx_depth = slot_ingress.queue_depths.rbc_chunk_rx,
+                slot_block_rx_depth = slot_ingress.queue_depths.block_rx,
+                oldest_ingress_age_ms = slot_ingress.oldest_age_ms,
+                oldest_ingress_kind = slot_ingress.oldest_kind.map(|kind| kind.as_str()),
+                oldest_ingress_block = ?slot_ingress.oldest_block_hash,
                 "deferring empty-frontier idle rotation while proposal ingress drains"
             );
             return false;
@@ -33759,7 +33803,7 @@ impl Actor {
         if height == contiguous_frontier_height
             && !proposal_seen
             && current_view == 0
-            && Self::frontier_consensus_ingress_queued(queue_depths)
+            && Self::frontier_consensus_ingress_queued(slot_ingress.queue_depths)
             && !proposal_gap_backlog_grace_expired
             && !empty_frontier_vote_evidence_for_current_view
             && !self.height_has_vote_backed_consensus_evidence(height)
@@ -33780,6 +33824,13 @@ impl Actor {
                     block_payload_rx_depth = queue_depths.block_payload_rx,
                     rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
                     block_rx_depth = queue_depths.block_rx,
+                    slot_vote_rx_depth = slot_ingress.queue_depths.vote_rx,
+                    slot_block_payload_rx_depth = slot_ingress.queue_depths.block_payload_rx,
+                    slot_rbc_chunk_rx_depth = slot_ingress.queue_depths.rbc_chunk_rx,
+                    slot_block_rx_depth = slot_ingress.queue_depths.block_rx,
+                    oldest_ingress_age_ms = slot_ingress.oldest_age_ms,
+                    oldest_ingress_kind = slot_ingress.oldest_kind.map(|kind| kind.as_str()),
+                    oldest_ingress_block = ?slot_ingress.oldest_block_hash,
                     "deferring empty-frontier idle rotation while consensus ingress drains"
                 );
                 return false;

@@ -10073,6 +10073,10 @@ impl InboundBlockMessage {
         }
     }
 
+    fn queue_ingress_metadata(&self) -> Option<status::WorkerQueueIngressMetadata> {
+        block_message_queue_ingress_metadata(&self.message)
+    }
+
     fn with_enqueue_metadata(mut self, queue: status::WorkerQueueKind) -> Self {
         self.enqueued_at = Some(Instant::now());
         self.queue = Some(queue);
@@ -10091,6 +10095,147 @@ impl InboundBlockMessage {
         &self.message
     }
 }
+
+fn block_message_queue_ingress_metadata(
+    message: &BlockMessage,
+) -> Option<status::WorkerQueueIngressMetadata> {
+    use status::ConsensusMessageKind;
+
+    let metadata = match message {
+        BlockMessage::BlockCreated(created) => {
+            let header = created.block.header();
+            status::WorkerQueueIngressMetadata::new(
+                header.height().get(),
+                header.view_change_index(),
+                ConsensusMessageKind::BlockCreated,
+                Some(created.block.hash()),
+            )
+        }
+        BlockMessage::BlockSyncUpdate(update) => {
+            let header = update.block.header();
+            status::WorkerQueueIngressMetadata::new(
+                header.height().get(),
+                header.view_change_index(),
+                ConsensusMessageKind::BlockSyncUpdate,
+                Some(update.block.hash()),
+            )
+        }
+        BlockMessage::FetchBlockBody(request) => status::WorkerQueueIngressMetadata::new(
+            request.height,
+            request.view,
+            ConsensusMessageKind::FetchBlockBody,
+            Some(request.block_hash),
+        ),
+        BlockMessage::BlockBodyResponse(response) => status::WorkerQueueIngressMetadata::new(
+            response.height,
+            response.view,
+            ConsensusMessageKind::BlockBodyResponse,
+            Some(response.block_hash),
+        ),
+        BlockMessage::ProposalHint(hint) => status::WorkerQueueIngressMetadata::new(
+            hint.height,
+            hint.view,
+            ConsensusMessageKind::ProposalHint,
+            Some(hint.block_hash),
+        ),
+        BlockMessage::Proposal(proposal) => status::WorkerQueueIngressMetadata::new(
+            proposal.header.height,
+            proposal.header.view,
+            ConsensusMessageKind::Proposal,
+            None,
+        ),
+        BlockMessage::QcVote(vote) => status::WorkerQueueIngressMetadata::new(
+            vote.height,
+            vote.view,
+            ConsensusMessageKind::QcVote,
+            Some(vote.block_hash),
+        ),
+        BlockMessage::Qc(qc) => status::WorkerQueueIngressMetadata::new(
+            qc.height,
+            qc.view,
+            ConsensusMessageKind::Qc,
+            Some(qc.subject_block_hash),
+        ),
+        BlockMessage::ExecWitness(witness) => status::WorkerQueueIngressMetadata::new(
+            witness.height,
+            witness.view,
+            ConsensusMessageKind::ExecWitness,
+            Some(witness.block_hash),
+        ),
+        BlockMessage::RbcInitRequest(request) => status::WorkerQueueIngressMetadata::new(
+            request.height,
+            request.view,
+            ConsensusMessageKind::RbcInitRequest,
+            Some(request.block_hash),
+        ),
+        BlockMessage::RbcChunkRequest(request) => status::WorkerQueueIngressMetadata::new(
+            request.height,
+            request.view,
+            ConsensusMessageKind::RbcChunkRequest,
+            Some(request.block_hash),
+        ),
+        BlockMessage::RbcInit(init) => status::WorkerQueueIngressMetadata::new(
+            init.height,
+            init.view,
+            ConsensusMessageKind::RbcInit,
+            Some(init.block_hash),
+        ),
+        BlockMessage::RbcChunk(chunk) => status::WorkerQueueIngressMetadata::new(
+            chunk.height,
+            chunk.view,
+            ConsensusMessageKind::RbcChunk,
+            Some(chunk.block_hash),
+        ),
+        BlockMessage::RbcChunkCompact(chunk) => status::WorkerQueueIngressMetadata::new(
+            u64::from(chunk.height),
+            u64::from(chunk.view),
+            ConsensusMessageKind::RbcChunk,
+            Some(chunk.block_hash),
+        ),
+        BlockMessage::RbcReady(ready) => status::WorkerQueueIngressMetadata::new(
+            ready.height,
+            ready.view,
+            ConsensusMessageKind::RbcReady,
+            Some(ready.block_hash),
+        ),
+        BlockMessage::RbcDeliver(deliver) => status::WorkerQueueIngressMetadata::new(
+            deliver.height,
+            deliver.view,
+            ConsensusMessageKind::RbcDeliver,
+            Some(deliver.block_hash),
+        ),
+        BlockMessage::FetchPendingBlock(request) => status::WorkerQueueIngressMetadata::new(
+            request.height,
+            request.view,
+            ConsensusMessageKind::FetchPendingBlock,
+            Some(request.block_hash),
+        ),
+        BlockMessage::ConsensusParams(_)
+        | BlockMessage::VrfCommit(_)
+        | BlockMessage::VrfReveal(_)
+        | BlockMessage::KuraReplicaAdvert(_) => return None,
+    };
+    Some(metadata)
+}
+
+trait WorkerQueueTrackedMessage {
+    fn worker_queue_ingress_metadata(&self) -> Option<status::WorkerQueueIngressMetadata> {
+        None
+    }
+}
+
+impl WorkerQueueTrackedMessage for InboundBlockMessage {
+    fn worker_queue_ingress_metadata(&self) -> Option<status::WorkerQueueIngressMetadata> {
+        self.queue_ingress_metadata()
+    }
+}
+
+impl WorkerQueueTrackedMessage for ControlFlow {}
+impl WorkerQueueTrackedMessage for LaneRelayMessage {}
+impl WorkerQueueTrackedMessage for BackgroundRequest {}
+
+#[cfg(test)]
+impl WorkerQueueTrackedMessage for u8 {}
 
 #[derive(Debug)]
 struct FrontierBlockSyncHint {
@@ -10521,6 +10666,7 @@ impl SumeragiHandle {
                                  kind: &'static str,
                                  queue: status::WorkerQueueKind,
                                  mode: IngressMode| {
+            let ingress_metadata = msg.queue_ingress_metadata();
             let msg = msg.with_enqueue_metadata(queue);
             match mode {
                 IngressMode::Blocking => {
@@ -10528,7 +10674,11 @@ impl SumeragiHandle {
                     let start = Instant::now();
                     match tx.send(msg) {
                         Ok(()) => {
-                            status::record_worker_queue_enqueue(queue);
+                            if let Some(metadata) = ingress_metadata {
+                                status::record_worker_queue_enqueue_with_metadata(queue, metadata);
+                            } else {
+                                status::record_worker_queue_enqueue(queue);
+                            }
                             status::record_worker_queue_blocked(queue, start.elapsed());
                             true
                         }
@@ -10541,7 +10691,11 @@ impl SumeragiHandle {
                 }
                 IngressMode::NonBlocking => match tx.try_send(msg) {
                     Ok(()) => {
-                        status::record_worker_queue_enqueue(queue);
+                        if let Some(metadata) = ingress_metadata {
+                            status::record_worker_queue_enqueue_with_metadata(queue, metadata);
+                        } else {
+                            status::record_worker_queue_enqueue(queue);
+                        }
                         wake();
                         true
                     }
@@ -12215,6 +12369,17 @@ enum WorkerMessage {
     Background(BackgroundRequest),
 }
 
+impl WorkerMessage {
+    fn queue_ingress_metadata(&self) -> Option<status::WorkerQueueIngressMetadata> {
+        match self {
+            WorkerMessage::Block(message) => message.queue_ingress_metadata(),
+            WorkerMessage::Control(message) => message.worker_queue_ingress_metadata(),
+            WorkerMessage::LaneRelay(message) => message.worker_queue_ingress_metadata(),
+            WorkerMessage::Background(message) => message.worker_queue_ingress_metadata(),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct WorkerEnvelope {
     tier: PriorityTier,
@@ -12590,6 +12755,7 @@ fn drain_mailbox<A: WorkerActor>(
         };
 
         stats.last_envelope = Some((envelope.tier, envelope.seq));
+        let ingress_metadata = envelope.message.queue_ingress_metadata();
         status::set_worker_stage(tier.stage());
         match envelope.message {
             WorkerMessage::Block(msg) => {
@@ -12699,7 +12865,11 @@ fn drain_mailbox<A: WorkerActor>(
             }
         }
 
-        status::record_worker_queue_drain(tier.queue_kind(), 1);
+        if let Some(metadata) = ingress_metadata {
+            status::record_worker_queue_drain_with_metadata(tier.queue_kind(), metadata);
+        } else {
+            status::record_worker_queue_drain(tier.queue_kind(), 1);
+        }
         budgets.consume(tier);
         last_served[tier.idx()] = now;
         phase_progress = true;
@@ -13169,7 +13339,7 @@ fn spawn_queue_worker<A, T, F>(
 ) -> std::thread::JoinHandle<()>
 where
     A: WorkerActor + Send + 'static,
-    T: Send + 'static,
+    T: WorkerQueueTrackedMessage + Send + 'static,
     F: FnMut(&mut A, T) -> Result<()> + Send + 'static,
 {
     sumeragi_thread_builder(name)
@@ -13221,13 +13391,16 @@ fn drain_queue_batch<A, T, F>(
 ) -> usize
 where
     A: WorkerActor,
+    T: WorkerQueueTrackedMessage,
     F: FnMut(&mut A, T) -> Result<()>,
 {
     let mut drained = 0_usize;
+    let mut untracked_drained = 0_usize;
     let max_batch_messages = max_batch_messages.max(1);
     let mut next_msg = Some(first_msg);
 
     while let Some(msg) = next_msg.take() {
+        let ingress_metadata = msg.worker_queue_ingress_metadata();
         if let Err(err) = handler(actor, msg) {
             iroha_logger::error!(
                 ?err,
@@ -13238,13 +13411,20 @@ where
         }
         poll_worker_results(actor);
         drained = drained.saturating_add(1);
+        if let Some(metadata) = ingress_metadata {
+            status::record_worker_queue_drain_with_metadata(queue_kind, metadata);
+        } else {
+            untracked_drained = untracked_drained.saturating_add(1);
+        }
         if drained >= max_batch_messages {
             break;
         }
         next_msg = rx.try_recv().ok();
     }
 
-    status::record_worker_queue_drain(queue_kind, drained);
+    if untracked_drained > 0 {
+        status::record_worker_queue_drain(queue_kind, untracked_drained);
+    }
     drained
 }
 

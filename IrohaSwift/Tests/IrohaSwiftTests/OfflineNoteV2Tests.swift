@@ -187,7 +187,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         )) { error in
             XCTAssertEqual(error as? OfflineNoteV2Error, .invalidCertificateVersion(1))
         }
-        XCTAssertThrowsError(try OfflineNoteKeyCertificateV2(
+        XCTAssertNoThrow(try OfflineNoteKeyCertificateV2(
             platform: cert.platform,
             keyId: cert.keyId,
             deviceId: cert.deviceId,
@@ -199,9 +199,7 @@ final class OfflineNoteV2Tests: XCTestCase {
             assertionUsageCountLimit: cert.assertionUsageCountLimit,
             oneUse: false,
             issuerSignature: issuerSignature
-        )) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .certificateMustBeOneUse)
-        }
+        ))
         XCTAssertThrowsError(try OfflineNoteKeyCertificateV2(
             platform: cert.platform,
             keyId: cert.keyId,
