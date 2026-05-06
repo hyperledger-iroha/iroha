@@ -2004,6 +2004,71 @@ mod run {
     const MALFORMED_PAYLOAD_FRAME_THRESHOLD: u32 = 64;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum MalformedPayloadFrameReason {
+        EmptyDecryptedPayload,
+        InnerHeaderTruncated,
+        InnerMagicMismatch,
+        InnerVersionMismatch,
+        InnerSchemaMismatch,
+        InnerCompressionUnsupported,
+        InnerLengthMissing,
+        InnerLengthTooLarge,
+        InnerLengthOverflow,
+        InnerFrameTruncated,
+        InnerDecodeFailed,
+        TrailingBytes,
+    }
+
+    impl MalformedPayloadFrameReason {
+        fn as_str(self) -> &'static str {
+            match self {
+                Self::EmptyDecryptedPayload => "empty_decrypted_payload",
+                Self::InnerHeaderTruncated => "inner_header_truncated",
+                Self::InnerMagicMismatch => "inner_magic_mismatch",
+                Self::InnerVersionMismatch => "inner_version_mismatch",
+                Self::InnerSchemaMismatch => "inner_schema_mismatch",
+                Self::InnerCompressionUnsupported => "inner_compression_unsupported",
+                Self::InnerLengthMissing => "inner_length_missing",
+                Self::InnerLengthTooLarge => "inner_length_too_large",
+                Self::InnerLengthOverflow => "inner_length_overflow",
+                Self::InnerFrameTruncated => "inner_frame_truncated",
+                Self::InnerDecodeFailed => "inner_decode_failed",
+                Self::TrailingBytes => "trailing_bytes",
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct MalformedPayloadFrameContext {
+        reason: MalformedPayloadFrameReason,
+        encrypted_frame_bytes: usize,
+        decrypted_payload_bytes: Option<usize>,
+        decode_offset: usize,
+        remaining_bytes: usize,
+        decoded_messages: usize,
+    }
+
+    impl MalformedPayloadFrameContext {
+        fn new(
+            reason: MalformedPayloadFrameReason,
+            encrypted_frame_bytes: usize,
+            decrypted_payload_bytes: Option<usize>,
+            decode_offset: usize,
+            remaining_bytes: usize,
+            decoded_messages: usize,
+        ) -> Self {
+            Self {
+                reason,
+                encrypted_frame_bytes,
+                decrypted_payload_bytes,
+                decode_offset,
+                remaining_bytes,
+                decoded_messages,
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum HighTopic {
         Control,
         Consensus,
@@ -2797,6 +2862,16 @@ mod run {
                             Err(Error::MalformedPayloadFrame) => {
                                 let disconnect =
                                     note_malformed_payload_frame(&mut malformed_payload_streak_hi);
+                                let context = message_reader.take_malformed_payload_context();
+                                let malformed_reason =
+                                    context.map(|ctx| ctx.reason.as_str()).unwrap_or("unknown");
+                                let encrypted_frame_bytes =
+                                    context.map(|ctx| ctx.encrypted_frame_bytes);
+                                let decrypted_payload_bytes =
+                                    context.and_then(|ctx| ctx.decrypted_payload_bytes);
+                                let decode_offset = context.map(|ctx| ctx.decode_offset);
+                                let remaining_bytes = context.map(|ctx| ctx.remaining_bytes);
+                                let decoded_messages = context.map(|ctx| ctx.decoded_messages);
                                 if let Some(suppressed) = malformed_payload_sampler
                                     .should_log(tokio::time::Duration::from_millis(500))
                                 {
@@ -2806,6 +2881,12 @@ mod run {
                                         stream = "high",
                                         malformed_payload_streak = malformed_payload_streak_hi,
                                         threshold = MALFORMED_PAYLOAD_FRAME_THRESHOLD,
+                                        malformed_reason,
+                                        ?encrypted_frame_bytes,
+                                        ?decrypted_payload_bytes,
+                                        ?decode_offset,
+                                        ?remaining_bytes,
+                                        ?decoded_messages,
                                         suppressed,
                                         "Dropped malformed decrypted peer payload frame"
                                     );
@@ -2908,6 +2989,18 @@ mod run {
                             Err(Error::MalformedPayloadFrame) => {
                                 let disconnect =
                                     note_malformed_payload_frame(&mut malformed_payload_streak_low);
+                                let context = message_reader_low
+                                    .as_mut()
+                                    .and_then(MessageReader::take_malformed_payload_context);
+                                let malformed_reason =
+                                    context.map(|ctx| ctx.reason.as_str()).unwrap_or("unknown");
+                                let encrypted_frame_bytes =
+                                    context.map(|ctx| ctx.encrypted_frame_bytes);
+                                let decrypted_payload_bytes =
+                                    context.and_then(|ctx| ctx.decrypted_payload_bytes);
+                                let decode_offset = context.map(|ctx| ctx.decode_offset);
+                                let remaining_bytes = context.map(|ctx| ctx.remaining_bytes);
+                                let decoded_messages = context.map(|ctx| ctx.decoded_messages);
                                 if let Some(suppressed) = malformed_payload_sampler
                                     .should_log(tokio::time::Duration::from_millis(500))
                                 {
@@ -2917,6 +3010,12 @@ mod run {
                                         stream = "low",
                                         malformed_payload_streak = malformed_payload_streak_low,
                                         threshold = MALFORMED_PAYLOAD_FRAME_THRESHOLD,
+                                        malformed_reason,
+                                        ?encrypted_frame_bytes,
+                                        ?decrypted_payload_bytes,
+                                        ?decode_offset,
+                                        ?remaining_bytes,
+                                        ?decoded_messages,
                                         suppressed,
                                         "Dropped malformed decrypted peer payload frame"
                                     );
@@ -3165,6 +3264,7 @@ mod run {
         framed_schema: [u8; 16],
         framed_padding: usize,
         max_frame_bytes: usize,
+        last_malformed_payload: Option<MalformedPayloadFrameContext>,
     }
 
     impl<E: Enc, M: Pload> MessageReader<E, M> {
@@ -3195,7 +3295,12 @@ mod run {
                 framed_schema: <M as ncore::NoritoSerialize>::schema_hash(),
                 framed_padding,
                 max_frame_bytes,
+                last_malformed_payload: None,
             }
+        }
+
+        fn take_malformed_payload_context(&mut self) -> Option<MalformedPayloadFrameContext> {
+            self.last_malformed_payload.take()
         }
 
         fn copy_to_aligned_scratch<'a>(
@@ -3277,6 +3382,7 @@ mod run {
         /// - Fail to decrypt message
         /// - Fail to decode the encrypted envelope
         fn parse_next_encrypted_frame(&mut self) -> Result<bool, Error> {
+            self.last_malformed_payload = None;
             let mut buf = &self.buffer[..];
             if buf.remaining() < Self::U32_SIZE {
                 // Not enough data to read u32
@@ -3292,26 +3398,67 @@ mod run {
             }
 
             let data = &buf[..size];
+            let mut malformed_context = None;
             let parsed = (|| -> Result<VecDeque<(M, usize)>, Error> {
                 let decrypted = self.cryptographer.decrypt_into(data, &mut self.decrypted)?;
                 let decrypted_len = decrypted.len();
                 if decrypted_len == 0 {
+                    malformed_context = Some(MalformedPayloadFrameContext::new(
+                        MalformedPayloadFrameReason::EmptyDecryptedPayload,
+                        size,
+                        Some(decrypted_len),
+                        0,
+                        0,
+                        0,
+                    ));
                     return Err(Error::MalformedPayloadFrame);
                 }
                 // Decrypted payload may contain multiple Norito-framed messages.
                 let align = core::mem::align_of::<ncore::Archived<M>>();
                 let mut offset = 0usize;
+                let mut decoded_messages = 0usize;
                 let mut frame_messages = VecDeque::new();
                 while offset < decrypted_len {
-                    let remaining = decrypted
-                        .get(offset..)
-                        .ok_or(Error::MalformedPayloadFrame)?;
-                    let frame_len =
-                        framed_message_len::<M>(remaining, self.framed_schema, self.framed_padding)
-                            .map_err(|_| Error::MalformedPayloadFrame)?;
-                    let frame = remaining
-                        .get(..frame_len)
-                        .ok_or(Error::MalformedPayloadFrame)?;
+                    let Some(remaining) = decrypted.get(offset..) else {
+                        malformed_context = Some(MalformedPayloadFrameContext::new(
+                            MalformedPayloadFrameReason::TrailingBytes,
+                            size,
+                            Some(decrypted_len),
+                            offset,
+                            0,
+                            decoded_messages,
+                        ));
+                        return Err(Error::MalformedPayloadFrame);
+                    };
+                    let frame_len = match framed_message_len::<M>(
+                        remaining,
+                        self.framed_schema,
+                        self.framed_padding,
+                    ) {
+                        Ok(frame_len) => frame_len,
+                        Err(reason) => {
+                            malformed_context = Some(MalformedPayloadFrameContext::new(
+                                reason,
+                                size,
+                                Some(decrypted_len),
+                                offset,
+                                remaining.len(),
+                                decoded_messages,
+                            ));
+                            return Err(Error::MalformedPayloadFrame);
+                        }
+                    };
+                    let Some(frame) = remaining.get(..frame_len) else {
+                        malformed_context = Some(MalformedPayloadFrameContext::new(
+                            MalformedPayloadFrameReason::InnerFrameTruncated,
+                            size,
+                            Some(decrypted_len),
+                            offset,
+                            remaining.len(),
+                            decoded_messages,
+                        ));
+                        return Err(Error::MalformedPayloadFrame);
+                    };
                     let misaligned = align > 1
                         && !frame.is_empty()
                         && !((frame.as_ptr() as usize).is_multiple_of(align));
@@ -3322,18 +3469,43 @@ mod run {
                     } else {
                         ncore::decode_from_bytes::<M>(frame)
                     };
-                    let decoded = decoded.map_err(|_| Error::MalformedPayloadFrame)?;
+                    let decoded = match decoded {
+                        Ok(decoded) => decoded,
+                        Err(_) => {
+                            malformed_context = Some(MalformedPayloadFrameContext::new(
+                                MalformedPayloadFrameReason::InnerDecodeFailed,
+                                size,
+                                Some(decrypted_len),
+                                offset,
+                                remaining.len(),
+                                decoded_messages,
+                            ));
+                            return Err(Error::MalformedPayloadFrame);
+                        }
+                    };
                     frame_messages.push_back((decoded, frame_len));
+                    decoded_messages = decoded_messages.saturating_add(1);
                     offset = offset.saturating_add(frame_len);
                 }
                 if offset == decrypted_len {
                     Ok(frame_messages)
                 } else {
+                    malformed_context = Some(MalformedPayloadFrameContext::new(
+                        MalformedPayloadFrameReason::TrailingBytes,
+                        size,
+                        Some(decrypted_len),
+                        offset,
+                        decrypted_len.saturating_sub(offset),
+                        decoded_messages,
+                    ));
                     Err(Error::MalformedPayloadFrame)
                 }
             })();
 
             self.buffer.advance(size + Self::U32_SIZE);
+            if matches!(&parsed, Err(Error::MalformedPayloadFrame)) {
+                self.last_malformed_payload = malformed_context;
+            }
             self.pending.extend(parsed?);
 
             Ok(true)
@@ -3921,43 +4093,48 @@ mod run {
         bytes: &[u8],
         expected_schema: [u8; 16],
         padding: usize,
-    ) -> Result<usize, Error> {
+    ) -> Result<usize, MalformedPayloadFrameReason> {
         const LEN_OFF: usize = 4 + 1 + 1 + 16 + 1;
         if bytes.len() < ncore::Header::SIZE {
-            return Err(Error::Format);
+            return Err(MalformedPayloadFrameReason::InnerHeaderTruncated);
         }
         if bytes[..4] != ncore::MAGIC {
-            return Err(Error::Format);
+            return Err(MalformedPayloadFrameReason::InnerMagicMismatch);
         }
         if bytes.get(4) != Some(&ncore::VERSION_MAJOR)
             || bytes.get(5) != Some(&ncore::VERSION_MINOR)
         {
-            return Err(Error::Format);
+            return Err(MalformedPayloadFrameReason::InnerVersionMismatch);
         }
         // schema hash: bytes[6..22]
-        let schema = bytes.get(6..22).ok_or(Error::Format)?;
+        let schema = bytes
+            .get(6..22)
+            .ok_or(MalformedPayloadFrameReason::InnerHeaderTruncated)?;
         if schema != expected_schema.as_slice() {
-            return Err(Error::Format);
+            return Err(MalformedPayloadFrameReason::InnerSchemaMismatch);
         }
         // compression: bytes[22]
         if bytes.get(22) != Some(&(ncore::Compression::None as u8)) {
-            return Err(Error::Format);
+            return Err(MalformedPayloadFrameReason::InnerCompressionUnsupported);
         }
         // payload length u64 LE: bytes[23..31]
-        let len_bytes = bytes.get(LEN_OFF..LEN_OFF + 8).ok_or(Error::Format)?;
+        let len_bytes = bytes
+            .get(LEN_OFF..LEN_OFF + 8)
+            .ok_or(MalformedPayloadFrameReason::InnerLengthMissing)?;
         let mut b = [0u8; 8];
         b.copy_from_slice(len_bytes);
         let payload_len_u64 = u64::from_le_bytes(b);
         if payload_len_u64 > ncore::max_archive_len() {
-            return Err(Error::Format);
+            return Err(MalformedPayloadFrameReason::InnerLengthTooLarge);
         }
-        let payload_len = usize::try_from(payload_len_u64).map_err(|_| Error::Format)?;
+        let payload_len = usize::try_from(payload_len_u64)
+            .map_err(|_| MalformedPayloadFrameReason::InnerLengthTooLarge)?;
         let total = ncore::Header::SIZE
             .checked_add(padding)
             .and_then(|x| x.checked_add(payload_len))
-            .ok_or(Error::Format)?;
+            .ok_or(MalformedPayloadFrameReason::InnerLengthOverflow)?;
         if total > bytes.len() {
-            return Err(Error::Format);
+            return Err(MalformedPayloadFrameReason::InnerFrameTruncated);
         }
         Ok(total)
     }
@@ -4959,7 +5136,10 @@ mod run {
             malformed_plain.extend_from_slice(&truncated_inner);
             let valid_plain = blob_message_frame(&[9u8]);
 
-            let mut raw = encrypted_frame(&malformed_plain, key_byte);
+            let malformed_frame = encrypted_frame(&malformed_plain, key_byte);
+            let expected_encrypted_len =
+                malformed_frame.len() - MessageReader::<ChaCha20Poly1305, Message<Blob>>::U32_SIZE;
+            let mut raw = malformed_frame;
             raw.extend_from_slice(&encrypted_frame(&valid_plain, key_byte));
 
             let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead {
@@ -4977,6 +5157,16 @@ mod run {
                 .await
                 .expect_err("first decrypted frame should be dropped");
             assert!(matches!(err, Error::MalformedPayloadFrame));
+            let context = reader
+                .take_malformed_payload_context()
+                .expect("malformed frame context");
+            assert_eq!(
+                context.reason,
+                MalformedPayloadFrameReason::InnerFrameTruncated
+            );
+            assert_eq!(context.encrypted_frame_bytes, expected_encrypted_len);
+            assert_eq!(context.decrypted_payload_bytes, Some(malformed_plain.len()));
+            assert_eq!(context.decoded_messages, 1);
 
             let (message, encoded_len) = reader
                 .read_message()

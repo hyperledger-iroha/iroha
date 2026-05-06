@@ -2026,6 +2026,14 @@ pub(crate) fn canonicalize_accepted_transactions(
     reorder_by_indices(transactions, &order);
 }
 
+fn signed_block_entrypoints_are_canonical(block: &SignedBlock) -> bool {
+    let accepted_entrypoints = block
+        .external_entrypoints_cloned()
+        .map(|entrypoint| AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint)))
+        .collect::<Vec<_>>();
+    accepted_transactions_are_canonical(&accepted_entrypoints)
+}
+
 mod pending {
     use iroha_primitives::time::TimeSource;
     use nonzero_ext::nonzero;
@@ -2073,13 +2081,15 @@ mod pending {
         ///
         /// This bypasses call-hash canonicalisation and is intended for
         /// test harnesses that require strict FIFO semantics.
+        #[cfg(test)]
         #[inline]
-        pub fn new_preserve_order(transactions: Vec<AcceptedTransaction<'static>>) -> Self {
+        pub(crate) fn new_preserve_order(transactions: Vec<AcceptedTransaction<'static>>) -> Self {
             Self::new_preserve_order_with_time_source(transactions, TimeSource::new_system())
         }
 
         /// Create with provided [`TimeSource`] while preserving transaction order.
-        pub fn new_preserve_order_with_time_source(
+        #[cfg(test)]
+        pub(crate) fn new_preserve_order_with_time_source(
             transactions: Vec<AcceptedTransaction<'static>>,
             time_source: TimeSource,
         ) -> Self {
@@ -2468,6 +2478,13 @@ mod new {
         use super::*;
         use crate::{block::BlockBuilder, tx::AcceptedTransaction};
 
+        fn private_kaigi_fee_asset_id() -> AssetDefinitionId {
+            AssetDefinitionId::new(
+                DomainId::parse_fully_qualified("universal.universal").expect("domain"),
+                Name::from_str("xor").expect("name"),
+            )
+        }
+
         fn sample_private_kaigi_transaction(chain: ChainId) -> PrivateKaigiTransaction {
             PrivateKaigiTransaction {
                 chain,
@@ -2504,10 +2521,7 @@ mod new {
                     proof: vec![0xAA, 0xBB, 0xCC],
                 },
                 fee_spend: PrivateKaigiFeeSpend {
-                    asset_definition_id: AssetDefinitionId::new(
-                        DomainId::try_new("wonderland", "universal").expect("domain"),
-                        Name::from_str("xor").expect("name"),
-                    ),
+                    asset_definition_id: private_kaigi_fee_asset_id(),
                     anchor_root: Hash::new(b"anchor-root"),
                     nullifiers: vec![[0x11; 32]],
                     output_commitments: vec![[0x22; 32]],
@@ -6640,7 +6654,13 @@ pub(crate) mod valid {
                         )),
                     ))
                 } else {
-                    state_block.validate_transaction(tx, &mut ivm_cache).1
+                    state_block
+                        .validate_transaction_with_routing_context(
+                            tx,
+                            &mut ivm_cache,
+                            routing_decisions[idx],
+                        )
+                        .1
                 };
                 ordered_results.push(result);
             }
@@ -10183,6 +10203,10 @@ pub(crate) mod valid {
             mut block: SignedBlock,
             state_block: &mut StateBlock<'_>,
         ) -> WithEvents<ValidBlock> {
+            assert!(
+                block.header().is_genesis() || signed_block_entrypoints_are_canonical(&block),
+                "unchecked block payload is not in canonical transaction entrypoint order"
+            );
             let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
             Self::validate_and_record_transactions(&mut block, state_block, None, false);
             if let Err(error) = validate_axt_envelopes(&block, state_block) {
@@ -10528,8 +10552,10 @@ pub(crate) mod valid {
 
         use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, Signature, SignatureOf};
         use iroha_data_model::{
-            Registrable,
+            HasMetadata, Registrable,
+            asset::{AssetDefinition, AssetDefinitionId, definition::AssetConfidentialPolicy},
             block::error::BlockRejectionReason as Reason,
+            confidential::ConfidentialStatus,
             consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
             da::{
                 commitment::{
@@ -10538,12 +10564,20 @@ pub(crate) mod valid {
                 },
                 types::{BlobDigest, StorageTicketId},
             },
+            domain::DomainId,
             isi::{Log, error::Mismatch},
+            kaigi::{
+                KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
+                KaigiRoomPolicy, kaigi_metadata_key,
+            },
+            metadata::Metadata,
+            name::Name,
             nexus::{
                 DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
             },
             parameter::Parameters,
             prelude::{Account, Domain, PeerId},
+            proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
             soracloud::{
                 SORA_STATE_BINDING_VERSION_V1, SoraCapabilityPolicyV1,
                 SoraCertifiedResponsePolicyV1, SoraContainerManifestRefV1, SoraContainerManifestV1,
@@ -10556,7 +10590,12 @@ pub(crate) mod valid {
                 SoraStateMutationOperationV1,
             },
             sorafs::pin_registry::ManifestDigest,
-            transaction::{TransactionBuilder, error::TransactionLimitError},
+            transaction::{
+                PrivateCreateKaigi, PrivateKaigiAction, PrivateKaigiArtifacts,
+                PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction,
+                TransactionBuilder, TransactionEntrypoint, error::TransactionLimitError,
+            },
+            zk::{BackendTag, OpenVerifyEnvelope},
         };
         use iroha_logger::Level;
         use iroha_primitives::time::TimeSource;
@@ -10577,7 +10616,7 @@ pub(crate) mod valid {
                 SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind,
                 SoracloudRuntimeReadHandle, SoracloudRuntimeSnapshot,
             },
-            state::{State, World},
+            state::{State, World, ZkAssetState, ZkAssetVerifierBinding},
             sumeragi::network_topology::{Topology, test_topology_with_keys},
             tx::AcceptedTransaction,
         };
@@ -11094,6 +11133,226 @@ pub(crate) mod valid {
             kura.store_block(committed.clone())
                 .expect("store committed block");
             committed.as_ref().hash()
+        }
+
+        fn private_kaigi_fee_asset_id() -> AssetDefinitionId {
+            AssetDefinitionId::new(
+                DomainId::parse_fully_qualified("universal.universal").expect("default XOR domain"),
+                Name::from_str("xor").expect("default XOR asset name"),
+            )
+        }
+
+        fn bind_private_kaigi_fee_proof(tx: &mut PrivateKaigiTransaction, fee_amount: &str) {
+            let aux = format!(
+                "{{\"schema\":\"iroha.private_kaigi.fee.v1\",\"action_hash_hex\":\"{}\",\"chain_id\":\"{}\",\"asset_definition_id\":\"{}\",\"fee_amount\":\"{}\"}}",
+                hex::encode(tx.action_hash().as_ref()),
+                tx.chain,
+                tx.fee_spend.asset_definition_id,
+                fee_amount,
+            );
+            let mut envelope = OpenVerifyEnvelope::new(
+                BackendTag::Unsupported,
+                "debug-ok-private-kaigi-fee",
+                [0; 32],
+                Vec::new(),
+                vec![0xA5],
+            );
+            envelope.aux = aux.into_bytes();
+            tx.fee_spend.proof =
+                norito::to_bytes(&envelope).expect("private Kaigi fee proof envelope encodes");
+        }
+
+        fn valid_private_kaigi_transaction(
+            chain: ChainId,
+            kaigi_domain: DomainId,
+            anchor_root: [u8; 32],
+        ) -> PrivateKaigiTransaction {
+            let fee_asset_id = private_kaigi_fee_asset_id();
+            let mut tx = PrivateKaigiTransaction {
+                chain,
+                creation_time_ms: 42,
+                nonce: Some(NonZeroU32::new(7).expect("nonce")),
+                metadata: Metadata::default(),
+                action: PrivateKaigiAction::Create(PrivateCreateKaigi {
+                    call: PrivateKaigiTemplate {
+                        id: KaigiId::new(
+                            kaigi_domain,
+                            Name::from_str("private-room").expect("call name"),
+                        ),
+                        title: None,
+                        description: None,
+                        max_participants: Some(4),
+                        gas_rate_per_minute: 25,
+                        metadata: Metadata::default(),
+                        scheduled_start_ms: None,
+                        privacy_mode: KaigiPrivacyMode::ZkRosterV1,
+                        room_policy: KaigiRoomPolicy::Authenticated,
+                        relay_manifest: None,
+                    },
+                }),
+                artifacts: PrivateKaigiArtifacts {
+                    commitment: KaigiParticipantCommitment {
+                        commitment: Hash::new(b"host-commitment"),
+                        alias_tag: Some("host".to_owned()),
+                    },
+                    nullifier: KaigiParticipantNullifier {
+                        digest: Hash::new(b"private-kaigi-nullifier"),
+                        issued_at_ms: 42,
+                    },
+                    roster_root: kaigi_zk::empty_roster_root_hash(),
+                    proof: vec![0xAA, 0xBB, 0xCC],
+                },
+                fee_spend: PrivateKaigiFeeSpend {
+                    asset_definition_id: fee_asset_id,
+                    anchor_root: Hash::prehashed(anchor_root),
+                    nullifiers: vec![[0x11; 32]],
+                    output_commitments: vec![[0x22; 32]],
+                    encrypted_change_payloads: vec![vec![0x33, 0x44]],
+                    proof: Vec::new(),
+                },
+            };
+            bind_private_kaigi_fee_proof(&mut tx, "0");
+            tx
+        }
+
+        fn seed_private_kaigi_fee_asset(world: &mut World, anchor_root: [u8; 32]) {
+            let fee_asset_id = private_kaigi_fee_asset_id();
+            let vk_box =
+                VerifyingKeyBox::new("debug/ok".to_owned(), b"private-kaigi-fee-vk".to_vec());
+            let vk_commitment = crate::zk::hash_vk(&vk_box);
+            let vk_id = VerifyingKeyId::new("debug/ok".to_owned(), "private-kaigi-fee-transfer");
+            let mut vk_record = VerifyingKeyRecord::new_with_owner(
+                1,
+                "debug-ok-private-kaigi-fee",
+                None,
+                "core",
+                BackendTag::Unsupported,
+                "debug",
+                [0; 32],
+                vk_commitment,
+            );
+            vk_record.vk_len =
+                u32::try_from(vk_box.bytes.len()).expect("fixture VK length fits u32");
+            vk_record.max_proof_bytes = u32::MAX;
+            vk_record.key = Some(vk_box);
+            vk_record.status = ConfidentialStatus::Active;
+            world.verifying_keys.insert(vk_id.clone(), vk_record);
+
+            let mut zk_asset = ZkAssetState::default();
+            zk_asset
+                .root_history
+                .push(Hash::prehashed(anchor_root).into());
+            zk_asset.vk_transfer = Some(ZkAssetVerifierBinding {
+                id: vk_id,
+                commitment: vk_commitment,
+            });
+            world.zk_assets.insert(fee_asset_id, zk_asset);
+        }
+
+        #[test]
+        fn validate_keep_voting_block_executes_private_kaigi_entrypoint() {
+            let key_pairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+            let topology = test_topology_with_keys(&key_pairs);
+            let leader = &key_pairs[0];
+            let chain_id = ChainId::from("private-kaigi-chain");
+            let kaigi_domain = DomainId::try_new("kaigi", "universal").expect("kaigi domain");
+            let universal_domain =
+                DomainId::parse_fully_qualified("universal.universal").expect("universal domain");
+            let (owner, _) = gen_account_in("kaigi-owner");
+            let anchor_root = [0x44; 32];
+            let fee_asset_definition = AssetDefinition::numeric(private_kaigi_fee_asset_id())
+                .confidential_policy(AssetConfidentialPolicy::shielded_only())
+                .build(&owner);
+            let mut world = World::with(
+                [
+                    Domain::new(kaigi_domain.clone()).build(&owner),
+                    Domain::new(universal_domain).build(&owner),
+                ],
+                [Account::new(owner).build(&ALICE_ID)],
+                [fee_asset_definition],
+            );
+            seed_private_kaigi_fee_asset(&mut world, anchor_root);
+
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_with_chain_for_testing(
+                world,
+                Arc::clone(&kura),
+                query_handle,
+                chain_id.clone(),
+            );
+            let prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
+            let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(100));
+            let private_tx = valid_private_kaigi_transaction(
+                chain_id.clone(),
+                kaigi_domain.clone(),
+                anchor_root,
+            );
+            let call_name = match &private_tx.action {
+                PrivateKaigiAction::Create(create) => create.call.id.call_name.clone(),
+                PrivateKaigiAction::Join(_) | PrivateKaigiAction::End(_) => {
+                    unreachable!("fixture creates a private Kaigi")
+                }
+            };
+            let accepted = vec![AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
+                TransactionEntrypoint::PrivateKaigi(private_tx),
+            ))];
+            time_handle.advance(Duration::from_millis(1));
+            let latest = state
+                .view()
+                .latest_block()
+                .expect("previous block committed");
+            assert_eq!(latest.hash(), prev_hash);
+            let expected_confidential_features = {
+                let view = state.view();
+                crate::state::compute_confidential_feature_digest(
+                    view.world(),
+                    &state.zk_snapshot(),
+                    2,
+                )
+            };
+            let block = BlockBuilder::new_with_time_source(accepted, time_source.clone())
+                .chain(0, Some(latest.as_ref()))
+                .with_confidential_features(Some(expected_confidential_features))
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let signed: SignedBlock = block.into();
+            let mut voting_block = None;
+
+            let (valid, state_block) = ValidBlock::validate_keep_voting_block(
+                signed,
+                &topology,
+                &chain_id,
+                &ALICE_ID,
+                &time_source,
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {})
+            .expect("private Kaigi block should validate and execute");
+            let tx_result = valid
+                .as_ref()
+                .results()
+                .next()
+                .expect("private Kaigi result recorded");
+            assert!(
+                tx_result.as_ref().is_ok(),
+                "unexpected rejection: {tx_result:?}"
+            );
+            state_block.commit().expect("private Kaigi state commits");
+
+            let view = state.view();
+            let domain = view
+                .world()
+                .domain(&kaigi_domain)
+                .expect("Kaigi domain remains present");
+            let metadata_key = kaigi_metadata_key(&call_name).expect("Kaigi metadata key");
+            assert!(
+                domain.metadata().contains(&metadata_key),
+                "private Kaigi create should store the call record"
+            );
         }
 
         #[test]
@@ -11897,6 +12156,54 @@ pub(crate) mod valid {
             )
             .expect_err("noncanonical transaction order should be rejected");
             assert_eq!(err, BlockValidationError::NonCanonicalTransactionOrder);
+        }
+
+        #[test]
+        #[should_panic(
+            expected = "unchecked block payload is not in canonical transaction entrypoint order"
+        )]
+        fn validate_unchecked_panics_on_noncanonical_non_genesis_payload() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let key_pairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+            let topology = test_topology_with_keys(&key_pairs);
+            let leader = &key_pairs[0];
+            let state = State::new_for_testing(World::new(), Arc::clone(&kura), query);
+
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
+
+            let (alice_id, alice_keypair) = gen_account_in("wonderland");
+            let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+            let tx1 = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                alice_id.clone(),
+                &time_source,
+            )
+            .with_instructions([Log::new(Level::INFO, "first".to_string())])
+            .sign(alice_keypair.private_key());
+            let tx2 = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                alice_id,
+                &time_source,
+            )
+            .with_instructions([Log::new(Level::INFO, "second".to_string())])
+            .sign(alice_keypair.private_key());
+            let mut accepted = vec![
+                AcceptedTransaction::new_unchecked(Cow::Owned(tx1)),
+                AcceptedTransaction::new_unchecked(Cow::Owned(tx2)),
+            ];
+            accepted.sort_by_key(AcceptedTransaction::hash_as_entrypoint);
+            accepted.reverse();
+
+            time_handle.advance(Duration::from_millis(1));
+            let new_block =
+                BlockBuilder::new_preserve_order_with_time_source(accepted, time_source.clone())
+                    .chain(0, state.view().latest_block().as_deref())
+                    .sign(leader.private_key())
+                    .unpack(|_| {});
+            let mut state_block = state.block(new_block.header());
+            let _ = ValidBlock::validate_unchecked(new_block.into(), &mut state_block);
         }
 
         #[test]

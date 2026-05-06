@@ -58,7 +58,7 @@ use crate::{
         extract_authority_domains as extract_directory_authority_domains,
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
-    queue::evaluate_policy_with_catalog_and_world,
+    queue::{RoutingDecision, evaluate_policy_with_catalog_and_world},
     smartcontracts::{Execute, code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
@@ -981,10 +981,14 @@ impl<'tx> AcceptedTransaction<'tx> {
                 },
             ));
         }
-        if tx.fee_spend.asset_definition_id.to_string() != "xor#universal" {
+        if tx.fee_spend.asset_definition_id.to_string()
+            != iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+        {
             return Err(AcceptTransactionFail::TransactionLimit(
                 TransactionLimitError {
-                    reason: "private Kaigi fee spend asset must be xor#universal".into(),
+                    reason:
+                        "private Kaigi fee spend asset must be the canonical xor#universal asset"
+                            .into(),
                 },
             ));
         }
@@ -1105,7 +1109,8 @@ impl<'tx> AcceptedTransaction<'tx> {
         if binding.asset_definition_id != tx.fee_spend.asset_definition_id.to_string() {
             return Err(TransactionRejectionReason::Validation(
                 ValidationFail::NotPermitted(
-                    "private Kaigi fee spend proof is not bound to xor#universal".into(),
+                    "private Kaigi fee spend proof is not bound to the canonical xor#universal asset"
+                        .into(),
                 ),
             ));
         }
@@ -1157,20 +1162,10 @@ impl<'tx> AcceptedTransaction<'tx> {
             Some(tx.fee_spend.anchor_root.into()),
         );
 
-        let fee_payer = crate::smartcontracts::isi::kaigi::private_instruction_box(tx)
-            .ok()
-            .and_then(|_| {
-                let digest = iroha_crypto::Hash::new(tx.action_hash().as_ref());
-                PublicKey::from_bytes(Algorithm::Ed25519, digest.as_ref())
-                    .ok()
-                    .map(AccountId::new)
-            })
-            .unwrap_or_else(|| {
-                let digest = iroha_crypto::Hash::new(tx.action_hash().as_ref());
-                let public_key = PublicKey::from_bytes(Algorithm::Ed25519, digest.as_ref())
-                    .expect("32-byte digest must form an Ed25519 public key");
-                AccountId::new(public_key)
-            });
+        let fee_payer_seed = iroha_crypto::Hash::new(tx.action_hash().as_ref());
+        let fee_payer_keypair =
+            iroha_crypto::KeyPair::from_seed(fee_payer_seed.as_ref().to_vec(), Algorithm::Ed25519);
+        let fee_payer = AccountId::new(fee_payer_keypair.public_key().clone());
 
         transfer
             .execute(&fee_payer, state_transaction)
@@ -2018,6 +2013,30 @@ impl StateBlock<'_> {
         tx: AcceptedTransaction<'_>,
         ivm_cache: &mut IvmCache,
     ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
+        self.validate_transaction_with_optional_routing_context(tx, ivm_cache, None)
+    }
+
+    /// Validate and apply a transaction using a caller-resolved routing context.
+    ///
+    /// This is used by block payload execution paths that already resolved routing from
+    /// embedded execution context. Signed transactions still recompute policy routing in
+    /// [`Self::validate_transaction_internal`] for lane-policy enforcement; authority-free
+    /// entrypoints use this context directly.
+    pub(crate) fn validate_transaction_with_routing_context(
+        &mut self,
+        tx: AcceptedTransaction<'_>,
+        ivm_cache: &mut IvmCache,
+        routing: RoutingDecision,
+    ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
+        self.validate_transaction_with_optional_routing_context(tx, ivm_cache, Some(routing))
+    }
+
+    fn validate_transaction_with_optional_routing_context(
+        &mut self,
+        tx: AcceptedTransaction<'_>,
+        ivm_cache: &mut IvmCache,
+        routing: Option<RoutingDecision>,
+    ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
         // Capture gas accounting inputs up front to avoid borrowing conflicts
         let gas_total_before = self.gas_used_in_block;
         let gas_limit = self.gas_limit_per_block;
@@ -2026,6 +2045,11 @@ impl StateBlock<'_> {
         let proof_bytes_before = self.zk_proof_bytes_in_block;
         let conf_gas_before = self.confidential_gas_used_in_block;
         let mut state_transaction = self.transaction();
+        if let Some(routing) = routing {
+            state_transaction.current_lane_id = Some(routing.lane_id);
+            state_transaction.current_dataspace_id = Some(routing.dataspace_id);
+            state_transaction.world.current_dataspace_id = Some(routing.dataspace_id);
+        }
         let hash = tx.hash_as_entrypoint();
         let result = Self::validate_transaction_internal(tx, &mut state_transaction, ivm_cache);
         if result.is_ok() {
@@ -2249,6 +2273,9 @@ impl StateBlock<'_> {
                 "transaction routing could not be resolved: {err}"
             )))
         })?;
+        state_transaction.current_lane_id = Some(routing_decision.lane_id);
+        state_transaction.current_dataspace_id = Some(routing_decision.dataspace_id);
+        state_transaction.world.current_dataspace_id = Some(routing_decision.dataspace_id);
         let lane_assignment = LaneAssignment {
             lane_id: routing_decision.lane_id,
             dataspace_id: routing_decision.dataspace_id,

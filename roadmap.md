@@ -62,9 +62,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
 - Keep the Sumeragi main-loop broad corridor attached to future consensus
   changes.
   - The 2026-05-06 canonical proposal/block entrypoint-ordering fix is covered
-    by focused ordering, mixed-entrypoint builder, rejection mapping, and
-    noncanonical static-validation regressions. Rerun the full
-    `cargo test -p iroha_core --lib` corridor before the next consensus sweep.
+    by focused ordering, mixed-entrypoint builder, rejection mapping,
+    noncanonical static/unchecked-validation, and PrivateKaigi entrypoint
+    execution regressions. Rerun the full `cargo test -p iroha_core --lib`
+    corridor before the next consensus sweep.
   - The 2026-05-03 `cargo test -p iroha_core --lib` rerun is green
     (`5129` passed, `22` ignored) after fixing execution-witness recorder
     isolation and hardening the RBC sidecar cooldown fixture.

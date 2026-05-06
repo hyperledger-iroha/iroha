@@ -16,13 +16,25 @@ Last updated: 2026-05-06
   PrivateKaigi admission checks. Blocks containing non-signed entrypoints use a
   conservative sequential recording path so result ordering stays aligned with
   serialized entrypoints.
+- The remaining bypass surfaces are closed for non-genesis blocks:
+  preserve-order `BlockBuilder` constructors are test-only, unchecked validation
+  asserts canonical external entrypoint order, and the sequential non-signed
+  execution fallback carries the same routing context that static validation
+  resolved.
+- PrivateKaigi fee and opaque-authority execution now derives deterministic
+  Ed25519 accounts from seeds instead of interpreting arbitrary digest bytes as
+  public keys. The focused block regression executes a PrivateKaigi entrypoint
+  through `validate_keep_voting_block` and commits the resulting Kaigi state.
 - Validation:
   - `cargo fmt --all --check`
   - `cargo check -p iroha_core --lib`
-  - `cargo test -p iroha_core block_builder_orders_mixed_entrypoints_without_signed_downcast -- --nocapture`
-  - `cargo test -p iroha_core canonicalize_proposal_batch_keeps_routing_aligned_with_transaction_order -- --nocapture`
-  - `cargo test -p iroha_core maps_block_validation_errors -- --nocapture`
-  - `cargo test -p iroha_core validate_static_snapshot_rejects_noncanonical_transaction_order -- --nocapture`
+  - `cargo test -p iroha_core --lib block_builder_orders_mixed_entrypoints_without_signed_downcast -- --nocapture`
+  - `cargo test -p iroha_core --lib canonicalize_proposal_batch_keeps_routing_aligned_with_transaction_order -- --nocapture`
+  - `cargo test -p iroha_core --lib maps_block_validation_errors -- --nocapture`
+  - `cargo test -p iroha_core --lib validate_static_snapshot_rejects_noncanonical_transaction_order -- --nocapture`
+  - `cargo test -p iroha_core --lib validate_unchecked_panics_on_noncanonical_non_genesis_payload -- --nocapture`
+  - `cargo test -p iroha_core --lib validate_keep_voting_block_executes_private_kaigi_entrypoint -- --nocapture`
+  - `cargo test -p iroha_core --lib opaque_account_from_seed_accepts_arbitrary_digest_bytes -- --nocapture`
 
 ## 2026-05-05 Durable Space Directory snapshot restore
 

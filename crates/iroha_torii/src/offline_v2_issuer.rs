@@ -372,6 +372,17 @@ pub(crate) async fn handle_audit(
         body.as_ref(),
         ENDPOINT_AUDIT,
     )?;
+    if parsed
+        .value
+        .get("payment_tokens")
+        .and_then(Value::as_array)
+        .is_some_and(|tokens| !tokens.is_empty())
+    {
+        return Err(validation(
+            "OFFLINE_AUDIT_TORII_ISSUER_UNAVAILABLE",
+            "Offline Notes V2 audit payment-token submission is not implemented by this Torii issuer; route audit mutations through the Core API issuer.",
+        ));
+    }
     let accepted_receipt_ids = parsed
         .value
         .get("receipts")
