@@ -36925,7 +36925,9 @@ impl IntoResponse for Error {
 
                 if matches!(
                     source.as_ref(),
-                    queue::Error::Full | queue::Error::MaximumTransactionsPerUser
+                    queue::Error::Full
+                        | queue::Error::MaximumTransactionsPerUser
+                        | queue::Error::IngressBackpressure { .. }
                 ) {
                     headers.insert("Retry-After", HeaderValue::from_static("1"));
                 }
@@ -39165,7 +39167,7 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn handler_post_transaction_allows_enqueue_when_queue_age_saturates() {
+    async fn handler_post_transaction_rejects_when_queue_age_saturates() {
         let mut app = mk_app_state_for_tests();
         Arc::get_mut(&mut app)
             .expect("unique app state")
@@ -39205,16 +39207,32 @@ pub(crate) mod tests_runtime_handlers {
             "age saturation should still be observable"
         );
 
-        let second = super::handler_post_transaction(
+        let second = match super::handler_post_transaction(
             State(app.clone()),
             HeaderMap::new(),
             NoritoVersioned(tx2),
         )
         .await
-        .expect("second transaction should not be age-shed")
-        .into_response();
-        assert_eq!(second.status(), StatusCode::ACCEPTED);
-        assert_eq!(app.queue.active_len(), 2);
+        {
+            Ok(_) => panic!("second transaction should be rejected while local queue is stale"),
+            Err(err) => err.into_response(),
+        };
+        assert_eq!(second.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            second
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("PRTRY:QUEUE_BACKPRESSURE")
+        );
+        assert_eq!(
+            second
+                .headers()
+                .get("Retry-After")
+                .and_then(|value| value.to_str().ok()),
+            Some("1")
+        );
+        assert_eq!(app.queue.active_len(), 1);
     }
 
     #[tokio::test]
@@ -52523,6 +52541,38 @@ pub(crate) mod tests_runtime_handlers {
         );
     }
 
+    #[test]
+    fn push_into_queue_ingress_backpressure_maps_to_retryable_unavailable() {
+        use nonzero_ext::nonzero;
+
+        let err = super::Error::PushIntoQueue {
+            source: Box::new(queue::Error::IngressBackpressure {
+                reason: "local queue is latency-saturated".to_owned(),
+            }),
+            backpressure: queue::BackpressureState::Saturated {
+                queued: 3,
+                capacity: nonzero!(32_usize),
+            },
+        };
+
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|v| v.to_str().ok()),
+            Some("PRTRY:QUEUE_BACKPRESSURE")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("Retry-After")
+                .and_then(|v| v.to_str().ok()),
+            Some("1")
+        );
+    }
+
     #[tokio::test]
     async fn serialization_error_emits_redacted_norito_payload() {
         let err = super::Error::SerializationFailure {
@@ -52688,6 +52738,13 @@ mod tests_queue_metadata {
                 queue::Error::MaximumTransactionsPerUser,
                 "PRTRY:QUEUE_RATE",
                 "authority reached per-user queue capacity",
+            ),
+            (
+                queue::Error::IngressBackpressure {
+                    reason: "oldest queued transaction exceeded liveness budget".to_owned(),
+                },
+                "PRTRY:QUEUE_BACKPRESSURE",
+                "oldest queued transaction exceeded liveness budget",
             ),
             (
                 queue::Error::Expired,
@@ -52912,6 +52969,7 @@ impl Error {
             queue::Error::Full | queue::Error::MaximumTransactionsPerUser => {
                 StatusCode::TOO_MANY_REQUESTS
             }
+            queue::Error::IngressBackpressure { .. } => StatusCode::SERVICE_UNAVAILABLE,
             queue::Error::Expired => StatusCode::BAD_REQUEST,
             queue::Error::UnresolvedRoute { .. } => StatusCode::BAD_REQUEST,
             queue::Error::InBlockchain => StatusCode::CONFLICT,
@@ -52933,6 +52991,10 @@ impl Error {
             queue::Error::MaximumTransactionsPerUser => (
                 "per_user_queue_limit",
                 "authority reached its per-user queue capacity",
+            ),
+            queue::Error::IngressBackpressure { .. } => (
+                "queue_ingress_backpressure",
+                "local transaction queue is latency-saturated; retry another peer",
             ),
             queue::Error::Expired => (
                 "transaction_expired",
@@ -52984,7 +53046,9 @@ impl Error {
         let (code, message) = Self::queue_error_summary(err);
         let saturated = backpressure.is_saturated();
         let retry_after_seconds = match err {
-            queue::Error::Full | queue::Error::MaximumTransactionsPerUser => Some(1),
+            queue::Error::Full
+            | queue::Error::MaximumTransactionsPerUser
+            | queue::Error::IngressBackpressure { .. } => Some(1),
             _ => None,
         };
         QueueErrorEnvelope {
@@ -53045,6 +53109,9 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
             "PRTRY:QUEUE_RATE",
             "authority reached per-user queue capacity".to_owned(),
         ),
+        queue::Error::IngressBackpressure { reason } => {
+            ("PRTRY:QUEUE_BACKPRESSURE", reason.clone())
+        }
         queue::Error::Expired => ("ED07", "transaction expired before admission".to_owned()),
         queue::Error::UnresolvedRoute { reason } => (
             "PRTRY:ROUTE_UNRESOLVED",

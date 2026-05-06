@@ -1,6 +1,6 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-05-04
+Last updated: 2026-05-06
 
 Completed history lives in `status.md`. This file should only track unfinished work.
 
@@ -61,6 +61,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - Once the alias lease slice is stable under those focused reruns, fold it into the next broader `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings` corridor.
 - Keep the Sumeragi main-loop broad corridor attached to future consensus
   changes.
+  - The 2026-05-06 canonical proposal/block entrypoint-ordering fix is covered
+    by focused ordering, mixed-entrypoint builder, rejection mapping, and
+    noncanonical static-validation regressions. Rerun the full
+    `cargo test -p iroha_core --lib` corridor before the next consensus sweep.
   - The 2026-05-03 `cargo test -p iroha_core --lib` rerun is green
     (`5129` passed, `22` ignored) after fixing execution-witness recorder
     isolation and hardening the RBC sidecar cooldown fixture.

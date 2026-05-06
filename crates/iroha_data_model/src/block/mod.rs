@@ -687,6 +687,8 @@ pub mod error {
             PrevBlockHeightMismatch,
             /// Merkle root of block contents is invalid.
             MerkleRootMismatch,
+            /// Block transaction entrypoints are not in canonical order.
+            NonCanonicalTransactionOrder,
             /// Transaction in the block failed admission or validation.
             TransactionValidationFailed,
             /// Block signatures do not match current topology.
@@ -743,6 +745,9 @@ pub mod error {
                 }
                 BlockRejectionReason::MerkleRootMismatch => {
                     norito::json::write_json_string("MerkleRootMismatch", out);
+                }
+                BlockRejectionReason::NonCanonicalTransactionOrder => {
+                    norito::json::write_json_string("NonCanonicalTransactionOrder", out);
                 }
                 BlockRejectionReason::TransactionValidationFailed => {
                     norito::json::write_json_string("TransactionValidationFailed", out);
@@ -811,6 +816,9 @@ pub mod error {
                 "PrevBlockHashMismatch" => Ok(BlockRejectionReason::PrevBlockHashMismatch),
                 "PrevBlockHeightMismatch" => Ok(BlockRejectionReason::PrevBlockHeightMismatch),
                 "MerkleRootMismatch" => Ok(BlockRejectionReason::MerkleRootMismatch),
+                "NonCanonicalTransactionOrder" => {
+                    Ok(BlockRejectionReason::NonCanonicalTransactionOrder)
+                }
                 "TransactionValidationFailed" => {
                     Ok(BlockRejectionReason::TransactionValidationFailed)
                 }
@@ -860,6 +868,9 @@ impl fmt::Display for error::BlockRejectionReason {
                 f.write_str("Previous block height mismatch")
             }
             error::BlockRejectionReason::MerkleRootMismatch => f.write_str("Merkle root mismatch"),
+            error::BlockRejectionReason::NonCanonicalTransactionOrder => {
+                f.write_str("Block transaction entrypoints are not in canonical order")
+            }
             error::BlockRejectionReason::TransactionValidationFailed => {
                 f.write_str("Transaction validation failed during block processing")
             }

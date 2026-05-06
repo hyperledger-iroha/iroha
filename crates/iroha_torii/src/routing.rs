@@ -10398,14 +10398,14 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing(
             .effective_block_time();
         queue.refresh_pressure_budget_from_block_time(block_time)
     };
-    if pressure.saturated_by_age {
+    if pressure.saturated_by_age && !pressure.saturated_by_count {
         iroha_logger::debug!(
             tx_hash = %accepted_tx.hash(),
             queued = pressure.queued_tx_count,
             tracked = pressure.tracked_tx_count,
             capacity = pressure.capacity.get(),
             oldest_queued_tx_age_ms = pressure.oldest_queued_tx_age_ms,
-            "accepting transaction ingress while local queue is latency-saturated"
+            "transaction queue age liveness budget exceeded; accepting ingress because count capacity is healthy"
         );
     }
 
@@ -49171,7 +49171,7 @@ mod transaction_ingress_overload_tests {
     }
 
     #[tokio::test]
-    async fn transaction_ingress_accepts_latency_saturated_queue_before_capacity() {
+    async fn transaction_ingress_accepts_aged_queue_before_capacity() {
         let state = Arc::new(State::new_for_testing(
             World::default(),
             Kura::blank_kura_for_testing(),
@@ -49200,6 +49200,16 @@ mod transaction_ingress_overload_tests {
 
         queue.backdate_queued_transactions_for_tests(Duration::from_secs(3));
 
+        let pressure = queue.pressure_snapshot();
+        assert!(
+            pressure.saturated_by_age,
+            "test setup should trip the age liveness signal"
+        );
+        assert!(
+            !pressure.into_backpressure().is_saturated(),
+            "age pressure alone must not become admission backpressure"
+        );
+
         let second = signed_log_transaction(&chain_id, &KeyPair::random(), "second");
         handle_transaction(
             Arc::clone(&chain_id),
@@ -49208,12 +49218,12 @@ mod transaction_ingress_overload_tests {
             second,
         )
         .await
-        .expect("latency-saturated queue should still accept until capacity");
+        .expect("aged queue below capacity should still accept direct ingress");
 
         let backpressure = queue.current_backpressure();
         assert!(
-            backpressure.is_saturated(),
-            "latency saturation must remain visible as backpressure telemetry"
+            !backpressure.is_saturated(),
+            "age pressure alone must not remain visible as admission backpressure"
         );
         assert_eq!(backpressure.queued(), 2);
         assert_eq!(backpressure.capacity().get(), 32);

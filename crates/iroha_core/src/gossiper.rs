@@ -33,7 +33,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     IrohaNetwork, NetworkMessage,
-    queue::{GossipBatchEntry, Queue, RoutingDecision},
+    queue::{GossipBatchEntry, Queue, QueuePressureSnapshot, RoutingDecision},
     state::{State, TransactionsReadOnly},
     tx::AcceptedTransaction,
 };
@@ -519,8 +519,12 @@ impl TransactionGossiper {
     fn gossip_transactions(&mut self) {
         let now = Instant::now();
         let queue_active_len = self.queue.active_len();
-        let targeted_backlog_active =
-            Self::targeted_backlog_requires_gossip(self.gossip_size, queue_active_len);
+        let queue_pressure = self.queue.pressure_snapshot();
+        let targeted_backlog_active = Self::queue_liveness_pressure_requires_gossip(
+            self.gossip_size,
+            queue_active_len,
+            queue_pressure,
+        );
         if self.gossip_backpressure_active(now) && !targeted_backlog_active {
             iroha_logger::trace!(
                 drops = self.last_drop_count,
@@ -532,10 +536,13 @@ impl TransactionGossiper {
         if targeted_backlog_active && self.last_drop_at.is_some() {
             iroha_logger::debug!(
                 queue_active_len,
+                queue_queued_len = queue_pressure.queued_tx_count,
+                queue_oldest_age_ms = queue_pressure.oldest_queued_tx_age_ms,
+                queue_saturated_by_age = queue_pressure.saturated_by_age,
                 gossip_size = self.gossip_size.get(),
                 drops = self.last_drop_count,
                 cooldown_ms = self.backpressure_cooldown().as_millis(),
-                "transaction gossiper continuing under targeted backlog despite relay backpressure"
+                "transaction gossiper continuing under queue liveness pressure despite relay backpressure"
             );
         }
         self.expire_peer_recent_suppression();
@@ -1109,6 +1116,15 @@ impl TransactionGossiper {
     fn targeted_backlog_requires_gossip(gossip_size: NonZeroU32, queue_active_len: usize) -> bool {
         let backlog_threshold = (gossip_size.get() as usize).saturating_mul(2);
         queue_active_len >= backlog_threshold
+    }
+
+    fn queue_liveness_pressure_requires_gossip(
+        gossip_size: NonZeroU32,
+        queue_active_len: usize,
+        queue_pressure: QueuePressureSnapshot,
+    ) -> bool {
+        Self::targeted_backlog_requires_gossip(gossip_size, queue_active_len)
+            || queue_pressure.saturated_by_age
     }
 
     fn seed_for_plane(seed: u64, dataspace_id: DataSpaceId, domain: u64) -> u64 {
@@ -3890,6 +3906,24 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             gossip_size,
             16
         ));
+    }
+
+    #[test]
+    fn latency_saturated_queue_keeps_gossip_active_below_count_threshold() {
+        let gossip_size = NonZeroU32::new(8).expect("non-zero gossip size");
+        let pressure = QueuePressureSnapshot {
+            tracked_tx_count: 1,
+            queued_tx_count: 1,
+            capacity: NonZeroUsize::new(32).expect("non-zero capacity"),
+            oldest_queued_tx_age_ms: 3_000,
+            saturated_by_count: false,
+            saturated_by_age: true,
+        };
+
+        assert!(
+            TransactionGossiper::queue_liveness_pressure_requires_gossip(gossip_size, 1, pressure),
+            "old queued transactions must keep gossip active even when the queue count is small"
+        );
     }
 
     #[test]

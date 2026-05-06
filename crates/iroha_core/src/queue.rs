@@ -325,15 +325,18 @@ pub struct QueuePressureSnapshot {
     pub oldest_queued_tx_age_ms: u64,
     /// Whether the queue saturated because the tracked count hit capacity.
     pub saturated_by_count: bool,
-    /// Whether the queue saturated because the oldest queued age exceeded the budget.
+    /// Whether the oldest queued age exceeded the liveness budget.
+    ///
+    /// This keeps gossip/recovery diagnostics active for old queued transactions,
+    /// but does not by itself mean transaction admission should be throttled.
     pub saturated_by_age: bool,
 }
 
 impl QueuePressureSnapshot {
-    /// Whether either saturation signal is active.
+    /// Whether queue admission should be considered saturated.
     #[must_use]
     pub const fn is_saturated(self) -> bool {
-        self.saturated_by_count || self.saturated_by_age
+        self.saturated_by_count
     }
 
     /// Convert the richer pressure snapshot into the coarse backpressure state.
@@ -364,7 +367,7 @@ pub enum BackpressureState {
         /// Maximum queue capacity configured for the peer.
         capacity: NonZeroUsize,
     },
-    /// Queue exceeded a capacity or latency budget; callers should defer submissions.
+    /// Queue reached capacity; callers should defer submissions.
     Saturated {
         /// Number of transactions still waiting in the queue when saturation triggered.
         queued: usize,
@@ -460,6 +463,11 @@ impl BackpressureHandle {
 pub enum Error {
     /// Queue is full
     Full,
+    /// Local queue is under explicit ingress backpressure; transaction ingress should retry another peer: {reason}
+    IngressBackpressure {
+        /// Reason describing the backpressure signal.
+        reason: String,
+    },
     /// Transaction expired
     Expired,
     /// Transaction is already applied
@@ -623,7 +631,7 @@ impl Queue {
         }
     }
 
-    fn compute_tx_encoded_len(tx: &AcceptedTransaction<'_>) -> usize {
+    pub(crate) fn compute_tx_encoded_len(tx: &AcceptedTransaction<'_>) -> usize {
         match tx.entrypoint() {
             iroha_data_model::transaction::TransactionEntrypoint::External(signed) => signed
                 .encoded_len_exact()
@@ -8365,7 +8373,7 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn backpressure_state_saturates_on_oldest_queue_age() {
+    async fn queue_age_pressure_does_not_saturate_backpressure() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
@@ -8382,7 +8390,7 @@ pub mod tests {
         let snapshot = queue.pressure_snapshot();
         assert!(!snapshot.saturated_by_count);
         assert!(snapshot.saturated_by_age);
-        assert!(queue.current_backpressure().is_saturated());
+        assert!(!queue.current_backpressure().is_saturated());
     }
 
     #[tokio::test]
@@ -8402,7 +8410,7 @@ pub mod tests {
 
         assert_eq!(snapshot.oldest_queued_tx_age_ms, 6);
         assert!(snapshot.saturated_by_age);
-        assert!(queue.current_backpressure().is_saturated());
+        assert!(!queue.current_backpressure().is_saturated());
     }
 
     #[tokio::test]

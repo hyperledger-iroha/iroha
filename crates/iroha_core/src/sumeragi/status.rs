@@ -3250,6 +3250,8 @@ struct WorkerQueueIngressEntry {
 pub struct WorkerQueueIngressSnapshot {
     /// Queue depths for messages matching the snapshot scope.
     pub queue_depths: WorkerQueueDepthSnapshot,
+    /// Semantic ingress-class depths for messages matching the snapshot scope.
+    pub class_depths: WorkerQueueIngressClassSnapshot,
     /// Oldest queued ingress age in milliseconds.
     pub oldest_age_ms: Option<u64>,
     /// Slot of the oldest queued ingress.
@@ -3260,6 +3262,21 @@ pub struct WorkerQueueIngressSnapshot {
     pub oldest_kind: Option<ConsensusMessageKind>,
     /// Block hash for the oldest queued ingress when available.
     pub oldest_block_hash: Option<HashOf<BlockHeader>>,
+}
+
+/// Semantic classes for slot-scoped consensus ingress accounting.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WorkerQueueIngressClassSnapshot {
+    /// Proposal headers, hints, and certificates that can make a same-slot branch viable.
+    pub proposal_evidence_rx: u64,
+    /// Payload/body availability messages for a same-slot branch.
+    pub availability_rx: u64,
+    /// Body repair requests that indicate peer-side recovery for a same-slot branch.
+    pub body_repair_rx: u64,
+    /// Vote messages that can complete or redirect a same-slot branch.
+    pub vote_evidence_rx: u64,
+    /// Other tracked consensus ingress.
+    pub other_rx: u64,
 }
 
 /// Per-queue totals for enqueue diagnostics.
@@ -7550,6 +7567,44 @@ fn increment_queue_depth(depths: &mut WorkerQueueDepthSnapshot, queue: WorkerQue
     }
 }
 
+fn increment_ingress_class_depth(
+    depths: &mut WorkerQueueIngressClassSnapshot,
+    kind: ConsensusMessageKind,
+) {
+    match kind {
+        ConsensusMessageKind::ProposalHint
+        | ConsensusMessageKind::Proposal
+        | ConsensusMessageKind::Qc => {
+            depths.proposal_evidence_rx = depths.proposal_evidence_rx.saturating_add(1);
+        }
+        ConsensusMessageKind::BlockCreated
+        | ConsensusMessageKind::BlockSyncUpdate
+        | ConsensusMessageKind::BlockBodyResponse
+        | ConsensusMessageKind::ExecWitness
+        | ConsensusMessageKind::RbcInit
+        | ConsensusMessageKind::RbcChunk
+        | ConsensusMessageKind::RbcReady
+        | ConsensusMessageKind::RbcDeliver => {
+            depths.availability_rx = depths.availability_rx.saturating_add(1);
+        }
+        ConsensusMessageKind::FetchBlockBody
+        | ConsensusMessageKind::RbcInitRequest
+        | ConsensusMessageKind::RbcChunkRequest
+        | ConsensusMessageKind::FetchPendingBlock => {
+            depths.body_repair_rx = depths.body_repair_rx.saturating_add(1);
+        }
+        ConsensusMessageKind::QcVote => {
+            depths.vote_evidence_rx = depths.vote_evidence_rx.saturating_add(1);
+        }
+        ConsensusMessageKind::ConsensusParams
+        | ConsensusMessageKind::VrfCommit
+        | ConsensusMessageKind::VrfReveal
+        | ConsensusMessageKind::Evidence => {
+            depths.other_rx = depths.other_rx.saturating_add(1);
+        }
+    }
+}
+
 fn worker_queue_ingress_snapshot_from_entries(
     entries: impl Iterator<Item = (WorkerQueueSlot, WorkerQueueIngressEntry)>,
 ) -> WorkerQueueIngressSnapshot {
@@ -7558,6 +7613,7 @@ fn worker_queue_ingress_snapshot_from_entries(
     let mut oldest: Option<(WorkerQueueSlot, WorkerQueueIngressEntry)> = None;
     for (slot, entry) in entries {
         increment_queue_depth(&mut snapshot.queue_depths, entry.queue);
+        increment_ingress_class_depth(&mut snapshot.class_depths, entry.kind);
         if oldest
             .as_ref()
             .is_none_or(|(_, current)| entry.enqueued_at < current.enqueued_at)
@@ -7767,6 +7823,52 @@ pub(crate) fn worker_queue_height_ingress_snapshot(height: u64) -> WorkerQueueIn
             .filter(move |(slot, _)| slot.height == height)
             .flat_map(|(slot, entries)| entries.iter().cloned().map(move |entry| (*slot, entry))),
     )
+}
+
+pub(crate) fn prune_worker_queue_slot_ingress_older_than(max_age: Duration) -> usize {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&WORKER_QUEUE_TEST_LOCK) else {
+        return 0;
+    };
+
+    if max_age == Duration::ZERO {
+        return 0;
+    }
+    let now = Instant::now();
+    let mut guard = worker_queue_slot_ingress()
+        .lock()
+        .expect("worker queue slot ingress lock poisoned");
+    let mut pruned = 0usize;
+    guard.retain(|_, entries| {
+        let before = entries.len();
+        entries.retain(|entry| now.saturating_duration_since(entry.enqueued_at) <= max_age);
+        pruned = pruned.saturating_add(before.saturating_sub(entries.len()));
+        !entries.is_empty()
+    });
+    pruned
+}
+
+#[cfg(test)]
+pub(crate) fn backdate_worker_queue_slot_ingress_for_tests(
+    height: u64,
+    view: u64,
+    age: Duration,
+) -> usize {
+    let Some(_guard) = try_reentrant_test_guard(&WORKER_QUEUE_TEST_LOCK) else {
+        return 0;
+    };
+
+    let enqueued_at = Instant::now().checked_sub(age).unwrap_or_else(Instant::now);
+    let mut guard = worker_queue_slot_ingress()
+        .lock()
+        .expect("worker queue slot ingress lock poisoned");
+    let Some(entries) = guard.get_mut(&WorkerQueueSlot::new(height, view)) else {
+        return 0;
+    };
+    for entry in entries.iter_mut() {
+        entry.enqueued_at = enqueued_at;
+    }
+    entries.len()
 }
 
 fn commit_inflight_hash_slot() -> &'static Mutex<Option<UntypedHash>> {
@@ -10020,6 +10122,9 @@ mod tests {
         let slot_snapshot = super::worker_queue_slot_ingress_snapshot(7, 2);
         assert_eq!(slot_snapshot.queue_depths.block_payload_rx, 1);
         assert_eq!(slot_snapshot.queue_depths.vote_rx, 0);
+        assert_eq!(slot_snapshot.class_depths.proposal_evidence_rx, 1);
+        assert_eq!(slot_snapshot.class_depths.availability_rx, 0);
+        assert_eq!(slot_snapshot.class_depths.vote_evidence_rx, 0);
         assert_eq!(
             slot_snapshot.oldest_slot,
             Some(super::WorkerQueueSlot::new(7, 2))
@@ -10034,6 +10139,8 @@ mod tests {
         let height_snapshot = super::worker_queue_height_ingress_snapshot(7);
         assert_eq!(height_snapshot.queue_depths.block_payload_rx, 1);
         assert_eq!(height_snapshot.queue_depths.vote_rx, 0);
+        assert_eq!(height_snapshot.class_depths.proposal_evidence_rx, 1);
+        assert_eq!(height_snapshot.class_depths.vote_evidence_rx, 0);
 
         super::record_worker_queue_drain_with_metadata(
             WorkerQueueKind::BlockPayload,
@@ -10056,6 +10163,36 @@ mod tests {
 
         let slot_snapshot = super::worker_queue_slot_ingress_snapshot(7, 2);
         assert_eq!(slot_snapshot.queue_depths.block_payload_rx, 0);
+        assert_eq!(slot_snapshot.oldest_slot, None);
+        super::reset_worker_loop_snapshot_for_tests();
+    }
+
+    #[test]
+    fn worker_queue_ingress_prune_removes_stale_scoped_metadata() {
+        let _guard = super::worker_queue_test_guard();
+        super::reset_worker_loop_snapshot_for_tests();
+
+        super::record_worker_queue_enqueue_with_metadata(
+            WorkerQueueKind::BlockPayload,
+            super::WorkerQueueIngressMetadata::new(
+                9,
+                3,
+                super::ConsensusMessageKind::Proposal,
+                None,
+            ),
+        );
+        assert_eq!(
+            super::backdate_worker_queue_slot_ingress_for_tests(9, 3, Duration::from_secs(5)),
+            1
+        );
+        assert_eq!(
+            super::prune_worker_queue_slot_ingress_older_than(Duration::from_secs(1)),
+            1
+        );
+
+        let slot_snapshot = super::worker_queue_slot_ingress_snapshot(9, 3);
+        assert_eq!(slot_snapshot.queue_depths.block_payload_rx, 0);
+        assert_eq!(slot_snapshot.class_depths.proposal_evidence_rx, 0);
         assert_eq!(slot_snapshot.oldest_slot, None);
         super::reset_worker_loop_snapshot_for_tests();
     }

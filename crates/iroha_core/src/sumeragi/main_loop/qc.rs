@@ -442,7 +442,7 @@ impl Actor {
         effective
     }
 
-    fn maybe_validate_pending_for_commit_qc(
+    pub(super) fn maybe_validate_pending_for_commit_qc(
         &mut self,
         qc: &crate::sumeragi::consensus::Qc,
         commit_topology: &[PeerId],

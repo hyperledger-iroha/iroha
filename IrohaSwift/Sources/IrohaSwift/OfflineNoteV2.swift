@@ -18,7 +18,6 @@ public enum OfflineNoteV2Error: Error, LocalizedError, Equatable {
     case invalidHashLength(field: String, expected: Int, actual: Int)
     case invalidHash(field: String)
     case invalidCertificateVersion(UInt16)
-    case certificateMustBeOneUse
     case invalidNotePublicKeyLength(expected: Int, actual: Int)
     case invalidIssuerSignatureLength(expected: Int, actual: Int)
     case emptyProofBytes
@@ -39,8 +38,6 @@ public enum OfflineNoteV2Error: Error, LocalizedError, Equatable {
             return "\(field) must be a canonical Iroha hash."
         case let .invalidCertificateVersion(version):
             return "Offline V2 key certificate version must be 2 (found \(version))."
-        case .certificateMustBeOneUse:
-            return "Offline V2 key certificate must be marked one-use."
         case let .invalidNotePublicKeyLength(expected, actual):
             return "Offline V2 note public key must be \(expected) bytes (found \(actual))."
         case let .invalidIssuerSignatureLength(expected, actual):

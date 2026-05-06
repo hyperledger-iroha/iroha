@@ -3817,6 +3817,13 @@ impl Actor {
                             },
                         );
                         self.note_validated_qc_tally(&qc, tally.clone());
+                        if !block_signers.is_empty() {
+                            let _ = self.validate_pending_for_block_sync_commit_qc(
+                                &qc,
+                                topology.as_ref(),
+                                "block_sync_update",
+                            );
+                        }
                         let block_known_for_commit =
                             self.pending
                                 .pending_blocks
@@ -4786,6 +4793,45 @@ impl Actor {
         true
     }
 
+    fn validate_pending_for_block_sync_commit_qc(
+        &mut self,
+        qc: &crate::sumeragi::consensus::Qc,
+        commit_topology: &[PeerId],
+        source: &'static str,
+    ) -> bool {
+        if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+            return false;
+        }
+        {
+            let Some(pending) = self.pending.pending_blocks.get_mut(&qc.subject_block_hash) else {
+                return false;
+            };
+            if pending.height != qc.height
+                || pending.view != qc.view
+                || pending.is_retry_aborted()
+                || matches!(pending.validation_status, ValidationStatus::Invalid)
+            {
+                return false;
+            }
+            pending.note_commit_qc_observed(qc.epoch);
+            if matches!(pending.validation_status, ValidationStatus::Valid) {
+                return true;
+            }
+        }
+
+        let validated = self.maybe_validate_pending_for_commit_qc(qc, commit_topology);
+        if validated {
+            info!(
+                height = qc.height,
+                view = qc.view,
+                block = %qc.subject_block_hash,
+                source,
+                "validated pending block inline after block-sync commit QC"
+            );
+        }
+        validated
+    }
+
     fn prepare_known_block_qc_work(
         &mut self,
         qc: crate::sumeragi::consensus::Qc,
@@ -5143,6 +5189,7 @@ impl Actor {
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
         let qc_signers = qc_signer_count(&qc);
+        let mut block_signature_evidence_present = cached_tally.is_some();
         let tally = if let Some(tally) = cached_tally {
             Ok(tally)
         } else {
@@ -5152,6 +5199,7 @@ impl Actor {
                 .as_ref()
                 .and_then(|key| self.block_signer_cache.get(key));
             let block_signers = if let Some(signers) = cached_block_signers {
+                block_signature_evidence_present = !signers.is_empty();
                 signers
             } else {
                 let block_signers = {
@@ -5166,6 +5214,7 @@ impl Actor {
                 };
                 match block_signers {
                     Ok(signers) => {
+                        block_signature_evidence_present = !signers.is_empty();
                         if let Some(key) = signer_cache_key {
                             self.block_signer_cache.insert(key, signers.clone());
                         }
@@ -5240,6 +5289,13 @@ impl Actor {
             },
         );
         self.note_validated_qc_tally(&qc, tally.clone());
+        if block_signature_evidence_present {
+            let _ = self.validate_pending_for_block_sync_commit_qc(
+                &qc,
+                topology.as_ref(),
+                "known_block_qc_work",
+            );
+        }
         let mut block_known_for_commit =
             self.pending
                 .pending_blocks

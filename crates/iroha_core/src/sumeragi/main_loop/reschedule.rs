@@ -624,9 +624,9 @@ impl Actor {
                             )
                     });
             let pending_height_ingress =
-                super::status::worker_queue_height_ingress_snapshot(pending.height);
+                self.frontier_height_ingress_snapshot(pending.height, queue_depths);
             let same_height_missing_block_recovery_backlog_active = contiguous_frontier
-                && Self::frontier_proposal_ingress_queued(pending_height_ingress.queue_depths)
+                && Self::frontier_ingress_recovery_queued(pending_height_ingress)
                 && self
                     .pending
                     .missing_block_requests
@@ -883,23 +883,16 @@ impl Actor {
                 }
                 let same_slot_ingress_active = contiguous_frontier
                     && !has_votes
-                    && self.frontier_recovery_same_slot_ingress_active(
-                        pending.height,
-                        pending.view,
-                        now,
-                        queue_depths,
-                    );
-                let pending_slot_ingress =
-                    super::status::worker_queue_slot_ingress_snapshot(pending.height, pending.view);
-                let availability_ingress_active = pending_slot_ingress
-                    .queue_depths
-                    .block_payload_rx
-                    .saturating_add(pending_slot_ingress.queue_depths.rbc_chunk_rx)
-                    > 0;
-                if same_slot_ingress_active
-                    && (availability_ingress_active
-                        || progress_stall_age < zero_vote_backlog_deadline)
-                {
+                    && self
+                        .frontier_ingress_work_state(
+                            pending.height,
+                            pending.view,
+                            now,
+                            queue_depths,
+                            self.frontier_ingress_drain_grace(self.runtime_da_enabled()),
+                        )
+                        .same_slot_ingress_active;
+                if same_slot_ingress_active && progress_stall_age < zero_vote_backlog_deadline {
                     if self.frontier_recovery.is_none() {
                         self.frontier_recovery = Some(super::FrontierRecoveryState {
                             frontier_height: pending.height,
@@ -1694,9 +1687,9 @@ impl Actor {
                 &self.subsystems.da_rbc.rbc.status_handle,
                 &pending,
             );
-        let height_ingress = super::status::worker_queue_height_ingress_snapshot(height);
+        let height_ingress = self.frontier_height_ingress_snapshot(height, queue_depths);
         let resilience_ingress_backlog_active = self.config.resilience.enabled
-            && (Self::frontier_consensus_ingress_queued(height_ingress.queue_depths)
+            && (Self::frontier_ingress_consensus_queued(height_ingress)
                 || queue_depths.consensus_rx > 0
                 || queue_depths.lane_relay_rx > 0);
         let authoritative_frontier_rotation_candidate = contiguous_frontier

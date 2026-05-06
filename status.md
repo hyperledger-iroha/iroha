@@ -1,6 +1,28 @@
 # Status
 
-Last updated: 2026-05-05
+Last updated: 2026-05-06
+
+## 2026-05-06 Sumeragi canonical proposal and block entrypoint ordering
+
+- Centralized accepted-transaction canonical ordering for Sumeragi proposal
+  assembly and `BlockBuilder`, using `TransactionEntrypoint` hashes instead of
+  signed-transaction downcasts. Routing decisions and encoded-size sidecars now
+  follow the same permutation as the transaction batch.
+- Received block validation now rejects non-genesis external entrypoints that
+  are not in canonical hash order with `NonCanonicalTransactionOrder`, and the
+  block rejection reason is surfaced through the data model/JSON mapping.
+- Block construction and validation paths now use accepted-entrypoint metadata
+  for creation time, Merkle roots, committed-transaction lookup, and
+  PrivateKaigi admission checks. Blocks containing non-signed entrypoints use a
+  conservative sequential recording path so result ordering stays aligned with
+  serialized entrypoints.
+- Validation:
+  - `cargo fmt --all --check`
+  - `cargo check -p iroha_core --lib`
+  - `cargo test -p iroha_core block_builder_orders_mixed_entrypoints_without_signed_downcast -- --nocapture`
+  - `cargo test -p iroha_core canonicalize_proposal_batch_keeps_routing_aligned_with_transaction_order -- --nocapture`
+  - `cargo test -p iroha_core maps_block_validation_errors -- --nocapture`
+  - `cargo test -p iroha_core validate_static_snapshot_rejects_noncanonical_transaction_order -- --nocapture`
 
 ## 2026-05-05 Durable Space Directory snapshot restore
 

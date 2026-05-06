@@ -1756,6 +1756,8 @@ pub enum BlockValidationError {
     },
     /// The merkle root does not match the computed one.
     MerkleRootMismatch,
+    /// Block transaction entrypoints are not in canonical order.
+    NonCanonicalTransactionOrder,
     /// Execution context invalid: {0}
     ExecutionContextInvalid(String),
     /// Cannot accept a transaction
@@ -1967,6 +1969,63 @@ pub fn check_genesis_block(
 #[derive(Debug, Clone)]
 pub struct BlockBuilder<B>(B);
 
+/// Return the canonical transaction order for a block/proposal payload.
+///
+/// The original index is an explicit tie-breaker so equal hashes keep a stable
+/// order until duplicate detection rejects them.
+pub(crate) fn canonical_accepted_transaction_order(
+    transactions: &[AcceptedTransaction<'_>],
+) -> Vec<usize> {
+    let mut order = (0..transactions.len()).collect::<Vec<_>>();
+    order.sort_unstable_by(|&left, &right| {
+        transactions[left]
+            .hash_as_entrypoint()
+            .cmp(&transactions[right].hash_as_entrypoint())
+            .then_with(|| left.cmp(&right))
+    });
+    order
+}
+
+/// Check whether accepted transactions already follow canonical payload order.
+pub(crate) fn accepted_transactions_are_canonical(
+    transactions: &[AcceptedTransaction<'_>],
+) -> bool {
+    canonical_accepted_transaction_order(transactions)
+        .into_iter()
+        .enumerate()
+        .all(|(idx, ordered)| idx == ordered)
+}
+
+/// Reorder a vector by a canonical index permutation.
+pub(crate) fn reorder_by_indices<T: Clone>(values: &mut Vec<T>, order: &[usize]) {
+    if order
+        .iter()
+        .copied()
+        .enumerate()
+        .all(|(idx, ordered)| idx == ordered)
+    {
+        return;
+    }
+
+    let original = values.clone();
+    values.clear();
+    values.reserve(order.len());
+    for &idx in order {
+        values.push(original[idx].clone());
+    }
+}
+
+/// Canonicalize accepted transactions in-place.
+pub(crate) fn canonicalize_accepted_transactions(
+    transactions: &mut Vec<AcceptedTransaction<'static>>,
+) {
+    if transactions.len() <= 1 {
+        return;
+    }
+    let order = canonical_accepted_transaction_order(transactions);
+    reorder_by_indices(transactions, &order);
+}
+
 mod pending {
     use iroha_primitives::time::TimeSource;
     use nonzero_ext::nonzero;
@@ -2001,17 +2060,11 @@ mod pending {
             // Empty blocks can be built for tests, but validation rejects them unless they carry
             // entrypoints (external transactions or time triggers) or deterministic artifacts
             // such as DA bundles; consensus should not emit them.
-            let mut transactions: Vec<_> = transactions
-                .into_iter()
-                .enumerate()
-                .map(|(idx, tx)| (tx.as_ref().hash_as_entrypoint(), idx, tx))
-                .collect();
-            // Canonicalize payload order by (call_hash, original index) so scheduler tie-breaks
-            // remain stable regardless of submission order.
-            transactions.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+            let mut transactions = transactions;
+            canonicalize_accepted_transactions(&mut transactions);
 
             Self(Pending {
-                transactions: transactions.into_iter().map(|(_, _, tx)| tx).collect(),
+                transactions,
                 time_source,
             })
         }
@@ -2048,8 +2101,7 @@ mod pending {
                 .0
                 .transactions
                 .iter()
-                .map(AsRef::as_ref)
-                .map(SignedTransaction::creation_time)
+                .map(AcceptedTransaction::creation_time)
                 .max()
                 // No transactions present; validation still rejects empty payloads.
                 .unwrap_or(Duration::ZERO);
@@ -2080,8 +2132,7 @@ mod pending {
                 .0
                 .transactions
                 .iter()
-                .map(AsRef::as_ref)
-                .map(SignedTransaction::hash_as_entrypoint)
+                .map(AcceptedTransaction::hash_as_entrypoint)
                 .collect::<MerkleTree<_>>()
                 .root();
             let creation_time_ms = creation_time
@@ -2390,16 +2441,81 @@ mod new {
 
     #[cfg(test)]
     mod tests {
-        use std::{borrow::Cow, time::Duration};
+        use std::{borrow::Cow, num::NonZeroU32, str::FromStr, time::Duration};
 
-        use iroha_crypto::KeyPair;
-        use iroha_data_model::{ChainId, isi::Log, transaction::TransactionBuilder};
+        use iroha_crypto::{Hash, KeyPair};
+        use iroha_data_model::{
+            ChainId,
+            asset::AssetDefinitionId,
+            domain::DomainId,
+            isi::Log,
+            kaigi::{
+                KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
+                KaigiRoomPolicy,
+            },
+            metadata::Metadata,
+            name::Name,
+            transaction::{
+                PrivateCreateKaigi, PrivateKaigiAction, PrivateKaigiArtifacts,
+                PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction,
+                TransactionBuilder, TransactionEntrypoint,
+            },
+        };
         use iroha_logger::Level;
         use iroha_primitives::time::TimeSource;
         use iroha_test_samples::gen_account_in;
 
         use super::*;
         use crate::{block::BlockBuilder, tx::AcceptedTransaction};
+
+        fn sample_private_kaigi_transaction(chain: ChainId) -> PrivateKaigiTransaction {
+            PrivateKaigiTransaction {
+                chain,
+                creation_time_ms: 42,
+                nonce: Some(NonZeroU32::new(7).expect("nonce")),
+                metadata: Metadata::default(),
+                action: PrivateKaigiAction::Create(PrivateCreateKaigi {
+                    call: PrivateKaigiTemplate {
+                        id: KaigiId::new(
+                            DomainId::try_new("kaigi", "universal").expect("domain"),
+                            Name::from_str("private-room").expect("name"),
+                        ),
+                        title: None,
+                        description: None,
+                        max_participants: Some(4),
+                        gas_rate_per_minute: 25,
+                        metadata: Metadata::default(),
+                        scheduled_start_ms: None,
+                        privacy_mode: KaigiPrivacyMode::ZkRosterV1,
+                        room_policy: KaigiRoomPolicy::Authenticated,
+                        relay_manifest: None,
+                    },
+                }),
+                artifacts: PrivateKaigiArtifacts {
+                    commitment: KaigiParticipantCommitment {
+                        commitment: Hash::new(b"host-commitment"),
+                        alias_tag: Some("host".to_owned()),
+                    },
+                    nullifier: KaigiParticipantNullifier {
+                        digest: Hash::new(b"private-kaigi-nullifier"),
+                        issued_at_ms: 42,
+                    },
+                    roster_root: Hash::new(b"roster-root"),
+                    proof: vec![0xAA, 0xBB, 0xCC],
+                },
+                fee_spend: PrivateKaigiFeeSpend {
+                    asset_definition_id: AssetDefinitionId::new(
+                        DomainId::try_new("wonderland", "universal").expect("domain"),
+                        Name::from_str("xor").expect("name"),
+                    ),
+                    anchor_root: Hash::new(b"anchor-root"),
+                    nullifiers: vec![[0x11; 32]],
+                    output_commitments: vec![[0x22; 32]],
+                    encrypted_change_payloads: vec![vec![0x33, 0x44]],
+                    proof: vec![0x55, 0x66],
+                },
+            }
+        }
 
         #[test]
         fn into_signed_block_preserves_transactions() {
@@ -2487,6 +2603,47 @@ mod new {
 
             let signed_block: SignedBlock = new_block.into();
             assert_eq!(signed_block.transactions_vec(), &expected);
+        }
+
+        #[test]
+        fn block_builder_orders_mixed_entrypoints_without_signed_downcast() {
+            let chain: ChainId = "mixed-entrypoint-block".parse().expect("valid chain id");
+            let (authority, keypair) = gen_account_in("wonderland");
+
+            let signed = TransactionBuilder::new(chain.clone(), authority)
+                .with_instructions([Log::new(Level::INFO, "signed".to_owned())])
+                .sign(keypair.private_key());
+            let private = sample_private_kaigi_transaction(chain);
+            let accepted = vec![
+                AcceptedTransaction::new_unchecked(Cow::Owned(signed.clone())),
+                AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
+                    TransactionEntrypoint::PrivateKaigi(private.clone()),
+                )),
+            ];
+
+            let mut expected_entrypoints = accepted
+                .iter()
+                .map(|tx| tx.entrypoint().clone())
+                .collect::<Vec<_>>();
+            expected_entrypoints.sort_by_key(TransactionEntrypoint::hash);
+
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_secs(1));
+            let builder = BlockBuilder::new_with_time_source(accepted, time_source);
+            let block_signer = KeyPair::random();
+
+            let new_block = builder
+                .chain(0, None)
+                .sign(block_signer.private_key())
+                .unpack(|_| {});
+
+            let signed_block: SignedBlock = new_block.into();
+            assert_eq!(signed_block.transactions_vec(), &[signed]);
+            assert_eq!(
+                signed_block
+                    .external_entrypoints_cloned()
+                    .collect::<Vec<_>>(),
+                expected_entrypoints
+            );
         }
     }
 }
@@ -5284,9 +5441,9 @@ pub(crate) mod valid {
             Ok(())
         }
 
-        fn embedded_routing_decisions_for_signed_transactions(
+        fn embedded_routing_decisions_for_entrypoints(
             block: &SignedBlock,
-            tx_count: usize,
+            entrypoint_count: usize,
         ) -> Option<Vec<crate::queue::RoutingDecision>> {
             let bundle = match Self::validate_execution_context_header(block) {
                 Ok(Some(bundle)) => bundle,
@@ -5304,13 +5461,11 @@ pub(crate) mod valid {
             let decisions = block
                 .external_entrypoints_cloned()
                 .zip(bundle.external.iter())
-                .filter_map(|(entrypoint, context)| {
-                    matches!(entrypoint, TransactionEntrypoint::External(_)).then(|| {
-                        crate::queue::RoutingDecision::new(context.lane_id, context.dataspace_id)
-                    })
+                .map(|(_entrypoint, context)| {
+                    crate::queue::RoutingDecision::new(context.lane_id, context.dataspace_id)
                 })
                 .collect::<Vec<_>>();
-            (decisions.len() == tx_count).then_some(decisions)
+            (decisions.len() == entrypoint_count).then_some(decisions)
         }
 
         fn committed_heights_for_block(
@@ -5318,8 +5473,12 @@ pub(crate) mod valid {
             transactions: &impl TransactionsReadOnly,
         ) -> Vec<Option<NonZeroUsize>> {
             block
-                .external_transactions()
-                .map(|tx| transactions.get(&tx.hash()))
+                .external_entrypoints_cloned()
+                .map(|entrypoint| {
+                    let accepted =
+                        AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint));
+                    transactions.get(&accepted.hash())
+                })
                 .collect()
         }
 
@@ -5357,11 +5516,18 @@ pub(crate) mod valid {
             let pipeline_cfg = &static_data.pipeline_cfg;
             let crypto_cfg = &static_data.crypto_cfg;
             let block_creation_time = block.header().creation_time();
+            let is_genesis_block = block.header().is_genesis();
+            let accepted_entrypoints: Vec<AcceptedTransaction<'static>> = block
+                .external_entrypoints_cloned()
+                .map(|entrypoint| {
+                    AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint))
+                })
+                .collect();
             let txs: Vec<&SignedTransaction> = block.external_transactions().collect();
             debug_assert_eq!(
                 committed_heights.len(),
-                txs.len(),
-                "committed-height snapshot must align with block transaction list",
+                accepted_entrypoints.len(),
+                "committed-height snapshot must align with block entrypoint list",
             );
             if let Some(cached_ok) = cached_ok {
                 debug_assert_eq!(
@@ -6129,12 +6295,18 @@ pub(crate) mod valid {
                 }
             }
 
-            let mut seen_hashes: std::collections::BTreeSet<HashOf<SignedTransaction>> =
+            let mut seen_hashes: std::collections::BTreeSet<HashOf<TransactionEntrypoint>> =
                 std::collections::BTreeSet::new();
-            let mut entrypoints: Vec<HashOf<TransactionEntrypoint>> = Vec::with_capacity(txs.len());
+            let mut entrypoints: Vec<HashOf<TransactionEntrypoint>> =
+                Vec::with_capacity(accepted_entrypoints.len());
 
-            for (tx, committed_height) in txs.iter().zip(committed_heights.iter()) {
-                let tx_hash = (*tx).hash();
+            if !is_genesis_block && !accepted_transactions_are_canonical(&accepted_entrypoints) {
+                return Err(BlockValidationError::NonCanonicalTransactionOrder);
+            }
+
+            for (tx, committed_height) in accepted_entrypoints.iter().zip(committed_heights.iter())
+            {
+                let tx_hash = tx.hash_as_entrypoint();
                 // In case of soft-fork transaction is check if it was added at the same height as candidate block.
                 if committed_height
                     .as_ref()
@@ -6156,12 +6328,36 @@ pub(crate) mod valid {
                     return Err(BlockValidationError::TransactionInTheFuture);
                 }
 
-                entrypoints.push(tx.hash_as_entrypoint());
+                match tx.entrypoint() {
+                    TransactionEntrypoint::External(_) => {}
+                    TransactionEntrypoint::PrivateKaigi(private) => {
+                        AcceptedTransaction::validate_private_kaigi_with_now(
+                            private,
+                            chain_id,
+                            max_clock_drift,
+                            tx_params,
+                            block_creation_time,
+                        )
+                        .map_err(BlockValidationError::TransactionAccept)?;
+                    }
+                    TransactionEntrypoint::Time(_) => {
+                        return Err(BlockValidationError::TransactionAccept(
+                            AcceptTransactionFail::TransactionLimit(
+                                iroha_data_model::transaction::error::TransactionLimitError {
+                                    reason:
+                                        "direct time entrypoints are not accepted in block payloads"
+                                            .into(),
+                                },
+                            ),
+                        ));
+                    }
+                }
+
+                entrypoints.push(tx_hash);
             }
 
             use rayon::prelude::*;
 
-            let is_genesis_block = block.header().is_genesis();
             let validate_tx =
                 |(idx, tx): (usize, &&SignedTransaction)| -> Option<BlockValidationError> {
                     if cached(idx) {
@@ -6367,6 +6563,143 @@ pub(crate) mod valid {
 
         /// Validate each transaction in the block, apply resulting state changes,
         /// and record results back into the block.
+        #[allow(clippy::needless_pass_by_value)]
+        fn validate_and_record_entrypoints_sequential(
+            block: &mut SignedBlock,
+            state_block: &mut StateBlock<'_>,
+            timings: Option<&mut ValidationTimings>,
+            entrypoints: Vec<TransactionEntrypoint>,
+        ) {
+            let to_ms = |duration: Duration| -> u64 {
+                u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+            };
+            let mut timings = timings;
+            let height_usize: usize = block
+                .header()
+                .height()
+                .get()
+                .try_into()
+                .expect("block height fits usize");
+            let block_height =
+                std::num::NonZeroUsize::new(height_usize).expect("block height greater than zero");
+            let accepted = entrypoints
+                .into_iter()
+                .map(|entrypoint| {
+                    AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint))
+                })
+                .collect::<Vec<_>>();
+            #[allow(clippy::disallowed_types)]
+            let tx_hashes: std::collections::HashSet<_> =
+                accepted.iter().map(AcceptedTransaction::hash).collect();
+            state_block
+                .transactions
+                .insert_block(tx_hashes, block_height);
+
+            let dataspace_catalog = &state_block.nexus.dataspace_catalog;
+            let lane_catalog = &state_block.nexus.lane_catalog;
+            let routing_policy = &state_block.nexus.routing_policy;
+            let embedded_routing =
+                Self::embedded_routing_decisions_for_entrypoints(block, accepted.len());
+            let (routing_decisions, routing_errors) = if let Some(decisions) = embedded_routing {
+                (decisions, vec![None; accepted.len()])
+            } else {
+                let mut decisions = Vec::with_capacity(accepted.len());
+                let mut errors = Vec::with_capacity(accepted.len());
+                for tx in &accepted {
+                    match evaluate_policy_with_catalog_and_world(
+                        routing_policy,
+                        lane_catalog,
+                        dataspace_catalog,
+                        tx,
+                        &state_block.world,
+                    ) {
+                        Ok(decision) => {
+                            decisions.push(decision);
+                            errors.push(None);
+                        }
+                        Err(err) => {
+                            decisions.push(crate::queue::RoutingDecision::default());
+                            errors.push(Some(err));
+                        }
+                    }
+                }
+                (decisions, errors)
+            };
+
+            let apply_start = timings.as_ref().map(|_| Instant::now());
+            let mut ivm_cache = IvmCache::new();
+            let mut hashes = Vec::with_capacity(accepted.len());
+            let mut ordered_results = Vec::with_capacity(accepted.len());
+            for (idx, tx) in accepted.into_iter().enumerate() {
+                let hash = tx.hash_as_entrypoint();
+                hashes.push(hash);
+                let result = if let Some(err) = routing_errors[idx].as_ref() {
+                    Err(TransactionRejectionReason::Validation(
+                        iroha_data_model::ValidationFail::NotPermitted(format!(
+                            "transaction routing could not be resolved: {err}"
+                        )),
+                    ))
+                } else {
+                    state_block.validate_transaction(tx, &mut ivm_cache).1
+                };
+                ordered_results.push(result);
+            }
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), apply_start) {
+                let elapsed = to_ms(start.elapsed());
+                timings.execution_tx_apply_ms = elapsed;
+                timings.execution_tx_apply_sequential_ms = elapsed;
+            }
+
+            let time_triggers_start = timings.as_ref().map(|_| Instant::now());
+            let (time_trgs, mut time_trg_hashes, mut time_trg_results) =
+                state_block.execute_time_triggers(&block.header());
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), time_triggers_start) {
+                timings.execution_tx_time_triggers_ms = to_ms(start.elapsed());
+            }
+            #[cfg(test)]
+            execute_soracloud_mailbox_runtime(state_block);
+            let finalize_start = timings.as_ref().map(|_| Instant::now());
+            let mut fastpq_entry_dataspaces = std::collections::BTreeMap::new();
+            for (idx, entry_hash) in hashes.iter().enumerate() {
+                fastpq_entry_dataspaces.insert(
+                    iroha_crypto::Hash::from(*entry_hash),
+                    routing_decisions[idx].dataspace_id,
+                );
+            }
+            for entry_hash in &time_trg_hashes {
+                fastpq_entry_dataspaces.insert(
+                    iroha_crypto::Hash::from(*entry_hash),
+                    DataSpaceId::UNIVERSAL,
+                );
+            }
+            hashes.append(&mut time_trg_hashes);
+            ordered_results.append(&mut time_trg_results);
+
+            let mut tx_set_hashes = hashes.clone();
+            tx_set_hashes.sort_unstable();
+            let tx_set_hash =
+                crate::fastpq::tx_set_hash_from_ordered_hashes(tx_set_hashes.iter().copied());
+            state_block.set_fastpq_tx_set_hash(tx_set_hash);
+            state_block.set_fastpq_entry_dataspaces(fastpq_entry_dataspaces);
+
+            let fastpq_transcripts = state_block.drain_transfer_transcripts();
+            let axt_envelopes = state_block.drain_axt_envelopes();
+            let axt_policy_snapshot = Some(state_block.axt_policy_snapshot());
+            block.set_transaction_results_with_transcripts(
+                time_trgs,
+                hashes.as_slice(),
+                ordered_results,
+                fastpq_transcripts,
+                axt_envelopes,
+                axt_policy_snapshot,
+            );
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), finalize_start) {
+                timings.execution_tx_finalize_ms = to_ms(start.elapsed());
+            }
+        }
+
+        /// Validate each transaction in the block, apply resulting state changes,
+        /// and record results back into the block.
         ///
         /// Must be called with a **block that is _assumed_ to be valid**.
         /// When `skip_stateless_checks` is true, signature/limit validation is skipped under the
@@ -6407,6 +6740,20 @@ pub(crate) mod valid {
 
             // Start a new witness window for this block (SBV‑AM prototype)
             crate::sumeragi::witness::start_block();
+
+            let external_entrypoints = block.external_entrypoints_cloned().collect::<Vec<_>>();
+            if external_entrypoints
+                .iter()
+                .any(|entrypoint| !matches!(entrypoint, TransactionEntrypoint::External(_)))
+            {
+                Self::validate_and_record_entrypoints_sequential(
+                    block,
+                    state_block,
+                    timings.as_deref_mut(),
+                    external_entrypoints,
+                );
+                return;
+            }
 
             // Prepare scheduling: collect transactions, their access sets, and hashes
             let txs: Vec<&SignedTransaction> = block.external_transactions().collect();
@@ -6526,7 +6873,7 @@ pub(crate) mod valid {
                 }
             }
             let embedded_routing =
-                Self::embedded_routing_decisions_for_signed_transactions(block, txs.len());
+                Self::embedded_routing_decisions_for_entrypoints(block, txs.len());
             let (routing_decisions, routing_errors) = if let Some(decisions) = embedded_routing {
                 (decisions, vec![None; txs.len()])
             } else {
@@ -11462,6 +11809,97 @@ pub(crate) mod valid {
         }
 
         #[test]
+        fn validate_static_snapshot_rejects_noncanonical_transaction_order() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let key_pairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+            let topology = test_topology_with_keys(&key_pairs);
+            let leader = &key_pairs[0];
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "leader",
+                leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
+
+            let (alice_id, alice_keypair) = gen_account_in("wonderland");
+            let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+            let tx1 = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                alice_id.clone(),
+                &time_source,
+            )
+            .with_instructions([Log::new(Level::INFO, "first".to_string())])
+            .sign(alice_keypair.private_key());
+            let tx2 = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                alice_id,
+                &time_source,
+            )
+            .with_instructions([Log::new(Level::INFO, "second".to_string())])
+            .sign(alice_keypair.private_key());
+            let mut accepted = vec![
+                AcceptedTransaction::new_unchecked(Cow::Owned(tx1)),
+                AcceptedTransaction::new_unchecked(Cow::Owned(tx2)),
+            ];
+            accepted.sort_by_key(AcceptedTransaction::hash_as_entrypoint);
+            accepted.reverse();
+
+            time_handle.advance(Duration::from_millis(1));
+            let new_block =
+                BlockBuilder::new_preserve_order_with_time_source(accepted, time_source.clone())
+                    .chain(0, state.view().latest_block().as_deref())
+                    .sign(leader.private_key())
+                    .unpack(|_| {});
+            let signed: SignedBlock = new_block.into();
+
+            let static_data = {
+                let view = state.query_view();
+                ValidBlock::validate_static_state_dependent(
+                    &signed,
+                    &topology,
+                    &state.chain_id,
+                    &ALICE_ID,
+                    &view,
+                    false,
+                    &time_source,
+                    false,
+                    false,
+                )
+                .expect("static state-dependent validation should succeed")
+            };
+            let committed_heights = {
+                let transactions_view = state.transactions.view();
+                ValidBlock::committed_heights_for_block(&signed, &transactions_view)
+            };
+            #[cfg(feature = "telemetry")]
+            let metrics = Some(&state.telemetry);
+            #[cfg(not(feature = "telemetry"))]
+            let metrics = ();
+
+            let err = ValidBlock::validate_static_with_snapshot(
+                &signed,
+                &state.chain_id,
+                &ALICE_ID,
+                &static_data,
+                &committed_heights,
+                None,
+                false,
+                metrics,
+            )
+            .expect_err("noncanonical transaction order should be rejected");
+            assert_eq!(err, BlockValidationError::NonCanonicalTransactionOrder);
+        }
+
+        #[test]
         fn validate_static_snapshot_rejects_invalid_signature() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
@@ -12404,6 +12842,10 @@ pub(crate) mod valid {
             assert_eq!(
                 map_block_err_to_reason(&BlockValidationError::MerkleRootMismatch),
                 Reason::MerkleRootMismatch
+            );
+            assert_eq!(
+                map_block_err_to_reason(&BlockValidationError::NonCanonicalTransactionOrder),
+                Reason::NonCanonicalTransactionOrder
             );
             assert_eq!(
                 map_block_err_to_reason(&BlockValidationError::EmptyBlock),
@@ -15274,6 +15716,9 @@ mod event {
             BlockValidationError::PrevBlockHashMismatch { .. } => Reason::PrevBlockHashMismatch,
             BlockValidationError::PrevBlockHeightMismatch { .. } => Reason::PrevBlockHeightMismatch,
             BlockValidationError::MerkleRootMismatch => Reason::MerkleRootMismatch,
+            BlockValidationError::NonCanonicalTransactionOrder => {
+                Reason::NonCanonicalTransactionOrder
+            }
             BlockValidationError::TransactionAccept(fail) => match fail {
                 AcceptTransactionFail::TransactionLimit(_)
                 | AcceptTransactionFail::SignatureVerification(_)

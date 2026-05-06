@@ -884,7 +884,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         CheckedTransaction::new(self, state)
     }
 
-    fn validate_private_kaigi_with_now(
+    pub(crate) fn validate_private_kaigi_with_now(
         tx: &PrivateKaigiTransaction,
         expected_chain_id: &ChainId,
         max_clock_drift: Duration,
@@ -2026,7 +2026,7 @@ impl StateBlock<'_> {
         let proof_bytes_before = self.zk_proof_bytes_in_block;
         let conf_gas_before = self.confidential_gas_used_in_block;
         let mut state_transaction = self.transaction();
-        let hash = tx.as_ref().hash_as_entrypoint();
+        let hash = tx.hash_as_entrypoint();
         let result = Self::validate_transaction_internal(tx, &mut state_transaction, ivm_cache);
         if result.is_ok() {
             // Enforce block gas limit if configured; accumulate gas used by last tx (IVM path)

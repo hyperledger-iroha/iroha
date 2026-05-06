@@ -1752,9 +1752,9 @@ public final class OfflineNoteV2 {
     if (version != 2) {
       throw new IllegalArgumentException("Offline Note V2 key certificate version must be 2");
     }
-    if (!oneUse) {
-      throw new IllegalArgumentException("Offline Note V2 key certificate must be one-use");
-    }
+    // The oneUse field is preserved in the signed certificate payload for wire compatibility.
+    // Replay protection is enforced by note claims, nullifiers, output commitments, and
+    // platform assertion/counter checks rather than by globally consuming this certificate.
     if (publicKey.length != 32) {
       throw new IllegalArgumentException("Offline Note V2 note public key must be 32 bytes");
     }

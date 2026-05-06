@@ -1324,6 +1324,7 @@ impl Actor {
                     .map(|tx| tx.hash());
                 self.queue
                     .remove_committed_hashes(committed_tx_hashes, None);
+                let _ = self.refresh_backpressure_state();
                 crate::sumeragi::status::record_kura_stage(
                     pending_height,
                     pending_view,
@@ -3487,6 +3488,44 @@ impl Actor {
                 }
             }
 
+            if enable_qc_pipeline
+                && pending.local_commit_vote_emitted()
+                && !pending.commit_qc_observed()
+                && !missing_local_data
+                && pending.validation_status == ValidationStatus::Valid
+                && pending_age >= fast_timeout
+                && pending_extends_tip(
+                    pending_height,
+                    pending.block.header().prev_block_hash(),
+                    self.state.committed_height(),
+                    self.state.latest_block_hash_fast(),
+                )
+            {
+                let recovery_targets = self.known_block_commit_qc_recovery_targets(
+                    hash,
+                    pending_height,
+                    pending_view,
+                    &commit_topology,
+                );
+                if self.maybe_request_known_block_commit_qc_recovery(
+                    hash,
+                    pending_height,
+                    pending_view,
+                    &recovery_targets,
+                    Some(&pending),
+                    "commit_pipeline_local_vote_missing_commit_qc",
+                ) {
+                    debug!(
+                        height = pending_height,
+                        view = pending_view,
+                        block = %hash,
+                        pending_age_ms,
+                        fast_timeout_ms = fast_timeout.as_millis(),
+                        "arming known-block commit-QC recovery for locally voted pending block"
+                    );
+                }
+            }
+
             if ready_to_finalize {
                 let qc_header = crate::sumeragi::consensus::QcHeaderRef {
                     phase: crate::sumeragi::consensus::Phase::Commit,
@@ -3943,11 +3982,14 @@ impl Actor {
         }
 
         let now = Instant::now();
-        let payload_materialized_locally = self.frontier_block_materialized_locally(block_hash);
-        let recovery_tracked_before_decision = self
-            .pending
-            .missing_commit_qc_requests
-            .contains_key(&block_hash);
+        let payload_materialized_by_override = pending_override.is_some_and(|pending| {
+            pending.height == height
+                && pending.view == view
+                && !pending.is_retry_aborted()
+                && !matches!(pending.validation_status, ValidationStatus::Invalid)
+        });
+        let payload_materialized_locally = payload_materialized_by_override
+            || self.frontier_block_materialized_locally(block_hash);
         let mut request_stalled = false;
         if height == self.committed_height_snapshot().saturating_add(1) {
             let stall_window = self.frontier_slot_lag_window();
@@ -3999,6 +4041,38 @@ impl Actor {
                 return true;
             }
         }
+        if height == self.committed_height_snapshot().saturating_add(1)
+            && payload_materialized_locally
+            && self
+                .local_conflicting_frontier_vote(height, block_hash)
+                .is_none()
+            && self
+                .frontier_slot_conflicts_with_live_local_owner(height, view, block_hash)
+                .is_none()
+        {
+            let mut targets = filtered_targets.iter().cloned();
+            let leader = targets.next();
+            let voters = targets.collect();
+            let _ = self.handle_frontier_slot_event(
+                now,
+                super::FrontierSlotEvent::OnFutureGapObserved {
+                    block_hash,
+                    view,
+                    leader,
+                    voters,
+                    exact_fetch_armed: false,
+                    requester: None,
+                },
+            );
+            let _ = self.handle_frontier_slot_event(
+                now,
+                super::FrontierSlotEvent::OnBodyAvailable {
+                    block_hash,
+                    view,
+                    sender: None,
+                },
+            );
+        }
 
         let retry_window = self.missing_block_retry_window_with_rbc_progress(
             block_hash,
@@ -4047,7 +4121,7 @@ impl Actor {
                 target_kind,
             } => {
                 if height == self.committed_height_snapshot().saturating_add(1)
-                    && (!payload_materialized_locally || !recovery_tracked_before_decision)
+                    && !payload_materialized_locally
                     && !request_stalled
                     && self.try_route_missing_block_through_exact_frontier_slot(
                         block_hash, height, view, &targets,
@@ -7345,9 +7419,17 @@ impl Actor {
 
     pub(super) fn refresh_backpressure_state(&mut self) -> bool {
         let refreshed = self.subsystems.propose.backpressure_gate.refresh();
+        let state = self.subsystems.propose.backpressure_gate.state();
         // Always publish the latest snapshot so operator status endpoints report
         // correct queue capacity even when the state has not changed.
-        super::status::set_tx_queue_backpressure(self.subsystems.propose.backpressure_gate.state());
+        super::status::set_tx_queue_backpressure(state);
+        #[cfg(feature = "telemetry")]
+        crate::telemetry::record_state_tx_queue_backpressure(
+            self.state.metrics(),
+            state.queued() as u64,
+            state.capacity().get() as u64,
+            state.is_saturated(),
+        );
         refreshed
     }
 
