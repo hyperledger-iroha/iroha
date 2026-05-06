@@ -60,6 +60,7 @@ const POST_TILE_KERNEL: &str = "fastpq_fft_post_tiling";
 const BN254_FFT_KERNEL: &str = "bn254_fft_columns";
 const BN254_LDE_KERNEL: &str = "bn254_lde_columns";
 const BN254_POSEIDON_HASH_KERNEL: &str = "bn254_poseidon_hash_words";
+#[cfg(test)]
 const GOLDILOCKS_GENERATOR: u64 = 7;
 const MIN_FFT_COLUMNS_PER_BATCH: u32 = 1;
 const MAX_FFT_COLUMNS_PER_BATCH: u32 = 64;
@@ -1595,8 +1596,8 @@ const METAL_KERNEL_DESCRIPTORS: &[MetalKernelDescriptor] = &[
         threadgroup_cap: Some(FFT_THREADGROUP_CAPACITY),
         tile_stage_cap: Some(FFT_TILE_STAGE_LIMIT),
         notes: "Performs low-degree extension in place: copies coefficients into the evaluation \
-                buffer, executes tiled FFT stages with the requested coset, and leaves the final \
-                stages to the post-tiling kernel when necessary.",
+                buffer with coefficient-wise coset scaling, executes tiled FFT stages over the \
+                base domain, and leaves the final stages to the post-tiling kernel when necessary.",
     },
     MetalKernelDescriptor {
         entry_point: "poseidon_permute",
@@ -2108,6 +2109,7 @@ impl QueuePool {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 struct TwiddleCacheKey {
     log_len: u32,
+    root: u64,
     inverse: bool,
 }
 
@@ -2127,14 +2129,18 @@ impl TwiddleCache {
         }
     }
 
-    fn resolve(&mut self, device: &Device, log_len: u32, inverse: bool) -> Buffer {
-        let key = TwiddleCacheKey { log_len, inverse };
+    fn resolve(&mut self, device: &Device, log_len: u32, root: u64, inverse: bool) -> Buffer {
+        let key = TwiddleCacheKey {
+            log_len,
+            root,
+            inverse,
+        };
         if let Some(entry) = self.buffers.get(&key) {
             record_twiddle_cache_sample(entry.build_cost_ms, true);
             return entry.buffer.clone();
         }
         let started = Instant::now();
-        let stage_twiddles = compute_stage_twiddles(log_len, inverse);
+        let stage_twiddles = compute_stage_twiddles(log_len, root, inverse);
         let buffer = device.new_buffer_with_data(
             stage_twiddles.as_ptr().cast::<c_void>(),
             (stage_twiddles.len() * mem::size_of::<u64>()) as u64,
@@ -2191,12 +2197,12 @@ fn bn254_poseidon_context() -> MetalResult<&'static Bn254PoseidonMetalPipelines>
 }
 
 impl MetalPipelines {
-    fn stage_twiddle_buffer(&self, log_len: u32, inverse: bool) -> Buffer {
+    fn stage_twiddle_buffer(&self, log_len: u32, root: u64, inverse: bool) -> Buffer {
         let mut cache = self
             .twiddle_cache
             .lock()
             .expect("Metal twiddle cache poisoned");
-        cache.resolve(&self.device, log_len, inverse)
+        cache.resolve(&self.device, log_len, root, inverse)
     }
 
     fn bn254_fft_twiddle_buffer(&self, log_size: u32) -> MetalResult<Buffer> {
@@ -2654,25 +2660,27 @@ fn default_queue_column_threshold(fanout: usize) -> u32 {
 }
 
 #[allow(dead_code)] // Metal FFT entry point is unused when CUDA-only builds run tests
-pub fn fft_columns(columns: &mut [Vec<u64>], log_size: u32) -> MetalResult<()> {
+pub fn fft_columns(columns: &mut [Vec<u64>], log_size: u32, root: u64) -> MetalResult<()> {
     if columns.is_empty() {
         return Ok(());
     }
 
-    fft_columns_async(columns, log_size)?.wait()
+    fft_columns_async(columns, log_size, root)?.wait()
 }
 
 /// Dispatches an FFT over the provided columns and returns a pending handle.
 pub(crate) fn fft_columns_async<'a>(
     columns: &'a mut [Vec<u64>],
     log_size: u32,
+    root: u64,
 ) -> MetalResult<PendingColumns<'a>> {
-    dispatch_fft_columns(columns, log_size, false)
+    dispatch_fft_columns(columns, log_size, root, false)
 }
 
 fn dispatch_fft_columns<'a>(
     columns: &'a mut [Vec<u64>],
     log_size: u32,
+    root: u64,
     inverse: bool,
 ) -> MetalResult<PendingColumns<'a>> {
     let extent = 1usize << log_size;
@@ -2688,7 +2696,7 @@ fn dispatch_fft_columns<'a>(
     let context = metal_context()?;
     let limits = pipeline_limits(&context.fft);
     let tuning = metal_config::fft_tuning(log_size, limits.exec_width, limits.max_threads);
-    let twiddle_buffer = context.stage_twiddle_buffer(log_size, inverse);
+    let twiddle_buffer = context.stage_twiddle_buffer(log_size, root, inverse);
 
     let base_args = FftArgs {
         column_len,
@@ -3053,20 +3061,21 @@ fn submit_post_tile_dispatch(
 }
 
 #[allow(dead_code)] // Metal IFFT entry point is unused in non-macOS test environments
-pub fn ifft_columns(columns: &mut [Vec<u64>], log_size: u32) -> MetalResult<()> {
+pub fn ifft_columns(columns: &mut [Vec<u64>], log_size: u32, root: u64) -> MetalResult<()> {
     if columns.is_empty() {
         return Ok(());
     }
 
-    ifft_columns_async(columns, log_size)?.wait()
+    ifft_columns_async(columns, log_size, root)?.wait()
 }
 
 /// Dispatches an inverse FFT and returns a pending handle for the caller to await.
 pub(crate) fn ifft_columns_async<'a>(
     columns: &'a mut [Vec<u64>],
     log_size: u32,
+    root: u64,
 ) -> MetalResult<PendingColumns<'a>> {
-    dispatch_fft_columns(columns, log_size, true)
+    dispatch_fft_columns(columns, log_size, root, true)
 }
 
 /// Returns the resolved FFT tuning (threadgroup lanes/tile stages) for the current Metal device.
@@ -3095,13 +3104,14 @@ pub fn lde_columns(
     coeffs: &[Vec<u64>],
     trace_log: u32,
     blowup_log: u32,
+    lde_root: u64,
     coset: u64,
 ) -> MetalResult<Option<Vec<Vec<u64>>>> {
     if coeffs.is_empty() {
         return Ok(Some(Vec::new()));
     }
 
-    lde_columns_async(coeffs, trace_log, blowup_log, coset)?.wait()
+    lde_columns_async(coeffs, trace_log, blowup_log, lde_root, coset)?.wait()
 }
 
 /// Dispatches an LDE kernel and returns a pending handle so callers can wait later.
@@ -3109,6 +3119,7 @@ pub(crate) fn lde_columns_async(
     coeffs: &[Vec<u64>],
     trace_log: u32,
     blowup_log: u32,
+    lde_root: u64,
     coset: u64,
 ) -> MetalResult<PendingLde> {
     let trace_len = 1usize << trace_log;
@@ -3151,7 +3162,7 @@ pub(crate) fn lde_columns_async(
     let context = metal_context()?;
     let coeff_metal = shared_buffer(&context.device, coeff_buffer.as_mut_slice());
     let eval_metal = shared_buffer(&context.device, eval_buffer.as_mut_slice());
-    let stage_twiddle_buffer = context.stage_twiddle_buffer(eval_log, false);
+    let stage_twiddle_buffer = context.stage_twiddle_buffer(eval_log, lde_root, false);
     let limits = pipeline_limits(&context.lde);
     let tuning = metal_config::fft_tuning(eval_log, limits.exec_width, limits.max_threads);
 
@@ -3218,7 +3229,7 @@ pub(crate) fn lde_columns_async(
                 stage_start,
                 inverse: 0,
                 threadgroup_lanes: args.threadgroup_lanes,
-                coset,
+                coset: 1,
             };
             tickets.push(submit_post_tile_dispatch(
                 context,
@@ -4910,14 +4921,13 @@ fn goldilocks_inv(value: u64) -> u64 {
     goldilocks_pow(value, FIELD_MODULUS - 2)
 }
 
-fn compute_stage_twiddles(log_len: u32, inverse: bool) -> Vec<u64> {
+fn compute_stage_twiddles(log_len: u32, root: u64, inverse: bool) -> Vec<u64> {
     if log_len == 0 {
         return Vec::new();
     }
 
     let len = 1u64 << log_len;
-    let base_exponent = (FIELD_MODULUS - 1) >> log_len;
-    let mut omega = goldilocks_pow(GOLDILOCKS_GENERATOR, base_exponent);
+    let mut omega = root;
     if inverse {
         omega = goldilocks_inv(omega);
     }
@@ -5092,10 +5102,10 @@ mod bn254_helper_tests {
 
     #[test]
     fn validate_bn254_twiddles_shape_checks_length() {
-        let ok = super::validate_bn254_twiddles_shape(2, &[[0u64; 4]; 2]).is_ok();
+        let ok = super::validate_bn254_twiddles_shape(2, &[[0u64; 4]; 4]).is_ok();
         assert!(ok, "expected shape to be valid");
 
-        let err = super::validate_bn254_twiddles_shape(2, &[[0u64; 4]; 1])
+        let err = super::validate_bn254_twiddles_shape(2, &[[0u64; 4]; 3])
             .expect_err("expected shape error");
         assert!(matches!(err, GpuError::InvalidInput(_)));
     }
@@ -5188,15 +5198,26 @@ mod tests {
         for (log_size, column_count) in scenarios {
             let mut cpu_columns = sample_fft_columns(log_size, column_count);
             let mut metal_columns = cpu_columns.clone();
+            let root = planner.trace_domain(log_size).generator;
 
             planner.fft_columns(&mut cpu_columns);
-            if unwrap_or_skip(super::fft_columns(&mut metal_columns, log_size), "fft").is_none() {
+            if unwrap_or_skip(
+                super::fft_columns(&mut metal_columns, log_size, root),
+                "fft",
+            )
+            .is_none()
+            {
                 return;
             }
             assert_eq!(cpu_columns, metal_columns);
 
             planner.ifft_columns(&mut cpu_columns);
-            if unwrap_or_skip(super::ifft_columns(&mut metal_columns, log_size), "ifft").is_none() {
+            if unwrap_or_skip(
+                super::ifft_columns(&mut metal_columns, log_size, root),
+                "ifft",
+            )
+            .is_none()
+            {
                 return;
             }
             assert_eq!(cpu_columns, metal_columns);
@@ -5224,8 +5245,17 @@ mod tests {
                 .collect::<Vec<u64>>(),
         ];
         let cpu_eval = planner.lde_columns(&coeffs);
+        let lde_root = planner
+            .lde_domain(trace_log + planner.blowup_log())
+            .generator;
         let Some(gpu_eval) = unwrap_or_skip(
-            super::lde_columns(&coeffs, trace_log, planner.blowup_log(), params.omega_coset),
+            super::lde_columns(
+                &coeffs,
+                trace_log,
+                planner.blowup_log(),
+                lde_root,
+                params.omega_coset,
+            ),
             "lde",
         ) else {
             return;
@@ -5309,10 +5339,11 @@ mod tests {
             0xefff_ffff_0000_0001,
             0x0000_0000_3fff_ffff_c000,
         ];
-        let twiddles = super::compute_stage_twiddles(5, false);
+        let root = super::goldilocks_pow(super::GOLDILOCKS_GENERATOR, (FIELD_MODULUS - 1) >> 5);
+        let twiddles = super::compute_stage_twiddles(5, root, false);
         assert_eq!(twiddles, expected);
 
-        let inverse_twiddles = super::compute_stage_twiddles(5, true);
+        let inverse_twiddles = super::compute_stage_twiddles(5, root, true);
         for (forward, inverse) in expected.iter().zip(inverse_twiddles.iter()) {
             assert_eq!(*inverse, super::goldilocks_inv(*forward));
         }
@@ -5594,13 +5625,14 @@ mod tests {
     #[test]
     fn kernel_descriptors_cover_entry_points() {
         let descriptors = super::metal_kernel_descriptors();
-        assert_eq!(descriptors.len(), 5);
+        assert_eq!(descriptors.len(), 6);
         for name in [
             "fastpq_fft_columns",
             "fastpq_fft_post_tiling",
             "fastpq_lde_columns",
             "poseidon_permute",
             "poseidon_hash_columns",
+            "bn254_poseidon_hash_words",
         ] {
             assert!(
                 descriptors

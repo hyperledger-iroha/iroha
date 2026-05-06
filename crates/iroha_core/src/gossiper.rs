@@ -24,6 +24,7 @@ use iroha_data_model::{
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_p2p::{Broadcast, Post, Priority};
+use iroha_primitives::time::TimeSource;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     codec::{Decode, Encode},
@@ -34,7 +35,7 @@ use tokio::sync::mpsc;
 use crate::{
     IrohaNetwork, NetworkMessage,
     queue::{GossipBatchEntry, Queue, RoutingDecision},
-    state::{State, TransactionsReadOnly},
+    state::{State, StatelessValidationContext, TransactionsReadOnly},
     tx::{
         AcceptTransactionFail, AcceptedTransaction, PreparedTransactionMetadata,
         SignatureRejectionCode, SignatureVerificationFail,
@@ -1314,6 +1315,7 @@ impl TransactionGossiper {
         let state = self.state.as_ref();
         let committed_transactions = state.transactions.view();
         let ed25519_batch_cap = self.state.pipeline.signature_batch_max_ed25519;
+        let stateless_cache_cap = self.state.pipeline.stateless_cache_cap;
 
         struct GossipAdmissionCandidate {
             tx: GossipTransaction,
@@ -1501,6 +1503,29 @@ impl TransactionGossiper {
             });
         }
 
+        if stateless_cache_cap > 0 && !materialized.is_empty() {
+            let cache_context = StatelessValidationContext::new(
+                self.chain_id.clone(),
+                u64::try_from(max_clock_drift.as_millis()).unwrap_or(u64::MAX),
+                tx_limits,
+                crypto_cfg.allowed_signing.clone(),
+            );
+            let cache_now_ms = TimeSource::new_system().get_unix_time().as_millis();
+            let mut cache = state.stateless_validation_cache().lock();
+            cache.set_cap(stateless_cache_cap);
+            cache.ensure_context(cache_context);
+            for candidate in &mut materialized {
+                let Some(prepared) = candidate.prepared.as_ref() else {
+                    continue;
+                };
+                if prepared.single_ed25519_key.is_some()
+                    && cache.get_ok(&prepared.signed_hash, cache_now_ms)
+                {
+                    candidate.ed25519_prechecked = true;
+                }
+            }
+        }
+
         if ed25519_batch_cap > 0 {
             #[derive(Clone, Copy)]
             struct Ed25519BatchItem {
@@ -1535,6 +1560,9 @@ impl TransactionGossiper {
             let mut signatures = Vec::new();
             let mut public_keys = Vec::new();
             for (idx, candidate) in materialized.iter().enumerate() {
+                if candidate.ed25519_prechecked {
+                    continue;
+                }
                 let TransactionEntrypoint::External(signed) = &candidate.entrypoint else {
                     continue;
                 };

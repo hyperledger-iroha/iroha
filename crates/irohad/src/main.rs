@@ -3845,6 +3845,9 @@ impl Iroha {
         state.chain_id = config.common.chain.clone();
         // Apply crypto config before replay/genesis validation so allowed_signing is respected.
         state.set_crypto(config.crypto.clone());
+        // Apply pipeline config before replay so config-backed execution policy such as
+        // pipeline.gas is identical to the live path that originally committed the block.
+        state.set_pipeline(config.pipeline.clone());
         state
             .set_nexus(config.nexus.clone())
             .map_err(|err| Report::new(err).change_context(StartError::InitKura))

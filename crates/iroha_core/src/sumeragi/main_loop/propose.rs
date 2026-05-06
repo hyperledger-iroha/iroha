@@ -574,12 +574,49 @@ impl Actor {
         Some(NonZeroU64::new(capped).expect("non-zero by construction"))
     }
 
+    pub(super) fn is_ivm_heavy_transaction(
+        tx: &AcceptedTransaction<'_>,
+        replay_ivm_proved: bool,
+    ) -> bool {
+        fn is_heavy_executable(
+            executable: &iroha_data_model::transaction::Executable,
+            replay_ivm_proved: bool,
+        ) -> bool {
+            matches!(
+                executable,
+                iroha_data_model::transaction::Executable::ContractCall(_)
+                    | iroha_data_model::transaction::Executable::Ivm(_)
+            ) || (replay_ivm_proved
+                && matches!(
+                    executable,
+                    iroha_data_model::transaction::Executable::IvmProved(_)
+                ))
+        }
+
+        match tx.entrypoint() {
+            iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
+                is_heavy_executable(signed.instructions(), replay_ivm_proved)
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
+                is_heavy_executable(
+                    reveal.signed_transaction().instructions(),
+                    replay_ivm_proved,
+                )
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_)
+            | iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(_)
+            | iroha_data_model::transaction::TransactionEntrypoint::Time(_) => false,
+        }
+    }
+
     pub(super) fn pull_transactions_for_proposal(
         &self,
         state: &State,
         max_in_block: NonZeroUsize,
         scan_budget: usize,
         gas_limit_per_block: Option<NonZeroU64>,
+        max_ivm_transactions: Option<NonZeroUsize>,
+        replay_ivm_proved: bool,
         tx_guards: &mut Vec<crate::queue::TransactionGuard>,
         height: u64,
         view: u64,
@@ -590,6 +627,9 @@ impl Actor {
         let mut fetched_total = 0usize;
         let mut gas_used_in_block = 0u64;
         let gas_limit_per_block = gas_limit_per_block.map(NonZeroU64::get);
+        let max_ivm_transactions = max_ivm_transactions.map(NonZeroUsize::get);
+        let mut ivm_transactions_included = 0usize;
+        let mut ivm_transactions_deferred = 0usize;
         let scan_budget = scan_budget.max(1);
 
         loop {
@@ -637,20 +677,39 @@ impl Actor {
                 deferred_accumulator.extend(deferred);
             }
 
-            if let Some(limit) = gas_limit_per_block {
-                let mut accepted = Vec::with_capacity(fetched.len());
-                for guard in fetched {
-                    let gas_cost = guard.gas_cost();
-                    let remaining_gas = limit.saturating_sub(gas_used_in_block);
-                    let would_exceed = gas_cost > remaining_gas && gas_cost > 0;
-                    let allow_oversized = gas_used_in_block == 0 && accepted.is_empty();
-
-                    if would_exceed && !allow_oversized {
+            let mut accepted = Vec::with_capacity(fetched.len());
+            for guard in fetched {
+                let release_lane_consumption =
+                    |guard: &crate::queue::TransactionGuard,
+                     lane_consumption: &mut BTreeMap<LaneId, u64>| {
                         let lane_id = guard.routing().lane_id;
                         let teu = guard.teu_weight();
                         if let Some(used) = lane_consumption.get_mut(&lane_id) {
                             *used = used.saturating_sub(teu);
                         }
+                    };
+
+                let is_ivm_heavy =
+                    Self::is_ivm_heavy_transaction(guard.as_accepted(), replay_ivm_proved);
+                if let Some(limit) = max_ivm_transactions
+                    && is_ivm_heavy
+                    && ivm_transactions_included >= limit
+                {
+                    release_lane_consumption(&guard, &mut lane_consumption);
+                    ivm_transactions_deferred = ivm_transactions_deferred.saturating_add(1);
+                    deferred_accumulator.push((guard.clone_accepted(), guard.routing()));
+                    continue;
+                }
+
+                if let Some(limit) = gas_limit_per_block {
+                    let gas_cost = guard.gas_cost();
+                    let remaining_gas = limit.saturating_sub(gas_used_in_block);
+                    let would_exceed = gas_cost > remaining_gas && gas_cost > 0;
+                    let allow_oversized =
+                        gas_used_in_block == 0 && tx_guards.is_empty() && accepted.is_empty();
+
+                    if would_exceed && !allow_oversized {
+                        release_lane_consumption(&guard, &mut lane_consumption);
                         deferred_accumulator.push((guard.clone_accepted(), guard.routing()));
                         continue;
                     }
@@ -665,18 +724,31 @@ impl Actor {
                         );
                     }
                     gas_used_in_block = gas_used_in_block.saturating_add(gas_cost);
-                    accepted.push(guard);
                 }
-                tx_guards.extend(accepted);
-            } else {
-                tx_guards.extend(fetched);
+
+                if is_ivm_heavy {
+                    ivm_transactions_included = ivm_transactions_included.saturating_add(1);
+                }
+                accepted.push(guard);
             }
+            tx_guards.extend(accepted);
 
             if let Some(limit) = gas_limit_per_block {
                 if gas_used_in_block >= limit {
                     break;
                 }
             }
+        }
+
+        if ivm_transactions_deferred > 0 {
+            debug!(
+                height,
+                view,
+                max_ivm_transactions,
+                ivm_transactions_included,
+                ivm_transactions_deferred,
+                "proposal IVM-heavy transaction budget reached"
+            );
         }
 
         deferred_accumulator
@@ -832,7 +904,7 @@ impl Actor {
             || self.pending_block_has_qc(pending_hash, pending.height, pending.view)
     }
 
-    fn clear_stale_commit_inflight_for_block(
+    pub(super) fn clear_stale_commit_inflight_for_block(
         &mut self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
@@ -1740,6 +1812,12 @@ impl Actor {
             );
             let fast_gas_capped = proposal_gas_limit != base_gas_limit;
             let scan_budget = self.proposal_scan_budget(max_in_block);
+            let max_ivm_transactions = self.config.block.max_ivm_transactions;
+            let replay_ivm_proved = {
+                let state_view = self.state.view();
+                let pipeline = state_view.pipeline();
+                pipeline.ivm_proved.enabled && !pipeline.ivm_proved.skip_replay
+            };
             debug!(
                 height,
                 view,
@@ -1747,6 +1825,7 @@ impl Actor {
                 max_tx_param = block_max_param.get(),
                 max_tx_target,
                 max_in_block = max_in_block.get(),
+                max_ivm_transactions = max_ivm_transactions.map(NonZeroUsize::get),
                 scan_budget,
                 scan_multiplier = self.config.block.proposal_queue_scan_multiplier.get(),
                 effective_commit_time_ms,
@@ -1762,6 +1841,8 @@ impl Actor {
                 max_in_block,
                 scan_budget,
                 proposal_gas_limit,
+                max_ivm_transactions,
+                replay_ivm_proved,
                 &mut tx_guards,
                 height,
                 view,
@@ -2379,10 +2460,12 @@ impl Actor {
                     .proposal_cache
                     .insert_hint(proposal_hint);
                 let block_created = if let Some(block_created) = self
-                    .frontier_block_created_for_local_proposal_wire(
+                    .frontier_block_created_for_local_proposal_wire_with_payload(
                         &signed_block,
                         &proposal,
                         topology.as_ref(),
+                        &payload_bytes,
+                        payload_hash,
                     ) {
                     block_created
                 } else {
@@ -3004,7 +3087,7 @@ impl Actor {
             return;
         };
 
-        let (pending_block, block_hash) = {
+        let (pending_block, block_hash, pending_payload_bytes, pending_payload_hash) = {
             let Some(pending) = self.pending.pending_blocks.values().find(|pending| {
                 !pending.aborted
                     && pending.height == height
@@ -3019,7 +3102,12 @@ impl Actor {
                 );
                 return;
             };
-            (pending.block.clone(), pending.block.hash())
+            (
+                pending.block.clone(),
+                pending.block.hash(),
+                pending.payload_bytes().to_vec(),
+                pending.payload_hash,
+            )
         };
 
         let (consensus_mode, _, _) = self.consensus_context_for_height(height);
@@ -3084,10 +3172,12 @@ impl Actor {
         }
 
         let local_peer_id = self.common_config.peer.id().clone();
-        let Some(block_created) = self.frontier_block_created_for_local_proposal_wire(
+        let Some(block_created) = self.frontier_block_created_for_local_proposal_wire_with_payload(
             &pending_block,
             &proposal,
             &proposal_roster,
+            &pending_payload_bytes,
+            pending_payload_hash,
         ) else {
             warn!(
                 height,

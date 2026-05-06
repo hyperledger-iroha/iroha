@@ -19896,7 +19896,11 @@ impl Actor {
         let _message_timing = message_timing;
         debug!(message=%Self::block_message_kind(&msg), "received consensus block message");
         self.note_message_received(&msg);
-        self.process_committed_blocks_before_consensus(Self::block_message_kind(&msg));
+        let defer_committed_block_poll =
+            matches!(msg, BlockMessage::VrfCommit(_) | BlockMessage::VrfReveal(_));
+        if !defer_committed_block_poll {
+            self.process_committed_blocks_before_consensus(Self::block_message_kind(&msg));
+        }
         if let Some((height, view)) = Self::block_message_height_view(&msg) {
             if self.should_drop_future_consensus_message(
                 height,
@@ -20074,7 +20078,7 @@ impl Actor {
                 return Ok(());
             }
         }
-        match msg {
+        let result = match msg {
             BlockMessage::ConsensusParams(advert) => self.handle_consensus_params(advert),
             BlockMessage::BlockCreated(block) => self.handle_block_created(block, sender),
             BlockMessage::BlockSyncUpdate(update) => self.handle_block_sync_update(update, sender),
@@ -20101,8 +20105,8 @@ impl Actor {
                 Ok(())
             }
             BlockMessage::Qc(cert) => self.handle_qc(cert),
-            BlockMessage::VrfCommit(commit) => self.handle_vrf_commit(commit),
-            BlockMessage::VrfReveal(reveal) => self.handle_vrf_reveal(reveal),
+            BlockMessage::VrfCommit(commit) => self.handle_vrf_commit(commit, sender),
+            BlockMessage::VrfReveal(reveal) => self.handle_vrf_reveal(reveal, sender),
             BlockMessage::ExecWitness(witness) => {
                 self.handle_exec_witness(witness);
                 Ok(())
@@ -20120,7 +20124,11 @@ impl Actor {
             BlockMessage::RbcDeliver(deliver) => self.handle_rbc_deliver(deliver),
             BlockMessage::FetchPendingBlock(request) => self.handle_fetch_pending_block(request),
             BlockMessage::Proposal(proposal) => self.handle_proposal(proposal),
+        };
+        if defer_committed_block_poll {
+            self.process_committed_blocks_before_consensus("VrfMetadataPostHandle");
         }
+        result
     }
 
     pub(super) fn on_lane_relay_message(&mut self, message: super::LaneRelayMessage) -> Result<()> {
@@ -21367,15 +21375,25 @@ impl Actor {
         block: &SignedBlock,
         key: super::rbc_store::SessionKey,
     ) -> Option<RbcInit> {
+        let payload_bytes = self::proposals::block_payload_bytes(block);
+        let payload_hash = Hash::new(&payload_bytes);
+        self.rebuild_rbc_init_from_payload_bytes(block, key, &payload_bytes, payload_hash)
+    }
+
+    fn rebuild_rbc_init_from_payload_bytes(
+        &self,
+        block: &SignedBlock,
+        key: super::rbc_store::SessionKey,
+        payload_bytes: &[u8],
+        payload_hash: Hash,
+    ) -> Option<RbcInit> {
         let roster = self.rbc_roster_for_session(key);
         if roster.is_empty() {
             return None;
         }
-        let payload_bytes = self::proposals::block_payload_bytes(block);
-        let payload_hash = Hash::new(&payload_bytes);
         let epoch = self.epoch_for_height(key.1);
         let session = match Self::build_rbc_session_from_payload_with_chunking(
-            &payload_bytes,
+            payload_bytes,
             payload_hash,
             self::rbc::RbcChunkingSpec::from_config(&self.config.rbc),
             epoch,
@@ -38283,8 +38301,14 @@ impl RbcSession {
         if !self.delivered || self.received_chunks != self.total_chunks {
             return None;
         }
-        let payload = self.payload_bytes()?;
-        Some(u64::try_from(payload.len()).unwrap_or(u64::MAX))
+        if let Some(payload_size) = self.layout.payload_size() {
+            return Some(u64::try_from(payload_size).unwrap_or(u64::MAX));
+        }
+        let mut bytes = 0usize;
+        for entry in &self.chunks {
+            bytes = bytes.saturating_add(entry.as_ref()?.bytes.len());
+        }
+        Some(u64::try_from(bytes).unwrap_or(u64::MAX))
     }
 
     pub(crate) fn take_delivered_payload_bytes_for_telemetry_with_fallback(

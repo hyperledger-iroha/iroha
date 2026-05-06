@@ -96,6 +96,8 @@ pub struct Kura {
     block_store: Mutex<BlockStore>,
     /// The array of block hashes and a slot for an arc of the block. This is normally recovered from the index file.
     block_data: Mutex<BlockData>,
+    /// Reverse lookup for committed block hash to block height.
+    block_height_index: Mutex<BlockHeightIndex>,
     /// Channel for waking the writer thread when sidecars need flushing or shutdown is signalled.
     block_notify_tx: mpsc::Sender<BlockNotify>,
     block_notify_rx: Mutex<Option<mpsc::Receiver<BlockNotify>>>,
@@ -155,6 +157,7 @@ pub struct Kura {
 }
 
 type BlockData = Vec<(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)>;
+type BlockHeightIndex = BTreeMap<HashOf<BlockHeader>, NonZeroUsize>;
 type BlockReplicaKey = (u64, HashOf<BlockHeader>);
 type BlockReplicaRegistry = BTreeMap<BlockReplicaKey, BTreeMap<PeerId, BlockReplicaAdvert>>;
 
@@ -530,6 +533,33 @@ enum BlockNotify {
 }
 
 impl Kura {
+    fn build_block_height_index(block_data: &BlockData) -> BlockHeightIndex {
+        block_data
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, (hash, _))| {
+                NonZeroUsize::new(idx.saturating_add(1)).map(|height| (*hash, height))
+            })
+            .fold(BTreeMap::new(), |mut index, (hash, height)| {
+                index.entry(hash).or_insert(height);
+                index
+            })
+    }
+
+    fn set_block_height_index_entry(&self, height: usize, hash: HashOf<BlockHeader>) {
+        let Some(height) = NonZeroUsize::new(height) else {
+            return;
+        };
+        let mut index = self.block_height_index.lock();
+        index.retain(|_, indexed_height| *indexed_height != height);
+        index.insert(hash, height);
+    }
+
+    fn truncate_block_height_index(&self, keep: usize) {
+        let mut index = self.block_height_index.lock();
+        index.retain(|_, height| height.get() <= keep);
+    }
+
     /// Return `true` when the block payload is available locally (in memory, `blocks.data`, or the
     /// local sidecar cache).
     pub(crate) fn block_payload_available_by_hash(&self, hash: HashOf<BlockHeader>) -> bool {
@@ -710,6 +740,7 @@ impl Kura {
             .then(|| blocks_root.join("blocks.jsonl"));
 
         let (block_data, chain_validation) = Kura::init(&mut block_store, config.init_mode)?;
+        let block_height_index = Self::build_block_height_index(&block_data);
         let block_count = block_data.len();
         info!(mode=?config.init_mode, block_count, "Kura init complete");
 
@@ -752,6 +783,7 @@ impl Kura {
         let kura = Arc::new(Self {
             block_store: Mutex::new(block_store),
             block_data: Mutex::new(block_data),
+            block_height_index: Mutex::new(block_height_index),
             block_notify_tx,
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(block_plain_text_path),
@@ -833,6 +865,7 @@ impl Kura {
                 FSYNC_INTERVAL,
             )),
             block_data: Mutex::new(Vec::new()),
+            block_height_index: Mutex::new(BTreeMap::new()),
             block_notify_tx,
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(None),
@@ -2039,14 +2072,9 @@ impl Kura {
             .flatten()
     }
 
-    /// Search through blocks for the height of the block with the given hash.
+    /// Resolve the height of the block with the given hash.
     pub fn get_block_height_by_hash(&self, hash: HashOf<BlockHeader>) -> Option<NonZeroUsize> {
-        self.block_data
-            .lock()
-            .iter()
-            .position(|(block_hash, _block_arc)| *block_hash == hash)
-            .and_then(|idx| idx.checked_add(1))
-            .and_then(NonZeroUsize::new)
+        self.block_height_index.lock().get(&hash).copied()
     }
 
     /// Return the durable height and encoded payload length for a known canonical block hash.
@@ -2497,6 +2525,7 @@ impl Kura {
             if actual_height <= u64::try_from(block_data.len())? {
                 drop(block_data);
                 self.ensure_durable_block_at_height(actual_height, block_hash)?;
+                self.set_block_height_index_entry(actual_height_usize, block_hash);
                 if let Some(entry) = merge_entry {
                     self.append_merge_entry_for_existing_block_if_missing(actual_height, entry)?;
                 }
@@ -2521,6 +2550,7 @@ impl Kura {
         if actual_height <= u64::try_from(block_data.len())? {
             drop(block_data);
             self.ensure_durable_block_at_height(actual_height, block_hash)?;
+            self.set_block_height_index_entry(actual_height_usize, block_hash);
             if let Some(entry) = merge_entry {
                 self.append_merge_entry_for_existing_block_if_missing(actual_height, entry)?;
             }
@@ -2565,6 +2595,7 @@ impl Kura {
             self.blocks_in_memory.get(),
         );
         let new_len = block_data.len();
+        self.set_block_height_index_entry(actual_height_usize, block_hash);
         drop(block_data);
         self.append_debug_block_dump(block);
 
@@ -3337,6 +3368,7 @@ impl Kura {
             if Self::validate_top_replacement(data.as_slice(), height, height_usize, block_hash)? {
                 drop(data);
                 self.ensure_durable_block_at_height(height, block_hash)?;
+                self.set_block_height_index_entry(height_usize, block_hash);
                 return Ok(());
             }
         }
@@ -3347,6 +3379,7 @@ impl Kura {
         if Self::validate_top_replacement(data.as_slice(), height, height_usize, block_hash)? {
             drop(data);
             self.ensure_durable_block_at_height(height, block_hash)?;
+            self.set_block_height_index_entry(height_usize, block_hash);
             return Ok(());
         }
 
@@ -3356,6 +3389,7 @@ impl Kura {
             *top = (block_hash, Some(Arc::clone(&block)));
         }
         Self::drop_persisted_blocks(&mut data, height_usize, self.blocks_in_memory.get());
+        self.set_block_height_index_entry(height_usize, block_hash);
         drop(data);
         self.prune_wsv_checkpoints_above(height.saturating_sub(1))?;
         self.append_debug_block_dump(&block);
@@ -3418,6 +3452,7 @@ impl Kura {
             }
             data.truncate(keep);
         }
+        self.truncate_block_height_index(keep);
         self.invalidate_pending_budget_cache();
 
         if !self.store_root.as_os_str().is_empty() {
@@ -7803,6 +7838,7 @@ mod tests {
         kura.block_data
             .lock()
             .push((block_hash, Some(Arc::clone(&block))));
+        kura.set_block_height_index_entry(1, block_hash);
 
         assert_eq!(
             kura.durable_block_payload_len_by_hash(block_hash),
@@ -7846,6 +7882,7 @@ mod tests {
         kura.block_data
             .lock()
             .push((block_hash, Some(Arc::clone(&block))));
+        kura.set_block_height_index_entry(1, block_hash);
 
         let err = kura
             .replace_top_block(Arc::clone(&block))
@@ -12876,16 +12913,31 @@ mod tests {
         let b1 = blocks.next();
         let b2 = blocks.next();
         let b3 = blocks.next();
+        let b2_hash = b2.hash();
+        let b3_hash = b3.hash();
         kura.store_block(b1).expect("store block");
         kura.store_block(b2).expect("store block");
         kura.store_block(b3.clone()).expect("store block");
 
         assert_eq!(kura.blocks_count(), 3);
+        assert_eq!(
+            kura.get_block_height_by_hash(b3_hash),
+            Some(nonzero!(3_usize))
+        );
         kura.prune_to_height(2).expect("prune to height");
         assert_eq!(kura.blocks_count(), 2);
+        assert_eq!(
+            kura.get_block_height_by_hash(b2_hash),
+            Some(nonzero!(2_usize))
+        );
+        assert_eq!(kura.get_block_height_by_hash(b3_hash), None);
 
         kura.store_block(b3).expect("store block after prune");
         assert_eq!(kura.blocks_count(), 3);
+        assert_eq!(
+            kura.get_block_height_by_hash(b3_hash),
+            Some(nonzero!(3_usize))
+        );
     }
 
     #[test]

@@ -6628,8 +6628,13 @@ impl Actor {
         let Some(block) = self.local_signed_block_for_hash(key.0) else {
             return;
         };
-        let payload_bytes = super::proposals::block_payload_bytes(block.as_ref());
-        let payload_hash = Hash::new(&payload_bytes);
+        let (payload_bytes, payload_hash) = self
+            .with_local_payload_for_progress(key.0, |_, _, bytes, hash| (bytes.to_vec(), hash))
+            .unwrap_or_else(|| {
+                let payload_bytes = super::proposals::block_payload_bytes(block.as_ref());
+                let payload_hash = Hash::new(&payload_bytes);
+                (payload_bytes, payload_hash)
+            });
         if let Err(err) = self.persist_exact_frontier_rbc_recovery_snapshot(
             key,
             block.as_ref(),
@@ -7114,7 +7119,19 @@ impl Actor {
             return;
         };
         for record in &effects.vrf_epoch_seals {
-            self.pending_npos_vrf_records.remove(&record.epoch);
+            let remove_pending = self
+                .pending_npos_vrf_records
+                .get(&record.epoch)
+                .is_none_or(|pending| Self::committed_vrf_record_covers_pending(record, pending));
+            if remove_pending {
+                self.pending_npos_vrf_records.remove(&record.epoch);
+            } else {
+                debug!(
+                    epoch = record.epoch,
+                    committed_updated_at_height = record.updated_at_height,
+                    "retaining newer pending VRF epoch record after stale committed seal"
+                );
+            }
             if let Some((activate_at, roster, apply_now)) =
                 Self::activation_plan_from_vrf_record(height, record)
             {
@@ -7148,6 +7165,21 @@ impl Actor {
         }
         super::status::inc_vrf_penalties_applied(vrf_applied);
         super::status::inc_consensus_penalties_applied(consensus_applied);
+    }
+
+    pub(super) fn committed_vrf_record_covers_pending(
+        committed: &VrfEpochRecord,
+        pending: &VrfEpochRecord,
+    ) -> bool {
+        pending.updated_at_height <= committed.updated_at_height
+            && pending
+                .participants
+                .iter()
+                .all(|participant| committed.participants.contains(participant))
+            && pending
+                .late_reveals
+                .iter()
+                .all(|late_reveal| committed.late_reveals.contains(late_reveal))
     }
 
     #[allow(clippy::unnecessary_wraps)]

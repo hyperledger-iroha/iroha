@@ -1,14 +1,111 @@
 //! Implementations for transaction queries.
 
+use std::collections::BTreeSet;
+
 use eyre::Result;
+use iroha_crypto::HashOf;
 use iroha_data_model::{
+    block::{BlockHeader, SignedBlock},
     prelude::*,
-    query::{CommittedTransaction, dsl::CompoundPredicate, error::QueryExecutionFail},
+    query::{
+        CommittedTransaction, dsl::CompoundPredicate, error::QueryExecutionFail,
+        json::PredicateJson,
+    },
 };
 use iroha_telemetry::metrics;
 use nonzero_ext::nonzero;
+use norito::json::Value;
 
 use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
+
+fn block_hash_from_value(value: &Value) -> Option<HashOf<BlockHeader>> {
+    norito::json::from_value(value.clone()).ok()
+}
+
+fn transaction_block_hash_field(field: &str) -> bool {
+    matches!(field, "block_hash" | "block" | "block.hash")
+}
+
+fn maybe_replace_block_candidate_heights(
+    best: &mut Option<BTreeSet<std::num::NonZeroUsize>>,
+    candidates: BTreeSet<std::num::NonZeroUsize>,
+) {
+    if best
+        .as_ref()
+        .map_or(true, |current| candidates.len() < current.len())
+    {
+        *best = Some(candidates);
+    }
+}
+
+fn transaction_candidate_block_heights(
+    predicate: &PredicateJson,
+    state_ro: &impl StateReadOnly,
+) -> Option<BTreeSet<std::num::NonZeroUsize>> {
+    let mut best = None;
+
+    for cond in &predicate.equals {
+        if transaction_block_hash_field(&cond.field) {
+            maybe_replace_block_candidate_heights(
+                &mut best,
+                block_hash_from_value(&cond.value)
+                    .and_then(|hash| state_ro.kura().get_block_height_by_hash(hash))
+                    .into_iter()
+                    .collect(),
+            );
+        }
+    }
+
+    for cond in &predicate.r#in {
+        if transaction_block_hash_field(&cond.field) {
+            maybe_replace_block_candidate_heights(
+                &mut best,
+                cond.values
+                    .iter()
+                    .filter_map(block_hash_from_value)
+                    .filter_map(|hash| state_ro.kura().get_block_height_by_hash(hash))
+                    .collect(),
+            );
+        }
+    }
+
+    best
+}
+
+fn block_committed_transactions(block: &SignedBlock) -> Vec<CommittedTransaction> {
+    let block_hash = block.hash();
+
+    let entrypoint_hashes = block.entrypoint_hashes().rev();
+    let entrypoint_proofs = block.entrypoint_proofs().rev();
+    let entrypoints = block.entrypoints_cloned().rev();
+    let result_hashes = block.result_hashes().rev();
+    let result_proofs = block.result_proofs().rev();
+    let results = block.results().cloned().rev();
+
+    entrypoint_hashes
+        .zip(entrypoint_proofs)
+        .zip(entrypoints)
+        .zip(result_hashes)
+        .zip(result_proofs)
+        .zip(results)
+        .map(
+            |(
+                ((((entrypoint_hash, entrypoint_proof), entrypoint), result_hash), result_proof),
+                result,
+            )| {
+                CommittedTransaction {
+                    block_hash,
+                    entrypoint_hash,
+                    entrypoint_proof,
+                    entrypoint,
+                    result_hash,
+                    result_proof,
+                    result,
+                }
+            },
+        )
+        .collect()
+}
 
 impl ValidQuery for FindTransactions {
     #[metrics(+"find_transactions")]
@@ -17,49 +114,34 @@ impl ValidQuery for FindTransactions {
         filter: CompoundPredicate<CommittedTransaction>,
         state_ro: &impl StateReadOnly,
     ) -> Result<impl Iterator<Item = Self::Item>, QueryExecutionFail> {
-        Ok(state_ro
-            .all_blocks(nonzero!(1_usize))
-            // Iterate over blocks in descending order (most recent first).
-            .rev()
-            .flat_map(|block| {
-                let block_hash = block.hash();
+        let predicate_json = filter
+            .json_payload()
+            .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
 
-                // Iterate over transactions in descending order (most recent first).
-                let entrypoint_hashes = block.entrypoint_hashes().rev();
-                let entrypoint_proofs = block.entrypoint_proofs().rev();
-                let entrypoints = block.entrypoints_cloned().rev();
-                let result_hashes = block.result_hashes().rev();
-                let result_proofs = block.result_proofs().rev();
-                let results = block.results().cloned().rev();
+        let candidate_heights = predicate_json
+            .as_ref()
+            .and_then(|predicate| transaction_candidate_block_heights(predicate, state_ro));
 
-                entrypoint_hashes
-                    .zip(entrypoint_proofs)
-                    .zip(entrypoints)
-                    .zip(result_hashes)
-                    .zip(result_proofs)
-                    .zip(results)
-                    .map(
-                        |(
-                            (
-                                (((entrypoint_hash, entrypoint_proof), entrypoint), result_hash),
-                                result_proof,
-                            ),
-                            result,
-                        )| {
-                            CommittedTransaction {
-                                block_hash,
-                                entrypoint_hash,
-                                entrypoint_proof,
-                                entrypoint,
-                                result_hash,
-                                result_proof,
-                                result,
-                            }
-                        },
-                    )
-                    .collect::<Vec<_>>()
-            })
-            .filter(move |tx| filter.applies(tx)))
+        let iter: Box<dyn Iterator<Item = CommittedTransaction> + '_> =
+            if let Some(candidate_heights) = candidate_heights {
+                Box::new(
+                    candidate_heights
+                        .into_iter()
+                        .rev()
+                        .filter_map(|height| state_ro.kura().get_block(height))
+                        .flat_map(|block| block_committed_transactions(&block)),
+                )
+            } else {
+                Box::new(
+                    state_ro
+                        .all_blocks(nonzero!(1_usize))
+                        // Iterate over blocks in descending order (most recent first).
+                        .rev()
+                        .flat_map(|block| block_committed_transactions(&block)),
+                )
+            };
+
+        Ok(iter.filter(move |tx| filter.applies(tx)))
     }
 }
 

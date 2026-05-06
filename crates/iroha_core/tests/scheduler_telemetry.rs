@@ -701,6 +701,7 @@ fn nexus_config_diff_counter_and_event_emitted() {
     let nexus = Nexus {
         enabled: true,
         storage: NexusStorage::default(),
+        relay_worker: NexusRelayWorker::default(),
         staking: NexusStaking::default(),
         fees: NexusFees::default(),
         relay_worker: NexusRelayWorker::default(),
@@ -712,6 +713,7 @@ fn nexus_config_diff_counter_and_event_emitted() {
         lane_config: RuntimeLaneConfig::from_catalog(&lane_catalog),
         lane_catalog,
         dataspace_catalog,
+        dataspace_fee_sponsors: BTreeMap::new(),
         routing_policy,
         registry,
         governance,

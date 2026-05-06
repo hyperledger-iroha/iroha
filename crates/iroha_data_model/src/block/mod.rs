@@ -741,7 +741,7 @@ pub mod error {
             DaProofPolicyMismatch,
             /// DA shard cursor was missing or regressed.
             DaShardCursorViolation,
-            /// Deterministic NPoS effects did not match the signed block header or local validation.
+            /// Deterministic `NPoS` effects did not match the signed block header or local validation.
             NposEffectsMismatch,
         }
     }

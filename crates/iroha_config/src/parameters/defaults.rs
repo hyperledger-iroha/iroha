@@ -2821,6 +2821,8 @@ pub mod sumeragi {
     pub const FANOUT_ACTIVITY_LOOKBACK_BLOCKS: u32 = 128;
     /// Optional cap on transactions per block (None = unlimited).
     pub const BLOCK_MAX_TRANSACTIONS: Option<NonZeroUsize> = None;
+    /// Optional cap on VM-heavy transactions per block (None = unlimited).
+    pub const BLOCK_MAX_IVM_TRANSACTIONS: Option<NonZeroUsize> = None;
     /// Commit-time threshold (ms) for applying fast-finality proposal caps.
     pub const FAST_FINALITY_COMMIT_TIME_MS: u64 = 1_000;
     /// Optional cap on block gas limit when commit time is <= fast-finality threshold.

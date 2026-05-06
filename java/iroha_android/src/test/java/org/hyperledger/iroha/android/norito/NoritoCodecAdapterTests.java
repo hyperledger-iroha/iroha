@@ -116,9 +116,10 @@ public final class NoritoCodecAdapterTests {
     final long controllerTag = NoritoAdapters.uint(32).decode(authorityDecoder);
     assert controllerTag == 0L : "AccountController tag must be Single";
     final byte[] publicKeyField = readField(authorityDecoder, "authority.controller.public_key");
-    final String publicKeyLiteral =
-        decodeFieldPayload(publicKeyField, NoritoAdapters.stringAdapter(), "authority.controller.public_key");
-    assert !publicKeyLiteral.isBlank() : "Public key field must wrap a single string";
+    final byte[] publicKeyPayload =
+        decodeFieldPayload(publicKeyField, BYTE_VECTOR_ADAPTER, "authority.controller.public_key");
+    assert Arrays.equals(PublicKeyCodec.compactPublicKeyPayload(0x01, publicKey), publicKeyPayload)
+        : "Public key field must wrap the compact public-key payload";
     assert authorityDecoder.remaining() == 0 : "Authority payload must contain only the controller payload";
   }
 
@@ -175,10 +176,10 @@ public final class NoritoCodecAdapterTests {
         policyDecoder.readLength(false);
     assert memberCount == 2L : "Multisig policy member count must round-trip";
 
-    final String expectedMemberA =
-        PublicKeyCodec.encodePublicKeyMultihash(0x01, memberKeyA);
-    final String expectedMemberB =
-        PublicKeyCodec.encodePublicKeyMultihash(0x01, memberKeyB);
+    final byte[] expectedMemberA =
+        PublicKeyCodec.compactPublicKeyPayload(0x01, memberKeyA);
+    final byte[] expectedMemberB =
+        PublicKeyCodec.compactPublicKeyPayload(0x01, memberKeyB);
 
     assertMultisigMember(policyDecoder, expectedMemberA, 1, "member[0]");
     assertMultisigMember(policyDecoder, expectedMemberB, 2, "member[1]");
@@ -505,17 +506,17 @@ public final class NoritoCodecAdapterTests {
 
   private static void assertMultisigMember(
       final NoritoDecoder decoder,
-      final String expectedPublicKey,
+      final byte[] expectedPublicKey,
       final int expectedWeight,
       final String label) {
     final byte[] memberPayload = readSequenceElement(decoder, decoder.compactLenActive(), label);
     final NoritoDecoder memberDecoder = canonicalDecoder(memberPayload);
-    final String publicKey =
-        NoritoAdapters.stringAdapter().decode(memberDecoder);
+    final byte[] publicKey =
+        BYTE_VECTOR_ADAPTER.decode(memberDecoder);
     final int weight =
         Math.toIntExact(NoritoAdapters.uint(16).decode(memberDecoder));
     assert memberDecoder.remaining() == 0 : label + " payload should not have trailing bytes";
-    assert expectedPublicKey.equals(publicKey) : label + " public key must round-trip";
+    assert Arrays.equals(expectedPublicKey, publicKey) : label + " public key must round-trip";
     assert weight == expectedWeight : label + " weight must round-trip";
   }
 

@@ -23,6 +23,11 @@
 //!   rules.
 //! - The body hash is computed over the raw request body bytes.
 //! - Freshness validation rejects stale timestamps and replayed nonces.
+//!
+//! Some endpoints carry the same auth envelope inside a JSON body instead of
+//! HTTP headers. Those callers provide `account_id`, `timestamp_ms`, `nonce`,
+//! and exactly one proof field in the body, while the canonical message hashes
+//! the endpoint-defined unsigned body bytes.
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -65,6 +70,7 @@ pub const HEADER_NONCE: &str = "X-Iroha-Nonce";
 /// Header carrying the base64 Norito-encoded multisig witness.
 pub const HEADER_WITNESS: &str = "X-Iroha-Witness";
 const ACCOUNT_HEADER_CONTEXT: &str = "X-Iroha-Account";
+const ACCOUNT_BODY_CONTEXT: &str = "account_id";
 /// HTTP request types used for canonical signing.
 pub use axum::http::{Method, Uri};
 
@@ -234,12 +240,26 @@ pub fn configure(config: CanonicalRequestAuthConfig) {
 /// Authenticated canonical request identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedCanonicalRequest {
-    /// Account declared in the canonical request headers.
+    /// Account declared in the canonical request authentication material.
     pub account: AccountId,
     /// Exact account controller key that verified the request signature.
     pub signer: PublicKey,
     /// Full signer set that satisfied the request authorisation.
     pub verified_signers: Vec<PublicKey>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CanonicalRequestBodyProof<'a> {
+    SignatureBase64(&'a str),
+    WitnessBase64(&'a str),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CanonicalRequestBodyAuth<'a> {
+    pub(crate) account_id: &'a str,
+    pub(crate) timestamp_ms: u64,
+    pub(crate) nonce: &'a str,
+    pub(crate) proof: CanonicalRequestBodyProof<'a>,
 }
 
 /// Canonicalise a raw query string by decoding, sorting, and re-encoding.
@@ -384,24 +404,47 @@ fn parse_account_header_value(
     state: &Arc<CoreState>,
     account_literal: &str,
 ) -> Result<AccountId, crate::Error> {
+    parse_account_literal_value(
+        state,
+        account_literal,
+        ACCOUNT_HEADER_CONTEXT,
+        "invalid X-Iroha-Account value",
+    )
+}
+
+fn parse_account_body_value(
+    state: &Arc<CoreState>,
+    account_literal: &str,
+) -> Result<AccountId, crate::Error> {
+    parse_account_literal_value(
+        state,
+        account_literal,
+        ACCOUNT_BODY_CONTEXT,
+        "invalid account_id value",
+    )
+}
+
+fn parse_account_literal_value(
+    state: &Arc<CoreState>,
+    account_literal: &str,
+    context: &'static str,
+    invalid_message: &'static str,
+) -> Result<AccountId, crate::Error> {
     crate::routing::parse_account_literal_with_state(
         state.as_ref(),
         account_literal.trim(),
         &crate::routing::MaybeTelemetry::disabled(),
-        ACCOUNT_HEADER_CONTEXT,
+        context,
     )
     .map(|(account_id, _)| account_id)
-    .map_err(|_| {
-        crate::Error::Query(ValidationFail::NotPermitted(
-            "invalid X-Iroha-Account value".to_owned(),
-        ))
-    })
+    .map_err(|_| crate::Error::Query(ValidationFail::NotPermitted(invalid_message.to_owned())))
 }
 
 fn validate_freshness(
     config: &CanonicalRequestAuthConfig,
     timestamp_ms: u64,
     nonce: &str,
+    nonce_context: &'static str,
 ) -> Result<(), crate::Error> {
     let delta_ms = now_unix_ms().abs_diff(timestamp_ms);
     let max_skew_ms: u64 = config
@@ -418,8 +461,168 @@ fn validate_freshness(
         || !nonce.is_ascii()
         || nonce.bytes().any(|byte| byte.is_ascii_whitespace())
     {
+        return Err(crate::Error::Query(ValidationFail::NotPermitted(format!(
+            "invalid {nonce_context} value"
+        ))));
+    }
+    Ok(())
+}
+
+fn decode_signature_value(
+    signature_b64: &str,
+    context: &'static str,
+) -> Result<Signature, crate::Error> {
+    let signature_bytes = BASE64_STANDARD.decode(signature_b64.trim()).map_err(|_| {
+        crate::Error::Query(ValidationFail::NotPermitted(format!(
+            "invalid base64 in {context}"
+        )))
+    })?;
+    Ok(Signature::from_bytes(&signature_bytes))
+}
+
+fn decode_witness_value(
+    witness_b64: &str,
+    context: &'static str,
+) -> Result<CanonicalRequestWitnessV1, crate::Error> {
+    let witness_bytes = BASE64_STANDARD.decode(witness_b64.trim()).map_err(|_| {
+        crate::Error::Query(ValidationFail::NotPermitted(format!(
+            "invalid base64 in {context}"
+        )))
+    })?;
+    let witness: CanonicalRequestWitnessV1 =
+        norito::decode_from_bytes(&witness_bytes).map_err(|_| {
+            crate::Error::Query(ValidationFail::NotPermitted(format!(
+                "invalid {context} payload"
+            )))
+        })?;
+    if witness.schema_version != CANONICAL_REQUEST_WITNESS_VERSION_V1 {
+        return Err(crate::Error::Query(ValidationFail::NotPermitted(format!(
+            "unsupported {context} schema_version `{}`",
+            witness.schema_version
+        ))));
+    }
+    Ok(witness)
+}
+
+fn verify_single_signature_authorization(
+    state: &Arc<CoreState>,
+    account: &AccountId,
+    signature: &Signature,
+    message: &[u8],
+) -> Result<PublicKey, crate::Error> {
+    let world = state.world_view();
+    let account_entry = world.account(account).map_err(|_| {
+        crate::Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+            FindError::Account(account.clone()),
+        )))
+    })?;
+
+    match account_entry.id.controller() {
+        AccountController::Single(pk) => {
+            if signature.verify(pk, message).is_ok() {
+                Ok(pk.clone())
+            } else {
+                Err(crate::Error::Query(ValidationFail::NotPermitted(
+                    "query signature failed verification".to_owned(),
+                )))
+            }
+        }
+        AccountController::Multisig(_) => Err(crate::Error::Query(ValidationFail::NotPermitted(
+            "multisig accounts must use X-Iroha-Witness".to_owned(),
+        ))),
+    }
+}
+
+fn verify_multisig_witness_authorization(
+    state: &Arc<CoreState>,
+    account: &AccountId,
+    witness: &CanonicalRequestWitnessV1,
+    witness_context: &'static str,
+) -> Result<Vec<PublicKey>, crate::Error> {
+    let message = canonical_request_witness_message(witness).map_err(|_| {
+        crate::Error::Query(ValidationFail::NotPermitted(format!(
+            "invalid {witness_context} payload"
+        )))
+    })?;
+
+    let world = state.world_view();
+    let account_entry = world.account(account).map_err(|_| {
+        crate::Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+            FindError::Account(account.clone()),
+        )))
+    })?;
+    match account_entry.id.controller() {
+        AccountController::Single(_) => Err(crate::Error::Query(ValidationFail::NotPermitted(
+            "single-signature accounts must use X-Iroha-Signature".to_owned(),
+        ))),
+        AccountController::Multisig(policy) => {
+            if witness.signatures.is_empty() {
+                return Err(crate::Error::Query(ValidationFail::NotPermitted(format!(
+                    "{witness_context} must include at least one signature"
+                ))));
+            }
+
+            let member_weights: BTreeMap<PublicKey, u16> = policy
+                .members()
+                .iter()
+                .map(|member| (member.public_key().clone(), member.weight()))
+                .collect();
+            let mut seen = BTreeSet::new();
+            let mut total_weight = 0_u32;
+            let mut verified_signers = Vec::with_capacity(witness.signatures.len());
+
+            for CanonicalRequestSignatureWitnessV1 { signer, signature } in &witness.signatures {
+                if !seen.insert(signer.clone()) {
+                    return Err(crate::Error::Query(ValidationFail::NotPermitted(format!(
+                        "{witness_context} contains duplicate signer keys"
+                    ))));
+                }
+                let Some(weight) = member_weights.get(signer) else {
+                    return Err(crate::Error::Query(ValidationFail::NotPermitted(format!(
+                        "{witness_context} includes a signer outside the account multisig policy"
+                    ))));
+                };
+                signature.verify(signer, &message).map_err(|_| {
+                    crate::Error::Query(ValidationFail::NotPermitted(
+                        "query signature failed verification".to_owned(),
+                    ))
+                })?;
+                total_weight = total_weight.saturating_add(u32::from(*weight));
+                verified_signers.push(signer.clone());
+            }
+            if total_weight < u32::from(policy.threshold()) {
+                return Err(crate::Error::Query(ValidationFail::NotPermitted(format!(
+                    "{witness_context} signatures do not satisfy multisig threshold"
+                ))));
+            }
+            Ok(verified_signers)
+        }
+    }
+}
+
+fn validate_expected_account(
+    expected_account: Option<&AccountId>,
+    account: &AccountId,
+) -> Result<(), crate::Error> {
+    if let Some(expected) = expected_account
+        && expected != account
+    {
         return Err(crate::Error::Query(ValidationFail::NotPermitted(
-            "invalid X-Iroha-Nonce value".to_owned(),
+            "signed account does not match request path".to_owned(),
+        )));
+    }
+    Ok(())
+}
+
+fn check_replay(
+    account: &AccountId,
+    nonce: &str,
+    replay_cache: &ReplayCache,
+) -> Result<(), crate::Error> {
+    let replay_key = format!("{account}:{nonce}");
+    if !replay_cache.check_and_insert(replay_key) {
+        return Err(crate::Error::Query(ValidationFail::NotPermitted(
+            "request nonce already used".to_owned(),
         )));
     }
     Ok(())
@@ -459,6 +662,80 @@ where
     )
     .map(|_| ())
     .map_err(crate::Error::Query)
+}
+
+pub(crate) fn verify_canonical_body_request(
+    state: &Arc<CoreState>,
+    auth: CanonicalRequestBodyAuth<'_>,
+    method: &Method,
+    uri: &Uri,
+    unsigned_body: &[u8],
+    expected_account: Option<&AccountId>,
+) -> Result<VerifiedCanonicalRequest, crate::Error> {
+    let account = parse_account_body_value(state, auth.account_id)?;
+    validate_expected_account(expected_account, &account)?;
+
+    let (auth_config, replay_cache) = auth_runtime_snapshot();
+    validate_freshness(&auth_config, auth.timestamp_ms, auth.nonce, "nonce")?;
+
+    match auth.proof {
+        CanonicalRequestBodyProof::SignatureBase64(signature_b64) => {
+            let signature = decode_signature_value(signature_b64, "signature_base64")?;
+            let message = canonical_request_signature_message(
+                method,
+                uri,
+                unsigned_body,
+                auth.timestamp_ms,
+                auth.nonce,
+            );
+            let signer =
+                verify_single_signature_authorization(state, &account, &signature, &message)?;
+            check_replay(&account, auth.nonce, &replay_cache)?;
+            Ok(VerifiedCanonicalRequest {
+                account,
+                signer: signer.clone(),
+                verified_signers: vec![signer],
+            })
+        }
+        CanonicalRequestBodyProof::WitnessBase64(witness_b64) => {
+            let witness = decode_witness_value(witness_b64, "witness_base64")?;
+            if witness.subject_account != account {
+                return Err(crate::Error::Query(ValidationFail::NotPermitted(
+                    "account_id does not match witness_base64 subject_account".to_owned(),
+                )));
+            }
+            if witness.timestamp_ms != auth.timestamp_ms {
+                return Err(crate::Error::Query(ValidationFail::NotPermitted(
+                    "timestamp_ms does not match witness_base64 timestamp_ms".to_owned(),
+                )));
+            }
+            if witness.nonce != auth.nonce {
+                return Err(crate::Error::Query(ValidationFail::NotPermitted(
+                    "nonce does not match witness_base64 nonce".to_owned(),
+                )));
+            }
+
+            let expected_hash = canonical_request_hash(method, uri, unsigned_body);
+            if witness.canonical_request_hash != expected_hash {
+                return Err(crate::Error::Query(ValidationFail::NotPermitted(
+                    "witness_base64 canonical request hash mismatch".to_owned(),
+                )));
+            }
+
+            let verified_signers =
+                verify_multisig_witness_authorization(state, &account, &witness, "witness_base64")?;
+            check_replay(&account, auth.nonce, &replay_cache)?;
+            let signer = verified_signers
+                .first()
+                .cloned()
+                .expect("non-empty witness signer set");
+            Ok(VerifiedCanonicalRequest {
+                account,
+                signer,
+                verified_signers,
+            })
+        }
+    }
 }
 
 /// Verify optional canonical request headers.
@@ -539,7 +816,12 @@ pub fn verify_canonical_request(
         }
 
         let (auth_config, replay_cache) = auth_runtime_snapshot();
-        validate_freshness(&auth_config, witness.timestamp_ms, &witness.nonce)?;
+        validate_freshness(
+            &auth_config,
+            witness.timestamp_ms,
+            &witness.nonce,
+            "X-Iroha-Nonce",
+        )?;
 
         let expected_hash = canonical_request_hash(method, uri, body);
         if witness.canonical_request_hash != expected_hash {
@@ -658,7 +940,7 @@ pub fn verify_canonical_request(
         })?;
     let nonce = parse_required_header_text(headers, HEADER_NONCE)?;
     let (auth_config, replay_cache) = auth_runtime_snapshot();
-    validate_freshness(&auth_config, timestamp_ms, &nonce)?;
+    validate_freshness(&auth_config, timestamp_ms, &nonce, "X-Iroha-Nonce")?;
 
     let signature_b64 = parse_required_header_text(headers, HEADER_SIGNATURE)?;
     let signature_bytes = BASE64_STANDARD.decode(signature_b64.trim()).map_err(|_| {

@@ -5321,29 +5321,55 @@ impl Actor {
     ) -> bool {
         self.record_phase_sample(PipelinePhase::CollectCommit, qc.height, qc.view);
         let qc_ref = Self::qc_to_header_ref(qc);
+        let mut same_height_realign = false;
         if let Some(lock) = self.locked_qc
             && !self.block_known_for_lock(lock.subject_block_hash)
             && qc.view <= lock.view
             && (qc.height != lock.height || qc.subject_block_hash != lock.subject_block_hash)
         {
-            // Keep lock/highest stable while local lock payload is missing; apply once recovered.
-            self.drop_missing_lock_if_unknown(qc);
-            info!(
-                height = qc.height,
-                view = qc.view,
-                incoming_hash = %qc.subject_block_hash,
-                locked_height = lock.height,
-                locked_hash = %lock.subject_block_hash,
-                "deferring precommit QC lock/highest update until locked payload is available"
-            );
-            return true;
+            let same_height_conflict =
+                qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash;
+            if allow_nonextending && same_height_conflict {
+                info!(
+                    height = qc.height,
+                    view = qc.view,
+                    locked_height = lock.height,
+                    locked_view = lock.view,
+                    locked_hash = %lock.subject_block_hash,
+                    incoming_hash = %qc.subject_block_hash,
+                    "accepting same-height commit QC from block sync to realign missing local lock payload"
+                );
+                same_height_realign = true;
+            } else {
+                // Keep lock/highest stable while local lock payload is missing; apply once recovered.
+                self.drop_missing_lock_if_unknown(qc);
+                info!(
+                    height = qc.height,
+                    view = qc.view,
+                    incoming_hash = %qc.subject_block_hash,
+                    locked_height = lock.height,
+                    locked_hash = %lock.subject_block_hash,
+                    "deferring precommit QC lock/highest update until locked payload is available"
+                );
+                return true;
+            }
         }
         if let Some(lock) = self.locked_qc {
-            if self.block_known_for_lock(lock.subject_block_hash) {
-                let same_height_conflict =
-                    qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash;
-                let conflicts_locked = qc.height < lock.height && qc.view <= lock.view;
-                if same_height_conflict {
+            let same_height_conflict =
+                qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash;
+            if same_height_conflict {
+                if allow_nonextending {
+                    info!(
+                        height = qc.height,
+                        view = qc.view,
+                        locked_height = lock.height,
+                        locked_view = lock.view,
+                        locked_hash = %lock.subject_block_hash,
+                        incoming_hash = %qc.subject_block_hash,
+                        "accepting same-height commit QC from block sync to realign locked chain"
+                    );
+                    same_height_realign = true;
+                } else {
                     info!(
                         height = qc.height,
                         view = qc.view,
@@ -5360,6 +5386,9 @@ impl Actor {
                     );
                     return false;
                 }
+            }
+            if self.block_known_for_lock(lock.subject_block_hash) {
+                let conflicts_locked = qc.height < lock.height && qc.view <= lock.view;
                 if conflicts_locked {
                     info!(
                         height = qc.height,
@@ -5417,13 +5446,14 @@ impl Actor {
                     "accepting non-extending precommit QC from block sync to realign locked chain"
                 );
             }
-            let should_update = self.highest_qc.is_none_or(|current| {
-                let incoming = (qc_ref.height, qc_ref.view);
-                let existing = (current.height, current.view);
-                incoming > existing
-                    || (incoming == existing
-                        && current.phase != crate::sumeragi::consensus::Phase::Commit)
-            });
+            let should_update = same_height_realign
+                || self.highest_qc.is_none_or(|current| {
+                    let incoming = (qc_ref.height, qc_ref.view);
+                    let existing = (current.height, current.view);
+                    incoming > existing
+                        || (incoming == existing
+                            && current.phase != crate::sumeragi::consensus::Phase::Commit)
+                });
             if should_update {
                 super::status::set_highest_qc(qc.height, qc.view);
                 super::status::set_highest_qc_hash(qc.subject_block_hash);
@@ -5437,9 +5467,10 @@ impl Actor {
                     "skipping highest QC update for stale precommit QC"
                 );
             }
-            let should_update = self
-                .locked_qc
-                .is_none_or(|lock| (qc.height, qc.view) > (lock.height, lock.view));
+            let should_update = same_height_realign
+                || self
+                    .locked_qc
+                    .is_none_or(|lock| (qc.height, qc.view) > (lock.height, lock.view));
             if should_update {
                 super::status::set_locked_qc(qc.height, qc.view, Some(qc.subject_block_hash));
                 self.locked_qc = Some(qc_ref);

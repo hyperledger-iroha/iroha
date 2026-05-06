@@ -730,6 +730,14 @@ Map<String, String> headers =
 Signatures cover the canonical method/path/query/body layout plus freshness
 metadata, matching the Rust verifier Torii uses on app-facing endpoints.
 
+Offline V2 issuer POST endpoints (`/v1/offline/v2/keys/refill`,
+`/v1/offline/v2/notes/issue`, `/v1/offline/v2/notes/redeem`, and
+`/v1/offline/v2/audit`) carry auth in the JSON body instead of `X-Iroha-*`
+headers. Use `CanonicalRequestSigner.withBodySignature(...)` to add
+`account_id`, `timestamp_ms`, `nonce`, and `signature_base64` to a request
+body. Multisig callers should build the canonical request witness separately
+and pass it as `witness_base64` with `withBodyWitness(...)`.
+
 ### Sora VPN native lease flow
 
 `HttpClientTransport` exposes the quote-first Sora VPN endpoints. Quotes bind
@@ -1087,8 +1095,19 @@ Licensed under the Apache License, Version 2.0. See `LICENSE` for details.
 ## Offline V2 readiness and auditing
 
 The SDK exposes a lightweight `OfflineToriiClient` for the maintained Offline V2
-Torii surface. Torii now publishes only `GET /v1/offline/v2/readiness`; note issuance,
-redemption, and audit payloads are submitted as transaction instructions.
+readiness surface. Torii also keeps issuer POST endpoints for key refill and
+note issuance: wallets derive the Offline Note V2 commitment locally and pass
+the bare 64-character `note_commitment` hex to `/v1/offline/v2/notes/issue`.
+Torii issues that exact commitment and returns settlement lineage metadata;
+`settlement.entry_hash` is no longer used as the note commitment. Redemption
+and audit payloads are submitted as direct transaction instructions.
+`OfflineNoteV2Wallet` provides the Java Android one-call app flow for load,
+receive request preparation, P2P pay, accept/audit submission, redeem
+submission, and sync. The wallet keeps issuer, attestation, random, proof,
+store, and direct transaction submission behind public interfaces so Android
+apps can bind them to Torii, Android Keystore, and app-specific persistence;
+the core module includes an in-memory store and `IrohaOfflineNoteV2TransactionSubmitter`
+for tests and JVM tooling.
 
 The client reuses the existing `ClientConfig` headers/observers and can be
 created from any `HttpClientTransport`:
@@ -1100,8 +1119,8 @@ transport
     .thenAccept(readiness -> System.out.println(readiness.offlineNoteV2()));
 ```
 
-Non-V2 offline HTTP routes were removed from the public offline client surface so callers cannot
-accidentally target Torii routes that now return 404.
+Non-V2 offline HTTP routes were removed from the public offline client surface
+so callers cannot accidentally target Torii routes that now return 404.
 
 Use `OfflineToriiClient#getOfflineV2Readiness()` to check whether Torii exposes the V2 note
 capabilities before showing offline receive or payment-token UI.

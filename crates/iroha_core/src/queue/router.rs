@@ -2786,6 +2786,29 @@ impl ConfigLaneRouter {
             lane_catalog: Arc::new(lane_catalog),
         }
     }
+
+    fn catalog_only_routing_decision(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+    ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
+        if let Some(decision) = dataspace_scoped_permission_routing_decision(
+            tx,
+            Some(self.lane_catalog.as_ref()),
+            Some(self.dataspace_catalog.as_ref()),
+            None,
+        )? {
+            return Ok(Some(decision));
+        }
+        if let Some(decision) = settlement_routing_decision(
+            tx,
+            self.lane_catalog.as_ref(),
+            self.dataspace_catalog.as_ref(),
+            None,
+        )? {
+            return Ok(Some(decision));
+        }
+        Ok(None)
+    }
 }
 
 impl LaneRouter for ConfigLaneRouter {
@@ -2805,11 +2828,18 @@ impl LaneRouter for ConfigLaneRouter {
         if policy_needs_state(self.policy.as_ref())
             || dataspace_scoped_permission_routing_requires_state(tx)
             || transaction_target_routing_requires_state(tx)
-            || account_permission_holder_routing_target(tx).is_some()
         {
             return None;
         }
-        Some(self.route(tx))
+        match self.catalog_only_routing_decision(tx) {
+            Ok(Some(decision)) => return Some(decision),
+            Ok(None) => {}
+            Err(_) => return None,
+        }
+        if self.authority_scope_routing_requires_state(tx).ok()? {
+            return None;
+        }
+        self.try_route(tx).ok()
     }
 
     fn try_route(
@@ -2915,9 +2945,13 @@ impl LaneRouter for ConfigLaneRouter {
         if policy_needs_state(self.policy.as_ref())
             || dataspace_scoped_permission_routing_requires_state(tx)
             || transaction_target_routing_requires_state(tx)
-            || account_permission_holder_routing_target(tx).is_some()
-            || self.authority_scope_routing_requires_state(tx)?
         {
+            return Ok(None);
+        }
+        if let Some(decision) = self.catalog_only_routing_decision(tx)? {
+            return Ok(Some(decision));
+        }
+        if self.authority_scope_routing_requires_state(tx)? {
             return Ok(None);
         }
         self.try_route(tx).map(Some)
@@ -7885,6 +7919,7 @@ mod tests {
             AccountAliasDomain::from("hbl".parse::<Name>().expect("domain label")),
         );
         let state = state_with_account_scope_entries(&[(holder_id.clone(), scope_entry)], catalog);
+        state.nexus.write().lane_catalog = router.lane_catalog.as_ref().clone();
         let state_view = state.view();
         assert_eq!(
             state_view

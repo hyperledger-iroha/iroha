@@ -14,7 +14,11 @@ use iroha_core::{
     tx::AcceptTransactionFail as AF,
 };
 use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
-use iroha_data_model::{block::builder::BlockBuilder, prelude::*};
+use iroha_data_model::{
+    block::{BlockExecutionContextBundle, ExternalExecutionContext, builder::BlockBuilder},
+    nexus::{DataSpaceId, LaneId},
+    prelude::*,
+};
 use nonzero_ext::nonzero;
 
 fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, KeyPair) {
@@ -92,8 +96,20 @@ fn mk_block_with_permuted_txs(
         .max()
         .unwrap_or(0);
     let header = BlockHeader::new(height, prev_block_hash, None, None, ct_ms + 1, 0);
+    let execution_context = BlockExecutionContextBundle::new(
+        txs.iter()
+            .map(|tx| {
+                ExternalExecutionContext::new(
+                    tx.hash_as_entrypoint(),
+                    LaneId::SINGLE,
+                    DataSpaceId::UNIVERSAL,
+                )
+            })
+            .collect(),
+    );
     let mut builder = BlockBuilder::new(header);
     builder.set_da_proof_policies(Some(proof_policy_bundle.clone()));
+    builder.set_execution_context(Some(execution_context));
     for tx in txs {
         builder.push_transaction(tx);
     }

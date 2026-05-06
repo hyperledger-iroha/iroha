@@ -1,6 +1,161 @@
 # Status
 
-Last updated: 2026-05-05
+Last updated: 2026-05-06
+
+## 2026-05-06 Dataspace default fee sponsorship
+
+- `nexus.dataspace_catalog` now accepts `fee_sponsor_account_id` for a
+  dataspace-wide default fee sponsor. Explicit transaction `fee_sponsor`
+  metadata still wins, while transactions without that metadata inherit the
+  sponsor for their routed dataspace.
+- Nexus fee admission and execution authorization now accept the routed
+  dataspace default sponsor without requiring every caller account to hold a
+  direct `CanUseFeeSponsor` grant. Existing explicit grants remain supported,
+  and configured dataspace sponsors still require `nexus.fees.sponsorship_enabled`.
+
+## 2026-05-05 Sumeragi VRF late-reveal ingress hardening
+
+- Torii consensus evidence submission now checks the configured stale-evidence
+  horizon immediately after decode. Payloads older than the NPoS horizon are
+  accepted as stale inputs without running signature/topology validation, so
+  stale evidence is not persisted and does not fail for the wrong reason.
+- Sumeragi now routes `VrfCommit` and `VrfReveal` metadata through the vote
+  worker queue. The actor also handles VRF metadata before polling newly
+  committed blocks for epoch catch-up, then polls committed blocks immediately
+  afterward. This preserves queued late reveals that arrive while the local WSV
+  height has already advanced to the epoch boundary.
+- VRF reveal processing now hydrates the in-memory epoch manager from the
+  committed VRF epoch record before validating a reveal, so late external
+  reveals can be matched against commitments that were persisted by an earlier
+  block even if the local manager missed the original commit. Accepted
+  Torii-submitted VRF commits/reveals are also gossiped to the active validator
+  topology while network-originated copies are not rebroadcast.
+- The late-reveal integration harness now avoids blocking progress-log
+  submissions, signs external VRF metadata with the active mode tag, retries
+  reveal submission while the epoch is still open for late reveals, keeps
+  polling for the persisted seal after Sumeragi status reports acceptance, and
+  reports compact status diagnostics on failure.
+- Focused validation passed for stale evidence submission and the NPoS
+  performance metrics baseline:
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo test -p integration_tests --test consensus_and_da sumeragi_negative_paths::posting_stale_evidence_is_not_persisted -- --nocapture`
+  and
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo test -p integration_tests --test consensus_and_da sumeragi_npos_performance::npos_baseline_1s_k3_captures_metrics -- --nocapture`.
+  Focused core validation also passed for
+  `incoming_block_message_routes_vrf_metadata_via_vote_queue`,
+  `external_vrf_reveal_broadcasts_after_acceptance`,
+  `merge_record_observations_hydrates_commit_for_late_reveal`,
+  `committed_vrf_record_does_not_cover_newer_pending_late_reveal`,
+  `on_block_message_handles_vrf_reveal_before_commit_catchup_finalizes_epoch`,
+  and the permissioned-mode VRF commit/reveal handler regressions.
+- Validation caveat: the focused late-reveal integration now reaches
+  Sumeragi acceptance (`vrf_late_reveals_total = 1`) but still fails to observe
+  the persisted epoch seal because the four-peer NPoS/DA network repeatedly
+  stalls at height 4 with pending RBC sessions waiting on missing INIT/chunk
+  data. Treat that as a separate DA/RBC liveness issue before using this
+  integration as the final VRF persistence gate. Formatting and whitespace were
+  rerun after these edits.
+
+## 2026-05-05 Offline Note V2 wallet-derived commitments
+
+- Offline Note V2 commitment derivation now starts in the wallet instead of
+  Torii settlement metadata. `iroha_data_model::offline` exposes canonical
+  Norito preimages and domain tags for note commitments, input nullifiers, and
+  payment token ids, with 32-byte `note_secret` and `token_nonce` material
+  enforced by the derivation helpers.
+- Torii `/v1/offline/v2/notes/issue` now requires a wallet-supplied bare
+  64-character hex `note_commitment`, issues that exact commitment, and keeps
+  `settlement.entry_hash` as lineage/settlement metadata rather than deriving
+  the note commitment from it.
+- Kotlin/JVM, Java Android, and Swift Offline Note V2 model helpers now match
+  the Rust derivation vectors for source notes, P2P output notes, input
+  nullifiers, payment token ids, and redeem nullifiers. The shared Offline V2
+  fixture was regenerated with the derivation preimages, and transaction
+  fixtures were refreshed after aligning SDK account-controller encoding on
+  compact public-key payload bytes.
+- Kotlin/JVM, Java Android, and Swift now expose `OfflineNoteV2Wallet` facades
+  for `load`, `prepareReceive`, `pay`, `accept`, `redeem`, and `sync`, with
+  structured in-memory stores, injectable attestation/random/proof/issuer
+  boundaries, direct audit/redeem transaction submitters, and mock lifecycle
+  tests covering load, P2P pay, accept/audit, redeem, and spent/change-pending
+  state transitions.
+- Validation passed with the focused Rust Offline V2 data-model, Torii issuer,
+  and core tests; full Kotlin `:core-jvm:test`; Java Android core harness; and
+  Swift `OfflineNoteV2Tests`. Earlier derivation work in this slice also had
+  focused Java fixture/Norito parity coverage and full `swift test` in
+  `IrohaSwift` green. Formatting and whitespace checks are green with
+  `cargo fmt --all --check` and `git diff --check`. Production Torii issuer adapters,
+  non-no-op wallet sync reconciliation, structured secure note stores, and
+  public Norito decoders remain tracked as release work in `roadmap.md`.
+
+## 2026-05-05 Torii query API WSV fast paths
+
+- Generic Torii query execution now routes more common JSON predicates through
+  in-memory WSV/Kura indexes instead of falling back to full scans. The covered
+  surfaces include repo agreements, public and anonymous asset escrows, proof
+  records, triggers, active trigger IDs, roles, blocks, block headers, and
+  committed transactions constrained by block hash.
+- Kura now maintains a block-hash-to-height index alongside the in-memory block
+  log, keeping hash lookups fast across replay, durable block append,
+  top-block replacement, and pruning.
+- Focused validation passed with the repo agreement, escrow, proof record,
+  trigger, role, block/header, committed-transaction block-hash, and Kura
+  pruning unit tests. Formatting, whitespace, and
+  `cargo check -p iroha_core --lib` are green.
+
+## 2026-05-05 Offline V2 issuer body auth
+
+- Offline V2 issuer POSTs now reject legacy `X-Iroha-*` app-auth headers and
+  verify `account_id`, `timestamp_ms`, `nonce`, plus exactly one of
+  `signature_base64` or `witness_base64` from the JSON body. The signed body
+  hash uses Norito JSON canonical bytes with only top-level proof fields
+  removed, preserving nested receipt and lineage signatures.
+- Kotlin and Java `CanonicalRequestSigner` helpers now build body-auth signing
+  messages and single-signature body fields, with witness helper support for a
+  prebuilt `witness_base64`.
+- Focused Torii validation passed with
+  `CARGO_TARGET_DIR=target/codex-offline-body-auth cargo test -p iroha_torii body_auth --lib`.
+  `rustfmt --edition 2024 --check crates/iroha_torii/src/app_auth.rs crates/iroha_torii/src/offline_v2_issuer.rs`
+  is green. The broader `offline_v2` Torii test filter is blocked by an
+  unrelated compile error in the already-dirty `crates/iroha_torii/src/lib.rs`
+  duplicate-group scratch buffer, which currently needs a type annotation.
+  Full `cargo fmt --all -- --check` is also blocked by unrelated formatting
+  drift in `crates/iroha_torii/src/lib.rs`.
+- Kotlin/Java Gradle validation could not run on this host because no Java
+  runtime is installed or discoverable (`java -version` and
+  `/usr/libexec/java_home -v 21` both fail).
+
+## 2026-05-05 Soracloud and local acceleration validation
+
+- The full `irohad` Soracloud binary filter is green with
+  `env -u LOG_FORMAT CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-full cargo test -p irohad --features embedded-soracloud-runtime --bin irohad soracloud -- --nocapture`
+  (`97` passed, `1` ignored, `139` filtered out). The expected
+  `manager_config_rejects_unsafe_direct_actual_production_posture` panic is
+  covered by a `#[should_panic]` test.
+- Local Apple Metal is available on this macOS arm64 host:
+  `xcrun -sdk macosx metal -v` reports Apple Metal `32023.864`. `nvcc` is not
+  on `PATH`, so CUDA hardware parity was not run here.
+- Local IVM acceleration gates are green:
+  `RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-accel-metal cargo test -p ivm --features metal --test metal_sha256 --test gpu_determinism --test metal_disable_on_mismatch --test vector_ops -- --nocapture`
+  and
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-accel-simd cargo test -p ivm --test acceleration_simd --test simd_tail_misalignment --test poseidon_simd --test vector_detect -- --nocapture`.
+- Norito Metal/SIMD gates are green with
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-metal cargo test -p jsonstage1_metal -p gpuzstd_metal -- --nocapture`
+  and
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-metal cargo test -p norito --features "json simd-accel parallel-stage1 stage1-validate codec-gpu-metal" stage1 -- --nocapture`.
+  `gpuzstd_metal` reported the runtime GPU backend unavailable and skipped its
+  GPU-only assertions, while the helper and Stage-1 suites passed.
+- FASTPQ Metal hardware parity is green on the available Apple Metal backend:
+  `FASTPQ_GPU=gpu RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-metal cargo test -p fastpq_prover --features fastpq-gpu --lib metal -- --nocapture`
+  passed (`67` passed, `285` filtered out). The fix covers deterministic
+  test device hints, BN254 fixture/kernel coverage, Goldilocks reduction,
+  domain-rooted FFT twiddles, coefficient-wise LDE coset scaling, tile
+  writeback, BN254 LDE scaling, and Metal-safe Poseidon partial-round
+  compilation.
+- The full Soracloud production-readiness profile was not run because this
+  workspace has no operator mixed-host inventory or observability evidence
+  inputs. That remains a rollout blocker rather than a local code failure.
+- Hygiene checks passed with `cargo fmt --all -- --check`, `git diff --check`,
+  and `scripts/check_no_scale.sh`.
 
 ## 2026-05-05 UAID replay/checkpoint hardening
 
@@ -6387,8 +6542,8 @@ Last updated: 2026-05-05
   `153%`, and `batch_from_transcripts/missing_digests/64` by about `26%`
   against the no-zeroing run under the same load window.
 - The final partial-word helper now masks stale high bytes instead of copying
-  into a temporary zeroed buffer, and `PoseidonWordPacker` uses a manual 8-byte
-  loop for full words. Filtered Criterion kept this follow-up after measuring
+  into a temporary zeroed buffer, and `PoseidonWordPacker` uses an 8-byte
+  full-word path. Filtered Criterion kept this follow-up after measuring
   `byte_hasher_streaming/32` at about `59.5 us`,
   `poseidon_preimage_digest` at about `328.5 us`, and
   `batch_from_transcripts/missing_digests/64` at about `21.6 ms`, all reported
@@ -6414,9 +6569,47 @@ Last updated: 2026-05-05
   `176.7 us`; the final helper rerun measured about `58.6 us` for 33 bytes and
   `175.8 us` for 129 bytes, both within the noise threshold against the
   immediately preceding baseline.
+- Kept cross-crate `#[inline(always)]` on `PoseidonByteHasher`'s public update
+  and finalize methods plus FASTPQ's tiny digest/encode helpers after reverting
+  them to plain `#[inline]` regressed filtered `byte_hasher_streaming/32`,
+  `byte_hasher_streaming/128`, and `poseidon_preimage_digest` by about `4.4%`,
+  `6.8%`, and `7.2%` respectively. The `Write` trait method inlining
+  experiment was rejected: it kept `poseidon_preimage_digest` within noise but
+  regressed the precomputed 64-transcript batch filter by about `1.9%`.
+- The `crypto_hotpaths` 64-transcript FASTPQ benchmark fixture now generates a
+  valid chained balance sequence so current SMT witness attachment can run
+  before measuring missing/precomputed Poseidon digest paths.
+- Rejected three follow-up hot-path experiments after filtered Criterion A/B:
+  direct slot-1 absorption in `PoseidonByteHasher::update` regressed small
+  streaming inputs, a fixed 32-byte `batch_hash` update path regressed
+  `poseidon_preimage_digest` by about `9.7%`, and forcing
+  `PoseidonWordPacker::{new, update, finish}` to `#[inline(always)]` regressed
+  both 64-transcript batch filters by about `5-7%`.
+- Rejected output-wrapper inlining too: adding `#[inline]` to
+  `hash_u64_words_bytes` regressed the packed u64-word filters heavily, and
+  reverse A/B showed ordinary `#[inline]` on `field_to_{bytes,u64}` plus
+  fixed-width public wrappers had no meaningful benefit.
+- Rejected `#[inline]` on `PoseidonByteHasher::new` after direct reverse A/B
+  kept `byte_hasher_streaming/{32,128}` and `poseidon_preimage_digest` within
+  the noise threshold without the annotation.
+- Kept `chunks_exact(2)` iteration in `hash_u64_words_internal` after direct
+  A/B improved the 24-word packed filter by about `3.0%`. Reverse A/B restoring
+  the old index loop regressed `hash_u64_words_bytes/{2,24,64}` by about
+  `5.4%`, `4.0%`, and `4.2%`.
+- Kept `chunks_exact(8)` in `PoseidonWordPacker::update` after isolated reverse
+  A/B restoring the manual loop regressed
+  `batch_from_transcripts/missing_digests/64` by about `1.7%`; the precomputed
+  64-transcript filter stayed within the noise threshold. Hybrid stack-first
+  single-digest packers with 24- and 32-word inline buffers were rejected after
+  `poseidon_preimage_digest` stayed within-noise slower than the Vec-backed
+  packed-word path.
 - Updated FASTPQ digest construction in `crates/iroha_core/src/fastpq/mod.rs`
-  to stream Norito encodings into the Poseidon byte hasher and to pack GPU
-  digest batches into a shared word buffer with preallocated slice/word
+  to pack the single-digest CPU path through the same u64 word preimage builder
+  used by batched Poseidon digests. Direct reverse A/B kept the packed-word
+  `poseidon_preimage_digest` path after the streaming byte hasher measured
+  about `334 us`, and the restored packed implementation confirmed at about
+  `317 us`, roughly `5.2%` faster than the temporary streaming baseline.
+  GPU digest batches still use a shared word buffer with preallocated slice/word
   capacity. GPU finalization now exits before packing when Poseidon acceleration
   is disabled or the single-delta digest count is below the GPU threshold, and
   the packed-word path now avoids a non-specializing shape-dispatch branch.

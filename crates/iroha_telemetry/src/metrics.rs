@@ -7071,6 +7071,14 @@ pub struct Metrics {
     pub merkle_root_gpu_total: IntCounter,
     /// Merkle root computations using CPU (cumulative)
     pub merkle_root_cpu_total: IntCounter,
+    /// IVM memory commit duration (milliseconds), labelled by commit path.
+    pub ivm_memory_commit_ms: HistogramVec,
+    /// IVM memory commit dirty chunk count, labelled by commit path.
+    pub ivm_memory_commit_dirty_chunks: HistogramVec,
+    /// IVM Merkle cache full rebuilds.
+    pub ivm_merkle_rebuild_total: IntCounter,
+    /// IVM Merkle cache incremental leaf updates.
+    pub ivm_merkle_incremental_leaf_updates_total: IntCounter,
     /// Number of DAG vertices (transactions) in the latest validated block
     pub pipeline_dag_vertices: GenericGauge<AtomicU64>,
     /// Number of DAG edges (conflicts) in the latest validated block
@@ -11183,6 +11191,32 @@ impl Default for Metrics {
             "Merkle root computations using CPU (cumulative)",
         )
         .expect("Infallible");
+        let ivm_memory_commit_ms = HistogramVec::new(
+            HistogramOpts::new(
+                "ivm_memory_commit_ms",
+                "IVM memory commit duration in milliseconds by commit path",
+            )
+            .buckets(prometheus::exponential_buckets(0.1, 2.0, 16).expect("inputs are valid")),
+            &["path"],
+        )
+        .expect("Infallible");
+        let ivm_memory_commit_dirty_chunks = HistogramVec::new(
+            HistogramOpts::new(
+                "ivm_memory_commit_dirty_chunks",
+                "IVM memory commit dirty chunk count by commit path",
+            )
+            .buckets(prometheus::exponential_buckets(1.0, 2.0, 20).expect("inputs are valid")),
+            &["path"],
+        )
+        .expect("Infallible");
+        let ivm_merkle_rebuild_total =
+            IntCounter::new("ivm_merkle_rebuild_total", "IVM Merkle cache full rebuilds")
+                .expect("Infallible");
+        let ivm_merkle_incremental_leaf_updates_total = IntCounter::new(
+            "ivm_merkle_incremental_leaf_updates_total",
+            "IVM Merkle cache incremental leaf updates",
+        )
+        .expect("Infallible");
         let pipeline_dag_vertices = GenericGauge::new(
             "pipeline_dag_vertices",
             "DAG vertices (transactions) in the latest validated block",
@@ -13873,6 +13907,10 @@ impl Default for Metrics {
             ivm_register_unique_count,
             merkle_root_gpu_total,
             merkle_root_cpu_total,
+            ivm_memory_commit_ms,
+            ivm_memory_commit_dirty_chunks,
+            ivm_merkle_rebuild_total,
+            ivm_merkle_incremental_leaf_updates_total,
             pipeline_dag_vertices,
             pipeline_dag_edges,
             pipeline_conflict_rate_bps,
@@ -14611,6 +14649,10 @@ impl Default for Metrics {
             // Merkle root computation counters
             merkle_root_gpu_total,
             merkle_root_cpu_total,
+            ivm_memory_commit_ms,
+            ivm_memory_commit_dirty_chunks,
+            ivm_merkle_rebuild_total,
+            ivm_merkle_incremental_leaf_updates_total,
             pipeline_dag_vertices,
             pipeline_dag_edges,
             pipeline_conflict_rate_bps,

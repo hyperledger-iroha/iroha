@@ -49,14 +49,14 @@ authority = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱ�
 private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 asset_definition_id = "xor#universal"
 amount = "25000"
-pow_difficulty_bits = 8
+pow_difficulty_bits = 4
 pow_scrypt_log_n = 13
 pow_scrypt_r = 8
 pow_scrypt_p = 1
-pow_max_anchor_age_blocks = 6
+pow_max_anchor_age_blocks = 256
 pow_adaptive_lookback_blocks = 64
-pow_adaptive_claims_per_extra_bit = 4
-pow_adaptive_max_extra_bits = 2
+pow_adaptive_claims_per_extra_bit = 0
+pow_adaptive_max_extra_bits = 0
 pow_vrf_seed_enabled = true
 
 [sorafs.quota]

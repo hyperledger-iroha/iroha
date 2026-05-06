@@ -447,6 +447,8 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             },
             block: A::SumeragiBlock {
                 max_transactions: iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_TRANSACTIONS,
+                max_ivm_transactions:
+                    iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_IVM_TRANSACTIONS,
                 fast_gas_limit_per_block:
                     iroha_config::parameters::defaults::sumeragi::FAST_FINALITY_GAS_LIMIT_PER_BLOCK,
                 max_payload_bytes: iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES,

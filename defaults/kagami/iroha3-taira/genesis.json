@@ -161,7 +161,7 @@
         "custom": {
           "ivm_gas_limit_per_block": {
             "id": "ivm_gas_limit_per_block",
-            "payload": 1680000
+            "payload": 50000000
           },
           "sumeragi_npos_parameters": {
             "id": "sumeragi_npos_parameters",

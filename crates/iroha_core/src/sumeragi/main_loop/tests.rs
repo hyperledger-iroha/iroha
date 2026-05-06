@@ -67,7 +67,8 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::ManifestDigest,
     transaction::{
-        SignedTransaction, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
+        Executable, IvmBytecode, SignedTransaction, TransactionSubmissionReceipt,
+        TransactionSubmissionReceiptPayload,
         signed::{ExecutionStep, TransactionResultInner},
     },
     trigger::DataTriggerSequence,
@@ -1881,6 +1882,8 @@ fn test_sumeragi_config() -> SumeragiConfig {
         },
         block: SumeragiBlock {
             max_transactions: None,
+            max_ivm_transactions:
+                iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_IVM_TRANSACTIONS,
             fast_gas_limit_per_block:
                 iroha_config::parameters::defaults::sumeragi::FAST_FINALITY_GAS_LIMIT_PER_BLOCK,
             max_payload_bytes: None,
@@ -10861,6 +10864,36 @@ async fn flush_pending_rbc_if_roster_ready_uses_cached_roster_when_source_missin
     harness.shutdown.send();
 }
 
+#[test]
+fn rbc_delivered_payload_bytes_uses_layout_size_without_rebuilding_payload() {
+    let payload = vec![1_u8, 2, 3, 4, 5, 6];
+    let layout = RbcPayloadLayout::new(RbcEncoding::Plain, 4, payload.len() as u64, 0, 0)
+        .expect("plain RBC payload layout");
+    let total_chunks = layout.total_chunks().expect("known total chunks") as u32;
+    let mut session = RbcSession::new_with_layout(
+        layout,
+        total_chunks,
+        Some(Hash::new(&payload)),
+        None,
+        None,
+        0,
+    )
+    .expect("RBC session");
+
+    session.ingest_chunk(0, payload[..4].to_vec(), None);
+    session.ingest_chunk(1, payload[4..].to_vec(), None);
+    assert_eq!(session.delivered_payload_bytes(), None);
+
+    assert!(session.record_deliver(0, vec![0xAA]));
+    let expected = u64::try_from(payload.len()).expect("payload length fits u64");
+    assert_eq!(session.delivered_payload_bytes(), Some(expected));
+    assert_eq!(
+        session.take_delivered_payload_bytes_for_telemetry(),
+        Some(expected)
+    );
+    assert_eq!(session.take_delivered_payload_bytes_for_telemetry(), None);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn flush_pending_rbc_if_roster_ready_replays_stashed_ready_and_deliver_with_cached_roster() {
     let mut consensus_cfg = test_sumeragi_config();
@@ -12079,13 +12112,13 @@ async fn block_sync_update_rejects_conflicting_precommit_qc_against_lock() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn precommit_qc_rejects_same_height_conflict_even_when_nonextending_allowed() {
+async fn precommit_qc_same_height_conflict_requires_block_sync_override() {
     let _guard = super::status::qc_status_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let locked_block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
-    let conflicting_block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 1, None);
+    let locked_block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 3, None);
+    let conflicting_block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
     store_block_with_test_ancestors(actor.kura.as_ref(), locked_block.clone());
     let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
     state.push_block_hash_for_testing(locked_block.hash());
@@ -12093,10 +12126,10 @@ async fn precommit_qc_rejects_same_height_conflict_even_when_nonextending_allowe
         phase: Phase::Commit,
         subject_block_hash: locked_block.hash(),
         height: 1,
-        view: 0,
+        view: 3,
         epoch: 0,
     });
-    super::status::set_locked_qc(1, 0, Some(locked_block.hash()));
+    super::status::set_locked_qc(1, 3, Some(locked_block.hash()));
 
     let chain = actor.common_config.chain.clone();
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
@@ -12104,7 +12137,7 @@ async fn precommit_qc_rejects_same_height_conflict_even_when_nonextending_allowe
         &chain,
         conflicting_block.hash(),
         1,
-        1,
+        0,
         0,
         vec![0b0000_1111],
         Phase::Commit,
@@ -12112,12 +12145,20 @@ async fn precommit_qc_rejects_same_height_conflict_even_when_nonextending_allowe
         &harness.key_pairs,
     );
     assert!(
-        !actor.process_precommit_qc(&qc, true, true),
-        "same-height conflicting precommit QC should be rejected fail-closed"
+        !actor.process_precommit_qc(&qc, true, false),
+        "same-height conflicting precommit QC should be rejected without block-sync override"
     );
     let locked = actor.locked_qc.expect("locked qc preserved");
     assert_eq!(locked.subject_block_hash, locked_block.hash());
-    assert_eq!(locked.view, 0, "lock should remain on the canonical branch");
+    assert_eq!(locked.view, 3, "lock should remain on the local branch");
+
+    assert!(
+        actor.process_precommit_qc(&qc, true, true),
+        "validated block-sync commit QC should be allowed to realign a same-height local lock"
+    );
+    let locked = actor.locked_qc.expect("locked qc realigned");
+    assert_eq!(locked.subject_block_hash, conflicting_block.hash());
+    assert_eq!(locked.view, 0);
 
     harness.shutdown.send();
 }
@@ -16889,6 +16930,16 @@ async fn fetch_pending_block_keeps_rbc_transport_rebuildable_when_da_enabled() {
     assert_eq!(init.height, height);
     assert_eq!(init.view, view);
     let payload_bytes = super::proposals::block_payload_bytes(&block_clone);
+    let payload_hash = Hash::new(&payload_bytes);
+    let init_from_payload = actor
+        .rebuild_rbc_init_from_payload_bytes(&block_clone, key, &payload_bytes, payload_hash)
+        .expect("expected RBC init rebuild from carried payload bytes");
+    assert_eq!(init_from_payload.block_hash, init.block_hash);
+    assert_eq!(init_from_payload.height, init.height);
+    assert_eq!(init_from_payload.view, init.view);
+    assert_eq!(init_from_payload.payload_hash, init.payload_hash);
+    assert_eq!(init_from_payload.chunk_root, init.chunk_root);
+    assert_eq!(init_from_payload.chunk_digests, init.chunk_digests);
     let chunks = super::rbc::chunk_payload_bytes(&payload_bytes, actor.config.rbc.chunk_max_bytes);
     assert!(!chunks.is_empty(), "expected RBC chunks response");
 
@@ -18792,6 +18843,68 @@ async fn process_precommit_qc_defers_realign_when_locked_payload_missing() {
             .missing_block_requests
             .contains_key(&locked_hash),
         "missing locked payload should trigger a fetch request"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn process_precommit_qc_realigns_same_height_when_locked_payload_missing_with_override() {
+    let _guard = super::status::qc_status_test_guard();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let locked_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCF; Hash::LENGTH]));
+    actor.locked_qc = Some(QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: locked_hash,
+        height: 2,
+        view: 3,
+        epoch: actor.epoch_for_height(2),
+    });
+    super::status::set_locked_qc(2, 3, Some(locked_hash));
+    assert!(
+        !actor.block_known_for_lock(locked_hash),
+        "test lock payload should be missing locally"
+    );
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 2, 0, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor
+        .pending
+        .pending_blocks
+        .insert(block_hash, PendingBlock::new(block, payload_hash, 2, 0));
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        2,
+        0,
+        actor.epoch_for_height(2),
+        vec![0b0000_1111],
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    assert!(
+        actor.process_precommit_qc(&qc, true, true),
+        "validated block-sync commit QC should realign even when the stale lock payload is missing"
+    );
+    let locked = actor.locked_qc.expect("locked qc realigned");
+    assert_eq!(locked.subject_block_hash, block_hash);
+    assert_eq!(locked.height, 2);
+    assert_eq!(locked.view, 0);
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&locked_hash),
+        "same-height block-sync realignment should not keep chasing the stale local lock payload"
     );
 
     harness.shutdown.send();
@@ -100861,6 +100974,8 @@ async fn proposal_queue_scan_budget_limits_fetch() {
         nonzero!(5_usize),
         2,
         None,
+        None,
+        false,
         &mut tx_guards,
         1,
         0,
@@ -100907,6 +101022,8 @@ async fn proposal_filter_drops_committed_transactions_after_queue_scan() {
         nonzero!(2_usize),
         2,
         None,
+        None,
+        false,
         &mut tx_guards,
         height,
         view,
@@ -101009,6 +101126,8 @@ async fn proposal_gas_budget_limits_fetch() {
         nonzero!(5_usize),
         5,
         Some(gas_cap),
+        None,
+        false,
         &mut tx_guards,
         1,
         0,
@@ -101031,6 +101150,70 @@ async fn proposal_gas_budget_limits_fetch() {
         1,
         "deferred tx should remain queued"
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_ivm_budget_defers_extra_ivm_and_keeps_cheap_slots() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let ivm_a = sample_ivm_transaction();
+    let ivm_b = sample_ivm_transaction();
+    let cheap = sample_transaction();
+    let cheap_hash = cheap.hash();
+    for tx in [ivm_a, ivm_b, cheap] {
+        actor
+            .queue
+            .push(
+                AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+                actor.state.view(),
+            )
+            .expect("push tx");
+    }
+
+    let mut tx_guards = Vec::new();
+    let deferred = actor.pull_transactions_for_proposal(
+        actor.state.as_ref(),
+        nonzero!(3_usize),
+        3,
+        None,
+        NonZeroUsize::new(1),
+        false,
+        &mut tx_guards,
+        1,
+        0,
+    );
+
+    assert_eq!(tx_guards.len(), 2, "one IVM and one cheap tx should fit");
+    assert_eq!(deferred.len(), 1, "second IVM tx should be deferred");
+    assert!(
+        tx_guards
+            .iter()
+            .any(|guard| guard.as_accepted().hash() == cheap_hash),
+        "cheap transaction should fill a remaining proposal slot"
+    );
+    assert!(
+        tx_guards
+            .iter()
+            .filter(|guard| Actor::is_ivm_heavy_transaction(guard.as_accepted(), false))
+            .count()
+            <= 1,
+        "proposal should respect IVM-heavy cap"
+    );
+
+    drop(tx_guards);
+    for (tx, routing) in deferred {
+        actor
+            .queue
+            .push_requeued_with_routing(tx, routing, actor.state.as_ref())
+            .expect("requeue deferred tx");
+    }
+    assert_eq!(actor.queue.queued_len(), 1, "deferred IVM tx stays queued");
 
     harness.shutdown.send();
 }
@@ -130345,7 +130528,7 @@ async fn handle_vrf_commit_does_not_record_mode_mismatch_in_permissioned_mode() 
     super::status::reset_message_handling_for_tests();
     harness
         .actor
-        .handle_vrf_commit(commit)
+        .handle_vrf_commit(commit, None)
         .expect("handle vrf commit");
 
     let entries = super::status::snapshot().consensus_message_handling.entries;
@@ -130377,7 +130560,7 @@ async fn handle_vrf_reveal_does_not_record_mode_mismatch_in_permissioned_mode() 
     super::status::reset_message_handling_for_tests();
     harness
         .actor
-        .handle_vrf_reveal(reveal)
+        .handle_vrf_reveal(reveal, None)
         .expect("handle vrf reveal");
 
     let entries = super::status::snapshot().consensus_message_handling.entries;
@@ -130392,6 +130575,176 @@ async fn handle_vrf_reveal_does_not_record_mode_mismatch_in_permissioned_mode() 
     );
 
     super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn external_vrf_reveal_broadcasts_after_acceptance() {
+    use crate::sumeragi::consensus::{NPOS_TAG, VrfCommit, VrfReveal, vrf_reveal_preimage};
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 10;
+    consensus_cfg.npos.vrf.commit_deadline_offset_blocks = 4;
+    consensus_cfg.npos.vrf.reveal_deadline_offset_blocks = 4;
+
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
+    let reveal = [0xB4; 32];
+    let commitment: [u8; 32] = Hash::new(reveal).into();
+    {
+        let manager = harness
+            .actor
+            .epoch_manager
+            .as_mut()
+            .expect("epoch manager set");
+        manager.set_params(10, 4, 4);
+        manager.set_epoch(0);
+        manager.set_validator_roster_indices(0..4);
+        assert_eq!(
+            manager.try_note_commit_at_height(
+                2,
+                VrfCommit {
+                    epoch: 0,
+                    commitment,
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+    }
+
+    let mut reveal_msg = VrfReveal {
+        epoch: 0,
+        reveal,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let preimage = vrf_reveal_preimage(&harness.actor.common_config.chain, NPOS_TAG, &reveal_msg);
+    let signature = Signature::new(harness.key_pairs[0].private_key(), &preimage);
+    reveal_msg.bls_sig = signature.payload().to_vec();
+
+    let _ = harness.background_rx.try_iter().count();
+    harness
+        .actor
+        .handle_vrf_reveal(reveal_msg.clone(), None)
+        .expect("external reveal handled");
+    let broadcast_count = harness
+        .background_rx
+        .try_iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post { msg, .. }
+                    if matches!(msg.as_ref(), BlockMessage::VrfReveal(_))
+            )
+        })
+        .count();
+    assert_eq!(
+        broadcast_count, 3,
+        "external reveal should be posted to non-local validators"
+    );
+
+    let network_sender = harness.actor.effective_commit_topology()[1].clone();
+    let _ = harness.background_rx.try_iter().count();
+    harness
+        .actor
+        .handle_vrf_reveal(reveal_msg, Some(network_sender))
+        .expect("network reveal handled");
+    assert!(
+        harness.background_rx.try_iter().all(|post| {
+            !matches!(
+                post,
+                BackgroundPost::Post { msg, .. }
+                    if matches!(msg.as_ref(), BlockMessage::VrfReveal(_))
+            )
+        }),
+        "network-originated reveal should not be rebroadcast"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn on_block_message_handles_vrf_reveal_before_commit_catchup_finalizes_epoch() {
+    use crate::sumeragi::consensus::{NPOS_TAG, VrfCommit, VrfReveal, vrf_reveal_preimage};
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 10;
+    consensus_cfg.npos.vrf.commit_deadline_offset_blocks = 4;
+    consensus_cfg.npos.vrf.reveal_deadline_offset_blocks = 4;
+
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 2).await;
+    let actor = &mut harness.actor;
+
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        for height in 3_u64..=10 {
+            let height_byte = u8::try_from(height).expect("height fits in u8 for test hash");
+            state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([height_byte; Hash::LENGTH]),
+            ));
+        }
+    }
+
+    let reveal = [0xA5; 32];
+    let commitment: [u8; 32] = Hash::new(reveal).into();
+    {
+        let manager = actor.epoch_manager.as_mut().expect("epoch manager set");
+        manager.set_params(10, 4, 4);
+        manager.set_epoch(0);
+        manager.set_validator_roster_indices(0..4);
+        assert_eq!(
+            manager.try_note_commit_at_height(
+                2,
+                VrfCommit {
+                    epoch: 0,
+                    commitment,
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+    }
+
+    let mut reveal_msg = VrfReveal {
+        epoch: 0,
+        reveal,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let preimage = vrf_reveal_preimage(&actor.common_config.chain, NPOS_TAG, &reveal_msg);
+    let signature = Signature::new(harness.key_pairs[0].private_key(), &preimage);
+    reveal_msg.bls_sig = signature.payload().to_vec();
+
+    actor
+        .on_block_message(crate::sumeragi::InboundBlockMessage::new(
+            BlockMessage::VrfReveal(reveal_msg),
+            None,
+        ))
+        .expect("vrf reveal handled before committed-block catch-up");
+
+    let finalized = actor
+        .pending_npos_vrf_records
+        .get(&0)
+        .expect("epoch 0 VRF record staged");
+    assert!(finalized.finalized);
+    assert_eq!(finalized.late_reveals.len(), 1);
+    assert_eq!(finalized.late_reveals[0].signer, 0);
+    assert_eq!(finalized.late_reveals[0].reveal, reveal);
+    assert_eq!(
+        actor
+            .epoch_manager
+            .as_ref()
+            .expect("epoch manager set")
+            .epoch(),
+        1
+    );
+
     harness.shutdown.send();
 }
 
@@ -139176,6 +139529,29 @@ fn sample_transaction() -> SignedTransaction {
         .sign(&private_key)
 }
 
+fn sample_ivm_transaction() -> SignedTransaction {
+    let chain: ChainId = "test-chain".parse().expect("chain id");
+    let key_pair = KeyPair::random();
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let mut program = ivm::ProgramMetadata {
+        max_cycles: 1,
+        abi_version: 1,
+        ..ivm::ProgramMetadata::default()
+    }
+    .encode();
+    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    let mut metadata = iroha_data_model::metadata::Metadata::default();
+    metadata.insert(
+        "gas_limit".parse().expect("gas_limit key"),
+        iroha_primitives::json::Json::new(crate::smartcontracts::ivm::gas_limit_for_cycles(1)),
+    );
+
+    TransactionBuilder::new(chain, authority)
+        .with_metadata(metadata)
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+        .sign(key_pair.private_key())
+}
+
 fn sample_log_transaction_with_message_len(message_len: usize) -> SignedTransaction {
     let chain: ChainId = "test-chain".parse().expect("chain id");
     let key_pair = KeyPair::random();
@@ -140934,6 +141310,209 @@ async fn block_sync_update_commit_qc_supersedes_stale_same_height_frontier_owner
             .map(|slot| (slot.block_hash, slot.view)),
         Some((committed_hash, committed_view)),
         "frontier ownership should move to the certified recovery block",
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_commit_qc_bypasses_stale_commit_inflight_frontier_owner() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let parent = Some(seed_genesis_block_for_state(&actor.state));
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let local_view = 3_u64;
+    let committed_view = 0_u64;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, local_view, now);
+
+    let local_block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, local_view, parent);
+    let local_inflight_block = local_block.clone();
+    let local_hash = local_block.hash();
+    actor
+        .handle_block_created(
+            super::message::BlockCreated {
+                block: local_block,
+                frontier: None,
+            },
+            None,
+        )
+        .expect("seed stale same-height frontier owner");
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&local_hash)
+        .expect("local pending block")
+        .note_local_commit_vote_emitted();
+    actor.note_frontier_owner_local_vote_emitted(local_hash, height, local_view);
+    actor.subsystems.commit.inflight = Some(commit_inflight_for_block(
+        actor,
+        local_inflight_block,
+        height,
+        local_view,
+    ));
+    assert_eq!(
+        actor.subsystems.commit.inflight.as_ref().map(|inflight| {
+            (
+                inflight.block_hash,
+                inflight.pending.height,
+                inflight.pending.view,
+            )
+        }),
+        Some((local_hash, height, local_view)),
+        "test setup requires stale local commit work to block ordinary replay",
+    );
+
+    let committed_block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, committed_view, parent);
+    let committed_hash = committed_block.hash();
+    assert_ne!(
+        committed_hash, local_hash,
+        "test setup requires distinct same-height branches",
+    );
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers: BTreeSet<ValidatorIndex> = (0..topology.as_ref().len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let epoch = actor.epoch_for_height(height);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        committed_hash,
+        height,
+        committed_view,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let mut update = super::message::BlockSyncUpdate::from(&committed_block);
+    update.commit_qc = Some(qc);
+
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("handle certified exact-frontier block sync update");
+
+    assert!(
+        actor.deferred_block_sync_updates.is_empty(),
+        "certified exact-frontier recovery must not be queued behind stale commit inflight",
+    );
+    assert!(
+        actor
+            .subsystems
+            .commit
+            .inflight
+            .as_ref()
+            .is_none_or(|inflight| inflight.block_hash != local_hash),
+        "authoritative same-height recovery must clear stale local commit inflight",
+    );
+    let recovered = actor
+        .pending
+        .pending_blocks
+        .get(&committed_hash)
+        .expect("certified recovery block should stay live locally");
+    assert!(
+        recovered.commit_qc_observed(),
+        "certified exact-frontier recovery must retain the commit QC for finalization",
+    );
+    assert!(
+        !recovered.is_retired_same_height(),
+        "certified recovery must not be demoted while superseding stale inflight work",
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn sparse_exact_frontier_block_sync_bypasses_stale_commit_inflight_for_payload_repair() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let parent = Some(seed_genesis_block_for_state(&actor.state));
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let local_view = 3_u64;
+    let committed_view = 0_u64;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, local_view, now);
+
+    let local_block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, local_view, parent);
+    let local_inflight_block = local_block.clone();
+    let local_hash = local_block.hash();
+    actor
+        .handle_block_created(
+            super::message::BlockCreated {
+                block: local_block,
+                frontier: None,
+            },
+            None,
+        )
+        .expect("seed stale same-height frontier owner");
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&local_hash)
+        .expect("local pending block")
+        .note_local_commit_vote_emitted();
+    actor.note_frontier_owner_local_vote_emitted(local_hash, height, local_view);
+    actor.subsystems.commit.inflight = Some(commit_inflight_for_block(
+        actor,
+        local_inflight_block,
+        height,
+        local_view,
+    ));
+
+    let committed_block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, committed_view, parent);
+    let committed_hash = committed_block.hash();
+    assert_ne!(
+        committed_hash, local_hash,
+        "test setup requires distinct same-height branches",
+    );
+
+    let mut update = super::message::BlockSyncUpdate::from(&committed_block);
+    update.commit_qc = None;
+    update.validator_checkpoint = None;
+    update.stake_snapshot = None;
+    update.commit_votes.clear();
+
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("handle sparse exact-frontier block sync update");
+
+    assert!(
+        actor.deferred_block_sync_updates.is_empty(),
+        "exact-frontier payload repair must not wait behind stale commit inflight",
+    );
+    let recovered = actor
+        .pending
+        .pending_blocks
+        .get(&committed_hash)
+        .expect("sparse exact-frontier payload should be retained locally");
+    assert!(
+        recovered.is_retired_same_height(),
+        "payload-only recovery should hydrate the canonical block without stealing ownership until commit proof arrives",
+    );
+    assert!(
+        actor
+            .subsystems
+            .commit
+            .inflight
+            .as_ref()
+            .is_some_and(|inflight| inflight.block_hash == local_hash),
+        "payload-only recovery must not clear stale commit inflight without commit proof",
     );
 
     harness.shutdown.send();
@@ -146735,6 +147314,55 @@ fn activation_plan_defers_until_margin() {
     assert!(
         !plan.2,
         "activation should defer when current height below activation threshold"
+    );
+}
+
+#[test]
+fn committed_vrf_record_does_not_cover_newer_pending_late_reveal() {
+    use iroha_data_model::consensus::{VrfEpochRecord, VrfLateRevealRecord, VrfParticipantRecord};
+
+    let participant = VrfParticipantRecord {
+        signer: 0,
+        commitment: Some([0x11; 32]),
+        reveal: None,
+        last_updated_height: 2,
+    };
+    let committed = VrfEpochRecord {
+        epoch: 0,
+        seed: [0x22; 32],
+        epoch_length: 10,
+        commit_deadline_offset: 4,
+        reveal_deadline_offset: 4,
+        roster_len: 4,
+        finalized: false,
+        updated_at_height: 2,
+        participants: vec![participant],
+        late_reveals: Vec::new(),
+        committed_no_reveal: Vec::new(),
+        no_participation: Vec::new(),
+        penalties_applied: false,
+        penalties_applied_at_height: None,
+        validator_election: None,
+    };
+    let late_reveal = VrfLateRevealRecord {
+        signer: 0,
+        reveal: [0x33; 32],
+        noted_at_height: 5,
+    };
+    let mut pending = committed.clone();
+    pending.updated_at_height = 5;
+    pending.late_reveals.push(late_reveal);
+
+    assert!(
+        !Actor::committed_vrf_record_covers_pending(&committed, &pending),
+        "a stale committed seal must not drop a newer pending late reveal"
+    );
+
+    let mut committed_with_reveal = pending.clone();
+    committed_with_reveal.finalized = true;
+    assert!(
+        Actor::committed_vrf_record_covers_pending(&committed_with_reveal, &pending),
+        "a committed seal that contains the pending late reveal may clear it"
     );
 }
 

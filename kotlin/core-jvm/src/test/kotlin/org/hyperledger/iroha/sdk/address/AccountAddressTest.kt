@@ -56,6 +56,12 @@ class AccountAddressTest {
         val decoded = assertNotNull(decodePublicKeyLiteral(encoded))
         assertEquals(0x04, decoded.curveId)
         assertEquals(secpKey.toList(), decoded.keyBytes.toList())
+
+        val compact = compactPublicKeyPayload(0x04, secpKey)
+        assertEquals(1, compact[0].toInt())
+        val decodedCompact = assertNotNull(decodeCompactPublicKeyPayload(compact))
+        assertEquals(0x04, decodedCompact.curveId)
+        assertEquals(secpKey.toList(), decodedCompact.keyBytes.toList())
     }
 
     @Test

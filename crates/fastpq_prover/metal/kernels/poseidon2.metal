@@ -190,7 +190,7 @@ inline void permute_chunk(
         full_round_chunk(chunk, count, rounds, round, mds);
         round += 1;
     }
-#pragma clang loop unroll(full)
+#pragma clang loop unroll(disable)
     for (uint i = 0; i < PARTIAL_ROUNDS; ++i) {
         partial_round_chunk(chunk, count, rounds, round, mds);
         round += 1;

@@ -132,6 +132,7 @@ def test_render_edge_nginx_conf_includes_all_public_routes() -> None:
     assert "server_name *.mon.taira.sora.net ~^.+\\.mon\\.taira\\.sora\\.net$;" in rendered
     assert "proxy_set_header Host $taira_mon_alias_host;" in rendered
     assert "proxy_set_header X-Forwarded-Host $host;" in rendered
+    assert "proxy_set_header Host taira-validator-2.sora.org;" in rendered
     assert "proxy_pass http://taira_public_edge_upstream;" in rendered
     assert "proxy_pass http://taira_public_edge_upstream$soradns_target_path$is_args$args;" in rendered
     assert "proxy_pass http://taira_validator_1_upstream;" in rendered

@@ -18,6 +18,11 @@ object CanonicalRequestSigner {
     const val HEADER_SIGNATURE = "X-Iroha-Signature"
     const val HEADER_TIMESTAMP_MS = "X-Iroha-Timestamp-Ms"
     const val HEADER_NONCE = "X-Iroha-Nonce"
+    const val BODY_ACCOUNT_ID = "account_id"
+    const val BODY_TIMESTAMP_MS = "timestamp_ms"
+    const val BODY_NONCE = "nonce"
+    const val BODY_SIGNATURE_BASE64 = "signature_base64"
+    const val BODY_WITNESS_BASE64 = "witness_base64"
 
     private val NONCE_RANDOM = SecureRandom()
 
@@ -67,6 +72,96 @@ object CanonicalRequestSigner {
         return rendered.toByteArray(StandardCharsets.UTF_8)
     }
 
+    /** Build unsigned canonical JSON bytes for body-auth endpoints. */
+    @JvmStatic
+    fun unsignedBodyAuthJson(bodyFields: Map<String, Any?>): ByteArray {
+        val unsigned = LinkedHashMap<String, Any?>(bodyFields)
+        unsigned.remove(BODY_SIGNATURE_BASE64)
+        unsigned.remove(BODY_WITNESS_BASE64)
+        return JsonEncoder.encode(unsigned).toByteArray(StandardCharsets.UTF_8)
+    }
+
+    /** Build body-auth canonical request bytes plus freshness metadata. */
+    @JvmStatic
+    fun canonicalBodyAuthSignatureMessage(
+        method: String,
+        uri: URI,
+        bodyFields: Map<String, Any?>,
+        timestampMs: Long,
+        nonce: String
+    ): ByteArray = canonicalRequestSignatureMessage(
+        method,
+        uri,
+        unsignedBodyAuthJson(bodyFields),
+        timestampMs,
+        nonce,
+    )
+
+    /** Build the top-level fields required for single-signature body auth. */
+    @JvmStatic
+    fun buildBodySignatureFields(
+        method: String,
+        uri: URI,
+        bodyFields: Map<String, Any?>,
+        accountId: String,
+        privateKey: PrivateKey
+    ): Map<String, Any?> =
+        buildBodySignatureFields(method, uri, bodyFields, accountId, privateKey, System.currentTimeMillis(), randomNonce())
+
+    /** Build the top-level fields required for single-signature body auth with explicit freshness metadata. */
+    @JvmStatic
+    fun buildBodySignatureFields(
+        method: String,
+        uri: URI,
+        bodyFields: Map<String, Any?>,
+        accountId: String,
+        privateKey: PrivateKey,
+        timestampMs: Long,
+        nonce: String
+    ): Map<String, Any?> {
+        val unsigned = bodyWithBodyAuthFreshness(bodyFields, accountId, timestampMs, nonce)
+        val message = canonicalBodyAuthSignatureMessage(method, uri, unsigned, timestampMs, nonce)
+        val signatureBytes = signEd25519(privateKey, message)
+        return mapOf(
+            BODY_ACCOUNT_ID to accountId,
+            BODY_TIMESTAMP_MS to timestampMs,
+            BODY_NONCE to nonce,
+            BODY_SIGNATURE_BASE64 to Base64.getEncoder().encodeToString(signatureBytes),
+        )
+    }
+
+    /** Return a copy of `bodyFields` carrying single-signature body auth. */
+    @JvmStatic
+    fun withBodySignature(
+        method: String,
+        uri: URI,
+        bodyFields: Map<String, Any?>,
+        accountId: String,
+        privateKey: PrivateKey,
+        timestampMs: Long,
+        nonce: String
+    ): Map<String, Any?> {
+        val body = LinkedHashMap<String, Any?>(bodyFields)
+        body.remove(BODY_WITNESS_BASE64)
+        body.putAll(buildBodySignatureFields(method, uri, body, accountId, privateKey, timestampMs, nonce))
+        return body
+    }
+
+    /** Return a copy of `bodyFields` carrying a prebuilt multisig witness body auth proof. */
+    @JvmStatic
+    fun withBodyWitness(
+        bodyFields: Map<String, Any?>,
+        accountId: String,
+        timestampMs: Long,
+        nonce: String,
+        witnessBase64: String
+    ): Map<String, Any?> {
+        require(witnessBase64.isNotBlank()) { "witnessBase64 is required" }
+        val body = bodyWithBodyAuthFreshness(bodyFields, accountId, timestampMs, nonce)
+        body[BODY_WITNESS_BASE64] = witnessBase64
+        return body
+    }
+
     /** Build canonical signing headers with generated freshness metadata. */
     @JvmStatic
     fun buildHeaders(
@@ -92,21 +187,41 @@ object CanonicalRequestSigner {
         require(accountId.isNotBlank()) { "accountId is required" }
         require(nonce.isNotBlank()) { "nonce is required" }
         val message = canonicalRequestSignatureMessage(method, uri, body, timestampMs, nonce)
-        val signatureBytes: ByteArray
-        try {
-            val signer = Signature.getInstance("Ed25519")
-            signer.initSign(privateKey)
-            signer.update(message)
-            signatureBytes = signer.sign()
-        } catch (ex: Exception) {
-            throw IllegalStateException("failed to sign canonical request", ex)
-        }
+        val signatureBytes = signEd25519(privateKey, message)
         return mapOf(
             HEADER_ACCOUNT to accountId,
             HEADER_SIGNATURE to Base64.getEncoder().encodeToString(signatureBytes),
             HEADER_TIMESTAMP_MS to timestampMs.toString(),
             HEADER_NONCE to nonce,
         )
+    }
+
+    private fun bodyWithBodyAuthFreshness(
+        bodyFields: Map<String, Any?>,
+        accountId: String,
+        timestampMs: Long,
+        nonce: String
+    ): LinkedHashMap<String, Any?> {
+        require(accountId.isNotBlank()) { "accountId is required" }
+        require(nonce.isNotBlank()) { "nonce is required" }
+        val body = LinkedHashMap<String, Any?>(bodyFields)
+        body[BODY_ACCOUNT_ID] = accountId
+        body[BODY_TIMESTAMP_MS] = timestampMs
+        body[BODY_NONCE] = nonce
+        body.remove(BODY_SIGNATURE_BASE64)
+        body.remove(BODY_WITNESS_BASE64)
+        return body
+    }
+
+    private fun signEd25519(privateKey: PrivateKey, message: ByteArray): ByteArray {
+        try {
+            val signer = Signature.getInstance("Ed25519")
+            signer.initSign(privateKey)
+            signer.update(message)
+            return signer.sign()
+        } catch (ex: Exception) {
+            throw IllegalStateException("failed to sign canonical request", ex)
+        }
     }
 
     private fun urlEncode(value: String): String {

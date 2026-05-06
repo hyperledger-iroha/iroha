@@ -178,9 +178,24 @@ impl ManifestV1 {
         norito::to_bytes(self)
     }
 
+    /// Serializes the manifest using the v1 Norito layout without compact lengths.
+    ///
+    /// This is only for compatibility with already-running Taira nodes that decode
+    /// SoraFS storage manifests with the pre-compact-length Norito layout.
+    pub fn encode_legacy_norito(&self) -> Result<Vec<u8>, NoritoError> {
+        let _guard = norito::core::DecodeFlagsGuard::enter(0);
+        norito::to_bytes(self)
+    }
+
     /// Computes the canonical manifest digest used by the Pin Registry.
     pub fn digest(&self) -> Result<Hash, NoritoError> {
         let bytes = self.encode()?;
+        Ok(blake3::hash(&bytes))
+    }
+
+    /// Computes the digest for the legacy Norito manifest bytes.
+    pub fn legacy_norito_digest(&self) -> Result<Hash, NoritoError> {
+        let bytes = self.encode_legacy_norito()?;
         Ok(blake3::hash(&bytes))
     }
 }
@@ -591,6 +606,21 @@ mod tests {
         let bytes = manifest.encode().expect("encode manifest");
         let decoded: ManifestV1 = norito::decode_from_bytes(&bytes).expect("decode manifest");
         assert_eq!(manifest, decoded);
+    }
+
+    #[test]
+    fn legacy_norito_encode_roundtrip() {
+        let manifest = sample_manifest();
+        let bytes = manifest
+            .encode_legacy_norito()
+            .expect("encode legacy manifest");
+        let decoded: ManifestV1 = norito::decode_from_bytes(&bytes).expect("decode manifest");
+        assert_eq!(manifest, decoded);
+        assert_eq!(bytes[norito::core::Header::SIZE - 1], 0);
+        assert_eq!(
+            manifest.legacy_norito_digest().expect("legacy digest"),
+            blake3::hash(&bytes)
+        );
     }
 
     #[test]

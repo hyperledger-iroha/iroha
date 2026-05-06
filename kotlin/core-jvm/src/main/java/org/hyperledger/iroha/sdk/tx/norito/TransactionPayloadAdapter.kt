@@ -8,8 +8,8 @@ import org.hyperledger.iroha.sdk.address.MultisigMemberPayload
 import org.hyperledger.iroha.sdk.address.MultisigPolicyPayload
 import org.hyperledger.iroha.sdk.address.PublicKeyPayload
 import org.hyperledger.iroha.sdk.address.algorithmForCurveId
-import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
-import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
+import org.hyperledger.iroha.sdk.address.compactPublicKeyPayload
+import org.hyperledger.iroha.sdk.address.decodeCompactPublicKeyPayload
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
@@ -115,8 +115,8 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
                 val controllerTag = ENUM_TAG_ADAPTER.decode(decoder)
                 return when (controllerTag) {
                     SINGLE_CONTROLLER_TAG -> {
-                        val publicKeyLiteral = decodeSizedField(decoder, STRING_ADAPTER)
-                        ControllerPayload.single(publicKeyLiteral)
+                        val publicKeyPayload = decodeSizedField(decoder, BYTE_VECTOR_ADAPTER)
+                        ControllerPayload.single(publicKeyPayload)
                     }
                     MULTISIG_CONTROLLER_TAG -> {
                         val policy = decodeSizedField(decoder, MULTISIG_POLICY_ADAPTER)
@@ -140,8 +140,8 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
                 try {
                     val singlePayload = address.singleKeyPayloadIgnoringCurveSupport()
                     if (singlePayload != null) {
-                        val publicKey = encodePublicKeyMultihash(singlePayload.curveId, singlePayload.publicKey)
-                        return ControllerPayload.single(publicKey)
+                        val publicKeyPayload = compactPublicKeyPayload(singlePayload.curveId, singlePayload.publicKey)
+                        return ControllerPayload.single(publicKeyPayload)
                     }
                     val multisigPayload = address.multisigPolicyPayloadIgnoringCurveSupport()
                     if (multisigPayload != null) {
@@ -160,8 +160,8 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
 
             private fun renderAuthority(controller: ControllerPayload): String {
                 if (controller.isSingle) {
-                    val publicKeyLiteral = controller.publicKeyLiteral!!
-                    val payload = decodePublicKeyLiteral(publicKeyLiteral)
+                    val publicKeyPayload = controller.publicKeyPayload()
+                    val payload = decodeCompactPublicKeyPayload(publicKeyPayload)
                         ?: throw IllegalArgumentException("Invalid single-key AccountController payload")
                     return renderSingleAuthority(payload)
                 }
@@ -192,15 +192,19 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
         }
 
         private class ControllerPayload private constructor(
-            val publicKeyLiteral: String?,
+            publicKeyPayload: ByteArray?,
             val multisigPolicy: MultisigPolicyPayload?,
         ) {
+            private val publicKeyPayload: ByteArray? = publicKeyPayload?.copyOf()
+
             val isSingle: Boolean get() = multisigPolicy == null
 
+            fun publicKeyPayload(): ByteArray = publicKeyPayload!!.copyOf()
+
             companion object {
-                fun single(publicKeyLiteral: String): ControllerPayload {
-                    require(publicKeyLiteral.isNotBlank()) { "public key literal must not be blank" }
-                    return ControllerPayload(publicKeyLiteral.trim(), null)
+                fun single(publicKeyPayload: ByteArray): ControllerPayload {
+                    require(publicKeyPayload.isNotEmpty()) { "public key payload must not be empty" }
+                    return ControllerPayload(publicKeyPayload, null)
                 }
 
                 fun multisig(multisigPolicy: MultisigPolicyPayload): ControllerPayload =
@@ -212,7 +216,7 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
             override fun encode(encoder: NoritoEncoder, value: ControllerPayload) {
                 if (value.isSingle) {
                     ENUM_TAG_ADAPTER.encode(encoder, SINGLE_CONTROLLER_TAG)
-                    encodeSizedField(encoder, STRING_ADAPTER, value.publicKeyLiteral!!)
+                    encodeSizedField(encoder, BYTE_VECTOR_ADAPTER, value.publicKeyPayload())
                     return
                 }
                 ENUM_TAG_ADAPTER.encode(encoder, MULTISIG_CONTROLLER_TAG)
@@ -223,8 +227,8 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
                 val controllerTag = ENUM_TAG_ADAPTER.decode(decoder)
                 val controller = when (controllerTag) {
                     SINGLE_CONTROLLER_TAG -> {
-                        val publicKeyLiteral = decodeSizedField(decoder, STRING_ADAPTER)
-                        ControllerPayload.single(publicKeyLiteral)
+                        val publicKeyPayload = decodeSizedField(decoder, BYTE_VECTOR_ADAPTER)
+                        ControllerPayload.single(publicKeyPayload)
                     }
                     MULTISIG_CONTROLLER_TAG -> {
                         val policy = decodeSizedField(decoder, MULTISIG_POLICY_ADAPTER)
@@ -254,15 +258,15 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
 
         private class MultisigMemberNoritoAdapter : TypeAdapter<MultisigMemberPayload> {
             override fun encode(encoder: NoritoEncoder, value: MultisigMemberPayload) {
-                val publicKey = encodePublicKeyMultihash(value.curveId, value.publicKey)
-                STRING_ADAPTER.encode(encoder, publicKey)
+                val publicKeyPayload = compactPublicKeyPayload(value.curveId, value.publicKey)
+                BYTE_VECTOR_ADAPTER.encode(encoder, publicKeyPayload)
                 UINT16_ADAPTER.encode(encoder, value.weight.toLong())
             }
 
             override fun decode(decoder: NoritoDecoder): MultisigMemberPayload {
-                val publicKeyLiteral = STRING_ADAPTER.decode(decoder)
+                val publicKeyPayload = BYTE_VECTOR_ADAPTER.decode(decoder)
                 val weight = Math.toIntExact(UINT16_ADAPTER.decode(decoder))
-                val payload = decodePublicKeyLiteral(publicKeyLiteral)
+                val payload = decodeCompactPublicKeyPayload(publicKeyPayload)
                     ?: throw IllegalArgumentException("Invalid multisig member public key")
                 return MultisigMemberPayload(payload.curveId, weight, payload.keyBytes)
             }
@@ -370,6 +374,7 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
         private val UINT64_ADAPTER: TypeAdapter<Long> = NoritoAdapters.uint(64)
         private val UINT16_ADAPTER: TypeAdapter<Long> = NoritoAdapters.uint(16)
         private val UINT8_ADAPTER: TypeAdapter<Long> = NoritoAdapters.uint(8)
+        private val BYTE_VECTOR_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.byteVecAdapter()
         private val RAW_BYTE_VEC_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.rawByteVecAdapter()
         private val IVM_BYTECODE_ADAPTER: TypeAdapter<ByteArray> = IvmBytecodeAdapter()
         private val INSTRUCTION_LIST_ADAPTER: TypeAdapter<List<InstructionBox>> =

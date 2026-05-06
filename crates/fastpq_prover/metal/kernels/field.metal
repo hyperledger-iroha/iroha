@@ -5,12 +5,21 @@ constant ulong FIELD_MODULUS = 0xffffffff00000001UL;
 constant ulong FIELD_GENERATOR = 7UL;
 
 inline ulong reduce_goldilocks(ulong lo, ulong hi) {
-    uint lo_lo = (uint)(lo & 0xffffffffUL);
-    uint lo_hi = (uint)(lo >> 32);
     uint hi_lo = (uint)(hi & 0xffffffffUL);
     uint hi_hi = (uint)(hi >> 32);
 
-    ulong acc = ((ulong)(lo_hi + hi_lo) << 32) + (ulong)(lo_lo);
+    ulong shifted = (ulong)(hi_lo) << 32;
+    ulong acc = lo + shifted;
+    bool carry = acc < lo;
+    if (acc >= FIELD_MODULUS) {
+        acc -= FIELD_MODULUS;
+    }
+    if (carry) {
+        acc += 0xffffffffUL;
+        if (acc >= FIELD_MODULUS) {
+            acc -= FIELD_MODULUS;
+        }
+    }
 
     ulong sub = (ulong)(hi_lo);
     if (acc < sub) {

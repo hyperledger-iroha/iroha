@@ -773,14 +773,19 @@ pub mod isi {
 
 pub mod query {
     //! Queries associated to triggers.
+    use std::collections::BTreeSet;
+
     use iroha_data_model::{
         query::{
             dsl::{CompoundPredicate, EvaluatePredicate},
             error::QueryExecutionFail as Error,
+            json::PredicateJson,
             trigger::{FindTriggerById, FindTriggers},
         },
         trigger::{Trigger, TriggerId},
     };
+    use mv::storage::StorageReadOnly;
+    use norito::json::Value;
 
     use super::*;
     use crate::{
@@ -788,6 +793,247 @@ pub mod query {
         smartcontracts::{ValidQuery, ValidSingularQuery, triggers::set::SetReadOnly},
         state::StateReadOnly,
     };
+
+    fn trigger_id_from_value(value: &Value) -> Option<TriggerId> {
+        norito::json::from_value(value.clone()).ok()
+    }
+
+    fn maybe_replace_trigger_candidate_ids(
+        best: &mut Option<BTreeSet<TriggerId>>,
+        candidates: BTreeSet<TriggerId>,
+    ) {
+        if best
+            .as_ref()
+            .map_or(true, |current| candidates.len() < current.len())
+        {
+            *best = Some(candidates);
+        }
+    }
+
+    fn trigger_candidate_ids(predicate: &PredicateJson) -> Option<BTreeSet<TriggerId>> {
+        let mut best = None;
+
+        for cond in &predicate.equals {
+            if cond.field == "id" {
+                maybe_replace_trigger_candidate_ids(
+                    &mut best,
+                    trigger_id_from_value(&cond.value).into_iter().collect(),
+                );
+            }
+        }
+
+        for cond in &predicate.r#in {
+            if cond.field == "id" {
+                maybe_replace_trigger_candidate_ids(
+                    &mut best,
+                    cond.values
+                        .iter()
+                        .filter_map(trigger_id_from_value)
+                        .collect(),
+                );
+            }
+        }
+
+        best
+    }
+
+    fn trigger_alias_values(trigger: &Trigger, field: &str) -> Vec<String> {
+        match field {
+            "id" => vec![trigger.id().to_string()],
+            _ => Vec::new(),
+        }
+    }
+
+    fn trigger_id_alias_values(id: &TriggerId, field: &str) -> Vec<String> {
+        match field {
+            "id" => vec![id.to_string()],
+            _ => Vec::new(),
+        }
+    }
+
+    fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+        if path.is_empty() {
+            return None;
+        }
+        let mut current = value;
+        for segment in path.split('.') {
+            if segment.is_empty() {
+                return None;
+            }
+            match current {
+                Value::Object(map) => current = map.get(segment)?,
+                _ => return None,
+            }
+        }
+        Some(current)
+    }
+
+    fn predicate_value_equals_str(value: &Value, expected: &str) -> bool {
+        matches!(value, Value::String(raw) if raw == expected)
+    }
+
+    fn predicate_values_contain_str(values: &[Value], expected: &str) -> bool {
+        values
+            .iter()
+            .any(|value| matches!(value, Value::String(raw) if raw == expected))
+    }
+
+    fn trigger_json_value<'a>(
+        cache: &'a mut Option<Value>,
+        trigger: &Trigger,
+    ) -> Option<&'a Value> {
+        if cache.is_none() {
+            *cache = norito::json::to_value(trigger).ok();
+        }
+        cache.as_ref()
+    }
+
+    fn trigger_id_json_value<'a>(
+        cache: &'a mut Option<Value>,
+        id: &TriggerId,
+    ) -> Option<&'a Value> {
+        if cache.is_none() {
+            *cache = norito::json::to_value(id).ok();
+        }
+        cache.as_ref()
+    }
+
+    fn predicate_matches_trigger(predicate: &PredicateJson, trigger: &Trigger) -> bool {
+        let mut trigger_json = None;
+
+        for cond in &predicate.equals {
+            let aliases = trigger_alias_values(trigger, &cond.field);
+            if !aliases.is_empty() {
+                if !aliases
+                    .iter()
+                    .any(|alias| predicate_value_equals_str(&cond.value, alias))
+                {
+                    return false;
+                }
+                continue;
+            }
+            let Some(value) = trigger_json_value(&mut trigger_json, trigger) else {
+                continue;
+            };
+            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
+                return false;
+            };
+            if actual != &cond.value {
+                return false;
+            }
+        }
+
+        for cond in &predicate.r#in {
+            let aliases = trigger_alias_values(trigger, &cond.field);
+            if !aliases.is_empty() {
+                if !aliases
+                    .iter()
+                    .any(|alias| predicate_values_contain_str(&cond.values, alias))
+                {
+                    return false;
+                }
+                continue;
+            }
+            let Some(value) = trigger_json_value(&mut trigger_json, trigger) else {
+                continue;
+            };
+            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
+                return false;
+            };
+            if !cond.values.iter().any(|candidate| candidate == actual) {
+                return false;
+            }
+        }
+
+        for field in &predicate.exists {
+            if !trigger_alias_values(trigger, field).is_empty() {
+                continue;
+            }
+            let Some(value) = trigger_json_value(&mut trigger_json, trigger) else {
+                continue;
+            };
+            let Some(actual) = predicate_value_at_path(value, field) else {
+                return false;
+            };
+            if actual.is_null() {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn predicate_matches_trigger_id(predicate: &PredicateJson, id: &TriggerId) -> bool {
+        let mut id_json = None;
+
+        for cond in &predicate.equals {
+            let aliases = trigger_id_alias_values(id, &cond.field);
+            if !aliases.is_empty() {
+                if !aliases
+                    .iter()
+                    .any(|alias| predicate_value_equals_str(&cond.value, alias))
+                {
+                    return false;
+                }
+                continue;
+            }
+            let Some(value) = trigger_id_json_value(&mut id_json, id) else {
+                continue;
+            };
+            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
+                return false;
+            };
+            if actual != &cond.value {
+                return false;
+            }
+        }
+
+        for cond in &predicate.r#in {
+            let aliases = trigger_id_alias_values(id, &cond.field);
+            if !aliases.is_empty() {
+                if !aliases
+                    .iter()
+                    .any(|alias| predicate_values_contain_str(&cond.values, alias))
+                {
+                    return false;
+                }
+                continue;
+            }
+            let Some(value) = trigger_id_json_value(&mut id_json, id) else {
+                continue;
+            };
+            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
+                return false;
+            };
+            if !cond.values.iter().any(|candidate| candidate == actual) {
+                return false;
+            }
+        }
+
+        for field in &predicate.exists {
+            if !trigger_id_alias_values(id, field).is_empty() {
+                continue;
+            }
+            let Some(value) = trigger_id_json_value(&mut id_json, id) else {
+                continue;
+            };
+            let Some(actual) = predicate_value_at_path(value, field) else {
+                return false;
+            };
+            if actual.is_null() {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn trigger_id_is_active(triggers: &impl SetReadOnly, id: &TriggerId) -> bool {
+        triggers.active_data_trigger_ids().get(id).is_some()
+            || triggers.active_pipeline_trigger_ids().get(id).is_some()
+            || triggers.active_time_trigger_ids().get(id).is_some()
+            || triggers.active_by_call_trigger_ids().get(id).is_some()
+    }
 
     impl ValidQuery for FindActiveTriggerIds {
         #[metrics(+"find_active_triggers")]
@@ -797,6 +1043,21 @@ pub mod query {
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = TriggerId>, Error> {
             let triggers = state_ro.world().triggers();
+            let predicate_json = filter
+                .json_payload()
+                .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+            if let Some(candidate_ids) = predicate_json.as_ref().and_then(trigger_candidate_ids) {
+                let iter: Box<dyn Iterator<Item = TriggerId> + '_> =
+                    Box::new(candidate_ids.into_iter().filter(move |id| {
+                        trigger_id_is_active(triggers, id)
+                            && predicate_json.as_ref().map_or_else(
+                                || filter.applies(id),
+                                |predicate| predicate_matches_trigger_id(predicate, id),
+                            )
+                    }));
+                return Ok(iter);
+            }
+
             let iter: Box<dyn Iterator<Item = TriggerId> + '_> =
                 Box::new(triggers.active_trigger_ids_iter().cloned());
             if filter.json_payload().is_none() {
@@ -807,7 +1068,12 @@ pub mod query {
             // remaining executions). This makes the query resilient to any
             // edge case where a depleted trigger could temporarily remain
             // registered during a transaction before being pruned.
-            Ok(Box::new(iter.filter(move |id| filter.applies(id))))
+            Ok(Box::new(iter.filter(move |id| {
+                predicate_json.as_ref().map_or_else(
+                    || filter.applies(id),
+                    |predicate| predicate_matches_trigger_id(predicate, id),
+                )
+            })))
         }
     }
 
@@ -819,15 +1085,35 @@ pub mod query {
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = Self::Item>, Error> {
             let triggers = state_ro.world().triggers();
+            let predicate_json = filter
+                .json_payload()
+                .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+            if let Some(candidate_ids) = predicate_json.as_ref().and_then(trigger_candidate_ids) {
+                let iter: Box<dyn Iterator<Item = Trigger> + '_> =
+                    Box::new(candidate_ids.into_iter().filter_map(move |id| {
+                        triggers.trigger_by_id(&id).filter(|trigger| {
+                            if let Some(predicate) = predicate_json.as_ref() {
+                                predicate_matches_trigger(predicate, trigger)
+                            } else {
+                                filter.applies(trigger)
+                            }
+                        })
+                    }));
+                return Ok(iter);
+            }
 
             let iter: Box<dyn Iterator<Item = Trigger> + '_> = Box::new(triggers.triggers_iter());
             if filter.json_payload().is_none() {
                 return Ok(iter);
             }
 
-            Ok(Box::new(
-                iter.filter(move |trigger| filter.applies(trigger)),
-            ))
+            Ok(Box::new(iter.filter(move |trigger| {
+                if let Some(predicate) = predicate_json.as_ref() {
+                    predicate_matches_trigger(predicate, trigger)
+                } else {
+                    filter.applies(trigger)
+                }
+            })))
         }
     }
 
@@ -1383,7 +1669,40 @@ mod tests {
         .collect();
         ids.sort();
 
-        assert_eq!(ids, vec![rose_id, tulip_id]);
+        assert_eq!(ids, vec![rose_id.clone(), tulip_id.clone()]);
+
+        let by_id: Vec<_> = ValidQuery::execute(
+            FindTriggers,
+            CompoundPredicate::<Trigger>::build(|predicate| {
+                predicate.equals("id", rose_id.clone())
+            }),
+            &view,
+        )
+        .expect("trigger query by id should succeed")
+        .map(|trigger| trigger.id().clone())
+        .collect();
+        assert_eq!(by_id, vec![rose_id.clone()]);
+
+        let active_by_id: Vec<_> = ValidQuery::execute(
+            FindActiveTriggerIds,
+            CompoundPredicate::<TriggerId>::build(|predicate| {
+                predicate.equals("id", rose_id.clone())
+            }),
+            &view,
+        )
+        .expect("active trigger id query by id should succeed")
+        .collect();
+        assert_eq!(active_by_id, vec![rose_id.clone()]);
+
+        let missing_id: TriggerId = "utrig_missing".parse().unwrap();
+        let missing_count = ValidQuery::execute(
+            FindTriggers,
+            CompoundPredicate::<Trigger>::build(|predicate| predicate.equals("id", missing_id)),
+            &view,
+        )
+        .expect("missing trigger query by id should succeed")
+        .count();
+        assert_eq!(missing_count, 0);
     }
 
     #[test]

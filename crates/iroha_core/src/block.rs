@@ -2223,7 +2223,7 @@ mod chained {
             self
         }
 
-        /// Attach deterministic NPoS effects and update the header hash accordingly.
+        /// Attach deterministic `NPoS` effects and update the header hash accordingly.
         #[must_use]
         pub fn with_npos_consensus_effects(
             mut self,
@@ -2391,7 +2391,7 @@ mod new {
             self.previous_roster_evidence.as_ref()
         }
 
-        /// NPoS consensus effects embedded in this block, if any.
+        /// `NPoS` consensus effects embedded in this block, if any.
         pub fn npos_consensus_effects(&self) -> Option<&NposConsensusEffects> {
             self.npos_consensus_effects.as_ref()
         }
@@ -4659,6 +4659,16 @@ pub(crate) mod valid {
             let metrics = Some(&state.telemetry);
             #[cfg(not(feature = "telemetry"))]
             let metrics = ();
+            let cache_now_ms = block.header().creation_time().as_millis();
+            let cached_stateless_ok = cache_context.as_ref().map(|context| {
+                let mut cache = state.stateless_validation_cache().lock();
+                cache.set_cap(cache_cap);
+                cache.ensure_context(context.clone());
+                prepared_txs
+                    .iter()
+                    .map(|prepared| cache.get_ok(&prepared.metadata.signed_hash, cache_now_ms))
+                    .collect::<Vec<_>>()
+            });
             let static_snapshot_start = Instant::now();
             if let Err(error) = Self::validate_static_with_snapshot(
                 &block,
@@ -4667,6 +4677,7 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 &prepared_txs,
+                cached_stateless_ok.as_deref(),
                 trust_replay_tx_signatures,
                 metrics,
             ) {
@@ -4871,6 +4882,16 @@ pub(crate) mod valid {
             let metrics = Some(&state.telemetry);
             #[cfg(not(feature = "telemetry"))]
             let metrics = ();
+            let cache_now_ms = block.header().creation_time().as_millis();
+            let cached_stateless_ok = cache_context.as_ref().map(|context| {
+                let mut cache = state.stateless_validation_cache().lock();
+                cache.set_cap(cache_cap);
+                cache.ensure_context(context.clone());
+                prepared_txs
+                    .iter()
+                    .map(|prepared| cache.get_ok(&prepared.metadata.signed_hash, cache_now_ms))
+                    .collect::<Vec<_>>()
+            });
             if let Err(error) = Self::validate_static_with_snapshot(
                 &block,
                 expected_chain_id,
@@ -4878,6 +4899,7 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 &prepared_txs,
+                cached_stateless_ok.as_deref(),
                 false,
                 metrics,
             ) {
@@ -5480,10 +5502,7 @@ pub(crate) mod valid {
                 })?;
                 let derived_decision =
                     crate::queue::RoutingDecision::new(decision.lane_id, decision.dataspace_id);
-                if derived_decision != committed_decision
-                    && !(derived_decision == crate::queue::RoutingDecision::default()
-                        && committed_decision != crate::queue::RoutingDecision::default())
-                {
+                if derived_decision != committed_decision {
                     return Err(Self::execution_context_error(format!(
                         "execution context routing mismatch at index {idx}: expected lane {} dataspace {}, got lane {} dataspace {}",
                         decision.lane_id.as_u32(),
@@ -5585,6 +5604,7 @@ pub(crate) mod valid {
             static_data: &StaticValidationData,
             committed_heights: &[Option<NonZeroUsize>],
             prepared_txs: &[PreparedBlockTransaction],
+            cached_stateless_ok: Option<&[bool]>,
             trust_replay_tx_signatures: bool,
             _metrics: MetricsRef<'_>,
         ) -> Result<(), BlockValidationError> {
@@ -5712,6 +5732,17 @@ pub(crate) mod valid {
 
             let is_genesis_block = block.header().is_genesis();
             let mut ed25519_prechecked = vec![false; prepared_txs.len()];
+            if let Some(cached_stateless_ok) = cached_stateless_ok {
+                if cached_stateless_ok.len() != prepared_txs.len() {
+                    return Err(BlockValidationError::MerkleRootMismatch);
+                }
+                for (prechecked, cached_ok) in ed25519_prechecked
+                    .iter_mut()
+                    .zip(cached_stateless_ok.iter())
+                {
+                    *prechecked = *cached_ok;
+                }
+            }
             let ed25519_batch_cap = pipeline_cfg.signature_batch_max_ed25519;
             if !is_genesis_block && ed25519_batch_cap > 0 {
                 struct Ed25519BatchItem {
@@ -5745,6 +5776,9 @@ pub(crate) mod valid {
                     .enumerate()
                 {
                     let signature = tx.signature().payload().payload();
+                    if ed25519_prechecked[idx] {
+                        continue;
+                    }
                     if signature.len() != crate::tx::ED25519_SIGNATURE_LENGTH {
                         continue;
                     }
@@ -5977,6 +6011,16 @@ pub(crate) mod valid {
             let metrics = Some(state.metrics());
             #[cfg(not(feature = "telemetry"))]
             let metrics = ();
+            let cache_now_ms = block.header().creation_time().as_millis();
+            let cached_stateless_ok = cache_context.as_ref().map(|context| {
+                let mut cache = state.stateless_validation_cache().lock();
+                cache.set_cap(cache_cap);
+                cache.ensure_context(context.clone());
+                prepared_txs
+                    .iter()
+                    .map(|prepared| cache.get_ok(&prepared.metadata.signed_hash, cache_now_ms))
+                    .collect::<Vec<_>>()
+            });
             Self::validate_static_with_snapshot(
                 block,
                 chain_id,
@@ -5984,6 +6028,7 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 &prepared_txs,
+                cached_stateless_ok.as_deref(),
                 false,
                 metrics,
             )?;
@@ -6188,7 +6233,6 @@ pub(crate) mod valid {
                 u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
             };
             let mut timings = timings;
-            let _ivm_cache = IvmCache::new();
             if block.has_results() {
                 if let Some(snapshot) = block.axt_policy_snapshot() {
                     state_block.install_axt_policy_snapshot(snapshot);
@@ -6442,15 +6486,14 @@ pub(crate) mod valid {
             if !skip_stateless_checks {
                 // Ed25519 deterministic micro-batching for stateless pre-pass.
                 {
-                    #[derive(Clone)]
                     struct EdItem {
                         idx: usize,
-                        pk: [u8; 32],
-                        msg: [u8; 32],
-                        sig: [u8; 64],
                     }
                     let mut items: Vec<EdItem> = Vec::with_capacity(txs.len());
-                    for (idx, tx) in txs.iter().enumerate() {
+                    let mut messages = Vec::with_capacity(txs.len());
+                    let mut signatures = Vec::with_capacity(txs.len());
+                    let mut public_keys = Vec::with_capacity(txs.len());
+                    for (idx, (tx, prepared)) in txs.iter().zip(prepared_txs.iter()).enumerate() {
                         if cached_ok[idx] {
                             continue;
                         }
@@ -6461,26 +6504,24 @@ pub(crate) mod valid {
                         if signatory.algorithm() != iroha_crypto::Algorithm::Ed25519 {
                             continue;
                         }
-                        let (_algo, pk_bytes) = signatory.to_bytes();
-                        if pk_bytes.len() != 32 {
-                            prechecked_signature_results[idx] =
-                                Some(malformed_signature(tx, "bad signature or key length"));
-                            continue;
-                        }
                         let sig_bytes = tx.signature().payload().payload();
                         if sig_bytes.len() != 64 {
                             prechecked_signature_results[idx] =
                                 Some(malformed_signature(tx, "bad signature or key length"));
                             continue;
                         }
-                        let h = prepared_txs[idx].metadata.payload_hash;
-                        let mut msg = [0u8; 32];
-                        msg.copy_from_slice(h.as_ref());
-                        let mut pk = [0u8; 32];
-                        pk.copy_from_slice(pk_bytes);
-                        let mut sig = [0u8; 64];
-                        sig.copy_from_slice(sig_bytes);
-                        items.push(EdItem { idx, pk, msg, sig });
+                        let Some(public_key) = prepared.metadata.single_ed25519_key else {
+                            let (_algo, pk_bytes) = signatory.to_bytes();
+                            if pk_bytes.len() != 32 {
+                                prechecked_signature_results[idx] =
+                                    Some(malformed_signature(tx, "bad signature or key length"));
+                            }
+                            continue;
+                        };
+                        items.push(EdItem { idx });
+                        messages.push(prepared.metadata.payload_hash.as_ref().as_slice());
+                        signatures.push(sig_bytes);
+                        public_keys.push(public_key);
                     }
                     let cap = if state_block.pipeline.signature_batch_max_ed25519 > 0 {
                         state_block.pipeline.signature_batch_max_ed25519
@@ -6488,50 +6529,27 @@ pub(crate) mod valid {
                         state_block.pipeline.signature_batch_max
                     };
                     if cap > 0 && !items.is_empty() {
-                        let derive_seed = |slice: &[EdItem]| -> [u8; 32] {
-                            let mut tuples: Vec<Vec<u8>> = slice
-                                .iter()
-                                .map(|it| {
-                                    let mut v = Vec::with_capacity(32 + 32 + 64);
-                                    v.extend_from_slice(&it.pk);
-                                    v.extend_from_slice(&it.msg);
-                                    v.extend_from_slice(&it.sig);
-                                    v
-                                })
-                                .collect();
-                            tuples.sort_unstable();
-                            let mut hasher = sha2::Sha256::new();
-                            hasher.update(b"iroha:ecc_batch:v1:ed25519");
-                            for t in tuples.iter() {
-                                hasher.update(t);
-                            }
-                            let out = hasher.finalize();
-                            let mut seed = [0u8; 32];
-                            seed.copy_from_slice(&out);
-                            seed
-                        };
-                        let verify_batch_slice = |slice: &[EdItem]| -> bool {
-                            let seed = derive_seed(slice);
-                            let msgs: Vec<&[u8]> =
-                                slice.iter().map(|it| it.msg.as_slice()).collect();
-                            let sigs: Vec<&[u8]> =
-                                slice.iter().map(|it| it.sig.as_slice()).collect();
-                            let pks: Vec<&[u8]> = slice.iter().map(|it| it.pk.as_slice()).collect();
-                            iroha_crypto::ed25519_verify_batch_deterministic(
-                                &msgs, &sigs, &pks, seed,
-                            )
-                            .is_ok()
-                        };
+                        let mut scratch = iroha_crypto::Ed25519BatchScratch::default();
                         let mut start = 0;
                         while start < items.len() {
                             let end = usize::min(start + cap, items.len());
-                            let batch = &items[start..end];
-                            if verify_batch_slice(batch) {
-                                for it in batch {
+                            let batch_messages = &messages[start..end];
+                            let batch_signatures = &signatures[start..end];
+                            let batch_public_keys = &public_keys[start..end];
+                            if iroha_crypto::ed25519_verify_batch_preparsed_deterministic_with_scratch(
+                                batch_messages,
+                                batch_signatures,
+                                batch_public_keys,
+                                [0; 32],
+                                &mut scratch,
+                            )
+                            .is_ok()
+                            {
+                                for it in &items[start..end] {
                                     prechecked_signature_results[it.idx] = Some(Ok(()));
                                 }
                             } else {
-                                for it in batch {
+                                for it in &items[start..end] {
                                     prechecked_signature_results[it.idx] =
                                         Some(signature_result_for_tx(txs[it.idx]));
                                 }
@@ -7217,6 +7235,16 @@ pub(crate) mod valid {
 
             // Snapshot accounts for overlay building (prepass) — reused across txs
             let accounts_snapshot = state_block.accounts_snapshot();
+            let overlay_cache_count = workers.max(1);
+            let overlay_caches: Vec<_> = (0..overlay_cache_count)
+                .map(|_| {
+                    parking_lot::Mutex::new(IvmCache::with_capacity(
+                        state_block.pipeline.cache_size,
+                    ))
+                })
+                .collect();
+            #[cfg(feature = "telemetry")]
+            let overlay_aggregate_lane = state_block.nexus.routing_policy.default_lane;
 
             // Parallel overlay construction from configuration
             let build_parallel = state_block.pipeline.parallel_overlay;
@@ -7239,14 +7267,26 @@ pub(crate) mod valid {
                                     state_block,
                                     tx.authority(),
                                 );
+                                let cache_idx = rayon::current_thread_index().unwrap_or(i)
+                                    % overlay_caches.len();
+                                #[cfg(feature = "telemetry")]
+                                let cache_wait_start = Instant::now();
+                                let mut ivm_cache = overlay_caches[cache_idx].lock();
+                                #[cfg(feature = "telemetry")]
+                                state_block.metrics().observe_pipeline_stage_ms(
+                                    overlay_aggregate_lane,
+                                    "overlay_cache_wait",
+                                    cache_wait_start.elapsed().as_secs_f64() * 1_000.0,
+                                );
                                 *slot = build_overlay_for_transaction_with_accounts_zk(
                                     tx,
-                                    accounts_snapshot.as_ref(),
+                                    Arc::clone(&accounts_snapshot),
                                     state_block,
                                     state_block.zk().halo2.enabled
                                         || state_block.zk().stark.enabled,
                                     &block.header(),
                                     metadata,
+                                    &mut ivm_cache,
                                 )
                                 .map(Arc::new);
                             }
@@ -7260,13 +7300,25 @@ pub(crate) mod valid {
                                 state_block,
                                 tx.authority(),
                             );
+                            let cache_idx =
+                                rayon::current_thread_index().unwrap_or(i) % overlay_caches.len();
+                            #[cfg(feature = "telemetry")]
+                            let cache_wait_start = Instant::now();
+                            let mut ivm_cache = overlay_caches[cache_idx].lock();
+                            #[cfg(feature = "telemetry")]
+                            state_block.metrics().observe_pipeline_stage_ms(
+                                overlay_aggregate_lane,
+                                "overlay_cache_wait",
+                                cache_wait_start.elapsed().as_secs_f64() * 1_000.0,
+                            );
                             *slot = build_overlay_for_transaction_with_accounts_zk(
                                 tx,
-                                accounts_snapshot.as_ref(),
+                                Arc::clone(&accounts_snapshot),
                                 state_block,
                                 state_block.zk().halo2.enabled || state_block.zk().stark.enabled,
                                 &block.header(),
                                 metadata,
+                                &mut ivm_cache,
                             )
                             .map(Arc::new);
                         }
@@ -7279,13 +7331,23 @@ pub(crate) mod valid {
                             state_block,
                             tx.authority(),
                         );
+                        #[cfg(feature = "telemetry")]
+                        let cache_wait_start = Instant::now();
+                        let mut ivm_cache = overlay_caches[0].lock();
+                        #[cfg(feature = "telemetry")]
+                        state_block.metrics().observe_pipeline_stage_ms(
+                            overlay_aggregate_lane,
+                            "overlay_cache_wait",
+                            cache_wait_start.elapsed().as_secs_f64() * 1_000.0,
+                        );
                         overlays[i] = build_overlay_for_transaction_with_accounts_zk(
                             tx,
-                            accounts_snapshot.as_ref(),
+                            Arc::clone(&accounts_snapshot),
                             state_block,
                             state_block.zk().halo2.enabled || state_block.zk().stark.enabled,
                             &block.header(),
                             metadata,
+                            &mut ivm_cache,
                         )
                         .map(Arc::new);
                     }
@@ -7302,15 +7364,25 @@ pub(crate) mod valid {
                             state_block,
                             tx.authority(),
                         );
+                        #[cfg(feature = "telemetry")]
+                        let cache_wait_start = Instant::now();
+                        let mut ivm_cache = overlay_caches[0].lock();
+                        #[cfg(feature = "telemetry")]
+                        state_block.metrics().observe_pipeline_stage_ms(
+                            overlay_aggregate_lane,
+                            "overlay_cache_wait",
+                            cache_wait_start.elapsed().as_secs_f64() * 1_000.0,
+                        );
                         overlays[i] =
                             crate::pipeline::overlay::build_overlay_for_transaction_quarantine(
                                 tx,
-                                accounts_snapshot.as_ref(),
+                                Arc::clone(&accounts_snapshot),
                                 state_block,
                                 q_cycle_cap,
                                 q_time_cap,
                                 upper_cycle_cap,
                                 metadata,
+                                &mut ivm_cache,
                             )
                             .map(Arc::new);
                     }
@@ -11404,6 +11476,7 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 &prepared_txs,
+                None,
                 false,
                 metrics,
             )
@@ -11588,6 +11661,7 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 &prepared_txs,
+                None,
                 false,
                 metrics,
             )
@@ -11737,7 +11811,7 @@ pub(crate) mod valid {
         }
 
         #[test]
-        fn validate_static_state_dependent_accepts_committed_context_when_policy_derives_default() {
+        fn validate_static_state_dependent_rejects_committed_context_when_policy_derives_default() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
             let key_pairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
@@ -11814,7 +11888,7 @@ pub(crate) mod valid {
             let signed: SignedBlock = new_block.into();
 
             let view = state.query_view();
-            ValidBlock::validate_static_state_dependent(
+            let err = ValidBlock::validate_static_state_dependent(
                 &signed,
                 &topology,
                 &state.chain_id,
@@ -11825,7 +11899,12 @@ pub(crate) mod valid {
                 false,
                 false,
             )
-            .expect("committed execution context should be accepted as durable routing");
+            .expect_err("default-routed transactions must not accept arbitrary durable routing");
+            assert!(matches!(
+                err,
+                BlockValidationError::ExecutionContextInvalid(ref message)
+                    if message.contains("routing mismatch")
+            ));
         }
 
         #[test]

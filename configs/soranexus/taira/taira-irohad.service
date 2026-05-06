@@ -13,9 +13,11 @@ Environment=RUST_LOG=info
 Environment=IROHA_TAIRA_IROHAD_BIN=/opt/iroha/bin/irohad
 Environment=IROHA_TAIRA_CONFIG=/opt/iroha/configs/soranexus/taira/config.toml
 Environment=IROHA_TAIRA_GENESIS=/opt/iroha/configs/soranexus/taira/genesis.json
+Environment=IROHA_TAIRA_INROU_PREREQ_CHECK=/opt/iroha/configs/soranexus/taira/check_inrou_host_prereqs.sh
 EnvironmentFile=-/etc/default/taira-irohad
 # Keep the shipped Taira config and genesis explicit so each validator's direct
 # public Torii hostname exposes the curated MCP surface at /v1/mcp.
+ExecStartPre=${IROHA_TAIRA_INROU_PREREQ_CHECK}
 ExecStart=${IROHA_TAIRA_IROHAD_BIN} --sora --config ${IROHA_TAIRA_CONFIG} --genesis-manifest-json ${IROHA_TAIRA_GENESIS}
 Restart=on-failure
 RestartSec=5

@@ -31,6 +31,60 @@ pub const OFFLINE_REJECTION_REASON_PREFIX: &str = "offline_reason::";
 pub const OFFLINE_ASSET_ENABLED_METADATA_KEY: &str = "offline.enabled";
 /// Domain-separation tag for deterministic offline escrow derivation.
 pub const OFFLINE_ESCROW_SEED_LABEL: &str = "iroha.offline.escrow.v1";
+/// Domain-separation tag for wallet-derived Offline Note V2 note commitments.
+pub const OFFLINE_NOTE_V2_NOTE_COMMITMENT_DOMAIN: &str = "iroha:offline-note-v2:note-commitment:v1";
+/// Domain-separation tag for wallet-derived Offline Note V2 input nullifiers.
+pub const OFFLINE_NOTE_V2_INPUT_NULLIFIER_DOMAIN: &str = "iroha:offline-note-v2:input-nullifier:v1";
+/// Domain-separation tag for wallet-derived Offline Note V2 payment token identifiers.
+pub const OFFLINE_NOTE_V2_PAYMENT_TOKEN_ID_DOMAIN: &str =
+    "iroha:offline-note-v2:payment-token-id:v1";
+
+/// Error returned when Offline Note V2 canonical derivation inputs are invalid.
+#[derive(Debug)]
+pub enum OfflineNoteV2DerivationError {
+    /// Random secret material must be exactly 32 bytes.
+    InvalidRandomBytesLength {
+        /// Name of the invalid field.
+        field: &'static str,
+        /// Expected byte count.
+        expected: usize,
+        /// Actual byte count.
+        actual: usize,
+    },
+    /// Canonical Norito encoding failed.
+    Encode(norito::Error),
+}
+
+impl core::fmt::Display for OfflineNoteV2DerivationError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::InvalidRandomBytesLength {
+                field,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "Offline Note V2 {field} must be exactly {expected} bytes (found {actual})"
+            ),
+            Self::Encode(err) => write!(f, "failed to encode Offline Note V2 preimage: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for OfflineNoteV2DerivationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidRandomBytesLength { .. } => None,
+            Self::Encode(err) => Some(err),
+        }
+    }
+}
+
+impl From<norito::Error> for OfflineNoteV2DerivationError {
+    fn from(err: norito::Error) -> Self {
+        Self::Encode(err)
+    }
+}
 
 /// Derive the deterministic Offline V2 escrow account for an asset definition.
 #[must_use]
@@ -276,6 +330,111 @@ mod model {
         /// Redeemable output claims created by the token.
         pub output_claims: Vec<OfflineNoteIssuedClaimV2>,
     }
+
+    /// Origin of a wallet-derived Offline Note V2 note commitment.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNoteIssuerLoadOriginV2 {
+        /// Wallet operation id sent to Torii.
+        pub operation_id: String,
+        /// Issuer lineage id updated by Torii.
+        pub lineage_id: String,
+        /// Local lineage revision after issuing the note.
+        pub local_revision: u64,
+    }
+
+    /// Origin data for an offline peer-to-peer payment token output.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNoteP2pOutputOriginV2 {
+        /// Recipient payment request id.
+        pub payment_request_id: String,
+        /// Output index inside the payment token.
+        pub output_index: u32,
+    }
+
+    /// Canonical preimage used to derive an Offline Note V2 note commitment.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNoteCommitmentPreimageV2 {
+        /// Domain separator for note commitments.
+        pub domain: String,
+        /// Chain id that scopes this note.
+        pub chain_id: ChainId,
+        /// Hash of the owner key certificate payload.
+        pub owner_key_certificate_payload_hash: Hash,
+        /// Asset held by the note.
+        pub asset: AssetId,
+        /// Note amount.
+        pub amount: Numeric,
+        /// Wallet-generated 32-byte note secret.
+        pub note_secret: Vec<u8>,
+        /// Origin metadata that separates issuer loads from P2P outputs.
+        pub origin: OfflineNoteCommitmentOriginV2,
+    }
+
+    /// Canonical preimage used to derive an Offline Note V2 input nullifier.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNoteInputNullifierPreimageV2 {
+        /// Domain separator for input nullifiers.
+        pub domain: String,
+        /// Chain id that scopes this nullifier.
+        pub chain_id: ChainId,
+        /// Commitment of the note being spent.
+        pub source_note_commitment: Hash,
+        /// Hash of the owner key certificate payload.
+        pub owner_key_certificate_payload_hash: Hash,
+        /// Wallet-generated 32-byte note secret.
+        pub note_secret: Vec<u8>,
+    }
+
+    /// Canonical preimage used to derive an Offline Note V2 payment token id.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNotePaymentTokenIdPreimageV2 {
+        /// Domain separator for payment token ids.
+        pub domain: String,
+        /// Chain id that scopes this payment token.
+        pub chain_id: ChainId,
+        /// Wallet-generated 32-byte payment token nonce.
+        pub token_nonce: Vec<u8>,
+        /// Hash of the sender key certificate payload.
+        pub sender_key_certificate_payload_hash: Hash,
+        /// Input nullifiers consumed by the token.
+        pub input_nullifiers: Vec<Hash>,
+        /// Output commitments created by the token.
+        pub output_commitments: Vec<Hash>,
+    }
+}
+
+/// Origin of a wallet-derived Offline Note V2 note commitment.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum OfflineNoteCommitmentOriginV2 {
+    /// Note created by an issuer load operation.
+    IssuerLoad(OfflineNoteIssuerLoadOriginV2),
+    /// Note created as an output of an offline peer-to-peer payment token.
+    P2pOutput(OfflineNoteP2pOutputOriginV2),
 }
 
 const OFFLINE_NOTE_V2_KEY_CERTIFICATE_PAYLOAD_DOMAIN: &str =
@@ -475,6 +634,62 @@ impl OfflineNoteRedeemV2 {
     }
 }
 
+fn validate_offline_note_v2_random_bytes(
+    field: &'static str,
+    bytes: &[u8],
+) -> Result<(), OfflineNoteV2DerivationError> {
+    if bytes.len() != Hash::LENGTH {
+        return Err(OfflineNoteV2DerivationError::InvalidRandomBytesLength {
+            field,
+            expected: Hash::LENGTH,
+            actual: bytes.len(),
+        });
+    }
+    Ok(())
+}
+
+/// Derive the canonical Offline Note V2 note commitment from a wallet preimage.
+///
+/// # Errors
+///
+/// Returns an error when `note_secret` is not exactly 32 bytes or the preimage
+/// cannot be encoded with Norito.
+pub fn derive_offline_note_v2_note_commitment(
+    preimage: &OfflineNoteCommitmentPreimageV2,
+) -> Result<Hash, OfflineNoteV2DerivationError> {
+    validate_offline_note_v2_random_bytes("note_secret", &preimage.note_secret)?;
+    let bytes = to_bytes(preimage)?;
+    Ok(Hash::new(bytes))
+}
+
+/// Derive the canonical Offline Note V2 input nullifier from a wallet preimage.
+///
+/// # Errors
+///
+/// Returns an error when `note_secret` is not exactly 32 bytes or the preimage
+/// cannot be encoded with Norito.
+pub fn derive_offline_note_v2_input_nullifier(
+    preimage: &OfflineNoteInputNullifierPreimageV2,
+) -> Result<Hash, OfflineNoteV2DerivationError> {
+    validate_offline_note_v2_random_bytes("note_secret", &preimage.note_secret)?;
+    let bytes = to_bytes(preimage)?;
+    Ok(Hash::new(bytes))
+}
+
+/// Derive the canonical Offline Note V2 payment token id from a wallet preimage.
+///
+/// # Errors
+///
+/// Returns an error when `token_nonce` is not exactly 32 bytes or the preimage
+/// cannot be encoded with Norito.
+pub fn derive_offline_note_v2_payment_token_id(
+    preimage: &OfflineNotePaymentTokenIdPreimageV2,
+) -> Result<Hash, OfflineNoteV2DerivationError> {
+    validate_offline_note_v2_random_bytes("token_nonce", &preimage.token_nonce)?;
+    let bytes = to_bytes(preimage)?;
+    Ok(Hash::new(bytes))
+}
+
 #[cfg(test)]
 mod offline_note_v2_tests {
     use iroha_crypto::{Algorithm, KeyPair, PublicKey};
@@ -635,5 +850,164 @@ mod offline_note_v2_tests {
                 .public_inputs_hash()
                 .expect("changed audit input claim public inputs hash")
         );
+    }
+
+    #[test]
+    fn offline_note_v2_wallet_derivations_bind_preimages() {
+        let chain_id: ChainId = "offline-note-v2-derivation-chain"
+            .parse()
+            .expect("chain id");
+        let account_id = sample_account(0xD5, "offline");
+        let definition = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "usd".parse().expect("asset name"),
+        );
+        let asset = AssetId::new(definition, account_id);
+        let owner_key_certificate_payload_hash = Hash::new(b"offline-note-v2-owner-cert");
+        let note_secret = vec![0xA5; Hash::LENGTH];
+        let commitment_preimage = OfflineNoteCommitmentPreimageV2 {
+            domain: OFFLINE_NOTE_V2_NOTE_COMMITMENT_DOMAIN.to_owned(),
+            chain_id: chain_id.clone(),
+            owner_key_certificate_payload_hash,
+            asset: asset.clone(),
+            amount: Numeric::new(42, 0),
+            note_secret: note_secret.clone(),
+            origin: OfflineNoteCommitmentOriginV2::IssuerLoad(OfflineNoteIssuerLoadOriginV2 {
+                operation_id: "operation-1".to_owned(),
+                lineage_id: "lineage-1".to_owned(),
+                local_revision: 7,
+            }),
+        };
+        let commitment =
+            derive_offline_note_v2_note_commitment(&commitment_preimage).expect("commitment");
+
+        assert_eq!(
+            commitment,
+            derive_offline_note_v2_note_commitment(&commitment_preimage)
+                .expect("repeat commitment")
+        );
+        let mut changed_commitment_preimage = commitment_preimage.clone();
+        changed_commitment_preimage.origin =
+            OfflineNoteCommitmentOriginV2::P2pOutput(OfflineNoteP2pOutputOriginV2 {
+                payment_request_id: "payment-request-1".to_owned(),
+                output_index: 0,
+            });
+        assert_ne!(
+            commitment,
+            derive_offline_note_v2_note_commitment(&changed_commitment_preimage)
+                .expect("changed origin commitment")
+        );
+
+        let nullifier_preimage = OfflineNoteInputNullifierPreimageV2 {
+            domain: OFFLINE_NOTE_V2_INPUT_NULLIFIER_DOMAIN.to_owned(),
+            chain_id: chain_id.clone(),
+            source_note_commitment: commitment,
+            owner_key_certificate_payload_hash,
+            note_secret: note_secret.clone(),
+        };
+        let nullifier =
+            derive_offline_note_v2_input_nullifier(&nullifier_preimage).expect("nullifier");
+        assert_eq!(
+            nullifier,
+            derive_offline_note_v2_input_nullifier(&nullifier_preimage).expect("repeat nullifier")
+        );
+        let mut changed_nullifier_preimage = nullifier_preimage.clone();
+        changed_nullifier_preimage.note_secret[0] ^= 0x01;
+        assert_ne!(
+            nullifier,
+            derive_offline_note_v2_input_nullifier(&changed_nullifier_preimage)
+                .expect("changed secret nullifier")
+        );
+
+        let token_preimage = OfflineNotePaymentTokenIdPreimageV2 {
+            domain: OFFLINE_NOTE_V2_PAYMENT_TOKEN_ID_DOMAIN.to_owned(),
+            chain_id,
+            token_nonce: vec![0xC6; Hash::LENGTH],
+            sender_key_certificate_payload_hash: owner_key_certificate_payload_hash,
+            input_nullifiers: vec![nullifier],
+            output_commitments: vec![commitment],
+        };
+        let token_id =
+            derive_offline_note_v2_payment_token_id(&token_preimage).expect("payment token id");
+        assert_eq!(
+            token_id,
+            derive_offline_note_v2_payment_token_id(&token_preimage)
+                .expect("repeat payment token id")
+        );
+        let mut changed_token_preimage = token_preimage.clone();
+        changed_token_preimage.token_nonce[0] ^= 0x01;
+        assert_ne!(
+            token_id,
+            derive_offline_note_v2_payment_token_id(&changed_token_preimage)
+                .expect("changed nonce payment token id")
+        );
+    }
+
+    #[test]
+    fn offline_note_v2_wallet_derivations_reject_short_random_material() {
+        let chain_id: ChainId = "offline-note-v2-derivation-chain"
+            .parse()
+            .expect("chain id");
+        let account_id = sample_account(0xD6, "offline");
+        let definition = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "usd".parse().expect("asset name"),
+        );
+        let asset = AssetId::new(definition, account_id);
+        let owner_key_certificate_payload_hash = Hash::new(b"offline-note-v2-owner-cert");
+        let commitment_preimage = OfflineNoteCommitmentPreimageV2 {
+            domain: OFFLINE_NOTE_V2_NOTE_COMMITMENT_DOMAIN.to_owned(),
+            chain_id: chain_id.clone(),
+            owner_key_certificate_payload_hash,
+            asset,
+            amount: Numeric::new(42, 0),
+            note_secret: vec![0xA5; Hash::LENGTH - 1],
+            origin: OfflineNoteCommitmentOriginV2::IssuerLoad(OfflineNoteIssuerLoadOriginV2 {
+                operation_id: "operation-1".to_owned(),
+                lineage_id: "lineage-1".to_owned(),
+                local_revision: 7,
+            }),
+        };
+        assert!(matches!(
+            derive_offline_note_v2_note_commitment(&commitment_preimage),
+            Err(OfflineNoteV2DerivationError::InvalidRandomBytesLength {
+                field: "note_secret",
+                expected: Hash::LENGTH,
+                actual
+            }) if actual == Hash::LENGTH - 1
+        ));
+
+        let nullifier_preimage = OfflineNoteInputNullifierPreimageV2 {
+            domain: OFFLINE_NOTE_V2_INPUT_NULLIFIER_DOMAIN.to_owned(),
+            chain_id: chain_id.clone(),
+            source_note_commitment: Hash::new(b"source-note"),
+            owner_key_certificate_payload_hash,
+            note_secret: vec![0xB6; Hash::LENGTH - 1],
+        };
+        assert!(matches!(
+            derive_offline_note_v2_input_nullifier(&nullifier_preimage),
+            Err(OfflineNoteV2DerivationError::InvalidRandomBytesLength {
+                field: "note_secret",
+                expected: Hash::LENGTH,
+                actual
+            }) if actual == Hash::LENGTH - 1
+        ));
+
+        let token_preimage = OfflineNotePaymentTokenIdPreimageV2 {
+            domain: OFFLINE_NOTE_V2_PAYMENT_TOKEN_ID_DOMAIN.to_owned(),
+            chain_id,
+            token_nonce: vec![0xC7; Hash::LENGTH - 1],
+            sender_key_certificate_payload_hash: owner_key_certificate_payload_hash,
+            input_nullifiers: vec![Hash::new(b"nullifier")],
+            output_commitments: vec![Hash::new(b"commitment")],
+        };
+        assert!(matches!(
+            derive_offline_note_v2_payment_token_id(&token_preimage),
+            Err(OfflineNoteV2DerivationError::InvalidRandomBytesLength {
+                field: "token_nonce",
+                expected: Hash::LENGTH,
+                actual
+            }) if actual == Hash::LENGTH - 1
+        ));
     }
 }

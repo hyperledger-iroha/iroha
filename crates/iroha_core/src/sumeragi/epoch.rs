@@ -440,6 +440,29 @@ impl EpochManager {
         }
     }
 
+    /// Merge persisted observations for the current epoch without rewinding local state.
+    pub(crate) fn merge_record_observations(&mut self, record: &VrfEpochRecord) {
+        if record.epoch != self.epoch {
+            return;
+        }
+        for participant in &record.participants {
+            if let Some(commitment) = participant.commitment {
+                self.commits.entry(participant.signer).or_insert(commitment);
+            }
+            if let Some(reveal) = participant.reveal {
+                self.reveals.entry(participant.signer).or_insert(reveal);
+            }
+        }
+        for late_reveal in &record.late_reveals {
+            self.late_reveals
+                .entry(late_reveal.signer)
+                .or_insert(LateRevealEntry {
+                    reveal: late_reveal.reveal,
+                    noted_at_height: late_reveal.noted_at_height,
+                });
+        }
+    }
+
     /// Epoch index that a block at `height` belongs to.
     pub fn epoch_for_height(&self, height: u64) -> u64 {
         if self.epoch_length_blocks == 0 || height == 0 {
@@ -1374,6 +1397,65 @@ mod tests {
             ),
             VrfNoteResult::RejectedUnknownSigner
         );
+    }
+
+    #[test]
+    fn merge_record_observations_hydrates_commit_for_late_reveal() {
+        let chain = ChainId::from("iroha:test:epoch_merge_observations");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(10, 4, 4);
+        let reveal = [0x52; 32];
+        let record = VrfEpochRecord {
+            epoch: 0,
+            seed: em.seed(),
+            epoch_length: 10,
+            commit_deadline_offset: 4,
+            reveal_deadline_offset: 4,
+            roster_len: 0,
+            finalized: false,
+            updated_at_height: 2,
+            participants: vec![VrfParticipantRecord {
+                signer: 2,
+                commitment: Some(commitment_for(reveal)),
+                reveal: None,
+                last_updated_height: 2,
+            }],
+            late_reveals: Vec::new(),
+            committed_no_reveal: Vec::new(),
+            no_participation: Vec::new(),
+            penalties_applied: false,
+            penalties_applied_at_height: None,
+            validator_election: None,
+        };
+
+        assert_eq!(
+            em.try_note_reveal_at_height(
+                5,
+                VrfReveal {
+                    epoch: 0,
+                    reveal,
+                    signer: 2,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::RejectedOutOfWindow
+        );
+
+        em.merge_record_observations(&record);
+
+        assert_eq!(
+            em.try_note_reveal_at_height(
+                5,
+                VrfReveal {
+                    epoch: 0,
+                    reveal,
+                    signer: 2,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::AcceptedLate
+        );
+        assert_eq!(em.test_late_reveals_len(), 1);
     }
 
     #[test]

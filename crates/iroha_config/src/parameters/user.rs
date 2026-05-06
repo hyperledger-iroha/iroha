@@ -5512,6 +5512,9 @@ pub struct SumeragiBlock {
     /// Optional cap on transactions included in a block (`None` = unlimited).
     #[config(env = "SUMERAGI_BLOCK_MAX_TRANSACTIONS")]
     pub max_transactions: Option<NonZeroUsize>,
+    /// Optional cap on IVM-heavy transactions included in a block (`None` = unlimited).
+    #[config(env = "SUMERAGI_BLOCK_MAX_IVM_TRANSACTIONS")]
+    pub max_ivm_transactions: Option<NonZeroUsize>,
     /// Optional cap on block gas limit when commit time is fast (`None` = disabled).
     #[config(env = "SUMERAGI_BLOCK_FAST_GAS_LIMIT_PER_BLOCK")]
     pub fast_gas_limit_per_block: Option<NonZeroU64>,
@@ -7469,6 +7472,7 @@ impl Sumeragi {
             },
             block: actual::SumeragiBlock {
                 max_transactions: block.max_transactions,
+                max_ivm_transactions: block.max_ivm_transactions,
                 fast_gas_limit_per_block: block.fast_gas_limit_per_block,
                 max_payload_bytes: block.max_payload_bytes,
                 proposal_queue_scan_multiplier: block.proposal_queue_scan_multiplier,
@@ -11543,6 +11547,8 @@ pub struct DataSpaceDescriptor {
     /// Fault tolerance value (f) used to size per-dataspace committees (3f + 1).
     /// Must be at least 1.
     pub fault_tolerance: Option<u32>,
+    /// Optional default fee sponsor account literal for this data space.
+    pub fee_sponsor_account_id: Option<String>,
 }
 
 /// User-level configuration container for lane manifest registry.
@@ -13311,7 +13317,8 @@ impl Nexus {
             ..
         } = self;
 
-        let dataspace_catalog = Self::build_dataspace_catalog(dataspace_catalog, emitter)?;
+        let (dataspace_catalog, dataspace_fee_sponsors) =
+            Self::build_dataspace_catalog(dataspace_catalog, emitter)?;
         let lane_catalog =
             Self::build_lane_catalog(lane_count, lane_catalog, &dataspace_catalog, emitter)?;
         let routing_policy =
@@ -13328,6 +13335,20 @@ impl Nexus {
         let lane_relay_emergency = lane_relay_emergency.parse(emitter)?;
         let staking = staking.parse(emitter)?;
         let fees = fees.parse(emitter)?;
+        if !dataspace_fee_sponsors.is_empty() && !fees.sponsorship_enabled {
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig).attach(
+                    "nexus.dataspace_catalog fee_sponsor_account_id requires nexus.fees.sponsorship_enabled = true",
+                ),
+            );
+            return None;
+        }
+        if !dataspace_fee_sponsors.is_empty() && !enabled {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                "nexus.dataspace_catalog fee_sponsor_account_id requires nexus.enabled = true",
+            ));
+            return None;
+        }
         let relay_worker = relay_worker.parse(emitter)?;
         let hf_shared_leases = hf_shared_leases.parse(emitter)?;
         let uploaded_models = uploaded_models.parse(emitter)?;
@@ -13396,6 +13417,7 @@ impl Nexus {
             lane_catalog,
             lane_config,
             dataspace_catalog,
+            dataspace_fee_sponsors,
             routing_policy,
             registry,
             governance,
@@ -13609,8 +13631,9 @@ impl Nexus {
     fn build_dataspace_catalog(
         descriptors: Vec<DataSpaceDescriptor>,
         emitter: &mut Emitter<ParseError>,
-    ) -> Option<DataSpaceCatalog> {
+    ) -> Option<(DataSpaceCatalog, BTreeMap<DataSpaceId, String>)> {
         let mut dataspace_entries = Vec::new();
+        let mut dataspace_fee_sponsors = BTreeMap::new();
         let mut dataspace_errors = false;
 
         if descriptors.is_empty() {
@@ -13694,6 +13717,9 @@ impl Nexus {
                     continue;
                 }
 
+                if let Some(sponsor) = Self::normalize_opt(descriptor.fee_sponsor_account_id) {
+                    dataspace_fee_sponsors.insert(id, sponsor);
+                }
                 dataspace_entries.push(DataSpaceMetadata {
                     id,
                     alias,
@@ -13718,7 +13744,7 @@ impl Nexus {
         }
 
         match DataSpaceCatalog::new(dataspace_entries) {
-            Ok(catalog) => Some(catalog),
+            Ok(catalog) => Some((catalog, dataspace_fee_sponsors)),
             Err(error) => {
                 emitter.emit(
                     Report::new(ParseError::InvalidNexusConfig)

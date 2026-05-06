@@ -34,3 +34,29 @@ fn zk_padding_extends_trace_to_max_cycles() {
         "expected at least {padded_cycles} units of gas used, got {gas_used}"
     );
 }
+
+#[test]
+fn disabling_zk_trace_keeps_zk_semantics_without_formal_logs() {
+    let assert_zero = encoding::wide::encode_rr(ivm::instruction::wide::zk::ASSERT, 0, 0, 0);
+    let halt = encoding::wide::encode_halt();
+    let mut code = Vec::new();
+    code.extend_from_slice(&assert_zero.to_le_bytes());
+    code.extend_from_slice(&halt.to_le_bytes());
+
+    let prog = assemble_zk(&code, 32);
+    let mut vm = IVM::new(1_000);
+    vm.load_program(&prog).unwrap();
+    assert!(vm.zk_mode_enabled());
+    vm.set_zk_trace_enabled(false);
+
+    vm.run().unwrap();
+
+    assert!(vm.zk_mode_enabled());
+    assert!(!vm.zk_trace_enabled());
+    assert_eq!(vm.get_cycle_count(), 32);
+    assert!(vm.register_trace().is_empty());
+    assert!(vm.step_log().is_empty());
+    assert!(vm.memory_log().is_empty());
+    assert!(vm.register_log().is_empty());
+    assert!(vm.constraints().is_empty());
+}

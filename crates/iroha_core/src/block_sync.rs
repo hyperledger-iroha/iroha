@@ -2825,11 +2825,30 @@ fn select_block_sync_targets(
     (targets, stray_targets)
 }
 
+fn share_blocks_exact_contiguous_frontier_response(
+    blocks: &[SignedBlock],
+    local_tip_height: usize,
+    local_tip_hash: Option<HashOf<BlockHeader>>,
+) -> bool {
+    let Some(local_tip_hash) = local_tip_hash else {
+        return false;
+    };
+    let Some(first) = blocks.first() else {
+        return false;
+    };
+    let local_tip_height = u64::try_from(local_tip_height).unwrap_or(u64::MAX);
+    first.header().height().get() == local_tip_height.saturating_add(1)
+        && first.header().prev_block_hash() == Some(local_tip_hash)
+}
+
 #[cfg(test)]
 mod sample_targets_tests {
+    use std::num::NonZeroU64;
+
     use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
+    use crate::block::ValidBlock;
 
     #[test]
     fn samples_at_most_gossip_size() {
@@ -2862,6 +2881,34 @@ mod sample_targets_tests {
         for peer in peers {
             assert!(sample.contains(&peer));
         }
+    }
+
+    #[test]
+    fn exact_frontier_share_blocks_response_extends_local_tip() {
+        let keypair = iroha_crypto::KeyPair::random();
+        let parent_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]));
+        let block: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
+                header.set_height(NonZeroU64::new(6).expect("non-zero height"));
+                header.set_prev_block_hash(Some(parent_hash));
+            })
+            .into();
+
+        assert!(share_blocks_exact_contiguous_frontier_response(
+            std::slice::from_ref(&block),
+            5,
+            Some(parent_hash),
+        ));
+        assert!(!share_blocks_exact_contiguous_frontier_response(
+            std::slice::from_ref(&block),
+            5,
+            None,
+        ));
+        assert!(!share_blocks_exact_contiguous_frontier_response(
+            std::slice::from_ref(&block),
+            4,
+            Some(parent_hash),
+        ));
     }
 }
 
@@ -5649,7 +5696,16 @@ pub mod message {
                         && block_sync
                             .sumeragi
                             .allow_direct_block_sync_response(peer_id, now);
-                    if !solicited_by_gossip && !solicited_by_recovery {
+                    let exact_contiguous_frontier_response =
+                        share_blocks_exact_contiguous_frontier_response(
+                            blocks,
+                            block_sync.state.committed_height(),
+                            block_sync.state.latest_block_hash_fast(),
+                        );
+                    if !solicited_by_gossip
+                        && !solicited_by_recovery
+                        && !exact_contiguous_frontier_response
+                    {
                         debug!(
                             peer = %peer_id,
                             total = blocks.len(),
@@ -5660,6 +5716,16 @@ pub mod message {
                             telemetry.note_block_sync_unsolicited_share_blocks_drop();
                         }
                         return;
+                    }
+                    if exact_contiguous_frontier_response
+                        && !solicited_by_gossip
+                        && !solicited_by_recovery
+                    {
+                        info!(
+                            peer = %peer_id,
+                            total = blocks.len(),
+                            "accepting exact contiguous frontier block sync batch without response permit"
+                        );
                     }
 
                     let total = blocks.len();
