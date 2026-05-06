@@ -585,10 +585,11 @@ that the recursive proof's public-input hash matches the canonical Swift/Rust No
 before signing, so callers pass real prover output instead of mock-proof placeholders.
 `OfflineNoteV2Wallet` adds the app-facing one-call flow for load, receive
 request preparation, P2P pay, accept/audit submission, redeem submission, and
-sync. The first release surface is dependency-injected: apps provide the Torii
-issuer adapter, attestation provider, proof provider, transaction submitter,
-and persistent store; the SDK includes an in-memory store for tests and a
-direct `IrohaSDK` audit/redeem submitter.
+sync. The first release surface is dependency-injected: apps provide Torii
+canonical auth, device binding, attestation, proof, transaction submission, and
+persistent storage. The SDK includes an in-memory store, a
+`ToriiOfflineNoteV2IssuerClient` for body-signed key-refill plus note-issue
+loads, and a direct `IrohaSDK` audit/redeem submitter.
 Issuance is accepted only from an offline escrow manager with `CanManageOfflineEscrow`, and the
 one-use key certificate must be signed over its canonical payload. Redemption proofs bind the
 source note commitment, nullifiers, certified key payload, recipient, asset, and amount to a

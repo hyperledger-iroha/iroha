@@ -2864,7 +2864,7 @@ mod run {
                                     note_malformed_payload_frame(&mut malformed_payload_streak_hi);
                                 let context = message_reader.take_malformed_payload_context();
                                 let malformed_reason =
-                                    context.map(|ctx| ctx.reason.as_str()).unwrap_or("unknown");
+                                    context.map_or("unknown", |ctx| ctx.reason.as_str());
                                 let encrypted_frame_bytes =
                                     context.map(|ctx| ctx.encrypted_frame_bytes);
                                 let decrypted_payload_bytes =
@@ -2993,7 +2993,7 @@ mod run {
                                     .as_mut()
                                     .and_then(MessageReader::take_malformed_payload_context);
                                 let malformed_reason =
-                                    context.map(|ctx| ctx.reason.as_str()).unwrap_or("unknown");
+                                    context.map_or("unknown", |ctx| ctx.reason.as_str());
                                 let encrypted_frame_bytes =
                                     context.map(|ctx| ctx.encrypted_frame_bytes);
                                 let decrypted_payload_bytes =
@@ -3332,6 +3332,88 @@ mod run {
             &scratch[offset..end]
         }
 
+        fn parse_decrypted_frame_messages(
+            decrypted: &[u8],
+            encrypted_size: usize,
+            framed_schema: [u8; 16],
+            framed_padding: usize,
+            decode_scratch: &mut Vec<u8>,
+        ) -> Result<VecDeque<(M, usize)>, MalformedPayloadFrameContext> {
+            let decrypted_len = decrypted.len();
+            if decrypted_len == 0 {
+                return Err(MalformedPayloadFrameContext::new(
+                    MalformedPayloadFrameReason::EmptyDecryptedPayload,
+                    encrypted_size,
+                    Some(decrypted_len),
+                    0,
+                    0,
+                    0,
+                ));
+            }
+
+            let align = core::mem::align_of::<ncore::Archived<M>>();
+            let mut offset = 0usize;
+            let mut decoded_messages = 0usize;
+            let mut frame_messages = VecDeque::new();
+            while offset < decrypted_len {
+                let Some(remaining) = decrypted.get(offset..) else {
+                    return Err(MalformedPayloadFrameContext::new(
+                        MalformedPayloadFrameReason::TrailingBytes,
+                        encrypted_size,
+                        Some(decrypted_len),
+                        offset,
+                        0,
+                        decoded_messages,
+                    ));
+                };
+                let frame_len = framed_message_len::<M>(remaining, framed_schema, framed_padding)
+                    .map_err(|reason| {
+                    MalformedPayloadFrameContext::new(
+                        reason,
+                        encrypted_size,
+                        Some(decrypted_len),
+                        offset,
+                        remaining.len(),
+                        decoded_messages,
+                    )
+                })?;
+                let Some(frame) = remaining.get(..frame_len) else {
+                    return Err(MalformedPayloadFrameContext::new(
+                        MalformedPayloadFrameReason::InnerFrameTruncated,
+                        encrypted_size,
+                        Some(decrypted_len),
+                        offset,
+                        remaining.len(),
+                        decoded_messages,
+                    ));
+                };
+                let misaligned = align > 1
+                    && !frame.is_empty()
+                    && !((frame.as_ptr() as usize).is_multiple_of(align));
+                let decoded = if misaligned {
+                    let aligned = Self::copy_to_aligned_scratch(decode_scratch, frame, align);
+                    ncore::decode_from_bytes::<M>(aligned)
+                } else {
+                    ncore::decode_from_bytes::<M>(frame)
+                }
+                .map_err(|_| {
+                    MalformedPayloadFrameContext::new(
+                        MalformedPayloadFrameReason::InnerDecodeFailed,
+                        encrypted_size,
+                        Some(decrypted_len),
+                        offset,
+                        remaining.len(),
+                        decoded_messages,
+                    )
+                })?;
+                frame_messages.push_back((decoded, frame_len));
+                decoded_messages = decoded_messages.saturating_add(1);
+                offset = offset.saturating_add(frame_len);
+            }
+
+            Ok(frame_messages)
+        }
+
         fn reserve_for_frame(&mut self) -> Result<(), Error> {
             if self.buffer.len() < Self::U32_SIZE {
                 return Ok(());
@@ -3401,105 +3483,18 @@ mod run {
             let mut malformed_context = None;
             let parsed = (|| -> Result<VecDeque<(M, usize)>, Error> {
                 let decrypted = self.cryptographer.decrypt_into(data, &mut self.decrypted)?;
-                let decrypted_len = decrypted.len();
-                if decrypted_len == 0 {
-                    malformed_context = Some(MalformedPayloadFrameContext::new(
-                        MalformedPayloadFrameReason::EmptyDecryptedPayload,
-                        size,
-                        Some(decrypted_len),
-                        0,
-                        0,
-                        0,
-                    ));
-                    return Err(Error::MalformedPayloadFrame);
-                }
                 // Decrypted payload may contain multiple Norito-framed messages.
-                let align = core::mem::align_of::<ncore::Archived<M>>();
-                let mut offset = 0usize;
-                let mut decoded_messages = 0usize;
-                let mut frame_messages = VecDeque::new();
-                while offset < decrypted_len {
-                    let Some(remaining) = decrypted.get(offset..) else {
-                        malformed_context = Some(MalformedPayloadFrameContext::new(
-                            MalformedPayloadFrameReason::TrailingBytes,
-                            size,
-                            Some(decrypted_len),
-                            offset,
-                            0,
-                            decoded_messages,
-                        ));
-                        return Err(Error::MalformedPayloadFrame);
-                    };
-                    let frame_len = match framed_message_len::<M>(
-                        remaining,
-                        self.framed_schema,
-                        self.framed_padding,
-                    ) {
-                        Ok(frame_len) => frame_len,
-                        Err(reason) => {
-                            malformed_context = Some(MalformedPayloadFrameContext::new(
-                                reason,
-                                size,
-                                Some(decrypted_len),
-                                offset,
-                                remaining.len(),
-                                decoded_messages,
-                            ));
-                            return Err(Error::MalformedPayloadFrame);
-                        }
-                    };
-                    let Some(frame) = remaining.get(..frame_len) else {
-                        malformed_context = Some(MalformedPayloadFrameContext::new(
-                            MalformedPayloadFrameReason::InnerFrameTruncated,
-                            size,
-                            Some(decrypted_len),
-                            offset,
-                            remaining.len(),
-                            decoded_messages,
-                        ));
-                        return Err(Error::MalformedPayloadFrame);
-                    };
-                    let misaligned = align > 1
-                        && !frame.is_empty()
-                        && !((frame.as_ptr() as usize).is_multiple_of(align));
-                    let decoded = if misaligned {
-                        let aligned =
-                            Self::copy_to_aligned_scratch(&mut self.decode_scratch, frame, align);
-                        ncore::decode_from_bytes::<M>(aligned)
-                    } else {
-                        ncore::decode_from_bytes::<M>(frame)
-                    };
-                    let decoded = match decoded {
-                        Ok(decoded) => decoded,
-                        Err(_) => {
-                            malformed_context = Some(MalformedPayloadFrameContext::new(
-                                MalformedPayloadFrameReason::InnerDecodeFailed,
-                                size,
-                                Some(decrypted_len),
-                                offset,
-                                remaining.len(),
-                                decoded_messages,
-                            ));
-                            return Err(Error::MalformedPayloadFrame);
-                        }
-                    };
-                    frame_messages.push_back((decoded, frame_len));
-                    decoded_messages = decoded_messages.saturating_add(1);
-                    offset = offset.saturating_add(frame_len);
-                }
-                if offset == decrypted_len {
-                    Ok(frame_messages)
-                } else {
-                    malformed_context = Some(MalformedPayloadFrameContext::new(
-                        MalformedPayloadFrameReason::TrailingBytes,
-                        size,
-                        Some(decrypted_len),
-                        offset,
-                        decrypted_len.saturating_sub(offset),
-                        decoded_messages,
-                    ));
-                    Err(Error::MalformedPayloadFrame)
-                }
+                Self::parse_decrypted_frame_messages(
+                    decrypted,
+                    size,
+                    self.framed_schema,
+                    self.framed_padding,
+                    &mut self.decode_scratch,
+                )
+                .map_err(|context| {
+                    malformed_context = Some(context);
+                    Error::MalformedPayloadFrame
+                })
             })();
 
             self.buffer.advance(size + Self::U32_SIZE);

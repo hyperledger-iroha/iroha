@@ -13,9 +13,7 @@ use fastpq_prover::{
     gadgets::transfer::attach_transfer_smt_witnesses, try_hash_bn254_poseidon_word_batches,
     try_submit_bn254_poseidon_word_batches,
 };
-use iroha_config::parameters::actual::Fastpq;
-#[cfg(any(test, feature = "fastpq-gpu"))]
-use iroha_config::parameters::actual::{FastpqExecutionMode, FastpqPoseidonMode};
+use iroha_config::parameters::actual::{Fastpq, FastpqExecutionMode, FastpqPoseidonMode};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     DataSpaceId,
@@ -90,19 +88,39 @@ impl FastpqPublicInputsTemplate {
     }
 }
 
-pub(crate) fn configure_poseidon_digest_acceleration(_cfg: &Fastpq) {
-    DIGEST_ACCELERATION_ENABLED.store(false, Ordering::Release);
+pub(crate) fn configure_poseidon_digest_acceleration(cfg: &Fastpq) {
+    configure_poseidon_digest_acceleration_with_preflight(cfg, || {
+        #[cfg(feature = "fastpq-gpu")]
+        {
+            fastpq_prover::preflight_bn254_poseidon_word_batches()
+        }
+        #[cfg(not(feature = "fastpq-gpu"))]
+        {
+            false
+        }
+    });
 }
 
-#[cfg(any(test, feature = "fastpq-gpu"))]
 pub(crate) fn poseidon_digest_acceleration_configured(cfg: &Fastpq) -> bool {
-    !matches!(cfg.execution_mode, FastpqExecutionMode::Cpu)
-        && !matches!(cfg.poseidon_mode, FastpqPoseidonMode::Cpu)
+    match cfg.poseidon_mode {
+        FastpqPoseidonMode::Cpu => false,
+        FastpqPoseidonMode::Gpu => true,
+        FastpqPoseidonMode::Auto => !matches!(cfg.execution_mode, FastpqExecutionMode::Cpu),
+    }
 }
 
 #[cfg(any(test, feature = "fastpq-gpu"))]
 pub(crate) fn set_poseidon_digest_acceleration_enabled(enabled: bool) {
     DIGEST_ACCELERATION_ENABLED.store(enabled, Ordering::Release);
+}
+
+fn configure_poseidon_digest_acceleration_with_preflight(
+    cfg: &Fastpq,
+    preflight: impl FnOnce() -> bool,
+) -> bool {
+    let enabled = poseidon_digest_acceleration_configured(cfg) && preflight();
+    DIGEST_ACCELERATION_ENABLED.store(enabled, Ordering::Release);
+    enabled
 }
 
 #[inline]
@@ -340,6 +358,21 @@ impl PoseidonDigestBatch {
     }
 
     fn hash_cpu(&self) -> Vec<Hash> {
+        if self.slices.len() >= DIGEST_FINALIZE_PARALLEL_THRESHOLD {
+            use rayon::prelude::*;
+
+            return self
+                .slices
+                .par_iter()
+                .map(|slice| {
+                    let offset = slice.offset();
+                    let end = offset + slice.len();
+                    Hash::prehashed(halo2_poseidon::hash_u64_words_bytes(
+                        &self.words[offset..end],
+                    ))
+                })
+                .collect();
+        }
         self.slices
             .iter()
             .map(|slice| {
@@ -383,6 +416,10 @@ pub(crate) fn finalize_transfer_transcript_digests_in_map_with_pending(
     transcripts: &mut BTreeMap<Hash, Vec<TransferTranscript>>,
     pending: Option<PendingTransferTranscriptDigests>,
 ) {
+    #[cfg(debug_assertions)]
+    for entries in transcripts.values() {
+        debug_assert_precomputed_transfer_transcript_digests(entries);
+    }
     let digest_count = transcripts
         .values()
         .map(|entries| missing_single_delta_transcript_count(entries))
@@ -458,6 +495,10 @@ pub(crate) fn try_submit_transfer_transcript_digests_in_map(
 pub(crate) fn finalize_transfer_transcript_bundle_digests_in_place(
     bundles: &mut [TransferTranscriptBundle],
 ) {
+    #[cfg(debug_assertions)]
+    for bundle in bundles.iter() {
+        debug_assert_precomputed_transfer_transcript_digests(&bundle.transcripts);
+    }
     let digest_count = bundles
         .iter()
         .map(|bundle| missing_single_delta_transcript_count(&bundle.transcripts))
@@ -609,6 +650,24 @@ fn set_transfer_transcript_digest(transcript: &mut TransferTranscript, digest: H
         );
     } else {
         transcript.poseidon_preimage_digest = Some(digest);
+    }
+}
+
+#[cfg(debug_assertions)]
+fn debug_assert_precomputed_transfer_transcript_digests(transcripts: &[TransferTranscript]) {
+    let mut scratch = PoseidonDigestScratch::default();
+    for transcript in transcripts {
+        let Some(existing) = transcript.poseidon_preimage_digest else {
+            continue;
+        };
+        let [delta] = transcript.deltas.as_slice() else {
+            continue;
+        };
+        debug_assert_eq!(
+            existing,
+            poseidon_preimage_digest_with_scratch(delta, &transcript.batch_hash, &mut scratch),
+            "precomputed FASTPQ transfer transcript digest must match canonical digest",
+        );
     }
 }
 
@@ -1223,25 +1282,92 @@ mod tests {
     }
 
     #[test]
-    fn digest_acceleration_stays_disabled_until_preflight_enables_it() {
+    fn poseidon_digest_batch_parallel_cpu_preserves_input_order() {
+        let mut batch = PoseidonDigestBatch::with_capacity(DIGEST_FINALIZE_PARALLEL_THRESHOLD);
+        let mut expected = Vec::with_capacity(DIGEST_FINALIZE_PARALLEL_THRESHOLD);
+
+        for idx in 0..DIGEST_FINALIZE_PARALLEL_THRESHOLD {
+            let mut transcript = sample_transcript();
+            transcript.batch_hash = Hash::prehashed([idx as u8; Hash::LENGTH]);
+            let delta = &transcript.deltas[0];
+            expected.push(poseidon_preimage_digest(delta, &transcript.batch_hash));
+            batch.push(delta, &transcript.batch_hash);
+        }
+
+        assert_eq!(batch.hash_cpu(), expected);
+    }
+
+    #[test]
+    fn poseidon_digest_batch_cpu_or_gpu_matches_ordered_cpu_output() {
+        let _guard = DigestAccelerationGuard::new();
+        set_poseidon_digest_acceleration_enabled(true);
+        let mut batch = PoseidonDigestBatch::with_capacity(DIGEST_FINALIZE_GPU_THRESHOLD);
+
+        for idx in 0..DIGEST_FINALIZE_GPU_THRESHOLD {
+            let mut transcript = sample_transcript();
+            transcript.batch_hash = Hash::prehashed([idx as u8; Hash::LENGTH]);
+            batch.push(&transcript.deltas[0], &transcript.batch_hash);
+        }
+
+        assert_eq!(batch.hash_cpu_or_gpu(), batch.hash_cpu());
+    }
+
+    #[test]
+    fn digest_acceleration_respects_configured_modes() {
         let _guard = DigestAccelerationGuard::new();
         let auto = fastpq_cfg(FastpqExecutionMode::Auto, FastpqPoseidonMode::Auto);
         assert!(poseidon_digest_acceleration_configured(&auto));
+        assert!(configure_poseidon_digest_acceleration_with_preflight(
+            &auto,
+            || true
+        ));
+        assert!(poseidon_digest_acceleration_enabled());
 
         set_poseidon_digest_acceleration_enabled(true);
-        configure_poseidon_digest_acceleration(&auto);
+        assert!(!configure_poseidon_digest_acceleration_with_preflight(
+            &auto,
+            || false
+        ));
         assert!(!poseidon_digest_acceleration_enabled());
 
-        set_poseidon_digest_acceleration_enabled(true);
+        let explicit_gpu = fastpq_cfg(FastpqExecutionMode::Cpu, FastpqPoseidonMode::Gpu);
+        assert!(poseidon_digest_acceleration_configured(&explicit_gpu));
+        assert!(configure_poseidon_digest_acceleration_with_preflight(
+            &explicit_gpu,
+            || true
+        ));
         assert!(poseidon_digest_acceleration_enabled());
 
         let cpu = fastpq_cfg(FastpqExecutionMode::Cpu, FastpqPoseidonMode::Auto);
         assert!(!poseidon_digest_acceleration_configured(&cpu));
-        configure_poseidon_digest_acceleration(&cpu);
+        assert!(!configure_poseidon_digest_acceleration_with_preflight(
+            &cpu,
+            || true
+        ));
         assert!(!poseidon_digest_acceleration_enabled());
 
         let poseidon_cpu = fastpq_cfg(FastpqExecutionMode::Gpu, FastpqPoseidonMode::Cpu);
         assert!(!poseidon_digest_acceleration_configured(&poseidon_cpu));
+        assert!(!configure_poseidon_digest_acceleration_with_preflight(
+            &poseidon_cpu,
+            || true
+        ));
+        assert!(!poseidon_digest_acceleration_enabled());
+    }
+
+    #[test]
+    fn configure_digest_acceleration_uses_deterministic_cpu_fallback_without_backend() {
+        let _guard = DigestAccelerationGuard::new();
+        let auto = fastpq_cfg(FastpqExecutionMode::Auto, FastpqPoseidonMode::Auto);
+
+        configure_poseidon_digest_acceleration(&auto);
+
+        #[cfg(feature = "fastpq-gpu")]
+        let expected = fastpq_prover::preflight_bn254_poseidon_word_batches();
+        #[cfg(not(feature = "fastpq-gpu"))]
+        let expected = false;
+
+        assert_eq!(poseidon_digest_acceleration_enabled(), expected);
     }
 
     #[test]
@@ -1272,6 +1398,19 @@ mod tests {
             bundles[0].transcripts[0].poseidon_preimage_digest,
             Some(expected)
         );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(
+        expected = "precomputed FASTPQ transfer transcript digest must match canonical digest"
+    )]
+    fn finalize_transfer_transcripts_debug_asserts_precomputed_mismatch() {
+        let mut single = sample_transcript();
+        single.poseidon_preimage_digest = Some(Hash::prehashed([0xEE; Hash::LENGTH]));
+        let mut map = BTreeMap::from([(Hash::prehashed([0x7A; Hash::LENGTH]), vec![single])]);
+
+        finalize_transfer_transcript_digests_in_map(&mut map);
     }
 
     #[test]

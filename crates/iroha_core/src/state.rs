@@ -6311,12 +6311,41 @@ struct StatelessValidationCacheEntry {
     not_before_ms: u128,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct StatelessValidationCacheWarmEntry {
+    signed_hash: HashOf<SignedTransaction>,
+    expires_at_ms: Option<u128>,
+    not_before_ms: u128,
+}
+
+fn stateless_validation_cache_warm_entry(
+    tx: &crate::tx::AcceptedTransaction<'_>,
+    max_clock_drift_ms: u128,
+) -> Option<StatelessValidationCacheWarmEntry> {
+    let prepared = tx.stateless_cache_metadata()?;
+    prepared.single_ed25519_key?;
+    let expires_at_ms = tx
+        .time_to_live()
+        .and_then(|ttl| tx.creation_time().checked_add(ttl))
+        .map(|expires_at| expires_at.as_millis());
+    let not_before_ms = tx
+        .creation_time()
+        .as_millis()
+        .saturating_sub(max_clock_drift_ms);
+
+    Some(StatelessValidationCacheWarmEntry {
+        signed_hash: prepared.signed_hash,
+        expires_at_ms,
+        not_before_ms,
+    })
+}
+
 #[derive(Debug)]
 pub(crate) struct StatelessValidationCache {
     cap: usize,
     next_order: u64,
     context: Option<StatelessValidationContext>,
-    entries: std::collections::BTreeMap<
+    entries: std::collections::HashMap<
         iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
         StatelessValidationCacheEntry,
     >,
@@ -6332,7 +6361,7 @@ impl StatelessValidationCache {
             cap,
             next_order: 0,
             context: None,
-            entries: std::collections::BTreeMap::new(),
+            entries: std::collections::HashMap::new(),
             lru: std::collections::BTreeSet::new(),
         }
     }
@@ -6428,9 +6457,11 @@ impl StatelessValidationCache {
 
 #[cfg(test)]
 mod stateless_validation_cache_tests {
-    use super::StatelessValidationCache;
-    use iroha_crypto::{Hash, HashOf};
-    use iroha_data_model::transaction::SignedTransaction;
+    use super::{StatelessValidationCache, StatelessValidationContext};
+    use iroha_crypto::{Algorithm, Hash, HashOf};
+    use iroha_data_model::{
+        ChainId, parameter::TransactionParameters, transaction::SignedTransaction,
+    };
 
     fn dummy_hash(seed: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::new([seed]))
@@ -6450,6 +6481,49 @@ mod stateless_validation_cache_tests {
         cache.insert_ok(other_key, None, 0);
         assert!(!cache.get_ok(&key, 100));
         assert!(cache.get_ok(&other_key, 100));
+    }
+
+    #[test]
+    fn cache_refresh_updates_lru_order() {
+        let mut cache = StatelessValidationCache::new(2);
+        let first = dummy_hash(1);
+        let second = dummy_hash(2);
+        let third = dummy_hash(3);
+
+        cache.insert_ok(first, None, 0);
+        cache.insert_ok(second, None, 0);
+        cache.insert_ok(first, None, 0);
+        cache.insert_ok(third, None, 0);
+
+        assert!(cache.get_ok(&first, 100));
+        assert!(!cache.get_ok(&second, 100));
+        assert!(cache.get_ok(&third, 100));
+    }
+
+    #[test]
+    fn cache_context_change_invalidates_entries() {
+        let mut cache = StatelessValidationCache::new(4);
+        let key = dummy_hash(9);
+
+        cache.ensure_context(context("cache-a"));
+        cache.insert_ok(key, None, 0);
+        assert!(cache.get_ok(&key, 100));
+
+        cache.ensure_context(context("cache-a"));
+        assert!(cache.get_ok(&key, 100));
+
+        cache.ensure_context(context("cache-b"));
+        assert!(!cache.get_ok(&key, 100));
+        assert!(!cache.contains_key(&key));
+    }
+
+    fn context(chain_id: &str) -> StatelessValidationContext {
+        StatelessValidationContext::new(
+            chain_id.parse::<ChainId>().expect("valid chain id"),
+            0,
+            TransactionParameters::default(),
+            vec![Algorithm::Ed25519],
+        )
     }
 }
 
@@ -7348,8 +7422,6 @@ pub struct StateTransaction<'block, 'state> {
         &'block mut BTreeMap<Hash, Vec<iroha_data_model::fastpq::TransferTranscript>>,
     /// Transfer transcripts staged during the current transaction execution.
     pending_transfer_transcripts: Vec<iroha_data_model::fastpq::TransferTranscript>,
-    /// Reusable FASTPQ single-transfer digest scratch for this transaction.
-    poseidon_digest_scratch: crate::fastpq::PoseidonDigestScratch,
     /// Block-level accumulator for AXT envelope records.
     block_axt_envelopes: &'block mut Vec<AxtEnvelopeRecord>,
     /// Pending AXT envelopes captured during this transaction execution.
@@ -20085,19 +20157,40 @@ impl State {
         &self,
         tx: &crate::tx::AcceptedTransaction<'_>,
     ) {
+        self.warm_stateless_validation_cache_for_torii_prechecked_entries(core::iter::once(tx));
+    }
+
+    /// Warm the block stateless-validation cache for a Torii batch with one cache lock.
+    #[doc(hidden)]
+    #[track_caller]
+    pub fn warm_stateless_validation_cache_for_torii_prechecked_batch<'iter, 'tx, I>(&self, txs: I)
+    where
+        'tx: 'iter,
+        I: IntoIterator<Item = &'iter crate::tx::AcceptedTransaction<'tx>>,
+    {
+        self.warm_stateless_validation_cache_for_torii_prechecked_entries(txs);
+    }
+
+    fn warm_stateless_validation_cache_for_torii_prechecked_entries<'iter, 'tx, I>(&self, txs: I)
+    where
+        'tx: 'iter,
+        I: IntoIterator<Item = &'iter crate::tx::AcceptedTransaction<'tx>>,
+    {
         let cache_cap = self.pipeline.stateless_cache_cap;
         if cache_cap == 0 {
-            return;
-        }
-        let Some(prepared) = tx.stateless_cache_metadata() else {
-            return;
-        };
-        if prepared.single_ed25519_key.is_none() {
             return;
         }
 
         let (max_clock_drift, tx_params) = self.transaction_admission_limits();
         let max_clock_drift_ms = max_clock_drift.as_millis();
+        let entries = txs
+            .into_iter()
+            .filter_map(|tx| stateless_validation_cache_warm_entry(tx, max_clock_drift_ms))
+            .collect::<Vec<_>>();
+        if entries.is_empty() {
+            return;
+        }
+
         let allowed_signing = self.crypto.read().allowed_signing.clone();
         let context = StatelessValidationContext::new(
             self.chain_id.clone(),
@@ -20105,19 +20198,13 @@ impl State {
             tx_params,
             allowed_signing,
         );
-        let expires_at_ms = tx
-            .time_to_live()
-            .and_then(|ttl| tx.creation_time().checked_add(ttl))
-            .map(|expires_at| expires_at.as_millis());
-        let not_before_ms = tx
-            .creation_time()
-            .as_millis()
-            .saturating_sub(max_clock_drift_ms);
 
         let mut cache = self.stateless_validation_cache.lock();
         cache.set_cap(cache_cap);
         cache.ensure_context(context);
-        cache.insert_ok(prepared.signed_hash, expires_at_ms, not_before_ms);
+        for entry in entries {
+            cache.insert_ok(entry.signed_hash, entry.expires_at_ms, entry.not_before_ms);
+        }
     }
 
     /// Effective block time from current Sumeragi parameters.
@@ -23972,7 +24059,6 @@ impl<'state> StateBlock<'state> {
             preverified_batch: self.preverified_batch.clone(),
             fastpq_transcripts: &mut self.fastpq_transcripts,
             pending_transfer_transcripts: Vec::new(),
-            poseidon_digest_scratch: crate::fastpq::PoseidonDigestScratch::default(),
             block_axt_envelopes: &mut self.axt_envelopes,
             pending_axt_envelopes: Vec::new(),
             perm_cache: PermissionCheckCache::default(),
@@ -25669,10 +25755,11 @@ mod transfer_transcript_tests {
         let expected_poseidon = crate::fastpq::poseidon_preimage_digest(&delta, &call_hash);
         tx.record_transfer_transcript(&ALICE_ID, delta)
             .expect("record transcript");
-        assert_eq!(
-            tx.pending_transfer_transcripts[0].poseidon_preimage_digest,
-            Some(expected_poseidon),
-            "single-delta transfer transcript digest should be materialized before block drain"
+        assert!(
+            tx.pending_transfer_transcripts[0]
+                .poseidon_preimage_digest
+                .is_none(),
+            "single-delta transfer transcript digest should be deferred until block drain"
         );
         tx.apply();
         let transcripts = block.drain_transfer_transcripts();
@@ -29554,19 +29641,11 @@ impl StateTransaction<'_, '_> {
             )
         })?;
         let authority_digest = crate::fastpq::authority_digest(authority);
-        let poseidon_preimage_digest = match deltas.as_slice() {
-            [delta] => Some(crate::fastpq::poseidon_preimage_digest_with_scratch(
-                delta,
-                &batch_hash,
-                &mut self.poseidon_digest_scratch,
-            )),
-            _ => None,
-        };
         let transcript = TransferTranscript {
             batch_hash,
             deltas: core::mem::take(&mut deltas),
             authority_digest,
-            poseidon_preimage_digest,
+            poseidon_preimage_digest: None,
         };
         crate::sumeragi::witness::record_fastpq_transcript(&transcript);
         self.pending_transfer_transcripts.push(transcript);

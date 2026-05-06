@@ -1941,6 +1941,20 @@ impl CompoundPredicate<crate::query::CommittedTransaction> {
         self.payload.as_ref()
     }
 
+    /// Return committed-transaction filters carried by this predicate, if available.
+    pub fn committed_tx_filters(&self) -> Option<crate::query::CommittedTxFilters> {
+        self.payload_any().and_then(|payload| {
+            payload
+                .downcast_ref::<crate::query::CommittedTxFilters>()
+                .cloned()
+                .or_else(|| {
+                    payload
+                        .downcast_ref::<PredicateJsonPayload>()
+                        .and_then(|json| committed_tx_filters_from_json(json.as_str()))
+                })
+        })
+    }
+
     /// Evaluate the predicate against a committed transaction.
     pub fn applies(&self, input: &crate::query::CommittedTransaction) -> bool {
         if let Some(p) = self.payload_any() {

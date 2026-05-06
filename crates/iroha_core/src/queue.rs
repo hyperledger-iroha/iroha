@@ -2570,8 +2570,7 @@ impl Queue {
             let capacity = self.capacity.get();
             let mut accepted_count = 0usize;
             let mut seen_hashes = BTreeSet::new();
-            let mut checked_user_increments = BTreeMap::<AccountId, usize>::new();
-            let mut accepted_authorities = Vec::with_capacity(prepared.len());
+            let mut checked_user_increments = BTreeMap::<&AccountId, usize>::new();
 
             for admission in &prepared {
                 let checked = &admission.checked;
@@ -2617,18 +2616,16 @@ impl Queue {
                         break;
                     }
                     checked_user_increments
-                        .entry(authority.clone())
+                        .entry(authority)
                         .and_modify(|count| *count = count.saturating_add(1))
                         .or_insert(1);
-                    accepted_authorities.push(Some(authority.clone()));
-                } else {
-                    accepted_authorities.push(None);
                 }
 
                 accepted_count = accepted_count.saturating_add(1);
             }
+            drop(checked_user_increments);
 
-            let mut applied_count = 0usize;
+            let mut applied_user_increments = BTreeMap::<AccountId, usize>::new();
             for admission in prepared.into_iter().take(accepted_count) {
                 let PreparedQueueAdmission {
                     checked,
@@ -2643,6 +2640,7 @@ impl Queue {
                 } = admission;
                 let lane_id = routing_decision.lane_id;
                 let dataspace_id = routing_decision.dataspace_id;
+                let authority = checked.as_ref().authority_opt().cloned();
                 let entry = match self.txs.entry(hash) {
                     Entry::Occupied(_) => {
                         failure = Some(Failure {
@@ -2697,7 +2695,12 @@ impl Queue {
                 }
                 self.tx_gas_cost.insert(hash, proposal_gas_cost);
                 self.track_expiry_hash(hash);
-                applied_count = applied_count.saturating_add(1);
+                if let Some(authority) = authority {
+                    applied_user_increments
+                        .entry(authority)
+                        .and_modify(|count| *count = count.saturating_add(1))
+                        .or_insert(1);
+                }
                 #[cfg(feature = "telemetry")]
                 {
                     self.record_teu_enqueue_locked(
@@ -2717,22 +2720,7 @@ impl Queue {
                     dataspace_id,
                 });
             }
-            if applied_count == accepted_count {
-                self.apply_per_user_tx_count_increments(checked_user_increments);
-            } else {
-                let mut applied_user_increments = BTreeMap::<AccountId, usize>::new();
-                for authority in accepted_authorities
-                    .into_iter()
-                    .take(applied_count)
-                    .flatten()
-                {
-                    applied_user_increments
-                        .entry(authority)
-                        .and_modify(|count| *count = count.saturating_add(1))
-                        .or_insert(1);
-                }
-                self.apply_per_user_tx_count_increments(applied_user_increments);
-            }
+            self.apply_per_user_tx_count_increments(applied_user_increments);
         }
         #[cfg(feature = "telemetry")]
         self.publish_teu_backlog_metric_keys(

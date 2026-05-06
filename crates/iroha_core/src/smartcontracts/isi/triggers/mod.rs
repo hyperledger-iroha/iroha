@@ -798,16 +798,15 @@ pub mod query {
         norito::json::from_value(value.clone()).ok()
     }
 
-    fn maybe_replace_trigger_candidate_ids(
+    fn intersect_trigger_candidate_ids(
         best: &mut Option<BTreeSet<TriggerId>>,
         candidates: BTreeSet<TriggerId>,
     ) {
-        if best
-            .as_ref()
-            .map_or(true, |current| candidates.len() < current.len())
-        {
+        let Some(current) = best.take() else {
             *best = Some(candidates);
-        }
+            return;
+        };
+        *best = Some(current.intersection(&candidates).cloned().collect());
     }
 
     fn trigger_candidate_ids(predicate: &PredicateJson) -> Option<BTreeSet<TriggerId>> {
@@ -815,7 +814,7 @@ pub mod query {
 
         for cond in &predicate.equals {
             if cond.field == "id" {
-                maybe_replace_trigger_candidate_ids(
+                intersect_trigger_candidate_ids(
                     &mut best,
                     trigger_id_from_value(&cond.value).into_iter().collect(),
                 );
@@ -824,7 +823,7 @@ pub mod query {
 
         for cond in &predicate.r#in {
             if cond.field == "id" {
-                maybe_replace_trigger_candidate_ids(
+                intersect_trigger_candidate_ids(
                     &mut best,
                     cond.values
                         .iter()
@@ -835,6 +834,30 @@ pub mod query {
         }
 
         best
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn trigger_candidate_ids_are_intersected() {
+            let rose_id: TriggerId = "intersect_rose".parse().unwrap();
+            let tulip_id: TriggerId = "intersect_tulip".parse().unwrap();
+            let iris_id: TriggerId = "intersect_iris".parse().unwrap();
+            let mut candidates = None;
+
+            intersect_trigger_candidate_ids(
+                &mut candidates,
+                BTreeSet::from([rose_id.clone(), tulip_id]),
+            );
+            intersect_trigger_candidate_ids(
+                &mut candidates,
+                BTreeSet::from([rose_id.clone(), iris_id]),
+            );
+
+            assert_eq!(candidates, Some(BTreeSet::from([rose_id])));
+        }
     }
 
     fn trigger_alias_values(trigger: &Trigger, field: &str) -> Vec<String> {

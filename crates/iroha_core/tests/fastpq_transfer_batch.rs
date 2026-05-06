@@ -14,7 +14,7 @@ use iroha_test_samples::{ALICE_ID, gen_account_in};
 use nonzero_ext::nonzero;
 
 #[test]
-fn single_transfer_precomputes_canonical_poseidon_digest() {
+fn single_transfer_finalizes_canonical_poseidon_digest_on_block_drain() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
 

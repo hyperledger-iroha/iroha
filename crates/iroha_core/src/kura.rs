@@ -3,10 +3,11 @@
 //! new [`Block`](iroha_data_model::block::SignedBlock)s on the
 //! blockchain.
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fmt::Debug,
     io::{BufWriter, ErrorKind, Read, Seek, SeekFrom, Write},
     num::NonZeroUsize,
+    ops::Bound,
     path::{Path, PathBuf},
     sync::{
         Arc, OnceLock,
@@ -33,6 +34,7 @@ use iroha_crypto::{Hash, HashOf};
 #[cfg(test)]
 use iroha_data_model::block::decode_versioned_signed_block;
 use iroha_data_model::{
+    AccountId,
     block::{BlockHeader, SignedBlock, decode_framed_signed_block},
     consensus::{Qc, ValidatorSetCheckpoint},
     merge::MergeLedgerEntry,
@@ -98,6 +100,8 @@ pub struct Kura {
     block_data: Mutex<BlockData>,
     /// Reverse lookup for committed block hash to block height.
     block_height_index: Mutex<BlockHeightIndex>,
+    /// Reverse lookup for committed transaction entrypoint hash to containing block heights.
+    transaction_entrypoint_index: Mutex<TransactionEntrypointIndex>,
     /// Channel for waking the writer thread when sidecars need flushing or shutdown is signalled.
     block_notify_tx: mpsc::Sender<BlockNotify>,
     block_notify_rx: Mutex<Option<mpsc::Receiver<BlockNotify>>>,
@@ -158,8 +162,35 @@ pub struct Kura {
 
 type BlockData = Vec<(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)>;
 type BlockHeightIndex = BTreeMap<HashOf<BlockHeader>, NonZeroUsize>;
+type TransactionEntrypointHeights = BTreeMap<HashOf<TransactionEntrypoint>, BTreeSet<NonZeroUsize>>;
+type TransactionAuthorityHeights = BTreeMap<AccountId, BTreeSet<NonZeroUsize>>;
+type TransactionTimestampHeights = BTreeMap<u64, BTreeSet<NonZeroUsize>>;
+type TransactionResultStatusHeights = BTreeMap<bool, BTreeSet<NonZeroUsize>>;
 type BlockReplicaKey = (u64, HashOf<BlockHeader>);
 type BlockReplicaRegistry = BTreeMap<BlockReplicaKey, BTreeMap<PeerId, BlockReplicaAdvert>>;
+
+#[derive(Debug)]
+struct TransactionEntrypointIndex {
+    complete: bool,
+    indexed_heights: BTreeSet<NonZeroUsize>,
+    heights_by_entrypoint: TransactionEntrypointHeights,
+    heights_by_authority: TransactionAuthorityHeights,
+    heights_by_timestamp_ms: TransactionTimestampHeights,
+    heights_by_result_status: TransactionResultStatusHeights,
+}
+
+impl TransactionEntrypointIndex {
+    fn complete_empty() -> Self {
+        Self {
+            complete: true,
+            indexed_heights: BTreeSet::new(),
+            heights_by_entrypoint: BTreeMap::new(),
+            heights_by_authority: BTreeMap::new(),
+            heights_by_timestamp_ms: BTreeMap::new(),
+            heights_by_result_status: BTreeMap::new(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct WsvCheckpoint {
@@ -546,6 +577,131 @@ impl Kura {
             })
     }
 
+    fn build_transaction_entrypoint_index(block_data: &BlockData) -> TransactionEntrypointIndex {
+        let mut index = TransactionEntrypointIndex {
+            complete: false,
+            indexed_heights: BTreeSet::new(),
+            heights_by_entrypoint: BTreeMap::new(),
+            heights_by_authority: BTreeMap::new(),
+            heights_by_timestamp_ms: BTreeMap::new(),
+            heights_by_result_status: BTreeMap::new(),
+        };
+
+        for (idx, (_, block)) in block_data.iter().enumerate() {
+            let Some(block) = block else {
+                continue;
+            };
+            let Some(height) = NonZeroUsize::new(idx.saturating_add(1)) else {
+                continue;
+            };
+            Self::insert_transaction_entrypoint_heights(&mut index, height, block);
+        }
+        index.complete = index.indexed_heights.len() == block_data.len();
+
+        index
+    }
+
+    fn insert_transaction_entrypoint_heights(
+        index: &mut TransactionEntrypointIndex,
+        height: NonZeroUsize,
+        block: &SignedBlock,
+    ) {
+        index.indexed_heights.insert(height);
+        if !block.has_results() {
+            return;
+        }
+        for hash in block.entrypoint_hashes() {
+            index
+                .heights_by_entrypoint
+                .entry(hash)
+                .or_default()
+                .insert(height);
+        }
+        for entrypoint in block.entrypoints_cloned() {
+            if let Some(authority) = entrypoint.authority_opt() {
+                index
+                    .heights_by_authority
+                    .entry(authority.clone())
+                    .or_default()
+                    .insert(height);
+            }
+            if let Some(timestamp_ms) = entrypoint.creation_time_ms() {
+                index
+                    .heights_by_timestamp_ms
+                    .entry(timestamp_ms)
+                    .or_default()
+                    .insert(height);
+            }
+        }
+        for result in block.results() {
+            index
+                .heights_by_result_status
+                .entry(result.as_ref().is_ok())
+                .or_default()
+                .insert(height);
+        }
+    }
+
+    fn remove_transaction_entrypoint_height(
+        index: &mut TransactionEntrypointIndex,
+        height: NonZeroUsize,
+    ) {
+        index.heights_by_entrypoint.retain(|_, heights| {
+            heights.remove(&height);
+            !heights.is_empty()
+        });
+        index.heights_by_authority.retain(|_, heights| {
+            heights.remove(&height);
+            !heights.is_empty()
+        });
+        index.heights_by_timestamp_ms.retain(|_, heights| {
+            heights.remove(&height);
+            !heights.is_empty()
+        });
+        index.heights_by_result_status.retain(|_, heights| {
+            heights.remove(&height);
+            !heights.is_empty()
+        });
+        index.indexed_heights.remove(&height);
+    }
+
+    fn set_transaction_entrypoint_index_entry(
+        &self,
+        height: usize,
+        block: &SignedBlock,
+        chain_len: usize,
+    ) {
+        let Some(height) = NonZeroUsize::new(height) else {
+            return;
+        };
+        let mut index = self.transaction_entrypoint_index.lock();
+        Self::remove_transaction_entrypoint_height(&mut index, height);
+        Self::insert_transaction_entrypoint_heights(&mut index, height, block);
+        index.complete = index.indexed_heights.len() == chain_len;
+    }
+
+    fn truncate_transaction_heights<K: Ord>(
+        index: &mut BTreeMap<K, BTreeSet<NonZeroUsize>>,
+        keep: usize,
+    ) {
+        index.retain(|_, indexed_heights| {
+            indexed_heights.retain(|height| height.get() <= keep);
+            !indexed_heights.is_empty()
+        });
+    }
+
+    fn truncate_transaction_entrypoint_index(&self, keep: usize) {
+        let mut index = self.transaction_entrypoint_index.lock();
+        index
+            .indexed_heights
+            .retain(|indexed_height| indexed_height.get() <= keep);
+        Self::truncate_transaction_heights(&mut index.heights_by_entrypoint, keep);
+        Self::truncate_transaction_heights(&mut index.heights_by_authority, keep);
+        Self::truncate_transaction_heights(&mut index.heights_by_timestamp_ms, keep);
+        Self::truncate_transaction_heights(&mut index.heights_by_result_status, keep);
+        index.complete = index.indexed_heights.len() == keep;
+    }
+
     fn set_block_height_index_entry(&self, height: usize, hash: HashOf<BlockHeader>) {
         let Some(height) = NonZeroUsize::new(height) else {
             return;
@@ -741,6 +897,7 @@ impl Kura {
 
         let (block_data, chain_validation) = Kura::init(&mut block_store, config.init_mode)?;
         let block_height_index = Self::build_block_height_index(&block_data);
+        let transaction_entrypoint_index = Self::build_transaction_entrypoint_index(&block_data);
         let block_count = block_data.len();
         info!(mode=?config.init_mode, block_count, "Kura init complete");
 
@@ -784,6 +941,7 @@ impl Kura {
             block_store: Mutex::new(block_store),
             block_data: Mutex::new(block_data),
             block_height_index: Mutex::new(block_height_index),
+            transaction_entrypoint_index: Mutex::new(transaction_entrypoint_index),
             block_notify_tx,
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(block_plain_text_path),
@@ -866,6 +1024,7 @@ impl Kura {
             )),
             block_data: Mutex::new(Vec::new()),
             block_height_index: Mutex::new(BTreeMap::new()),
+            transaction_entrypoint_index: Mutex::new(TransactionEntrypointIndex::complete_empty()),
             block_notify_tx,
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(None),
@@ -2077,6 +2236,101 @@ impl Kura {
         self.block_height_index.lock().get(&hash).copied()
     }
 
+    /// Resolve block heights containing the given transaction entrypoint hash.
+    ///
+    /// Returns `None` when the in-memory index is known to be partial, so callers can fall back to
+    /// scanning blocks without risking incomplete query results.
+    pub fn get_block_heights_by_entrypoint_hash(
+        &self,
+        hash: HashOf<TransactionEntrypoint>,
+    ) -> Option<BTreeSet<NonZeroUsize>> {
+        let index = self.transaction_entrypoint_index.lock();
+        index.complete.then(|| {
+            index
+                .heights_by_entrypoint
+                .get(&hash)
+                .cloned()
+                .unwrap_or_default()
+        })
+    }
+
+    /// Resolve block heights containing committed transactions with the given authority.
+    ///
+    /// Returns `None` when the in-memory transaction index is known to be partial.
+    pub fn get_block_heights_by_transaction_authority(
+        &self,
+        authority: &AccountId,
+    ) -> Option<BTreeSet<NonZeroUsize>> {
+        let index = self.transaction_entrypoint_index.lock();
+        index.complete.then(|| {
+            index
+                .heights_by_authority
+                .get(authority)
+                .cloned()
+                .unwrap_or_default()
+        })
+    }
+
+    /// Resolve block heights containing committed transactions with the given timestamp.
+    ///
+    /// Returns `None` when the in-memory transaction index is known to be partial.
+    pub fn get_block_heights_by_transaction_timestamp_ms(
+        &self,
+        timestamp_ms: u64,
+    ) -> Option<BTreeSet<NonZeroUsize>> {
+        let index = self.transaction_entrypoint_index.lock();
+        index.complete.then(|| {
+            index
+                .heights_by_timestamp_ms
+                .get(&timestamp_ms)
+                .cloned()
+                .unwrap_or_default()
+        })
+    }
+
+    /// Resolve block heights containing committed transactions in the timestamp range.
+    ///
+    /// Returns `None` when the in-memory transaction index is known to be partial.
+    pub fn get_block_heights_by_transaction_timestamp_range(
+        &self,
+        lower_bound: Option<u64>,
+        upper_bound: Option<u64>,
+    ) -> Option<BTreeSet<NonZeroUsize>> {
+        if let (Some(lower), Some(upper)) = (lower_bound, upper_bound)
+            && lower > upper
+        {
+            return Some(BTreeSet::new());
+        }
+
+        let index = self.transaction_entrypoint_index.lock();
+        index.complete.then(|| {
+            let lower = lower_bound.map_or(Bound::Unbounded, Bound::Included);
+            let upper = upper_bound.map_or(Bound::Unbounded, Bound::Included);
+            index
+                .heights_by_timestamp_ms
+                .range((lower, upper))
+                .flat_map(|(_, heights)| heights.iter().copied())
+                .collect()
+        })
+    }
+
+    /// Resolve block heights containing committed transactions with the given result status.
+    ///
+    /// Returns `None` when the in-memory transaction index is known to be partial.
+    pub fn get_block_heights_by_transaction_result_status(
+        &self,
+        is_ok: bool,
+    ) -> Option<BTreeSet<NonZeroUsize>> {
+        let index = self.transaction_entrypoint_index.lock();
+        index.complete.then(|| {
+            index
+                .heights_by_result_status
+                .get(&is_ok)
+                .cloned()
+                .unwrap_or_default()
+        })
+    }
+
     /// Return the durable height and encoded payload length for a known canonical block hash.
     pub(crate) fn durable_block_payload_len_by_hash(
         &self,
@@ -2127,7 +2381,7 @@ impl Kura {
 
     /// Get a reference to block by height, loading it from disk if needed.
     pub fn get_block(&self, block_height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
-        let (block_index, expected_hash, should_cache) = {
+        let (block_index, expected_hash, should_cache, chain_len) = {
             let data = self.block_data.lock();
             if data.len() < block_height.get() {
                 return None;
@@ -2140,7 +2394,7 @@ impl Kura {
 
             let expected_hash = data[idx].0;
             let should_cache = idx + self.blocks_in_memory.get() >= data.len();
-            (idx, expected_hash, should_cache)
+            (idx, expected_hash, should_cache, data.len())
         };
 
         let block = {
@@ -2221,6 +2475,11 @@ impl Kura {
         }
 
         let block_arc = Arc::new(block);
+        self.set_transaction_entrypoint_index_entry(
+            block_index.saturating_add(1),
+            block_arc.as_ref(),
+            chain_len,
+        );
 
         if should_cache {
             let mut data = self.block_data.lock();
@@ -2523,9 +2782,11 @@ impl Kura {
                 block_hash,
             )?;
             if actual_height <= u64::try_from(block_data.len())? {
+                let chain_len = block_data.len();
                 drop(block_data);
                 self.ensure_durable_block_at_height(actual_height, block_hash)?;
                 self.set_block_height_index_entry(actual_height_usize, block_hash);
+                self.set_transaction_entrypoint_index_entry(actual_height_usize, block, chain_len);
                 if let Some(entry) = merge_entry {
                     self.append_merge_entry_for_existing_block_if_missing(actual_height, entry)?;
                 }
@@ -2548,9 +2809,11 @@ impl Kura {
             block_hash,
         )?;
         if actual_height <= u64::try_from(block_data.len())? {
+            let chain_len = block_data.len();
             drop(block_data);
             self.ensure_durable_block_at_height(actual_height, block_hash)?;
             self.set_block_height_index_entry(actual_height_usize, block_hash);
+            self.set_transaction_entrypoint_index_entry(actual_height_usize, block, chain_len);
             if let Some(entry) = merge_entry {
                 self.append_merge_entry_for_existing_block_if_missing(actual_height, entry)?;
             }
@@ -2596,6 +2859,7 @@ impl Kura {
         );
         let new_len = block_data.len();
         self.set_block_height_index_entry(actual_height_usize, block_hash);
+        self.set_transaction_entrypoint_index_entry(actual_height_usize, block, new_len);
         drop(block_data);
         self.append_debug_block_dump(block);
 
@@ -3366,9 +3630,11 @@ impl Kura {
         {
             let data = self.block_data.lock();
             if Self::validate_top_replacement(data.as_slice(), height, height_usize, block_hash)? {
+                let chain_len = data.len();
                 drop(data);
                 self.ensure_durable_block_at_height(height, block_hash)?;
                 self.set_block_height_index_entry(height_usize, block_hash);
+                self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len);
                 return Ok(());
             }
         }
@@ -3377,9 +3643,11 @@ impl Kura {
 
         let mut data = self.block_data.lock();
         if Self::validate_top_replacement(data.as_slice(), height, height_usize, block_hash)? {
+            let chain_len = data.len();
             drop(data);
             self.ensure_durable_block_at_height(height, block_hash)?;
             self.set_block_height_index_entry(height_usize, block_hash);
+            self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len);
             return Ok(());
         }
 
@@ -3389,7 +3657,9 @@ impl Kura {
             *top = (block_hash, Some(Arc::clone(&block)));
         }
         Self::drop_persisted_blocks(&mut data, height_usize, self.blocks_in_memory.get());
+        let chain_len = data.len();
         self.set_block_height_index_entry(height_usize, block_hash);
+        self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len);
         drop(data);
         self.prune_wsv_checkpoints_above(height.saturating_sub(1))?;
         self.append_debug_block_dump(&block);
@@ -3453,6 +3723,7 @@ impl Kura {
             data.truncate(keep);
         }
         self.truncate_block_height_index(keep);
+        self.truncate_transaction_entrypoint_index(keep);
         self.invalidate_pending_budget_cache();
 
         if !self.store_root.as_os_str().is_empty() {
@@ -9332,6 +9603,70 @@ mod tests {
         let first = kura.get_block(height).expect("block available");
         let second = kura.get_block(height).expect("cached block");
         assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn transaction_index_completes_after_lazy_loading_reopened_blocks() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+
+        {
+            let _rt_guard = rt.enter();
+            let _logger = iroha_logger::test_logger();
+        }
+
+        let temp_dir = TempDir::new().unwrap();
+        let blocks = create_blocks(&rt, &temp_dir);
+        let entrypoint_hash = blocks[2]
+            .as_ref()
+            .entrypoint_hashes()
+            .next()
+            .expect("canonical test block has a transaction");
+
+        let (kura, block_count) = Kura::new(
+            &Config {
+                init_mode: InitMode::Strict,
+                store_dir: iroha_config::base::WithOrigin::inline(
+                    temp_dir.path().to_str().unwrap().into(),
+                ),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+                blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
+                debug_output_new_blocks: false,
+                merge_ledger_cache_capacity:
+                    iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+                fsync_mode: iroha_config::kura::FsyncMode::Batched,
+                fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+                block_sync_roster_retention:
+                    iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+                roster_sidecar_retention:
+                    iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            },
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("reopen Kura");
+
+        assert_eq!(block_count.0, 3);
+        assert!(
+            kura.get_block_heights_by_entrypoint_hash(entrypoint_hash)
+                .is_none(),
+            "reopened Kura starts with only hash metadata indexed"
+        );
+
+        for height in 1..=block_count.0 {
+            let height = NonZeroUsize::new(height).expect("non-zero height");
+            kura.get_block(height).expect("block loads from disk");
+        }
+
+        assert_eq!(
+            kura.get_block_heights_by_entrypoint_hash(entrypoint_hash)
+                .expect("all reopened blocks have been indexed"),
+            BTreeSet::from([nonzero!(2_usize)])
+        );
     }
 
     #[test]

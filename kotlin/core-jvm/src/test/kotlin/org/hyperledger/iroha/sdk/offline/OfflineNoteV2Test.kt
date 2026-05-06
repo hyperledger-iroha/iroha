@@ -1,16 +1,26 @@
 package org.hyperledger.iroha.sdk.offline
 
+import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Paths
+import java.nio.charset.StandardCharsets
+import java.security.KeyPairGenerator
 import java.util.Base64
 import java.util.Locale
 import java.util.concurrent.CompletableFuture
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.client.ClientResponse
+import org.hyperledger.iroha.sdk.client.HttpTransportExecutor
+import org.hyperledger.iroha.sdk.client.JsonEncoder
 import org.hyperledger.iroha.sdk.client.JsonParser
+import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
+import org.hyperledger.iroha.sdk.client.transport.TransportRequest
+import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 
 class OfflineNoteV2Test {
     @Test
@@ -291,6 +301,88 @@ class OfflineNoteV2Test {
     }
 
     @Test
+    fun toriiIssuerClientBodySignsRefillAndIssuesWalletCommitment() {
+        val fixture = loadFixture()
+        val certificateJson = obj(obj(fixture, "payment_token"), "sender_key_certificate")
+        val accountId = string(certificateJson, "account_id")
+        val assetDefinitionId = assetDefinitionFromAssetId(string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id"))
+        val offlinePublicKey = "a5".repeat(32)
+        val deviceBinding = OfflineNoteV2IssuerDeviceBinding(
+            deviceId = "device-1",
+            offlinePublicKey = offlinePublicKey,
+            deviceBinding = linkedMapOf(
+                "device_id" to "device-1",
+                "offline_public_key" to offlinePublicKey,
+                "signature_base64" to "nested-device-signature-is-not-body-auth",
+            ),
+        )
+        val executor = OfflineIssuerExecutor(certificateJson)
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val client = ToriiOfflineNoteV2IssuerClient(
+            canonicalAuth = ToriiCanonicalRequestAuth(accountId, keyPair.private),
+            deviceBindingProvider = object : OfflineNoteV2IssuerDeviceBindingProvider {
+                override fun currentDeviceBinding(
+                    chainId: String,
+                    accountId: String,
+                    assetDefinitionId: String,
+                ): OfflineNoteV2IssuerDeviceBinding = deviceBinding
+            },
+            executor = executor,
+            baseUri = URI.create("https://torii.example"),
+            clock = java.util.function.LongSupplier { 1_700_000_000_000L },
+            nonceGenerator = SequenceIdGenerator(
+                "operation-refill-1",
+                "auth-refill-1",
+                "auth-issue-1",
+            ),
+        )
+
+        val context = client.prepareLoad("chain-1", accountId, assetDefinitionId, "5").join()
+        assertEquals("operation-refill-1", context.operationId)
+        assertEquals("lineage-1", context.lineageId)
+        assertEquals(1L, context.localRevision)
+
+        val commitment = ByteArray(32) { (it + 1).toByte() }
+        val response = client.issueNote(
+            OfflineNoteV2IssueRequest(
+                chainId = "chain-1",
+                accountId = accountId,
+                assetDefinitionId = assetDefinitionId,
+                assetId = "$assetDefinitionId#$accountId",
+                amount = "5",
+                loadContext = context,
+                noteCommitment = commitment,
+            )
+        ).join()
+
+        assertEquals(hex(commitment), hex(response.noteCommitment()))
+        assertEquals("settlement-entry-hash", response.settlementEntryHashHex)
+        assertEquals(2, executor.requests.size)
+        assertEquals("/v1/offline/v2/keys/refill", executor.requests[0].uri.path)
+        assertEquals("/v1/offline/v2/notes/issue", executor.requests[1].uri.path)
+        for (request in executor.requests) {
+            assertFalse(request.headers.keys.any { it.startsWith("X-Iroha-", ignoreCase = true) })
+        }
+
+        val refillBody = executor.requestBody(0)
+        assertEquals(accountId, string(refillBody, "account_id"))
+        assertEquals("operation-refill-1", string(refillBody, "operation_id"))
+        assertEquals("auth-refill-1", string(refillBody, "nonce"))
+        assertTrue(string(refillBody, "signature_base64").isNotBlank())
+        assertEquals(
+            "nested-device-signature-is-not-body-auth",
+            string(obj(refillBody, "device_binding"), "signature_base64"),
+        )
+
+        val issueBody = executor.requestBody(1)
+        assertEquals(hex(commitment), string(issueBody, "note_commitment"))
+        assertEquals(0L, long(issueBody, "local_revision"))
+        assertEquals("0", string(issueBody, "local_balance"))
+        assertEquals("auth-issue-1", string(issueBody, "nonce"))
+        assertNotNull(obj(issueBody, "lineage_state"))
+    }
+
+    @Test
     fun walletLifecycleBuildsAuditAcceptAndRedeemTransactions() {
         val fixture = loadFixture()
         val chain = obj(fixture, "chain_vectors")
@@ -492,6 +584,80 @@ class OfflineNoteV2Test {
         private val id: String,
     ) : OfflineNoteV2IdGenerator {
         override fun nextId(prefix: String): String = id
+    }
+
+    private class SequenceIdGenerator(
+        private vararg val ids: String,
+    ) : OfflineNoteV2IdGenerator {
+        private var index = 0
+
+        override fun nextId(prefix: String): String {
+            require(index < ids.size) { "test id generator exhausted" }
+            return ids[index++]
+        }
+    }
+
+    private inner class OfflineIssuerExecutor(
+        private val certificateJson: Map<String, Any?>,
+    ) : HttpTransportExecutor {
+        val requests = ArrayList<TransportRequest>()
+
+        override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+            requests.add(request)
+            val body = requestBody(request)
+            val response = when (request.uri.path) {
+                "/v1/offline/v2/keys/refill" -> linkedMapOf<String, Any?>(
+                    "operation_id" to string(body, "operation_id"),
+                    "lineage_state" to lineageState(0, "0"),
+                    "key_certificate" to certificateWithExpiry(),
+                    "key_certificates" to listOf(certificateWithExpiry()),
+                )
+                "/v1/offline/v2/notes/issue" -> linkedMapOf<String, Any?>(
+                    "operation_id" to string(body, "operation_id"),
+                    "settlement" to linkedMapOf("entry_hash" to "settlement-entry-hash"),
+                    "lineage_state" to lineageState(1, "5"),
+                    "local_balance" to "5",
+                    "locked_balance" to "0",
+                    "local_revision" to 1L,
+                    "local_state_hash" to "lineage-state-hash",
+                    "issued_note_commitment" to string(body, "note_commitment"),
+                    "key_certificate" to certificateWithExpiry(),
+                    "key_certificates" to listOf(certificateWithExpiry()),
+                )
+                else -> throw IllegalStateException("unexpected path ${request.uri.path}")
+            }
+            return CompletableFuture.completedFuture(
+                TransportResponse.builder()
+                    .setStatusCode(200)
+                    .setBody(JsonEncoder.encode(response).toByteArray(StandardCharsets.UTF_8))
+                    .build()
+            )
+        }
+
+        fun requestBody(index: Int): Map<String, Any?> = requestBody(requests[index])
+
+        private fun requestBody(request: TransportRequest): Map<String, Any?> {
+            @Suppress("UNCHECKED_CAST")
+            return JsonParser.parse(String(request.body, StandardCharsets.UTF_8)) as Map<String, Any?>
+        }
+
+        private fun certificateWithExpiry(): Map<String, Any?> {
+            val copy = LinkedHashMap(certificateJson)
+            copy["expires_at_ms"] = 1_700_000_060_000L
+            return copy
+        }
+
+        private fun lineageState(revision: Long, balance: String): Map<String, Any?> =
+            linkedMapOf(
+                "lineage_id" to "lineage-1",
+                "server_revision" to revision,
+                "pending_local_revision" to revision,
+                "balance" to balance,
+                "locked_balance" to "0",
+                "authorization" to linkedMapOf(
+                    "expires_at_ms" to 1_700_000_060_000L,
+                ),
+            )
     }
 
     private object BindingProofProvider : OfflineNoteV2ProofProvider {

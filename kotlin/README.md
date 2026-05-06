@@ -37,9 +37,10 @@ actions: load, prepare receive, pay, accept/audit, redeem, and sync. Wallets
 derive note commitments, input nullifiers, and payment token ids locally, then
 delegate Torii issuance, device attestation, proof generation, persistence, and
 direct audit/redeem transaction submission through injectable interfaces. The
-JVM core includes an in-memory store and `IrohaOfflineNoteV2TransactionSubmitter`
-for tests and server-side tooling; Android secure storage remains in the
-platform wallet layer.
+JVM core includes an in-memory store, `IrohaOfflineNoteV2TransactionSubmitter`,
+and `ToriiOfflineNoteV2IssuerClient` for Torii key-refill plus note-issue
+loads. Apps provide canonical auth and a device-binding provider; Android
+secure storage remains in the platform wallet layer.
 
 ---
 

@@ -5952,7 +5952,7 @@ pub fn read_config_and_genesis(
         );
     }
     #[cfg(feature = "fastpq-gpu")]
-    preflight_fastpq_bn254_poseidon_words();
+    preflight_fastpq_bn254_poseidon_words(&config.zk.fastpq);
 
     let stack_budget_bytes = ivm_stack_budget_bytes(&config);
     apply_concurrency_config(&config.concurrency, stack_budget_bytes);
@@ -7830,7 +7830,15 @@ fn install_fastpq_execution_mode_probe(labels: &FastpqDeviceLabels) {
 }
 
 #[cfg(feature = "fastpq-gpu")]
-fn preflight_fastpq_bn254_poseidon_words() {
+fn preflight_fastpq_bn254_poseidon_words(config: &iroha_config::parameters::actual::Fastpq) {
+    if !fastpq_poseidon_word_preflight_enabled(config) {
+        iroha_logger::debug!(
+            target: "fastpq",
+            "BN254 Poseidon word-batch GPU preflight skipped by FASTPQ config"
+        );
+        return;
+    }
+
     if fastpq_prover::preflight_bn254_poseidon_word_batches() {
         iroha_logger::info!(
             target: "fastpq",
@@ -7841,6 +7849,17 @@ fn preflight_fastpq_bn254_poseidon_words() {
             target: "fastpq",
             "BN254 Poseidon word-batch GPU preflight unavailable; scalar fallback remains active"
         );
+    }
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn fastpq_poseidon_word_preflight_enabled(
+    config: &iroha_config::parameters::actual::Fastpq,
+) -> bool {
+    match config.poseidon_mode {
+        FastpqPoseidonMode::Cpu => false,
+        FastpqPoseidonMode::Gpu => true,
+        FastpqPoseidonMode::Auto => !matches!(config.execution_mode, FastpqExecutionMode::Cpu),
     }
 }
 
@@ -8953,6 +8972,33 @@ mod tests {
             assert!(overrides.dispatch_trace);
             assert!(overrides.debug_enum);
             assert!(!overrides.debug_fused);
+        }
+
+        #[cfg(feature = "fastpq-gpu")]
+        #[test]
+        fn poseidon_word_preflight_respects_fastpq_config() {
+            let mut cfg = Fastpq {
+                execution_mode: FastpqExecutionMode::Auto,
+                poseidon_mode: FastpqPoseidonMode::Auto,
+                device_class: None,
+                chip_family: None,
+                gpu_kind: None,
+                metal_queue_fanout: None,
+                metal_queue_column_threshold: None,
+                metal_max_in_flight: None,
+                metal_threadgroup_width: None,
+                metal_trace: false,
+                metal_debug_enum: false,
+                metal_debug_fused: false,
+            };
+
+            assert!(fastpq_poseidon_word_preflight_enabled(&cfg));
+            cfg.execution_mode = FastpqExecutionMode::Cpu;
+            assert!(!fastpq_poseidon_word_preflight_enabled(&cfg));
+            cfg.poseidon_mode = FastpqPoseidonMode::Gpu;
+            assert!(fastpq_poseidon_word_preflight_enabled(&cfg));
+            cfg.poseidon_mode = FastpqPoseidonMode::Cpu;
+            assert!(!fastpq_poseidon_word_preflight_enabled(&cfg));
         }
     }
 

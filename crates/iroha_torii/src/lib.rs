@@ -29040,7 +29040,7 @@ struct TransactionBatchPrecheck {
 
 const ED25519_PRECHECK_SIGNATURE_LENGTH: usize = 64;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct Ed25519PrecheckKey {
     message: [u8; Hash::LENGTH],
     signature: [u8; ED25519_PRECHECK_SIGNATURE_LENGTH],
@@ -29105,7 +29105,7 @@ fn precheck_transaction_batch_ed25519(
     let scratch_cap = batch_cap.min(transactions.len());
     let mut indices = Vec::with_capacity(scratch_cap);
     let mut duplicate_groups: Vec<Vec<usize>> = Vec::with_capacity(scratch_cap);
-    let mut unique_positions = std::collections::BTreeMap::<Ed25519PrecheckKey, usize>::new();
+    let mut unique_positions = std::collections::HashMap::<Ed25519PrecheckKey, usize>::new();
     let mut messages = Vec::with_capacity(scratch_cap);
     let mut signatures = Vec::with_capacity(scratch_cap);
     let mut public_keys = Vec::with_capacity(scratch_cap);
@@ -29626,10 +29626,8 @@ async fn handler_post_transactions_batch(
                 app.state.clone(),
                 accepted,
             )?;
-            for accepted_tx in stateless_cache_warm {
-                app.state
-                    .warm_stateless_validation_cache_for_torii_prechecked(&accepted_tx);
-            }
+            app.state
+                .warm_stateless_validation_cache_for_torii_prechecked_batch(&stateless_cache_warm);
             Ok::<usize, Error>(accepted_count)
         })
         .await

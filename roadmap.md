@@ -1,15 +1,13 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-05-05
+Last updated: 2026-05-06
 
 Completed history lives in `status.md`. This file should only track unfinished work.
 
 ## Offline Note V2 wallet SDK completion
 
-- Finish production adapters behind the new one-call `OfflineNoteV2Wallet`
+- Finish wallet reconciliation behind the one-call `OfflineNoteV2Wallet`
   facades:
-  - add default Torii issuer adapters for key refill plus
-    `/v1/offline/v2/notes/issue` in Kotlin/JVM, Java Android, and Swift;
   - replace the first-pass `sync()` no-op with transaction-outcome
     reconciliation for `CHANGE_PENDING`, `SPEND_PENDING`, and
     `REDEEM_PENDING` note records;
@@ -609,17 +607,18 @@ Completed history lives in `status.md`. This file should only track unfinished w
     The 2026-05-05 FASTPQ lane preflight follow-up moves backend construction
     off the startup/submission path, keeps digest acceleration disabled until
     the lane observes successful GPU preflights, and falls back to CPU prover
-    modes after a failed Poseidon GPU preflight. Its fresh `20k TPS` / `120s`
-    gate at
-    `dist/izanami-prebuilt-20k-fastpq-gpu-return-preflight-gate-120s-20260505-124838`
+    modes after a failed Poseidon GPU preflight. The current May 6 return gate
+    at
+    `dist/izanami-prebuilt-20k-fastpq-gpu-return-current-120s-20260506-124641`
     accepted and succeeded all `2,400,000` submissions with no safety failures
-    and reached `45,191` strict-approved transactions at height `13`, above the
-    prior `36,967` gate baseline. Treat first-proof FASTPQ GPU preflight as
-    addressed for now; the next open work is Ed25519/public-key parse and verify
-    work, Norito transaction and transfer encode/decode/length accounting,
-    allocation/copy churn, queue-admission/world-view preparation, and queue
-    drain under saturated 20k ingress. Do not spend the next pass on scalar
-    FASTPQ/Poseidon fallback unless a later profile reintroduces it.
+    and reached `49,428` strict-approved transactions at height `14`, above the
+    previous `45,191` preflight gate. Treat first-proof FASTPQ GPU preflight
+    and the latest single-transfer digest deferral path as addressed for now;
+    the next open work is Ed25519/public-key parse and verify work, Norito
+    transaction and transfer encode/decode/length accounting, allocation/copy
+    churn, queue-admission/world-view preparation, and queue drain under
+    saturated 20k ingress. Do not spend the next pass on scalar FASTPQ/Poseidon
+    fallback unless a later profile reintroduces it.
   - Avoid repeating the rejected process-wide Ed25519 public-key parse cache
     approach without new evidence: the 2026-05-03 sharded shared-cache
     experiment regressed short-gate commit progress and was backed out. Keep

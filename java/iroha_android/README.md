@@ -1106,8 +1106,10 @@ receive request preparation, P2P pay, accept/audit submission, redeem
 submission, and sync. The wallet keeps issuer, attestation, random, proof,
 store, and direct transaction submission behind public interfaces so Android
 apps can bind them to Torii, Android Keystore, and app-specific persistence;
-the core module includes an in-memory store and `IrohaOfflineNoteV2TransactionSubmitter`
-for tests and JVM tooling.
+the core module includes an in-memory store,
+`IrohaOfflineNoteV2TransactionSubmitter`, and
+`ToriiOfflineNoteV2IssuerClient` for body-signed key-refill plus note-issue
+loads in tests and JVM tooling.
 
 The client reuses the existing `ClientConfig` headers/observers and can be
 created from any `HttpClientTransport`:

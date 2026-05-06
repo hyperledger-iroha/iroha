@@ -2,6 +2,24 @@
 
 Last updated: 2026-05-06
 
+## 2026-05-06 Izanami 20k current gate
+
+- The fresh 4-peer no-fault prebuilt `20k TPS` / `120s` `fastpq-gpu`
+  return-current gate at
+  `dist/izanami-prebuilt-20k-fastpq-gpu-return-current-120s-20260506-124641`
+  exited `0`. It offered, accepted, and succeeded all `2,400,000`
+  submissions, used all `2,400,000` prebuilt transactions, and reported `0`
+  submit failures, validation rejects, confirmation failures, confirmation
+  queue drops, prebuild fallbacks, prebuild skips, prebuild build failures,
+  ingress failovers, or unhealthy endpoints.
+- Final quorum/strict height was `14/14`; final quorum/strict approved
+  transactions were `49,428/49,428`. Submit latency was `p50=3ms`,
+  `p95=12ms`, `p99=70ms`, and `max=184ms`. The queue remained saturated at
+  `873,062 / 2,400,000`, with `117` pacemaker backpressure deferrals and
+  commit-pipeline EMA `12ms`. This returns the current 20k ingress/strict
+  progress path to the `49,428` gate target while committed 20k TPS remains a
+  queue-drain and validation/serialization follow-up.
+
 ## 2026-05-06 Dataspace default fee sponsorship
 
 - `nexus.dataspace_catalog` now accepts `fee_sponsor_account_id` for a
@@ -78,29 +96,76 @@ Last updated: 2026-05-06
   boundaries, direct audit/redeem transaction submitters, and mock lifecycle
   tests covering load, P2P pay, accept/audit, redeem, and spent/change-pending
   state transitions.
+- Kotlin/JVM, Java Android, and Swift now include Torii-backed
+  `OfflineNoteV2IssuerClient` adapters for `/v1/offline/v2/keys/refill` and
+  `/v1/offline/v2/notes/issue`. The adapters body-sign issuer JSON with the
+  canonical request signer, cache signed lineage state between refill and
+  issue, derive wallet commitments against the post-issue revision, and submit
+  the wallet-supplied `note_commitment` unchanged.
 - Validation passed with the focused Rust Offline V2 data-model, Torii issuer,
   and core tests; full Kotlin `:core-jvm:test`; Java Android core harness; and
-  Swift `OfflineNoteV2Tests`. Earlier derivation work in this slice also had
+  Swift `OfflineNoteV2Tests`. The 2026-05-06 rerun of
+  `cd IrohaSwift && swift test --filter OfflineNoteV2Tests` is green
+  (`19` tests, `0` failures). Earlier derivation work in this slice also had
   focused Java fixture/Norito parity coverage and full `swift test` in
   `IrohaSwift` green. Formatting and whitespace checks are green with
-  `cargo fmt --all --check` and `git diff --check`. Production Torii issuer adapters,
-  non-no-op wallet sync reconciliation, structured secure note stores, and
-  public Norito decoders remain tracked as release work in `roadmap.md`.
+  `cargo fmt --all --check` and `git diff --check`. Non-no-op wallet sync
+  reconciliation, structured secure note stores, and public Norito decoders
+  remain tracked as release work in `roadmap.md`.
 
-## 2026-05-05 Torii query API WSV fast paths
+## 2026-05-06 Torii query API WSV fast paths
 
 - Generic Torii query execution now routes more common JSON predicates through
   in-memory WSV/Kura indexes instead of falling back to full scans. The covered
   surfaces include repo agreements, public and anonymous asset escrows, proof
   records, triggers, active trigger IDs, roles, blocks, block headers, and
-  committed transactions constrained by block hash.
-- Kura now maintains a block-hash-to-height index alongside the in-memory block
-  log, keeping hash lookups fast across replay, durable block append,
-  top-block replacement, and pruning.
+  committed transactions constrained by block hash, entrypoint hash, authority,
+  timestamp, timestamp range, or result status. Committed-transaction typed
+  filters now expose their parsed filter set to the planner, so `ts_ge`/`ts_le`
+  ranges and typed authority/entrypoint/result filters use the same Kura indexes
+  as JSON equality predicates. Multiple positive transaction constraints are
+  intersected at the block-height candidate stage instead of only choosing the
+  smallest candidate set. NFT queries now also plan domain predicates through
+  the existing `nfts_in_domain_iter` range instead of scanning the whole NFT
+  store. Proof-record JSON predicates now intersect id/backend/status candidate
+  sets from the proof-id key order and status index. Asset queries now preserve
+  exact asset-id predicates in the general planner, so `id == ...` combined
+  with additional JSON conditions still uses direct WSV lookup instead of
+  widening to account/definition/domain scans. Repo agreement, public escrow,
+  anonymous escrow, block/header, trigger, and role planners now intersect
+  repeated positive index-derived candidate sets instead of retaining only the
+  smallest set, keeping conjunctive predicates narrow before final filtering.
+- Kura now maintains block-hash-to-height and committed-transaction indexes
+  alongside the in-memory block log, keeping hash/transaction lookups fast
+  across replay, durable block append, lazy block-body loading, top-block
+  replacement, and pruning. Reopened stores with only hash metadata keep the
+  transaction index marked partial until loaded block bodies make it complete,
+  so query planners fall back to full scans instead of returning incomplete
+  results.
 - Focused validation passed with the repo agreement, escrow, proof record,
-  trigger, role, block/header, committed-transaction block-hash, and Kura
-  pruning unit tests. Formatting, whitespace, and
-  `cargo check -p iroha_core --lib` are green.
+  trigger, role, block/header, committed-transaction block-hash, transaction
+  entrypoint, transaction authority/timestamp/result-status, typed transaction
+  timestamp-range, NFT owner/domain range, proof backend/status intersection,
+  Kura pruning, lazy transaction-index completion, asset exact-id
+  general-planner, repo participant-candidate intersection, escrow
+  status/buyer-candidate intersection, block candidate-height intersection,
+  trigger candidate-id intersection, and role candidate-id intersection unit
+  tests. Formatting is green; crate-level
+  `cargo check -p iroha_core --lib` is green; `cargo check -p iroha_data_model
+  --features fast_dsl` is green; `git diff --check` and
+  `scripts/check_no_scale.sh` are green. The 2026-05-06 rerun also covered
+  `find_transactions_by_authority_timestamp_and_result_use_kura_indexes`,
+  `find_transactions_by_filter_timestamp_range_uses_kura_index`,
+  `transaction_index_completes_after_lazy_loading_reopened_blocks`, and
+  `find_proof_records_intersects_backend_and_status_indexes` under
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-query-fastpaths`, plus
+  `asset_predicate_view_extracts_alias_fields_for_planner` and
+  `find_assets_filters_by_exact_id_with_extra_predicate`,
+  `repo_agreement_candidates_intersect_participant_indexes`,
+  `asset_escrow_candidates_intersect_status_and_buyer_indexes`,
+  `block_candidate_heights_are_intersected`,
+  `trigger_candidate_ids_are_intersected`, and
+  `role_candidate_ids_are_intersected` in the default target.
 
 ## 2026-05-05 Offline V2 issuer body auth
 
@@ -114,15 +179,27 @@ Last updated: 2026-05-06
   prebuilt `witness_base64`.
 - Focused Torii validation passed with
   `CARGO_TARGET_DIR=target/codex-offline-body-auth cargo test -p iroha_torii body_auth --lib`.
+  The broader Offline V2 issuer filter also passed with
+  `CARGO_TARGET_DIR=target/codex-offline-body-auth cargo test -p iroha_torii offline_v2`
+  (the lib slice reported `13` passed and `1749` filtered out, plus the package
+  filter covered `offline_v2_readiness_is_mounted_and_legacy_routes_are_absent`).
   `rustfmt --edition 2024 --check crates/iroha_torii/src/app_auth.rs crates/iroha_torii/src/offline_v2_issuer.rs`
-  is green. The broader `offline_v2` Torii test filter is blocked by an
-  unrelated compile error in the already-dirty `crates/iroha_torii/src/lib.rs`
-  duplicate-group scratch buffer, which currently needs a type annotation.
-  Full `cargo fmt --all -- --check` is also blocked by unrelated formatting
-  drift in `crates/iroha_torii/src/lib.rs`.
-- Kotlin/Java Gradle validation could not run on this host because no Java
-  runtime is installed or discoverable (`java -version` and
-  `/usr/libexec/java_home -v 21` both fail).
+  and full `cargo fmt --all -- --check` are green.
+- The focused strict lint gate
+  `CARGO_TARGET_DIR=target/codex-offline-body-auth cargo clippy -p iroha_torii --lib -- -D warnings`
+  is green after clearing current-tree blockers in `iroha_p2p` decrypted-frame
+  parsing and exposing the proof-record indexed insert helper to production
+  builds. The p2p cleanup is covered by
+  `CARGO_TARGET_DIR=target/codex-offline-body-auth cargo test -p iroha_p2p`
+  (`161` unit tests and `15` integration tests passed).
+- Kotlin/Java validation is green when Gradle is pointed at the local Homebrew
+  OpenJDK 21 install:
+  `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --console=plain`
+  and
+  `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew test --console=plain`
+  from `java/iroha_android`.
+- Swift SDK validation also passed with `swift test` from `IrohaSwift`
+  (`783` executed, `101` skipped, `0` failures).
 
 ## 2026-05-05 Soracloud and local acceleration validation
 

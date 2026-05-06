@@ -18882,16 +18882,15 @@ pub mod isi {
             norito::json::from_value(value.clone()).ok()
         }
 
-        fn maybe_replace_role_candidate_ids(
+        fn intersect_role_candidate_ids(
             best: &mut Option<BTreeSet<RoleId>>,
             candidates: BTreeSet<RoleId>,
         ) {
-            if best
-                .as_ref()
-                .map_or(true, |current| candidates.len() < current.len())
-            {
+            let Some(current) = best.take() else {
                 *best = Some(candidates);
-            }
+                return;
+            };
+            *best = Some(current.intersection(&candidates).cloned().collect());
         }
 
         fn role_candidate_ids(predicate: &PredicateJson) -> Option<BTreeSet<RoleId>> {
@@ -18899,7 +18898,7 @@ pub mod isi {
 
             for cond in &predicate.equals {
                 if cond.field == "id" {
-                    maybe_replace_role_candidate_ids(
+                    intersect_role_candidate_ids(
                         &mut best,
                         role_id_from_value(&cond.value).into_iter().collect(),
                     );
@@ -18908,7 +18907,7 @@ pub mod isi {
 
             for cond in &predicate.r#in {
                 if cond.field == "id" {
-                    maybe_replace_role_candidate_ids(
+                    intersect_role_candidate_ids(
                         &mut best,
                         cond.values.iter().filter_map(role_id_from_value).collect(),
                     );
@@ -18916,6 +18915,30 @@ pub mod isi {
             }
 
             best
+        }
+
+        #[cfg(test)]
+        mod role_candidate_tests {
+            use super::*;
+
+            #[test]
+            fn role_candidate_ids_are_intersected() {
+                let admin_id: RoleId = "intersect_admin".parse().unwrap();
+                let writer_id: RoleId = "intersect_writer".parse().unwrap();
+                let reader_id: RoleId = "intersect_reader".parse().unwrap();
+                let mut candidates = None;
+
+                intersect_role_candidate_ids(
+                    &mut candidates,
+                    BTreeSet::from([admin_id.clone(), writer_id]),
+                );
+                intersect_role_candidate_ids(
+                    &mut candidates,
+                    BTreeSet::from([admin_id.clone(), reader_id]),
+                );
+
+                assert_eq!(candidates, Some(BTreeSet::from([admin_id])));
+            }
         }
 
         fn role_id_alias_values(id: &RoleId, field: &str) -> Vec<String> {
@@ -19327,15 +19350,14 @@ pub mod isi {
             }
         }
 
-        fn maybe_replace_proof_candidate_ids(
-            best: &mut Option<BTreeSet<ProofId>>,
+        fn intersect_proof_candidate_ids(
+            selected: &mut Option<BTreeSet<ProofId>>,
             candidates: BTreeSet<ProofId>,
         ) {
-            if best
-                .as_ref()
-                .map_or(true, |current| candidates.len() < current.len())
-            {
-                *best = Some(candidates);
+            if let Some(selected) = selected {
+                selected.retain(|proof_id| candidates.contains(proof_id));
+            } else {
+                *selected = Some(candidates);
             }
         }
 
@@ -19377,15 +19399,15 @@ pub mod isi {
 
             for cond in &predicate.equals {
                 match cond.field.as_str() {
-                    "id" => maybe_replace_proof_candidate_ids(
+                    "id" => intersect_proof_candidate_ids(
                         &mut best,
                         proof_id_from_value(&cond.value).into_iter().collect(),
                     ),
-                    "backend" | "id.backend" => maybe_replace_proof_candidate_ids(
+                    "backend" | "id.backend" => intersect_proof_candidate_ids(
                         &mut best,
                         proof_ids_for_backends(world, proof_backend_from_value(&cond.value)),
                     ),
-                    "status" => maybe_replace_proof_candidate_ids(
+                    "status" => intersect_proof_candidate_ids(
                         &mut best,
                         proof_ids_for_statuses(world, proof_status_from_value(&cond.value)),
                     ),
@@ -19395,18 +19417,18 @@ pub mod isi {
 
             for cond in &predicate.r#in {
                 match cond.field.as_str() {
-                    "id" => maybe_replace_proof_candidate_ids(
+                    "id" => intersect_proof_candidate_ids(
                         &mut best,
                         cond.values.iter().filter_map(proof_id_from_value).collect(),
                     ),
-                    "backend" | "id.backend" => maybe_replace_proof_candidate_ids(
+                    "backend" | "id.backend" => intersect_proof_candidate_ids(
                         &mut best,
                         proof_ids_for_backends(
                             world,
                             cond.values.iter().filter_map(proof_backend_from_value),
                         ),
                     ),
-                    "status" => maybe_replace_proof_candidate_ids(
+                    "status" => intersect_proof_candidate_ids(
                         &mut best,
                         proof_ids_for_statuses(
                             world,

@@ -27,16 +27,15 @@ fn block_hash_from_value(value: &Value) -> Option<HashOf<BlockHeader>> {
     norito::json::from_value(value.clone()).ok()
 }
 
-fn maybe_replace_block_candidate_heights(
+fn intersect_block_candidate_heights(
     best: &mut Option<BTreeSet<NonZeroUsize>>,
     candidates: BTreeSet<NonZeroUsize>,
 ) {
-    if best
-        .as_ref()
-        .map_or(true, |current| candidates.len() < current.len())
-    {
+    let Some(current) = best.take() else {
         *best = Some(candidates);
-    }
+        return;
+    };
+    *best = Some(current.intersection(&candidates).copied().collect());
 }
 
 fn block_candidate_heights(
@@ -49,14 +48,14 @@ fn block_candidate_heights(
 
     for cond in &predicate.equals {
         if is_height_field(&cond.field) {
-            maybe_replace_block_candidate_heights(
+            intersect_block_candidate_heights(
                 &mut best,
                 block_height_from_value(&cond.value).into_iter().collect(),
             );
             continue;
         }
         if is_hash_field(&cond.field) {
-            maybe_replace_block_candidate_heights(
+            intersect_block_candidate_heights(
                 &mut best,
                 block_hash_from_value(&cond.value)
                     .and_then(|hash| state_ro.kura().get_block_height_by_hash(hash))
@@ -68,7 +67,7 @@ fn block_candidate_heights(
 
     for cond in &predicate.r#in {
         if is_height_field(&cond.field) {
-            maybe_replace_block_candidate_heights(
+            intersect_block_candidate_heights(
                 &mut best,
                 cond.values
                     .iter()
@@ -78,7 +77,7 @@ fn block_candidate_heights(
             continue;
         }
         if is_hash_field(&cond.field) {
-            maybe_replace_block_candidate_heights(
+            intersect_block_candidate_heights(
                 &mut best,
                 cond.values
                     .iter()
@@ -420,5 +419,25 @@ impl ValidQuery for FindBlockHeaders {
                 }),
         );
         Ok(iter)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn block_candidate_heights_are_intersected() {
+        let mut candidates = None;
+        intersect_block_candidate_heights(
+            &mut candidates,
+            BTreeSet::from([nonzero!(1_usize), nonzero!(2_usize)]),
+        );
+        intersect_block_candidate_heights(
+            &mut candidates,
+            BTreeSet::from([nonzero!(2_usize), nonzero!(3_usize)]),
+        );
+
+        assert_eq!(candidates, Some(BTreeSet::from([nonzero!(2_usize)])));
     }
 }
