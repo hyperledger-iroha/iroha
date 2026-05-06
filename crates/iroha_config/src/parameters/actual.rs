@@ -4742,6 +4742,10 @@ pub struct SumeragiRecovery {
     pub pending_proposal_cap: usize,
     /// Missing-block fetch attempts before switching to aggressive topology fanout.
     pub missing_fetch_aggressive_after_attempts: u32,
+    /// Grace window before exact-frontier body repair actively fetches payloads.
+    pub authoritative_body_ingress_fetch_grace: Duration,
+    /// Minimum retry window for exact-frontier body fetches.
+    pub exact_body_fetch_retry_floor: Duration,
 }
 
 /// Deterministic transport fanout configuration for large validator sets.

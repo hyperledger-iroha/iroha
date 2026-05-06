@@ -2932,8 +2932,6 @@ enum MissingBlockPriority {
     Consensus,
 }
 
-const AUTHORITATIVE_BODY_INGRESS_FETCH_GRACE: Duration = Duration::from_millis(100);
-
 fn phase_rank(phase: crate::sumeragi::consensus::Phase) -> u8 {
     match phase {
         crate::sumeragi::consensus::Phase::Prepare => 0,
@@ -5628,7 +5626,7 @@ impl Actor {
     }
 
     fn authoritative_body_ingress_fetch_grace(&self) -> Duration {
-        AUTHORITATIVE_BODY_INGRESS_FETCH_GRACE
+        self.config.recovery.authoritative_body_ingress_fetch_grace
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -8060,6 +8058,33 @@ impl Actor {
             };
             stall_age >= quorum_timeout
         })
+    }
+
+    pub(super) fn frontier_body_gap_payload_drain_urgent(&self) -> bool {
+        let Some(slot) = self.frontier_slot.as_ref() else {
+            return false;
+        };
+        if !matches!(slot.mode, FrontierSlotMode::Normal)
+            || !slot.exact_fetch_armed
+            || slot.body_present
+            || !matches!(
+                slot.phase,
+                FrontierSlotPhase::AwaitBody | FrontierSlotPhase::AwaitCommitQc
+            )
+        {
+            return false;
+        }
+        if !(slot.quorum_progress.votes_observed
+            || slot.quorum_progress.commit_qc_observed
+            || self.slot_has_vote_backed_consensus_evidence(slot.height, slot.view))
+        {
+            return false;
+        }
+
+        let queue_depths = super::status::worker_queue_depth_snapshot();
+        queue_depths.rbc_chunk_rx > 0
+            || queue_depths.block_payload_rx > 0
+            || queue_depths.block_rx > 0
     }
 
     fn has_blocking_pending_blocks(&self) -> bool {
@@ -16072,7 +16097,7 @@ impl Actor {
         view: u64,
     ) -> Duration {
         self.consensus_missing_block_retry_window(block_hash, height, view)
-            .max(REBROADCAST_COOLDOWN_FLOOR)
+            .max(self.config.recovery.exact_body_fetch_retry_floor)
     }
 
     fn frontier_slot_targets_from_topology(
@@ -16585,6 +16610,24 @@ impl Actor {
         );
         let message = Arc::new(BlockMessage::FetchBlockBody(request));
         let encoded = Arc::new(BlockMessageWire::encode_message(message.as_ref()));
+        let target_count = targets.len();
+        let queue_depths = super::status::worker_queue_depth_snapshot();
+        info!(
+            height = slot.height,
+            view = slot.view,
+            block = %slot.block_hash,
+            target_count,
+            fetch_stage = ?slot.fetch_stage,
+            retry_window_ms = slot.retry_window.as_millis(),
+            lag_ms = now.saturating_duration_since(slot.lag_started_at()).as_millis(),
+            votes_observed = slot.quorum_progress.votes_observed,
+            commit_qc_observed = slot.quorum_progress.commit_qc_observed,
+            vote_rx_depth = queue_depths.vote_rx,
+            block_payload_rx_depth = queue_depths.block_payload_rx,
+            rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+            block_rx_depth = queue_depths.block_rx,
+            "requested exact frontier block body"
+        );
         for peer in targets {
             self.schedule_background(BackgroundRequest::Post {
                 peer,
@@ -18846,10 +18889,16 @@ impl Actor {
                 next_due = Self::merge_deadline(next_due, Some(deadline));
             }
             if !session.ready_signatures.is_empty() {
+                let targeted_payload_cooldown =
+                    if self.exact_frontier_body_repair_active_at_height(key.1) {
+                        payload_cooldown.min(ready_cooldown)
+                    } else {
+                        payload_cooldown
+                    };
                 let deadline = rbc
                     .targeted_payload_rescue_last_sent
                     .get(key)
-                    .and_then(|last| last.checked_add(payload_cooldown))
+                    .and_then(|last| last.checked_add(targeted_payload_cooldown))
                     .unwrap_or(now)
                     .max(now);
                 next_due = Self::merge_deadline(next_due, Some(deadline));
@@ -22392,7 +22441,12 @@ impl Actor {
         let mut sent = false;
 
         let now = Instant::now();
-        let payload_cooldown = self.payload_rebroadcast_cooldown();
+        let base_payload_cooldown = self.payload_rebroadcast_cooldown();
+        let payload_cooldown = if self.exact_frontier_body_repair_active_at_height(key.1) {
+            base_payload_cooldown.min(self.rebroadcast_cooldown())
+        } else {
+            base_payload_cooldown
+        };
         let payload_due = self.rbc_targeted_payload_rescue_due(&key, now, payload_cooldown);
         let roster = self.ensure_rbc_session_roster(key);
         let mut payload_session = session.clone();
@@ -22419,81 +22473,93 @@ impl Actor {
                     self.config.rbc.chunk_max_bytes,
                 );
             }
-            if !payload_session.is_invalid()
-                && let Some((init, chunks)) =
+            if !payload_session.is_invalid() {
+                if let Some((init, chunks)) =
                     Self::rbc_payload_bundle(key, &payload_session, &roster)
-            {
-                if chunks.is_empty() {
-                    debug!(
-                        height = key.1,
-                        view = key.2,
-                        block = %key.0,
-                        ready = ready_count,
-                        targets = ?targets,
-                        "skipping targeted RBC payload rescue: chunk cache unavailable"
-                    );
-                } else {
-                    let chunk_count = chunks.len();
-                    info!(
-                        height = key.1,
-                        view = key.2,
-                        block = %key.0,
-                        ready = ready_count,
-                        chunk_count,
-                        targets = ?targets,
-                        "sending targeted RBC payload to peers missing READY"
-                    );
-                    let init_message = Arc::new(BlockMessage::RbcInit(init));
-                    let init_encoded =
-                        Arc::new(BlockMessageWire::encode_message(init_message.as_ref()));
-                    for peer in &targets {
-                        self.schedule_background(BackgroundRequest::Post {
-                            peer: peer.clone(),
-                            msg: BlockMessageWire::with_encoded(
-                                Arc::clone(&init_message),
-                                Arc::clone(&init_encoded),
-                            ),
-                        });
-                    }
-                    for chunk in chunks {
-                        let message = Arc::new(BlockMessage::from_rbc_chunk(chunk));
-                        let encoded = Arc::new(BlockMessageWire::encode_message(message.as_ref()));
-                        for peer in &targets {
-                            self.schedule_background(BackgroundRequest::Post {
-                                peer: peer.clone(),
-                                msg: BlockMessageWire::with_encoded(
-                                    Arc::clone(&message),
-                                    Arc::clone(&encoded),
-                                ),
-                            });
-                        }
-                    }
-                    if let Some(block) =
-                        self.local_signed_block_for_body_repair(key.0)
-                            .filter(|block| {
-                                let header = block.header();
-                                header.height().get() == key.1
-                                    && header.view_change_index() == key.2
-                            })
-                    {
-                        info!(
+                {
+                    if chunks.is_empty() {
+                        debug!(
                             height = key.1,
                             view = key.2,
                             block = %key.0,
                             ready = ready_count,
                             targets = ?targets,
-                            "sending targeted BlockBodyResponse companion to peers missing READY"
+                            payload_cooldown_ms = payload_cooldown.as_millis(),
+                            "targeted RBC payload rescue has no cached chunks; relying on exact body companion if available"
                         );
+                    } else {
+                        let chunk_count = chunks.len();
+                        let queue_depths = super::status::worker_queue_depth_snapshot();
+                        info!(
+                            height = key.1,
+                            view = key.2,
+                            block = %key.0,
+                            ready = ready_count,
+                            chunk_count,
+                            targets = ?targets,
+                            payload_cooldown_ms = payload_cooldown.as_millis(),
+                            vote_rx_depth = queue_depths.vote_rx,
+                            block_payload_rx_depth = queue_depths.block_payload_rx,
+                            rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                            block_rx_depth = queue_depths.block_rx,
+                            "sending targeted RBC payload to peers missing READY"
+                        );
+                        let init_message = Arc::new(BlockMessage::RbcInit(init));
+                        let init_encoded =
+                            Arc::new(BlockMessageWire::encode_message(init_message.as_ref()));
                         for peer in &targets {
-                            self.send_block_body_response(peer.clone(), block.as_ref());
+                            self.schedule_background(BackgroundRequest::Post {
+                                peer: peer.clone(),
+                                msg: BlockMessageWire::with_encoded(
+                                    Arc::clone(&init_message),
+                                    Arc::clone(&init_encoded),
+                                ),
+                            });
                         }
+                        for chunk in chunks {
+                            let message = Arc::new(BlockMessage::from_rbc_chunk(chunk));
+                            let encoded =
+                                Arc::new(BlockMessageWire::encode_message(message.as_ref()));
+                            for peer in &targets {
+                                self.schedule_background(BackgroundRequest::Post {
+                                    peer: peer.clone(),
+                                    msg: BlockMessageWire::with_encoded(
+                                        Arc::clone(&message),
+                                        Arc::clone(&encoded),
+                                    ),
+                                });
+                            }
+                        }
+                        sent = true;
                     }
+                }
+                if let Some(block) =
+                    self.local_signed_block_for_body_repair(key.0)
+                        .filter(|block| {
+                            let header = block.header();
+                            header.height().get() == key.1 && header.view_change_index() == key.2
+                        })
+                {
+                    info!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        ready = ready_count,
+                        targets = ?targets,
+                        payload_cooldown_ms = payload_cooldown.as_millis(),
+                        "sending targeted BlockBodyResponse companion to peers missing READY"
+                    );
+                    for peer in &targets {
+                        self.send_block_body_response(peer.clone(), block.as_ref());
+                    }
+                    sent = true;
+                }
+                if sent {
                     self.subsystems
                         .da_rbc
                         .rbc
                         .targeted_payload_rescue_last_sent
                         .insert(key, now);
-                    sent = true;
                 }
             }
         }
