@@ -74,7 +74,7 @@ use iroha_data_model::{
     confidential::ConfidentialFeatureDigest,
     consensus::{
         ConsensusKeyRole, NposConsensusEffects, PreviousRosterEvidence, Qc,
-        VALIDATOR_SET_HASH_VERSION_V1,
+        VALIDATOR_SET_HASH_VERSION_V1, VrfEpochRecord, VrfParticipantRecord,
     },
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
@@ -5201,6 +5201,65 @@ pub(crate) mod valid {
             }
         }
 
+        fn vrf_epoch_record_extends_existing(
+            existing: &VrfEpochRecord,
+            proposed: &VrfEpochRecord,
+        ) -> bool {
+            if existing == proposed {
+                return true;
+            }
+
+            existing.epoch == proposed.epoch
+                && existing.seed == proposed.seed
+                && existing.epoch_length == proposed.epoch_length
+                && existing.commit_deadline_offset == proposed.commit_deadline_offset
+                && existing.reveal_deadline_offset == proposed.reveal_deadline_offset
+                && existing.roster_len == proposed.roster_len
+                && (!existing.finalized || proposed.finalized)
+                && proposed.updated_at_height >= existing.updated_at_height
+                && (!existing.penalties_applied || proposed.penalties_applied)
+                && existing
+                    .penalties_applied_at_height
+                    .is_none_or(|height| proposed.penalties_applied_at_height == Some(height))
+                && Self::vrf_participants_extend_existing(
+                    &existing.participants,
+                    &proposed.participants,
+                )
+                && existing
+                    .late_reveals
+                    .iter()
+                    .all(|late_reveal| proposed.late_reveals.contains(late_reveal))
+                && existing
+                    .committed_no_reveal
+                    .iter()
+                    .all(|signer| proposed.committed_no_reveal.contains(signer))
+                && existing
+                    .no_participation
+                    .iter()
+                    .all(|signer| proposed.no_participation.contains(signer))
+                && existing
+                    .validator_election
+                    .as_ref()
+                    .is_none_or(|election| proposed.validator_election.as_ref() == Some(election))
+        }
+
+        fn vrf_participants_extend_existing(
+            existing: &[VrfParticipantRecord],
+            proposed: &[VrfParticipantRecord],
+        ) -> bool {
+            existing.iter().all(|old| {
+                proposed
+                    .iter()
+                    .find(|new| new.signer == old.signer)
+                    .is_some_and(|new| {
+                        old.commitment
+                            .is_none_or(|commitment| new.commitment == Some(commitment))
+                            && old.reveal.is_none_or(|reveal| new.reveal == Some(reveal))
+                            && new.last_updated_height >= old.last_updated_height
+                    })
+            })
+        }
+
         fn validate_npos_effects_with_state(
             block: &SignedBlock,
             state: &State,
@@ -5263,7 +5322,7 @@ pub(crate) mod valid {
 
                     let world = state.world_view();
                     if let Some(existing) = world.vrf_epochs().get(&record.epoch)
-                        && existing != record
+                        && !Self::vrf_epoch_record_extends_existing(&existing, record)
                     {
                         return Err(Self::npos_effects_error(
                             "VRF epoch seal conflicts with pre-block state",
@@ -10323,7 +10382,7 @@ pub(crate) mod valid {
             consensus::{
                 ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
                 NposConsensusEffects, NposMarkVrfPenaltiesAppliedAction, NposPenaltyAction,
-                VrfEpochRecord,
+                VrfEpochRecord, VrfLateRevealRecord, VrfParticipantRecord,
             },
             da::{
                 commitment::{
@@ -11626,6 +11685,102 @@ pub(crate) mod valid {
             let mut block: SignedBlock = valid.into();
             block.set_npos_consensus_effects(effects);
             block
+        }
+
+        fn vrf_epoch_record_for_test(epoch: u64, height: u64) -> VrfEpochRecord {
+            VrfEpochRecord {
+                epoch,
+                seed: [0x42; 32],
+                epoch_length: 10,
+                commit_deadline_offset: 3,
+                reveal_deadline_offset: 6,
+                roster_len: 4,
+                finalized: false,
+                updated_at_height: height,
+                participants: vec![VrfParticipantRecord {
+                    signer: 0,
+                    commitment: Some([0x11; 32]),
+                    reveal: None,
+                    last_updated_height: height,
+                }],
+                late_reveals: Vec::new(),
+                committed_no_reveal: Vec::new(),
+                no_participation: Vec::new(),
+                penalties_applied: false,
+                penalties_applied_at_height: None,
+                validator_election: None,
+            }
+        }
+
+        #[test]
+        fn validate_npos_effects_allows_vrf_record_monotonic_extension() {
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let mut world = World::new();
+            let existing = vrf_epoch_record_for_test(1, 12);
+            world.vrf_epochs.insert(existing.epoch, existing.clone());
+            let state = State::new_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+
+            let mut proposed = existing;
+            proposed.updated_at_height = 14;
+            proposed.participants[0].reveal = Some([0x55; 32]);
+            proposed.participants[0].last_updated_height = 14;
+            proposed.participants.push(VrfParticipantRecord {
+                signer: 1,
+                commitment: Some([0x22; 32]),
+                reveal: Some([0x33; 32]),
+                last_updated_height: 14,
+            });
+            proposed.late_reveals.push(VrfLateRevealRecord {
+                signer: 0,
+                reveal: [0x44; 32],
+                noted_at_height: 14,
+            });
+
+            let block = npos_effects_block(
+                leader.private_key(),
+                15,
+                Some(NposConsensusEffects {
+                    vrf_epoch_seals: vec![proposed],
+                    penalty_actions: Vec::new(),
+                }),
+            );
+
+            ValidBlock::validate_npos_effects_with_state(&block, &state)
+                .expect("monotonic VRF epoch record extension should validate");
+        }
+
+        #[test]
+        fn validate_npos_effects_rejects_vrf_record_rewrite() {
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let mut world = World::new();
+            let existing = vrf_epoch_record_for_test(1, 12);
+            world.vrf_epochs.insert(existing.epoch, existing.clone());
+            let state = State::new_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+
+            let mut proposed = existing;
+            proposed.seed = [0x99; 32];
+            proposed.updated_at_height = 14;
+
+            let block = npos_effects_block(
+                leader.private_key(),
+                15,
+                Some(NposConsensusEffects {
+                    vrf_epoch_seals: vec![proposed],
+                    penalty_actions: Vec::new(),
+                }),
+            );
+
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state)
+                .expect_err("VRF epoch record rewrite should be rejected");
+            assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
         }
 
         #[test]

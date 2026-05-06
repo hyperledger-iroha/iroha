@@ -123,6 +123,7 @@ const GENERATED_HF_RECONCILE_REQUEST_COOLDOWN_MS: u64 = 30_000;
 const INROU_HOST_ADVERT_ATTEMPT_COOLDOWN_MS: u64 = 10_000;
 const INROU_HOST_HEARTBEAT_TTL_FLOOR_MS: u64 = 300_000;
 const INROU_PLACEMENT_RECONCILE_ATTEMPT_COOLDOWN_MS: u64 = 10_000;
+const SORACLOUD_LOCAL_READ_MAX_SNAPSHOT_LAG_BLOCKS: u64 = 64;
 const INROU_PORTABLE_START_GRACE_FLOOR: Duration = Duration::from_secs(180);
 const INROU_PORTABLE_BUNDLE_METADATA_PATH: &str = "/soracloud/bundle.tgz";
 const INROU_PORTABLE_BUNDLE_METADATA_MEMBER: &str = "soracloud/bundle.tgz";
@@ -7518,9 +7519,13 @@ fn validate_local_runtime_snapshot(
             ),
         ));
     }
-    if snapshot.observed_height != committed_height
-        || parse_snapshot_hash(snapshot.observed_block_hash.as_deref())? != committed_block_hash
-    {
+    let snapshot_block_hash = parse_snapshot_hash(snapshot.observed_block_hash.as_deref())?;
+    if !local_read_snapshot_covers_committed_state(
+        snapshot.observed_height,
+        snapshot_block_hash,
+        committed_height,
+        committed_block_hash,
+    ) {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             format!(
@@ -7557,6 +7562,21 @@ fn validate_local_runtime_snapshot(
         ));
     }
     Ok(())
+}
+
+fn local_read_snapshot_covers_committed_state(
+    snapshot_height: u64,
+    snapshot_block_hash: Option<Hash>,
+    committed_height: u64,
+    committed_block_hash: Option<Hash>,
+) -> bool {
+    if snapshot_height == committed_height {
+        return snapshot_block_hash == committed_block_hash;
+    }
+    if snapshot_height > committed_height {
+        return false;
+    }
+    committed_height.saturating_sub(snapshot_height) <= SORACLOUD_LOCAL_READ_MAX_SNAPSHOT_LAG_BLOCKS
 }
 
 fn validate_apartment_snapshot(
@@ -14308,6 +14328,43 @@ mod tests {
         assert!(summary.contains("serial console: missing python3"));
     }
     use sorafs_node::{NodeHandle, config::StorageConfig};
+
+    #[test]
+    fn local_read_snapshot_allows_bounded_lag_but_rejects_wrong_tip() {
+        let committed = Hash::prehashed([0x11; Hash::LENGTH]);
+        let stale = Hash::prehashed([0x22; Hash::LENGTH]);
+
+        assert!(local_read_snapshot_covers_committed_state(
+            100,
+            Some(committed),
+            100,
+            Some(committed),
+        ));
+        assert!(!local_read_snapshot_covers_committed_state(
+            100,
+            Some(stale),
+            100,
+            Some(committed),
+        ));
+        assert!(local_read_snapshot_covers_committed_state(
+            99,
+            Some(stale),
+            100,
+            Some(committed),
+        ));
+        assert!(!local_read_snapshot_covers_committed_state(
+            100_u64.saturating_sub(SORACLOUD_LOCAL_READ_MAX_SNAPSHOT_LAG_BLOCKS + 1),
+            Some(stale),
+            100,
+            Some(committed),
+        ));
+        assert!(!local_read_snapshot_covers_committed_state(
+            101,
+            Some(stale),
+            100,
+            Some(committed),
+        ));
+    }
 
     fn load_deployment_bundle_fixture() -> Result<SoraDeploymentBundleV1> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))

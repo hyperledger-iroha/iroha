@@ -1397,6 +1397,38 @@ impl Actor {
         view_gap >= min_view_gap
     }
 
+    fn local_same_height_vote_has_live_proposal_material(
+        &self,
+        proposal_height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> bool {
+        self.pending
+            .pending_blocks
+            .get(&block_hash)
+            .is_some_and(|pending| pending.height == proposal_height && !pending.is_retry_aborted())
+            || self
+                .subsystems
+                .commit
+                .inflight
+                .as_ref()
+                .is_some_and(|inflight| {
+                    inflight.block_hash == block_hash
+                        && inflight.pending.height == proposal_height
+                        && !inflight.pending.aborted
+                })
+            || self
+                .pending
+                .pending_processing
+                .get()
+                .is_some_and(|pending| pending == block_hash)
+            || self
+                .kura
+                .get_block_height_by_hash(block_hash)
+                .is_some_and(|height| {
+                    u64::try_from(height.get()).is_ok_and(|height| height == proposal_height)
+                })
+    }
+
     pub(super) fn local_same_height_vote_blocks_fresh_proposal(
         &self,
         proposal_height: u64,
@@ -1410,7 +1442,10 @@ impl Actor {
         }
         if existing_vote.view == proposal_view {
             return self.local_same_height_vote_has_hard_lock(proposal_height, existing_vote)
-                || self.block_known_locally(existing_vote.block_hash);
+                || self.local_same_height_vote_has_live_proposal_material(
+                    proposal_height,
+                    existing_vote.block_hash,
+                );
         }
         if !self.config.resilience.enabled {
             return true;

@@ -103886,6 +103886,61 @@ async fn missing_qc_view_advance_preserves_local_same_height_vote_history_for_st
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn local_same_height_vote_for_committed_parent_does_not_block_same_view_proposal() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let _ = seed_genesis_block_for_state(&actor.state);
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let epoch = actor.epoch_for_height(height);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let local_signer = actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local validator index");
+    let committed_parent = actor
+        .state
+        .view()
+        .latest_block_hash()
+        .expect("seeded genesis block hash");
+    actor.vote_log.insert(
+        (Phase::Commit, height, view, epoch, local_signer),
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash: committed_parent,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view,
+            epoch,
+            highest_qc: None,
+            signer: local_signer,
+            bls_sig: Vec::new(),
+        },
+    );
+
+    let existing_vote = actor
+        .local_same_height_vote(height, epoch)
+        .expect("test setup requires local same-height vote evidence");
+    assert!(
+        !actor.local_same_height_vote_blocks_fresh_proposal(
+            height,
+            view,
+            &existing_vote,
+            Instant::now(),
+            true,
+        ),
+        "a same-view vote record pointing at an already committed parent must not wedge proposal assembly for the next height"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn pacemaker_defers_reproposal_after_missing_qc_view_advance_with_vote_locked_frontier_owner()
 {
     let mut harness = test_actor_harness(4).await;
