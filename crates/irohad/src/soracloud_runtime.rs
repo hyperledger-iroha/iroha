@@ -9888,10 +9888,13 @@ fn build_runtime_snapshot(
                 } else {
                     match bundle.container.runtime {
                         iroha_data_model::soracloud::SoraContainerRuntimeV1::Ivm => {
-                            active_runtime_state
-                                .map_or(SoraServiceHealthStatusV1::Hydrating, |state| {
-                                    state.health_status
-                                })
+                            hydrated_ivm_service_health_status(
+                                active_runtime_state.copied(),
+                                bundle.service.execution_plane,
+                                bundle.container.runtime,
+                                &service_name,
+                                &service_version,
+                            )
                         }
                         SoraContainerRuntimeV1::Inrou => {
                             if !hosted_http_lease_active {
@@ -10311,6 +10314,23 @@ fn collect_active_versions(
         ));
     }
     versions
+}
+
+fn hydrated_ivm_service_health_status(
+    runtime_state: Option<&SoraServiceRuntimeStateV1>,
+    execution_plane: iroha_data_model::soracloud::SoraServiceExecutionPlaneV1,
+    runtime: iroha_data_model::soracloud::SoraContainerRuntimeV1,
+    service_name: &str,
+    service_version: &str,
+) -> SoraServiceHealthStatusV1 {
+    if let Some(state) = runtime_state {
+        return state.health_status;
+    }
+    if ensure_ivm_runtime(execution_plane, runtime, service_name, service_version).is_ok() {
+        SoraServiceHealthStatusV1::Healthy
+    } else {
+        SoraServiceHealthStatusV1::Degraded
+    }
 }
 
 fn authoritative_mailbox_counts(
@@ -19384,6 +19404,61 @@ mod tests {
                     && !artifact.available_locally)
         );
         assert!(!temp_dir.path().join("services/stale_service").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_once_marks_hydrated_ivm_service_healthy_without_runtime_state() -> Result<()> {
+        let mut state = test_state()?;
+        let mut bundle = load_deployment_bundle_fixture()?;
+        bundle.service.artifacts.clear();
+        let bundle_bytes = simple_soracloud_contract_artifact(&["query"]);
+        bundle.container.bundle_hash = Hash::new(&bundle_bytes);
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
+            world
+                .soracloud_service_deployments_mut_for_testing()
+                .insert(
+                    bundle.service.service_name.clone(),
+                    sample_deployment_state(&bundle),
+                );
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        let artifacts_root = temp_dir.path().join("artifacts");
+        fs::create_dir_all(&artifacts_root)?;
+        fs::write(
+            artifacts_root.join(hash_cache_name(bundle.container.bundle_hash)),
+            &bundle_bytes,
+        )?;
+
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            Arc::clone(&state),
+        );
+        manager.reconcile_once()?;
+
+        let snapshot = manager.snapshot.read().clone();
+        let plan = snapshot
+            .services
+            .get(bundle.service.service_name.as_ref())
+            .and_then(|versions| versions.get(&bundle.service.service_version))
+            .expect("hydrated IVM service plan");
+        assert_eq!(plan.runtime, SoraContainerRuntimeV1::Ivm);
+        assert!(plan.bundle_available_locally);
+        assert_eq!(plan.health_status, SoraServiceHealthStatusV1::Healthy);
+        assert!(
+            plan.artifacts
+                .iter()
+                .all(|artifact| artifact.available_locally)
+        );
         Ok(())
     }
 
