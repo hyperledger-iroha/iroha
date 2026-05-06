@@ -10861,6 +10861,36 @@ async fn flush_pending_rbc_if_roster_ready_uses_cached_roster_when_source_missin
     harness.shutdown.send();
 }
 
+#[test]
+fn rbc_delivered_payload_bytes_uses_layout_size_without_rebuilding_payload() {
+    let payload = vec![1_u8, 2, 3, 4, 5, 6];
+    let layout = RbcPayloadLayout::new(RbcEncoding::Plain, 4, payload.len() as u64, 0, 0)
+        .expect("plain RBC payload layout");
+    let total_chunks = layout.total_chunks().expect("known total chunks") as u32;
+    let mut session = RbcSession::new_with_layout(
+        layout,
+        total_chunks,
+        Some(Hash::new(&payload)),
+        None,
+        None,
+        0,
+    )
+    .expect("RBC session");
+
+    session.ingest_chunk(0, payload[..4].to_vec(), None);
+    session.ingest_chunk(1, payload[4..].to_vec(), None);
+    assert_eq!(session.delivered_payload_bytes(), None);
+
+    assert!(session.record_deliver(0, vec![0xAA]));
+    let expected = u64::try_from(payload.len()).expect("payload length fits u64");
+    assert_eq!(session.delivered_payload_bytes(), Some(expected));
+    assert_eq!(
+        session.take_delivered_payload_bytes_for_telemetry(),
+        Some(expected)
+    );
+    assert_eq!(session.take_delivered_payload_bytes_for_telemetry(), None);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn flush_pending_rbc_if_roster_ready_replays_stashed_ready_and_deliver_with_cached_roster() {
     let mut consensus_cfg = test_sumeragi_config();
@@ -16889,6 +16919,16 @@ async fn fetch_pending_block_keeps_rbc_transport_rebuildable_when_da_enabled() {
     assert_eq!(init.height, height);
     assert_eq!(init.view, view);
     let payload_bytes = super::proposals::block_payload_bytes(&block_clone);
+    let payload_hash = Hash::new(&payload_bytes);
+    let init_from_payload = actor
+        .rebuild_rbc_init_from_payload_bytes(&block_clone, key, &payload_bytes, payload_hash)
+        .expect("expected RBC init rebuild from carried payload bytes");
+    assert_eq!(init_from_payload.block_hash, init.block_hash);
+    assert_eq!(init_from_payload.height, init.height);
+    assert_eq!(init_from_payload.view, init.view);
+    assert_eq!(init_from_payload.payload_hash, init.payload_hash);
+    assert_eq!(init_from_payload.chunk_root, init.chunk_root);
+    assert_eq!(init_from_payload.chunk_digests, init.chunk_digests);
     let chunks = super::rbc::chunk_payload_bytes(&payload_bytes, actor.config.rbc.chunk_max_bytes);
     assert!(!chunks.is_empty(), "expected RBC chunks response");
 
@@ -130345,7 +130385,7 @@ async fn handle_vrf_commit_does_not_record_mode_mismatch_in_permissioned_mode() 
     super::status::reset_message_handling_for_tests();
     harness
         .actor
-        .handle_vrf_commit(commit)
+        .handle_vrf_commit(commit, None)
         .expect("handle vrf commit");
 
     let entries = super::status::snapshot().consensus_message_handling.entries;
@@ -130377,7 +130417,7 @@ async fn handle_vrf_reveal_does_not_record_mode_mismatch_in_permissioned_mode() 
     super::status::reset_message_handling_for_tests();
     harness
         .actor
-        .handle_vrf_reveal(reveal)
+        .handle_vrf_reveal(reveal, None)
         .expect("handle vrf reveal");
 
     let entries = super::status::snapshot().consensus_message_handling.entries;
@@ -130392,6 +130432,176 @@ async fn handle_vrf_reveal_does_not_record_mode_mismatch_in_permissioned_mode() 
     );
 
     super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn external_vrf_reveal_broadcasts_after_acceptance() {
+    use crate::sumeragi::consensus::{NPOS_TAG, VrfCommit, VrfReveal, vrf_reveal_preimage};
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 10;
+    consensus_cfg.npos.vrf.commit_deadline_offset_blocks = 4;
+    consensus_cfg.npos.vrf.reveal_deadline_offset_blocks = 4;
+
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
+    let reveal = [0xB4; 32];
+    let commitment: [u8; 32] = Hash::new(reveal).into();
+    {
+        let manager = harness
+            .actor
+            .epoch_manager
+            .as_mut()
+            .expect("epoch manager set");
+        manager.set_params(10, 4, 4);
+        manager.set_epoch(0);
+        manager.set_validator_roster_indices(0..4);
+        assert_eq!(
+            manager.try_note_commit_at_height(
+                2,
+                VrfCommit {
+                    epoch: 0,
+                    commitment,
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+    }
+
+    let mut reveal_msg = VrfReveal {
+        epoch: 0,
+        reveal,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let preimage = vrf_reveal_preimage(&harness.actor.common_config.chain, NPOS_TAG, &reveal_msg);
+    let signature = Signature::new(harness.key_pairs[0].private_key(), &preimage);
+    reveal_msg.bls_sig = signature.payload().to_vec();
+
+    let _ = harness.background_rx.try_iter().count();
+    harness
+        .actor
+        .handle_vrf_reveal(reveal_msg.clone(), None)
+        .expect("external reveal handled");
+    let broadcast_count = harness
+        .background_rx
+        .try_iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post { msg, .. }
+                    if matches!(msg.as_ref(), BlockMessage::VrfReveal(_))
+            )
+        })
+        .count();
+    assert_eq!(
+        broadcast_count, 3,
+        "external reveal should be posted to non-local validators"
+    );
+
+    let network_sender = harness.actor.effective_commit_topology()[1].clone();
+    let _ = harness.background_rx.try_iter().count();
+    harness
+        .actor
+        .handle_vrf_reveal(reveal_msg, Some(network_sender))
+        .expect("network reveal handled");
+    assert!(
+        harness.background_rx.try_iter().all(|post| {
+            !matches!(
+                post,
+                BackgroundPost::Post { msg, .. }
+                    if matches!(msg.as_ref(), BlockMessage::VrfReveal(_))
+            )
+        }),
+        "network-originated reveal should not be rebroadcast"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn on_block_message_handles_vrf_reveal_before_commit_catchup_finalizes_epoch() {
+    use crate::sumeragi::consensus::{NPOS_TAG, VrfCommit, VrfReveal, vrf_reveal_preimage};
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 10;
+    consensus_cfg.npos.vrf.commit_deadline_offset_blocks = 4;
+    consensus_cfg.npos.vrf.reveal_deadline_offset_blocks = 4;
+
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 2).await;
+    let actor = &mut harness.actor;
+
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        for height in 3_u64..=10 {
+            let height_byte = u8::try_from(height).expect("height fits in u8 for test hash");
+            state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([height_byte; Hash::LENGTH]),
+            ));
+        }
+    }
+
+    let reveal = [0xA5; 32];
+    let commitment: [u8; 32] = Hash::new(reveal).into();
+    {
+        let manager = actor.epoch_manager.as_mut().expect("epoch manager set");
+        manager.set_params(10, 4, 4);
+        manager.set_epoch(0);
+        manager.set_validator_roster_indices(0..4);
+        assert_eq!(
+            manager.try_note_commit_at_height(
+                2,
+                VrfCommit {
+                    epoch: 0,
+                    commitment,
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+    }
+
+    let mut reveal_msg = VrfReveal {
+        epoch: 0,
+        reveal,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let preimage = vrf_reveal_preimage(&actor.common_config.chain, NPOS_TAG, &reveal_msg);
+    let signature = Signature::new(harness.key_pairs[0].private_key(), &preimage);
+    reveal_msg.bls_sig = signature.payload().to_vec();
+
+    actor
+        .on_block_message(crate::sumeragi::InboundBlockMessage::new(
+            BlockMessage::VrfReveal(reveal_msg),
+            None,
+        ))
+        .expect("vrf reveal handled before committed-block catch-up");
+
+    let finalized = actor
+        .pending_npos_vrf_records
+        .get(&0)
+        .expect("epoch 0 VRF record staged");
+    assert!(finalized.finalized);
+    assert_eq!(finalized.late_reveals.len(), 1);
+    assert_eq!(finalized.late_reveals[0].signer, 0);
+    assert_eq!(finalized.late_reveals[0].reveal, reveal);
+    assert_eq!(
+        actor
+            .epoch_manager
+            .as_ref()
+            .expect("epoch manager set")
+            .epoch(),
+        1
+    );
+
     harness.shutdown.send();
 }
 
@@ -146735,6 +146945,55 @@ fn activation_plan_defers_until_margin() {
     assert!(
         !plan.2,
         "activation should defer when current height below activation threshold"
+    );
+}
+
+#[test]
+fn committed_vrf_record_does_not_cover_newer_pending_late_reveal() {
+    use iroha_data_model::consensus::{VrfEpochRecord, VrfLateRevealRecord, VrfParticipantRecord};
+
+    let participant = VrfParticipantRecord {
+        signer: 0,
+        commitment: Some([0x11; 32]),
+        reveal: None,
+        last_updated_height: 2,
+    };
+    let committed = VrfEpochRecord {
+        epoch: 0,
+        seed: [0x22; 32],
+        epoch_length: 10,
+        commit_deadline_offset: 4,
+        reveal_deadline_offset: 4,
+        roster_len: 4,
+        finalized: false,
+        updated_at_height: 2,
+        participants: vec![participant],
+        late_reveals: Vec::new(),
+        committed_no_reveal: Vec::new(),
+        no_participation: Vec::new(),
+        penalties_applied: false,
+        penalties_applied_at_height: None,
+        validator_election: None,
+    };
+    let late_reveal = VrfLateRevealRecord {
+        signer: 0,
+        reveal: [0x33; 32],
+        noted_at_height: 5,
+    };
+    let mut pending = committed.clone();
+    pending.updated_at_height = 5;
+    pending.late_reveals.push(late_reveal);
+
+    assert!(
+        !Actor::committed_vrf_record_covers_pending(&committed, &pending),
+        "a stale committed seal must not drop a newer pending late reveal"
+    );
+
+    let mut committed_with_reveal = pending.clone();
+    committed_with_reveal.finalized = true;
+    assert!(
+        Actor::committed_vrf_record_covers_pending(&committed_with_reveal, &pending),
+        "a committed seal that contains the pending late reveal may clear it"
     );
 }
 

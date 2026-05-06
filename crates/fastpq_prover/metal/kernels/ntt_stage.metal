@@ -252,10 +252,10 @@ inline void process_tile_stage_range(
             );
             threadgroup_barrier(mem_flags::mem_threadgroup);
         }
-        if (lane < chunk_len) {
-            column[base + lane] = tile[lane];
+        for (ulong chunk_offset = lane; chunk_offset < chunk_len; chunk_offset += lane_stride) {
+            column[base + chunk_offset] = tile[chunk_offset];
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_device);
     }
 }
 
@@ -365,7 +365,7 @@ kernel void fastpq_fft_columns(
     if (lane == 0U) {
         bit_reverse_in_place(column, len, args.log_len);
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_device);
 
     uint capped_limit = min(args.local_stage_limit, FFT_TILE_STAGE_CAP);
     uint local_limit = min(args.log_len, capped_limit);
@@ -401,7 +401,7 @@ kernel void fastpq_fft_columns(
         processed += 1U;
     }
 
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_device);
     if ((processed >= args.log_len) && (args.inverse != 0U)) {
         ulong inv_len = multiplicative_inverse(len);
         ulong lane_stride = (ulong)lanes;
@@ -434,15 +434,18 @@ kernel void fastpq_lde_columns(
     threadgroup ulong tile[FFT_THREADGROUP_CAPACITY];
 
     ulong lane_stride = (ulong)lanes;
+    ulong coset_power = pow_mod(args.coset, (ulong)lane);
+    ulong coset_stride = pow_mod(args.coset, lane_stride);
     for (ulong idx = (ulong)lane; idx < trace_len; idx += lane_stride) {
-        column[idx] = column_coeffs[idx];
+        column[idx] = mul_mod(column_coeffs[idx], coset_power);
+        coset_power = mul_mod(coset_power, coset_stride);
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_device);
 
     if (lane == 0U) {
         bit_reverse_in_place(column, eval_len, eval_log);
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_device);
 
     uint capped_limit = min(args.local_stage_limit, FFT_TILE_STAGE_CAP);
     uint local_limit = min(eval_log, capped_limit);
@@ -455,7 +458,7 @@ kernel void fastpq_lde_columns(
             2U,
             eval_log,
             stage_twiddles,
-            args.coset,
+            1UL,
             tile,
             lane,
             lanes
@@ -470,7 +473,7 @@ kernel void fastpq_lde_columns(
             1U,
             eval_log,
             stage_twiddles,
-            args.coset,
+            1UL,
             tile,
             lane,
             lanes
@@ -478,7 +481,7 @@ kernel void fastpq_lde_columns(
         processed += 1U;
     }
 
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_device);
 }
 
 kernel void fastpq_fft_post_tiling(

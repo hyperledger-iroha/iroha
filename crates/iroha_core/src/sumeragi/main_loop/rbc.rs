@@ -2034,7 +2034,9 @@ impl Actor {
         payload_bytes: &[u8],
         payload_hash: Hash,
     ) -> Result<()> {
-        let Some(init) = self.rebuild_rbc_init_from_block(block, key) else {
+        let Some(init) =
+            self.rebuild_rbc_init_from_payload_bytes(block, key, payload_bytes, payload_hash)
+        else {
             if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned()
                 && session.total_chunks() != 0
             {

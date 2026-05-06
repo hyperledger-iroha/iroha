@@ -9,13 +9,19 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use hex::encode;
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
 use iroha_data_model::{
+    ChainId,
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     domain::DomainId,
     offline::{
-        OfflineNoteAuditBundleV2, OfflineNoteAuditOutputClaimV2, OfflineNoteIssueV2,
-        OfflineNoteIssuedClaimV2, OfflineNoteKeyCertificateV2, OfflineNoteRecursiveProofV2,
-        OfflineNoteRedeemV2,
+        OFFLINE_NOTE_V2_INPUT_NULLIFIER_DOMAIN, OFFLINE_NOTE_V2_NOTE_COMMITMENT_DOMAIN,
+        OFFLINE_NOTE_V2_PAYMENT_TOKEN_ID_DOMAIN, OfflineNoteAuditBundleV2,
+        OfflineNoteAuditOutputClaimV2, OfflineNoteCommitmentOriginV2,
+        OfflineNoteCommitmentPreimageV2, OfflineNoteInputNullifierPreimageV2, OfflineNoteIssueV2,
+        OfflineNoteIssuedClaimV2, OfflineNoteIssuerLoadOriginV2, OfflineNoteKeyCertificateV2,
+        OfflineNoteP2pOutputOriginV2, OfflineNotePaymentTokenIdPreimageV2,
+        OfflineNoteRecursiveProofV2, OfflineNoteRedeemV2, derive_offline_note_v2_input_nullifier,
+        derive_offline_note_v2_note_commitment, derive_offline_note_v2_payment_token_id,
     },
     proof::{ProofBox, VerifyingKeyId},
     qr_stream::{QrPayloadKind, QrStreamEncoder, QrStreamFrameKind, QrStreamOptions},
@@ -34,7 +40,10 @@ const FIXTURE_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/offline/interop_contract_v2.json"
 );
-const TOKEN_ID_LABEL: &str = "offline-v2-token-fixture-1";
+const CHAIN_ID: &str = "offline-v2-fixture-chain";
+const LOAD_OPERATION_ID: &str = "operation-fixture-load-1";
+const LOAD_LINEAGE_ID: &str = "lineage-fixture-1";
+const LOAD_LOCAL_REVISION: u64 = 1;
 const INVOICE_ID: &str = "invoice-fixture-1";
 const SENDER_KEY_ID: &str = "sender-key-v2-1";
 const RECIPIENT_KEY_ID: &str = "recipient-key-v2-1";
@@ -92,12 +101,80 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         RECIPIENT_DEVICE_ID,
     )?;
 
-    let token_id = Hash::new(TOKEN_ID_LABEL);
-    let source_note_commitment = Hash::new(b"offline-v2-vector-source-note");
-    let input_nullifier = Hash::new(b"offline-v2-vector-input-nullifier");
-    let redeem_nullifier = Hash::new(b"offline-v2-vector-redeem-nullifier");
-    let recipient_commitment = Hash::new(b"offline-v2-vector-recipient-output");
-    let change_commitment = Hash::new(b"offline-v2-vector-change-output");
+    let chain_id: ChainId = CHAIN_ID.parse()?;
+    let source_note_secret = vec![0x41; Hash::LENGTH];
+    let recipient_note_secret = vec![0x42; Hash::LENGTH];
+    let change_note_secret = vec![0x43; Hash::LENGTH];
+    let token_nonce = vec![0x51; Hash::LENGTH];
+    let sender_certificate_payload_hash = sender_certificate.model.payload_hash()?;
+    let recipient_certificate_payload_hash = recipient_certificate.model.payload_hash()?;
+    let source_commitment_preimage = OfflineNoteCommitmentPreimageV2 {
+        domain: OFFLINE_NOTE_V2_NOTE_COMMITMENT_DOMAIN.to_owned(),
+        chain_id: chain_id.clone(),
+        owner_key_certificate_payload_hash: sender_certificate_payload_hash,
+        asset: sender_asset_id.clone(),
+        amount: Numeric::new(52, 0),
+        note_secret: source_note_secret.clone(),
+        origin: OfflineNoteCommitmentOriginV2::IssuerLoad(OfflineNoteIssuerLoadOriginV2 {
+            operation_id: LOAD_OPERATION_ID.to_owned(),
+            lineage_id: LOAD_LINEAGE_ID.to_owned(),
+            local_revision: LOAD_LOCAL_REVISION,
+        }),
+    };
+    let source_note_commitment =
+        derive_offline_note_v2_note_commitment(&source_commitment_preimage)?;
+    let input_nullifier_preimage = OfflineNoteInputNullifierPreimageV2 {
+        domain: OFFLINE_NOTE_V2_INPUT_NULLIFIER_DOMAIN.to_owned(),
+        chain_id: chain_id.clone(),
+        source_note_commitment,
+        owner_key_certificate_payload_hash: sender_certificate_payload_hash,
+        note_secret: source_note_secret.clone(),
+    };
+    let input_nullifier = derive_offline_note_v2_input_nullifier(&input_nullifier_preimage)?;
+    let recipient_commitment_preimage = OfflineNoteCommitmentPreimageV2 {
+        domain: OFFLINE_NOTE_V2_NOTE_COMMITMENT_DOMAIN.to_owned(),
+        chain_id: chain_id.clone(),
+        owner_key_certificate_payload_hash: recipient_certificate_payload_hash,
+        asset: recipient_asset_id.clone(),
+        amount: Numeric::new(5, 0),
+        note_secret: recipient_note_secret.clone(),
+        origin: OfflineNoteCommitmentOriginV2::P2pOutput(OfflineNoteP2pOutputOriginV2 {
+            payment_request_id: INVOICE_ID.to_owned(),
+            output_index: 0,
+        }),
+    };
+    let recipient_commitment =
+        derive_offline_note_v2_note_commitment(&recipient_commitment_preimage)?;
+    let change_commitment_preimage = OfflineNoteCommitmentPreimageV2 {
+        domain: OFFLINE_NOTE_V2_NOTE_COMMITMENT_DOMAIN.to_owned(),
+        chain_id: chain_id.clone(),
+        owner_key_certificate_payload_hash: sender_certificate_payload_hash,
+        asset: sender_asset_id.clone(),
+        amount: Numeric::new(47, 0),
+        note_secret: change_note_secret.clone(),
+        origin: OfflineNoteCommitmentOriginV2::P2pOutput(OfflineNoteP2pOutputOriginV2 {
+            payment_request_id: INVOICE_ID.to_owned(),
+            output_index: 1,
+        }),
+    };
+    let change_commitment = derive_offline_note_v2_note_commitment(&change_commitment_preimage)?;
+    let token_id_preimage = OfflineNotePaymentTokenIdPreimageV2 {
+        domain: OFFLINE_NOTE_V2_PAYMENT_TOKEN_ID_DOMAIN.to_owned(),
+        chain_id: chain_id.clone(),
+        token_nonce: token_nonce.clone(),
+        sender_key_certificate_payload_hash: sender_certificate_payload_hash,
+        input_nullifiers: vec![input_nullifier],
+        output_commitments: vec![recipient_commitment, change_commitment],
+    };
+    let token_id = derive_offline_note_v2_payment_token_id(&token_id_preimage)?;
+    let redeem_nullifier =
+        derive_offline_note_v2_input_nullifier(&OfflineNoteInputNullifierPreimageV2 {
+            domain: OFFLINE_NOTE_V2_INPUT_NULLIFIER_DOMAIN.to_owned(),
+            chain_id,
+            source_note_commitment: recipient_commitment,
+            owner_key_certificate_payload_hash: recipient_certificate_payload_hash,
+            note_secret: recipient_note_secret.clone(),
+        })?;
 
     let issue = OfflineNoteIssueV2 {
         note_commitment: source_note_commitment,
@@ -331,6 +408,90 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         (
             "chain_vectors",
             object(vec![
+                (
+                    "derivation",
+                    object(vec![
+                        ("chain_id", Value::from(CHAIN_ID)),
+                        (
+                            "note_commitment_domain",
+                            Value::from(OFFLINE_NOTE_V2_NOTE_COMMITMENT_DOMAIN),
+                        ),
+                        (
+                            "input_nullifier_domain",
+                            Value::from(OFFLINE_NOTE_V2_INPUT_NULLIFIER_DOMAIN),
+                        ),
+                        (
+                            "payment_token_id_domain",
+                            Value::from(OFFLINE_NOTE_V2_PAYMENT_TOKEN_ID_DOMAIN),
+                        ),
+                        ("issuer_load_operation_id", Value::from(LOAD_OPERATION_ID)),
+                        ("issuer_load_lineage_id", Value::from(LOAD_LINEAGE_ID)),
+                        (
+                            "issuer_load_local_revision",
+                            Value::from(LOAD_LOCAL_REVISION),
+                        ),
+                        ("payment_request_id", Value::from(INVOICE_ID)),
+                        (
+                            "source_note_secret_hex",
+                            Value::from(encode(&source_note_secret)),
+                        ),
+                        (
+                            "recipient_note_secret_hex",
+                            Value::from(encode(&recipient_note_secret)),
+                        ),
+                        (
+                            "change_note_secret_hex",
+                            Value::from(encode(&change_note_secret)),
+                        ),
+                        ("token_nonce_hex", Value::from(encode(&token_nonce))),
+                        (
+                            "sender_key_certificate_payload_hash",
+                            Value::from(sender_certificate_payload_hash.to_string()),
+                        ),
+                        (
+                            "recipient_key_certificate_payload_hash",
+                            Value::from(recipient_certificate_payload_hash.to_string()),
+                        ),
+                        (
+                            "source_note_commitment",
+                            Value::from(source_note_commitment.to_string()),
+                        ),
+                        (
+                            "source_note_commitment_preimage_hex",
+                            Value::from(encode(to_bytes(&source_commitment_preimage)?)),
+                        ),
+                        ("input_nullifier", Value::from(input_nullifier.to_string())),
+                        (
+                            "input_nullifier_preimage_hex",
+                            Value::from(encode(to_bytes(&input_nullifier_preimage)?)),
+                        ),
+                        (
+                            "recipient_output_commitment",
+                            Value::from(recipient_commitment.to_string()),
+                        ),
+                        (
+                            "recipient_output_commitment_preimage_hex",
+                            Value::from(encode(to_bytes(&recipient_commitment_preimage)?)),
+                        ),
+                        (
+                            "change_output_commitment",
+                            Value::from(change_commitment.to_string()),
+                        ),
+                        (
+                            "change_output_commitment_preimage_hex",
+                            Value::from(encode(to_bytes(&change_commitment_preimage)?)),
+                        ),
+                        ("payment_token_id", Value::from(token_id.to_string())),
+                        (
+                            "payment_token_id_preimage_hex",
+                            Value::from(encode(to_bytes(&token_id_preimage)?)),
+                        ),
+                        (
+                            "redeem_nullifier",
+                            Value::from(redeem_nullifier.to_string()),
+                        ),
+                    ]),
+                ),
                 (
                     "certificates",
                     object(vec![

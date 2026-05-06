@@ -3006,6 +3006,8 @@ pub struct Nexus {
     pub lane_config: LaneConfig,
     /// Validated data-space catalog.
     pub dataspace_catalog: DataSpaceCatalog,
+    /// Default fee sponsor account literal for each data space.
+    pub dataspace_fee_sponsors: BTreeMap<DataSpaceId, String>,
     /// Lane routing policy.
     pub routing_policy: LaneRoutingPolicy,
     /// Lane manifest registry configuration.
@@ -3041,6 +3043,7 @@ impl Default for Nexus {
             lane_catalog: LaneCatalog::default(),
             lane_config: LaneConfig::default(),
             dataspace_catalog: DataSpaceCatalog::default(),
+            dataspace_fee_sponsors: BTreeMap::new(),
             routing_policy: LaneRoutingPolicy::default(),
             registry: LaneRegistry::default(),
             governance: GovernanceCatalog::default(),
@@ -3076,6 +3079,7 @@ impl Nexus {
     pub fn has_lane_overrides(&self) -> bool {
         self.lane_catalog != LaneCatalog::default()
             || self.dataspace_catalog != DataSpaceCatalog::default()
+            || !self.dataspace_fee_sponsors.is_empty()
             || self.routing_policy != LaneRoutingPolicy::default()
     }
 }

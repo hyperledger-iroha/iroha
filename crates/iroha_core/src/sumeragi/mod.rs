@@ -4911,6 +4911,95 @@ mod tests {
     }
 
     #[test]
+    fn incoming_block_message_routes_vrf_metadata_via_vote_queue() {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        handle.incoming_block_message(BlockMessage::VrfCommit(
+            crate::sumeragi::consensus::VrfCommit {
+                epoch: 7,
+                commitment: [0xAB; 32],
+                signer: 5,
+                bls_sig: Vec::new(),
+            },
+        ));
+        handle.incoming_block_message(BlockMessage::VrfReveal(
+            crate::sumeragi::consensus::VrfReveal {
+                epoch: 7,
+                reveal: [0xCD; 32],
+                signer: 5,
+                bls_sig: Vec::new(),
+            },
+        ));
+
+        let commit = vote_rx
+            .try_recv()
+            .expect("VrfCommit should be enqueued to vote channel");
+        let (queue_kind, _latency_ms) = commit
+            .queue_latency_ms()
+            .expect("VrfCommit should record enqueue metadata");
+        assert_eq!(queue_kind, status::WorkerQueueKind::Votes);
+        assert!(matches!(
+            commit,
+            InboundBlockMessage {
+                message: BlockMessage::VrfCommit(_),
+                ..
+            }
+        ));
+
+        let reveal = vote_rx
+            .try_recv()
+            .expect("VrfReveal should be enqueued to vote channel");
+        let (queue_kind, _latency_ms) = reveal
+            .queue_latency_ms()
+            .expect("VrfReveal should record enqueue metadata");
+        assert_eq!(queue_kind, status::WorkerQueueKind::Votes);
+        assert!(matches!(
+            reveal,
+            InboundBlockMessage {
+                message: BlockMessage::VrfReveal(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            block_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
     fn incoming_block_message_routes_rbc_chunk_via_rbc_queue() {
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -10363,8 +10452,8 @@ impl SumeragiHandle {
 
     /// Enqueue an incoming block-synchronization or consensus message.
     #[allow(clippy::too_many_lines)]
-    pub fn incoming_block_message(&self, msg: BlockMessage) {
-        let _ = self.incoming_block_message_with_sender(msg, None, IngressMode::Blocking);
+    pub fn incoming_block_message(&self, msg: BlockMessage) -> bool {
+        self.incoming_block_message_with_sender(msg, None, IngressMode::Blocking)
     }
 
     /// Enqueue an incoming block-synchronization or consensus message from a known peer.
@@ -10389,6 +10478,8 @@ impl SumeragiHandle {
                 | BlockMessage::Proposal(_)
                 | BlockMessage::QcVote(_)
                 | BlockMessage::Qc(_)
+                | BlockMessage::VrfCommit(_)
+                | BlockMessage::VrfReveal(_)
                 | BlockMessage::RbcInit(_)
                 | BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_)
@@ -10413,6 +10504,8 @@ impl SumeragiHandle {
                 | BlockMessage::Proposal(_)
                 | BlockMessage::QcVote(_)
                 | BlockMessage::Qc(_)
+                | BlockMessage::VrfCommit(_)
+                | BlockMessage::VrfReveal(_)
                 | BlockMessage::RbcInit(_)
                 | BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_)
@@ -10632,6 +10725,20 @@ impl SumeragiHandle {
                 &self.votes,
                 InboundBlockMessage::new(BlockMessage::ProposalHint(hint), sender),
                 "ProposalHint",
+                status::WorkerQueueKind::Votes,
+                mode,
+            ),
+            BlockMessage::VrfCommit(commit) => enqueue_with_mode(
+                &self.votes,
+                InboundBlockMessage::new(BlockMessage::VrfCommit(commit), sender),
+                "VrfCommit",
+                status::WorkerQueueKind::Votes,
+                mode,
+            ),
+            BlockMessage::VrfReveal(reveal) => enqueue_with_mode(
+                &self.votes,
+                InboundBlockMessage::new(BlockMessage::VrfReveal(reveal), sender),
+                "VrfReveal",
                 status::WorkerQueueKind::Votes,
                 mode,
             ),

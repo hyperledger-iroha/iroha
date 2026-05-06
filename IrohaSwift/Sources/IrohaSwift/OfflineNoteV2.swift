@@ -5,6 +5,9 @@ public enum OfflineNoteV2Constants {
     public static let issuedClaimDomain = "iroha:offline-note-v2:issued-claim:v1"
     public static let redeemPublicInputsDomain = "iroha:offline-note-v2:redeem-public-inputs:v1"
     public static let auditPublicInputsDomain = "iroha:offline-note-v2:audit-public-inputs:v1"
+    public static let noteCommitmentDomain = "iroha:offline-note-v2:note-commitment:v1"
+    public static let inputNullifierDomain = "iroha:offline-note-v2:input-nullifier:v1"
+    public static let paymentTokenIdDomain = "iroha:offline-note-v2:payment-token-id:v1"
     public static let recursiveBackend = "halo2/ipa"
     public static let recursiveVerifierName = "offline-note-v2-recursive-v1"
     public static let recursivePublicInputsSchemaV1 = #"{"schema":"offline_note_v2_recursive_v1","public_inputs":["public_inputs_hash_limb0","public_inputs_hash_limb1","public_inputs_hash_limb2","public_inputs_hash_limb3","proof_mode","input_count","output_count","input_amount_sum","output_amount_sum","input_nullifier_sum_limb0","output_commitment_sum_limb0","key_certificate_payload_hash_limb0","source_or_token_limb0","input_claim_hash_sum_limb0","output_claim_hash_sum_limb0","reserved_zero"]}"#
@@ -27,6 +30,8 @@ public enum OfflineNoteV2Error: Error, LocalizedError, Equatable {
     case emptyInputClaims
     case emptyOutputCommitments
     case emptyOutputClaims
+    case invalidRandomBytesLength(field: String, expected: Int, actual: Int)
+    case unsupportedDerivationDomain(field: String, expected: String, actual: String)
     case auditInputCountMismatch(nullifiers: Int, claims: Int)
     case auditOutputClaimNotCommitted(String)
     case proofPublicInputsHashMismatch(expected: String, actual: String)
@@ -57,6 +62,10 @@ public enum OfflineNoteV2Error: Error, LocalizedError, Equatable {
             return "Offline V2 audit output commitments must not be empty."
         case .emptyOutputClaims:
             return "Offline V2 audit output claims must not be empty."
+        case let .invalidRandomBytesLength(field, expected, actual):
+            return "\(field) must be exactly \(expected) bytes (found \(actual))."
+        case let .unsupportedDerivationDomain(field, expected, actual):
+            return "\(field) must be \(expected), got \(actual)."
         case let .auditInputCountMismatch(nullifiers, claims):
             return "Offline V2 audit input nullifier count \(nullifiers) must match input claim count \(claims)."
         case let .auditOutputClaimNotCommitted(commitment):
@@ -241,6 +250,196 @@ public struct OfflineNoteKeyCertificateV2: Equatable, Sendable {
             typeName: OfflineNoteV2TypeNames.keyCertificate,
             payload: OfflineNoteV2Encoding.encodeCertificate(self)
         )
+    }
+}
+
+public struct OfflineNoteIssuerLoadOriginV2: Equatable, Sendable {
+    public let operationId: String
+    public let lineageId: String
+    public let localRevision: UInt64
+
+    public init(operationId: String, lineageId: String, localRevision: UInt64) throws {
+        guard !operationId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw OfflineNoritoError.invalidMetadata("operation_id")
+        }
+        guard !lineageId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw OfflineNoritoError.invalidMetadata("lineage_id")
+        }
+        self.operationId = operationId
+        self.lineageId = lineageId
+        self.localRevision = localRevision
+    }
+}
+
+public struct OfflineNoteP2pOutputOriginV2: Equatable, Sendable {
+    public let paymentRequestId: String
+    public let outputIndex: UInt32
+
+    public init(paymentRequestId: String, outputIndex: UInt32) throws {
+        guard !paymentRequestId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw OfflineNoritoError.invalidMetadata("payment_request_id")
+        }
+        self.paymentRequestId = paymentRequestId
+        self.outputIndex = outputIndex
+    }
+}
+
+public enum OfflineNoteCommitmentOriginV2: Equatable, Sendable {
+    case issuerLoad(OfflineNoteIssuerLoadOriginV2)
+    case p2pOutput(OfflineNoteP2pOutputOriginV2)
+}
+
+public struct OfflineNoteCommitmentPreimageV2: Equatable, Sendable {
+    public let domain: String
+    public let chainId: String
+    public let ownerKeyCertificatePayloadHash: Data
+    public let assetId: String
+    public let amount: String
+    public let noteSecret: Data
+    public let origin: OfflineNoteCommitmentOriginV2
+
+    public init(domain: String = OfflineNoteV2Constants.noteCommitmentDomain,
+                chainId: String,
+                ownerKeyCertificatePayloadHash: Data,
+                assetId: String,
+                amount: String,
+                noteSecret: Data,
+                origin: OfflineNoteCommitmentOriginV2) throws {
+        guard domain == OfflineNoteV2Constants.noteCommitmentDomain else {
+            throw OfflineNoteV2Error.unsupportedDerivationDomain(
+                field: "domain",
+                expected: OfflineNoteV2Constants.noteCommitmentDomain,
+                actual: domain
+            )
+        }
+        guard !chainId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw OfflineNoritoError.invalidMetadata("chain_id")
+        }
+        try OfflineNoteV2Validation.validateHash(
+            ownerKeyCertificatePayloadHash,
+            field: "owner_key_certificate_payload_hash"
+        )
+        try OfflineNoteV2Validation.validateRandomBytes(noteSecret, field: "note_secret")
+        self.domain = domain
+        self.chainId = chainId
+        self.ownerKeyCertificatePayloadHash = ownerKeyCertificatePayloadHash
+        self.assetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
+        self.amount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString
+        self.noteSecret = noteSecret
+        self.origin = origin
+    }
+
+    public func noritoEncoded() throws -> Data {
+        try OfflineNoteV2Encoding.wrap(
+            typeName: OfflineNoteV2TypeNames.noteCommitmentPreimage,
+            payload: OfflineNoteV2Encoding.encodeNoteCommitmentPreimage(self)
+        )
+    }
+
+    public func deriveNoteCommitment() throws -> Data {
+        IrohaHash.hash(try noritoEncoded())
+    }
+}
+
+public struct OfflineNoteInputNullifierPreimageV2: Equatable, Sendable {
+    public let domain: String
+    public let chainId: String
+    public let sourceNoteCommitment: Data
+    public let ownerKeyCertificatePayloadHash: Data
+    public let noteSecret: Data
+
+    public init(domain: String = OfflineNoteV2Constants.inputNullifierDomain,
+                chainId: String,
+                sourceNoteCommitment: Data,
+                ownerKeyCertificatePayloadHash: Data,
+                noteSecret: Data) throws {
+        guard domain == OfflineNoteV2Constants.inputNullifierDomain else {
+            throw OfflineNoteV2Error.unsupportedDerivationDomain(
+                field: "domain",
+                expected: OfflineNoteV2Constants.inputNullifierDomain,
+                actual: domain
+            )
+        }
+        guard !chainId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw OfflineNoritoError.invalidMetadata("chain_id")
+        }
+        try OfflineNoteV2Validation.validateHash(sourceNoteCommitment, field: "source_note_commitment")
+        try OfflineNoteV2Validation.validateHash(
+            ownerKeyCertificatePayloadHash,
+            field: "owner_key_certificate_payload_hash"
+        )
+        try OfflineNoteV2Validation.validateRandomBytes(noteSecret, field: "note_secret")
+        self.domain = domain
+        self.chainId = chainId
+        self.sourceNoteCommitment = sourceNoteCommitment
+        self.ownerKeyCertificatePayloadHash = ownerKeyCertificatePayloadHash
+        self.noteSecret = noteSecret
+    }
+
+    public func noritoEncoded() throws -> Data {
+        try OfflineNoteV2Encoding.wrap(
+            typeName: OfflineNoteV2TypeNames.inputNullifierPreimage,
+            payload: OfflineNoteV2Encoding.encodeInputNullifierPreimage(self)
+        )
+    }
+
+    public func deriveInputNullifier() throws -> Data {
+        IrohaHash.hash(try noritoEncoded())
+    }
+}
+
+public struct OfflineNotePaymentTokenIdPreimageV2: Equatable, Sendable {
+    public let domain: String
+    public let chainId: String
+    public let tokenNonce: Data
+    public let senderKeyCertificatePayloadHash: Data
+    public let inputNullifiers: [Data]
+    public let outputCommitments: [Data]
+
+    public init(domain: String = OfflineNoteV2Constants.paymentTokenIdDomain,
+                chainId: String,
+                tokenNonce: Data,
+                senderKeyCertificatePayloadHash: Data,
+                inputNullifiers: [Data],
+                outputCommitments: [Data]) throws {
+        guard domain == OfflineNoteV2Constants.paymentTokenIdDomain else {
+            throw OfflineNoteV2Error.unsupportedDerivationDomain(
+                field: "domain",
+                expected: OfflineNoteV2Constants.paymentTokenIdDomain,
+                actual: domain
+            )
+        }
+        guard !chainId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw OfflineNoritoError.invalidMetadata("chain_id")
+        }
+        try OfflineNoteV2Validation.validateRandomBytes(tokenNonce, field: "token_nonce")
+        try OfflineNoteV2Validation.validateHash(
+            senderKeyCertificatePayloadHash,
+            field: "sender_key_certificate_payload_hash"
+        )
+        try OfflineNoteV2Validation.validateHashes(inputNullifiers, field: "input_nullifiers")
+        try OfflineNoteV2Validation.validateHashes(
+            outputCommitments,
+            field: "output_commitments",
+            emptyError: .emptyOutputCommitments
+        )
+        self.domain = domain
+        self.chainId = chainId
+        self.tokenNonce = tokenNonce
+        self.senderKeyCertificatePayloadHash = senderKeyCertificatePayloadHash
+        self.inputNullifiers = inputNullifiers
+        self.outputCommitments = outputCommitments
+    }
+
+    public func noritoEncoded() throws -> Data {
+        try OfflineNoteV2Encoding.wrap(
+            typeName: OfflineNoteV2TypeNames.paymentTokenIdPreimage,
+            payload: OfflineNoteV2Encoding.encodePaymentTokenIdPreimage(self)
+        )
+    }
+
+    public func derivePaymentTokenId() throws -> Data {
+        IrohaHash.hash(try noritoEncoded())
     }
 }
 
@@ -713,6 +912,9 @@ enum OfflineNoteV2TypeNames {
     static let redeemPublicInputs = "iroha_data_model::offline::model::OfflineNoteRedeemPublicInputsV2"
     static let audit = "iroha_data_model::offline::model::OfflineNoteAuditBundleV2"
     static let auditPublicInputs = "iroha_data_model::offline::model::OfflineNoteAuditPublicInputsV2"
+    static let noteCommitmentPreimage = "iroha_data_model::offline::model::OfflineNoteCommitmentPreimageV2"
+    static let inputNullifierPreimage = "iroha_data_model::offline::model::OfflineNoteInputNullifierPreimageV2"
+    static let paymentTokenIdPreimage = "iroha_data_model::offline::model::OfflineNotePaymentTokenIdPreimageV2"
     static let issueInstruction = "iroha_data_model::isi::offline::IssueOfflineNoteV2"
     static let redeemInstruction = "iroha_data_model::isi::offline::RedeemOfflineNoteV2"
     static let auditInstruction = "iroha_data_model::isi::offline::AuditOfflineNoteV2"
@@ -736,6 +938,16 @@ enum OfflineNoteV2Validation {
         }
         for (index, value) in values.enumerated() {
             try validateHash(value, field: "\(field)[\(index)]")
+        }
+    }
+
+    static func validateRandomBytes(_ value: Data, field: String) throws {
+        guard value.count == 32 else {
+            throw OfflineNoteV2Error.invalidRandomBytesLength(
+                field: field,
+                expected: 32,
+                actual: value.count
+            )
         }
     }
 
@@ -899,10 +1111,77 @@ enum OfflineNoteV2Encoding {
         return writer.data
     }
 
+    static func encodeNoteCommitmentPreimage(_ preimage: OfflineNoteCommitmentPreimageV2) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(OfflineCompactNorito.encodeString(preimage.domain))
+        writer.writeField(encodeChainId(preimage.chainId))
+        writer.writeField(try OfflineCompactNorito.encodeHash(preimage.ownerKeyCertificatePayloadHash))
+        writer.writeField(try encodeAssetId(preimage.assetId))
+        writer.writeField(try encodeNumeric(preimage.amount))
+        writer.writeField(encodeBytesVec(preimage.noteSecret))
+        writer.writeField(encodeCommitmentOrigin(preimage.origin))
+        return writer.data
+    }
+
+    static func encodeInputNullifierPreimage(_ preimage: OfflineNoteInputNullifierPreimageV2) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(OfflineCompactNorito.encodeString(preimage.domain))
+        writer.writeField(encodeChainId(preimage.chainId))
+        writer.writeField(try OfflineCompactNorito.encodeHash(preimage.sourceNoteCommitment))
+        writer.writeField(try OfflineCompactNorito.encodeHash(preimage.ownerKeyCertificatePayloadHash))
+        writer.writeField(encodeBytesVec(preimage.noteSecret))
+        return writer.data
+    }
+
+    static func encodePaymentTokenIdPreimage(_ preimage: OfflineNotePaymentTokenIdPreimageV2) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(OfflineCompactNorito.encodeString(preimage.domain))
+        writer.writeField(encodeChainId(preimage.chainId))
+        writer.writeField(encodeBytesVec(preimage.tokenNonce))
+        writer.writeField(try OfflineCompactNorito.encodeHash(preimage.senderKeyCertificatePayloadHash))
+        writer.writeField(try encodeVec(preimage.inputNullifiers, encode: OfflineCompactNorito.encodeHash))
+        writer.writeField(try encodeVec(preimage.outputCommitments, encode: OfflineCompactNorito.encodeHash))
+        return writer.data
+    }
+
+    static func encodeCommitmentOrigin(_ origin: OfflineNoteCommitmentOriginV2) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        switch origin {
+        case let .issuerLoad(value):
+            writer.writeUInt32LE(0)
+            writer.writeField(encodeIssuerLoadOrigin(value))
+        case let .p2pOutput(value):
+            writer.writeUInt32LE(1)
+            writer.writeField(encodeP2pOutputOrigin(value))
+        }
+        return writer.data
+    }
+
+    private static func encodeIssuerLoadOrigin(_ origin: OfflineNoteIssuerLoadOriginV2) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(OfflineCompactNorito.encodeString(origin.operationId))
+        writer.writeField(OfflineCompactNorito.encodeString(origin.lineageId))
+        writer.writeField(OfflineCompactNorito.encodeUInt64(origin.localRevision))
+        return writer.data
+    }
+
+    private static func encodeP2pOutputOrigin(_ origin: OfflineNoteP2pOutputOriginV2) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(OfflineCompactNorito.encodeString(origin.paymentRequestId))
+        writer.writeField(OfflineCompactNorito.encodeUInt32(origin.outputIndex))
+        return writer.data
+    }
+
     private static func encodeAccountId(_ value: String) throws -> Data {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         let address = try AccountAddress.parseEncodedSwiftOnly(trimmed, expectedPrefix: 0x02F1)
         return try address.compactNoritoAccountControllerPayload()
+    }
+
+    private static func encodeChainId(_ value: String) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(OfflineCompactNorito.encodeString(value))
+        return writer.data
     }
 
     private static func encodeAssetId(_ assetId: String) throws -> Data {

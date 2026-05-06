@@ -546,9 +546,16 @@ impl Actor {
         reveal: crate::sumeragi::consensus::VrfReveal,
         local_signer: Option<ValidatorIndex>,
     ) -> Result<VrfNoteResult> {
+        let persisted_record = {
+            let world = self.state.world_view();
+            world.vrf_epochs().get(&reveal.epoch).cloned()
+        };
         let Some(manager) = self.epoch_manager.as_mut() else {
             return Err(eyre!("epoch manager unavailable"));
         };
+        if let Some(record) = persisted_record.as_ref() {
+            manager.merge_record_observations(record);
+        }
 
         let note_result = match manager.try_note_reveal_at_height(height, reveal.clone()) {
             VrfNoteResult::Accepted => {
@@ -739,6 +746,7 @@ impl Actor {
     pub(super) fn handle_vrf_commit(
         &mut self,
         commit: crate::sumeragi::consensus::VrfCommit,
+        sender: Option<PeerId>,
     ) -> Result<()> {
         if !matches!(
             self.consensus_mode,
@@ -778,13 +786,23 @@ impl Actor {
             );
             u32::MAX
         });
-        let _ = self.process_vrf_commit(height, roster_len_hint, commit, local_signer)?;
+        let note_result =
+            self.process_vrf_commit(height, roster_len_hint, commit.clone(), local_signer)?;
+        if sender.is_none()
+            && matches!(
+                note_result,
+                VrfNoteResult::Accepted | VrfNoteResult::AcceptedLate
+            )
+        {
+            self.broadcast_external_vrf_metadata(BlockMessage::VrfCommit(commit), &topology);
+        }
         Ok(())
     }
 
     pub(super) fn handle_vrf_reveal(
         &mut self,
         reveal: crate::sumeragi::consensus::VrfReveal,
+        sender: Option<PeerId>,
     ) -> Result<()> {
         if !matches!(
             self.consensus_mode,
@@ -824,7 +842,31 @@ impl Actor {
             );
             u32::MAX
         });
-        let _ = self.process_vrf_reveal(height, roster_len_hint, reveal, local_signer)?;
+        let note_result =
+            self.process_vrf_reveal(height, roster_len_hint, reveal.clone(), local_signer)?;
+        if sender.is_none()
+            && matches!(
+                note_result,
+                VrfNoteResult::Accepted | VrfNoteResult::AcceptedLate
+            )
+        {
+            self.broadcast_external_vrf_metadata(BlockMessage::VrfReveal(reveal), &topology);
+        }
         Ok(())
+    }
+
+    fn broadcast_external_vrf_metadata(&mut self, msg: BlockMessage, topology: &[PeerId]) {
+        let local_peer_id = self.common_config.peer.id().clone();
+        let msg = Arc::new(msg);
+        let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
+        for peer in topology {
+            if peer == &local_peer_id {
+                continue;
+            }
+            self.schedule_background(BackgroundRequest::Post {
+                peer: peer.clone(),
+                msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
+            });
+        }
     }
 }

@@ -148,7 +148,7 @@ impl BlockBuilder {
         self.previous_roster_evidence = evidence;
     }
 
-    /// Attach deterministic NPoS effects that will be embedded in the resulting block.
+    /// Attach deterministic `NPoS` effects that will be embedded in the resulting block.
     pub fn set_npos_consensus_effects(&mut self, effects: Option<NposConsensusEffects>) {
         self.npos_consensus_effects = effects.filter(|bundle| !bundle.is_empty());
     }

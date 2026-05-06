@@ -6,6 +6,7 @@ import org.hyperledger.iroha.sdk.address.MultisigMemberPayload
 import org.hyperledger.iroha.sdk.address.MultisigPolicyPayload
 import org.hyperledger.iroha.sdk.address.PublicKeyPayload
 import org.hyperledger.iroha.sdk.address.algorithmForCurveId
+import org.hyperledger.iroha.sdk.address.compactPublicKeyPayload
 import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
 import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
 import org.hyperledger.iroha.sdk.core.model.Executable
@@ -85,8 +86,12 @@ class NoritoJavaCodecAdapterParityTest {
         val controllerTag = NoritoAdapters.uint(32).decode(authorityDecoder)
         assertEquals(0L, controllerTag)
         val publicKeyField = readField(authorityDecoder, "authority.controller.public_key")
-        val publicKeyLiteral = decodeFieldPayload(publicKeyField, NoritoAdapters.stringAdapter(), "authority.controller.public_key")
-        assertEquals(encodePublicKeyMultihash(0x01, publicKey), publicKeyLiteral)
+        val publicKeyPayload = decodeFieldPayload(
+            publicKeyField,
+            BYTE_VECTOR_ADAPTER,
+            "authority.controller.public_key",
+        )
+        assertContentEquals(compactPublicKeyPayload(0x01, publicKey), publicKeyPayload)
         assertEquals(0, authorityDecoder.remaining())
     }
 
@@ -139,13 +144,13 @@ class NoritoJavaCodecAdapterParityTest {
 
         assertMultisigMember(
             policyDecoder,
-            encodePublicKeyMultihash(0x01, memberKeyA),
+            compactPublicKeyPayload(0x01, memberKeyA),
             1,
             "member[0]",
         )
         assertMultisigMember(
             policyDecoder,
-            encodePublicKeyMultihash(0x01, memberKeyB),
+            compactPublicKeyPayload(0x01, memberKeyB),
             2,
             "member[1]",
         )
@@ -351,16 +356,16 @@ class NoritoJavaCodecAdapterParityTest {
 
     private fun assertMultisigMember(
         decoder: NoritoDecoder,
-        expectedPublicKey: String,
+        expectedPublicKey: ByteArray,
         expectedWeight: Int,
         label: String,
     ) {
         val memberPayload = readSequenceElement(decoder, decoder.compactLenActive(), label)
         val memberDecoder = canonicalDecoder(memberPayload)
-        val publicKey = NoritoAdapters.stringAdapter().decode(memberDecoder)
+        val publicKey = BYTE_VECTOR_ADAPTER.decode(memberDecoder)
         val weight = NoritoAdapters.uint(16).decode(memberDecoder).toInt()
         assertEquals(0, memberDecoder.remaining(), "$label payload should not have trailing bytes")
-        assertEquals(expectedPublicKey, publicKey)
+        assertContentEquals(expectedPublicKey, publicKey)
         assertEquals(expectedWeight, weight)
     }
 

@@ -15,9 +15,15 @@ operators can reconcile gas debits against the Nexus fee model.
 - IVM transactions must include `gas_limit` metadata (`u64`, > 0) to cap fee
   exposure. The `/v1/contracts/call` endpoint requires `gas_limit`
   explicitly, and invalid values are rejected.
-- When a transaction sets `fee_sponsor` metadata, the sponsor must grant
-  `CanUseFeeSponsor { sponsor }` to the caller. Unauthorized sponsorship
-  attempts are rejected and recorded.
+- When a transaction sets `fee_sponsor` metadata, that explicit sponsor takes
+  precedence. The sponsor must grant `CanUseFeeSponsor { sponsor }` to the
+  caller unless it is also configured as the routed dataspace's default
+  sponsor.
+- Dataspaces may configure `fee_sponsor_account_id` in
+  `nexus.dataspace_catalog`. When sponsorship is enabled and a routed
+  transaction does not set explicit `fee_sponsor` metadata, Nexus charges the
+  dataspace default sponsor automatically. This keeps onboarding from requiring
+  per-account sponsorship grants.
 - Every transaction that pays gas records a `LaneSettlementReceipt`.  Each
   receipt stores the caller-provided source identifier, the local micro-amount,
   the XOR due immediately, the XOR expected after the haircut, the realised

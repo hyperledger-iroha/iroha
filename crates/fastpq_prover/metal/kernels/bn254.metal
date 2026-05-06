@@ -210,6 +210,24 @@ inline Bn254 bn254_to_canonical(Bn254 value) {
     return bn254_from_limbs(ulong4(out_limbs[0], out_limbs[1], out_limbs[2], out_limbs[3]));
 }
 
+inline Bn254 bn254_one_montgomery() {
+    return bn254_from_canonical(ulong4(1UL, 0UL, 0UL, 0UL));
+}
+
+inline Bn254 bn254_pow_u64(Bn254 base, ulong exponent) {
+    Bn254 result = bn254_one_montgomery();
+    Bn254 power = base;
+    ulong exp = exponent;
+    while (exp != 0UL) {
+        if ((exp & 1UL) != 0UL) {
+            result = bn254_montgomery_mul(result, power);
+        }
+        power = bn254_montgomery_mul(power, power);
+        exp >>= 1UL;
+    }
+    return result;
+}
+
 kernel void bn254_fft_columns(
     device Bn254 *columns [[buffer(0)]],
     constant uint &log_size [[buffer(1)]],
@@ -280,13 +298,19 @@ kernel void bn254_lde_columns(
     uint log_len = trace_log + blowup_log;
     ulong stage_span = eval_len >> 1UL;
     Bn254 coset_mont = bn254_from_canonical_value(coset);
-    Bn254 coset_sq = bn254_montgomery_mul(coset_mont, coset_mont);
+    Bn254 coset_stride = bn254_pow_u64(coset_mont, (ulong)threads_per_group);
+    Bn254 coset_power = bn254_pow_u64(coset_mont, (ulong)tid);
+
+    for (ulong idx = tid; idx < trace_len; idx += threads_per_group) {
+        out[idx] = bn254_montgomery_mul(out[idx], coset_power);
+        coset_power = bn254_montgomery_mul(coset_power, coset_stride);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
     for (uint stage = 0U; stage < log_len; ++stage) {
         ulong len = 1UL << (stage + 1U);
         ulong half_len = len >> 1UL;
         ulong stage_offset = stage_span * stage;
-        bool final_stage = (stage + 1U) == log_len;
         for (ulong pair_idx = tid; pair_idx < stage_span; pair_idx += threads_per_group) {
             ulong block = pair_idx / half_len;
             ulong pair = pair_idx % half_len;
@@ -297,13 +321,8 @@ kernel void bn254_lde_columns(
             Bn254 twiddle = bn254_from_canonical_value(stage_twiddles[stage_offset + pair]);
             Bn254 u = out[idx];
             Bn254 v = bn254_montgomery_mul(out[idx + half_len], twiddle);
-            if (final_stage) {
-                out[idx] = bn254_montgomery_mul(bn254_add(u, v), coset_mont);
-                out[idx + half_len] = bn254_montgomery_mul(bn254_sub(u, v), coset_sq);
-            } else {
-                out[idx] = bn254_add(u, v);
-                out[idx + half_len] = bn254_sub(u, v);
-            }
+            out[idx] = bn254_add(u, v);
+            out[idx + half_len] = bn254_sub(u, v);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }

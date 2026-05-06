@@ -12,6 +12,7 @@ use base64::{
 use iroha_config::parameters::actual;
 use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
+    ValidationFail,
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     isi::{InstructionBox, IssueOfflineNoteV2},
@@ -190,6 +191,7 @@ pub(crate) async fn handle_notes_issue(
     )?;
     let lineage_id = required_string(&parsed.value, "lineage_id")?;
     let amount = parse_positive_amount(required_string(&parsed.value, "amount")?, "amount")?;
+    let note_commitment = required_note_commitment(&parsed.value)?;
     if amount > issuer.max_tx_value.clone() {
         return Err(validation(
             "OFFLINE_AMOUNT_EXCEEDS_LIMIT",
@@ -253,7 +255,6 @@ pub(crate) async fn handle_notes_issue(
     )?;
     let certificate = build_key_certificate(&issuer, &parsed, &attestation, now_ms)?;
     let chain_certificate = build_chain_certificate(&issuer, &parsed, &attestation)?;
-    let note_commitment = Hash::new(entry_hash.as_bytes());
     let issue = IssueOfflineNoteV2::new(OfflineNoteIssueV2 {
         note_commitment: note_commitment.clone(),
         key_certificate: chain_certificate,
@@ -409,12 +410,14 @@ fn parse_and_authorize(
     body: &[u8],
     endpoint: &'static str,
 ) -> Result<ParsedOfflineRequest, Error> {
+    reject_legacy_auth_headers(headers)?;
     let value: Value = json::from_slice(body).map_err(|err| {
         validation_owned(
             "OFFLINE_V2_INVALID_JSON",
             format!("Offline Notes V2 request body is not valid JSON: {err}"),
         )
     })?;
+    let (body_auth, unsigned_body) = extract_body_auth(&value)?;
     let account_literal = required_string(&value, "account_id")?.to_string();
     let (account_id, canonical_account) = routing::parse_account_literal_with_state(
         &app.state,
@@ -428,26 +431,18 @@ fn parse_and_authorize(
             format!("Invalid Offline Notes V2 account_id: {}", err.reason()),
         )
     })?;
-    let Some(_) = app_auth::verify_canonical_request(
+    app_auth::verify_canonical_body_request(
         &app.state,
-        headers,
+        body_auth,
         method,
         uri,
-        body,
+        &unsigned_body,
         Some(&account_id),
     )
     .map_err(|err| Error::AppForbidden {
         code: "OFFLINE_V2_SIGNATURE_INVALID",
-        message: err.to_string(),
-    })?
-    else {
-        return Err(Error::AppForbidden {
-            code: "OFFLINE_V2_SIGNATURE_REQUIRED",
-            message:
-                "Offline Notes V2 issuer requests require X-Iroha canonical request signatures."
-                    .to_string(),
-        });
-    };
+        message: app_auth_error_message(err),
+    })?;
 
     let device_id = required_string(&value, "device_id")?.to_string();
     if let Some(header_device_id) = headers
@@ -511,6 +506,81 @@ fn parse_and_authorize(
         asset_definition_literal: asset_literal,
         device_binding,
     })
+}
+
+fn reject_legacy_auth_headers(headers: &HeaderMap) -> Result<(), Error> {
+    for name in [
+        app_auth::HEADER_ACCOUNT,
+        app_auth::HEADER_SIGNATURE,
+        app_auth::HEADER_TIMESTAMP_MS,
+        app_auth::HEADER_NONCE,
+        app_auth::HEADER_WITNESS,
+    ] {
+        if headers.contains_key(name) {
+            return Err(Error::AppForbidden {
+                code: "OFFLINE_V2_HEADER_AUTH_REJECTED",
+                message: "Offline Notes V2 issuer requests must put account_id, timestamp_ms, nonce, and signature_base64 or witness_base64 in the JSON body; X-Iroha canonical auth headers are not accepted.".to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn extract_body_auth(
+    value: &Value,
+) -> Result<(app_auth::CanonicalRequestBodyAuth<'_>, Vec<u8>), Error> {
+    let account_id = required_string(value, "account_id")?;
+    let timestamp_ms =
+        required_u64_with_code(value, "timestamp_ms", "OFFLINE_V2_SIGNATURE_REQUIRED")?;
+    let nonce = required_string(value, "nonce")?;
+    let signature_base64 = optional_string(value, "signature_base64");
+    let witness_base64 = optional_string(value, "witness_base64");
+    let proof = match (signature_base64, witness_base64) {
+        (Some(signature), None) => app_auth::CanonicalRequestBodyProof::SignatureBase64(signature),
+        (None, Some(witness)) => app_auth::CanonicalRequestBodyProof::WitnessBase64(witness),
+        (None, None) => {
+            return Err(Error::AppForbidden {
+                code: "OFFLINE_V2_SIGNATURE_REQUIRED",
+                message: "Offline Notes V2 issuer requests require exactly one body proof field: signature_base64 or witness_base64.".to_string(),
+            });
+        }
+        (Some(_), Some(_)) => {
+            return Err(Error::AppForbidden {
+                code: "OFFLINE_V2_SIGNATURE_INVALID",
+                message: "Offline Notes V2 issuer requests must not include both signature_base64 and witness_base64.".to_string(),
+            });
+        }
+    };
+    let mut unsigned = value.clone();
+    let Value::Object(map) = &mut unsigned else {
+        return Err(validation(
+            "OFFLINE_V2_INVALID_JSON",
+            "Offline Notes V2 request body must be a JSON object.",
+        ));
+    };
+    map.remove("signature_base64");
+    map.remove("witness_base64");
+    let unsigned_body = json::to_vec(&unsigned).map_err(|source| Error::SerializationFailure {
+        context: "offline_v2_body_auth_unsigned_json",
+        source,
+    })?;
+
+    Ok((
+        app_auth::CanonicalRequestBodyAuth {
+            account_id,
+            timestamp_ms,
+            nonce,
+            proof,
+        },
+        unsigned_body,
+    ))
+}
+
+fn app_auth_error_message(error: Error) -> String {
+    match error {
+        Error::Query(ValidationFail::NotPermitted(message)) => message,
+        other => other.to_string(),
+    }
 }
 
 fn verify_device_attestation(
@@ -1269,10 +1339,33 @@ fn required_string<'a>(value: &'a Value, field: &'static str) -> Result<&'a str,
         })
 }
 
+fn required_note_commitment(value: &Value) -> Result<Hash, Error> {
+    let raw = required_string(value, "note_commitment")?;
+    if raw.len() != Hash::LENGTH * 2 || raw.starts_with("0x") || raw.starts_with("0X") {
+        return Err(invalid_note_commitment());
+    }
+    Hash::from_str(raw).map_err(|_| invalid_note_commitment())
+}
+
+fn invalid_note_commitment() -> Error {
+    validation(
+        "OFFLINE_V2_INVALID_NOTE_COMMITMENT",
+        "Offline Notes V2 note_commitment must be a bare 64-character Iroha hash hex string.",
+    )
+}
+
 fn required_u64(value: &Value, field: &'static str) -> Result<u64, Error> {
+    required_u64_with_code(value, field, "OFFLINE_V2_MISSING_FIELD")
+}
+
+fn required_u64_with_code(
+    value: &Value,
+    field: &'static str,
+    code: &'static str,
+) -> Result<u64, Error> {
     value.get(field).and_then(Value::as_u64).ok_or_else(|| {
         validation_owned(
-            "OFFLINE_V2_MISSING_FIELD",
+            code,
             format!("Offline Notes V2 numeric field `{field}` is required."),
         )
     })
@@ -1509,8 +1602,19 @@ fn validation_owned(code: &'static str, message: String) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::{HeaderMap, HeaderValue, Method, Uri};
+    use iroha_core::prelude::World;
     use iroha_crypto::Algorithm;
-    use iroha_data_model::domain::DomainId;
+    use iroha_data_model::{
+        Registrable,
+        account::{Account, MultisigMember, MultisigPolicy},
+        asset::AssetDefinition,
+        domain::{Domain, DomainId},
+        soracloud::{
+            CANONICAL_REQUEST_WITNESS_VERSION_V1, CanonicalRequestSignatureWitnessV1,
+            CanonicalRequestWitnessV1,
+        },
+    };
 
     const NOW_MS: u64 = 1_700_000_000_000;
     const REPORT_BYTES: &[u8] = b"offline-v2-platform-attestation";
@@ -1651,6 +1755,428 @@ mod tests {
         }
     }
 
+    fn app_error_code(result: Result<impl Sized, Error>) -> &'static str {
+        match result {
+            Err(Error::AppQueryValidation { code, .. } | Error::AppForbidden { code, .. }) => code,
+            Err(error) => panic!("expected app error, got {error:?}"),
+            Ok(_) => panic!("expected app error"),
+        }
+    }
+
+    fn app_error_message(result: Result<impl Sized, Error>) -> String {
+        match result {
+            Err(
+                Error::AppQueryValidation { message, .. } | Error::AppForbidden { message, .. },
+            ) => message,
+            Err(error) => panic!("expected app error, got {error:?}"),
+            Ok(_) => panic!("expected app error"),
+        }
+    }
+
+    fn endpoint_cases() -> [(&'static str, &'static str); 4] {
+        [
+            (PATH_KEYS_REFILL, ENDPOINT_KEYS_REFILL),
+            (PATH_NOTES_ISSUE, ENDPOINT_NOTES_ISSUE),
+            (PATH_NOTES_REDEEM, ENDPOINT_NOTES_REDEEM),
+            (PATH_AUDIT, ENDPOINT_AUDIT),
+        ]
+    }
+
+    fn asset_definition_for_tests() -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
+            "rose".parse().expect("asset name"),
+        )
+    }
+
+    fn app_with_account_and_asset(
+        account_id: &AccountId,
+        asset_definition_id: &AssetDefinitionId,
+    ) -> SharedAppState {
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(account_id);
+        let account = Account::new(account_id.clone()).build(account_id);
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name(asset_definition_id.name().to_string())
+            .build(account_id);
+        let world = World::with([domain], [account], [asset_definition]);
+        crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(world)
+    }
+
+    fn signer_account(seed: u8) -> (KeyPair, AccountId, String) {
+        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let account = AccountId::new(key_pair.public_key().clone());
+        let literal = account.canonical_i105().expect("i105 account");
+        (key_pair, account, literal)
+    }
+
+    fn non_ascii_signer_account() -> (KeyPair, AccountId, String) {
+        for seed in 1_u8..=u8::MAX {
+            let (key_pair, account, literal) = signer_account(seed);
+            if literal.chars().any(|ch| !ch.is_ascii()) {
+                return (key_pair, account, literal);
+            }
+        }
+        panic!("expected at least one deterministic test key to produce non-ASCII I105");
+    }
+
+    fn minimal_parse_body(account_literal: &str, asset_literal: &str) -> Value {
+        let offline_public_key = "a5".repeat(32);
+        let device_binding = json_object(vec![
+            ("device_id", string_value("device-1")),
+            ("offline_public_key", string_value(&offline_public_key)),
+            (
+                "signature_base64",
+                string_value("nested-device-signature-is-not-body-auth"),
+            ),
+        ]);
+        json_object(vec![
+            ("account_id", string_value(account_literal)),
+            ("operation_id", string_value("operation-1")),
+            ("device_id", string_value("device-1")),
+            ("offline_public_key", string_value(offline_public_key)),
+            ("asset_definition_id", string_value(asset_literal)),
+            ("device_binding", device_binding),
+        ])
+    }
+
+    fn add_body_freshness(
+        value: &mut Value,
+        account_literal: &str,
+        timestamp_ms: u64,
+        nonce: &str,
+    ) {
+        insert_field(value, "account_id", string_value(account_literal));
+        insert_field(value, "timestamp_ms", number_value(timestamp_ms));
+        insert_field(value, "nonce", string_value(nonce));
+    }
+
+    fn unsigned_body_bytes(value: &Value) -> Vec<u8> {
+        let mut unsigned = value.clone();
+        let Value::Object(map) = &mut unsigned else {
+            panic!("expected object body");
+        };
+        map.remove("signature_base64");
+        map.remove("witness_base64");
+        json::to_vec(&unsigned).expect("unsigned body json")
+    }
+
+    fn sign_body_value(
+        method: &Method,
+        uri: &Uri,
+        key_pair: &KeyPair,
+        mut value: Value,
+        account_literal: &str,
+        timestamp_ms: u64,
+        nonce: &str,
+    ) -> Value {
+        add_body_freshness(&mut value, account_literal, timestamp_ms, nonce);
+        let unsigned = unsigned_body_bytes(&value);
+        let message = app_auth::canonical_request_signature_message(
+            method,
+            uri,
+            &unsigned,
+            timestamp_ms,
+            nonce,
+        );
+        let signature = Signature::new(key_pair.private_key(), &message);
+        insert_field(
+            &mut value,
+            "signature_base64",
+            string_value(BASE64_STANDARD.encode(signature.payload())),
+        );
+        value
+    }
+
+    fn encode_body(value: &Value) -> Vec<u8> {
+        json::to_vec(value).expect("request body json")
+    }
+
+    fn parse_offline_request(
+        app: &SharedAppState,
+        method: &Method,
+        uri: &Uri,
+        headers: &HeaderMap,
+        body: &Value,
+        endpoint: &'static str,
+    ) -> Result<ParsedOfflineRequest, Error> {
+        let body = encode_body(body);
+        parse_and_authorize(app.as_ref(), method, uri, headers, &body, endpoint)
+    }
+
+    fn multisig_witness_body_value(
+        method: &Method,
+        uri: &Uri,
+        signers: &[&KeyPair],
+        mut value: Value,
+        account: &AccountId,
+        account_literal: &str,
+        timestamp_ms: u64,
+        nonce: &str,
+    ) -> Value {
+        add_body_freshness(&mut value, account_literal, timestamp_ms, nonce);
+        let unsigned = unsigned_body_bytes(&value);
+        let mut witness = CanonicalRequestWitnessV1 {
+            schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
+            subject_account: account.clone(),
+            timestamp_ms,
+            nonce: nonce.to_string(),
+            canonical_request_hash: app_auth::canonical_request_hash(method, uri, &unsigned),
+            signatures: Vec::new(),
+        };
+        let message = app_auth::canonical_request_witness_message(&witness)
+            .expect("canonical witness payload");
+        witness.signatures = signers
+            .iter()
+            .map(|signer| CanonicalRequestSignatureWitnessV1 {
+                signer: signer.public_key().clone(),
+                signature: Signature::new(signer.private_key(), &message),
+            })
+            .collect();
+        insert_field(
+            &mut value,
+            "witness_base64",
+            string_value(app_auth::witness_header_value(&witness).expect("witness base64")),
+        );
+        value
+    }
+
+    #[test]
+    fn body_auth_accepts_single_signature_for_all_issuer_endpoints() {
+        let _guard = crate::tests_runtime_handlers::app_auth_test_guard(Default::default());
+        let (key_pair, account, account_literal) = non_ascii_signer_account();
+        let asset_definition_id = asset_definition_for_tests();
+        let asset_literal = asset_definition_id.to_string();
+        let app = app_with_account_and_asset(&account, &asset_definition_id);
+        let method = Method::POST;
+        let headers = HeaderMap::new();
+
+        for (path, endpoint) in endpoint_cases() {
+            let uri: Uri = path.parse().expect("uri");
+            let body = sign_body_value(
+                &method,
+                &uri,
+                &key_pair,
+                minimal_parse_body(&account_literal, &asset_literal),
+                &account_literal,
+                now_ms(),
+                &format!("valid-body-auth-{endpoint}"),
+            );
+            let parsed = parse_offline_request(&app, &method, &uri, &headers, &body, endpoint)
+                .expect("valid body auth");
+            assert_eq!(parsed.account_id, account);
+            assert_eq!(parsed.account_literal, account_literal);
+        }
+    }
+
+    #[test]
+    fn body_auth_accepts_multisig_witness() {
+        let _guard = crate::tests_runtime_handlers::app_auth_test_guard(Default::default());
+        let signer_one = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
+        let signer_two = KeyPair::from_seed(vec![0x42; 32], Algorithm::Ed25519);
+        let policy = MultisigPolicy::new(
+            2,
+            vec![
+                MultisigMember::new(signer_one.public_key().clone(), 1).expect("member"),
+                MultisigMember::new(signer_two.public_key().clone(), 1).expect("member"),
+            ],
+        )
+        .expect("policy");
+        let account = AccountId::new_multisig(policy);
+        let account_literal = account.canonical_i105().expect("i105 account");
+        let asset_definition_id = asset_definition_for_tests();
+        let asset_literal = asset_definition_id.to_string();
+        let app = app_with_account_and_asset(&account, &asset_definition_id);
+        let method = Method::POST;
+        let uri: Uri = PATH_AUDIT.parse().expect("uri");
+        let body = multisig_witness_body_value(
+            &method,
+            &uri,
+            &[&signer_one, &signer_two],
+            minimal_parse_body(&account_literal, &asset_literal),
+            &account,
+            &account_literal,
+            now_ms(),
+            "valid-body-witness",
+        );
+
+        let parsed = parse_offline_request(
+            &app,
+            &method,
+            &uri,
+            &HeaderMap::new(),
+            &body,
+            ENDPOINT_AUDIT,
+        )
+        .expect("valid multisig body auth");
+        assert_eq!(parsed.account_id, account);
+    }
+
+    #[test]
+    fn body_auth_rejects_missing_and_ambiguous_proofs() {
+        let _guard = crate::tests_runtime_handlers::app_auth_test_guard(Default::default());
+        let (key_pair, account, account_literal) = signer_account(0x43);
+        let asset_definition_id = asset_definition_for_tests();
+        let asset_literal = asset_definition_id.to_string();
+        let app = app_with_account_and_asset(&account, &asset_definition_id);
+        let method = Method::POST;
+        let uri: Uri = PATH_KEYS_REFILL.parse().expect("uri");
+        let headers = HeaderMap::new();
+
+        let mut missing = minimal_parse_body(&account_literal, &asset_literal);
+        add_body_freshness(&mut missing, &account_literal, now_ms(), "missing-proof");
+        assert_eq!(
+            app_error_code(parse_offline_request(
+                &app,
+                &method,
+                &uri,
+                &headers,
+                &missing,
+                ENDPOINT_KEYS_REFILL,
+            )),
+            "OFFLINE_V2_SIGNATURE_REQUIRED"
+        );
+
+        let mut both = sign_body_value(
+            &method,
+            &uri,
+            &key_pair,
+            minimal_parse_body(&account_literal, &asset_literal),
+            &account_literal,
+            now_ms(),
+            "both-proofs",
+        );
+        insert_field(&mut both, "witness_base64", string_value("AA=="));
+        assert_eq!(
+            app_error_code(parse_offline_request(
+                &app,
+                &method,
+                &uri,
+                &headers,
+                &both,
+                ENDPOINT_KEYS_REFILL,
+            )),
+            "OFFLINE_V2_SIGNATURE_INVALID"
+        );
+    }
+
+    #[test]
+    fn body_auth_rejects_stale_replayed_and_tampered_requests() {
+        let _guard = crate::tests_runtime_handlers::app_auth_test_guard(Default::default());
+        let (key_pair, account, account_literal) = signer_account(0x44);
+        let asset_definition_id = asset_definition_for_tests();
+        let asset_literal = asset_definition_id.to_string();
+        let app = app_with_account_and_asset(&account, &asset_definition_id);
+        let method = Method::POST;
+        let uri: Uri = PATH_NOTES_ISSUE.parse().expect("uri");
+        let headers = HeaderMap::new();
+
+        let stale = sign_body_value(
+            &method,
+            &uri,
+            &key_pair,
+            minimal_parse_body(&account_literal, &asset_literal),
+            &account_literal,
+            1,
+            "stale-body-auth",
+        );
+        let stale_message = app_error_message(parse_offline_request(
+            &app,
+            &method,
+            &uri,
+            &headers,
+            &stale,
+            ENDPOINT_NOTES_ISSUE,
+        ));
+        assert!(stale_message.contains("timestamp outside allowed skew"));
+
+        let replayed = sign_body_value(
+            &method,
+            &uri,
+            &key_pair,
+            minimal_parse_body(&account_literal, &asset_literal),
+            &account_literal,
+            now_ms(),
+            "replayed-body-auth",
+        );
+        parse_offline_request(
+            &app,
+            &method,
+            &uri,
+            &headers,
+            &replayed,
+            ENDPOINT_NOTES_ISSUE,
+        )
+        .expect("first request");
+        let replay_message = app_error_message(parse_offline_request(
+            &app,
+            &method,
+            &uri,
+            &headers,
+            &replayed,
+            ENDPOINT_NOTES_ISSUE,
+        ));
+        assert!(replay_message.contains("nonce already used"));
+
+        let mut tampered = sign_body_value(
+            &method,
+            &uri,
+            &key_pair,
+            minimal_parse_body(&account_literal, &asset_literal),
+            &account_literal,
+            now_ms(),
+            "tampered-body-auth",
+        );
+        insert_field(
+            &mut tampered,
+            "operation_id",
+            string_value("operation-tampered"),
+        );
+        let tampered_message = app_error_message(parse_offline_request(
+            &app,
+            &method,
+            &uri,
+            &headers,
+            &tampered,
+            ENDPOINT_NOTES_ISSUE,
+        ));
+        assert!(tampered_message.contains("signature failed verification"));
+    }
+
+    #[test]
+    fn body_auth_rejects_legacy_x_iroha_auth_headers() {
+        let _guard = crate::tests_runtime_handlers::app_auth_test_guard(Default::default());
+        let (key_pair, account, account_literal) = signer_account(0x45);
+        let asset_definition_id = asset_definition_for_tests();
+        let asset_literal = asset_definition_id.to_string();
+        let app = app_with_account_and_asset(&account, &asset_definition_id);
+        let method = Method::POST;
+        let uri: Uri = PATH_NOTES_REDEEM.parse().expect("uri");
+        let body = sign_body_value(
+            &method,
+            &uri,
+            &key_pair,
+            minimal_parse_body(&account_literal, &asset_literal),
+            &account_literal,
+            now_ms(),
+            "legacy-header-rejected",
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(app_auth::HEADER_ACCOUNT, HeaderValue::from_static("legacy"));
+
+        assert_eq!(
+            app_error_code(parse_offline_request(
+                &app,
+                &method,
+                &uri,
+                &headers,
+                &body,
+                ENDPOINT_NOTES_REDEEM,
+            )),
+            "OFFLINE_V2_HEADER_AUTH_REJECTED"
+        );
+    }
+
     #[test]
     fn verified_attestation_canonicalizes_certificate_key_bytes() {
         let (issuer, verifier) = sample_issuer();
@@ -1779,7 +2305,43 @@ mod tests {
     }
 
     #[test]
-    fn issued_note_commitment_uses_chain_commitment_encoding() {
+    fn issue_note_commitment_accepts_wallet_hash() {
+        let note_commitment = Hash::new(b"wallet-derived-note-commitment");
+        let request = json_object(vec![(
+            "note_commitment",
+            string_value(note_commitment.to_string()),
+        )]);
+
+        assert_eq!(
+            required_note_commitment(&request).expect("note commitment"),
+            note_commitment
+        );
+    }
+
+    #[test]
+    fn issue_note_commitment_rejects_missing_and_malformed_values() {
+        let missing = json_object(Vec::new());
+        assert_eq!(
+            validation_code(required_note_commitment(&missing)),
+            "OFFLINE_V2_MISSING_FIELD"
+        );
+
+        for invalid in [
+            "0x0000000000000000000000000000000000000000000000000000000000000001",
+            "000000000000000000000000000000000000000000000000000000000000000",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "not-a-hash",
+        ] {
+            let request = json_object(vec![("note_commitment", string_value(invalid))]);
+            assert_eq!(
+                validation_code(required_note_commitment(&request)),
+                "OFFLINE_V2_INVALID_NOTE_COMMITMENT"
+            );
+        }
+    }
+
+    #[test]
+    fn settlement_entry_hash_remains_lineage_metadata() {
         let entry_hash = settlement_entry_hash(
             "operation-1",
             "lineage-1",
@@ -1793,12 +2355,22 @@ mod tests {
             4,
         )
         .expect("entry hash");
-        let chain_commitment = Hash::new(entry_hash.as_bytes()).to_string();
 
-        assert_ne!(chain_commitment, entry_hash);
         assert_eq!(
-            chain_commitment,
-            Hash::new(entry_hash.as_bytes()).to_string()
+            entry_hash,
+            settlement_entry_hash(
+                "operation-1",
+                "lineage-1",
+                "account-1",
+                "device-1",
+                "offline-key-1",
+                "usd#offline",
+                "5",
+                "12",
+                "17",
+                4,
+            )
+            .expect("repeat entry hash")
         );
     }
 }

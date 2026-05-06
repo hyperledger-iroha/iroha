@@ -5536,7 +5536,9 @@ pub fn handle_post_sumeragi_vrf_commit(
         signer: request.signer,
         bls_sig,
     };
-    sumeragi.incoming_block_message(BlockMessage::VrfCommit(commit));
+    if !sumeragi.incoming_block_message(BlockMessage::VrfCommit(commit)) {
+        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
+    }
     Ok(StatusCode::ACCEPTED.into_response())
 }
 
@@ -5552,7 +5554,9 @@ pub fn handle_post_sumeragi_vrf_reveal(
         signer: request.signer,
         bls_sig,
     };
-    sumeragi.incoming_block_message(BlockMessage::VrfReveal(msg));
+    if !sumeragi.incoming_block_message(BlockMessage::VrfReveal(msg)) {
+        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
+    }
     Ok(StatusCode::ACCEPTED.into_response())
 }
 

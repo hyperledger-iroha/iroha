@@ -4,10 +4,44 @@ Last updated: 2026-05-05
 
 Completed history lives in `status.md`. This file should only track unfinished work.
 
+## Offline Note V2 wallet SDK completion
+
+- Finish production adapters behind the new one-call `OfflineNoteV2Wallet`
+  facades:
+  - add default Torii issuer adapters for key refill plus
+    `/v1/offline/v2/notes/issue` in Kotlin/JVM, Java Android, and Swift;
+  - replace the first-pass `sync()` no-op with transaction-outcome
+    reconciliation for `CHANGE_PENDING`, `SPEND_PENDING`, and
+    `REDEEM_PENDING` note records;
+  - add duplicate-token, already-spent, failed-audit, and failed-redeem
+    mock-transport regressions around that reconciliation.
+- Add structured encrypted Offline Note V2 wallet-note stores:
+  Android Keystore-backed secure storage in the platform module and Swift
+  Keychain-backed storage modeled after `ConnectKeyStore`. Kotlin/JVM, Java
+  Android, and Swift now have structured in-memory stores for SDK tests.
+- Add public Norito decoders for Offline Note V2 key certificates, issued
+  claims, redeem payloads, audit bundles, and payment tokens.
+
 ## Validation corridor
 
 - Carry the Sumeragi NPoS/permissioned QC and VRF hardening through the next
   full workspace corridor.
+  - A 2026-05-05 workspace rerun exposed three remaining
+    `consensus_and_da` cases after the UAID replay/checkpoint fixes:
+    stale evidence persistence, NPoS baseline timing, and late VRF reveal
+    penalty recovery. The stale-evidence and NPoS performance focused reruns
+    are green after the Torii horizon filter and baseline budget update. The
+    late-reveal path now has code-level fixes for VRF vote-queue routing and
+    deferring committed-block catch-up until after VRF metadata handling,
+    epoch-record hydration before reveal validation, stale pending-seal
+    retention, and external Torii VRF metadata gossip. The focused core units
+    for those paths are green. The remaining integration blocker is now a
+    separate four-peer NPoS/DA liveness stall: the late reveal is accepted in
+    Sumeragi status, but the network repeatedly stalls at height 4 with RBC
+    READY/DELIVER data waiting on missing INIT/chunk state before the pending
+    VRF seal can be committed. Fix that h4 DA/RBC stall, then rerun
+    `sumeragi_randomness::npos_late_vrf_reveal_clears_penalty_and_preserves_seed`
+    as the final persistence gate.
   - Focused commit, block-sync, VRF, QC-validation, roster-selection, Torii VRF
     OpenAPI/parser, and data-model consensus roundtrip tests are green as of
     2026-05-02 with `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-verify`.
@@ -381,6 +415,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - Keep NFT/RWA escrow and court fee/payout generalization as separate follow-ups; the v1 primitive intentionally resolves only between the escrow seller and accepted buyer.
 - Carry the Soracloud production posture hardening through the operator-host rollout corridor.
   - Local focused, portable QEMU, and prior multi-peer load gates are green as of 2026-04-25; the readiness runner now reports missing operator inventory and missing observability evidence as production blockers. Before public rollout, run the mixed-host Inrou smoke with the real operator inventory, attach the real metrics/status/alert/dashboard evidence, and archive a blocker-free readiness report.
+  - The full `irohad` Soracloud binary filter is green as of 2026-05-05 under
+    `--features embedded-soracloud-runtime`. The full readiness profile still
+    requires operator mixed-host inventory and observability evidence before it
+    can produce a blocker-free rollout report.
 - Carry the new Taira devex CLI through the opt-in live rollout corridor.
   - The local CLI/Torii/mock-script validation for `iroha taira doctor` and `iroha taira write-canary` is green as of 2026-04-25, but no live Taira write was run from this tree.
   - Before publishing a live receipt, run `iroha taira doctor --public-root https://taira.sora.org` and an operator-approved `iroha taira write-canary --public-root https://taira.sora.org`, preserving only the redacted receipt and any stable failure codes.
@@ -504,6 +542,11 @@ Completed history lives in `status.md`. This file should only track unfinished w
     scalar `poseidon3_permute` or CPU FASTPQ fallback. Keep CUDA runtime
     parity/perf validation as a separate CUDA-host follow-up; macOS
     compile/manifest coverage is not CUDA hardware evidence.
+  - The 2026-05-05 hardware-backed FASTPQ Metal parity rerun on macOS is green
+    after repairing Goldilocks FFT/LDE, BN254 LDE, and Poseidon Metal/CPU
+    mismatches. Keep CUDA runtime parity/performance validation as a separate
+    CUDA-host follow-up; this Apple Metal evidence does not prove CUDA backend
+    parity.
   - The next throughput slice should target the post-GPU peer CPU stack:
     Ed25519/Curve25519 public-key parse and verification, Norito
     transaction/transfer serialization and decode, transaction metadata
@@ -712,9 +755,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
     inbound versioned signed payload bytes.
   - The first FASTPQ BN254 Metal Poseidon batch path is implemented behind the
     existing `fastpq-gpu` feature and existing FASTPQ execution/poseidon modes.
-    Remaining work is validation on a host with the Apple Metal toolchain
-    installed: compile the metallib, run the Metal parity tests, then compare a
-    30s sampled 20k profile and a 120s gate with `--fastpq-poseidon-mode gpu`
+    Apple Metal toolchain validation was run on 2026-05-05 and found FASTPQ
+    Metal parity failures in FFT/LDE/Poseidon paths. Remaining work is to fix
+    those mismatches, rerun the Metal parity tests to green, then compare a 30s
+    sampled 20k profile and a 120s gate with `--fastpq-poseidon-mode gpu`
     against the latest scalar release artifacts.
   - Carry the Norito sequence span planner through the remaining acceleration
     corridor: validate the CUDA sequence planner with the real `cuda-kernel`

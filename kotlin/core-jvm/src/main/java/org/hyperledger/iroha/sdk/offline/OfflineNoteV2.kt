@@ -9,7 +9,7 @@ import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
 import org.hyperledger.iroha.sdk.address.MultisigMemberPayload
 import org.hyperledger.iroha.sdk.address.MultisigPolicyPayload
 import org.hyperledger.iroha.sdk.address.algorithmForCurveId
-import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
+import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
@@ -25,6 +25,12 @@ object OfflineNoteV2 {
         "iroha:offline-note-v2:redeem-public-inputs:v1"
     const val AUDIT_PUBLIC_INPUTS_DOMAIN: String =
         "iroha:offline-note-v2:audit-public-inputs:v1"
+    const val NOTE_COMMITMENT_DOMAIN: String =
+        "iroha:offline-note-v2:note-commitment:v1"
+    const val INPUT_NULLIFIER_DOMAIN: String =
+        "iroha:offline-note-v2:input-nullifier:v1"
+    const val PAYMENT_TOKEN_ID_DOMAIN: String =
+        "iroha:offline-note-v2:payment-token-id:v1"
     const val RECURSIVE_BACKEND: String = "halo2/ipa"
     const val RECURSIVE_VERIFIER_NAME: String = "offline-note-v2-recursive-v1"
     const val RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1: String =
@@ -56,6 +62,18 @@ object OfflineNoteV2 {
         "iroha_data_model::offline::model::OfflineNoteAuditBundleV2"
     private const val AUDIT_PUBLIC_INPUTS_SCHEMA =
         "iroha_data_model::offline::model::OfflineNoteAuditPublicInputsV2"
+    private const val NOTE_COMMITMENT_PREIMAGE_SCHEMA =
+        "iroha_data_model::offline::model::OfflineNoteCommitmentPreimageV2"
+    private const val INPUT_NULLIFIER_PREIMAGE_SCHEMA =
+        "iroha_data_model::offline::model::OfflineNoteInputNullifierPreimageV2"
+    private const val PAYMENT_TOKEN_ID_PREIMAGE_SCHEMA =
+        "iroha_data_model::offline::model::OfflineNotePaymentTokenIdPreimageV2"
+    const val ISSUE_INSTRUCTION_SCHEMA: String =
+        "iroha_data_model::isi::offline::IssueOfflineNoteV2"
+    const val REDEEM_INSTRUCTION_SCHEMA: String =
+        "iroha_data_model::isi::offline::RedeemOfflineNoteV2"
+    const val AUDIT_INSTRUCTION_SCHEMA: String =
+        "iroha_data_model::isi::offline::AuditOfflineNoteV2"
 
     @JvmStatic
     fun encodeCertificatePayload(value: KeyCertificatePayloadV2): ByteArray =
@@ -90,6 +108,55 @@ object OfflineNoteV2 {
         encodeWithHeader(value, AUDIT_PUBLIC_INPUTS_SCHEMA, AuditPublicInputsAdapter)
 
     @JvmStatic
+    fun encodeNoteCommitmentPreimage(value: NoteCommitmentPreimageV2): ByteArray =
+        encodeWithHeader(value, NOTE_COMMITMENT_PREIMAGE_SCHEMA, NoteCommitmentPreimageAdapter)
+
+    @JvmStatic
+    fun encodeInputNullifierPreimage(value: InputNullifierPreimageV2): ByteArray =
+        encodeWithHeader(value, INPUT_NULLIFIER_PREIMAGE_SCHEMA, InputNullifierPreimageAdapter)
+
+    @JvmStatic
+    fun encodePaymentTokenIdPreimage(value: PaymentTokenIdPreimageV2): ByteArray =
+        encodeWithHeader(value, PAYMENT_TOKEN_ID_PREIMAGE_SCHEMA, PaymentTokenIdPreimageAdapter)
+
+    @JvmStatic
+    fun issueInstruction(value: IssueV2): InstructionBox =
+        InstructionBox.fromWirePayload(
+            ISSUE_INSTRUCTION_SCHEMA,
+            encodeInstructionWrapper(ISSUE_INSTRUCTION_SCHEMA, encodeIssue(value)),
+        )
+
+    @JvmStatic
+    fun redeemInstruction(value: RedeemV2): InstructionBox {
+        value.validateProofBinding()
+        return InstructionBox.fromWirePayload(
+            REDEEM_INSTRUCTION_SCHEMA,
+            encodeInstructionWrapper(REDEEM_INSTRUCTION_SCHEMA, encodeRedeem(value)),
+        )
+    }
+
+    @JvmStatic
+    fun auditInstruction(value: AuditBundleV2): InstructionBox {
+        value.validateProofBinding()
+        return InstructionBox.fromWirePayload(
+            AUDIT_INSTRUCTION_SCHEMA,
+            encodeInstructionWrapper(AUDIT_INSTRUCTION_SCHEMA, encodeAudit(value)),
+        )
+    }
+
+    @JvmStatic
+    fun deriveNoteCommitment(value: NoteCommitmentPreimageV2): ByteArray =
+        hash(encodeNoteCommitmentPreimage(value))
+
+    @JvmStatic
+    fun deriveInputNullifier(value: InputNullifierPreimageV2): ByteArray =
+        hash(encodeInputNullifierPreimage(value))
+
+    @JvmStatic
+    fun derivePaymentTokenId(value: PaymentTokenIdPreimageV2): ByteArray =
+        hash(encodePaymentTokenIdPreimage(value))
+
+    @JvmStatic
     fun hash(bytes: ByteArray): ByteArray = IrohaHash.prehash(bytes)
 
     @JvmStatic
@@ -105,6 +172,9 @@ object OfflineNoteV2 {
 
     private fun <T> encodeWithHeader(value: T, schema: String, adapter: TypeAdapter<T>): ByteArray =
         NoritoCodec.encode(value, schema, adapter, NoritoHeader.COMPACT_LEN)
+
+    private fun encodeInstructionWrapper(schema: String, modelPayload: ByteArray): ByteArray =
+        NoritoCodec.encode(modelPayload, schema, InstructionWrapperAdapter, 0)
 
     class VerifyingKeyIdReference @JvmOverloads constructor(
         val backend: String = RECURSIVE_BACKEND,
@@ -218,6 +288,113 @@ object OfflineNoteV2 {
         fun signingBytes(): ByteArray = signingPayload().noritoEncoded()
         fun payloadHash(): ByteArray = hash(signingBytes())
         fun noritoEncoded(): ByteArray = encodeCertificate(this)
+    }
+
+    sealed class CommitmentOriginV2 {
+        class IssuerLoad(
+            val operationId: String,
+            val lineageId: String,
+            val localRevision: Long,
+        ) : CommitmentOriginV2() {
+            init {
+                require(operationId.trim().isNotEmpty()) { "operation_id must not be empty" }
+                require(lineageId.trim().isNotEmpty()) { "lineage_id must not be empty" }
+                require(localRevision >= 0) { "local_revision must be non-negative" }
+            }
+        }
+
+        class P2pOutput(
+            val paymentRequestId: String,
+            val outputIndex: Int,
+        ) : CommitmentOriginV2() {
+            init {
+                require(paymentRequestId.trim().isNotEmpty()) { "payment_request_id must not be empty" }
+                require(outputIndex >= 0) { "output_index must be non-negative" }
+            }
+        }
+    }
+
+    class NoteCommitmentPreimageV2 @JvmOverloads constructor(
+        val domain: String = NOTE_COMMITMENT_DOMAIN,
+        val chainId: String,
+        ownerKeyCertificatePayloadHash: ByteArray,
+        val assetId: String,
+        val amount: String,
+        noteSecret: ByteArray,
+        val origin: CommitmentOriginV2,
+    ) {
+        private val _ownerKeyCertificatePayloadHash = ownerKeyCertificatePayloadHash.copyOf()
+        private val _noteSecret = noteSecret.copyOf()
+        val canonicalAmount: String = parseNumeric(amount).canonicalString
+
+        init {
+            require(domain == NOTE_COMMITMENT_DOMAIN) { "unsupported note commitment domain" }
+            require(chainId.trim().isNotEmpty()) { "chain_id must not be empty" }
+            requireHash(_ownerKeyCertificatePayloadHash, "owner_key_certificate_payload_hash")
+            parseAssetId(assetId)
+            requireRandomBytes(_noteSecret, "note_secret")
+        }
+
+        fun ownerKeyCertificatePayloadHash(): ByteArray = _ownerKeyCertificatePayloadHash.copyOf()
+        fun noteSecret(): ByteArray = _noteSecret.copyOf()
+        fun noritoEncoded(): ByteArray = encodeNoteCommitmentPreimage(this)
+        fun deriveNoteCommitment(): ByteArray = OfflineNoteV2.deriveNoteCommitment(this)
+    }
+
+    class InputNullifierPreimageV2 @JvmOverloads constructor(
+        val domain: String = INPUT_NULLIFIER_DOMAIN,
+        val chainId: String,
+        sourceNoteCommitment: ByteArray,
+        ownerKeyCertificatePayloadHash: ByteArray,
+        noteSecret: ByteArray,
+    ) {
+        private val _sourceNoteCommitment = sourceNoteCommitment.copyOf()
+        private val _ownerKeyCertificatePayloadHash = ownerKeyCertificatePayloadHash.copyOf()
+        private val _noteSecret = noteSecret.copyOf()
+
+        init {
+            require(domain == INPUT_NULLIFIER_DOMAIN) { "unsupported input nullifier domain" }
+            require(chainId.trim().isNotEmpty()) { "chain_id must not be empty" }
+            requireHash(_sourceNoteCommitment, "source_note_commitment")
+            requireHash(_ownerKeyCertificatePayloadHash, "owner_key_certificate_payload_hash")
+            requireRandomBytes(_noteSecret, "note_secret")
+        }
+
+        fun sourceNoteCommitment(): ByteArray = _sourceNoteCommitment.copyOf()
+        fun ownerKeyCertificatePayloadHash(): ByteArray = _ownerKeyCertificatePayloadHash.copyOf()
+        fun noteSecret(): ByteArray = _noteSecret.copyOf()
+        fun noritoEncoded(): ByteArray = encodeInputNullifierPreimage(this)
+        fun deriveInputNullifier(): ByteArray = OfflineNoteV2.deriveInputNullifier(this)
+    }
+
+    class PaymentTokenIdPreimageV2 @JvmOverloads constructor(
+        val domain: String = PAYMENT_TOKEN_ID_DOMAIN,
+        val chainId: String,
+        tokenNonce: ByteArray,
+        senderKeyCertificatePayloadHash: ByteArray,
+        inputNullifiers: List<ByteArray>,
+        outputCommitments: List<ByteArray>,
+    ) {
+        private val _tokenNonce = tokenNonce.copyOf()
+        private val _senderKeyCertificatePayloadHash = senderKeyCertificatePayloadHash.copyOf()
+        private val _inputNullifiers = inputNullifiers.map { it.copyOf() }
+        private val _outputCommitments = outputCommitments.map { it.copyOf() }
+
+        init {
+            require(domain == PAYMENT_TOKEN_ID_DOMAIN) { "unsupported payment token id domain" }
+            require(chainId.trim().isNotEmpty()) { "chain_id must not be empty" }
+            requireRandomBytes(_tokenNonce, "token_nonce")
+            requireHash(_senderKeyCertificatePayloadHash, "sender_key_certificate_payload_hash")
+            requireHashes(_inputNullifiers, "input_nullifiers")
+            requireHashes(_outputCommitments, "output_commitments")
+        }
+
+        fun tokenNonce(): ByteArray = _tokenNonce.copyOf()
+        fun senderKeyCertificatePayloadHash(): ByteArray = _senderKeyCertificatePayloadHash.copyOf()
+        fun inputNullifiers(): List<ByteArray> = _inputNullifiers.map { it.copyOf() }
+        fun outputCommitments(): List<ByteArray> = _outputCommitments.map { it.copyOf() }
+        fun noritoEncoded(): ByteArray = encodePaymentTokenIdPreimage(this)
+        fun derivePaymentTokenId(): ByteArray = OfflineNoteV2.derivePaymentTokenId(this)
     }
 
     class IssueV2(
@@ -579,6 +756,15 @@ object OfflineNoteV2 {
         }
     }
 
+    private object InstructionWrapperAdapter : TypeAdapter<ByteArray> {
+        override fun encode(encoder: NoritoEncoder, value: ByteArray) {
+            writeField(encoder) { it.writeBytes(value) }
+        }
+
+        override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): ByteArray =
+            throw UnsupportedOperationException("Offline Note V2 instruction decoding is not supported yet")
+    }
+
     private object KeyCertificatePayloadAdapter : TypeAdapter<KeyCertificatePayloadV2> {
         override fun encode(encoder: NoritoEncoder, value: KeyCertificatePayloadV2) {
             writeField(encoder) { writeString(it, value.domain) }
@@ -727,6 +913,48 @@ object OfflineNoteV2 {
             throw UnsupportedOperationException("Offline Note V2 decoding is not supported yet")
     }
 
+    private object NoteCommitmentPreimageAdapter : TypeAdapter<NoteCommitmentPreimageV2> {
+        override fun encode(encoder: NoritoEncoder, value: NoteCommitmentPreimageV2) {
+            writeField(encoder) { writeString(it, value.domain) }
+            writeField(encoder) { writeChainId(it, value.chainId) }
+            writeField(encoder) { it.writeBytes(value.ownerKeyCertificatePayloadHash()) }
+            writeField(encoder) { writeAssetId(it, value.assetId) }
+            writeField(encoder) { writeNumeric(it, value.canonicalAmount) }
+            writeField(encoder) { writeBytesVec(it, value.noteSecret()) }
+            writeField(encoder) { writeCommitmentOrigin(it, value.origin) }
+        }
+
+        override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): NoteCommitmentPreimageV2 =
+            throw UnsupportedOperationException("Offline Note V2 decoding is not supported yet")
+    }
+
+    private object InputNullifierPreimageAdapter : TypeAdapter<InputNullifierPreimageV2> {
+        override fun encode(encoder: NoritoEncoder, value: InputNullifierPreimageV2) {
+            writeField(encoder) { writeString(it, value.domain) }
+            writeField(encoder) { writeChainId(it, value.chainId) }
+            writeField(encoder) { it.writeBytes(value.sourceNoteCommitment()) }
+            writeField(encoder) { it.writeBytes(value.ownerKeyCertificatePayloadHash()) }
+            writeField(encoder) { writeBytesVec(it, value.noteSecret()) }
+        }
+
+        override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): InputNullifierPreimageV2 =
+            throw UnsupportedOperationException("Offline Note V2 decoding is not supported yet")
+    }
+
+    private object PaymentTokenIdPreimageAdapter : TypeAdapter<PaymentTokenIdPreimageV2> {
+        override fun encode(encoder: NoritoEncoder, value: PaymentTokenIdPreimageV2) {
+            writeField(encoder) { writeString(it, value.domain) }
+            writeField(encoder) { writeChainId(it, value.chainId) }
+            writeField(encoder) { writeBytesVec(it, value.tokenNonce()) }
+            writeField(encoder) { it.writeBytes(value.senderKeyCertificatePayloadHash()) }
+            writeField(encoder) { writeVec(it, value.inputNullifiers()) { out, bytes -> out.writeBytes(bytes) } }
+            writeField(encoder) { writeVec(it, value.outputCommitments()) { out, bytes -> out.writeBytes(bytes) } }
+        }
+
+        override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): PaymentTokenIdPreimageV2 =
+            throw UnsupportedOperationException("Offline Note V2 decoding is not supported yet")
+    }
+
     private fun writeField(parent: NoritoEncoder, writePayload: (NoritoEncoder) -> Unit) {
         val child = parent.childEncoder()
         writePayload(child)
@@ -784,8 +1012,32 @@ object OfflineNoteV2 {
         writeField(encoder) { writeBytesVec(it, value.bytes()) }
     }
 
+    private fun writeCommitmentOrigin(encoder: NoritoEncoder, origin: CommitmentOriginV2) {
+        when (origin) {
+            is CommitmentOriginV2.IssuerLoad -> {
+                encoder.writeUInt(0, 32)
+                writeField(encoder) { payload ->
+                    writeField(payload) { writeString(it, origin.operationId) }
+                    writeField(payload) { writeString(it, origin.lineageId) }
+                    writeField(payload) { it.writeUInt(origin.localRevision, 64) }
+                }
+            }
+            is CommitmentOriginV2.P2pOutput -> {
+                encoder.writeUInt(1, 32)
+                writeField(encoder) { payload ->
+                    writeField(payload) { writeString(it, origin.paymentRequestId) }
+                    writeField(payload) { it.writeUInt(origin.outputIndex.toLong(), 32) }
+                }
+            }
+        }
+    }
+
     private fun writeAccountId(encoder: NoritoEncoder, accountId: String) {
         encoder.writeBytes(encodeAccountIdPayload(accountId))
+    }
+
+    private fun writeChainId(encoder: NoritoEncoder, chainId: String) {
+        writeField(encoder) { writeString(it, chainId) }
     }
 
     private fun encodeAccountIdPayload(accountId: String): ByteArray {
@@ -798,7 +1050,7 @@ object OfflineNoteV2 {
         if (single != null) {
             val encoder = NoritoEncoder(NoritoHeader.COMPACT_LEN)
             encoder.writeUInt(0, 32)
-            writeField(encoder) { writeString(it, encodePublicKeyMultihash(single.curveId, single.publicKey)) }
+            writeField(encoder) { writePublicKey(it, single.curveId, single.publicKey) }
             return encoder.toByteArray()
         }
         val multisig = address.multisigPolicyPayloadIgnoringCurveSupport()
@@ -828,12 +1080,35 @@ object OfflineNoteV2 {
         encoder.writeUInt(sorted.size.toLong(), 64)
         for (member in sorted) {
             writeField(encoder) { memberEncoder ->
-                writeField(memberEncoder) {
-                    writeString(it, encodePublicKeyMultihash(member.curveId, member.publicKey))
-                }
+                writeField(memberEncoder) { writePublicKey(it, member.curveId, member.publicKey) }
                 writeField(memberEncoder) { it.writeUInt(member.weight.toLong(), 16) }
             }
         }
+    }
+
+    private fun writePublicKey(encoder: NoritoEncoder, curveId: Int, publicKey: ByteArray) {
+        writeConstVec(encoder, publicKeyCompactPayload(curveId, publicKey))
+    }
+
+    private fun publicKeyCompactPayload(curveId: Int, publicKey: ByteArray): ByteArray {
+        val tag = when (curveId) {
+            0x01 -> 0
+            0x04 -> 1
+            0x03 -> 2
+            0x05 -> 3
+            0x02 -> 4
+            0x0A -> 5
+            0x0B -> 6
+            0x0C -> 7
+            0x0D -> 8
+            0x0E -> 9
+            0x0F -> 10
+            else -> throw IllegalArgumentException("Unsupported curve id: $curveId")
+        }
+        val bytes = ByteArray(1 + publicKey.size)
+        bytes[0] = tag.toByte()
+        System.arraycopy(publicKey, 0, bytes, 1, publicKey.size)
+        return bytes
     }
 
     private fun writeAssetId(encoder: NoritoEncoder, assetId: String) {
@@ -1057,6 +1332,10 @@ object OfflineNoteV2 {
         for (i in values.indices) {
             requireHash(values[i], "$field[$i]")
         }
+    }
+
+    private fun requireRandomBytes(value: ByteArray, field: String) {
+        require(value.size == 32) { "$field must be exactly 32 bytes" }
     }
 
     private fun canonicalSortKey(member: MultisigMemberPayload): ByteArray {

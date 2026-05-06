@@ -9,8 +9,7 @@ import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
 import org.hyperledger.iroha.sdk.address.MultisigMemberPayload
 import org.hyperledger.iroha.sdk.address.MultisigPolicyPayload
 import org.hyperledger.iroha.sdk.address.algorithmForCurveId
-import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
-import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
+import org.hyperledger.iroha.sdk.address.compactPublicKeyPayload
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
@@ -50,10 +49,10 @@ object TransferWirePayloadEncoder {
     private const val TRANSFER_BOX_ASSET_DISCRIMINANT = 2
     private const val MULTISIG_POLICY_VERSION_V1 = 1
 
-    private val STRING_ADAPTER: TypeAdapter<String> = NoritoAdapters.stringAdapter()
     private val UINT8_ADAPTER: TypeAdapter<Long> = NoritoAdapters.uint(8)
     private val UINT16_ADAPTER: TypeAdapter<Long> = NoritoAdapters.uint(16)
     private val UINT32_ADAPTER: TypeAdapter<Long> = NoritoAdapters.uint(32)
+    private val BYTE_VECTOR_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.byteVecAdapter()
 
     /**
      * Encodes an asset transfer instruction as a wire-framed InstructionBox.
@@ -134,16 +133,18 @@ object TransferWirePayloadEncoder {
     }
 
     private class AccountController private constructor(
-        private val publicKeyMultihash: String?,
+        publicKeyPayload: ByteArray?,
         private val multisigPolicy: MultisigPolicyPayload?,
     ) {
-        fun isSingle(): Boolean = publicKeyMultihash != null
-        fun publicKeyMultihash(): String = publicKeyMultihash!!
+        private val publicKeyPayload: ByteArray? = publicKeyPayload?.copyOf()
+
+        fun isSingle(): Boolean = publicKeyPayload != null
+        fun publicKeyPayload(): ByteArray = publicKeyPayload!!.copyOf()
         fun multisigPolicy(): MultisigPolicyPayload = multisigPolicy!!
 
         companion object {
-            fun single(publicKeyMultihash: String): AccountController =
-                AccountController(publicKeyMultihash, null)
+            fun single(publicKeyPayload: ByteArray): AccountController =
+                AccountController(publicKeyPayload, null)
             fun multisig(policy: MultisigPolicyPayload): AccountController =
                 AccountController(null, policy)
         }
@@ -165,8 +166,8 @@ object TransferWirePayloadEncoder {
                 try {
                     val singleKey = address.singleKeyPayloadIgnoringCurveSupport()
                     if (singleKey != null) {
-                        val multihash = encodePublicKeyMultihash(singleKey.curveId, singleKey.publicKey)
-                        return AccountId(AccountController.single(multihash))
+                        val publicKeyPayload = compactPublicKeyPayload(singleKey.curveId, singleKey.publicKey)
+                        return AccountId(AccountController.single(publicKeyPayload))
                     }
                     val multisig = address.multisigPolicyPayloadIgnoringCurveSupport()
                     if (multisig != null) {
@@ -277,16 +278,16 @@ object TransferWirePayloadEncoder {
     private class AccountControllerAdapter : TypeAdapter<AccountController> {
         override fun encode(encoder: NoritoEncoder, value: AccountController) {
             if (value.isSingle()) {
-                encodeSingle(encoder, value.publicKeyMultihash())
+                encodeSingle(encoder, value.publicKeyPayload())
             } else {
                 encodeMultisig(encoder, value.multisigPolicy())
             }
         }
 
-        private fun encodeSingle(encoder: NoritoEncoder, publicKeyMultihash: String) {
+        private fun encodeSingle(encoder: NoritoEncoder, publicKeyPayload: ByteArray) {
             UINT32_ADAPTER.encode(encoder, 0L)
             val child = encoder.childEncoder()
-            STRING_ADAPTER.encode(child, publicKeyMultihash)
+            BYTE_VECTOR_ADAPTER.encode(child, publicKeyPayload)
             val payload = child.toByteArray()
             writePayloadLength(encoder, payload.size)
             encoder.writeBytes(payload)
@@ -318,8 +319,8 @@ object TransferWirePayloadEncoder {
             vecEncoder.writeUInt(sorted.size.toLong(), 64)
             for (member in sorted) {
                 val memberEncoder = vecEncoder.childEncoder()
-                val memberMultihash = encodePublicKeyMultihash(member.curveId, member.publicKey)
-                encodeSizedField(memberEncoder, STRING_ADAPTER, memberMultihash)
+                val publicKeyPayload = compactPublicKeyPayload(member.curveId, member.publicKey)
+                encodeSizedField(memberEncoder, BYTE_VECTOR_ADAPTER, publicKeyPayload)
                 encodeSizedField(memberEncoder, UINT16_ADAPTER, member.weight.toLong())
                 val memberPayload = memberEncoder.toByteArray()
                 writePayloadLength(vecEncoder, memberPayload.size)

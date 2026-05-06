@@ -14,7 +14,7 @@ use std::{
 
 use iroha_config::parameters::actual::{
     LaneCompliance, LaneConfig as RuntimeLaneConfig, LaneRelayEmergency, NexusAxt,
-    NexusEndorsement, NexusFees, NexusStaking, NexusStorage,
+    NexusEndorsement, NexusFees, NexusRelayWorker, NexusStaking, NexusStorage,
 };
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
@@ -701,6 +701,7 @@ fn nexus_config_diff_counter_and_event_emitted() {
     let nexus = Nexus {
         enabled: true,
         storage: NexusStorage::default(),
+        relay_worker: NexusRelayWorker::default(),
         staking: NexusStaking::default(),
         fees: NexusFees::default(),
         hf_shared_leases: Default::default(),
@@ -711,6 +712,7 @@ fn nexus_config_diff_counter_and_event_emitted() {
         lane_config: RuntimeLaneConfig::from_catalog(&lane_catalog),
         lane_catalog,
         dataspace_catalog,
+        dataspace_fee_sponsors: BTreeMap::new(),
         routing_policy,
         registry,
         governance,

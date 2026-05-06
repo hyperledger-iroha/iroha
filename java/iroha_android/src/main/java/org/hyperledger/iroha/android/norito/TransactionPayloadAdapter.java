@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.norito;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,6 +36,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final TypeAdapter<Long> UINT32_AS_LONG_ADAPTER = NoritoAdapters.uint(32);
   private static final TypeAdapter<Long> UINT16_ADAPTER = NoritoAdapters.uint(16);
   private static final TypeAdapter<Long> UINT8_ADAPTER = NoritoAdapters.uint(8);
+  private static final TypeAdapter<byte[]> BYTE_VECTOR_ADAPTER = NoritoAdapters.byteVecAdapter();
   private static final TypeAdapter<byte[]> RAW_BYTE_VEC_ADAPTER = NoritoAdapters.rawByteVecAdapter();
   private static final TypeAdapter<byte[]> IVM_BYTECODE_ADAPTER = new IvmBytecodeAdapter();
   private static final TypeAdapter<List<InstructionBox>> INSTRUCTION_LIST_ADAPTER =
@@ -187,7 +189,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     private static ControllerPayload decodeControllerPayload(final NoritoDecoder decoder) {
       final long controllerTag = ENUM_TAG_ADAPTER.decode(decoder);
       if (controllerTag == SINGLE_CONTROLLER_TAG) {
-        return ControllerPayload.single(decodeSizedField(decoder, STRING_ADAPTER));
+        return ControllerPayload.single(decodeSizedField(decoder, BYTE_VECTOR_ADAPTER));
       }
       if (controllerTag == MULTISIG_CONTROLLER_TAG) {
         return ControllerPayload.multisig(decodeSizedField(decoder, MULTISIG_POLICY_ADAPTER));
@@ -213,9 +215,9 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
             address.singleKeyPayloadIgnoringCurveSupport();
         if (singlePayload.isPresent()) {
           final AccountAddress.SingleKeyPayload payload = singlePayload.get();
-          final String publicKey =
-              PublicKeyCodec.encodePublicKeyMultihash(payload.curveId(), payload.publicKey());
-          return ControllerPayload.single(publicKey);
+          final byte[] publicKeyPayload =
+              PublicKeyCodec.compactPublicKeyPayload(payload.curveId(), payload.publicKey());
+          return ControllerPayload.single(publicKeyPayload);
         }
         final java.util.Optional<AccountAddress.MultisigPolicyPayload> multisigPayload =
             address.multisigPolicyPayloadIgnoringCurveSupport();
@@ -232,9 +234,8 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
 
     private static String renderAuthority(final ControllerPayload controller) {
       if (controller.isSingle()) {
-        final String publicKeyLiteral = controller.publicKeyLiteral();
         final PublicKeyCodec.PublicKeyPayload payload =
-            PublicKeyCodec.decodePublicKeyLiteral(publicKeyLiteral);
+            PublicKeyCodec.decodeCompactPublicKeyPayload(controller.publicKeyPayload());
         if (payload == null) {
           throw new IllegalArgumentException("Invalid single-key AccountController payload");
         }
@@ -244,21 +245,22 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     }
 
     private static final class ControllerPayload {
-      private final String publicKeyLiteral;
+      private final byte[] publicKeyPayload;
       private final AccountAddress.MultisigPolicyPayload multisigPolicy;
 
       private ControllerPayload(
-          final String publicKeyLiteral,
+          final byte[] publicKeyPayload,
           final AccountAddress.MultisigPolicyPayload multisigPolicy) {
-        this.publicKeyLiteral = publicKeyLiteral;
+        this.publicKeyPayload =
+            publicKeyPayload == null ? null : Arrays.copyOf(publicKeyPayload, publicKeyPayload.length);
         this.multisigPolicy = multisigPolicy;
       }
 
-      private static ControllerPayload single(final String publicKeyLiteral) {
-        if (publicKeyLiteral == null || publicKeyLiteral.isBlank()) {
-          throw new IllegalArgumentException("public key literal must not be blank");
+      private static ControllerPayload single(final byte[] publicKeyPayload) {
+        if (publicKeyPayload == null || publicKeyPayload.length == 0) {
+          throw new IllegalArgumentException("public key payload must not be empty");
         }
-        return new ControllerPayload(publicKeyLiteral.trim(), null);
+        return new ControllerPayload(publicKeyPayload, null);
       }
 
       private static ControllerPayload multisig(
@@ -273,8 +275,8 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
         return multisigPolicy == null;
       }
 
-      private String publicKeyLiteral() {
-        return publicKeyLiteral;
+      private byte[] publicKeyPayload() {
+        return Arrays.copyOf(publicKeyPayload, publicKeyPayload.length);
       }
 
       private AccountAddress.MultisigPolicyPayload multisigPolicy() {
@@ -290,7 +292,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
         }
         if (value.isSingle()) {
           ENUM_TAG_ADAPTER.encode(encoder, SINGLE_CONTROLLER_TAG);
-          encodeSizedField(encoder, STRING_ADAPTER, value.publicKeyLiteral());
+          encodeSizedField(encoder, BYTE_VECTOR_ADAPTER, value.publicKeyPayload());
           return;
         }
         ENUM_TAG_ADAPTER.encode(encoder, MULTISIG_CONTROLLER_TAG);
@@ -302,8 +304,8 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
         final long controllerTag = ENUM_TAG_ADAPTER.decode(decoder);
         final ControllerPayload controller;
         if (controllerTag == SINGLE_CONTROLLER_TAG) {
-          final String publicKeyLiteral = decodeSizedField(decoder, STRING_ADAPTER);
-          controller = ControllerPayload.single(publicKeyLiteral);
+          final byte[] publicKeyPayload = decodeSizedField(decoder, BYTE_VECTOR_ADAPTER);
+          controller = ControllerPayload.single(publicKeyPayload);
         } else if (controllerTag == MULTISIG_CONTROLLER_TAG) {
           final AccountAddress.MultisigPolicyPayload policy =
               decodeSizedField(decoder, MULTISIG_POLICY_ADAPTER);
@@ -343,18 +345,18 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       @Override
       public void encode(
           final NoritoEncoder encoder, final AccountAddress.MultisigMemberPayload value) {
-        final String publicKey =
-            PublicKeyCodec.encodePublicKeyMultihash(value.curveId(), value.publicKey());
-        STRING_ADAPTER.encode(encoder, publicKey);
+        final byte[] publicKeyPayload =
+            PublicKeyCodec.compactPublicKeyPayload(value.curveId(), value.publicKey());
+        BYTE_VECTOR_ADAPTER.encode(encoder, publicKeyPayload);
         UINT16_ADAPTER.encode(encoder, (long) value.weight());
       }
 
       @Override
       public AccountAddress.MultisigMemberPayload decode(final NoritoDecoder decoder) {
-        final String publicKeyLiteral = STRING_ADAPTER.decode(decoder);
+        final byte[] publicKeyPayload = BYTE_VECTOR_ADAPTER.decode(decoder);
         final int weight = Math.toIntExact(UINT16_ADAPTER.decode(decoder));
         final PublicKeyCodec.PublicKeyPayload payload =
-            PublicKeyCodec.decodePublicKeyLiteral(publicKeyLiteral);
+            PublicKeyCodec.decodeCompactPublicKeyPayload(publicKeyPayload);
         if (payload == null) {
           throw new IllegalArgumentException("Invalid multisig member public key");
         }

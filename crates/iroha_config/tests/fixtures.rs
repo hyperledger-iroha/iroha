@@ -3253,6 +3253,7 @@ fn routing_policy_dataspace_resolution() {
             manifest_hash: None,
             description: None,
             fault_tolerance: None,
+            fee_sponsor_account_id: None,
         }],
         routing_policy: RoutingPolicy {
             default_lane: Some(1),
@@ -3303,6 +3304,7 @@ fn routing_policy_lane_dataspace_mismatch_rejected() {
             manifest_hash: None,
             description: None,
             fault_tolerance: None,
+            fee_sponsor_account_id: None,
         }],
         routing_policy: RoutingPolicy {
             default_lane: Some(0),
@@ -3349,6 +3351,7 @@ fn dataspace_fault_tolerance_zero_rejected() {
             manifest_hash: None,
             description: None,
             fault_tolerance: Some(0),
+            fee_sponsor_account_id: None,
         }],
         ..Nexus::default()
     };
@@ -3358,6 +3361,129 @@ fn dataspace_fault_tolerance_zero_rejected() {
     let err = emitter.into_result().expect_err("parse error expected");
     let debug = strip_ansi_codes(&format!("{err:?}"));
     assert_contains!(debug, "fault_tolerance must be >= 1");
+}
+
+#[test]
+fn dataspace_fee_sponsor_account_id_parses_when_sponsorship_enabled() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{
+        DataSpaceDescriptor, LaneDescriptor, Nexus, NexusFees, RoutingPolicy,
+    };
+    use iroha_config_base::util::Emitter;
+    use iroha_data_model::nexus::DataSpaceId;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        enabled: true,
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("primary".into()),
+            dataspace: Some("alpha".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        dataspace_catalog: vec![DataSpaceDescriptor {
+            alias: Some("alpha".into()),
+            id: Some(1),
+            manifest_hash: None,
+            description: None,
+            fault_tolerance: None,
+            fee_sponsor_account_id: Some("sponsor@alpha".into()),
+        }],
+        fees: NexusFees {
+            sponsorship_enabled: true,
+            ..NexusFees::default()
+        },
+        routing_policy: RoutingPolicy {
+            default_lane: Some(0),
+            default_dataspace: Some("alpha".into()),
+            ..RoutingPolicy::default()
+        },
+        ..Nexus::default()
+    };
+
+    let parsed = nexus
+        .parse(&mut emitter)
+        .expect("dataspace fee sponsor should parse");
+    assert!(emitter.into_result().is_ok());
+    assert_eq!(
+        parsed.dataspace_fee_sponsors.get(&DataSpaceId::new(1)),
+        Some(&"sponsor@alpha".to_owned())
+    );
+}
+
+#[test]
+fn dataspace_fee_sponsor_account_id_requires_sponsorship_enabled() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{
+        DataSpaceDescriptor, LaneDescriptor, Nexus, RoutingPolicy,
+    };
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        enabled: true,
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("primary".into()),
+            dataspace: Some("alpha".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        dataspace_catalog: vec![DataSpaceDescriptor {
+            alias: Some("alpha".into()),
+            id: Some(1),
+            manifest_hash: None,
+            description: None,
+            fault_tolerance: None,
+            fee_sponsor_account_id: Some("sponsor@alpha".into()),
+        }],
+        routing_policy: RoutingPolicy {
+            default_lane: Some(0),
+            default_dataspace: Some("alpha".into()),
+            ..RoutingPolicy::default()
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let err = emitter.into_result().expect_err("parse error expected");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(debug, "sponsorship_enabled");
+}
+
+#[test]
+fn dataspace_fee_sponsor_account_id_requires_nexus_enabled() {
+    use iroha_config::parameters::user::{DataSpaceDescriptor, Nexus, NexusFees};
+    use iroha_config_base::util::Emitter;
+    use iroha_data_model::nexus::DataSpaceId;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        enabled: false,
+        dataspace_catalog: vec![DataSpaceDescriptor {
+            alias: Some("universal".into()),
+            id: Some(DataSpaceId::UNIVERSAL.as_u64()),
+            manifest_hash: None,
+            description: None,
+            fault_tolerance: None,
+            fee_sponsor_account_id: Some("sponsor@universal".into()),
+        }],
+        fees: NexusFees {
+            sponsorship_enabled: true,
+            ..NexusFees::default()
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let err = emitter.into_result().expect_err("parse error expected");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(debug, "nexus.enabled");
 }
 
 #[test]

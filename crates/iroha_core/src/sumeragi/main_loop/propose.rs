@@ -2379,10 +2379,12 @@ impl Actor {
                     .proposal_cache
                     .insert_hint(proposal_hint);
                 let block_created = if let Some(block_created) = self
-                    .frontier_block_created_for_local_proposal_wire(
+                    .frontier_block_created_for_local_proposal_wire_with_payload(
                         &signed_block,
                         &proposal,
                         topology.as_ref(),
+                        &payload_bytes,
+                        payload_hash,
                     ) {
                     block_created
                 } else {
@@ -3004,7 +3006,7 @@ impl Actor {
             return;
         };
 
-        let (pending_block, block_hash) = {
+        let (pending_block, block_hash, pending_payload_bytes, pending_payload_hash) = {
             let Some(pending) = self.pending.pending_blocks.values().find(|pending| {
                 !pending.aborted
                     && pending.height == height
@@ -3019,7 +3021,12 @@ impl Actor {
                 );
                 return;
             };
-            (pending.block.clone(), pending.block.hash())
+            (
+                pending.block.clone(),
+                pending.block.hash(),
+                pending.payload_bytes().to_vec(),
+                pending.payload_hash,
+            )
         };
 
         let (consensus_mode, _, _) = self.consensus_context_for_height(height);
@@ -3084,10 +3091,12 @@ impl Actor {
         }
 
         let local_peer_id = self.common_config.peer.id().clone();
-        let Some(block_created) = self.frontier_block_created_for_local_proposal_wire(
+        let Some(block_created) = self.frontier_block_created_for_local_proposal_wire_with_payload(
             &pending_block,
             &proposal,
             &proposal_roster,
+            &pending_payload_bytes,
+            pending_payload_hash,
         ) else {
             warn!(
                 height,
