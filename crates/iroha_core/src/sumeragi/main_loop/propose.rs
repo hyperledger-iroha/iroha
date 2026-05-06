@@ -904,7 +904,7 @@ impl Actor {
             || self.pending_block_has_qc(pending_hash, pending.height, pending.view)
     }
 
-    fn clear_stale_commit_inflight_for_block(
+    pub(super) fn clear_stale_commit_inflight_for_block(
         &mut self,
         block_hash: HashOf<BlockHeader>,
         height: u64,

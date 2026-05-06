@@ -1060,11 +1060,14 @@ impl Actor {
     }
 
     fn block_sync_qc_same_height_recoverable(
-        _lock: crate::sumeragi::consensus::QcHeaderRef,
-        _qc: &crate::sumeragi::consensus::Qc,
-        _allow_nonextending_qc: bool,
+        lock: crate::sumeragi::consensus::QcHeaderRef,
+        qc: &crate::sumeragi::consensus::Qc,
+        allow_nonextending_qc: bool,
     ) -> bool {
-        false
+        allow_nonextending_qc
+            && matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
+            && qc.height == lock.height
+            && qc.subject_block_hash != lock.subject_block_hash
     }
 
     fn defer_block_sync_qc_while_locked_payload_missing(
@@ -1459,14 +1462,18 @@ impl Actor {
         &self,
         block_height: u64,
         parent_hash: Option<HashOf<BlockHeader>>,
+        allow_certified_exact_frontier_bypass: bool,
     ) -> Option<&'static str> {
-        if self.subsystems.commit.inflight.is_some() {
+        if self.subsystems.commit.inflight.is_some() && !allow_certified_exact_frontier_bypass {
             return Some("commit_inflight");
         }
-        if self.validation_inflight_blocks_block_sync_update(block_height, parent_hash) {
+        if self.validation_inflight_blocks_block_sync_update(block_height, parent_hash)
+            && !allow_certified_exact_frontier_bypass
+        {
             return Some("validation_inflight");
         }
-        if self.pending.pending_processing.get().is_some() {
+        if self.pending.pending_processing.get().is_some() && !allow_certified_exact_frontier_bypass
+        {
             return Some("pending_processing");
         }
         None
@@ -1713,8 +1720,54 @@ impl Actor {
             );
         }
         self.prune_frontier_slot_state();
-        let entry_deferral_reason =
-            self.block_sync_update_deferral_reason(block_height, parent_hash);
+        let certified_exact_contiguous_frontier =
+            exact_contiguous_frontier && (incoming_qc.is_some() || validator_checkpoint.is_some());
+        let sparse_exact_contiguous_frontier_repair = exact_contiguous_frontier
+            && requested_missing_block
+            && !block_known_locally
+            && incoming_qc.is_none()
+            && validator_checkpoint.is_none()
+            && !has_commit_votes;
+        let allow_exact_contiguous_frontier_bypass =
+            certified_exact_contiguous_frontier || sparse_exact_contiguous_frontier_repair;
+        let would_defer_exact_frontier = allow_exact_contiguous_frontier_bypass
+            && self
+                .block_sync_update_deferral_reason(block_height, parent_hash, false)
+                .is_some();
+        let entry_deferral_reason = self.block_sync_update_deferral_reason(
+            block_height,
+            parent_hash,
+            allow_exact_contiguous_frontier_bypass,
+        );
+        if would_defer_exact_frontier && entry_deferral_reason.is_none() {
+            info!(
+                height = block_height,
+                view = block_view,
+                block = %block_hash,
+                commit_inflight = self.subsystems.commit.inflight.is_some(),
+                validation_inflight = self.subsystems.validation.inflight.len(),
+                pending_processing = self.pending.pending_processing.get().is_some(),
+                certified = certified_exact_contiguous_frontier,
+                sparse_payload_repair = sparse_exact_contiguous_frontier_repair,
+                "bypassing block sync deferral for exact-frontier recovery update"
+            );
+        }
+        if sparse_exact_contiguous_frontier_repair {
+            let now = Instant::now();
+            let retry_window = self.rebroadcast_cooldown();
+            let view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
+            let _ = super::touch_missing_block_request(
+                &mut self.pending.missing_block_requests,
+                block_hash,
+                block_height,
+                block_view,
+                crate::sumeragi::consensus::Phase::Commit,
+                super::MissingBlockPriority::Consensus,
+                now,
+                retry_window,
+                view_change_window,
+            );
+        }
         let exact_frontier_body_repair = self.frontier_slot.as_ref().is_some_and(|slot| {
             slot.block_hash == block_hash && slot.height == block_height && slot.view == block_view
         });
@@ -3354,6 +3407,11 @@ impl Actor {
             );
             return Ok(());
         }
+        let sparse_exact_frontier_recovery_requested = requested_missing_block
+            && exact_contiguous_frontier
+            && incoming_qc.is_none()
+            && validator_checkpoint.is_none()
+            && !has_commit_votes;
         let mut quorum_available = block_sync_quorum_available(
             block_signer_count,
             commit_quorum,
@@ -3361,7 +3419,7 @@ impl Actor {
             qc_evidence_present,
             commit_cert_present,
             checkpoint_present,
-            explicit_requested_missing_block,
+            explicit_requested_missing_block || sparse_exact_frontier_recovery_requested,
             block_height,
             local_height,
         );
@@ -4917,13 +4975,13 @@ impl Actor {
         if let Some(lock) = self.locked_qc {
             let same_height_conflict = Self::block_sync_qc_same_height_conflict(lock, &qc);
             if same_height_conflict {
-                if self.defer_block_sync_qc_while_locked_payload_missing(
-                    &qc,
-                    "known_block_qc.height_conflict.missing_locked_payload",
-                ) {
-                    return None;
-                }
                 if !Self::block_sync_qc_same_height_recoverable(lock, &qc, true) {
+                    if self.defer_block_sync_qc_while_locked_payload_missing(
+                        &qc,
+                        "known_block_qc.height_conflict.missing_locked_payload",
+                    ) {
+                        return None;
+                    }
                     crate::sumeragi::status::inc_block_sync_locked_qc_prefilter_drop();
                     self.log_block_sync_locked_qc_conflict(
                         &qc,

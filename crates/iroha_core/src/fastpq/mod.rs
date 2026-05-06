@@ -1475,6 +1475,39 @@ mod tests {
     }
 
     #[test]
+    fn batch_from_transcripts_chains_repeated_balance_keys() {
+        let first = sample_transcript();
+        let second = sample_transcript();
+        let batch = batch_from_transcripts(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_public_inputs(),
+            [&first, &second],
+        )
+        .expect("batch");
+
+        let encoded = batch
+            .metadata
+            .get(TRANSFER_TRANSCRIPTS_METADATA_KEY)
+            .expect("transfer metadata");
+        let decoded: Vec<TransferTranscript> =
+            decode_from_bytes(encoded).expect("decode transcripts");
+        let second_delta = &decoded[1].deltas[0];
+        assert_eq!(second_delta.from_balance_before, Numeric::from(158u32));
+        assert_eq!(second_delta.from_balance_after, Numeric::from(116u32));
+        assert_eq!(second_delta.to_balance_before, Numeric::from(43u32));
+        assert_eq!(second_delta.to_balance_after, Numeric::from(85u32));
+
+        fastpq_prover::gadgets::transfer::verify_transcripts(&batch.transitions, &decoded)
+            .expect("transfer transcript rows verify");
+        fastpq_prover::gadgets::transfer::transcripts_to_witnesses(
+            &decoded,
+            &batch.public_inputs.old_root,
+            &batch.public_inputs.new_root,
+        )
+        .expect("transfer SMT witnesses verify");
+    }
+
+    #[test]
     fn batch_from_transcripts_normalizes_mixed_scale_values() {
         let mut transcript = sample_transcript();
         transcript.deltas[0].amount = Numeric::new(5, 1);

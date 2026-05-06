@@ -1234,6 +1234,8 @@ impl Actor {
                 });
             let pending = self.pending.pending_blocks.remove(&hash);
             let _ = self.supersede_validation_inflight(hash);
+            let commit_inflight_cleared =
+                self.clear_stale_commit_inflight_for_block(hash, height, old_view, true);
             self.pending.pending_fetch_requests.remove(&hash);
             self.pending.pending_block_body_requests.remove(&hash);
             self.clear_missing_block_request(&hash, MissingBlockClearReason::Obsolete);
@@ -1259,6 +1261,7 @@ impl Actor {
                     superseded_view = old_view,
                     incoming_block = %incoming_hash,
                     superseded_block = %hash,
+                    commit_inflight_cleared = commit_inflight_cleared.is_some(),
                     "retiring superseded contiguous-frontier owner with commit evidence for payload recovery"
                 );
                 continue;
@@ -1270,6 +1273,7 @@ impl Actor {
                 superseded_view = old_view,
                 incoming_block = %incoming_hash,
                 superseded_block = %hash,
+                commit_inflight_cleared = commit_inflight_cleared.is_some(),
                 "dropping superseded contiguous-frontier owner after stronger same-height evidence"
             );
         }

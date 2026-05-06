@@ -727,7 +727,7 @@ fi
 if [[ -z "${RUST_LOG:-}" && "$PROFILE" == "debug" ]]; then
   export RUST_LOG="warn"
 fi
-IROHAD_BIN="$IROHAD_BIN" ./start.sh
+IROHAD_BIN="$IROHAD_BIN" IROHA_CLI="$CLI_BIN" ./start.sh
 
 format_host_for_url() {
   local host="$1"

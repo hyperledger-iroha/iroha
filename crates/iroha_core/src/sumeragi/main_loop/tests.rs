@@ -12082,13 +12082,13 @@ async fn block_sync_update_rejects_conflicting_precommit_qc_against_lock() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn precommit_qc_rejects_same_height_conflict_even_when_nonextending_allowed() {
+async fn precommit_qc_same_height_conflict_requires_block_sync_override() {
     let _guard = super::status::qc_status_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let locked_block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
-    let conflicting_block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 1, None);
+    let locked_block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 3, None);
+    let conflicting_block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
     store_block_with_test_ancestors(actor.kura.as_ref(), locked_block.clone());
     let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
     state.push_block_hash_for_testing(locked_block.hash());
@@ -12096,10 +12096,10 @@ async fn precommit_qc_rejects_same_height_conflict_even_when_nonextending_allowe
         phase: Phase::Commit,
         subject_block_hash: locked_block.hash(),
         height: 1,
-        view: 0,
+        view: 3,
         epoch: 0,
     });
-    super::status::set_locked_qc(1, 0, Some(locked_block.hash()));
+    super::status::set_locked_qc(1, 3, Some(locked_block.hash()));
 
     let chain = actor.common_config.chain.clone();
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
@@ -12107,7 +12107,7 @@ async fn precommit_qc_rejects_same_height_conflict_even_when_nonextending_allowe
         &chain,
         conflicting_block.hash(),
         1,
-        1,
+        0,
         0,
         vec![0b0000_1111],
         Phase::Commit,
@@ -12115,12 +12115,20 @@ async fn precommit_qc_rejects_same_height_conflict_even_when_nonextending_allowe
         &harness.key_pairs,
     );
     assert!(
-        !actor.process_precommit_qc(&qc, true, true),
-        "same-height conflicting precommit QC should be rejected fail-closed"
+        !actor.process_precommit_qc(&qc, true, false),
+        "same-height conflicting precommit QC should be rejected without block-sync override"
     );
     let locked = actor.locked_qc.expect("locked qc preserved");
     assert_eq!(locked.subject_block_hash, locked_block.hash());
-    assert_eq!(locked.view, 0, "lock should remain on the canonical branch");
+    assert_eq!(locked.view, 3, "lock should remain on the local branch");
+
+    assert!(
+        actor.process_precommit_qc(&qc, true, true),
+        "validated block-sync commit QC should be allowed to realign a same-height local lock"
+    );
+    let locked = actor.locked_qc.expect("locked qc realigned");
+    assert_eq!(locked.subject_block_hash, conflicting_block.hash());
+    assert_eq!(locked.view, 0);
 
     harness.shutdown.send();
 }
@@ -18795,6 +18803,68 @@ async fn process_precommit_qc_defers_realign_when_locked_payload_missing() {
             .missing_block_requests
             .contains_key(&locked_hash),
         "missing locked payload should trigger a fetch request"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn process_precommit_qc_realigns_same_height_when_locked_payload_missing_with_override() {
+    let _guard = super::status::qc_status_test_guard();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let locked_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCF; Hash::LENGTH]));
+    actor.locked_qc = Some(QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: locked_hash,
+        height: 2,
+        view: 3,
+        epoch: actor.epoch_for_height(2),
+    });
+    super::status::set_locked_qc(2, 3, Some(locked_hash));
+    assert!(
+        !actor.block_known_for_lock(locked_hash),
+        "test lock payload should be missing locally"
+    );
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 2, 0, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor
+        .pending
+        .pending_blocks
+        .insert(block_hash, PendingBlock::new(block, payload_hash, 2, 0));
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        2,
+        0,
+        actor.epoch_for_height(2),
+        vec![0b0000_1111],
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    assert!(
+        actor.process_precommit_qc(&qc, true, true),
+        "validated block-sync commit QC should realign even when the stale lock payload is missing"
+    );
+    let locked = actor.locked_qc.expect("locked qc realigned");
+    assert_eq!(locked.subject_block_hash, block_hash);
+    assert_eq!(locked.height, 2);
+    assert_eq!(locked.view, 0);
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&locked_hash),
+        "same-height block-sync realignment should not keep chasing the stale local lock payload"
     );
 
     harness.shutdown.send();
@@ -141030,6 +141100,209 @@ async fn block_sync_update_commit_qc_supersedes_stale_same_height_frontier_owner
             .map(|slot| (slot.block_hash, slot.view)),
         Some((committed_hash, committed_view)),
         "frontier ownership should move to the certified recovery block",
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_commit_qc_bypasses_stale_commit_inflight_frontier_owner() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let parent = Some(seed_genesis_block_for_state(&actor.state));
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let local_view = 3_u64;
+    let committed_view = 0_u64;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, local_view, now);
+
+    let local_block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, local_view, parent);
+    let local_inflight_block = local_block.clone();
+    let local_hash = local_block.hash();
+    actor
+        .handle_block_created(
+            super::message::BlockCreated {
+                block: local_block,
+                frontier: None,
+            },
+            None,
+        )
+        .expect("seed stale same-height frontier owner");
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&local_hash)
+        .expect("local pending block")
+        .note_local_commit_vote_emitted();
+    actor.note_frontier_owner_local_vote_emitted(local_hash, height, local_view);
+    actor.subsystems.commit.inflight = Some(commit_inflight_for_block(
+        actor,
+        local_inflight_block,
+        height,
+        local_view,
+    ));
+    assert_eq!(
+        actor.subsystems.commit.inflight.as_ref().map(|inflight| {
+            (
+                inflight.block_hash,
+                inflight.pending.height,
+                inflight.pending.view,
+            )
+        }),
+        Some((local_hash, height, local_view)),
+        "test setup requires stale local commit work to block ordinary replay",
+    );
+
+    let committed_block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, committed_view, parent);
+    let committed_hash = committed_block.hash();
+    assert_ne!(
+        committed_hash, local_hash,
+        "test setup requires distinct same-height branches",
+    );
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers: BTreeSet<ValidatorIndex> = (0..topology.as_ref().len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let epoch = actor.epoch_for_height(height);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        committed_hash,
+        height,
+        committed_view,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let mut update = super::message::BlockSyncUpdate::from(&committed_block);
+    update.commit_qc = Some(qc);
+
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("handle certified exact-frontier block sync update");
+
+    assert!(
+        actor.deferred_block_sync_updates.is_empty(),
+        "certified exact-frontier recovery must not be queued behind stale commit inflight",
+    );
+    assert!(
+        actor
+            .subsystems
+            .commit
+            .inflight
+            .as_ref()
+            .is_none_or(|inflight| inflight.block_hash != local_hash),
+        "authoritative same-height recovery must clear stale local commit inflight",
+    );
+    let recovered = actor
+        .pending
+        .pending_blocks
+        .get(&committed_hash)
+        .expect("certified recovery block should stay live locally");
+    assert!(
+        recovered.commit_qc_observed(),
+        "certified exact-frontier recovery must retain the commit QC for finalization",
+    );
+    assert!(
+        !recovered.is_retired_same_height(),
+        "certified recovery must not be demoted while superseding stale inflight work",
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn sparse_exact_frontier_block_sync_bypasses_stale_commit_inflight_for_payload_repair() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let parent = Some(seed_genesis_block_for_state(&actor.state));
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let local_view = 3_u64;
+    let committed_view = 0_u64;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, local_view, now);
+
+    let local_block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, local_view, parent);
+    let local_inflight_block = local_block.clone();
+    let local_hash = local_block.hash();
+    actor
+        .handle_block_created(
+            super::message::BlockCreated {
+                block: local_block,
+                frontier: None,
+            },
+            None,
+        )
+        .expect("seed stale same-height frontier owner");
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&local_hash)
+        .expect("local pending block")
+        .note_local_commit_vote_emitted();
+    actor.note_frontier_owner_local_vote_emitted(local_hash, height, local_view);
+    actor.subsystems.commit.inflight = Some(commit_inflight_for_block(
+        actor,
+        local_inflight_block,
+        height,
+        local_view,
+    ));
+
+    let committed_block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, committed_view, parent);
+    let committed_hash = committed_block.hash();
+    assert_ne!(
+        committed_hash, local_hash,
+        "test setup requires distinct same-height branches",
+    );
+
+    let mut update = super::message::BlockSyncUpdate::from(&committed_block);
+    update.commit_qc = None;
+    update.validator_checkpoint = None;
+    update.stake_snapshot = None;
+    update.commit_votes.clear();
+
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("handle sparse exact-frontier block sync update");
+
+    assert!(
+        actor.deferred_block_sync_updates.is_empty(),
+        "exact-frontier payload repair must not wait behind stale commit inflight",
+    );
+    let recovered = actor
+        .pending
+        .pending_blocks
+        .get(&committed_hash)
+        .expect("sparse exact-frontier payload should be retained locally");
+    assert!(
+        recovered.is_retired_same_height(),
+        "payload-only recovery should hydrate the canonical block without stealing ownership until commit proof arrives",
+    );
+    assert!(
+        actor
+            .subsystems
+            .commit
+            .inflight
+            .as_ref()
+            .is_some_and(|inflight| inflight.block_hash == local_hash),
+        "payload-only recovery must not clear stale commit inflight without commit proof",
     );
 
     harness.shutdown.send();

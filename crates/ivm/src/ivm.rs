@@ -2178,7 +2178,7 @@ impl IVM {
                 break;
             }
         }
-        self.memory.commit();
+        self.commit_memory_after_run_if_needed();
         Ok(())
     }
 
@@ -3502,6 +3502,13 @@ impl IVM {
     /// Execute the loaded program using a borrowed host without storing it in the VM.
     pub fn run_with_host(&mut self, host: &mut dyn IVMHost) -> Result<(), VMError> {
         self.run_with_host_ref(host)
+    }
+
+    #[inline]
+    fn commit_memory_after_run_if_needed(&mut self) {
+        if self.zk_trace_collection_enabled() {
+            self.memory.commit();
+        }
     }
 
     fn run_with_host_ref(&mut self, host: &mut dyn IVMHost) -> Result<(), VMError> {
@@ -5583,7 +5590,7 @@ impl IVM {
                 }
                 self.flush_cycle_logs(&mut last_logged_cycle);
             }
-            self.memory.commit();
+            self.commit_memory_after_run_if_needed();
             if self.constraint_failed {
                 Err(VMError::AssertionFailed)
             } else {
@@ -6670,6 +6677,86 @@ mod tests {
         assert_eq!(first_proof, second_proof);
         assert_eq!(first_proof.version, EXECUTION_PROOF_VERSION_V1);
         assert_eq!(first_proof.code_hash, first.code_hash());
+    }
+
+    fn store_program_with_mode(mode: u8, max_cycles: u64) -> Vec<u8> {
+        let metadata = ProgramMetadata {
+            mode,
+            max_cycles,
+            abi_version: 1,
+            ..ProgramMetadata::default()
+        };
+        let mut program = metadata.encode();
+        let store =
+            crate::encoding::wide::encode_store(instruction::wide::memory::STORE64, 1, 2, 0);
+        program.extend_from_slice(&store.to_le_bytes());
+        program.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+        program
+    }
+
+    #[test]
+    fn non_zk_run_defers_memory_merkle_commit_until_root_is_requested() {
+        set_banner_enabled(false);
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_program(&store_program_with_mode(0, 0))
+            .expect("program loads");
+        let before = vm.memory.current_root();
+        assert!(!vm.memory.dirty_for_testing());
+
+        vm.set_register(1, Memory::HEAP_START);
+        vm.set_register(2, 0xCAFE_BABE_DEAD_BEEFu64);
+        vm.run().expect("program runs");
+
+        assert!(
+            vm.memory.dirty_for_testing(),
+            "non-ZK execution should not rebuild the full memory Merkle tree eagerly"
+        );
+        let proof = vm.execution_proof();
+        assert!(!vm.memory.dirty_for_testing());
+        assert_ne!(proof.final_memory_root, *before.as_ref());
+    }
+
+    #[test]
+    fn zk_run_with_trace_collection_disabled_defers_memory_merkle_commit() {
+        set_banner_enabled(false);
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_program(&store_program_with_mode(crate::ivm_mode::ZK, 4))
+            .expect("program loads");
+        vm.set_zk_trace_enabled(false);
+        let before = vm.memory.current_root();
+        assert!(!vm.memory.dirty_for_testing());
+
+        vm.set_register(1, Memory::HEAP_START);
+        vm.set_register(2, 0xABCD_EF01_2345_6789u64);
+        vm.run().expect("program runs");
+
+        assert!(
+            vm.memory.dirty_for_testing(),
+            "ZK semantic execution without trace collection should not rebuild the full memory Merkle tree eagerly"
+        );
+        let proof = vm.execution_proof();
+        assert!(!vm.memory.dirty_for_testing());
+        assert_ne!(proof.final_memory_root, *before.as_ref());
+    }
+
+    #[test]
+    fn zk_trace_collection_still_commits_memory_merkle_root_before_returning() {
+        set_banner_enabled(false);
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_program(&store_program_with_mode(crate::ivm_mode::ZK, 4))
+            .expect("program loads");
+        let before = vm.memory.current_root();
+        assert!(!vm.memory.dirty_for_testing());
+
+        vm.set_register(1, Memory::HEAP_START);
+        vm.set_register(2, 0xABCD_EF01_2345_6789u64);
+        vm.run().expect("program runs");
+
+        assert!(
+            !vm.memory.dirty_for_testing(),
+            "ZK trace collection must keep the final memory root committed"
+        );
+        assert_ne!(*vm.memory.current_root().as_ref(), *before.as_ref());
     }
 
     fn empty_blob_tlv() -> Vec<u8> {

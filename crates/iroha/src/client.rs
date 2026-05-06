@@ -4821,6 +4821,7 @@ mod evidence_http_tests {
             &authority,
             key_pair.private_key(),
             &manifest,
+            None,
             chunk_digest,
             9,
             Some(alias),
@@ -8522,6 +8523,29 @@ impl Client {
         &self,
         params: SorafsPinRegisterArgs<'_>,
     ) -> Result<norito::json::Value> {
+        self.post_sorafs_pin_register_with_digest(params, None)
+    }
+
+    /// Convenience: POST `/v1/sorafs/pin/register` with an explicit manifest digest.
+    ///
+    /// Use this when the manifest bytes submitted to storage were encoded with a
+    /// compatibility layout and the registry digest must match those exact bytes.
+    ///
+    /// # Errors
+    /// Returns an error if request construction, NORITO JSON serialization, or the HTTP call fails.
+    pub fn post_sorafs_pin_register_with_manifest_digest(
+        &self,
+        params: SorafsPinRegisterArgs<'_>,
+        manifest_digest: [u8; 32],
+    ) -> Result<norito::json::Value> {
+        self.post_sorafs_pin_register_with_digest(params, Some(manifest_digest))
+    }
+
+    fn post_sorafs_pin_register_with_digest(
+        &self,
+        params: SorafsPinRegisterArgs<'_>,
+        manifest_digest: Option<[u8; 32]>,
+    ) -> Result<norito::json::Value> {
         let SorafsPinRegisterArgs {
             authority,
             private_key,
@@ -8536,6 +8560,7 @@ impl Client {
             authority,
             private_key,
             manifest,
+            manifest_digest,
             chunk_digest_sha3_256,
             submitted_epoch,
             alias,
@@ -9417,14 +9442,19 @@ impl Client {
         authority: &iroha_data_model::account::AccountId,
         private_key: &iroha_crypto::PrivateKey,
         manifest: &sorafs_manifest::ManifestV1,
+        manifest_digest_override: Option<[u8; 32]>,
         chunk_digest_sha3_256: [u8; 32],
         submitted_epoch: u64,
         alias: Option<SorafsPinAlias<'_>>,
         successor_of: Option<[u8; 32]>,
     ) -> Result<norito::json::Value> {
-        let manifest_digest = manifest
-            .digest()
-            .wrap_err("failed to compute manifest digest for pin registration")?;
+        let manifest_digest = match manifest_digest_override {
+            Some(digest) => digest,
+            None => *manifest
+                .digest()
+                .wrap_err("failed to compute manifest digest for pin registration")?
+                .as_bytes(),
+        };
         let chunker = &manifest.chunking;
         let mut map = norito::json::Map::new();
         map.insert(
@@ -9463,7 +9493,7 @@ impl Client {
         );
         map.insert(
             "manifest_digest_hex".into(),
-            norito::json::Value::from(hex::encode(manifest_digest.as_bytes())),
+            norito::json::Value::from(hex::encode(manifest_digest)),
         );
         map.insert(
             "chunk_digest_sha3_256_hex".into(),

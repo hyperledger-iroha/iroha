@@ -219,6 +219,7 @@ impl IvmCache {
 
         self.stats.runtime_misses = self.stats.runtime_misses.saturating_add(1);
         let mut vm = ivm::IVM::new(gas_limit);
+        vm.set_zk_trace_enabled(false);
         vm.load_program(bytecode)?;
         if gas_limit > 0 {
             vm.set_gas_limit(gas_limit);
@@ -261,6 +262,7 @@ impl IvmCache {
             self.insert_summary(summary_key, runtime.summary.clone());
         }
         let mut vm = ivm::IVM::new(stack_gas_limit);
+        vm.set_zk_trace_enabled(false);
         vm.set_host(ivm::host::DefaultHost::default());
         let key = RuntimeKey::new(
             runtime.summary.code_hash,

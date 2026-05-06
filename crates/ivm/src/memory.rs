@@ -148,17 +148,14 @@ impl Memory {
     fn recompute_dirty(&mut self) {
         let started_at = Instant::now();
         let indices: Vec<_> = self.dirty_chunks.drain().collect();
-        // Heuristic: if more than half the leaves are dirty, prefer a full GPU recompute path
-        // (leaves + reducer) when available to avoid serial CPU reductions.
-        let total_leaves = self.data.len().div_ceil(32).max(1);
+        // Heuristic: if more than half the leaves are dirty, prefer a full
+        // accelerated leaf recompute when available.
+        let total_leaves = self.tree.leaf_count();
         let large_update = indices.len() * 2 >= total_leaves;
         let dirty_count = indices.len() as f64;
         let mut commit_path = "incremental";
         if large_update && self.tree.recompute_all_leaves_accel(&self.data) {
-            // Compute root using accelerated reducer to avoid CPU rebuild.
-            let root_bytes =
-                crate::byte_merkle_tree::ByteMerkleTree::root_from_bytes_accel(&self.data, 32);
-            self.root = HashOf::from_untyped_unchecked(Hash::prehashed(root_bytes));
+            self.root = self.tree.root_hash();
             self.dirty = false;
             commit_path = "accel";
             let metrics = iroha_telemetry::metrics::global_or_default();
@@ -173,7 +170,8 @@ impl Memory {
             return;
         }
         if large_update {
-            self.tree = ByteMerkleTree::from_bytes_parallel(&self.data, 32);
+            self.tree =
+                ByteMerkleTree::from_bytes_parallel_with_leaf_count(&self.data, 32, total_leaves);
             commit_path = "full_rebuild";
             iroha_telemetry::metrics::global_or_default()
                 .ivm_merkle_rebuild_total
@@ -201,6 +199,11 @@ impl Memory {
         if self.dirty {
             self.recompute_dirty();
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn dirty_for_testing(&self) -> bool {
+        self.dirty
     }
 
     /// Generate the Merkle authentication path for the 32-byte chunk containing
@@ -1009,6 +1012,50 @@ mod tests {
             mem.dirty_chunks.is_empty(),
             "large commit should drain dirty chunks"
         );
+    }
+
+    #[test]
+    fn large_commit_keeps_unaligned_memory_tree_shape() {
+        let data = vec![0u8; 32 * 8 + 16];
+        let tree = ByteMerkleTree::new(8, 32);
+        let root = tree.root_hash();
+        let mut incremental = Memory {
+            data: data.clone(),
+            stack_limit: Memory::STACK_ALIGNMENT,
+            heap_alloc: 0,
+            heap_limit: Memory::HEAP_SIZE,
+            code_length: 0,
+            output_cursor: 0,
+            root,
+            tree,
+            dirty: false,
+            dirty_chunks: HashSet::new(),
+            read_log: Mutex::new(Vec::new()),
+            write_log: Mutex::new(Vec::new()),
+        };
+        let mut rebuilt = incremental.clone();
+
+        incremental.data[0..32].fill(0xAA);
+        incremental.data[32..64].fill(0x55);
+        incremental.dirty_chunks.extend([0, 1]);
+        incremental.dirty = true;
+        incremental.commit();
+        incremental.data[64..96].fill(0x11);
+        incremental.data[96..128].fill(0x22);
+        incremental.dirty_chunks.extend([2, 3]);
+        incremental.dirty = true;
+        let incremental_root = incremental.root();
+
+        rebuilt.data[0..32].fill(0xAA);
+        rebuilt.data[32..64].fill(0x55);
+        rebuilt.data[64..96].fill(0x11);
+        rebuilt.data[96..128].fill(0x22);
+        rebuilt.dirty_chunks.extend([0, 1, 2, 3]);
+        rebuilt.dirty = true;
+        let rebuilt_root = rebuilt.root();
+
+        assert_eq!(rebuilt.tree.leaf_count(), 8);
+        assert_eq!(rebuilt_root, incremental_root);
     }
 
     #[test]

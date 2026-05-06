@@ -201,14 +201,14 @@ authority = "{authority}"
 private_key = "{private_key}"
 asset_definition_id = "{fee_asset_id}"
 amount = "25000"
-pow_difficulty_bits = 8
+pow_difficulty_bits = 4
 pow_scrypt_log_n = 13
 pow_scrypt_r = 8
 pow_scrypt_p = 1
-pow_max_anchor_age_blocks = 6
+pow_max_anchor_age_blocks = 256
 pow_adaptive_lookback_blocks = 64
-pow_adaptive_claims_per_extra_bit = 4
-pow_adaptive_max_extra_bits = 2
+pow_adaptive_claims_per_extra_bit = 0
+pow_adaptive_max_extra_bits = 0
 pow_vrf_seed_enabled = false
 """
 

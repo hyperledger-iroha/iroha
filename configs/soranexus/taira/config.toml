@@ -31,8 +31,8 @@ max_frame_bytes_tx_gossip = 1048576
 [torii]
 address = "addr:0.0.0.0:18080#B922"
 max_content_len = 1_073_741_824
-deploy_rate_per_origin_per_sec = 4
-deploy_burst_per_origin = 8
+deploy_rate_per_origin_per_sec = 1000
+deploy_burst_per_origin = 2000
 webhooks_enabled = false
 zk_attachments_enabled = false
 
@@ -54,14 +54,14 @@ authority = "REPLACE_WITH_TAIRA_FAUCET_AUTHORITY"
 private_key = "REPLACE_WITH_TAIRA_FAUCET_PRIVATE_KEY"
 asset_definition_id = "xor#universal"
 amount = "25000"
-pow_difficulty_bits = 8
+pow_difficulty_bits = 4
 pow_scrypt_log_n = 13
 pow_scrypt_r = 8
 pow_scrypt_p = 1
-pow_max_anchor_age_blocks = 6
+pow_max_anchor_age_blocks = 256
 pow_adaptive_lookback_blocks = 64
-pow_adaptive_claims_per_extra_bit = 4
-pow_adaptive_max_extra_bits = 2
+pow_adaptive_claims_per_extra_bit = 0
+pow_adaptive_max_extra_bits = 0
 pow_vrf_seed_enabled = true
 
 [sorafs.discovery]
@@ -197,7 +197,7 @@ index = 0
 alias = "core"
 description = "Primary execution lane"
 dataspace = "universal"
-metadata = { "scheduler.teu_capacity" = "25000" }
+metadata = { "scheduler.teu_capacity" = "50000000" }
 
 [[nexus.lane_catalog]]
 index = 1
@@ -259,7 +259,7 @@ description = "Route contract deployments to the zk lane for proof tracking"
 
 [nexus.fusion]
 floor_teu = 2500
-exit_teu = 4000
+exit_teu = 50000000
 observation_slots = 2
 max_window_slots = 12
 

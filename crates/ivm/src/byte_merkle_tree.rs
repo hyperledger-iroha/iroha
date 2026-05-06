@@ -233,6 +233,43 @@ impl ByteMerkleTree {
         }
     }
 
+    /// Construct a tree from raw bytes in parallel using exactly `num_leaves`
+    /// padded chunks.
+    pub(crate) fn from_bytes_parallel_with_leaf_count(
+        data: &[u8],
+        chunk: usize,
+        num_leaves: usize,
+    ) -> Self {
+        use rayon::prelude::*;
+
+        assert!(chunk > 0 && chunk <= 32);
+        let zero_hash = Self::compute_zero_hash(chunk);
+        let leaf_count = num_leaves.max(1);
+        let leaves: Vec<[u8; 32]> = (0..leaf_count)
+            .into_par_iter()
+            .map(|idx| {
+                let start = idx.saturating_mul(chunk);
+                let end = (start + chunk).min(data.len());
+                let mut buf = [0u8; 32];
+                if start < end {
+                    buf[..(end - start)].copy_from_slice(&data[start..end]);
+                }
+                if buf[..chunk].iter().all(|&b| b == 0) {
+                    zero_hash
+                } else {
+                    sha256_oneblock32(&buf[..chunk])
+                }
+            })
+            .collect();
+        let canonical = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(leaves.clone());
+        ByteMerkleTree {
+            chunk,
+            zero_hash,
+            leaves: Mutex::new(leaves),
+            cached: Mutex::new(Some(canonical)),
+        }
+    }
+
     pub(crate) fn reset_from(&mut self, other: &ByteMerkleTree) {
         self.chunk = other.chunk;
         self.zero_hash = other.zero_hash;
@@ -338,7 +375,7 @@ impl ByteMerkleTree {
     /// On success, updates internal hashed leaves and invalidates the cached tree.
     /// Returns true if acceleration was used, false otherwise (no changes made).
     pub(crate) fn recompute_all_leaves_accel(&self, data: &[u8]) -> bool {
-        let leaves_count = data.len().div_ceil(self.chunk).max(1);
+        let leaves_count = self.leaf_count();
         // Prefer CPU SHA2 path on AArch64 for medium sizes
         if prefer_cpu_sha2(leaves_count) || leaves_count < merkle_gpu_min_leaves() {
             return false;
@@ -390,6 +427,10 @@ impl ByteMerkleTree {
             leaves: Mutex::new(leaves),
             cached: Mutex::new(None),
         }
+    }
+
+    pub(crate) fn leaf_count(&self) -> usize {
+        self.leaves.lock().len()
     }
 
     /// Return the canonical Merkle root as a typed hash.
