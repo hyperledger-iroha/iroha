@@ -192,6 +192,11 @@ Last updated: 2026-05-06
   builds. The p2p cleanup is covered by
   `CARGO_TARGET_DIR=target/codex-offline-body-auth cargo test -p iroha_p2p`
   (`161` unit tests and `15` integration tests passed).
+- Full Rust workspace build is green with `cargo build --workspace` in the
+  normal repository target directory (`20m10s`). A first duplicate-target
+  attempt failed with `No space left on device`; removing the generated
+  `target/codex-offline-body-auth` tree freed enough space for the successful
+  normal-target build.
 - Kotlin/Java validation is green when Gradle is pointed at the local Homebrew
   OpenJDK 21 install:
   `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --console=plain`
