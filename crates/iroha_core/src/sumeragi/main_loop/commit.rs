@@ -3742,7 +3742,13 @@ impl Actor {
             let Some(pending) = self.pending.pending_blocks.get_mut(&block_hash) else {
                 return false;
             };
-            pending.should_replay_commit_evidence(view, commit_votes, has_commit_qc)
+            let allow_stalled_retry = commit_votes > 0 || has_commit_qc;
+            pending.should_replay_commit_evidence(
+                view,
+                commit_votes,
+                has_commit_qc,
+                allow_stalled_retry,
+            )
         };
         if !should_replay {
             iroha_logger::trace!(

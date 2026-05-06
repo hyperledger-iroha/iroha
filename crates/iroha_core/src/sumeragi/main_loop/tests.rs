@@ -27057,7 +27057,7 @@ async fn known_block_commit_evidence_replay_skips_payload_fallback_without_roste
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn known_block_commit_evidence_replay_skips_without_new_progress() {
+async fn known_block_commit_evidence_replay_retries_stalled_commit_evidence_after_cooldown() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let background_log = attach_background_log(actor);
@@ -27103,18 +27103,20 @@ async fn known_block_commit_evidence_replay_skips_without_new_progress() {
 
     actor.block_sync_rebroadcast_log.clear();
     assert!(
-        !actor.maybe_replay_known_block_commit_evidence(
+        actor.maybe_replay_known_block_commit_evidence(
             block_hash,
             1,
             0,
             topology.as_ref(),
-            "test_no_new_progress",
+            "test_stalled_commit_evidence",
         ),
-        "replay should stop once neither the view, vote count, nor commit-QC state has advanced"
+        "stalled commit evidence should keep retrying once the cooldown expires"
     );
     assert!(
-        take_background_log(&background_log).is_empty(),
-        "no-progress replay suppression should avoid scheduling any new network work"
+        take_background_log(&background_log)
+            .iter()
+            .any(|entry| entry.msg_kind == Some("QcVote")),
+        "stalled commit evidence retry should schedule another commit-vote replay"
     );
 
     harness.shutdown.send();

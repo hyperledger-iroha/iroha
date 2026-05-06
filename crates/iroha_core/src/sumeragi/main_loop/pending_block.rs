@@ -394,6 +394,7 @@ impl PendingBlock {
         view: u64,
         commit_votes: usize,
         has_commit_qc: bool,
+        allow_stalled_retry: bool,
     ) -> bool {
         let candidate = CommitEvidenceReplayState {
             view,
@@ -407,10 +408,12 @@ impl PendingBlock {
         let progressed = commit_votes > previous.commit_votes
             || (has_commit_qc && !previous.has_commit_qc)
             || view != previous.view;
-        if progressed {
+        let retry_stalled_evidence = allow_stalled_retry && (commit_votes > 0 || has_commit_qc);
+        let should_replay = progressed || retry_stalled_evidence;
+        if should_replay {
             self.last_commit_evidence_replay = Some(candidate);
         }
-        progressed
+        should_replay
     }
 
     pub(super) fn note_kura_failure(
@@ -681,11 +684,12 @@ mod tests {
     fn commit_evidence_replay_advances_on_progress() {
         let mut pending =
             PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
-        assert!(pending.should_replay_commit_evidence(0, 1, false));
-        assert!(!pending.should_replay_commit_evidence(0, 1, false));
-        assert!(pending.should_replay_commit_evidence(0, 2, false));
-        assert!(pending.should_replay_commit_evidence(0, 2, true));
-        assert!(pending.should_replay_commit_evidence(1, 2, true));
+        assert!(pending.should_replay_commit_evidence(0, 1, false, false));
+        assert!(!pending.should_replay_commit_evidence(0, 1, false, false));
+        assert!(pending.should_replay_commit_evidence(0, 1, false, true));
+        assert!(pending.should_replay_commit_evidence(0, 2, false, false));
+        assert!(pending.should_replay_commit_evidence(0, 2, true, false));
+        assert!(pending.should_replay_commit_evidence(1, 2, true, false));
     }
 
     #[test]
