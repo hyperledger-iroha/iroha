@@ -2137,24 +2137,41 @@ impl Actor {
             if let Some(lock) = self.locked_qc {
                 let same_height_conflict = Self::block_sync_qc_same_height_conflict(lock, qc);
                 if same_height_conflict {
-                    if self.defer_block_sync_qc_while_locked_payload_missing(
+                    let exact_frontier_commit_cert = exact_contiguous_frontier
+                        && qc.subject_block_hash == block_hash
+                        && qc.height == block_height
+                        && qc.view == block_view
+                        && qc.epoch == expected_epoch
+                        && Self::block_sync_qc_same_height_recoverable(lock, qc, true);
+                    if exact_frontier_commit_cert {
+                        debug!(
+                            height = block_height,
+                            view = block_view,
+                            block = %block_hash,
+                            locked_height = lock.height,
+                            locked_view = lock.view,
+                            locked_block = %lock.subject_block_hash,
+                            "allowing exact-frontier commit QC to supersede same-height locked branch after validation"
+                        );
+                    } else if self.defer_block_sync_qc_while_locked_payload_missing(
                         qc,
                         "block_sync_update.prefilter.missing_locked_payload",
                     ) {
                         return Ok(());
+                    } else {
+                        self.log_block_sync_locked_qc_conflict(
+                            qc,
+                            lock,
+                            "block_sync_update.prefilter.height_conflict",
+                        );
+                        crate::sumeragi::status::inc_block_sync_locked_qc_prefilter_drop();
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::Qc,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::LockedQc,
+                        );
+                        incoming_qc = None;
                     }
-                    self.log_block_sync_locked_qc_conflict(
-                        qc,
-                        lock,
-                        "block_sync_update.prefilter.height_conflict",
-                    );
-                    crate::sumeragi::status::inc_block_sync_locked_qc_prefilter_drop();
-                    self.record_consensus_message_handling(
-                        super::status::ConsensusMessageKind::Qc,
-                        super::status::ConsensusMessageOutcome::Dropped,
-                        super::status::ConsensusMessageReason::LockedQc,
-                    );
-                    incoming_qc = None;
                 }
             }
         }

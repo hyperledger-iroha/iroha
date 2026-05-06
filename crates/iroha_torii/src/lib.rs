@@ -21330,6 +21330,38 @@ fn resolve_local_hosted_http_replica_listener(
 }
 
 #[cfg(feature = "app_api")]
+fn local_healthy_hosted_http_placement(
+    app: &SharedAppState,
+    service_name: &str,
+    service_version: &str,
+    placements: &[iroha_data_model::soracloud::SoraInrouReplicaPlacementV1],
+) -> Result<
+    Option<iroha_data_model::soracloud::SoraInrouReplicaPlacementV1>,
+    SoracloudRuntimeExecutionError,
+> {
+    let Some(local_peer_id) = app.local_peer_id.as_ref() else {
+        return Ok(None);
+    };
+    let local_peer_id = local_peer_id.to_string();
+    for placement in placements {
+        if placement.peer_id != local_peer_id {
+            continue;
+        }
+        if resolve_local_hosted_http_replica_listener(
+            app,
+            service_name,
+            service_version,
+            placement.replica_slot,
+        )?
+        .is_some()
+        {
+            return Ok(Some(placement.clone()));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(feature = "app_api")]
 fn resolve_hosted_http_runtime_target(
     app: &SharedAppState,
     route_match: &soracloud::HostedHttpRouteMatch,
@@ -21360,15 +21392,25 @@ fn resolve_hosted_http_runtime_target(
         else {
             continue;
         };
-        let Some((placement, _runtime_state)) = select_authoritative_hosted_http_replica(
-            world,
+        let placement = if let Some((placement, _runtime_state)) =
+            select_authoritative_hosted_http_replica(
+                world,
+                &service_name,
+                service_version,
+                &placement_record.placements,
+                remote_ip,
+                method,
+                uri,
+            ) {
+            placement
+        } else if let Some(placement) = local_healthy_hosted_http_placement(
+            app,
             &service_name,
             service_version,
             &placement_record.placements,
-            remote_ip,
-            method,
-            uri,
-        ) else {
+        )? {
+            placement
+        } else {
             continue;
         };
         healthy_targets.push(HealthyTarget {
@@ -21540,29 +21582,34 @@ fn resolve_exact_hosted_http_runtime_target(
             ),
         ));
     }
-    let Some(runtime_state) = world.soracloud_inrou_replica_runtime().get(&(
+    let runtime_state = world.soracloud_inrou_replica_runtime().get(&(
         service_name.to_owned(),
         service_version.to_owned(),
         replica_slot.to_string(),
-    )) else {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!(
-                "authoritative hosted Soracloud runtime state is unavailable for service `{service_name}` revision `{service_version}` replica {}",
-                replica_slot
-            ),
-        ));
-    };
-    if runtime_state.health_status
-        != iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy
-    {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!(
-                "hosted Soracloud replica {} for service `{service_name}` revision `{service_version}` is {:?}",
-                replica_slot, runtime_state.health_status
-            ),
-        ));
+    ));
+    if !runtime_state.is_some_and(|runtime_state| {
+        runtime_state.validator_account_id == placement.validator_account_id
+            && runtime_state.peer_id == placement.peer_id
+            && runtime_state.selected_backend == placement.selected_backend
+            && runtime_state.selected_guest_isa == placement.selected_guest_isa
+            && runtime_state.health_status
+                == iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy
+    }) {
+        let local_listener = resolve_local_hosted_http_replica_listener(
+            app,
+            service_name,
+            service_version,
+            replica_slot,
+        )?;
+        if local_listener.is_none() {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                format!(
+                    "hosted Soracloud replica {} for service `{service_name}` revision `{service_version}` is not healthy in authoritative state or local runtime snapshot",
+                    replica_slot
+                ),
+            ));
+        }
     }
     drop(state_view);
     let local_listen_base_url = resolve_local_hosted_http_replica_listener(
@@ -50099,7 +50146,8 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn resolve_hosted_http_runtime_target_fails_closed_without_authoritative_runtime_state() {
+    async fn resolve_hosted_http_runtime_target_uses_local_snapshot_when_authoritative_runtime_state_lags()
+     {
         let temp = tempfile::tempdir().expect("tempdir");
         let mut app = seed_public_hosted_http_rollout_app(
             &temp,
@@ -50146,21 +50194,18 @@ pub(crate) mod tests_runtime_handlers {
         let baseline_ip =
             hosted_http_rollout_test_ip("web_portal", &method, &uri, |bucket| bucket >= 20);
 
-        let error = super::resolve_hosted_http_runtime_target(
+        let target = super::resolve_hosted_http_runtime_target(
             &app,
             &route_match,
             Some(baseline_ip),
             &method,
             &uri,
         )
-        .expect_err("authoritative runtime state is required for hosted-http routing");
-        assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
-        assert!(
-            error
-                .message
-                .contains("no healthy hosted Soracloud revision"),
-            "unexpected error: {}",
-            error.message
+        .expect("healthy assigned local runtime snapshot should bridge authoritative lag");
+        assert_eq!(target.route_match.service_version, "2026.02.0");
+        assert_eq!(
+            target.local_listen_base_url.as_deref(),
+            Some("http://127.0.0.1:18080")
         );
     }
 

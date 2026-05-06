@@ -2001,6 +2001,18 @@ pub fn check_genesis_block(
 #[derive(Debug, Clone)]
 pub struct BlockBuilder<B>(B);
 
+fn signed_block_entrypoints_are_canonical(block: &SignedBlock) -> bool {
+    let mut previous = None;
+    for entrypoint in block.external_entrypoints_cloned() {
+        let hash = entrypoint.hash();
+        if previous.is_some_and(|previous| previous > hash) {
+            return false;
+        }
+        previous = Some(hash);
+    }
+    true
+}
+
 mod pending {
     use iroha_primitives::time::TimeSource;
     use nonzero_ext::nonzero;
@@ -2054,13 +2066,15 @@ mod pending {
         ///
         /// This bypasses call-hash canonicalisation and is intended for
         /// test harnesses that require strict FIFO semantics.
+        #[cfg(test)]
         #[inline]
-        pub fn new_preserve_order(transactions: Vec<AcceptedTransaction<'static>>) -> Self {
+        pub(crate) fn new_preserve_order(transactions: Vec<AcceptedTransaction<'static>>) -> Self {
             Self::new_preserve_order_with_time_source(transactions, TimeSource::new_system())
         }
 
         /// Create with provided [`TimeSource`] while preserving transaction order.
-        pub fn new_preserve_order_with_time_source(
+        #[cfg(test)]
+        pub(crate) fn new_preserve_order_with_time_source(
             transactions: Vec<AcceptedTransaction<'static>>,
             time_source: TimeSource,
         ) -> Self {
@@ -5545,6 +5559,33 @@ pub(crate) mod valid {
             (decisions.len() == tx_count).then_some(decisions)
         }
 
+        fn embedded_routing_decisions_for_entrypoints(
+            block: &SignedBlock,
+            entrypoint_count: usize,
+        ) -> Option<Vec<crate::queue::RoutingDecision>> {
+            let bundle = match Self::validate_execution_context_header(block) {
+                Ok(Some(bundle)) => bundle,
+                Ok(None) => return None,
+                Err(error) => {
+                    warn!(%error, "ignoring invalid embedded execution context during unchecked execution");
+                    return None;
+                }
+            };
+            if let Err(error) = Self::validate_execution_context_alignment(block, bundle) {
+                warn!(%error, "ignoring misaligned embedded execution context during unchecked execution");
+                return None;
+            }
+
+            let decisions = bundle
+                .external
+                .iter()
+                .map(|context| {
+                    crate::queue::RoutingDecision::new(context.lane_id, context.dataspace_id)
+                })
+                .collect::<Vec<_>>();
+            (decisions.len() == entrypoint_count).then_some(decisions)
+        }
+
         fn committed_heights_for_prepared_transactions(
             prepared_txs: &[PreparedBlockTransaction],
             transactions: &impl TransactionsReadOnly,
@@ -6082,6 +6123,39 @@ pub(crate) mod valid {
                 .transactions
                 .insert_block(tx_hashes, block_height);
 
+            let embedded_routing = Self::embedded_routing_decisions_for_entrypoints(block, n);
+            let (routing_decisions, routing_errors) = if let Some(decisions) = embedded_routing {
+                (decisions, vec![None; n])
+            } else {
+                let routing_policy = &state_block.nexus.routing_policy;
+                let lane_catalog = &state_block.nexus.lane_catalog;
+                let dataspace_catalog = &state_block.nexus.dataspace_catalog;
+                let mut decisions = Vec::with_capacity(n);
+                let mut errors = Vec::with_capacity(n);
+                for entrypoint in &entrypoints {
+                    let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
+                        Cow::Borrowed(entrypoint),
+                    );
+                    match evaluate_policy_with_catalog_and_world(
+                        routing_policy,
+                        lane_catalog,
+                        dataspace_catalog,
+                        &accepted,
+                        &state_block.world,
+                    ) {
+                        Ok(decision) => {
+                            decisions.push(decision);
+                            errors.push(None);
+                        }
+                        Err(err) => {
+                            decisions.push(crate::queue::RoutingDecision::default());
+                            errors.push(Some(err));
+                        }
+                    }
+                }
+                (decisions, errors)
+            };
+
             let mut execution_order: Vec<usize> = (0..n).collect();
             let reveal_positions: Vec<usize> = execution_order
                 .iter()
@@ -6106,14 +6180,27 @@ pub(crate) mod valid {
             let mut results: Vec<Option<TransactionResultInner>> = vec![None; n];
             for idx in execution_order {
                 let entrypoint = entrypoints[idx].clone();
+                let entrypoint_hash = entrypoint.hash();
                 let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
                     Cow::Owned(entrypoint),
                 );
-                let (hash, result) = state_block.validate_transaction_with_entrypoint_index(
-                    accepted,
-                    &mut ivm_cache,
-                    idx,
-                );
+                let (hash, result) = if let Some(err) = routing_errors[idx].as_ref() {
+                    (
+                        entrypoint_hash,
+                        Err(TransactionRejectionReason::Validation(
+                            iroha_data_model::ValidationFail::NotPermitted(format!(
+                                "transaction routing could not be resolved: {err}"
+                            )),
+                        )),
+                    )
+                } else {
+                    state_block.validate_transaction_with_entrypoint_index_and_routing_context(
+                        accepted,
+                        &mut ivm_cache,
+                        idx,
+                        routing_decisions[idx],
+                    )
+                };
                 hashes[idx] = Some(hash);
                 results[idx] = Some(result);
             }
@@ -6145,10 +6232,10 @@ pub(crate) mod valid {
             }
             let fastpq_digest_batch = state_block.submit_transfer_transcript_digest_batch();
             let mut fastpq_entry_dataspaces = std::collections::BTreeMap::new();
-            for entry_hash in &ordered_hashes {
+            for (idx, entry_hash) in ordered_hashes.iter().enumerate() {
                 fastpq_entry_dataspaces.insert(
                     iroha_crypto::Hash::from(*entry_hash),
-                    DataSpaceId::UNIVERSAL,
+                    routing_decisions[idx].dataspace_id,
                 );
             }
             for entry_hash in &time_hashes {
@@ -9881,6 +9968,10 @@ pub(crate) mod valid {
             mut block: SignedBlock,
             state_block: &mut StateBlock<'_>,
         ) -> WithEvents<ValidBlock> {
+            assert!(
+                block.header().is_genesis() || signed_block_entrypoints_are_canonical(&block),
+                "unchecked block payload is not in canonical transaction entrypoint order"
+            );
             let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
             Self::validate_and_record_transactions(&mut block, state_block, None, false);
             if let Err(error) = validate_axt_envelopes(&block, state_block) {

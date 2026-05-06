@@ -6607,6 +6607,10 @@ Last updated: 2026-05-06
   64-transcript missing-digest fixture stayed within noise without it, and a
   temporary 256-transcript fixture measured about `98.1 ms` serial versus
   `100.2 ms` through the parallel fallback.
+- Kept a `PoseidonByteHasher::finalize` pending-word specialization after the
+  direct streaming A/B improved the 32-byte filter by about `2.3%`; 33, 128,
+  129, 512, and 4096-byte filters stayed within noise, and reverse A/B restoring
+  the old `absorb_word` path moved the 32-byte filter back about `0.9%` slower.
 - Updated FASTPQ digest construction in `crates/iroha_core/src/fastpq/mod.rs`
   to pack the single-digest CPU path through the same u64 word preimage builder
   used by batched Poseidon digests. Direct reverse A/B kept the packed-word

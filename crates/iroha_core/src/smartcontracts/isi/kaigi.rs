@@ -1,7 +1,7 @@
 //! Host-side execution of Kaigi instruction family.
 use std::{collections::BTreeSet, convert::TryFrom};
 
-use iroha_crypto::{Algorithm, Hash, PublicKey};
+use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     HasMetadata,
     events::{
@@ -45,12 +45,8 @@ fn opaque_account_from_seed(label: &str, seed: &[u8]) -> Result<AccountId, Error
     preimage.push(0);
     preimage.extend_from_slice(seed);
     let digest = Hash::new(preimage);
-    let public_key = PublicKey::from_bytes(Algorithm::Ed25519, digest.as_ref()).map_err(|err| {
-        Error::InvariantViolation(
-            format!("failed to derive opaque private Kaigi authority: {err}").into(),
-        )
-    })?;
-    Ok(AccountId::new(public_key))
+    let keypair = KeyPair::from_seed(digest.as_ref().to_vec(), Algorithm::Ed25519);
+    Ok(AccountId::new(keypair.public_key().clone()))
 }
 
 fn opaque_host_account(commitment: &KaigiParticipantCommitment) -> Result<AccountId, Error> {
@@ -1286,6 +1282,20 @@ mod tests {
             }
             other => panic!("unexpected error variant {other:?}"),
         }
+    }
+
+    #[test]
+    fn opaque_account_from_seed_accepts_arbitrary_digest_bytes() {
+        let seed = Hash::new(b"private-kaigi-seed");
+        let first = opaque_account_from_seed("iroha.private_kaigi.test", seed.as_ref())
+            .expect("opaque account derivation succeeds");
+        let second = opaque_account_from_seed("iroha.private_kaigi.test", seed.as_ref())
+            .expect("opaque account derivation is repeatable");
+        let different_label = opaque_account_from_seed("iroha.private_kaigi.other", seed.as_ref())
+            .expect("opaque account derivation supports arbitrary labels");
+
+        assert_eq!(first, second);
+        assert_ne!(first, different_label);
     }
 
     #[test]

@@ -141207,6 +141207,7 @@ fn block_sync_update_contiguous_frontier_requested_with_commit_qc_routes_through
 
 #[tokio::test(flavor = "current_thread")]
 async fn block_sync_update_commit_qc_supersedes_stale_same_height_frontier_owner() {
+    let _guard = super::status::qc_status_test_guard();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -141240,6 +141241,30 @@ async fn block_sync_update_commit_qc_supersedes_stale_same_height_frontier_owner
         .expect("local pending block")
         .note_local_commit_vote_emitted();
     actor.note_frontier_owner_local_vote_emitted(local_hash, height, local_view);
+    let epoch = actor.epoch_for_height(height);
+    actor.locked_qc = Some(QcHeaderRef {
+        height,
+        view: local_view,
+        epoch,
+        subject_block_hash: local_hash,
+        phase: Phase::Commit,
+    });
+    super::status::set_locked_qc(height, local_view, Some(local_hash));
+    let inserted_request = super::touch_missing_block_request(
+        &mut actor.pending.missing_commit_qc_requests,
+        local_hash,
+        height,
+        local_view,
+        Phase::Commit,
+        super::MissingBlockPriority::Consensus,
+        Instant::now(),
+        Duration::from_secs(1),
+        None,
+    );
+    assert!(
+        inserted_request,
+        "test setup should seed the stale owner's missing commit-QC retry"
+    );
     assert_eq!(
         actor
             .frontier_slot
@@ -141262,7 +141287,6 @@ async fn block_sync_update_commit_qc_supersedes_stale_same_height_frontier_owner
         .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let epoch = actor.epoch_for_height(height);
     let qc = qc_with_bitmap(
         &actor.common_config.chain,
         committed_hash,
@@ -141310,6 +141334,13 @@ async fn block_sync_update_commit_qc_supersedes_stale_same_height_frontier_owner
             .map(|slot| (slot.block_hash, slot.view)),
         Some((committed_hash, committed_view)),
         "frontier ownership should move to the certified recovery block",
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&local_hash),
+        "authoritative same-height commit QC should stop retrying the superseded owner's impossible QC"
     );
 
     harness.shutdown.send();
