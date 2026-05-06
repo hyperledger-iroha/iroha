@@ -2826,6 +2826,10 @@ pub mod sumeragi {
     pub const WORKER_VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG: usize = 8;
     /// Maximum urgent actor-gate streak before yielding to DA-critical work.
     pub const WORKER_MAX_URGENT_BEFORE_DA_CRITICAL: u32 = 8;
+    /// Grace period before exact-frontier body repair actively fetches payloads.
+    pub const RECOVERY_AUTHORITATIVE_BODY_INGRESS_FETCH_GRACE_MS: u64 = 100;
+    /// Minimum retry window for exact-frontier body fetches.
+    pub const RECOVERY_EXACT_BODY_FETCH_RETRY_FLOOR_MS: u64 = 25;
     /// Default runtime consensus mode: "permissioned".
     pub const CONSENSUS_MODE: &str = "permissioned";
     /// Default: allow runtime consensus mode flips driven by on-chain parameters.

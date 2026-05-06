@@ -760,6 +760,14 @@ impl Actor {
     }
 
     pub(super) fn send_block_body_response(&mut self, peer: PeerId, block: &SignedBlock) {
+        let header = block.header();
+        debug!(
+            height = header.height().get(),
+            view = header.view_change_index(),
+            block = %block.hash(),
+            peer = %peer,
+            "sending exact BlockBodyResponse"
+        );
         let response = self.block_body_response_for_wire(block);
         self.dispatch_block_body_response_with_plain_fallback(peer, block, response);
     }
@@ -4705,6 +4713,22 @@ impl Actor {
                 && slot.height == response.height
                 && slot.view == response.view
         });
+        if body_materialized {
+            let queue_depths = super::status::worker_queue_depth_snapshot();
+            info!(
+                height = response.height,
+                view = response.view,
+                block = %response.block_hash,
+                sender = ?sender_for_slot.as_ref(),
+                slot_matches = slot_matches_after,
+                allow_same_height_repair,
+                vote_rx_depth = queue_depths.vote_rx,
+                block_payload_rx_depth = queue_depths.block_payload_rx,
+                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                block_rx_depth = queue_depths.block_rx,
+                "materialized block body from BlockBodyResponse"
+            );
+        }
         if body_materialized && slot_matches_after {
             let _ = self.handle_frontier_slot_event(
                 Instant::now(),

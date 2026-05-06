@@ -5985,6 +5985,18 @@ pub struct SumeragiRecovery {
         default = "defaults::sumeragi::RECOVERY_MISSING_FETCH_AGGRESSIVE_AFTER_ATTEMPTS"
     )]
     pub missing_fetch_aggressive_after_attempts: u32,
+    /// Grace window before exact-frontier body repair actively fetches payloads (milliseconds).
+    #[config(
+        env = "SUMERAGI_RECOVERY_AUTHORITATIVE_BODY_INGRESS_FETCH_GRACE_MS",
+        default = "defaults::sumeragi::RECOVERY_AUTHORITATIVE_BODY_INGRESS_FETCH_GRACE_MS"
+    )]
+    pub authoritative_body_ingress_fetch_grace_ms: u64,
+    /// Minimum retry window for exact-frontier body fetches (milliseconds).
+    #[config(
+        env = "SUMERAGI_RECOVERY_EXACT_BODY_FETCH_RETRY_FLOOR_MS",
+        default = "defaults::sumeragi::RECOVERY_EXACT_BODY_FETCH_RETRY_FLOOR_MS"
+    )]
+    pub exact_body_fetch_retry_floor_ms: u64,
 }
 
 /// User-level configuration container for deterministic transport fanout.
@@ -7623,6 +7635,12 @@ impl Sumeragi {
                 missing_fetch_aggressive_after_attempts: recovery
                     .missing_fetch_aggressive_after_attempts
                     .max(1),
+                authoritative_body_ingress_fetch_grace: std::time::Duration::from_millis(
+                    recovery.authoritative_body_ingress_fetch_grace_ms,
+                ),
+                exact_body_fetch_retry_floor: std::time::Duration::from_millis(
+                    recovery.exact_body_fetch_retry_floor_ms.max(1),
+                ),
             },
             fanout: actual::SumeragiFanout {
                 large_set_threshold: fanout.large_set_threshold,

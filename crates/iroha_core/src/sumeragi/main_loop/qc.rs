@@ -3974,6 +3974,84 @@ impl Actor {
                     exact_retry_emitted,
                     "routing vote-backed contiguous frontier payload miss through exact body repair"
                 );
+                let quorum_saturated_commit_gap =
+                    matches!(phase, crate::sumeragi::consensus::Phase::Commit)
+                        && exact_owner_routed
+                        && signature_topology
+                            .as_ref()
+                            .len()
+                            .saturating_sub(signers.len())
+                            < 2;
+                if quorum_saturated_commit_gap {
+                    let mut targets = rebroadcast_targets_for_qc(
+                        self.common_config.peer.id(),
+                        signers,
+                        signature_topology,
+                    )
+                    .into_iter()
+                    .collect::<BTreeSet<_>>();
+                    targets.extend(
+                        signature_topology
+                            .as_ref()
+                            .iter()
+                            .filter(|peer| *peer != self.common_config.peer.id())
+                            .cloned(),
+                    );
+                    let targets = targets.into_iter().collect::<Vec<_>>();
+                    let mut missing_block_requested = false;
+                    if !targets.is_empty() {
+                        let retry_window = self
+                            .config
+                            .recovery
+                            .exact_body_fetch_retry_floor
+                            .max(Duration::from_millis(1));
+                        let view_change_window =
+                            Some(self.quorum_timeout(self.runtime_da_enabled()));
+                        let _ = super::touch_missing_block_request(
+                            &mut self.pending.missing_block_requests,
+                            block_hash,
+                            height,
+                            view,
+                            phase,
+                            super::MissingBlockPriority::Consensus,
+                            now,
+                            retry_window,
+                            view_change_window,
+                        );
+                        let requester_roster_proof_known =
+                            self.requester_has_local_roster_proof(block_hash, height, view);
+                        send_missing_block_request(
+                            &self.network,
+                            &self.common_config.peer.id,
+                            block_hash,
+                            height,
+                            view,
+                            super::MissingBlockPriority::Consensus,
+                            requester_roster_proof_known,
+                            &targets,
+                        );
+                        missing_block_requested = true;
+                        self.note_missing_block_height_attempt(
+                            block_hash,
+                            height,
+                            view,
+                            super::MissingBlockRecoveryStage::HashFetch,
+                            None,
+                            now,
+                        );
+                    }
+                    info!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = %block_hash,
+                        topology_len = signature_topology.as_ref().len(),
+                        signers = signers.len(),
+                        targets = targets.len(),
+                        missing_block_requested,
+                        "paired exact frontier body repair with quorum-saturated missing-block fetch"
+                    );
+                }
                 let resilience_generic_fallback = self.config.resilience.enabled
                     && signature_topology
                         .as_ref()

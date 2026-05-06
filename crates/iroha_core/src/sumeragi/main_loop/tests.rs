@@ -1955,6 +1955,14 @@ fn test_sumeragi_config() -> SumeragiConfig {
             missing_fetch_aggressive_after_attempts:
                 iroha_config::parameters::defaults::sumeragi::
                     RECOVERY_MISSING_FETCH_AGGRESSIVE_AFTER_ATTEMPTS,
+            authoritative_body_ingress_fetch_grace: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::
+                    RECOVERY_AUTHORITATIVE_BODY_INGRESS_FETCH_GRACE_MS,
+            ),
+            exact_body_fetch_retry_floor: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::
+                    RECOVERY_EXACT_BODY_FETCH_RETRY_FLOOR_MS,
+            ),
         },
         fanout: SumeragiFanout {
             large_set_threshold:
@@ -72441,8 +72449,11 @@ fn defer_qc_for_missing_block_force_retry_now_bypasses_retry_window() {
             view_change_window: Some(retry_window),
             first_seen: now
                 .checked_sub(
-                    super::AUTHORITATIVE_BODY_INGRESS_FETCH_GRACE
-                        .saturating_add(Duration::from_millis(1)),
+                    Duration::from_millis(
+                        iroha_config::parameters::defaults::sumeragi::
+                            RECOVERY_AUTHORITATIVE_BODY_INGRESS_FETCH_GRACE_MS,
+                    )
+                    .saturating_add(Duration::from_millis(1)),
                 )
                 .unwrap_or(now),
             last_requested: now,
