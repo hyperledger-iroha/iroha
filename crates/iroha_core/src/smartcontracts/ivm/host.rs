@@ -1295,11 +1295,48 @@ impl HostExecutionArtifacts {
             .collect()
     }
 
+    fn seed_queued_call_hash_if_missing(
+        tx: &mut StateTransaction<'_, '_>,
+        queued: &[QueuedInstruction],
+    ) -> Result<(), ValidationFail> {
+        if tx.tx_call_hash.is_some() || queued.is_empty() {
+            return Ok(());
+        }
+        let mut bytes = Vec::from(&b"iroha:ivm:queued-call-hash:v1|"[..]);
+        for queued in queued {
+            let authority = norito::to_bytes(&queued.authority).map_err(|error| {
+                ValidationFail::InternalError(format!(
+                    "failed to encode queued authority for call_hash seed: {error}"
+                ))
+            })?;
+            let instruction = norito::to_bytes(&queued.instruction).map_err(|error| {
+                ValidationFail::InternalError(format!(
+                    "failed to encode queued instruction for call_hash seed: {error}"
+                ))
+            })?;
+            bytes.extend_from_slice(
+                &u64::try_from(authority.len())
+                    .unwrap_or(u64::MAX)
+                    .to_le_bytes(),
+            );
+            bytes.extend_from_slice(&authority);
+            bytes.extend_from_slice(
+                &u64::try_from(instruction.len())
+                    .unwrap_or(u64::MAX)
+                    .to_le_bytes(),
+            );
+            bytes.extend_from_slice(&instruction);
+        }
+        tx.tx_call_hash = Some(iroha_crypto::Hash::new(bytes));
+        Ok(())
+    }
+
     pub(crate) fn apply_to_transaction(
         self,
         tx: &mut StateTransaction<'_, '_>,
         _authority: &AccountId,
     ) -> Result<Vec<InstructionBox>, ValidationFail> {
+        Self::seed_queued_call_hash_if_missing(tx, &self.queued)?;
         let executor = tx.world.executor.clone();
         for queued in &self.queued {
             executor.execute_instruction_with_contract_runtime_context(
@@ -2918,6 +2955,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 .map(|queued| queued.instruction.clone())
                 .collect::<Vec<_>>(),
         )?;
+        HostExecutionArtifacts::seed_queued_call_hash_if_missing(tx, &queued)?;
         let executor = tx.world.executor.clone();
         for queued in &queued {
             executor.execute_instruction_with_contract_runtime_context(

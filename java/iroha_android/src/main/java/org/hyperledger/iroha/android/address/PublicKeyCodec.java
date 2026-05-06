@@ -81,6 +81,27 @@ public final class PublicKeyCodec {
     return builder.toString();
   }
 
+  /** Encodes a public key as Iroha's compact Norito payload: algorithm tag plus key bytes. */
+  public static byte[] compactPublicKeyPayload(final int curveId, final byte[] keyBytes) {
+    final int tag = compactAlgorithmTagForCurveId(curveId);
+    final byte[] payload = new byte[1 + keyBytes.length];
+    payload[0] = (byte) tag;
+    System.arraycopy(keyBytes, 0, payload, 1, keyBytes.length);
+    return payload;
+  }
+
+  /** Decodes Iroha's compact Norito public-key payload. */
+  public static PublicKeyPayload decodeCompactPublicKeyPayload(final byte[] payload) {
+    if (payload == null || payload.length == 0) {
+      return null;
+    }
+    final int curveId = curveIdForCompactAlgorithmTag(payload[0] & 0xFF);
+    if (curveId < 0) {
+      return null;
+    }
+    return new PublicKeyPayload(curveId, Arrays.copyOfRange(payload, 1, payload.length));
+  }
+
   /** Returns the canonical algorithm label for the curve id, or {@code null} when unknown. */
   public static String algorithmForCurveId(final int curveId) {
     switch (curveId) {
@@ -108,6 +129,64 @@ public final class PublicKeyCodec {
         return "sm2";
       default:
         return null;
+    }
+  }
+
+  private static int compactAlgorithmTagForCurveId(final int curveId) {
+    switch (curveId) {
+      case 0x01:
+        return 0;
+      case 0x04:
+        return 1;
+      case 0x03:
+        return 2;
+      case 0x05:
+        return 3;
+      case 0x02:
+        return 4;
+      case 0x0A:
+        return 5;
+      case 0x0B:
+        return 6;
+      case 0x0C:
+        return 7;
+      case 0x0D:
+        return 8;
+      case 0x0E:
+        return 9;
+      case 0x0F:
+        return 10;
+      default:
+        throw new IllegalArgumentException("Unsupported curve id: " + curveId);
+    }
+  }
+
+  private static int curveIdForCompactAlgorithmTag(final int tag) {
+    switch (tag) {
+      case 0:
+        return 0x01;
+      case 1:
+        return 0x04;
+      case 2:
+        return 0x03;
+      case 3:
+        return 0x05;
+      case 4:
+        return 0x02;
+      case 5:
+        return 0x0A;
+      case 6:
+        return 0x0B;
+      case 7:
+        return 0x0C;
+      case 8:
+        return 0x0D;
+      case 9:
+        return 0x0E;
+      case 10:
+        return 0x0F;
+      default:
+        return -1;
     }
   }
 

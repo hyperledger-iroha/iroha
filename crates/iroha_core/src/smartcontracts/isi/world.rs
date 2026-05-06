@@ -15325,6 +15325,41 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
+            let roles = crate::smartcontracts::ValidQuery::execute(
+                iroha_data_model::query::role::prelude::FindRoles,
+                iroha_data_model::query::dsl::CompoundPredicate::<Role>::build(|predicate| {
+                    predicate.equals("id", role_id.clone())
+                }),
+                &stx,
+            )
+            .expect("query role by id")
+            .map(|role| role.id().clone())
+            .collect::<Vec<_>>();
+            assert_eq!(roles, vec![role_id.clone()]);
+
+            let role_ids = crate::smartcontracts::ValidQuery::execute(
+                iroha_data_model::query::role::prelude::FindRoleIds,
+                iroha_data_model::query::dsl::CompoundPredicate::<RoleId>::build(|predicate| {
+                    predicate.equals("id", role_id.clone())
+                }),
+                &stx,
+            )
+            .expect("query role id by id")
+            .collect::<Vec<_>>();
+            assert_eq!(role_ids, vec![role_id.clone()]);
+
+            let missing_role_id: RoleId = "MISSING_ROLE".parse().expect("role id");
+            let missing_count = crate::smartcontracts::ValidQuery::execute(
+                iroha_data_model::query::role::prelude::FindRoleIds,
+                iroha_data_model::query::dsl::CompoundPredicate::<RoleId>::build(|predicate| {
+                    predicate.equals("id", missing_role_id)
+                }),
+                &stx,
+            )
+            .expect("query missing role id by id")
+            .count();
+            assert_eq!(missing_count, 0);
+
             // Verify Alice has been granted the role
             let has_role = stx
                 .world
@@ -18821,19 +18856,173 @@ pub mod isi {
     }
     /// Query module provides `IrohaQuery` Peer related implementations.
     pub mod query {
+        use std::collections::BTreeSet;
+
         use eyre::Result;
         use iroha_data_model::{
             parameter::Parameters,
             prelude::*,
+            proof::{ProofId, ProofRecord, ProofStatus},
             query::{
                 dsl::{CompoundPredicate, EvaluatePredicate},
                 error::QueryExecutionFail as Error,
+                json::PredicateJson,
             },
             role::Role,
         };
+        use norito::json::Value;
 
         use super::*;
-        use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
+        use crate::{
+            smartcontracts::ValidQuery,
+            state::{StateReadOnly, WorldReadOnly},
+        };
+
+        fn role_id_from_value(value: &Value) -> Option<RoleId> {
+            norito::json::from_value(value.clone()).ok()
+        }
+
+        fn maybe_replace_role_candidate_ids(
+            best: &mut Option<BTreeSet<RoleId>>,
+            candidates: BTreeSet<RoleId>,
+        ) {
+            if best
+                .as_ref()
+                .map_or(true, |current| candidates.len() < current.len())
+            {
+                *best = Some(candidates);
+            }
+        }
+
+        fn role_candidate_ids(predicate: &PredicateJson) -> Option<BTreeSet<RoleId>> {
+            let mut best = None;
+
+            for cond in &predicate.equals {
+                if cond.field == "id" {
+                    maybe_replace_role_candidate_ids(
+                        &mut best,
+                        role_id_from_value(&cond.value).into_iter().collect(),
+                    );
+                }
+            }
+
+            for cond in &predicate.r#in {
+                if cond.field == "id" {
+                    maybe_replace_role_candidate_ids(
+                        &mut best,
+                        cond.values.iter().filter_map(role_id_from_value).collect(),
+                    );
+                }
+            }
+
+            best
+        }
+
+        fn role_id_alias_values(id: &RoleId, field: &str) -> Vec<String> {
+            match field {
+                "id" => vec![id.to_string()],
+                _ => Vec::new(),
+            }
+        }
+
+        fn role_id_predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+            if path.is_empty() {
+                return None;
+            }
+            let mut current = value;
+            for segment in path.split('.') {
+                if segment.is_empty() {
+                    return None;
+                }
+                match current {
+                    Value::Object(map) => current = map.get(segment)?,
+                    _ => return None,
+                }
+            }
+            Some(current)
+        }
+
+        fn role_id_predicate_value_equals_str(value: &Value, expected: &str) -> bool {
+            matches!(value, Value::String(raw) if raw == expected)
+        }
+
+        fn role_id_predicate_values_contain_str(values: &[Value], expected: &str) -> bool {
+            values
+                .iter()
+                .any(|value| matches!(value, Value::String(raw) if raw == expected))
+        }
+
+        fn role_id_json_value<'a>(cache: &'a mut Option<Value>, id: &RoleId) -> Option<&'a Value> {
+            if cache.is_none() {
+                *cache = norito::json::to_value(id).ok();
+            }
+            cache.as_ref()
+        }
+
+        fn predicate_matches_role_id(predicate: &PredicateJson, id: &RoleId) -> bool {
+            let mut id_json = None;
+
+            for cond in &predicate.equals {
+                let aliases = role_id_alias_values(id, &cond.field);
+                if !aliases.is_empty() {
+                    if !aliases
+                        .iter()
+                        .any(|alias| role_id_predicate_value_equals_str(&cond.value, alias))
+                    {
+                        return false;
+                    }
+                    continue;
+                }
+                let Some(value) = role_id_json_value(&mut id_json, id) else {
+                    continue;
+                };
+                let Some(actual) = role_id_predicate_value_at_path(value, &cond.field) else {
+                    return false;
+                };
+                if actual != &cond.value {
+                    return false;
+                }
+            }
+
+            for cond in &predicate.r#in {
+                let aliases = role_id_alias_values(id, &cond.field);
+                if !aliases.is_empty() {
+                    if !aliases
+                        .iter()
+                        .any(|alias| role_id_predicate_values_contain_str(&cond.values, alias))
+                    {
+                        return false;
+                    }
+                    continue;
+                }
+                let Some(value) = role_id_json_value(&mut id_json, id) else {
+                    continue;
+                };
+                let Some(actual) = role_id_predicate_value_at_path(value, &cond.field) else {
+                    return false;
+                };
+                if !cond.values.iter().any(|candidate| candidate == actual) {
+                    return false;
+                }
+            }
+
+            for field in &predicate.exists {
+                if !role_id_alias_values(id, field).is_empty() {
+                    continue;
+                }
+                let Some(value) = role_id_json_value(&mut id_json, id) else {
+                    continue;
+                };
+                let Some(actual) = role_id_predicate_value_at_path(value, field) else {
+                    return false;
+                };
+                if actual.is_null() {
+                    return false;
+                }
+            }
+
+            true
+        }
 
         impl ValidQuery for FindRoles {
             #[metrics(+"find_roles")]
@@ -18842,13 +19031,31 @@ pub mod isi {
                 filter: CompoundPredicate<Role>,
                 state_ro: &impl StateReadOnly,
             ) -> Result<impl Iterator<Item = Self::Item>, Error> {
-                Ok(state_ro
-                    .world()
-                    .roles()
-                    .iter()
-                    .map(|(_, role)| role)
-                    .filter(move |&role| filter.applies(role))
-                    .cloned())
+                let world = state_ro.world();
+                let predicate_json = filter
+                    .json_payload()
+                    .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+                if let Some(candidate_ids) = predicate_json.as_ref().and_then(role_candidate_ids) {
+                    let iter: Box<dyn Iterator<Item = Role> + '_> =
+                        Box::new(candidate_ids.into_iter().filter_map(move |role_id| {
+                            world
+                                .roles()
+                                .get(&role_id)
+                                .filter(|role| filter.applies(*role))
+                                .cloned()
+                        }));
+                    return Ok(iter);
+                }
+
+                let iter: Box<dyn Iterator<Item = Role> + '_> = Box::new(
+                    world
+                        .roles()
+                        .iter()
+                        .map(|(_, role)| role)
+                        .filter(move |&role| filter.applies(role))
+                        .cloned(),
+                );
+                Ok(iter)
             }
         }
 
@@ -18859,14 +19066,31 @@ pub mod isi {
                 filter: CompoundPredicate<RoleId>,
                 state_ro: &impl StateReadOnly,
             ) -> Result<impl Iterator<Item = Self::Item>, Error> {
-                Ok(state_ro
-                    .world()
-                    .roles()
-                    .iter()
-                    .map(|(_, role)| role)
-                    .map(Role::id)
-                    .filter(move |&role| filter.applies(role))
-                    .cloned())
+                let world = state_ro.world();
+                let predicate_json = filter
+                    .json_payload()
+                    .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+                if let Some(candidate_ids) = predicate_json.as_ref().and_then(role_candidate_ids) {
+                    let iter: Box<dyn Iterator<Item = RoleId> + '_> =
+                        Box::new(candidate_ids.into_iter().filter(move |role_id| {
+                            world.roles().get(role_id).is_some()
+                                && predicate_json.as_ref().map_or_else(
+                                    || filter.applies(role_id),
+                                    |predicate| predicate_matches_role_id(predicate, role_id),
+                                )
+                        }));
+                    return Ok(iter);
+                }
+
+                let iter: Box<dyn Iterator<Item = RoleId> + '_> =
+                    Box::new(world.roles().iter().filter_map(move |(role_id, role)| {
+                        let matches = predicate_json.as_ref().map_or_else(
+                            || filter.applies(role.id()),
+                            |predicate| predicate_matches_role_id(predicate, role.id()),
+                        );
+                        matches.then(|| role_id.clone())
+                    }));
+                Ok(iter)
             }
         }
 
@@ -19083,6 +19307,230 @@ pub mod isi {
             }
         }
 
+        fn proof_id_from_value(value: &Value) -> Option<ProofId> {
+            norito::json::from_value(value.clone()).ok()
+        }
+
+        fn proof_status_from_value(value: &Value) -> Option<ProofStatus> {
+            norito::json::from_value(value.clone()).ok()
+        }
+
+        fn proof_backend_from_value(value: &Value) -> Option<String> {
+            value.as_str().map(ToOwned::to_owned)
+        }
+
+        fn proof_status_label(status: ProofStatus) -> &'static str {
+            match status {
+                ProofStatus::Submitted => "Submitted",
+                ProofStatus::Verified => "Verified",
+                ProofStatus::Rejected => "Rejected",
+            }
+        }
+
+        fn maybe_replace_proof_candidate_ids(
+            best: &mut Option<BTreeSet<ProofId>>,
+            candidates: BTreeSet<ProofId>,
+        ) {
+            if best
+                .as_ref()
+                .map_or(true, |current| candidates.len() < current.len())
+            {
+                *best = Some(candidates);
+            }
+        }
+
+        fn proof_ids_for_backends(
+            world: &impl WorldReadOnly,
+            backends: impl IntoIterator<Item = String>,
+        ) -> BTreeSet<ProofId> {
+            let mut ids = BTreeSet::new();
+            for backend in backends {
+                ids.extend(
+                    world
+                        .proofs_by_backend_iter(&backend)
+                        .map(|(proof_id, _)| proof_id.clone()),
+                );
+            }
+            ids
+        }
+
+        fn proof_ids_for_statuses(
+            world: &impl WorldReadOnly,
+            statuses: impl IntoIterator<Item = ProofStatus>,
+        ) -> BTreeSet<ProofId> {
+            let mut ids = BTreeSet::new();
+            for status in statuses {
+                ids.extend(
+                    world
+                        .proofs_by_status_iter(&status)
+                        .map(|(proof_id, _)| proof_id.clone()),
+                );
+            }
+            ids
+        }
+
+        fn proof_record_candidate_ids(
+            predicate: &PredicateJson,
+            world: &impl WorldReadOnly,
+        ) -> Option<BTreeSet<ProofId>> {
+            let mut best = None;
+
+            for cond in &predicate.equals {
+                match cond.field.as_str() {
+                    "id" => maybe_replace_proof_candidate_ids(
+                        &mut best,
+                        proof_id_from_value(&cond.value).into_iter().collect(),
+                    ),
+                    "backend" | "id.backend" => maybe_replace_proof_candidate_ids(
+                        &mut best,
+                        proof_ids_for_backends(world, proof_backend_from_value(&cond.value)),
+                    ),
+                    "status" => maybe_replace_proof_candidate_ids(
+                        &mut best,
+                        proof_ids_for_statuses(world, proof_status_from_value(&cond.value)),
+                    ),
+                    _ => {}
+                }
+            }
+
+            for cond in &predicate.r#in {
+                match cond.field.as_str() {
+                    "id" => maybe_replace_proof_candidate_ids(
+                        &mut best,
+                        cond.values.iter().filter_map(proof_id_from_value).collect(),
+                    ),
+                    "backend" | "id.backend" => maybe_replace_proof_candidate_ids(
+                        &mut best,
+                        proof_ids_for_backends(
+                            world,
+                            cond.values.iter().filter_map(proof_backend_from_value),
+                        ),
+                    ),
+                    "status" => maybe_replace_proof_candidate_ids(
+                        &mut best,
+                        proof_ids_for_statuses(
+                            world,
+                            cond.values.iter().filter_map(proof_status_from_value),
+                        ),
+                    ),
+                    _ => {}
+                }
+            }
+
+            best
+        }
+
+        fn proof_record_alias_values(record: &ProofRecord, field: &str) -> Vec<String> {
+            match field {
+                "id" => vec![record.id.to_string()],
+                "backend" | "id.backend" => vec![record.id.backend.to_string()],
+                "status" => vec![proof_status_label(record.status).to_owned()],
+                _ => Vec::new(),
+            }
+        }
+
+        fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+            if path.is_empty() {
+                return None;
+            }
+            let mut current = value;
+            for segment in path.split('.') {
+                if segment.is_empty() {
+                    return None;
+                }
+                match current {
+                    Value::Object(map) => current = map.get(segment)?,
+                    _ => return None,
+                }
+            }
+            Some(current)
+        }
+
+        fn predicate_value_equals_str(value: &Value, expected: &str) -> bool {
+            matches!(value, Value::String(raw) if raw == expected)
+        }
+
+        fn predicate_values_contain_str(values: &[Value], expected: &str) -> bool {
+            values
+                .iter()
+                .any(|value| matches!(value, Value::String(raw) if raw == expected))
+        }
+
+        fn proof_record_json_value<'a>(
+            cache: &'a mut Option<Value>,
+            record: &ProofRecord,
+        ) -> Option<&'a Value> {
+            if cache.is_none() {
+                *cache = norito::json::to_value(record).ok();
+            }
+            cache.as_ref()
+        }
+
+        fn predicate_matches_proof_record(predicate: &PredicateJson, record: &ProofRecord) -> bool {
+            let mut record_json = None;
+
+            for cond in &predicate.equals {
+                let aliases = proof_record_alias_values(record, &cond.field);
+                if !aliases.is_empty() {
+                    if !aliases
+                        .iter()
+                        .any(|alias| predicate_value_equals_str(&cond.value, alias))
+                    {
+                        return false;
+                    }
+                    continue;
+                }
+                let Some(value) = proof_record_json_value(&mut record_json, record) else {
+                    continue;
+                };
+                let Some(actual) = predicate_value_at_path(value, &cond.field) else {
+                    return false;
+                };
+                if actual != &cond.value {
+                    return false;
+                }
+            }
+
+            for cond in &predicate.r#in {
+                let aliases = proof_record_alias_values(record, &cond.field);
+                if !aliases.is_empty() {
+                    if !aliases
+                        .iter()
+                        .any(|alias| predicate_values_contain_str(&cond.values, alias))
+                    {
+                        return false;
+                    }
+                    continue;
+                }
+                let Some(value) = proof_record_json_value(&mut record_json, record) else {
+                    continue;
+                };
+                let Some(actual) = predicate_value_at_path(value, &cond.field) else {
+                    return false;
+                };
+                if !cond.values.iter().any(|candidate| candidate == actual) {
+                    return false;
+                }
+            }
+
+            for field in &predicate.exists {
+                if !proof_record_alias_values(record, field).is_empty() {
+                    continue;
+                }
+                let Some(value) = proof_record_json_value(&mut record_json, record) else {
+                    continue;
+                };
+                let Some(actual) = predicate_value_at_path(value, field) else {
+                    return false;
+                };
+                if actual.is_null() {
+                    return false;
+                }
+            }
+
+            true
+        }
+
         impl ValidQuery for iroha_data_model::query::proof::prelude::FindProofRecords {
             #[metrics(+"find_proof_records")]
             fn execute(
@@ -19091,13 +19539,41 @@ pub mod isi {
                 state_ro: &impl StateReadOnly,
             ) -> Result<impl Iterator<Item = iroha_data_model::proof::ProofRecord>, Error>
             {
-                Ok(state_ro
-                    .world()
-                    .proofs()
-                    .iter()
-                    .map(|(_, rec)| rec)
-                    .filter(move |rec| filter.applies(rec))
-                    .cloned())
+                let world = state_ro.world();
+                let predicate_json = filter
+                    .json_payload()
+                    .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+                if let Some(candidate_ids) = predicate_json
+                    .as_ref()
+                    .and_then(|predicate| proof_record_candidate_ids(predicate, world))
+                {
+                    let iter: Box<dyn Iterator<Item = iroha_data_model::proof::ProofRecord> + '_> =
+                        Box::new(candidate_ids.into_iter().filter_map(move |proof_id| {
+                            world
+                                .proofs()
+                                .get(&proof_id)
+                                .filter(|record| {
+                                    if let Some(predicate) = predicate_json.as_ref() {
+                                        predicate_matches_proof_record(predicate, record)
+                                    } else {
+                                        filter.applies(*record)
+                                    }
+                                })
+                                .cloned()
+                        }));
+                    return Ok(iter);
+                }
+
+                let iter: Box<dyn Iterator<Item = iroha_data_model::proof::ProofRecord> + '_> =
+                    Box::new(world.proofs().iter().filter_map(move |(_, record)| {
+                        let matches = if let Some(predicate) = predicate_json.as_ref() {
+                            predicate_matches_proof_record(predicate, record)
+                        } else {
+                            filter.applies(record)
+                        };
+                        matches.then(|| record.clone())
+                    }));
+                Ok(iter)
             }
         }
 

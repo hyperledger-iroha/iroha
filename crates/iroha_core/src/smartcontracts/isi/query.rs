@@ -3467,7 +3467,7 @@ mod tests {
         kura::Kura,
         query::store::LiveQueryStore,
         smartcontracts::{Execute, ValidQuery},
-        state::{State, World},
+        state::{State, StateReadOnly, World},
         sumeragi::network_topology::Topology,
         tx::AcceptedTransaction,
     };
@@ -5551,6 +5551,62 @@ mod tests {
     }
 
     #[test]
+    async fn find_blocks_and_headers_by_height() -> Result<()> {
+        let state = state_with_test_blocks_and_transactions(10, 1, 1)?;
+        let state_view = state.view();
+
+        let blocks = ValidQuery::execute(
+            FindBlocks,
+            CompoundPredicate::<iroha_data_model::block::SignedBlock>::build(|p| {
+                p.equals("height", 4_u64)
+            }),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].header().height().get(), 4);
+        let target_hash = blocks[0].hash();
+
+        let header_by_hash = ValidQuery::execute(
+            FindBlockHeaders,
+            CompoundPredicate::<iroha_data_model::block::BlockHeader>::build(|p| {
+                p.equals("hash", target_hash)
+            }),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+
+        assert_eq!(header_by_hash.len(), 1);
+        assert_eq!(header_by_hash[0].height().get(), 4);
+
+        let headers = ValidQuery::execute(
+            FindBlockHeaders,
+            CompoundPredicate::<iroha_data_model::block::BlockHeader>::build(|p| {
+                p.in_values("height", [2_u64, 7_u64, 3_u64])
+            }),
+            &state_view,
+        )?
+        .map(|header| header.height().get())
+        .collect::<Vec<_>>();
+
+        assert_eq!(headers, vec![7, 3, 2]);
+
+        let missing = ValidQuery::execute(
+            FindBlockHeaders,
+            CompoundPredicate::<iroha_data_model::block::BlockHeader>::build(|p| {
+                p.equals("height", 42_u64)
+            }),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+
+        assert!(missing.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
     async fn find_block_header_by_hash() -> Result<()> {
         let state = state_with_test_blocks_and_transactions(1, 1, 1)?;
         let state_view = state.view();
@@ -6070,6 +6126,50 @@ mod tests {
             txs.iter().filter(|txn| txn.result().is_err()).count() as u64,
             num_blocks
         );
+
+        Ok(())
+    }
+
+    #[test]
+    async fn find_transactions_by_block_hash_uses_block_index() -> Result<()> {
+        let state = state_with_test_blocks_and_transactions(8, 1, 1)?;
+        let state_view = state.view();
+        let block = state_view
+            .kura()
+            .get_block(nonzero!(4_usize))
+            .expect("block available");
+        let block_hash = block.hash();
+
+        let txs = ValidQuery::execute(
+            FindTransactions,
+            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+                p.equals("block_hash", block_hash)
+            }),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+
+        assert_eq!(txs.len(), 2);
+        assert!(txs.iter().all(|tx| tx.block_hash == block_hash));
+        assert_eq!(
+            txs.iter().map(|tx| tx.entrypoint_hash).collect::<Vec<_>>(),
+            block.entrypoint_hashes().rev().collect::<Vec<_>>()
+        );
+
+        let unknown_hash =
+            iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::new("missing block"),
+            );
+        let missing = ValidQuery::execute(
+            FindTransactions,
+            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+                p.equals("block_hash", unknown_hash)
+            }),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+
+        assert!(missing.is_empty());
 
         Ok(())
     }

@@ -633,12 +633,12 @@ public final class TransactionFixtureManifestTests {
     final long controllerTag = UINT32_ADAPTER.decode(decoder);
     if (controllerTag == 0L) {
       final byte[] publicKeyField = readField(decoder, field + ".controller.public_key");
-      final String publicKeyLiteral =
-          decodeFieldPayload(publicKeyField, STRING_ADAPTER, field + ".controller.public_key");
+      final byte[] publicKeyPayload =
+          decodeFieldPayload(publicKeyField, BYTE_VECTOR_ADAPTER, field + ".controller.public_key");
       if (decoder.remaining() != 0) {
         throw new IllegalArgumentException(field + ": trailing bytes after AccountController payload");
       }
-      final PublicKeyPayload payloadData = decodePublicKeyLiteral(publicKeyLiteral);
+      final PublicKeyPayload payloadData = decodeCompactPublicKeyPayload(publicKeyPayload);
       if (payloadData == null) {
         throw new IllegalArgumentException(field + ": invalid single-key AccountController payload");
       }
@@ -695,6 +695,34 @@ public final class TransactionFixtureManifestTests {
     final byte[] keyBytes =
         Arrays.copyOfRange(bytes, payloadOffset, payloadOffset + payloadLength);
     return new PublicKeyPayload(curveId, keyBytes);
+  }
+
+  private static PublicKeyPayload decodeCompactPublicKeyPayload(final byte[] payload) {
+    if (payload == null || payload.length == 0) {
+      return null;
+    }
+    final int curveId = curveIdForCompactAlgorithmTag(payload[0] & 0xFF);
+    if (curveId < 0) {
+      return null;
+    }
+    return new PublicKeyPayload(curveId, Arrays.copyOfRange(payload, 1, payload.length));
+  }
+
+  private static int curveIdForCompactAlgorithmTag(final int tag) {
+    return switch (tag) {
+      case 0 -> 0x01;
+      case 1 -> 0x04;
+      case 2 -> 0x03;
+      case 3 -> 0x05;
+      case 4 -> 0x02;
+      case 5 -> 0x0A;
+      case 6 -> 0x0B;
+      case 7 -> 0x0C;
+      case 8 -> 0x0D;
+      case 9 -> 0x0E;
+      case 10 -> 0x0F;
+      default -> -1;
+    };
   }
 
   private static int curveIdForMultihashCode(final long code) {
@@ -880,9 +908,9 @@ public final class TransactionFixtureManifestTests {
 
     @Override
     public AccountAddress.MultisigMemberPayload decode(final NoritoDecoder decoder) {
-      final String publicKeyLiteral = STRING_ADAPTER.decode(decoder);
+      final byte[] publicKeyPayload = BYTE_VECTOR_ADAPTER.decode(decoder);
       final int weight = Math.toIntExact(UINT16_ADAPTER.decode(decoder));
-      final PublicKeyPayload payload = decodePublicKeyLiteral(publicKeyLiteral);
+      final PublicKeyPayload payload = decodeCompactPublicKeyPayload(publicKeyPayload);
       if (payload == null) {
         throw new IllegalArgumentException("Invalid multisig member public key");
       }

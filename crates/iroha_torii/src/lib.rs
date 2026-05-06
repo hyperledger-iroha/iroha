@@ -29081,6 +29081,8 @@ fn precheck_transaction_batch_ed25519(
     let mut scratch = iroha_crypto::Ed25519BatchScratch::default();
     let scratch_cap = batch_cap.min(transactions.len());
     let mut indices = Vec::with_capacity(scratch_cap);
+    let mut duplicate_groups: Vec<Vec<usize>> = Vec::with_capacity(scratch_cap);
+    let mut unique_positions = std::collections::BTreeMap::<Vec<u8>, usize>::new();
     let mut messages = Vec::with_capacity(scratch_cap);
     let mut signatures = Vec::with_capacity(scratch_cap);
     let mut public_keys = Vec::with_capacity(scratch_cap);
@@ -29089,6 +29091,7 @@ fn precheck_transaction_batch_ed25519(
         transactions: &[DecodedVersionedSignedTransaction],
         prechecks: &mut [TransactionBatchPrecheck],
         indices: &[usize],
+        duplicate_groups: &[Vec<usize>],
         messages: &[&'a [u8]],
         signatures: &[&'a [u8]],
         public_keys: &[iroha_crypto::Ed25519ParsedPublicKey],
@@ -29112,14 +29115,25 @@ fn precheck_transaction_batch_ed25519(
 
         match batch_result {
             Ok(()) => {
-                for &idx in indices {
+                for (&idx, duplicates) in indices.iter().zip(duplicate_groups.iter()) {
                     prechecks[idx].single_ed25519_prechecked = true;
+                    for &duplicate_idx in duplicates {
+                        prechecks[duplicate_idx].single_ed25519_prechecked = true;
+                    }
                 }
             }
             Err((relative_idx, detail)) => {
                 if let Some(&idx) = indices.get(relative_idx) {
                     prechecks[idx].precheck_rejection =
-                        Some(signature_error(&transactions[idx], detail));
+                        Some(signature_error(&transactions[idx], detail.clone()));
+                    if let Some(duplicates) = duplicate_groups.get(relative_idx) {
+                        for &duplicate_idx in duplicates {
+                            prechecks[duplicate_idx].precheck_rejection = Some(signature_error(
+                                &transactions[duplicate_idx],
+                                detail.clone(),
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -29129,7 +29143,24 @@ fn precheck_transaction_batch_ed25519(
         let Some((message, signature, public_key)) = tx.single_ed25519_precheck_parts() else {
             continue;
         };
+        let mut key = Vec::with_capacity(
+            message
+                .len()
+                .saturating_add(signature.len())
+                .saturating_add(public_key.as_bytes().len()),
+        );
+        key.extend_from_slice(message);
+        key.extend_from_slice(signature);
+        key.extend_from_slice(public_key.as_bytes());
+        if let Some(&unique_pos) = unique_positions.get(&key) {
+            if let Some(duplicates) = duplicate_groups.get_mut(unique_pos) {
+                duplicates.push(idx);
+            }
+            continue;
+        }
+        unique_positions.insert(key, indices.len());
         indices.push(idx);
+        duplicate_groups.push(Vec::new());
         messages.push(message);
         signatures.push(signature);
         public_keys.push(public_key);
@@ -29139,12 +29170,15 @@ fn precheck_transaction_batch_ed25519(
                 transactions,
                 &mut prechecks,
                 &indices,
+                &duplicate_groups,
                 &messages,
                 &signatures,
                 &public_keys,
                 &mut scratch,
             );
             indices.clear();
+            duplicate_groups.clear();
+            unique_positions.clear();
             messages.clear();
             signatures.clear();
             public_keys.clear();
@@ -29154,6 +29188,7 @@ fn precheck_transaction_batch_ed25519(
         transactions,
         &mut prechecks,
         &indices,
+        &duplicate_groups,
         &messages,
         &signatures,
         &public_keys,

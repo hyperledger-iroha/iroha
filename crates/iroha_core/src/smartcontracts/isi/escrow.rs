@@ -37,10 +37,12 @@ use iroha_data_model::{
             FindAnonymousAssetEscrowsByStatus, FindAssetEscrowById, FindAssetEscrows,
             FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller, FindAssetEscrowsByStatus,
         },
+        json::PredicateJson,
     },
 };
 use iroha_primitives::numeric::Numeric;
 use mv::storage::StorageReadOnly;
+use norito::json::Value;
 
 use super::{
     Error, Execute,
@@ -1051,18 +1053,287 @@ impl Execute for ResolveAnonymousEscrowDispute {
     }
 }
 
+#[derive(Clone, Copy)]
+enum AssetEscrowAccountIndex {
+    Seller,
+    Buyer,
+}
+
+fn asset_escrow_account_index(field: &str) -> Option<AssetEscrowAccountIndex> {
+    match field {
+        "seller" => Some(AssetEscrowAccountIndex::Seller),
+        "buyer" => Some(AssetEscrowAccountIndex::Buyer),
+        _ => None,
+    }
+}
+
+fn asset_escrow_id_from_value(value: &Value) -> Option<EscrowId> {
+    norito::json::from_value(value.clone()).ok()
+}
+
+fn account_id_from_value(value: &Value) -> Option<AccountId> {
+    norito::json::from_value(value.clone()).ok()
+}
+
+fn asset_escrow_status_from_value(value: &Value) -> Option<AssetEscrowStatus> {
+    norito::json::from_value(value.clone()).ok()
+}
+
+fn maybe_replace_escrow_candidate_ids(
+    best: &mut Option<BTreeSet<EscrowId>>,
+    candidates: BTreeSet<EscrowId>,
+) {
+    if best
+        .as_ref()
+        .map_or(true, |current| candidates.len() < current.len())
+    {
+        *best = Some(candidates);
+    }
+}
+
+fn asset_escrow_ids_for_accounts(
+    world: &impl WorldReadOnly,
+    index: AssetEscrowAccountIndex,
+    accounts: impl IntoIterator<Item = AccountId>,
+) -> BTreeSet<EscrowId> {
+    let mut ids = BTreeSet::new();
+    for account_id in accounts {
+        let escrow_ids = match index {
+            AssetEscrowAccountIndex::Seller => world.asset_escrows_by_seller().get(&account_id),
+            AssetEscrowAccountIndex::Buyer => world.asset_escrows_by_buyer().get(&account_id),
+        };
+        if let Some(escrow_ids) = escrow_ids {
+            ids.extend(escrow_ids.iter().copied());
+        }
+    }
+    ids
+}
+
+fn anonymous_asset_escrow_ids_for_accounts(
+    world: &impl WorldReadOnly,
+    index: AssetEscrowAccountIndex,
+    accounts: impl IntoIterator<Item = AccountId>,
+) -> BTreeSet<EscrowId> {
+    let mut ids = BTreeSet::new();
+    for account_id in accounts {
+        let escrow_ids = match index {
+            AssetEscrowAccountIndex::Seller => {
+                world.anonymous_asset_escrows_by_seller().get(&account_id)
+            }
+            AssetEscrowAccountIndex::Buyer => {
+                world.anonymous_asset_escrows_by_buyer().get(&account_id)
+            }
+        };
+        if let Some(escrow_ids) = escrow_ids {
+            ids.extend(escrow_ids.iter().copied());
+        }
+    }
+    ids
+}
+
+fn asset_escrow_ids_for_statuses(
+    world: &impl WorldReadOnly,
+    statuses: impl IntoIterator<Item = AssetEscrowStatus>,
+) -> BTreeSet<EscrowId> {
+    let mut ids = BTreeSet::new();
+    for status in statuses {
+        if let Some(escrow_ids) = world.asset_escrows_by_status().get(&status) {
+            ids.extend(escrow_ids.iter().copied());
+        }
+    }
+    ids
+}
+
+fn anonymous_asset_escrow_ids_for_statuses(
+    world: &impl WorldReadOnly,
+    statuses: impl IntoIterator<Item = AssetEscrowStatus>,
+) -> BTreeSet<EscrowId> {
+    let mut ids = BTreeSet::new();
+    for status in statuses {
+        if let Some(escrow_ids) = world.anonymous_asset_escrows_by_status().get(&status) {
+            ids.extend(escrow_ids.iter().copied());
+        }
+    }
+    ids
+}
+
+fn asset_escrow_candidate_ids(
+    predicate: &PredicateJson,
+    world: &impl WorldReadOnly,
+) -> Option<BTreeSet<EscrowId>> {
+    let mut best = None;
+
+    for cond in &predicate.equals {
+        if cond.field == "id" {
+            maybe_replace_escrow_candidate_ids(
+                &mut best,
+                asset_escrow_id_from_value(&cond.value)
+                    .into_iter()
+                    .collect(),
+            );
+            continue;
+        }
+        if let Some(index) = asset_escrow_account_index(&cond.field) {
+            maybe_replace_escrow_candidate_ids(
+                &mut best,
+                asset_escrow_ids_for_accounts(world, index, account_id_from_value(&cond.value)),
+            );
+            continue;
+        }
+        if cond.field == "status" {
+            maybe_replace_escrow_candidate_ids(
+                &mut best,
+                asset_escrow_ids_for_statuses(world, asset_escrow_status_from_value(&cond.value)),
+            );
+        }
+    }
+
+    for cond in &predicate.r#in {
+        if cond.field == "id" {
+            maybe_replace_escrow_candidate_ids(
+                &mut best,
+                cond.values
+                    .iter()
+                    .filter_map(asset_escrow_id_from_value)
+                    .collect(),
+            );
+            continue;
+        }
+        if let Some(index) = asset_escrow_account_index(&cond.field) {
+            maybe_replace_escrow_candidate_ids(
+                &mut best,
+                asset_escrow_ids_for_accounts(
+                    world,
+                    index,
+                    cond.values.iter().filter_map(account_id_from_value),
+                ),
+            );
+            continue;
+        }
+        if cond.field == "status" {
+            maybe_replace_escrow_candidate_ids(
+                &mut best,
+                asset_escrow_ids_for_statuses(
+                    world,
+                    cond.values
+                        .iter()
+                        .filter_map(asset_escrow_status_from_value),
+                ),
+            );
+        }
+    }
+
+    best
+}
+
+fn anonymous_asset_escrow_candidate_ids(
+    predicate: &PredicateJson,
+    world: &impl WorldReadOnly,
+) -> Option<BTreeSet<EscrowId>> {
+    let mut best = None;
+
+    for cond in &predicate.equals {
+        if cond.field == "id" {
+            maybe_replace_escrow_candidate_ids(
+                &mut best,
+                asset_escrow_id_from_value(&cond.value)
+                    .into_iter()
+                    .collect(),
+            );
+            continue;
+        }
+        if let Some(index) = asset_escrow_account_index(&cond.field) {
+            maybe_replace_escrow_candidate_ids(
+                &mut best,
+                anonymous_asset_escrow_ids_for_accounts(
+                    world,
+                    index,
+                    account_id_from_value(&cond.value),
+                ),
+            );
+            continue;
+        }
+        if cond.field == "status" {
+            maybe_replace_escrow_candidate_ids(
+                &mut best,
+                anonymous_asset_escrow_ids_for_statuses(
+                    world,
+                    asset_escrow_status_from_value(&cond.value),
+                ),
+            );
+        }
+    }
+
+    for cond in &predicate.r#in {
+        if cond.field == "id" {
+            maybe_replace_escrow_candidate_ids(
+                &mut best,
+                cond.values
+                    .iter()
+                    .filter_map(asset_escrow_id_from_value)
+                    .collect(),
+            );
+            continue;
+        }
+        if let Some(index) = asset_escrow_account_index(&cond.field) {
+            maybe_replace_escrow_candidate_ids(
+                &mut best,
+                anonymous_asset_escrow_ids_for_accounts(
+                    world,
+                    index,
+                    cond.values.iter().filter_map(account_id_from_value),
+                ),
+            );
+            continue;
+        }
+        if cond.field == "status" {
+            maybe_replace_escrow_candidate_ids(
+                &mut best,
+                anonymous_asset_escrow_ids_for_statuses(
+                    world,
+                    cond.values
+                        .iter()
+                        .filter_map(asset_escrow_status_from_value),
+                ),
+            );
+        }
+    }
+
+    best
+}
+
 impl ValidQuery for FindAssetEscrows {
     fn execute(
         self,
         filter: CompoundPredicate<AssetEscrowRecord>,
         state_ro: &impl StateReadOnly,
     ) -> Result<impl Iterator<Item = AssetEscrowRecord>, QueryExecutionFail> {
-        Ok(state_ro
-            .world()
-            .asset_escrows()
-            .iter()
-            .map(|(_, record)| record.clone())
-            .filter(move |record| filter.applies(record)))
+        let world = state_ro.world();
+        let predicate_json = filter
+            .json_payload()
+            .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+        if let Some(candidate_ids) = predicate_json
+            .as_ref()
+            .and_then(|predicate| asset_escrow_candidate_ids(predicate, world))
+        {
+            let iter: Box<dyn Iterator<Item = AssetEscrowRecord> + '_> =
+                Box::new(candidate_ids.into_iter().filter_map(move |escrow_id| {
+                    world
+                        .asset_escrows()
+                        .get(&escrow_id)
+                        .filter(|record| filter.applies(*record))
+                        .cloned()
+                }));
+            return Ok(iter);
+        }
+
+        let iter: Box<dyn Iterator<Item = AssetEscrowRecord> + '_> = Box::new(
+            world
+                .asset_escrows()
+                .iter()
+                .filter_map(move |(_, record)| filter.applies(record).then(|| record.clone())),
+        );
+        Ok(iter)
     }
 }
 
@@ -1140,12 +1411,32 @@ impl ValidQuery for FindAnonymousAssetEscrows {
         filter: CompoundPredicate<AnonymousAssetEscrowRecord>,
         state_ro: &impl StateReadOnly,
     ) -> Result<impl Iterator<Item = AnonymousAssetEscrowRecord>, QueryExecutionFail> {
-        Ok(state_ro
-            .world()
-            .anonymous_asset_escrows()
-            .iter()
-            .map(|(_, record)| record.clone())
-            .filter(move |record| filter.applies(record)))
+        let world = state_ro.world();
+        let predicate_json = filter
+            .json_payload()
+            .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+        if let Some(candidate_ids) = predicate_json
+            .as_ref()
+            .and_then(|predicate| anonymous_asset_escrow_candidate_ids(predicate, world))
+        {
+            let iter: Box<dyn Iterator<Item = AnonymousAssetEscrowRecord> + '_> =
+                Box::new(candidate_ids.into_iter().filter_map(move |escrow_id| {
+                    world
+                        .anonymous_asset_escrows()
+                        .get(&escrow_id)
+                        .filter(|record| filter.applies(*record))
+                        .cloned()
+                }));
+            return Ok(iter);
+        }
+
+        let iter: Box<dyn Iterator<Item = AnonymousAssetEscrowRecord> + '_> = Box::new(
+            world
+                .anonymous_asset_escrows()
+                .iter()
+                .filter_map(move |(_, record)| filter.applies(record).then(|| record.clone())),
+        );
+        Ok(iter)
     }
 }
 
@@ -1260,6 +1551,10 @@ mod tests {
             timestamp_ms,
             0,
         )
+    }
+
+    fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
+        state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
     }
 
     fn state_with_parties(
@@ -1390,6 +1685,28 @@ mod tests {
             .get(escrow_id)
             .cloned()
             .expect("escrow record")
+    }
+
+    fn query_asset_escrow_ids(
+        state_transaction: &StateTransaction<'_, '_>,
+        predicate: CompoundPredicate<AssetEscrowRecord>,
+    ) -> Vec<EscrowId> {
+        FindAssetEscrows
+            .execute(predicate, state_transaction)
+            .expect("query asset escrows")
+            .map(|record| record.id)
+            .collect()
+    }
+
+    fn query_anonymous_asset_escrow_ids(
+        state_transaction: &StateTransaction<'_, '_>,
+        predicate: CompoundPredicate<AnonymousAssetEscrowRecord>,
+    ) -> Vec<EscrowId> {
+        FindAnonymousAssetEscrows
+            .execute(predicate, state_transaction)
+            .expect("query anonymous asset escrows")
+            .map(|record| record.id)
+            .collect()
     }
 
     fn anonymous_proof_record() -> AnonymousAssetEscrowProofRecord {
@@ -1654,7 +1971,7 @@ mod tests {
 
         let record = anonymous_escrow_record_for_test(&tx, &escrow_id);
         assert_eq!(record.status, AssetEscrowStatus::Disputed);
-        assert_eq!(record.buyer, Some(buyer));
+        assert_eq!(record.buyer, Some(buyer.clone()));
         assert_eq!(record.disputed_at_ms, Some(5_000));
         assert_eq!(record.evidence_hashes.len(), 1);
         assert_eq!(
@@ -1671,6 +1988,47 @@ mod tests {
         .expect("query anonymous escrows by status")
         .collect::<Vec<_>>();
         assert_eq!(by_status.len(), 1);
+
+        let by_id = query_anonymous_asset_escrow_ids(
+            &tx,
+            CompoundPredicate::<AnonymousAssetEscrowRecord>::build(|predicate| {
+                predicate.equals("id", escrow_id)
+            }),
+        );
+        assert_eq!(by_id, vec![escrow_id]);
+
+        let by_seller = query_anonymous_asset_escrow_ids(
+            &tx,
+            CompoundPredicate::<AnonymousAssetEscrowRecord>::build(|predicate| {
+                predicate.equals("seller", seller.clone())
+            }),
+        );
+        assert_eq!(by_seller, vec![escrow_id]);
+
+        let by_buyer = query_anonymous_asset_escrow_ids(
+            &tx,
+            CompoundPredicate::<AnonymousAssetEscrowRecord>::build(|predicate| {
+                predicate.equals("buyer", buyer.clone())
+            }),
+        );
+        assert_eq!(by_buyer, vec![escrow_id]);
+
+        let by_generic_status = query_anonymous_asset_escrow_ids(
+            &tx,
+            CompoundPredicate::<AnonymousAssetEscrowRecord>::build(|predicate| {
+                predicate.equals("status", AssetEscrowStatus::Disputed)
+            }),
+        );
+        assert_eq!(by_generic_status, vec![escrow_id]);
+
+        let missing_buyer = fixture_account("missing-anonymous-buyer");
+        let missing = query_anonymous_asset_escrow_ids(
+            &tx,
+            CompoundPredicate::<AnonymousAssetEscrowRecord>::build(|predicate| {
+                predicate.equals("buyer", missing_buyer)
+            }),
+        );
+        assert!(missing.is_empty());
     }
 
     #[test]
@@ -2087,18 +2445,22 @@ mod tests {
             "status update should remove stale accepted index entry"
         );
 
-        let by_seller = FindAssetEscrowsBySeller { seller }
-            .execute(CompoundPredicate::PASS, &tx)
-            .expect("query escrows by seller")
-            .map(|record| record.id)
-            .collect::<Vec<_>>();
+        let by_seller = FindAssetEscrowsBySeller {
+            seller: seller.clone(),
+        }
+        .execute(CompoundPredicate::PASS, &tx)
+        .expect("query escrows by seller")
+        .map(|record| record.id)
+        .collect::<Vec<_>>();
         assert_eq!(by_seller, vec![escrow_id]);
 
-        let by_buyer = FindAssetEscrowsByBuyer { buyer }
-            .execute(CompoundPredicate::PASS, &tx)
-            .expect("query escrows by buyer")
-            .map(|record| record.id)
-            .collect::<Vec<_>>();
+        let by_buyer = FindAssetEscrowsByBuyer {
+            buyer: buyer.clone(),
+        }
+        .execute(CompoundPredicate::PASS, &tx)
+        .expect("query escrows by buyer")
+        .map(|record| record.id)
+        .collect::<Vec<_>>();
         assert_eq!(by_buyer, vec![escrow_id]);
 
         let by_status = FindAssetEscrowsByStatus {
@@ -2109,6 +2471,52 @@ mod tests {
         .map(|record| record.id)
         .collect::<Vec<_>>();
         assert_eq!(by_status, vec![escrow_id]);
+
+        let by_generic_id = query_asset_escrow_ids(
+            &tx,
+            CompoundPredicate::<AssetEscrowRecord>::build(|predicate| {
+                predicate.equals("id", escrow_id)
+            }),
+        );
+        assert_eq!(by_generic_id, vec![escrow_id]);
+
+        let by_generic_seller = query_asset_escrow_ids(
+            &tx,
+            CompoundPredicate::<AssetEscrowRecord>::build(|predicate| {
+                predicate.equals("seller", seller.clone())
+            }),
+        );
+        assert_eq!(by_generic_seller, vec![escrow_id]);
+
+        let by_generic_buyer = query_asset_escrow_ids(
+            &tx,
+            CompoundPredicate::<AssetEscrowRecord>::build(|predicate| {
+                predicate.equals("buyer", buyer.clone())
+            }),
+        );
+        assert_eq!(by_generic_buyer, vec![escrow_id]);
+
+        let by_generic_status = query_asset_escrow_ids(
+            &tx,
+            CompoundPredicate::<AssetEscrowRecord>::build(|predicate| {
+                predicate.in_values(
+                    "status",
+                    [AssetEscrowStatus::Open, AssetEscrowStatus::PaymentSent],
+                )
+            }),
+        );
+        assert_eq!(by_generic_status, vec![escrow_id]);
+
+        let missing_buyer = fixture_account("missing-escrow-buyer");
+        let missing = query_asset_escrow_ids(
+            &tx,
+            CompoundPredicate::<AssetEscrowRecord>::build(|predicate| {
+                predicate
+                    .equals("status", AssetEscrowStatus::PaymentSent)
+                    .equals("buyer", missing_buyer)
+            }),
+        );
+        assert!(missing.is_empty());
     }
 
     #[test]
@@ -2202,6 +2610,7 @@ mod tests {
         );
         let mut block = state.block(block_header(1_000));
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xB1);
 
         OpenAssetEscrow {
             escrow_id,
@@ -2255,6 +2664,7 @@ mod tests {
         );
         let mut block = state.block(block_header(1_000));
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xB2);
 
         OpenAssetEscrow {
             escrow_id,
@@ -2303,6 +2713,7 @@ mod tests {
         );
         let mut block = state.block(block_header(2_000));
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xB3);
 
         OpenAssetEscrow {
             escrow_id,
@@ -2345,6 +2756,7 @@ mod tests {
         );
         let mut block = state.block(block_header(2_000));
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xB4);
 
         OpenAssetEscrow {
             escrow_id,
@@ -2390,6 +2802,7 @@ mod tests {
         );
         let mut block = state.block(block_header(3_000));
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xB5);
 
         OpenAssetEscrow {
             escrow_id,
@@ -2554,6 +2967,7 @@ mod tests {
         );
         let mut block = state.block(block_header(3_000));
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xB6);
 
         OpenAssetEscrow {
             escrow_id,
@@ -2615,6 +3029,7 @@ mod tests {
         );
         let mut block = state.block(block_header(4_000));
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xB7);
 
         OpenAssetEscrow {
             escrow_id,

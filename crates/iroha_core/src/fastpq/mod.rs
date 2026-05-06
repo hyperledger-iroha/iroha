@@ -13,7 +13,9 @@ use fastpq_prover::{
     gadgets::transfer::attach_transfer_smt_witnesses, try_hash_bn254_poseidon_word_batches,
     try_submit_bn254_poseidon_word_batches,
 };
-use iroha_config::parameters::actual::{Fastpq, FastpqExecutionMode, FastpqPoseidonMode};
+use iroha_config::parameters::actual::Fastpq;
+#[cfg(any(test, feature = "fastpq-gpu"))]
+use iroha_config::parameters::actual::{FastpqExecutionMode, FastpqPoseidonMode};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     DataSpaceId,
@@ -92,11 +94,13 @@ pub(crate) fn configure_poseidon_digest_acceleration(_cfg: &Fastpq) {
     DIGEST_ACCELERATION_ENABLED.store(false, Ordering::Release);
 }
 
+#[cfg(any(test, feature = "fastpq-gpu"))]
 pub(crate) fn poseidon_digest_acceleration_configured(cfg: &Fastpq) -> bool {
     !matches!(cfg.execution_mode, FastpqExecutionMode::Cpu)
         && !matches!(cfg.poseidon_mode, FastpqPoseidonMode::Cpu)
 }
 
+#[cfg(any(test, feature = "fastpq-gpu"))]
 pub(crate) fn set_poseidon_digest_acceleration_enabled(enabled: bool) {
     DIGEST_ACCELERATION_ENABLED.store(enabled, Ordering::Release);
 }
@@ -146,13 +150,9 @@ pub fn authority_digest(authority: &AccountId) -> Hash {
 #[inline(always)]
 #[must_use]
 pub fn poseidon_preimage_digest(delta: &TransferDeltaTranscript, batch_hash: &Hash) -> Hash {
-    let mut hasher = halo2_poseidon::PoseidonByteHasher::new();
-    append_encoded_words(&mut hasher, &delta.from_account);
-    append_encoded_words(&mut hasher, &delta.to_account);
-    append_encoded_words(&mut hasher, &delta.asset_definition);
-    append_encoded_words(&mut hasher, &delta.amount);
-    hasher.update(batch_hash.as_ref());
-    Hash::prehashed(hasher.finalize())
+    let mut words = Vec::with_capacity(POSEIDON_DIGEST_WORDS_PER_TRANSCRIPT_HINT);
+    append_transfer_digest_words(&mut words, delta, batch_hash);
+    Hash::prehashed(halo2_poseidon::hash_u64_words_bytes(&words))
 }
 
 #[inline(always)]
@@ -215,14 +215,15 @@ impl<'a> PoseidonWordPacker<'a> {
             }
         }
 
-        while bytes.len() >= 8 {
-            self.words.push(u64_from_le_bytes(&bytes[..8]));
-            bytes = &bytes[8..];
+        let mut chunks = bytes.chunks_exact(8);
+        for chunk in &mut chunks {
+            self.words.push(u64_from_le_bytes(chunk));
         }
 
-        if !bytes.is_empty() {
-            self.pending_bytes[..bytes.len()].copy_from_slice(bytes);
-            self.pending_len = bytes.len();
+        let remainder = chunks.remainder();
+        if !remainder.is_empty() {
+            self.pending_bytes[..remainder.len()].copy_from_slice(remainder);
+            self.pending_len = remainder.len();
         }
     }
 
@@ -238,13 +239,11 @@ impl<'a> PoseidonWordPacker<'a> {
 }
 
 impl Write for PoseidonWordPacker<'_> {
-    #[inline(always)]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.update(buf);
         Ok(buf.len())
     }
 
-    #[inline(always)]
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
@@ -307,7 +306,8 @@ impl PoseidonDigestBatch {
     }
 
     fn hash_cpu_or_gpu(&self) -> Vec<Hash> {
-        self.try_hash_gpu().unwrap_or_else(|| self.hash_cpu())
+        self.try_hash_gpu()
+            .unwrap_or_else(|| self.hash_cpu_for_batch_size())
     }
 
     fn try_submit_gpu(&self) -> Option<PendingBn254PoseidonWordBatch> {
@@ -331,6 +331,30 @@ impl PoseidonDigestBatch {
             })
             .collect()
     }
+
+    fn hash_cpu_for_batch_size(&self) -> Vec<Hash> {
+        if self.slices.len() >= DIGEST_FINALIZE_PARALLEL_THRESHOLD {
+            self.hash_cpu_parallel()
+        } else {
+            self.hash_cpu()
+        }
+    }
+
+    fn hash_cpu_parallel(&self) -> Vec<Hash> {
+        use rayon::prelude::*;
+
+        (0..self.slices.len())
+            .into_par_iter()
+            .map(|idx| {
+                let slice = &self.slices[idx];
+                let offset = slice.offset();
+                let end = offset + slice.len();
+                Hash::prehashed(halo2_poseidon::hash_u64_words_bytes(
+                    &self.words[offset..end],
+                ))
+            })
+            .collect()
+    }
 }
 
 /// Pending FASTPQ transfer transcript digest batch.
@@ -346,7 +370,7 @@ impl PendingTransferTranscriptDigests {
         pending
             .wait()
             .map(|digests| digests.into_iter().map(Hash::prehashed).collect::<Vec<_>>())
-            .unwrap_or_else(|| batch.hash_cpu())
+            .unwrap_or_else(|| batch.hash_cpu_for_batch_size())
     }
 }
 
@@ -1164,6 +1188,23 @@ mod tests {
             batch.try_hash_gpu().is_none(),
             "single digest should stay below the GPU threshold"
         );
+    }
+
+    #[test]
+    fn poseidon_digest_batch_parallel_cpu_hash_matches_serial_digest_order() {
+        let _guard = DigestAccelerationGuard::new();
+        set_poseidon_digest_acceleration_enabled(false);
+
+        let transcript = sample_transcript();
+        let delta = &transcript.deltas[0];
+        let mut batch = PoseidonDigestBatch::with_capacity(DIGEST_FINALIZE_PARALLEL_THRESHOLD + 3);
+        for _ in 0..(DIGEST_FINALIZE_PARALLEL_THRESHOLD + 3) {
+            batch.push(delta, &transcript.batch_hash);
+        }
+
+        let serial = batch.hash_cpu();
+        assert_eq!(batch.hash_cpu_parallel(), serial);
+        assert_eq!(batch.hash_cpu_or_gpu(), serial);
     }
 
     #[test]

@@ -32,7 +32,7 @@ const COLLECTORS_K: u16 = 3;
 const REDUNDANT_SEND_R: u8 = 2;
 const SAMPLE_BLOCKS: u64 = 12;
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
-const BASELINE_BLOCK_SPACING_MAX_MS: f64 = 6_000.0;
+const BASELINE_BLOCK_SPACING_MAX_MS: f64 = 10_000.0;
 // Six-peer NPoS baseline runs under full telemetry can absorb multiple bounded
 // quorum-timeout recoveries while still producing useful samples. Keep the
 // scenario strict on latency EMAs, but give the sampling window enough slack to

@@ -855,7 +855,7 @@ impl Queue {
     }
 
     fn compute_tx_encoded_len(tx: &AcceptedTransaction<'_>) -> usize {
-        tx.encoded_len()
+        tx.entrypoint_bytes().len()
     }
 
     fn encode_gossip_payload(tx: &AcceptedTransaction<'_>) -> Arc<Vec<u8>> {
@@ -2432,7 +2432,9 @@ impl Queue {
         let mut notifications = Vec::with_capacity(prepared.len());
         let mut failure = None;
         #[cfg(feature = "telemetry")]
-        let mut teu_dirty = false;
+        let mut dirty_teu_lanes = BTreeSet::new();
+        #[cfg(feature = "telemetry")]
+        let mut dirty_teu_dataspaces = BTreeSet::new();
         {
             let _guard = self.push_remove_lock.lock();
             let base_len = self.active_len();
@@ -2440,6 +2442,7 @@ impl Queue {
             let mut accepted_count = 0usize;
             let mut seen_hashes = BTreeSet::new();
             let mut checked_user_increments = BTreeMap::<AccountId, usize>::new();
+            let mut accepted_authorities = Vec::with_capacity(prepared.len());
 
             for admission in &prepared {
                 let checked = &admission.checked;
@@ -2488,12 +2491,15 @@ impl Queue {
                         .entry(authority.clone())
                         .and_modify(|count| *count = count.saturating_add(1))
                         .or_insert(1);
+                    accepted_authorities.push(Some(authority.clone()));
+                } else {
+                    accepted_authorities.push(None);
                 }
 
                 accepted_count = accepted_count.saturating_add(1);
             }
 
-            let mut applied_user_increments = BTreeMap::<AccountId, usize>::new();
+            let mut applied_count = 0usize;
             for admission in prepared.into_iter().take(accepted_count) {
                 let PreparedQueueAdmission {
                     checked,
@@ -2519,23 +2525,18 @@ impl Queue {
                     Entry::Vacant(entry) => entry,
                 };
 
-                let authority = checked.as_ref().authority_opt().cloned();
-
                 let tx_arc = Arc::new(checked);
                 entry.insert(Arc::clone(&tx_arc));
                 self.track_active_transaction();
                 self.routing_decisions.insert(hash, routing_decision);
                 routing_ledger::record(hash, routing_decision);
                 self.tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
-                self.record_queued_age(hash, enqueued_at_ms);
                 drop(tx_arc);
 
                 let mut pushed = self.tx_hashes.push(hash).is_ok();
-                let mut restore_queued_age_after_compaction = false;
                 if !pushed {
                     let compacted = self.compact_hash_queue_locked();
                     if compacted > 0 {
-                        restore_queued_age_after_compaction = true;
                         pushed = self.tx_hashes.push(hash).is_ok();
                     }
                 }
@@ -2560,21 +2561,14 @@ impl Queue {
                     });
                     break;
                 }
-                if restore_queued_age_after_compaction {
-                    self.record_queued_age(hash, enqueued_at_ms);
-                }
+                self.record_queued_age(hash, enqueued_at_ms);
                 self.tx_encoded_len.insert(hash, encoded_len);
                 if let Some(payload) = gossip_payload {
                     self.tx_gossip_payloads.insert(hash, payload);
                 }
                 self.tx_gas_cost.insert(hash, proposal_gas_cost);
                 self.track_expiry_hash(hash);
-                if let Some(authority) = authority {
-                    applied_user_increments
-                        .entry(authority)
-                        .and_modify(|count| *count = count.saturating_add(1))
-                        .or_insert(1);
-                }
+                applied_count = applied_count.saturating_add(1);
                 #[cfg(feature = "telemetry")]
                 {
                     self.record_teu_enqueue_locked(
@@ -2585,7 +2579,8 @@ impl Queue {
                             teu: pending_teu,
                         },
                     );
-                    teu_dirty = true;
+                    dirty_teu_lanes.insert(lane_id);
+                    dirty_teu_dataspaces.insert((lane_id, dataspace_id));
                 }
                 notifications.push(QueueAdmissionNotification {
                     hash,
@@ -2593,12 +2588,29 @@ impl Queue {
                     dataspace_id,
                 });
             }
-            self.apply_per_user_tx_count_increments(applied_user_increments);
+            if applied_count == accepted_count {
+                self.apply_per_user_tx_count_increments(checked_user_increments);
+            } else {
+                let mut applied_user_increments = BTreeMap::<AccountId, usize>::new();
+                for authority in accepted_authorities
+                    .into_iter()
+                    .take(applied_count)
+                    .flatten()
+                {
+                    applied_user_increments
+                        .entry(authority)
+                        .and_modify(|count| *count = count.saturating_add(1))
+                        .or_insert(1);
+                }
+                self.apply_per_user_tx_count_increments(applied_user_increments);
+            }
         }
         #[cfg(feature = "telemetry")]
-        if teu_dirty {
-            self.publish_teu_backlog_metrics(telemetry);
-        }
+        self.publish_teu_backlog_metric_keys(
+            telemetry,
+            dirty_teu_lanes.into_iter(),
+            dirty_teu_dataspaces.into_iter(),
+        );
         self.publish_backpressure_state(self.active_len(), telemetry);
         match failure {
             Some(failure) => Err((notifications, failure)),
@@ -2940,8 +2952,6 @@ impl Queue {
         let backpressure_telemetry: Option<&StateTelemetry> = Some(telemetry_handle);
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
-        #[cfg(feature = "telemetry")]
-        let mut teu_dirty = false;
 
         let encoded_len = Self::compute_tx_encoded_len(checked.as_accepted());
         let proposal_gas_cost = Self::compute_proposal_gas_cost(checked.as_accepted());
@@ -3042,13 +3052,14 @@ impl Queue {
                         teu: pending_teu,
                     },
                 );
-                teu_dirty = true;
             }
         }
         #[cfg(feature = "telemetry")]
-        if teu_dirty {
-            self.publish_teu_backlog_metrics(Some(telemetry_handle));
-        }
+        self.publish_teu_backlog_metric_keys(
+            Some(telemetry_handle),
+            [lane_id].into_iter(),
+            [(lane_id, dataspace_id)].into_iter(),
+        );
         iroha_logger::debug!(
             tx = %hash,
             lane_id = %lane_id,
@@ -4368,7 +4379,11 @@ impl Queue {
             agg.tx_count = agg.tx_count.saturating_sub(1);
         }
 
-        self.publish_teu_backlog_metrics(telemetry);
+        self.publish_teu_backlog_metric_keys(
+            telemetry,
+            [info.lane_id].into_iter(),
+            [(info.lane_id, info.dataspace_id)].into_iter(),
+        );
     }
 
     #[cfg(feature = "telemetry")]
@@ -4411,6 +4426,61 @@ impl Queue {
             .collect();
 
         for ((lane_id, dataspace_id), aggregate) in dataspace_snapshot {
+            telemetry.record_nexus_scheduler_dataspace_teu(
+                lane_id,
+                dataspace_id,
+                DataspaceTeuGaugeUpdate {
+                    backlog: aggregate.teu,
+                    age_slots: 0,
+                    virtual_finish: 0,
+                },
+            );
+        }
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn publish_teu_backlog_metric_keys(
+        &self,
+        telemetry: Option<&crate::telemetry::StateTelemetry>,
+        lanes: impl IntoIterator<Item = LaneId>,
+        dataspaces: impl IntoIterator<Item = (LaneId, DataSpaceId)>,
+    ) {
+        let Some(telemetry) = telemetry else {
+            return;
+        };
+
+        for lane_id in lanes {
+            let aggregate = self
+                .lane_teu_pending
+                .get(&lane_id)
+                .map(|entry| *entry.value())
+                .unwrap_or_default();
+            let limits = self.nexus_limits.read().for_lane(lane_id);
+            let committed = aggregate.teu.min(limits.teu_capacity);
+            let headroom = limits.teu_capacity.saturating_sub(committed);
+            telemetry.record_nexus_scheduler_lane_teu(
+                lane_id,
+                LaneTeuGaugeUpdate {
+                    capacity: limits.teu_capacity,
+                    committed,
+                    buckets: NexusLaneTeuBuckets {
+                        floor: 0,
+                        headroom,
+                        must_serve: 0,
+                        circuit_breaker: 0,
+                    },
+                    trigger_level: 0,
+                    starvation_bound_slots: limits.starvation_bound_slots,
+                },
+            );
+        }
+
+        for (lane_id, dataspace_id) in dataspaces {
+            let aggregate = self
+                .dataspace_teu_pending
+                .get(&(lane_id, dataspace_id))
+                .map(|entry| *entry.value())
+                .unwrap_or_default();
             telemetry.record_nexus_scheduler_dataspace_teu(
                 lane_id,
                 dataspace_id,
@@ -6368,7 +6438,7 @@ pub mod tests {
     fn compute_tx_encoded_len_matches_payload() {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let tx = accepted_tx_by_someone(&time_source);
-        let expected = tx.as_ref().encode().len();
+        let expected = tx.entrypoint_bytes().len();
         assert_eq!(Queue::compute_tx_encoded_len(&tx), expected);
     }
 
@@ -6399,7 +6469,7 @@ pub mod tests {
 
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let tx = accepted_tx_by_someone(&time_source);
-        let encoded_len = tx.as_ref().encoded_len();
+        let encoded_len = tx.entrypoint_bytes().len();
         let expected_gas = match tx.as_ref().instructions() {
             iroha_data_model::transaction::Executable::Instructions(batch) => {
                 crate::gas::meter_instructions(batch.as_ref())
@@ -6924,6 +6994,63 @@ pub mod tests {
     }
 
     #[test]
+    fn push_with_lane_with_state_accepts_dataspace_default_fee_sponsor() {
+        let mut fixture =
+            nexus_fee_fixture(Some(Numeric::from(10_u32)), Some(Numeric::from(10_u32)));
+        fixture
+            .state
+            .nexus
+            .get_mut()
+            .dataspace_fee_sponsors
+            .insert(DataSpaceId::UNIVERSAL, fixture.sponsor_id.to_string());
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+        );
+
+        queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect("dataspace default sponsor should be admitted without a grant");
+
+        assert_eq!(queue.queued_len(), 1);
+    }
+
+    #[test]
+    fn push_with_lane_with_state_accepts_explicit_dataspace_default_fee_sponsor() {
+        let mut fixture =
+            nexus_fee_fixture(Some(Numeric::from(10_u32)), Some(Numeric::from(10_u32)));
+        fixture
+            .state
+            .nexus
+            .get_mut()
+            .dataspace_fee_sponsors
+            .insert(DataSpaceId::UNIVERSAL, fixture.sponsor_id.to_string());
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "fee_sponsor".parse().expect("fee sponsor key"),
+            Json::new(fixture.sponsor_id.to_string()),
+        );
+        let tx = accepted_tx_with(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+            vec![sample_unregister_instruction()],
+            metadata,
+        );
+
+        queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect("explicit dataspace default sponsor should be admitted without a grant");
+
+        assert_eq!(queue.queued_len(), 1);
+    }
+
+    #[test]
     fn push_with_lane_with_state_accepts_external_settled_sponsor_without_local_fee_asset() {
         let mut fixture = nexus_fee_fixture(None, None);
         fixture
@@ -6988,6 +7115,8 @@ pub mod tests {
                 &stx.world,
                 &fixture.authority_id,
                 &fixture.sponsor_id,
+                &stx.nexus,
+                None,
             ),
             "read-only sponsor check should honor granted permission"
         );

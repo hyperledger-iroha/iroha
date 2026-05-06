@@ -49,6 +49,23 @@ fun encodePublicKeyMultihash(curveId: Int, keyBytes: ByteArray): String {
     return builder.toString()
 }
 
+/** Encodes a public key as Iroha's compact Norito payload (`algorithm tag || key bytes`). */
+fun compactPublicKeyPayload(curveId: Int, keyBytes: ByteArray): ByteArray {
+    val tag = compactAlgorithmTagForCurveId(curveId)
+    val payload = ByteArray(1 + keyBytes.size)
+    payload[0] = tag.toByte()
+    System.arraycopy(keyBytes, 0, payload, 1, keyBytes.size)
+    return payload
+}
+
+/** Decodes Iroha's compact Norito public-key payload. */
+fun decodeCompactPublicKeyPayload(payload: ByteArray?): PublicKeyPayload? {
+    if (payload == null || payload.isEmpty()) return null
+    val curveId = curveIdForCompactAlgorithmTag(payload[0].toInt() and 0xFF)
+    if (curveId < 0) return null
+    return PublicKeyPayload(curveId, payload.copyOfRange(1, payload.size))
+}
+
 /** Returns the canonical algorithm label for the curve id, or `null` when unknown. */
 fun algorithmForCurveId(curveId: Int): String? = when (curveId) {
     0x01 -> "ed25519"
@@ -63,6 +80,36 @@ fun algorithmForCurveId(curveId: Int): String? = when (curveId) {
     0x0E -> "gost512b"
     0x0F -> "sm2"
     else -> null
+}
+
+private fun compactAlgorithmTagForCurveId(curveId: Int): Int = when (curveId) {
+    0x01 -> 0
+    0x04 -> 1
+    0x03 -> 2
+    0x05 -> 3
+    0x02 -> 4
+    0x0A -> 5
+    0x0B -> 6
+    0x0C -> 7
+    0x0D -> 8
+    0x0E -> 9
+    0x0F -> 10
+    else -> throw IllegalArgumentException("Unsupported curve id: $curveId")
+}
+
+private fun curveIdForCompactAlgorithmTag(tag: Int): Int = when (tag) {
+    0 -> 0x01
+    1 -> 0x04
+    2 -> 0x03
+    3 -> 0x05
+    4 -> 0x02
+    5 -> 0x0A
+    6 -> 0x0B
+    7 -> 0x0C
+    8 -> 0x0D
+    9 -> 0x0E
+    10 -> 0x0F
+    else -> -1
 }
 
 private fun curveIdForMultihashCode(code: Long): Int = when (code) {
