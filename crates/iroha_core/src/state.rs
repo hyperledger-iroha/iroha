@@ -7348,6 +7348,8 @@ pub struct StateTransaction<'block, 'state> {
         &'block mut BTreeMap<Hash, Vec<iroha_data_model::fastpq::TransferTranscript>>,
     /// Transfer transcripts staged during the current transaction execution.
     pending_transfer_transcripts: Vec<iroha_data_model::fastpq::TransferTranscript>,
+    /// Reusable FASTPQ single-transfer digest scratch for this transaction.
+    poseidon_digest_scratch: crate::fastpq::PoseidonDigestScratch,
     /// Block-level accumulator for AXT envelope records.
     block_axt_envelopes: &'block mut Vec<AxtEnvelopeRecord>,
     /// Pending AXT envelopes captured during this transaction execution.
@@ -23970,6 +23972,7 @@ impl<'state> StateBlock<'state> {
             preverified_batch: self.preverified_batch.clone(),
             fastpq_transcripts: &mut self.fastpq_transcripts,
             pending_transfer_transcripts: Vec::new(),
+            poseidon_digest_scratch: crate::fastpq::PoseidonDigestScratch::default(),
             block_axt_envelopes: &mut self.axt_envelopes,
             pending_axt_envelopes: Vec::new(),
             perm_cache: PermissionCheckCache::default(),
@@ -29552,7 +29555,11 @@ impl StateTransaction<'_, '_> {
         })?;
         let authority_digest = crate::fastpq::authority_digest(authority);
         let poseidon_preimage_digest = match deltas.as_slice() {
-            [delta] => Some(crate::fastpq::poseidon_preimage_digest(delta, &batch_hash)),
+            [delta] => Some(crate::fastpq::poseidon_preimage_digest_with_scratch(
+                delta,
+                &batch_hash,
+                &mut self.poseidon_digest_scratch,
+            )),
             _ => None,
         };
         let transcript = TransferTranscript {

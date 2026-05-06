@@ -28991,6 +28991,29 @@ struct TransactionBatchPrecheck {
     precheck_rejection: Option<AcceptTransactionFail>,
 }
 
+const ED25519_PRECHECK_SIGNATURE_LENGTH: usize = 64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct Ed25519PrecheckKey {
+    message: [u8; Hash::LENGTH],
+    signature: [u8; ED25519_PRECHECK_SIGNATURE_LENGTH],
+    public_key: [u8; 32],
+}
+
+impl Ed25519PrecheckKey {
+    fn new(
+        message: &[u8],
+        signature: &[u8],
+        public_key: iroha_crypto::Ed25519ParsedPublicKey,
+    ) -> Option<Self> {
+        Some(Self {
+            message: message.try_into().ok()?,
+            signature: signature.try_into().ok()?,
+            public_key: *public_key.as_bytes(),
+        })
+    }
+}
+
 fn precheck_transaction_batch_ed25519(
     transactions: &[DecodedVersionedSignedTransaction],
     batch_cap: usize,
@@ -29035,7 +29058,7 @@ fn precheck_transaction_batch_ed25519(
     let scratch_cap = batch_cap.min(transactions.len());
     let mut indices = Vec::with_capacity(scratch_cap);
     let mut duplicate_groups: Vec<Vec<usize>> = Vec::with_capacity(scratch_cap);
-    let mut unique_positions = std::collections::BTreeMap::<Vec<u8>, usize>::new();
+    let mut unique_positions = std::collections::BTreeMap::<Ed25519PrecheckKey, usize>::new();
     let mut messages = Vec::with_capacity(scratch_cap);
     let mut signatures = Vec::with_capacity(scratch_cap);
     let mut public_keys = Vec::with_capacity(scratch_cap);
@@ -29096,15 +29119,9 @@ fn precheck_transaction_batch_ed25519(
         let Some((message, signature, public_key)) = tx.single_ed25519_precheck_parts() else {
             continue;
         };
-        let mut key = Vec::with_capacity(
-            message
-                .len()
-                .saturating_add(signature.len())
-                .saturating_add(public_key.as_bytes().len()),
-        );
-        key.extend_from_slice(message);
-        key.extend_from_slice(signature);
-        key.extend_from_slice(public_key.as_bytes());
+        let Some(key) = Ed25519PrecheckKey::new(message, signature, public_key) else {
+            continue;
+        };
         if let Some(&unique_pos) = unique_positions.get(&key) {
             if let Some(duplicates) = duplicate_groups.get_mut(unique_pos) {
                 duplicates.push(idx);
@@ -29247,6 +29264,40 @@ mod transaction_ingress_decode_tests {
         assert_eq!(prechecks.len(), 2);
         assert!(prechecks.iter().all(|precheck| {
             precheck.single_ed25519_prechecked && precheck.precheck_rejection.is_none()
+        }));
+    }
+
+    #[test]
+    fn transaction_batch_ed25519_precheck_reuses_exact_duplicate_key() {
+        let tx = signed_transaction_for_test_with_message("ed25519-precheck-duplicate");
+        let decoded = decode_transaction_batch_payloads(vec![
+            versioned_signed_transaction(&tx),
+            versioned_signed_transaction(&tx),
+        ])
+        .expect("valid duplicate batch decodes");
+
+        let prechecks = precheck_transaction_batch_ed25519(&decoded, 64);
+
+        assert_eq!(prechecks.len(), 2);
+        assert!(prechecks.iter().all(|precheck| {
+            precheck.single_ed25519_prechecked && precheck.precheck_rejection.is_none()
+        }));
+    }
+
+    #[test]
+    fn transaction_batch_ed25519_precheck_rejects_exact_duplicate_invalid_signature() {
+        let tx = transaction_with_invalid_signature("ed25519-precheck-duplicate-invalid");
+        let decoded = decode_transaction_batch_payloads(vec![
+            versioned_signed_transaction(&tx),
+            versioned_signed_transaction(&tx),
+        ])
+        .expect("well-formed duplicate invalid-signature batch decodes");
+
+        let prechecks = precheck_transaction_batch_ed25519(&decoded, 64);
+
+        assert_eq!(prechecks.len(), 2);
+        assert!(prechecks.iter().all(|precheck| {
+            !precheck.single_ed25519_prechecked && precheck.precheck_rejection.is_some()
         }));
     }
 

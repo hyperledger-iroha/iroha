@@ -467,10 +467,15 @@ impl PoseidonByteHasher {
     #[inline(always)]
     pub fn finalize(mut self) -> [u8; 32] {
         if self.pending_len > 0 {
-            self.absorb_word(Fr::from(partial_u64_from_le_bytes(
+            self.state[self.rate_len] += Fr::from(partial_u64_from_le_bytes(
                 &self.pending_bytes,
                 self.pending_len,
-            )));
+            ));
+            self.rate_len += 1;
+            if self.rate_len == 2 {
+                poseidon3_permute(&mut self.state);
+                self.rate_len = 0;
+            }
         }
         match self.rate_len {
             0 => self.state[0] += Fr::ONE,

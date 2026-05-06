@@ -1486,7 +1486,7 @@ impl TransactionGossiper {
                     Some(AcceptedTransaction::prepare_gossip_signed_metadata(
                         signed,
                         entrypoint_hash,
-                        payload.as_slice(),
+                        Arc::clone(&payload),
                     ))
                 }
                 _ => None,

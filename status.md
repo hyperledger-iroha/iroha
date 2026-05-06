@@ -6603,6 +6603,10 @@ Last updated: 2026-05-06
   single-digest packers with 24- and 32-word inline buffers were rejected after
   `poseidon_preimage_digest` stayed within-noise slower than the Vec-backed
   packed-word path.
+- Rejected the Rayon CPU hash fallback for packed digest batches after the
+  64-transcript missing-digest fixture stayed within noise without it, and a
+  temporary 256-transcript fixture measured about `98.1 ms` serial versus
+  `100.2 ms` through the parallel fallback.
 - Updated FASTPQ digest construction in `crates/iroha_core/src/fastpq/mod.rs`
   to pack the single-digest CPU path through the same u64 word preimage builder
   used by batched Poseidon digests. Direct reverse A/B kept the packed-word

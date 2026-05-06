@@ -1412,6 +1412,17 @@ impl<'tx> AcceptedTransaction<'tx> {
         )
     }
 
+    fn external_entrypoint_bytes_from_signed_frame(signed_frame: &[u8]) -> Option<Arc<Vec<u8>>> {
+        let view = norito::core::from_bytes_view(signed_frame).ok()?;
+        if view.schema() != <SignedTransaction as norito::core::NoritoSerialize>::schema_hash() {
+            return None;
+        }
+        Some(Self::external_entrypoint_bytes_from_signed_payload(
+            view.as_bytes(),
+            view.flags(),
+        ))
+    }
+
     fn framed_padding_for<T>() -> usize {
         let align = core::mem::align_of::<norito::core::Archived<T>>();
         if align <= 1 {
@@ -1525,12 +1536,10 @@ impl<'tx> AcceptedTransaction<'tx> {
                 .ok()
             })
             .map(Arc::new);
-        let entrypoint_bytes = signed_bytes.as_ref().map(|_| {
-            Self::external_entrypoint_bytes_from_signed_payload(
-                signed_payload.as_slice(),
-                signed_payload_flags,
-            )
-        });
+        let entrypoint_bytes = Some(Self::external_entrypoint_bytes_from_signed_payload(
+            signed_payload.as_slice(),
+            signed_payload_flags,
+        ));
         let encoded_len = signed_bytes
             .as_ref()
             .map_or(encoded_len, |bytes| bytes.len());
@@ -1608,16 +1617,17 @@ impl<'tx> AcceptedTransaction<'tx> {
     pub(crate) fn prepare_gossip_signed_metadata(
         tx: &SignedTransaction,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
-        entrypoint_bytes: &[u8],
+        entrypoint_bytes: Arc<Vec<u8>>,
     ) -> PreparedTransactionMetadata {
-        let encoded_len = Self::signed_encoded_len_from_external_entrypoint_frame(entrypoint_bytes)
-            .unwrap_or_else(|_| Self::signed_encoded_len(tx));
+        let encoded_len =
+            Self::signed_encoded_len_from_external_entrypoint_frame(entrypoint_bytes.as_slice())
+                .unwrap_or_else(|_| Self::signed_encoded_len(tx));
         Self::prepare_signed_metadata_with_entrypoint_hash_encoded_len_and_caches(
             tx,
             entrypoint_hash,
             encoded_len,
             None,
-            None,
+            Some(entrypoint_bytes),
         )
     }
 
@@ -2978,6 +2988,13 @@ impl<'tx> AcceptedTransaction<'tx> {
     #[must_use]
     pub(crate) fn entrypoint_bytes(&self) -> Arc<Vec<u8>> {
         Arc::clone(self.entrypoint_bytes.get_or_init(|| {
+            if matches!(self.entrypoint(), TransactionEntrypoint::External(_))
+                && let Some(Some(signed_bytes)) = self.signed_bytes.get()
+                && let Some(entrypoint_bytes) =
+                    Self::external_entrypoint_bytes_from_signed_frame(signed_bytes.as_slice())
+            {
+                return entrypoint_bytes;
+            }
             Arc::new(norito::to_bytes(self.entrypoint()).expect("encode transaction entrypoint"))
         }))
     }
@@ -7189,6 +7206,9 @@ pub mod tests {
             .with_instructions([Log::new(Level::INFO, "canonical-cache".into())])
             .sign(keypair.private_key());
         let signed_bytes = Arc::new(norito::to_bytes(&signed).expect("signed transaction encodes"));
+        let expected_entrypoint_bytes =
+            norito::to_bytes(&TransactionEntrypoint::External(signed.clone()))
+                .expect("entrypoint transaction encodes");
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
 
@@ -7204,6 +7224,10 @@ pub mod tests {
 
         let cached = accepted.signed_bytes().expect("canonical bytes cached");
         assert!(Arc::ptr_eq(&cached, &signed_bytes));
+        assert_eq!(
+            accepted.entrypoint_bytes().as_slice(),
+            expected_entrypoint_bytes.as_slice()
+        );
     }
 
     #[test]
@@ -7524,7 +7548,7 @@ pub mod tests {
         let actual = AcceptedTransaction::prepare_gossip_signed_metadata(
             &signed,
             entrypoint.hash(),
-            entrypoint_bytes.as_slice(),
+            Arc::new(entrypoint_bytes.clone()),
         );
 
         assert_eq!(actual.signed_hash, expected.signed_hash);
@@ -7532,7 +7556,14 @@ pub mod tests {
         assert_eq!(actual.payload_hash, expected.payload_hash);
         assert_eq!(actual.encoded_len, expected.encoded_len);
         assert!(actual.signed_bytes.is_none());
-        assert!(actual.entrypoint_bytes.is_none());
+        assert_eq!(
+            actual
+                .entrypoint_bytes
+                .as_ref()
+                .expect("gossip metadata keeps canonical entrypoint bytes")
+                .as_slice(),
+            entrypoint_bytes.as_slice()
+        );
         assert_eq!(
             actual.single_ed25519_key.is_some(),
             expected.single_ed25519_key.is_some()
