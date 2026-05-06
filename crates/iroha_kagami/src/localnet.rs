@@ -27,8 +27,11 @@ use iroha_data_model::{
     },
     nexus::DataSpaceId,
     offline::{OFFLINE_ASSET_ENABLED_METADATA_KEY, offline_escrow_account_id},
-    parameter::system::{
-        SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter, SumeragiParameters,
+    parameter::{
+        custom::{CustomParameter, CustomParameterId},
+        system::{
+            SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter, SumeragiParameters,
+        },
     },
     peer::PeerId,
     prelude::*,
@@ -405,7 +408,9 @@ const LOCALNET_PERF_QUEUE_CAPACITY: usize = 262_144;
 /// Default transaction TTL in the queue for localnet (ms).
 const LOCALNET_QUEUE_TTL_MS: u64 = 600_000;
 /// Default lane TEU capacity for localnet scheduling (raises per-block budget).
-const LOCALNET_LANE_TEU_CAPACITY: u32 = 1_000_000;
+const LOCALNET_LANE_TEU_CAPACITY: u32 = 50_000_000;
+/// Default IVM gas budget per block for Taira/localnet stress profiles.
+const LOCALNET_IVM_GAS_LIMIT_PER_BLOCK: u64 = 50_000_000;
 /// Default multiplier for proposal queue scan budgets on localnet.
 const LOCALNET_PROPOSAL_QUEUE_SCAN_MULTIPLIER: usize = 4;
 /// Default Torii tx rate limit (per authority) for localnet.
@@ -440,7 +445,7 @@ const LOCALNET_ALLOW_SINGLE_PEER_SORA_ENV: &str = "IROHA_LOCALNET_ALLOW_UNSAFE_S
 const LOCALNET_BLOCK_MAX_TRANSACTIONS: u64 = 10_000;
 /// Default stake bonded per localnet validator (raised to meet min_self_bond).
 const LOCALNET_STAKE_AMOUNT: u64 = 10_000;
-const LOCALNET_FAUCET_AUTHORITY_BALANCE: u64 = 1_000_000;
+const LOCALNET_FAUCET_AUTHORITY_BALANCE: u64 = 1_000_000_000;
 const LOCALNET_FAUCET_AMOUNT: &str = "25000";
 const LOCALNET_FAUCET_POW_DIFFICULTY_BITS: i64 = 8;
 const LOCALNET_FAUCET_POW_SCRYPT_LOG_N: i64 = 13;
@@ -2491,6 +2496,16 @@ fn apply_localnet_npos_overrides(
     parameters.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
 }
 
+fn apply_localnet_ivm_gas_limit_override(parameters: &mut Parameters) {
+    let gas_param_id = CustomParameterId::new(
+        "ivm_gas_limit_per_block"
+            .parse()
+            .expect("constant custom parameter name is valid"),
+    );
+    let gas_param = CustomParameter::new(gas_param_id, Json::new(LOCALNET_IVM_GAS_LIMIT_PER_BLOCK));
+    parameters.set_parameter(Parameter::Custom(gas_param));
+}
+
 fn localnet_npos_stake_amount(parameters: &Parameters, requested: Option<u64>) -> u64 {
     let requested = requested.unwrap_or(LOCALNET_STAKE_AMOUNT);
     let min_self_bond = parameters
@@ -2576,6 +2591,15 @@ fn apply_parameter_overrides(
         || redundant_send_r.is_some()
         || collectors_k.is_some()
         || include_npos
+        || parameters
+            .custom()
+            .get(&CustomParameterId::new(
+                "ivm_gas_limit_per_block"
+                    .parse()
+                    .expect("constant custom parameter name is valid"),
+            ))
+            .and_then(|custom| custom.payload().try_into_any_norito::<u64>().ok())
+            != Some(LOCALNET_IVM_GAS_LIMIT_PER_BLOCK)
         || parameters.block.max_transactions != block_max_transactions;
     if !should_update {
         return genesis;
@@ -2597,6 +2621,7 @@ fn apply_parameter_overrides(
     if include_npos {
         apply_localnet_npos_overrides(&mut parameters, redundant_send_r, collectors_k);
     }
+    apply_localnet_ivm_gas_limit_override(&mut parameters);
 
     let mut builder = genesis.into_builder();
     let mut pending_parameters = ordered_localnet_parameters(&previous_parameters, &parameters);
@@ -3147,13 +3172,15 @@ fn write_start_script(
     writeln!(start_file, "fi")?;
     writeln!(
         start_file,
-        "echo \"Using IROHAD_BIN=$IROHAD_BIN\" >&2\ncommand -v \"$IROHAD_BIN\" >/dev/null 2>&1 || {{ echo \"irohad binary not executable: $IROHAD_BIN\" >&2; exit 1; }}"
+        "echo \"Using IROHAD_BIN=$IROHAD_BIN\" >&2\nIROHAD_BIN_RESOLVED=\"$(command -v \"$IROHAD_BIN\" 2>/dev/null || true)\"\nif [ -z \"$IROHAD_BIN_RESOLVED\" ]; then\n  echo \"irohad binary not executable: $IROHAD_BIN\" >&2\n  exit 1\nfi\nIROHAD_BIN_DIR=\"$(cd -- \"$(dirname -- \"$IROHAD_BIN_RESOLVED\")\" && pwd)\"\nIROHA_CLI_FROM_IROHAD=\"$IROHAD_BIN_DIR/iroha\""
     )?;
     writeln!(start_file, "IROHA_CLI=\"${{IROHA_CLI:-}}\"")?;
     writeln!(start_file, "if [ -z \"$IROHA_CLI\" ]; then")?;
+    writeln!(start_file, "  if [ -x \"$IROHA_CLI_FROM_IROHAD\" ]; then")?;
+    writeln!(start_file, "    IROHA_CLI=\"$IROHA_CLI_FROM_IROHAD\"")?;
     writeln!(
         start_file,
-        "  if [ -x \"$DEFAULT_IROHA_CLI_RELEASE\" ]; then"
+        "  elif [ -x \"$DEFAULT_IROHA_CLI_RELEASE\" ]; then"
     )?;
     writeln!(start_file, "    IROHA_CLI=\"$DEFAULT_IROHA_CLI_RELEASE\"")?;
     writeln!(
@@ -3251,7 +3278,11 @@ fn write_start_script(
     )?;
     writeln!(
         start_file,
-        "      $IROHA_CLI --machine -c \"$DIR/client.toml\" --output-format json ledger asset mint --definition \"$FAUCET_ASSET_DEFINITION_ID\" --account \"$FAUCET_ACCOUNT\" --quantity \"$mint_amount\" > \"$DIR/faucet-topup.last.json\""
+        "      printf '{{\"gas_asset_id\":\"%s\",\"gas_limit\":2000000}}\\n' \"$FAUCET_ASSET_DEFINITION_ID\" > \"$DIR/faucet-topup.metadata.json\""
+    )?;
+    writeln!(
+        start_file,
+        "      $IROHA_CLI --machine -c \"$DIR/client.toml\" --metadata \"$DIR/faucet-topup.metadata.json\" --output-format json ledger asset mint --definition \"$FAUCET_ASSET_DEFINITION_ID\" --account \"$FAUCET_ACCOUNT\" --quantity \"$mint_amount\" > \"$DIR/faucet-topup.last.json\""
     )?;
     writeln!(start_file, "      return 0")?;
     writeln!(start_file, "    fi")?;
@@ -5560,6 +5591,19 @@ mod tests {
         let params = genesis_parameters(&manifest);
         assert_eq!(params.sumeragi().block_time_ms(), 1_000);
         assert_eq!(params.sumeragi().commit_time_ms(), 1_000);
+        let gas_param_id = CustomParameterId::new(
+            "ivm_gas_limit_per_block"
+                .parse()
+                .expect("constant custom parameter name is valid"),
+        );
+        let gas_limit: u64 = params
+            .custom()
+            .get(&gas_param_id)
+            .expect("localnet should pin the IVM gas limit")
+            .payload()
+            .try_into_any_norito()
+            .expect("gas limit payload should decode");
+        assert_eq!(gas_limit, LOCALNET_IVM_GAS_LIMIT_PER_BLOCK);
     }
 
     #[test]
@@ -7138,6 +7182,14 @@ mod tests {
             start_contents
                 .contains("ledger asset mint --definition \"$FAUCET_ASSET_DEFINITION_ID\""),
             "start script should mint the fee asset back to the faucet when reserve is low"
+        );
+        assert!(
+            start_contents.contains("--metadata \"$DIR/faucet-topup.metadata.json\""),
+            "start script should attach fee metadata to faucet reserve top-ups"
+        );
+        assert!(
+            start_contents.contains("'{\"gas_asset_id\":\"%s\",\"gas_limit\":2000000}\\n'"),
+            "start script should render faucet top-up gas metadata"
         );
         assert!(
             start_contents

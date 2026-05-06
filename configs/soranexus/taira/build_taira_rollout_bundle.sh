@@ -24,6 +24,7 @@ The bundle contains:
   - `scripts/render_taira_validator_bundle.py`
   - `scripts/render_taira_edge_nginx_conf.py`
   - `scripts/taira_faucet_canary.py`
+  - `configs/soranexus/taira/check_inrou_host_prereqs.sh`
   - `rollout.manifest.json`
   - `sha256sums.txt`
   - `<bundle>.tar.gz`
@@ -140,6 +141,7 @@ cp -R "${REPO_ROOT}/configs/soranexus/taira" "${bundle_dir}/configs/soranexus/"
 cp "${REPO_ROOT}/scripts/render_taira_validator_bundle.py" "${bundle_dir}/scripts/"
 cp "${REPO_ROOT}/scripts/render_taira_edge_nginx_conf.py" "${bundle_dir}/scripts/"
 cp "${REPO_ROOT}/scripts/taira_faucet_canary.py" "${bundle_dir}/scripts/"
+chmod 755 "${bundle_dir}/configs/soranexus/taira/check_inrou_host_prereqs.sh"
 
 manifest_path="${bundle_dir}/rollout.manifest.json"
 checksums_path="${bundle_dir}/sha256sums.txt"
@@ -186,6 +188,7 @@ payload = {
         "scripts/taira_faucet_canary.py",
     ],
     "required_followup": [
+        "install the native Inrou prerequisites reported by configs/soranexus/taira/check_inrou_host_prereqs.sh or run the CONFIG_PROFILE=taira container image",
         "install the bundled binaries/config on each public Taira validator",
         "render and install the shared-edge nginx config from the same validator roster before public cutover",
         "restart the validator with the shipped taira-irohad.service or equivalent",

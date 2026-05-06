@@ -12,6 +12,8 @@
 //! admission limits (`pipeline.overlay_max_*`) in one place.
 
 use core::str::FromStr;
+#[cfg(feature = "telemetry")]
+use std::time::Instant;
 use std::{
     collections::BTreeMap,
     mem,
@@ -66,7 +68,7 @@ use crate::{
         code,
         isi::settlement::{admission_validate_dvp, admission_validate_pvp},
         ivm::{
-            cache::ProgramSummary,
+            cache::{IvmCache, ProgramSummary},
             host::{AmxBudgetViolation, QueryStateSource},
         },
     },
@@ -264,11 +266,34 @@ fn validate_bound_contract_record(
     Ok(())
 }
 
-fn ivm_cache_summary(bytecode: &[u8]) -> Result<ProgramSummary, OverlayBuildError> {
-    let mut cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-    cache
-        .summarize_program(bytecode)
-        .map_err(|_| OverlayBuildError::IvmHeaderParse)
+fn map_program_analysis_error(err: ProgramAnalysisError) -> OverlayBuildError {
+    match err {
+        ProgramAnalysisError::Metadata(_) => OverlayBuildError::IvmHeaderParse,
+        ProgramAnalysisError::Decode(decode_err) => OverlayBuildError::IvmLoad(decode_err),
+    }
+}
+
+fn cached_amx_analysis(
+    ivm_cache: &mut IvmCache,
+    summary: &ProgramSummary,
+    bytecode: &[u8],
+) -> Result<ivm::analysis::ProgramAnalysis, OverlayBuildError> {
+    ivm_cache
+        .analyze_program(summary, bytecode)
+        .map_err(map_program_analysis_error)
+}
+
+#[cfg(feature = "telemetry")]
+fn observe_overlay_stage_ms<R>(state_ro: &R, stage: &'static str, started_at: Instant)
+where
+    R: StateReadOnly,
+{
+    let aggregate_lane = state_ro.nexus().routing_policy.default_lane;
+    state_ro.metrics().observe_pipeline_stage_ms(
+        aggregate_lane,
+        stage,
+        started_at.elapsed().as_secs_f64() * 1_000.0,
+    );
 }
 
 fn apply_contract_call_execution_context(
@@ -1139,27 +1164,15 @@ where
                     .expect("contract invocation parser must set entrypoint"),
             });
 
-            let accounts = Arc::new(
-                state_ro
-                    .world()
-                    .accounts_iter()
-                    .map(|e| e.id.clone())
-                    .collect::<Vec<_>>(),
-            );
+            let accounts = state_ro.accounts_snapshot();
             let streaming_meta = resolve_streaming_metadata(state_ro, tx.authority());
             let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
                 tx.authority().clone(),
                 Arc::clone(&accounts),
                 contract_call_context.args.clone(),
             );
-            let amx_analysis = ivm::analysis::analyze_program(record.code_bytes.as_ref()).map_err(
-                |err| match err {
-                    ProgramAnalysisError::Metadata(_) => OverlayBuildError::IvmHeaderParse,
-                    ProgramAnalysisError::Decode(decode_err) => {
-                        OverlayBuildError::IvmLoad(decode_err)
-                    }
-                },
-            )?;
+            let amx_analysis =
+                cached_amx_analysis(ivm_cache, &summary, record.code_bytes.as_ref())?;
             host.set_amx_analysis(amx_analysis);
             let amx_limits = crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(
                 state_ro.pipeline(),
@@ -1167,7 +1180,6 @@ where
             host.set_amx_limits(amx_limits);
             host.set_axt_timing(state_ro.nexus().axt);
             host.hydrate_axt_replay_ledger(state_ro);
-            host.set_durable_state_snapshot_from_world(state_ro.world());
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
             host.set_vrf_epoch_seeds_from_world(state_ro.world());
             host.set_query_state(state_ro);
@@ -1184,6 +1196,7 @@ where
                 .map_err(OverlayBuildError::IvmRun)?;
             vm.set_gas_limit(gas_limit);
             apply_contract_call_execution_context(&mut vm, Some(&contract_call_context))?;
+            vm.set_zk_trace_enabled(false);
             run_vm_with_host(&mut vm, &mut host)?;
             let ivm_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
@@ -1259,13 +1272,7 @@ where
 
             // Run CoreHost to collect queued ISIs
             // Snapshot of accounts for deterministic helpers
-            let accounts = Arc::new(
-                state_ro
-                    .world()
-                    .accounts_iter()
-                    .map(|e| e.id.clone())
-                    .collect::<Vec<_>>(),
-            );
+            let accounts = state_ro.accounts_snapshot();
             let streaming_meta = resolve_streaming_metadata(state_ro, tx.authority());
             let mut host = if let Some(context) = contract_call_context.as_ref() {
                 crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
@@ -1279,13 +1286,7 @@ where
                     Arc::clone(&accounts),
                 )
             };
-            let amx_analysis =
-                ivm::analysis::analyze_program(bytecode.as_ref()).map_err(|err| match err {
-                    ProgramAnalysisError::Metadata(_) => OverlayBuildError::IvmHeaderParse,
-                    ProgramAnalysisError::Decode(decode_err) => {
-                        OverlayBuildError::IvmLoad(decode_err)
-                    }
-                })?;
+            let amx_analysis = cached_amx_analysis(ivm_cache, &summary, bytecode.as_ref())?;
             host.set_amx_analysis(amx_analysis);
             let amx_limits = crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(
                 state_ro.pipeline(),
@@ -1293,7 +1294,6 @@ where
             host.set_amx_limits(amx_limits);
             host.set_axt_timing(state_ro.nexus().axt);
             host.hydrate_axt_replay_ledger(state_ro);
-            host.set_durable_state_snapshot_from_world(state_ro.world());
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
             host.set_vrf_epoch_seeds_from_world(state_ro.world());
             host.set_query_state(state_ro);
@@ -1309,6 +1309,7 @@ where
                 .map_err(OverlayBuildError::IvmRun)?;
             vm.set_gas_limit(gas_limit);
             apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
+            vm.set_zk_trace_enabled(false);
             run_vm_with_host(&mut vm, &mut host)?;
             let ivm_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
@@ -1496,11 +1497,12 @@ pub fn build_overlay_for_transaction_with_accounts(
 #[allow(clippy::too_many_lines)]
 pub(crate) fn build_overlay_for_transaction_with_accounts_zk<R>(
     tx: &SignedTransaction,
-    accounts: &[AccountId],
+    accounts: Arc<Vec<AccountId>>,
     state_ro: &R,
     zk_enabled: bool,
     header: &BlockHeader,
     streaming_meta: StreamingOverlayMetadata,
+    ivm_cache: &mut IvmCache,
 ) -> Result<TxOverlay, OverlayBuildError>
 where
     R: StateReadOnly + QueryStateSource,
@@ -1511,6 +1513,8 @@ where
             Ok(TxOverlay::from_instructions(instrs))
         }
         Executable::ContractCall(call) => {
+            #[cfg(feature = "telemetry")]
+            let program_prepare_start = Instant::now();
             let record = code::fetch_bound_contract_record(state_ro, &call.contract_address)
                 .ok_or_else(|| {
                     OverlayBuildError::ContractCall(format!(
@@ -1518,11 +1522,12 @@ where
                         call.contract_address
                     ))
                 })?;
-            let parsed = ivm::ProgramMetadata::parse(record.code_bytes.as_ref())
+            let summary = ivm_cache
+                .summarize_program(record.code_bytes.as_ref())
                 .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
-            let meta = parsed.metadata;
+            let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
-            let code_offset = parsed.code_offset;
+            let code_offset = summary.code_offset;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk && !zk_enabled {
                 return Err(OverlayBuildError::HeaderPolicy(
@@ -1535,12 +1540,15 @@ where
                 code_offset,
                 record.code_bytes.as_ref(),
             )?;
-            let summary = ivm_cache_summary(&record.code_bytes)?;
             validate_bound_contract_record(&record, &summary)?;
             let tx_gas_limit = require_tx_gas_limit(tx)?;
-            let mut vm = ivm::IVM::new(tx_gas_limit);
+            let mut vm = ivm_cache
+                .clone_runtime(&summary, record.code_bytes.as_ref(), tx_gas_limit)
+                .map_err(OverlayBuildError::IvmLoad)?;
             let contract_call_context =
                 parse_contract_invocation_execution_context(call, record.code_bytes.as_ref())?;
+            #[cfg(feature = "telemetry")]
+            observe_overlay_stage_ms(state_ro, "overlay_program_prepare", program_prepare_start);
             let contract_runtime_context = Some(crate::executor::ContractRuntimeExecutionContext {
                 contract_subject: record.contract_address.subject_id(),
                 contract_address: record.contract_address.clone(),
@@ -1556,25 +1564,20 @@ where
                 crate::smartcontracts::ivm::host::QueryStateSlot<_>,
             >::with_accounts_and_args(
                 tx.authority().clone(),
-                Arc::new(accounts.to_vec()),
+                Arc::clone(&accounts),
                 contract_call_context.args.clone(),
             );
-            let amx_analysis = ivm::analysis::analyze_program(record.code_bytes.as_ref()).map_err(
-                |err| match err {
-                    ProgramAnalysisError::Metadata(_) => OverlayBuildError::IvmHeaderParse,
-                    ProgramAnalysisError::Decode(decode_err) => {
-                        OverlayBuildError::IvmLoad(decode_err)
-                    }
-                },
-            )?;
+            let amx_analysis =
+                cached_amx_analysis(ivm_cache, &summary, record.code_bytes.as_ref())?;
             host.set_amx_analysis(amx_analysis);
+            #[cfg(feature = "telemetry")]
+            let host_hydrate_start = Instant::now();
             let amx_limits = crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(
                 state_ro.pipeline(),
             );
             host.set_amx_limits(amx_limits);
             host.set_axt_timing(state_ro.nexus().axt);
             host.hydrate_axt_replay_ledger(state_ro);
-            host.set_durable_state_snapshot_from_world(state_ro.world());
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
             host.set_vrf_epoch_seeds_from_world(state_ro.world());
             host.set_query_state(state_ro);
@@ -1589,11 +1592,16 @@ where
             host.set_chain_id(state_ro.chain_id());
             host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
                 .map_err(OverlayBuildError::IvmRun)?;
-            vm.load_program(record.code_bytes.as_ref())
-                .map_err(OverlayBuildError::IvmLoad)?;
             vm.set_gas_limit(tx_gas_limit);
             apply_contract_call_execution_context(&mut vm, Some(&contract_call_context))?;
+            vm.set_zk_trace_enabled(false);
+            #[cfg(feature = "telemetry")]
+            observe_overlay_stage_ms(state_ro, "overlay_host_hydrate", host_hydrate_start);
+            #[cfg(feature = "telemetry")]
+            let vm_run_start = Instant::now();
             run_vm_with_host(&mut vm, &mut host)?;
+            #[cfg(feature = "telemetry")]
+            observe_overlay_stage_ms(state_ro, "overlay_vm_run", vm_run_start);
             let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
             let negotiated_caps_snapshot = host.negotiated_caps_snapshot().copied();
@@ -1634,7 +1642,11 @@ where
             ))
         }
         Executable::Ivm(bytecode) => {
-            let summary = ivm_cache_summary(bytecode.as_ref())?;
+            #[cfg(feature = "telemetry")]
+            let program_prepare_start = Instant::now();
+            let summary = ivm_cache
+                .summarize_program(bytecode.as_ref())
+                .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
             let code_offset = summary.code_offset;
@@ -1652,36 +1664,35 @@ where
             )?;
             validate_contract_binding(state_ro, tx, &summary)?;
             let tx_gas_limit = require_tx_gas_limit(tx)?;
-            let mut vm = ivm::IVM::new(tx_gas_limit);
+            let mut vm = ivm_cache
+                .clone_runtime(&summary, bytecode.as_ref(), tx_gas_limit)
+                .map_err(OverlayBuildError::IvmLoad)?;
             let contract_call_context =
                 parse_contract_call_execution_context(tx.metadata(), bytecode.as_ref())?;
+            #[cfg(feature = "telemetry")]
+            observe_overlay_stage_ms(state_ro, "overlay_program_prepare", program_prepare_start);
             let mut host = if let Some(context) = contract_call_context.as_ref() {
                 crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
                     tx.authority().clone(),
-                    Arc::new(accounts.to_vec()),
+                    Arc::clone(&accounts),
                     context.args.clone(),
                 )
             } else {
                 crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
                     tx.authority().clone(),
-                    Arc::new(accounts.to_vec()),
+                    Arc::clone(&accounts),
                 )
             };
-            let amx_analysis =
-                ivm::analysis::analyze_program(bytecode.as_ref()).map_err(|err| match err {
-                    ProgramAnalysisError::Metadata(_) => OverlayBuildError::IvmHeaderParse,
-                    ProgramAnalysisError::Decode(decode_err) => {
-                        OverlayBuildError::IvmLoad(decode_err)
-                    }
-                })?;
+            let amx_analysis = cached_amx_analysis(ivm_cache, &summary, bytecode.as_ref())?;
             host.set_amx_analysis(amx_analysis);
+            #[cfg(feature = "telemetry")]
+            let host_hydrate_start = Instant::now();
             let amx_limits = crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(
                 state_ro.pipeline(),
             );
             host.set_amx_limits(amx_limits);
             host.set_axt_timing(state_ro.nexus().axt);
             host.hydrate_axt_replay_ledger(state_ro);
-            host.set_durable_state_snapshot_from_world(state_ro.world());
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
             host.set_vrf_epoch_seeds_from_world(state_ro.world());
             host.set_query_state(state_ro);
@@ -1695,11 +1706,16 @@ where
             host.set_chain_id(state_ro.chain_id());
             host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
                 .map_err(OverlayBuildError::IvmRun)?;
-            vm.load_program(bytecode.as_ref())
-                .map_err(OverlayBuildError::IvmLoad)?;
             vm.set_gas_limit(tx_gas_limit);
             apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
+            vm.set_zk_trace_enabled(false);
+            #[cfg(feature = "telemetry")]
+            observe_overlay_stage_ms(state_ro, "overlay_host_hydrate", host_hydrate_start);
+            #[cfg(feature = "telemetry")]
+            let vm_run_start = Instant::now();
             run_vm_with_host(&mut vm, &mut host)?;
+            #[cfg(feature = "telemetry")]
+            observe_overlay_stage_ms(state_ro, "overlay_vm_run", vm_run_start);
             let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
             let negotiated_caps_snapshot = host.negotiated_caps_snapshot().copied();
@@ -1804,12 +1820,13 @@ where
 #[allow(clippy::too_many_lines)]
 pub(crate) fn build_overlay_for_transaction_quarantine(
     tx: &SignedTransaction,
-    accounts: &[AccountId],
+    accounts: Arc<Vec<AccountId>>,
     state_ro: &(impl StateReadOnly + QueryStateSource),
     max_cycles_cap: u64,
     max_millis_cap: u64,
     upper_bound_cap: u64,
     streaming_meta: StreamingOverlayMetadata,
+    ivm_cache: &mut IvmCache,
 ) -> Result<TxOverlay, OverlayBuildError> {
     match tx.instructions() {
         Executable::Instructions(batch) => {
@@ -1825,9 +1842,10 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                         call.contract_address
                     ))
                 })?;
-            let parsed = ivm::ProgramMetadata::parse(record.code_bytes.as_ref())
+            let summary = ivm_cache
+                .summarize_program(record.code_bytes.as_ref())
                 .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
-            let meta = parsed.metadata;
+            let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
             if meta.mode & ivm::ivm_mode::ZK != 0 {
                 return Err(OverlayBuildError::HeaderPolicy(
@@ -1835,7 +1853,6 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 ));
             }
             let tx_gas_limit = require_tx_gas_limit(tx)?;
-            let summary = ivm_cache_summary(&record.code_bytes)?;
             validate_bound_contract_record(&record, &summary)?;
             let mut eff = meta.max_cycles;
             if eff == 0 {
@@ -1850,7 +1867,9 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             if eff == u64::MAX {
                 eff = 0;
             }
-            let mut vm = ivm::IVM::new(tx_gas_limit);
+            let mut vm = ivm_cache
+                .clone_runtime(&summary, record.code_bytes.as_ref(), tx_gas_limit)
+                .map_err(OverlayBuildError::IvmLoad)?;
             let contract_call_context =
                 parse_contract_invocation_execution_context(call, record.code_bytes.as_ref())?;
             let contract_runtime_context = Some(crate::executor::ContractRuntimeExecutionContext {
@@ -1868,17 +1887,11 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 crate::smartcontracts::ivm::host::QueryStateSlot<_>,
             >::with_accounts_and_args(
                 tx.authority().clone(),
-                Arc::new(accounts.to_vec()),
+                Arc::clone(&accounts),
                 contract_call_context.args.clone(),
             );
-            let amx_analysis = ivm::analysis::analyze_program(record.code_bytes.as_ref()).map_err(
-                |err| match err {
-                    ProgramAnalysisError::Metadata(_) => OverlayBuildError::IvmHeaderParse,
-                    ProgramAnalysisError::Decode(decode_err) => {
-                        OverlayBuildError::IvmLoad(decode_err)
-                    }
-                },
-            )?;
+            let amx_analysis =
+                cached_amx_analysis(ivm_cache, &summary, record.code_bytes.as_ref())?;
             host.set_amx_analysis(amx_analysis);
             let amx_limits = crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(
                 state_ro.pipeline(),
@@ -1886,7 +1899,6 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             host.set_amx_limits(amx_limits);
             host.set_axt_timing(state_ro.nexus().axt);
             host.hydrate_axt_replay_ledger(state_ro);
-            host.set_durable_state_snapshot_from_world(state_ro.world());
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
             host.set_vrf_epoch_seeds_from_world(state_ro.world());
             host.set_bound_contract_records_by_subject_snapshot(
@@ -1904,8 +1916,6 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             host.set_chain_id(state_ro.chain_id());
             host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
                 .map_err(OverlayBuildError::IvmRun)?;
-            vm.load_program(record.code_bytes.as_ref())
-                .map_err(OverlayBuildError::IvmLoad)?;
             if eff > 0 {
                 vm.set_max_cycles(eff);
             }
@@ -1943,9 +1953,10 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             ))
         }
         Executable::Ivm(bytecode) => {
-            let parsed = ivm::ProgramMetadata::parse(bytecode.as_ref())
+            let summary = ivm_cache
+                .summarize_program(bytecode.as_ref())
                 .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
-            let meta = parsed.metadata;
+            let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
             if meta.mode & ivm::ivm_mode::ZK != 0 {
                 return Err(OverlayBuildError::HeaderPolicy(
@@ -1966,25 +1977,25 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             if eff == u64::MAX {
                 eff = 0; // no cap
             }
-            let mut vm = ivm::IVM::new(tx_gas_limit);
+            let mut vm = ivm_cache
+                .clone_runtime(&summary, bytecode.as_ref(), tx_gas_limit)
+                .map_err(OverlayBuildError::IvmLoad)?;
             let contract_call_context =
                 parse_contract_call_execution_context(tx.metadata(), bytecode.as_ref())?;
             let mut host = if let Some(context) = contract_call_context.as_ref() {
                 crate::smartcontracts::ivm::host::CoreHost::with_accounts_and_args(
                     tx.authority().clone(),
-                    Arc::new(accounts.to_vec()),
+                    Arc::clone(&accounts),
                     context.args.clone(),
                 )
             } else {
                 crate::smartcontracts::ivm::host::CoreHost::with_accounts(
                     tx.authority().clone(),
-                    Arc::new(accounts.to_vec()),
+                    Arc::clone(&accounts),
                 )
             };
             apply_streaming_metadata(&mut host, streaming_meta);
             vm.set_host(host);
-            vm.load_program(bytecode.as_ref())
-                .map_err(OverlayBuildError::IvmLoad)?;
             if eff > 0 {
                 vm.set_max_cycles(eff);
             }
@@ -5000,14 +5011,7 @@ where
     R: StateReadOnly + QueryStateSource,
 {
     let mut vm = ivm::IVM::new(gas_limit);
-    let accounts = Arc::new(
-        state_ro
-            .world()
-            .accounts()
-            .iter()
-            .map(|(id, _)| id.clone())
-            .collect::<Vec<_>>(),
-    );
+    let accounts = state_ro.accounts_snapshot();
     let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
         tx.authority().clone(),
         Arc::clone(&accounts),
@@ -5023,7 +5027,6 @@ where
     host.set_amx_limits(amx_limits);
     host.set_axt_timing(state_ro.nexus().axt);
     host.hydrate_axt_replay_ledger(state_ro);
-    host.set_durable_state_snapshot_from_world(state_ro.world());
     host.set_public_inputs_from_parameters(state_ro.world().parameters());
     host.set_vrf_epoch_seeds_from_world(state_ro.world());
     host.set_query_state(state_ro);
@@ -5468,13 +5471,7 @@ where
         .clone_runtime(&summary, bytecode.as_ref(), gas_limit)
         .map_err(OverlayBuildError::IvmLoad)?;
 
-    let accounts = Arc::new(
-        state_ro
-            .world()
-            .accounts_iter()
-            .map(|entry| entry.id.clone())
-            .collect::<Vec<_>>(),
-    );
+    let accounts = state_ro.accounts_snapshot();
     let streaming_meta = resolve_streaming_metadata(state_ro, tx.authority());
     let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
         tx.authority().clone(),
@@ -5491,7 +5488,6 @@ where
     host.set_amx_limits(amx_limits);
     host.set_axt_timing(state_ro.nexus().axt);
     host.hydrate_axt_replay_ledger(state_ro);
-    host.set_durable_state_snapshot_from_world(state_ro.world());
     host.set_public_inputs_from_parameters(state_ro.world().parameters());
     host.set_vrf_epoch_seeds_from_world(state_ro.world());
     host.set_query_state(state_ro);

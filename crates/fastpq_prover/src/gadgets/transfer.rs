@@ -379,8 +379,9 @@ pub fn build_transfer_smt_witness_pair(
 /// as the batch public roots.
 ///
 /// # Errors
-/// Returns [`Error::TransferInvariant`] if a balance cannot be normalized or two
-/// leaves collide in the 32-bit V1 transfer tree.
+/// Returns [`Error::TransferInvariant`] if a balance cannot be normalized, two
+/// leaves collide in the 32-bit V1 transfer tree, or a declared transfer delta
+/// is not arithmetically valid.
 pub fn attach_transfer_smt_witnesses(
     transcripts: &mut [TransferTranscript],
 ) -> Result<([u8; 32], [u8; 32]), Error> {
@@ -416,18 +417,40 @@ pub fn attach_transfer_smt_witnesses(
     for transcript in transcripts {
         for delta in &mut transcript.deltas {
             let scale = delta.normalized_scale();
+            let snapshot = BalanceSnapshot::from_delta(delta)?;
             let from_key = balance_key(&delta.asset_definition, &delta.from_account);
-            delta.from_smt_witness = state.update_witness(
-                &from_key,
-                numeric_to_u64("from_balance_before", &delta.from_balance_before, scale)?,
-                numeric_to_u64("from_balance_after", &delta.from_balance_after, scale)?,
-            )?;
+            let from_balance_before = state.current_value(&from_key)?;
+            let from_balance_after =
+                from_balance_before
+                    .checked_sub(snapshot.amount)
+                    .ok_or_else(|| Error::TransferInvariant {
+                        details: format!(
+                            "sender balance underflow while chaining transfer SMT: before={from_balance_before}, amount={}",
+                            snapshot.amount
+                        ),
+                    })?;
+            if from_balance_before != snapshot.from_before
+                || from_balance_after != snapshot.from_after
+            {
+                delta.from_balance_before = Numeric::new(from_balance_before, scale);
+                delta.from_balance_after = Numeric::new(from_balance_after, scale);
+            }
+            delta.from_smt_witness =
+                state.update_witness(&from_key, from_balance_before, from_balance_after)?;
             let to_key = balance_key(&delta.asset_definition, &delta.to_account);
-            delta.to_smt_witness = state.update_witness(
-                &to_key,
-                numeric_to_u64("to_balance_before", &delta.to_balance_before, scale)?,
-                numeric_to_u64("to_balance_after", &delta.to_balance_after, scale)?,
-            )?;
+            let to_balance_before = state.current_value(&to_key)?;
+            let to_balance_after =
+                to_balance_before
+                    .checked_add(snapshot.amount)
+                    .ok_or_else(|| Error::TransferInvariant {
+                        details: "receiver balance overflow while chaining transfer SMT".into(),
+                    })?;
+            if to_balance_before != snapshot.to_before || to_balance_after != snapshot.to_after {
+                delta.to_balance_before = Numeric::new(to_balance_before, scale);
+                delta.to_balance_after = Numeric::new(to_balance_after, scale);
+            }
+            delta.to_smt_witness =
+                state.update_witness(&to_key, to_balance_before, to_balance_after)?;
         }
     }
     Ok((old_root, state.root().into()))
@@ -435,6 +458,7 @@ pub fn attach_transfer_smt_witnesses(
 
 struct TransferSmtState {
     levels: Vec<BTreeMap<u32, Hash>>,
+    balances: BTreeMap<u32, (Vec<u8>, u64)>,
 }
 
 impl Default for TransferSmtState {
@@ -443,6 +467,7 @@ impl Default for TransferSmtState {
             levels: (0..=TRANSFER_MERKLE_HEIGHT)
                 .map(|_| BTreeMap::new())
                 .collect(),
+            balances: BTreeMap::new(),
         }
     }
 }
@@ -451,6 +476,15 @@ impl TransferSmtState {
     fn insert(&mut self, key: &[u8], value: u64) -> Result<(), Error> {
         let path = path_index(key);
         let leaf = leaf_hash(key, value);
+        if let Some((existing_key, existing_value)) = self.balances.get(&path) {
+            if existing_key.as_slice() != key || *existing_value != value {
+                return Err(Error::TransferInvariant {
+                    details: "transfer SMT key path collision".into(),
+                });
+            }
+        } else {
+            self.balances.insert(path, (key.to_vec(), value));
+        }
         if let Some(existing) = self.levels[0].insert(path, leaf)
             && existing != leaf
         {
@@ -460,6 +494,19 @@ impl TransferSmtState {
         }
         self.recompute_path(path);
         Ok(())
+    }
+
+    fn current_value(&self, key: &[u8]) -> Result<u64, Error> {
+        let path = path_index(key);
+        match self.balances.get(&path) {
+            Some((existing_key, value)) if existing_key.as_slice() == key => Ok(*value),
+            Some(_) => Err(Error::TransferInvariant {
+                details: "transfer SMT key path collision".into(),
+            }),
+            None => Err(Error::TransferInvariant {
+                details: "transfer SMT key missing from seeded state".into(),
+            }),
+        }
     }
 
     fn update_witness(
@@ -475,10 +522,25 @@ impl TransferSmtState {
                 details: "transfer SMT pre-balance does not match current state".into(),
             });
         }
+        match self.balances.get(&path) {
+            Some((existing_key, value))
+                if existing_key.as_slice() == key && *value == value_before => {}
+            Some(_) => {
+                return Err(Error::TransferInvariant {
+                    details: "transfer SMT key path collision".into(),
+                });
+            }
+            None => {
+                return Err(Error::TransferInvariant {
+                    details: "transfer SMT key missing from seeded state".into(),
+                });
+            }
+        }
         let root_before: [u8; 32] = self.root().into();
         let siblings = self.siblings_for(path);
         let path_bits = path.to_le_bytes().to_vec();
         self.levels[0].insert(path, leaf_hash(key, value_after));
+        self.balances.insert(path, (key.to_vec(), value_after));
         self.recompute_path(path);
         let root_after: [u8; 32] = self.root().into();
         Ok(TransferSmtWitness::new(
@@ -1240,14 +1302,19 @@ mod tests {
     }
 
     #[test]
-    fn attach_transfer_smt_witnesses_rejects_stale_chained_balances() {
+    fn attach_transfer_smt_witnesses_chains_stale_repeated_balances() {
         let mut transcripts = vec![sample_transcript(), sample_transcript()];
 
-        let err = attach_transfer_smt_witnesses(&mut transcripts)
-            .expect_err("second transfer pre-balance is stale");
-        assert!(
-            matches!(err, Error::TransferInvariant { details } if details.contains("pre-balance"))
-        );
+        let (old_root, new_root) =
+            attach_transfer_smt_witnesses(&mut transcripts).expect("attach witnesses");
+        let second = &transcripts[1].deltas[0];
+        assert_eq!(second.from_balance_before, Numeric::from(158u32));
+        assert_eq!(second.from_balance_after, Numeric::from(116u32));
+        assert_eq!(second.to_balance_before, Numeric::from(43u32));
+        assert_eq!(second.to_balance_after, Numeric::from(85u32));
+
+        transcripts_to_witnesses(&transcripts, &old_root, &new_root)
+            .expect("chained witnesses verify");
     }
 
     #[test]

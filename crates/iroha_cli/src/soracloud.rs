@@ -9,6 +9,7 @@
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
+    env,
     fs, io,
     io::Read as _,
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
@@ -120,7 +121,7 @@ use reqwest::{
 use sha2::{Digest as _, Sha256};
 use sorafs_car::{CarBuildPlan, CarChunk, CarWriter};
 use sorafs_manifest::{
-    ChunkingProfileV1, DagCodecId, GovernanceProofs, ManifestBuilder, PinPolicy,
+    ChunkingProfileV1, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1, PinPolicy,
     StorageClass as ManifestStorageClass, chunker_registry,
 };
 use tiny_keccak::{Hasher as _, Sha3};
@@ -149,6 +150,7 @@ const APP_STATIC_SITE_CONFIG_NAME: &str = "soracloud/app_static_site";
 const PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME: &str = "soracloud/public_service_discovery";
 const APP_STATIC_SITE_BINDING_SCHEMA_VERSION_V1: u16 = 1;
 const PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1: u16 = 1;
+const SORAFS_TAIRA_LEGACY_MANIFEST_NORITO_ENV: &str = "IROHA_SORAFS_TAIRA_LEGACY_MANIFEST_NORITO";
 const APP_STATIC_SITE_INDEX_DOCUMENT: &str = "index.html";
 const PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT: &str = "index.json";
 const HEADER_IROHA_ACCOUNT: &str = "X-Iroha-Account";
@@ -9873,6 +9875,26 @@ fn fetch_existing_public_service_discovery_registry(
     Ok(Some(registry))
 }
 
+fn sorafs_taira_legacy_manifest_norito_enabled() -> bool {
+    env::var_os(SORAFS_TAIRA_LEGACY_MANIFEST_NORITO_ENV).is_some_and(|value| {
+        let value = value.to_string_lossy();
+        let value = value.trim().to_ascii_lowercase();
+        !matches!(value.as_str(), "" | "0" | "false" | "no" | "off")
+    })
+}
+
+fn encode_sorafs_manifest_for_storage(manifest: &ManifestV1) -> Result<(Vec<u8>, blake3::Hash)> {
+    let manifest_bytes = if sorafs_taira_legacy_manifest_norito_enabled() {
+        manifest
+            .encode_legacy_norito()
+            .wrap_err("failed to encode legacy SoraFS manifest")?
+    } else {
+        manifest.encode().wrap_err("failed to encode SoraFS manifest")?
+    };
+    let manifest_digest = blake3::hash(&manifest_bytes);
+    Ok((manifest_bytes, manifest_digest))
+}
+
 fn publish_public_service_discovery(
     bundle: &SoraDeploymentBundleV1,
     torii_url: &str,
@@ -9965,12 +9987,8 @@ fn publish_public_service_discovery(
         .governance(GovernanceProofs::default())
         .build()
         .wrap_err("failed to build public discovery manifest")?;
-    let manifest_bytes = manifest
-        .encode()
+    let (manifest_bytes, manifest_digest) = encode_sorafs_manifest_for_storage(&manifest)
         .wrap_err("failed to encode public discovery manifest")?;
-    let manifest_digest = manifest
-        .digest()
-        .wrap_err("failed to compute public discovery manifest digest")?;
     let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
     let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
     let files = plan
@@ -9990,18 +10008,21 @@ fn publish_public_service_discovery(
     client_config.key_pair = key_pair.clone();
     let client = Client::new(client_config);
     client
-        .post_sorafs_pin_register(iroha::client::SorafsPinRegisterArgs {
-            authority,
-            private_key: key_pair.private_key(),
-            manifest: &manifest,
-            chunk_digest_sha3_256,
-            submitted_epoch: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            alias: None,
-            successor_of: None,
-        })
+        .post_sorafs_pin_register_with_manifest_digest(
+            iroha::client::SorafsPinRegisterArgs {
+                authority,
+                private_key: key_pair.private_key(),
+                manifest: &manifest,
+                chunk_digest_sha3_256,
+                submitted_epoch: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                alias: None,
+                successor_of: None,
+            },
+            *manifest_digest.as_bytes(),
+        )
         .wrap_err("failed to register public discovery manifest")?;
     let borrowed_files = files
         .iter()
@@ -10204,12 +10225,8 @@ fn publish_app_static_site(
         .governance(GovernanceProofs::default())
         .build()
         .wrap_err("failed to build app static site manifest")?;
-    let manifest_bytes = manifest
-        .encode()
+    let (manifest_bytes, manifest_digest) = encode_sorafs_manifest_for_storage(&manifest)
         .wrap_err("failed to encode app static site manifest")?;
-    let manifest_digest = manifest
-        .digest()
-        .wrap_err("failed to compute app static site manifest digest")?;
     let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
     let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
     let files = plan
@@ -10229,18 +10246,21 @@ fn publish_app_static_site(
     client_config.key_pair = key_pair.clone();
     let client = Client::new(client_config);
     client
-        .post_sorafs_pin_register(iroha::client::SorafsPinRegisterArgs {
-            authority,
-            private_key: key_pair.private_key(),
-            manifest: &manifest,
-            chunk_digest_sha3_256,
-            submitted_epoch: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            alias: None,
-            successor_of: None,
-        })
+        .post_sorafs_pin_register_with_manifest_digest(
+            iroha::client::SorafsPinRegisterArgs {
+                authority,
+                private_key: key_pair.private_key(),
+                manifest: &manifest,
+                chunk_digest_sha3_256,
+                submitted_epoch: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                alias: None,
+                successor_of: None,
+            },
+            *manifest_digest.as_bytes(),
+        )
         .wrap_err("failed to register app static site manifest")?;
     let borrowed_files = files
         .iter()
@@ -10338,12 +10358,8 @@ fn publish_sorafs_directory_artifact(
         .governance(GovernanceProofs::default())
         .build()
         .wrap_err_with(|| format!("failed to build {description} manifest"))?;
-    let manifest_bytes = manifest
-        .encode()
+    let (manifest_bytes, manifest_digest) = encode_sorafs_manifest_for_storage(&manifest)
         .wrap_err_with(|| format!("failed to encode {description} manifest"))?;
-    let manifest_digest = manifest
-        .digest()
-        .wrap_err_with(|| format!("failed to compute {description} manifest digest"))?;
     let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
     let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
     let files = plan
@@ -10363,18 +10379,21 @@ fn publish_sorafs_directory_artifact(
     client_config.key_pair = key_pair.clone();
     let client = Client::new(client_config);
     client
-        .post_sorafs_pin_register(iroha::client::SorafsPinRegisterArgs {
-            authority,
-            private_key: key_pair.private_key(),
-            manifest: &manifest,
-            chunk_digest_sha3_256,
-            submitted_epoch: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            alias: None,
-            successor_of: None,
-        })
+        .post_sorafs_pin_register_with_manifest_digest(
+            iroha::client::SorafsPinRegisterArgs {
+                authority,
+                private_key: key_pair.private_key(),
+                manifest: &manifest,
+                chunk_digest_sha3_256,
+                submitted_epoch: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                alias: None,
+                successor_of: None,
+            },
+            *manifest_digest.as_bytes(),
+        )
         .wrap_err_with(|| format!("failed to register {description} manifest"))?;
     let borrowed_files = files
         .iter()
@@ -10465,12 +10484,8 @@ fn publish_sorafs_file_artifact(
         .governance(GovernanceProofs::default())
         .build()
         .wrap_err_with(|| format!("failed to build {description} manifest"))?;
-    let manifest_bytes = manifest
-        .encode()
+    let (manifest_bytes, manifest_digest) = encode_sorafs_manifest_for_storage(&manifest)
         .wrap_err_with(|| format!("failed to encode {description} manifest"))?;
-    let manifest_digest = manifest
-        .digest()
-        .wrap_err_with(|| format!("failed to compute {description} manifest digest"))?;
     let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
     let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
 
@@ -10482,18 +10497,21 @@ fn publish_sorafs_file_artifact(
     client_config.key_pair = key_pair.clone();
     let client = Client::new(client_config);
     client
-        .post_sorafs_pin_register(iroha::client::SorafsPinRegisterArgs {
-            authority,
-            private_key: key_pair.private_key(),
-            manifest: &manifest,
-            chunk_digest_sha3_256,
-            submitted_epoch: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            alias: None,
-            successor_of: None,
-        })
+        .post_sorafs_pin_register_with_manifest_digest(
+            iroha::client::SorafsPinRegisterArgs {
+                authority,
+                private_key: key_pair.private_key(),
+                manifest: &manifest,
+                chunk_digest_sha3_256,
+                submitted_epoch: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                alias: None,
+                successor_of: None,
+            },
+            *manifest_digest.as_bytes(),
+        )
         .wrap_err_with(|| format!("failed to register {description} manifest"))?;
     let storage_response = client
         .post_sorafs_storage_pin(&manifest_bytes, &payload, None)

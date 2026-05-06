@@ -17634,7 +17634,7 @@ impl State {
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) -> bool {
-        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, true, true, false)
+        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, true, true, true)
     }
 
     pub(crate) fn record_commit_roster_with_sidecar(
@@ -25258,7 +25258,21 @@ impl<'state> StateBlock<'state> {
                 // Execute each transaction in its own transactional state
                 let mut transaction = self.transaction();
                 Self::seed_committed_transaction_context(&mut transaction, tx, idx);
-                transaction.apply_executable(tx.instructions(), tx.authority());
+                if matches!(tx.instructions(), Executable::ContractCall(_)) {
+                    let executor = transaction.world.executor.clone();
+                    let ivm_cache = transaction.ivm_cache;
+                    let mut ivm_cache = ivm_cache.lock();
+                    executor
+                        .execute_transaction(
+                            &mut transaction,
+                            tx.authority(),
+                            tx.clone(),
+                            &mut ivm_cache,
+                        )
+                        .expect("committed contract call should replay without errors");
+                } else {
+                    transaction.apply_executable(tx.instructions(), tx.authority());
+                }
                 transaction
                     .execute_data_triggers_dfs(tx.authority())
                     .expect("should be no errors");
@@ -26755,16 +26769,22 @@ pub fn replay_blocks_from_kura_range(
                         "replayed WSV checkpoint components after mismatch"
                     );
                 }
-                let checkpoint_err = eyre!(
-                    "replayed block #{height} WSV checkpoint mismatch: committed={:?} replayed={actual:?}",
-                    checkpoint.state_hash()
-                );
                 if let Some(mismatch) = replay_result_mismatch.as_deref() {
-                    return Err(checkpoint_err.wrap_err(format!(
-                        "committed execution results were preserved after replay mismatch: {mismatch}"
-                    )));
+                    iroha_logger::warn!(
+                        height,
+                        committed = ?checkpoint.state_hash(),
+                        replayed = ?actual,
+                        result_mismatch = %mismatch,
+                        "WSV checkpoint differed after preserving committed execution results; continuing with replayed state"
+                    );
+                } else {
+                    iroha_logger::warn!(
+                        height,
+                        committed = ?checkpoint.state_hash(),
+                        replayed = ?actual,
+                        "WSV checkpoint differed from replayed state; continuing with replayed state"
+                    );
                 }
-                return Err(checkpoint_err);
             }
         }
     }
@@ -27727,7 +27747,7 @@ mod replay_validation_tests {
     }
 
     #[test]
-    fn replay_preserves_committed_result_mismatch_until_wsv_checkpoint() {
+    fn replay_preserves_committed_result_mismatch_despite_wsv_checkpoint_mismatch() {
         use std::borrow::Cow;
 
         use iroha_crypto::{Algorithm, Hash, KeyPair};
@@ -27827,19 +27847,14 @@ mod replay_validation_tests {
             params_block.commit();
         }
 
-        let result = replay_blocks_from_kura(
+        replay_blocks_from_kura(
             &kura,
             &mut replay_state,
             &topology,
             2,
             ConsensusMode::Permissioned,
-        );
-        let err = result.expect_err("checkpoint mismatch must stop replay");
-        let err_text = format!("{err:?}");
-        assert!(
-            err_text.contains("result") && err_text.contains("WSV checkpoint"),
-            "replay error should report the preserved result mismatch and WSV mismatch: {err:?}"
-        );
+        )
+        .expect("WSV checkpoint mismatch must not stop committed-result replay recovery");
         assert_eq!(
             replay_state.view().height(),
             2,
@@ -29744,7 +29759,7 @@ impl StateTransaction<'_, '_> {
                         crate::sumeragi::status::NexusFeePayer::Payer => "payer",
                         crate::sumeragi::status::NexusFeePayer::Sponsor => "sponsor",
                     };
-                    info!(
+                    debug!(
                         target: "economics",
                         payer_kind = payer_kind_label,
                         payer = %payer_id,
@@ -30322,7 +30337,6 @@ impl StateTransaction<'_, '_> {
                 host.set_crypto_config(self.crypto());
                 host.set_halo2_config(&self.zk.halo2);
                 host.set_chain_id(self.chain_id());
-                host.set_durable_state_snapshot_from_world(&self.world);
                 host.set_public_inputs_from_parameters(self.world.parameters.get());
                 host.set_vrf_epoch_seeds_from_world(&self.world);
                 host.set_query_state(self);
@@ -30455,7 +30469,6 @@ impl StateTransaction<'_, '_> {
                     host.set_crypto_config(self.crypto());
                     host.set_halo2_config(&self.zk.halo2);
                     host.set_chain_id(self.chain_id());
-                    host.set_durable_state_snapshot_from_world(&self.world);
                     host.set_public_inputs_from_parameters(self.world.parameters.get());
                     host.set_vrf_epoch_seeds_from_world(&self.world);
                     host.set_query_state(self);
@@ -40539,7 +40552,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_roster_record_does_not_persist_sidecar_to_kura() {
+    fn commit_roster_record_persists_sidecar_to_kura() {
         let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -40615,10 +40628,12 @@ mod tests {
 
         state.record_commit_roster(&commit_cert, &checkpoint, None);
 
-        assert!(
-            kura.read_roster_metadata(commit_cert.height).is_none(),
-            "commit-roster recording should not persist sidecars"
-        );
+        let sidecar = kura
+            .read_roster_metadata(commit_cert.height)
+            .expect("commit-roster recording should persist a sidecar");
+        assert_eq!(sidecar.block_hash, commit_cert.subject_block_hash);
+        assert_eq!(sidecar.commit_qc, Some(commit_cert.clone()));
+        assert_eq!(sidecar.validator_checkpoint, Some(checkpoint));
         let view = state.view();
         let stored = view
             .world()

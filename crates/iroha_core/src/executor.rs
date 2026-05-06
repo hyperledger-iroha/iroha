@@ -2644,14 +2644,7 @@ impl Executor {
                         })?;
                 }
                 let contract_runtime_context = contract_call_context.runtime_context();
-                let accounts = Arc::new(
-                    state_transaction
-                        .world
-                        .accounts
-                        .iter()
-                        .map(|(id, _)| id.clone())
-                        .collect::<Vec<_>>(),
-                );
+                let accounts = state_transaction.accounts_snapshot();
                 let mut host = CoreCoreHost::with_accounts_and_args(
                     authority.clone(),
                     Arc::clone(&accounts),
@@ -2663,7 +2656,6 @@ impl Executor {
                 host.set_block_time_ms(tx_creation_time_ms);
                 host.set_crypto_config(Arc::clone(&state_transaction.crypto));
                 host.set_halo2_config(&state_transaction.zk.halo2);
-                host.set_durable_state_snapshot_from_world(&state_transaction.world);
                 host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
                 host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
                 host.set_query_state(state_transaction);
@@ -2880,14 +2872,7 @@ impl Executor {
                     .as_ref()
                     .and_then(ContractCallExecutionContext::runtime_context);
                 // Attach host with a snapshot of known accounts for vendor helpers when present.
-                let accounts = Arc::new(
-                    state_transaction
-                        .world
-                        .accounts
-                        .iter()
-                        .map(|(id, _)| id.clone())
-                        .collect::<Vec<_>>(),
-                );
+                let accounts = state_transaction.accounts_snapshot();
                 let mut host = if let Some(context) = contract_call_context {
                     CoreCoreHost::with_accounts_and_args(
                         authority.clone(),
@@ -2899,7 +2884,6 @@ impl Executor {
                 };
                 host.set_crypto_config(Arc::clone(&state_transaction.crypto));
                 host.set_halo2_config(&state_transaction.zk.halo2);
-                host.set_durable_state_snapshot_from_world(&state_transaction.world);
                 host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
                 host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
                 host.set_query_state(state_transaction);

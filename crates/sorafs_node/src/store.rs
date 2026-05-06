@@ -45,6 +45,7 @@ const METADATA_FILE_NAME: &str = "metadata.to";
 const CHUNKS_DIR_NAME: &str = "chunks";
 const ATOMIC_EXT: &str = "tmp";
 const GC_TRASH_DIR_NAME: &str = "gc_trash";
+static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static GC_TRASH_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Errors raised by the SoraFS storage backend.
@@ -1779,7 +1780,7 @@ pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
         .parent()
         .ok_or_else(|| io::Error::other("missing parent directory"))?;
     fs::create_dir_all(parent)?;
-    let tmp = path.with_added_extension(ATOMIC_EXT);
+    let tmp = atomic_temp_path(path);
 
     let mut file = File::create(&tmp)?;
     file.write_all(data)?;
@@ -1788,6 +1789,12 @@ pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
 
     fs::rename(&tmp, path)?;
     Ok(())
+}
+
+fn atomic_temp_path(path: &Path) -> PathBuf {
+    let pid = std::process::id();
+    let counter = ATOMIC_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    path.with_added_extension(format!("{ATOMIC_EXT}.{pid}.{counter}"))
 }
 
 fn write_manifest_metadata(
@@ -2695,6 +2702,40 @@ mod tests {
         assert!(
             !target_no_ext.with_added_extension(ATOMIC_EXT).exists(),
             "temporary file should be removed even when original path has no extension"
+        );
+    }
+
+    #[test]
+    fn write_atomic_allows_concurrent_writes_to_same_target() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let target = temp_dir.path().join("index.norito");
+        let payloads = (0..16)
+            .map(|idx| format!("payload-{idx}").into_bytes())
+            .collect::<Vec<_>>();
+
+        std::thread::scope(|scope| {
+            for payload in &payloads {
+                let target = &target;
+                scope.spawn(move || write_atomic(target, payload).expect("concurrent write"));
+            }
+        });
+
+        let final_payload = fs::read(&target).expect("read final payload");
+        assert!(payloads.iter().any(|payload| payload == &final_payload));
+
+        let leftovers = fs::read_dir(temp_dir.path())
+            .expect("read temp dir")
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("index.norito.tmp.")
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            leftovers.is_empty(),
+            "temporary files should not remain after concurrent writes"
         );
     }
 }
