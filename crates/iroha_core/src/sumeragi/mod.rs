@@ -3236,9 +3236,9 @@ mod tests {
 
     #[test]
     fn incoming_block_message_drops_duplicate_block_sync_update() {
-        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_tx, _block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (vote_tx, _vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -3289,7 +3289,7 @@ mod tests {
         handle.incoming_block_message(BlockMessage::BlockSyncUpdate(update.clone()));
         handle.incoming_block_message(BlockMessage::BlockSyncUpdate(update));
 
-        let received: Vec<_> = block_payload_rx.try_iter().collect();
+        let received: Vec<_> = rbc_chunk_rx.try_iter().collect();
         assert_eq!(received.len(), 1);
         assert!(matches!(
             received.first(),
@@ -3302,9 +3302,9 @@ mod tests {
 
     #[test]
     fn incoming_block_message_accepts_block_sync_update_with_new_evidence() {
-        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_tx, _block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (vote_tx, _vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -3369,7 +3369,7 @@ mod tests {
         handle.incoming_block_message(BlockMessage::BlockSyncUpdate(update));
         handle.incoming_block_message(BlockMessage::BlockSyncUpdate(update_with_votes));
 
-        let received: Vec<_> = block_payload_rx.try_iter().collect();
+        let received: Vec<_> = rbc_chunk_rx.try_iter().collect();
         assert_eq!(received.len(), 2);
         assert!(received.iter().all(|msg| matches!(
             msg,
@@ -3434,7 +3434,7 @@ mod tests {
     }
 
     #[test]
-    fn incoming_block_message_routes_block_sync_update_via_block_payload_queue() {
+    fn incoming_block_message_routes_block_sync_update_via_rbc_ingress_queue() {
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_tx, _block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -3487,13 +3487,13 @@ mod tests {
 
         handle.incoming_block_message(BlockMessage::BlockSyncUpdate(update));
 
-        let received = block_payload_rx
+        let received = rbc_chunk_rx
             .try_recv()
-            .expect("BlockSyncUpdate should be enqueued to block payload channel");
+            .expect("BlockSyncUpdate should be enqueued to RBC ingress channel");
         let (queue_kind, _latency_ms) = received
             .queue_latency_ms()
             .expect("BlockSyncUpdate should record enqueue metadata");
-        assert_eq!(queue_kind, status::WorkerQueueKind::BlockPayload);
+        assert_eq!(queue_kind, status::WorkerQueueKind::RbcChunks);
         assert!(matches!(
             received,
             InboundBlockMessage {
@@ -3502,7 +3502,7 @@ mod tests {
             }
         ));
         assert!(matches!(
-            rbc_chunk_rx.try_recv(),
+            block_payload_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
         assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
@@ -3580,11 +3580,11 @@ mod tests {
     }
 
     #[test]
-    fn incoming_block_message_blocks_block_sync_update_when_block_payload_queue_full() {
+    fn incoming_block_message_blocks_block_sync_update_when_rbc_ingress_queue_full() {
         const CAP: usize = 1;
-        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(CAP);
         let (block_tx, _block_rx) = mpsc::sync_channel(CAP);
-        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(CAP);
         let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
         let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
         let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
@@ -3597,7 +3597,7 @@ mod tests {
                 BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
                 BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
             )));
-        let block_payload_tx_fill = block_payload_tx.clone();
+        let rbc_chunk_tx_fill = rbc_chunk_tx.clone();
         let handle = SumeragiHandle::new(
             block_payload_tx,
             block_tx,
@@ -3658,9 +3658,9 @@ mod tests {
         );
         let update_overflow = message::BlockSyncUpdate::from(&overflow_block);
 
-        block_payload_tx_fill
+        rbc_chunk_tx_fill
             .send(inbound(BlockMessage::BlockSyncUpdate(update)))
-            .expect("fill block payload channel");
+            .expect("fill RBC ingress channel");
         let (done_tx, done_rx) = mpsc::channel();
         let handle_clone = handle.clone();
         let join = std::thread::spawn(move || {
@@ -3670,10 +3670,10 @@ mod tests {
 
         done_rx
             .recv_timeout(Duration::from_millis(200))
-            .expect_err("BlockSyncUpdate should block when block payload queue is full");
-        let received = block_payload_rx
+            .expect_err("BlockSyncUpdate should block when RBC ingress queue is full");
+        let received = rbc_chunk_rx
             .try_recv()
-            .expect("original BlockSyncUpdate should remain in the block payload queue");
+            .expect("original BlockSyncUpdate should remain in the RBC ingress queue");
         assert!(matches!(
             received,
             InboundBlockMessage {
@@ -3684,7 +3684,7 @@ mod tests {
         done_rx
             .recv_timeout(Duration::from_millis(200))
             .expect("BlockSyncUpdate should enqueue after capacity frees");
-        let received = block_payload_rx
+        let received = rbc_chunk_rx
             .try_recv()
             .expect("overflow BlockSyncUpdate should be enqueued after capacity frees");
         assert!(matches!(
@@ -3698,11 +3698,11 @@ mod tests {
     }
 
     #[test]
-    fn try_incoming_block_message_blocks_block_sync_update_when_block_payload_queue_full() {
+    fn try_incoming_block_message_blocks_block_sync_update_when_rbc_ingress_queue_full() {
         const CAP: usize = 1;
-        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(CAP);
         let (block_tx, _block_rx) = mpsc::sync_channel(CAP);
-        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(CAP);
         let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
         let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
         let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
@@ -3715,7 +3715,7 @@ mod tests {
                 BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
                 BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
             )));
-        let block_payload_tx_fill = block_payload_tx.clone();
+        let rbc_chunk_tx_fill = rbc_chunk_tx.clone();
         let handle = SumeragiHandle::new(
             block_payload_tx,
             block_tx,
@@ -3776,9 +3776,9 @@ mod tests {
         );
         let update_overflow = message::BlockSyncUpdate::from(&overflow_block);
 
-        block_payload_tx_fill
+        rbc_chunk_tx_fill
             .send(inbound(BlockMessage::BlockSyncUpdate(update)))
-            .expect("fill block payload channel");
+            .expect("fill RBC ingress channel");
         let (done_tx, done_rx) = mpsc::channel();
         let handle_clone = handle.clone();
         let join = std::thread::spawn(move || {
@@ -3788,10 +3788,10 @@ mod tests {
 
         done_rx
             .recv_timeout(Duration::from_millis(200))
-            .expect_err("BlockSyncUpdate should block when block payload queue is full");
-        let received = block_payload_rx
+            .expect_err("BlockSyncUpdate should block when RBC ingress queue is full");
+        let received = rbc_chunk_rx
             .try_recv()
-            .expect("original BlockSyncUpdate should remain in the block payload queue");
+            .expect("original BlockSyncUpdate should remain in the RBC ingress queue");
         assert!(matches!(
             received,
             InboundBlockMessage {
@@ -3802,7 +3802,7 @@ mod tests {
         done_rx
             .recv_timeout(Duration::from_millis(200))
             .expect("BlockSyncUpdate should enqueue after capacity frees");
-        let received = block_payload_rx
+        let received = rbc_chunk_rx
             .try_recv()
             .expect("overflow BlockSyncUpdate should be enqueued after capacity frees");
         assert!(matches!(
@@ -10917,12 +10917,14 @@ impl SumeragiHandle {
                     );
                     return false;
                 }
-                // Block sync updates carry commit/QC evidence; prioritize with payload traffic.
+                // Block sync updates carry commit/QC evidence needed to finalize recovered
+                // bodies. Keep them on the protected body ingress lane with BlockCreated and
+                // BlockBodyResponse so a plain body companion cannot outrun its QC sidecar.
                 enqueue_with_mode(
-                    &self.block_payload,
+                    &self.rbc_chunks,
                     InboundBlockMessage::new(BlockMessage::BlockSyncUpdate(update), sender),
                     "BlockSyncUpdate",
-                    status::WorkerQueueKind::BlockPayload,
+                    status::WorkerQueueKind::RbcChunks,
                     mode,
                 )
             }
