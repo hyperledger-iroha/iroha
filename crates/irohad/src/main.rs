@@ -8846,8 +8846,16 @@ async fn run_node(config: Config, genesis: Option<GenesisBlock>) -> ReportResult
     let default_hook = std::panic::take_hook();
     let signal_clone = shutdown_on_panic.clone();
     std::panic::set_hook(Box::new(move |info| {
-        if panic_hook::is_suppressed() || norito::decode_panic_suppressed() {
+        let suppressed_by_panic_hook = panic_hook::is_suppressed();
+        let suppressed_by_norito_decode = norito::decode_panic_suppressed();
+        if suppressed_by_panic_hook || suppressed_by_norito_decode {
+            let panic_file = info.location().map(|location| location.file());
+            let panic_line = info.location().map(|location| location.line());
             iroha_logger::warn!(
+                suppressed_by_panic_hook,
+                suppressed_by_norito_decode,
+                ?panic_file,
+                ?panic_line,
                 "Panic occurred with shutdown suppression active; skipping shutdown signal"
             );
         } else {

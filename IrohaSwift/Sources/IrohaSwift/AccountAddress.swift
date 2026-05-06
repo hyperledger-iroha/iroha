@@ -1328,6 +1328,12 @@ extension AccountAddress {
         return writer.data
     }
 
+    private func compactNoritoPublicKeyPayload(curve: CurveId, publicKey: Data) throws -> Data {
+        let algorithm = try noritoSigningAlgorithm(for: curve)
+        let multihash = OfflineNorito.publicKeyMultihash(algorithm: algorithm, payload: publicKey)
+        return OfflineCompactNorito.encodeString(multihash)
+    }
+
     private func noritoMultisigPolicyPayload(
         version: UInt8,
         threshold: UInt16,

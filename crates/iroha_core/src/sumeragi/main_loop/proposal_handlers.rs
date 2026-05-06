@@ -1239,6 +1239,7 @@ impl Actor {
             self.pending.pending_fetch_requests.remove(&hash);
             self.pending.pending_block_body_requests.remove(&hash);
             self.clear_missing_block_request(&hash, MissingBlockClearReason::Obsolete);
+            self.clear_missing_commit_qc_request(&hash, MissingBlockClearReason::Obsolete);
             self.clear_missing_block_view_change(&hash);
             if retain_payload && let Some(mut pending) = pending {
                 if !pending.is_retired_same_height() {

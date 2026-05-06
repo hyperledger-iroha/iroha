@@ -548,6 +548,12 @@ impl ChunkStore {
                         });
                     }
                 }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                    debug!(
+                        ?path,
+                        "persisted RBC temp session disappeared before it could be read"
+                    );
+                }
                 Err(err) => {
                     warn!(?err, ?path, "failed to read persisted RBC temp session");
                 }
@@ -572,6 +578,12 @@ impl ChunkStore {
                     if seen.insert(key) {
                         out.push(Entry { persisted, path });
                     }
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                    debug!(
+                        ?path,
+                        "persisted RBC session disappeared before it could be read"
+                    );
                 }
                 Err(err) => {
                     warn!(?err, ?path, "failed to read persisted RBC session");
