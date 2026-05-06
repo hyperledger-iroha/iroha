@@ -276,8 +276,7 @@ impl Execute for RepoIsi {
         );
         state_transaction
             .world
-            .repo_agreements
-            .insert(agreement_id.clone(), agreement.clone());
+            .insert_repo_agreement_entry(agreement.clone());
 
         iroha_logger::info!(
             %agreement_id,
@@ -487,8 +486,7 @@ impl Execute for ReverseRepoIsi {
 
         state_transaction
             .world
-            .repo_agreements
-            .remove(agreement_id.clone());
+            .remove_repo_agreement_entry(&agreement_id);
 
         iroha_logger::info!(
             %agreement_id,
@@ -598,8 +596,7 @@ impl Execute for RepoMarginCallIsi {
         agreement.record_margin_check(current_timestamp_ms);
         state_transaction
             .world
-            .repo_agreements
-            .insert(agreement_id.clone(), agreement.clone());
+            .insert_repo_agreement_entry(agreement.clone());
 
         iroha_logger::info!(
             %agreement_id,
@@ -654,6 +651,7 @@ pub mod query {
 
     use eyre::Result;
     use iroha_data_model::{
+        account::{AccountId, ParsedAccountId},
         query::{
             dsl::{CompoundPredicate, EvaluatePredicate},
             error::QueryExecutionFail as Error,
@@ -666,15 +664,29 @@ pub mod query {
     use norito::json::Value;
 
     use super::*;
-    use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
+    use crate::{
+        smartcontracts::ValidQuery,
+        state::{StateReadOnly, WorldReadOnly},
+    };
 
-    enum RepoAgreementIdPath {
-        One(RepoAgreementId),
-        Set(Vec<RepoAgreementId>),
+    #[derive(Clone, Copy)]
+    enum RepoAgreementAccountIndex {
+        Initiator,
+        Counterparty,
+        Custodian,
     }
 
     fn repo_agreement_id_field(field: &str) -> bool {
         field == "id"
+    }
+
+    fn repo_agreement_account_index(field: &str) -> Option<RepoAgreementAccountIndex> {
+        match field {
+            "initiator" => Some(RepoAgreementAccountIndex::Initiator),
+            "counterparty" => Some(RepoAgreementAccountIndex::Counterparty),
+            "custodian" => Some(RepoAgreementAccountIndex::Custodian),
+            _ => None,
+        }
     }
 
     fn repo_agreement_id_from_value(value: &Value) -> Option<RepoAgreementId> {
@@ -683,34 +695,101 @@ pub mod query {
             .and_then(|raw| raw.parse::<RepoAgreementId>().ok())
     }
 
-    fn repo_agreement_predicate_id_path(predicate: &PredicateJson) -> Option<RepoAgreementIdPath> {
-        if !predicate.exists.is_empty() {
-            return None;
-        }
+    fn account_id_from_value(value: &Value) -> Option<AccountId> {
+        value.as_str().and_then(|raw| {
+            AccountId::parse_encoded(raw)
+                .map(ParsedAccountId::into_account_id)
+                .ok()
+        })
+    }
 
-        if predicate.r#in.is_empty() && predicate.equals.len() == 1 {
-            let cond = &predicate.equals[0];
+    fn maybe_replace_best(
+        best: &mut Option<BTreeSet<RepoAgreementId>>,
+        candidates: BTreeSet<RepoAgreementId>,
+    ) {
+        if best
+            .as_ref()
+            .map_or(true, |current| candidates.len() < current.len())
+        {
+            *best = Some(candidates);
+        }
+    }
+
+    fn ids_for_accounts(
+        world: &impl WorldReadOnly,
+        index: RepoAgreementAccountIndex,
+        accounts: impl IntoIterator<Item = AccountId>,
+    ) -> BTreeSet<RepoAgreementId> {
+        let mut ids = BTreeSet::new();
+        for account_id in accounts {
+            let agreements = match index {
+                RepoAgreementAccountIndex::Initiator => {
+                    world.repo_agreements_by_initiator().get(&account_id)
+                }
+                RepoAgreementAccountIndex::Counterparty => {
+                    world.repo_agreements_by_counterparty().get(&account_id)
+                }
+                RepoAgreementAccountIndex::Custodian => {
+                    world.repo_agreements_by_custodian().get(&account_id)
+                }
+            };
+            if let Some(agreements) = agreements {
+                ids.extend(agreements.iter().cloned());
+            }
+        }
+        ids
+    }
+
+    fn repo_agreement_candidate_ids(
+        predicate: &PredicateJson,
+        world: &impl WorldReadOnly,
+    ) -> Option<BTreeSet<RepoAgreementId>> {
+        let mut best = None;
+
+        for cond in &predicate.equals {
             if repo_agreement_id_field(&cond.field) {
-                return repo_agreement_id_from_value(&cond.value).map(RepoAgreementIdPath::One);
+                maybe_replace_best(
+                    &mut best,
+                    repo_agreement_id_from_value(&cond.value)
+                        .into_iter()
+                        .collect(),
+                );
+                continue;
+            }
+
+            if let Some(index) = repo_agreement_account_index(&cond.field) {
+                maybe_replace_best(
+                    &mut best,
+                    ids_for_accounts(world, index, account_id_from_value(&cond.value)),
+                );
             }
         }
 
-        if predicate.equals.is_empty() && predicate.r#in.len() == 1 {
-            let cond = &predicate.r#in[0];
-            if !repo_agreement_id_field(&cond.field) {
-                return None;
+        for cond in &predicate.r#in {
+            if repo_agreement_id_field(&cond.field) {
+                maybe_replace_best(
+                    &mut best,
+                    cond.values
+                        .iter()
+                        .filter_map(repo_agreement_id_from_value)
+                        .collect(),
+                );
+                continue;
             }
-            let ids = cond
-                .values
-                .iter()
-                .map(repo_agreement_id_from_value)
-                .collect::<Option<BTreeSet<_>>>()?
-                .into_iter()
-                .collect::<Vec<_>>();
-            return Some(RepoAgreementIdPath::Set(ids));
+
+            if let Some(index) = repo_agreement_account_index(&cond.field) {
+                maybe_replace_best(
+                    &mut best,
+                    ids_for_accounts(
+                        world,
+                        index,
+                        cond.values.iter().filter_map(account_id_from_value),
+                    ),
+                );
+            }
         }
 
-        None
+        best
     }
 
     impl ValidQuery for FindRepoAgreements {
@@ -724,18 +803,18 @@ pub mod query {
             let predicate_json = filter
                 .json_payload()
                 .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
-            if let Some(path) = predicate_json
+            if let Some(candidate_ids) = predicate_json
                 .as_ref()
-                .and_then(repo_agreement_predicate_id_path)
+                .and_then(|predicate| repo_agreement_candidate_ids(predicate, world))
             {
-                let ids = match path {
-                    RepoAgreementIdPath::One(id) => vec![id],
-                    RepoAgreementIdPath::Set(ids) => ids,
-                };
-                let iter: Box<dyn Iterator<Item = RepoAgreement> + '_> = Box::new(
-                    ids.into_iter()
-                        .filter_map(move |id| world.repo_agreements().get(&id).cloned()),
-                );
+                let iter: Box<dyn Iterator<Item = RepoAgreement> + '_> =
+                    Box::new(candidate_ids.into_iter().filter_map(move |id| {
+                        world
+                            .repo_agreements()
+                            .get(&id)
+                            .filter(|agreement| filter.applies(*agreement))
+                            .cloned()
+                    }));
                 return Ok(iter);
             }
 
@@ -1131,6 +1210,109 @@ mod tests {
             .map(|agreement| agreement.id)
             .collect::<Vec<_>>();
         assert_eq!(found, vec![agreement_id]);
+    }
+
+    #[test]
+    fn find_repo_agreements_uses_participant_indexes() {
+        let (state, agreement_id, cash_def_id, collateral_def_id, custodian_id) =
+            setup_state_with_custodian();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+
+        RepoIsi::new(
+            agreement_id.clone(),
+            ALICE_ID.clone(),
+            BOB_ID.clone(),
+            Some(custodian_id.clone()),
+            RepoCashLeg {
+                asset_definition_id: cash_def_id.clone(),
+                quantity: Numeric::from(1_000u32),
+            },
+            RepoCollateralLeg::new(collateral_def_id.clone(), Numeric::from(1_100u32)),
+            250,
+            1_704_000_000_000,
+            RepoGovernance::with_defaults(1_500, 86_400),
+        )
+        .execute(&ALICE_ID, &mut stx)
+        .expect("repo execution");
+
+        stx.apply();
+        block.commit().expect("commit succeeds");
+
+        let view = state.view();
+        assert!(
+            view.world
+                .repo_agreements_by_initiator()
+                .get(&ALICE_ID)
+                .is_some_and(|agreements| agreements.contains(&agreement_id))
+        );
+        assert!(
+            view.world
+                .repo_agreements_by_counterparty()
+                .get(&BOB_ID)
+                .is_some_and(|agreements| agreements.contains(&agreement_id))
+        );
+        assert!(
+            view.world
+                .repo_agreements_by_custodian()
+                .get(&custodian_id)
+                .is_some_and(|agreements| agreements.contains(&agreement_id))
+        );
+
+        for (field, account_id) in [
+            ("initiator", ALICE_ID.clone()),
+            ("counterparty", BOB_ID.clone()),
+            ("custodian", custodian_id.clone()),
+        ] {
+            let predicate = CompoundPredicate::<RepoAgreement>::build(|predicate| {
+                predicate.equals(field, account_id.to_string())
+            });
+            let found = FindRepoAgreements
+                .execute(predicate, &view)
+                .expect("query repo agreements by participant")
+                .map(|agreement| agreement.id)
+                .collect::<Vec<_>>();
+            assert_eq!(found, vec![agreement_id.clone()]);
+        }
+
+        let missing_predicate = CompoundPredicate::<RepoAgreement>::build(|predicate| {
+            predicate.equals("initiator", custodian_id.to_string())
+        });
+        assert_eq!(
+            FindRepoAgreements
+                .execute(missing_predicate, &view)
+                .expect("query repo agreements by missing participant")
+                .count(),
+            0
+        );
+
+        drop(view);
+
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        stx.world.remove_repo_agreement_entry(&agreement_id);
+        stx.apply();
+        block.commit().expect("commit succeeds");
+
+        let view = state.view();
+        assert!(
+            view.world
+                .repo_agreements_by_initiator()
+                .get(&ALICE_ID)
+                .is_none()
+        );
+        let predicate = CompoundPredicate::<RepoAgreement>::build(|predicate| {
+            predicate.equals("initiator", ALICE_ID.to_string())
+        });
+        assert_eq!(
+            FindRepoAgreements
+                .execute(predicate, &view)
+                .expect("query removed repo agreements by participant")
+                .count(),
+            0
+        );
     }
 
     #[test]

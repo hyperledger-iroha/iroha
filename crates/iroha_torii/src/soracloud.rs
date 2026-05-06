@@ -14271,6 +14271,7 @@ mod tests {
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
                 prev_roster_evidence_hash: None,
+                npos_effects_hash: None,
                 sccp_commitment_root: None,
                 execution_context_hash: None,
                 creation_time_ms: 0,

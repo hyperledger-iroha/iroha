@@ -147,7 +147,7 @@ pub struct PreviousRosterEvidence {
 ///
 /// These effects are applied as part of the committed block transition so every
 /// peer replays the same VRF epoch records and penalty state.
-#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -171,13 +171,25 @@ impl NposConsensusEffects {
     }
 }
 
-/// Jail action for a validator that missed VRF participation requirements.
+impl Ord for NposConsensusEffects {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.encode().cmp(&other.encode())
+    }
+}
+
+impl PartialOrd for NposConsensusEffects {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// A deterministic VRF jail action.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-pub struct NposVrfJailPenaltyAction {
+pub struct NposVrfJailAction {
     /// Epoch that produced the penalty.
     pub epoch: u64,
     /// Signer index in the epoch roster.
@@ -192,13 +204,13 @@ pub struct NposVrfJailPenaltyAction {
     pub reason: String,
 }
 
-/// Slash action for a validator implicated by consensus evidence.
+/// A deterministic consensus-evidence slash action.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-pub struct NposConsensusSlashPenaltyAction {
+pub struct NposConsensusSlashAction {
     /// Consensus evidence key.
     pub evidence_key: Vec<u8>,
     /// Signer index in the evidence roster.
@@ -215,48 +227,48 @@ pub struct NposConsensusSlashPenaltyAction {
     pub amount: Numeric,
 }
 
-/// Marker action recording that a VRF epoch's penalties were applied.
+/// Marker that a VRF epoch's penalties were applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-pub struct NposVrfPenaltiesAppliedMarker {
+pub struct NposMarkVrfPenaltiesAppliedAction {
     /// Epoch to mark.
     pub epoch: u64,
     /// Block height that applied the marker.
     pub height: u64,
 }
 
-/// Marker action recording that consensus evidence was applied.
+/// Marker that a consensus evidence record's penalty was applied.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-pub struct NposConsensusEvidenceAppliedMarker {
+pub struct NposMarkConsensusEvidenceAppliedAction {
     /// Consensus evidence key.
     pub evidence_key: Vec<u8>,
     /// Block height that applied the marker.
     pub height: u64,
 }
 
-/// A deterministic `NPoS` penalty state transition.
+/// Penalty or marker action applied by a committed `NPoS` effects bundle.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[norito(tag = "action", content = "detail", rename_all = "snake_case")]
 pub enum NposPenaltyAction {
     /// Jail a validator for missing VRF participation requirements.
-    VrfJail(NposVrfJailPenaltyAction),
+    VrfJail(NposVrfJailAction),
     /// Slash a validator from consensus evidence.
-    ConsensusSlash(NposConsensusSlashPenaltyAction),
+    ConsensusSlash(NposConsensusSlashAction),
     /// Mark a VRF epoch's penalties as applied.
-    MarkVrfPenaltiesApplied(NposVrfPenaltiesAppliedMarker),
+    MarkVrfPenaltiesApplied(NposMarkVrfPenaltiesAppliedAction),
     /// Mark a consensus evidence record's penalty as applied.
-    MarkConsensusEvidenceApplied(NposConsensusEvidenceAppliedMarker),
+    MarkConsensusEvidenceApplied(NposMarkConsensusEvidenceAppliedAction),
 }
 
 /// Snapshot of the election parameters used when selecting validators for an epoch.

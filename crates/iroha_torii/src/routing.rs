@@ -10580,6 +10580,57 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing(
         })
 }
 
+pub(crate) fn push_accepted_transactions_for_ingress_with_routing(
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    accepted: Vec<(
+        iroha_core::tx::AcceptedTransaction<'static>,
+        RoutingDecision,
+    )>,
+) -> Result<usize> {
+    if accepted.is_empty() {
+        return Ok(0);
+    }
+    let pressure = {
+        let block_time = state.sumeragi_effective_block_time();
+        queue.refresh_pressure_budget_from_block_time(block_time)
+    };
+    if pressure.saturated_by_age {
+        if let Some((accepted_tx, _)) = accepted.first() {
+            iroha_logger::debug!(
+                tx_hash = %accepted_tx.hash(),
+                queued = pressure.queued_tx_count,
+                tracked = pressure.tracked_tx_count,
+                capacity = pressure.capacity.get(),
+                oldest_queued_tx_age_ms = pressure.oldest_queued_tx_age_ms,
+                "local queue is latency-saturated; keeping ingress open until capacity is exhausted"
+            );
+        }
+    }
+
+    queue
+        .push_batch_with_lane_with_state_and_routing(accepted, state.as_ref())
+        .map_err(|queue::Failure { tx, err }| {
+            iroha_logger::warn!(
+                tx_hash=%tx.as_ref().hash(), ?err,
+                "Failed to push transaction batch into queue"
+            );
+
+            drop(tx);
+            (err, queue.current_backpressure())
+        })
+        .map_err(|(err, backpressure)| Error::PushIntoQueue {
+            source: Box::new(err),
+            backpressure,
+        })
+        .inspect(|accepted_count| {
+            iroha_logger::debug!(
+                accepted = accepted_count,
+                "transaction batch enqueued successfully"
+            );
+        })
+}
+
 #[iroha_futures::telemetry_future]
 async fn handle_transaction_inner(
     chain_id: Arc<ChainId>,
@@ -45776,6 +45827,7 @@ mod status_tests {
                 total_xor_variance_micro: 1u128,
                 swap_metadata: None,
                 receipts: Vec::new(),
+                nexus_fee_receipts: Vec::new(),
             }],
             lane_relay_envelopes: {
                 let settlement = LaneBlockCommitment {
@@ -45789,6 +45841,7 @@ mod status_tests {
                     total_xor_variance_micro: 0,
                     swap_metadata: None,
                     receipts: Vec::new(),
+                    nexus_fee_receipts: Vec::new(),
                 };
                 let header =
                     BlockHeader::new(NonZeroU64::new(1).expect("nonzero"), None, None, None, 0, 0);
@@ -46092,6 +46145,7 @@ mod status_tests {
                 volatility_class: LaneVolatilityClass::Stable,
             }),
             receipts: vec![receipt.clone()],
+            nexus_fee_receipts: Vec::new(),
         };
         let snap = sumeragi::StatusSnapshot {
             lane_settlement_commitments: vec![commitment.clone()],
@@ -46286,6 +46340,7 @@ mod status_tests {
                 xor_variance_micro: 500,
                 timestamp_ms: 1_700_000_000_456,
             }],
+            nexus_fee_receipts: Vec::new(),
         };
         let validator_set: Vec<PeerId> = Vec::new();
         let commit_qc = iroha_data_model::consensus::Qc {

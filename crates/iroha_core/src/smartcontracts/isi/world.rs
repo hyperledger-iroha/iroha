@@ -8563,9 +8563,17 @@ pub mod isi {
                 ));
             }
             if !report.ok {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "invalid transfer proof".into(),
-                ));
+                if state_transaction.trust_committed_execution_results {
+                    iroha_logger::warn!(
+                        backend = attachment.backend.as_str(),
+                        proof_len,
+                        "replay accepted committed ZK transfer result after local proof verifier rejection"
+                    );
+                } else {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "invalid transfer proof".into(),
+                    ));
+                }
             }
             for &nullifier in self.inputs() {
                 st.nullifiers.insert(nullifier);
@@ -13900,9 +13908,8 @@ pub mod isi {
                 AssetDefinitionId::new(foreign_domain.clone(), "bond".parse().unwrap());
             let repo_id: iroha_data_model::repo::RepoAgreementId =
                 "foreign_ref_guard".parse().expect("repo agreement id");
-            stx.world.repo_agreements.insert(
-                repo_id.clone(),
-                iroha_data_model::repo::RepoAgreement::new(
+            stx.world
+                .insert_repo_agreement_entry(iroha_data_model::repo::RepoAgreement::new(
                     repo_id,
                     initiator,
                     counterparty,
@@ -13919,8 +13926,7 @@ pub mod isi {
                     1,
                     iroha_data_model::repo::RepoGovernance::with_defaults(1_000, 60),
                     None,
-                ),
-            );
+                ));
 
             let err = Unregister::domain(domain_id.clone())
                 .execute(&ALICE_ID, &mut stx)
@@ -14419,7 +14425,7 @@ pub mod isi {
                 iroha_data_model::repo::RepoGovernance::with_defaults(1_000, 60),
                 None,
             );
-            stx.world.repo_agreements.insert(repo_id.clone(), agreement);
+            stx.world.insert_repo_agreement_entry(agreement);
 
             let settlement_id: iroha_data_model::isi::SettlementId =
                 "settleguard".parse().expect("settlement id");

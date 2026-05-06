@@ -2,6 +2,31 @@
 
 Last updated: 2026-05-05
 
+## 2026-05-05 UAID replay/checkpoint hardening
+
+- Kura replay now restores per-block commit-QC hints from the commit-roster
+  journal without pre-populating WSV commit-QC storage during journal restore.
+  Canonical replay checkpoints ignore consensus scheduling/evidence caches
+  (`commit_topology`, `prev_commit_topology`, `world.commit_qcs`, and
+  `world.vrf_epochs`) that are reconstructed from Kura and sidecar journals
+  rather than from transaction execution.
+- Checkpointed replay preserves committed Kura transaction results when local
+  execution drifts on already-committed history, then enforces the stored WSV
+  checkpoint. The committed-result fallback now seeds canonical transaction
+  context, replays successful committed transactions, runs time triggers, and
+  allows ZK transfer effects only in that replay-trust path so normal admission
+  still rejects invalid local proof verification.
+- Focused validation passed with the replay/checkpoint unit tests, the Halo2
+  restart-marker fixture verifier, and the previously failing
+  `consensus_and_da` restart/localnet cases:
+  `sumeragi_restart_retains_lock_convergence`,
+  `npos_pacemaker_resumes_after_downtime`,
+  `confidential_combined_peer_downtime_and_timeout_pressure_localnet`, and
+  `confidential_dual_restart_stress_mid_flow_localnet`. Formatting,
+  diff-whitespace, Cargo.lock, debug/source-guard checks, strict clippy for
+  `iroha_core --lib`, `iroha_crypto --lib --tests`, and
+  `integration_tests --test consensus_and_da` are green.
+
 ## 2026-05-05 Durable Space Directory snapshot restore
 
 - State snapshots now persist the durable Space Directory manifest registry in
@@ -780,6 +805,34 @@ Last updated: 2026-05-05
   reallocation and `memmove`, SHA-256/Blake2/CRC64 helpers, queue admission
   bookkeeping, and world-view/access preparation. Scalar FASTPQ/Poseidon
   fallback is not the current steady-state bottleneck.
+- The FASTPQ lane startup/preflight follow-up now publishes the lane handle
+  before backend construction, initializes the real prover on a blocking worker,
+  defers background proof jobs until that worker marks the lane ready, and keeps
+  host-side BN254 Poseidon digest acceleration disabled until the lane observes
+  successful Poseidon GPU and BN254 digest preflights. A failed prover Poseidon
+  preflight now keeps the deterministic CPU fallback for the lane instead of
+  letting first proof work resolve back onto the GPU hot path. Focused
+  validation passed with
+  `ENABLE_RANS_BUNDLES=1 NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-20k-queue cargo test -p iroha_core fastpq --features fastpq-gpu -- --nocapture`
+  (`43` matching tests passed) and the release rebuild
+  `ENABLE_RANS_BUNDLES=1 NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-20k-queue cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`
+  passed in `4m48s` with only the known `fastpq_prover` Metal dead-code
+  warnings and existing `PenaltyApplier::telemetry` warning.
+- The fresh 4-peer no-fault prebuilt `20k TPS` / `120s` `fastpq-gpu` return
+  gate at
+  `dist/izanami-prebuilt-20k-fastpq-gpu-return-preflight-gate-120s-20260505-124838`
+  exited `0`, offered, accepted, and succeeded all `2,400,000` submissions,
+  used all `2,400,000` prebuilt transactions with no fallback or build
+  failures, and reported `0` submit failures, validation rejects, confirmation
+  failures, confirmation queue drops, ingress failovers, or unhealthy endpoints.
+  Final quorum/strict height was `13/13`, final quorum/strict approved
+  transactions were `45,191/45,191`, max peer height and approved-transaction
+  skew were both `0`, and submit latency was `p50=3ms`, `p95=11ms`,
+  `p99=60ms`, `max=200ms`. The queue remained saturated
+  (`877,135 / 2,400,000`) with `95` pacemaker backpressure deferrals, so this
+  restores the 20k ingress/strict-progress gate above the prior `36,967`
+  baseline while committed 20k TPS still needs the validation/serialization and
+  queue-drain work identified in the latest 30s/60s profiles.
 
 ## 2026-05-03 IVM WSV mock mutation gas hardening
 
@@ -6348,6 +6401,19 @@ Last updated: 2026-05-05
   A round-constant destructuring experiment and a shared mask-table experiment
   were rejected after filtered runs showed no stable gain and a regression in at
   least one hot filter.
+- `field_to_bytes` now converts `Fr::to_repr()` directly into `[u8; 32]`
+  instead of copying through `as_ref()`. Filtered Criterion kept the conversion
+  cleanup after `hash_bytes/128` improved to about `174.1 us`, while
+  `hash_bytes/32`, `hash_bytes/512`, `hash2_u64`, and packed
+  `hash_u64_words_bytes` filters stayed within noise or showed no detected
+  regression.
+- The direct `hash_bytes` path now packs short trailing byte words from the
+  input slice without a temporary zeroed `[u8; 8]`, and the hot-path benchmark
+  now covers 33- and 129-byte inputs. Same-session A/B kept the helper after
+  restoring the temporary-copy path regressed one `hash_bytes/129` run to about
+  `176.7 us`; the final helper rerun measured about `58.6 us` for 33 bytes and
+  `175.8 us` for 129 bytes, both within the noise threshold against the
+  immediately preceding baseline.
 - Updated FASTPQ digest construction in `crates/iroha_core/src/fastpq/mod.rs`
   to stream Norito encodings into the Poseidon byte hasher and to pack GPU
   digest batches into a shared word buffer with preallocated slice/word

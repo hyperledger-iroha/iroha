@@ -136,6 +136,18 @@ impl PendingBlock {
         }
     }
 
+    pub(super) fn new_with_payload_bytes(
+        block: SignedBlock,
+        payload_hash: Hash,
+        height: u64,
+        view: u64,
+        payload_bytes: Vec<u8>,
+    ) -> Self {
+        let pending = Self::new(block, payload_hash, height, view);
+        let _ = pending.payload_bytes.set(payload_bytes);
+        pending
+    }
+
     #[allow(dead_code)]
     pub(super) fn with_transactions(
         block: SignedBlock,
@@ -661,6 +673,18 @@ mod tests {
         assert_eq!(pending.payload_bytes(), second_bytes.as_slice());
         assert_eq!(Hash::new(pending.payload_bytes()), second_hash);
         assert_ne!(first_bytes, second_bytes);
+    }
+
+    #[test]
+    fn pending_block_payload_bytes_can_be_seeded_at_creation() {
+        let block = sample_block(1);
+        let payload_bytes = block_payload_bytes(&block);
+        let payload_hash = Hash::new(&payload_bytes);
+        let pending =
+            PendingBlock::new_with_payload_bytes(block, payload_hash, 1, 0, payload_bytes.clone());
+
+        assert_eq!(pending.payload_bytes(), payload_bytes.as_slice());
+        assert_eq!(Hash::new(pending.payload_bytes()), payload_hash);
     }
 
     #[test]

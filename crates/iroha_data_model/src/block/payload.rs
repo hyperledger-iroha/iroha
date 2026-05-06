@@ -138,6 +138,8 @@ impl PartialOrd for BlockPayload {
 
 impl Ord for BlockPayload {
     fn cmp(&self, other: &Self) -> Ordering {
+        let self_npos_effects_hash = self.npos_consensus_effects.as_ref().map(HashOf::new);
+        let other_npos_effects_hash = other.npos_consensus_effects.as_ref().map(HashOf::new);
         (
             &self.header,
             &self.external_entrypoints,
@@ -146,7 +148,7 @@ impl Ord for BlockPayload {
             &self.da_proof_policies,
             &self.da_pin_intents,
             &self.previous_roster_evidence,
-            &self.npos_consensus_effects,
+            &self_npos_effects_hash,
         )
             .cmp(&(
                 &other.header,
@@ -156,7 +158,7 @@ impl Ord for BlockPayload {
                 &other.da_proof_policies,
                 &other.da_pin_intents,
                 &other.previous_roster_evidence,
-                &other.npos_consensus_effects,
+                &other_npos_effects_hash,
             ))
     }
 }

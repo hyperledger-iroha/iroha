@@ -5624,6 +5624,7 @@ impl Actor {
         rbc_payload_matches(sessions, handle, block_hash, height, view, payload_hash)
     }
 
+    #[cfg(test)]
     fn local_payload_matches_hash(block: &SignedBlock, payload_hash: &Hash) -> bool {
         let payload_bytes = super::proposals::block_payload_bytes(block);
         Hash::new(&payload_bytes) == *payload_hash
@@ -5635,7 +5636,7 @@ impl Actor {
         handle: &rbc_status::Handle,
         pending: &PendingBlock,
     ) -> bool {
-        if Self::local_payload_matches_hash(&pending.block, &pending.payload_hash) {
+        if Hash::new(pending.payload_bytes()) == pending.payload_hash {
             return true;
         }
         Self::ensure_block_matches_rbc_payload(
@@ -7147,36 +7148,6 @@ impl Actor {
         }
         super::status::inc_vrf_penalties_applied(vrf_applied);
         super::status::inc_consensus_penalties_applied(consensus_applied);
-    }
-
-    fn apply_penalties(&mut self, current_height: u64) -> Result<()> {
-        if !matches!(self.consensus_mode, ConsensusMode::Npos) {
-            return Ok(());
-        }
-        let telemetry = {
-            #[cfg(feature = "telemetry")]
-            {
-                Some(self.state.metrics())
-            }
-            #[cfg(not(feature = "telemetry"))]
-            {
-                None
-            }
-        };
-        let applier = PenaltyApplier::new(
-            self.state.as_ref(),
-            &self.config,
-            #[cfg(feature = "telemetry")]
-            telemetry,
-            #[cfg(not(feature = "telemetry"))]
-            telemetry,
-        );
-        let vrf = applier.apply_vrf_penalties(current_height);
-        let evidence = applier.apply_consensus_penalties(current_height)?;
-        super::status::inc_vrf_penalties_applied(vrf.applied);
-        super::status::inc_consensus_penalties_applied(evidence.applied);
-        super::status::set_penalties_pending(evidence.pending, vrf.pending);
-        Ok(())
     }
 
     #[allow(clippy::unnecessary_wraps)]

@@ -30,6 +30,8 @@ use norito::codec::Decode;
 use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 use sha2::{Digest, Sha256};
 
+#[cfg(test)]
+use super::proposals::block_payload_bytes;
 use super::{
     Actor, BlockPayloadDedupKey, DataspaceAllocation, InvalidSigKind, InvalidSigOutcome,
     LaneAllocation, MissingBlockClearReason, MissingBlockFetchDecision, PipelinePhase,
@@ -38,7 +40,6 @@ use super::{
         PendingChunkOutcome, PendingRbcDropReason, PendingRbcMessages, rbc_deliver_stash_bytes,
         rbc_ready_stash_bytes,
     },
-    proposals::block_payload_bytes,
 };
 use crate::{
     queue::{Queue, RoutingDecision},
@@ -1904,10 +1905,31 @@ impl Actor {
         Ok(session)
     }
 
+    #[cfg(test)]
     pub(super) fn seed_rbc_session_from_block(
         &mut self,
         key: SessionKey,
         block: &SignedBlock,
+        payload_hash: Hash,
+        rebroadcast_missing_init: bool,
+        emit_ready: bool,
+    ) -> Result<()> {
+        let payload_bytes = block_payload_bytes(block);
+        self.seed_rbc_session_from_payload(
+            key,
+            block,
+            &payload_bytes,
+            payload_hash,
+            rebroadcast_missing_init,
+            emit_ready,
+        )
+    }
+
+    pub(super) fn seed_rbc_session_from_payload(
+        &mut self,
+        key: SessionKey,
+        block: &SignedBlock,
+        payload_bytes: &[u8],
         payload_hash: Hash,
         rebroadcast_missing_init: bool,
         emit_ready: bool,
@@ -1918,10 +1940,9 @@ impl Actor {
 
         let should_rebroadcast =
             rebroadcast_missing_init || self.subsystems.da_rbc.rbc.pending.contains_key(&key);
-        let payload_bytes = block_payload_bytes(block);
         let seed_started_at = Instant::now();
         let mut session = match Self::build_rbc_session_from_payload_with_chunking(
-            &payload_bytes,
+            payload_bytes,
             payload_hash,
             RbcChunkingSpec::from_config(&self.config.rbc),
             self.epoch_for_height(key.1),
@@ -2068,7 +2089,14 @@ impl Actor {
         }
 
         if !has_session {
-            self.seed_rbc_session_from_block(key, block, payload_hash, pending_rbc, true)?;
+            self.seed_rbc_session_from_payload(
+                key,
+                block,
+                payload_bytes,
+                payload_hash,
+                pending_rbc,
+                true,
+            )?;
             return Ok(());
         }
 
@@ -2320,7 +2348,7 @@ impl Actor {
             let work = RbcSeedWork {
                 key,
                 payload_hash,
-                payload_bytes,
+                payload_bytes: payload_bytes.clone(),
                 chunking: RbcChunkingSpec::from_config(&self.config.rbc),
                 epoch: self.epoch_for_height(key.1),
                 started_at: Instant::now(),
@@ -2372,9 +2400,10 @@ impl Actor {
                 }
             }
         }
-        self.seed_rbc_session_from_block(
+        self.seed_rbc_session_from_payload(
             key,
             &block,
+            &payload_bytes,
             payload_hash,
             rebroadcast_missing_init,
             false,

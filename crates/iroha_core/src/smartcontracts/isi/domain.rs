@@ -6831,7 +6831,7 @@ mod tests {
             iroha_data_model::repo::RepoGovernance::with_defaults(1_000, 60),
             None,
         );
-        tx.world.repo_agreements.insert(repo_id, agreement);
+        tx.world.insert_repo_agreement_entry(agreement);
 
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
@@ -9104,9 +9104,8 @@ mod tests {
 
         let repo_id: iroha_data_model::repo::RepoAgreementId =
             "repo_asset_guard".parse().expect("repo agreement id");
-        tx.world.repo_agreements.insert(
-            repo_id.clone(),
-            iroha_data_model::repo::RepoAgreement::new(
+        tx.world
+            .insert_repo_agreement_entry(iroha_data_model::repo::RepoAgreement::new(
                 repo_id,
                 initiator,
                 counterparty,
@@ -9123,8 +9122,7 @@ mod tests {
                 1,
                 iroha_data_model::repo::RepoGovernance::with_defaults(1_000, 60),
                 None,
-            ),
-        );
+            ));
 
         let err = Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut tx)

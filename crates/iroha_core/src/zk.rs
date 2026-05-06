@@ -5418,6 +5418,35 @@ mod debug_backend_tests {
             assert!(!verify_backend(backend, &proof, Some(&vk)));
         }
     }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn halo2_ivm_execution_fixtures_verify_for_restart_markers() {
+        fn hash_for_live_proof(domain: &[u8], seed: [u8; 32]) -> iroha_crypto::Hash {
+            let mut preimage = Vec::with_capacity(domain.len() + seed.len());
+            preimage.extend_from_slice(domain);
+            preimage.extend_from_slice(&seed);
+            iroha_crypto::Hash::new(preimage)
+        }
+
+        for seed in [132_u8, 133_u8, 134_u8] {
+            let marker = [seed; 32];
+            let fixture = test_utils::halo2_ivm_execution_envelope(
+                hash_for_live_proof(b"zk-confidential-localnet/code", marker),
+                hash_for_live_proof(b"zk-confidential-localnet/overlay", marker),
+                hash_for_live_proof(b"zk-confidential-localnet/events", marker),
+                hash_for_live_proof(b"zk-confidential-localnet/gas-policy", marker),
+            );
+            let proof = fixture.proof_box(ZK_BACKEND_HALO2_IPA);
+            let vk = fixture
+                .vk_box(ZK_BACKEND_HALO2_IPA)
+                .expect("fixture must include a verifying key");
+            assert!(
+                verify_backend(ZK_BACKEND_HALO2_IPA, &proof, Some(&vk)),
+                "fixture proof should verify for seed {seed}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
