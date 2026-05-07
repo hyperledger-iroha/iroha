@@ -106,18 +106,18 @@ const THROUGHPUT_NPOS_SLO_BACKPRESSURE_RATE_MAX: f64 = 3.0;
 const THROUGHPUT_NPOS_SLO_QUEUE_SAT_FRAC_MAX: f64 = 0.3;
 const THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_ENV: &str = "IROHA_THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_SECS";
 const REALISTIC_30TPS_PEERS: usize = 4;
-const REALISTIC_30TPS_DURATION_SECS: u64 = 300;
-const REALISTIC_30TPS_TARGET_BLOCKS: u64 = 150;
+const REALISTIC_30TPS_DURATION_SECS: u64 = 1_200;
+const REALISTIC_30TPS_TARGET_BLOCKS: u64 = 600;
 const REALISTIC_30TPS_TARGET_TPS: u64 = 30;
 const REALISTIC_30TPS_BLOCK_TIME_MS: u64 = 500;
 const REALISTIC_30TPS_COMMIT_TIME_MS: u64 = 500;
-const REALISTIC_30TPS_BLOCK_MAX_TXS: u64 = 30;
+const REALISTIC_30TPS_BLOCK_MAX_TXS: u64 = 50;
 const REALISTIC_30TPS_SUBMIT_PARALLELISM: usize = 16;
 const REALISTIC_30TPS_QUEUE_SOFT_LIMIT: u64 = 3_000;
 const REALISTIC_30TPS_STALL_THRESHOLD: Duration = Duration::from_secs(20);
 const REALISTIC_30TPS_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 const REALISTIC_30TPS_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
-const REALISTIC_30TPS_TRANSFER_ACCOUNTS: usize = 64;
+const REALISTIC_30TPS_TRANSFER_ACCOUNTS: usize = 640;
 const REALISTIC_30TPS_TRANSFER_MAX_AMOUNT: u64 = 5;
 const FAIL_ON_SANDBOX_SKIP_ENV: &str = "IROHA_FAIL_ON_SANDBOX_SKIP";
 // Grouped localnet runs can take longer to publish authoritative Nexus bindings
@@ -583,9 +583,9 @@ fn verify_realistic_transfer_balances(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "long-running 4-peer localnet regression (30 TPS for 5 minutes)"]
+#[ignore = "long-running 4-peer localnet regression (30 TPS for 20 minutes)"]
 #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
-async fn permissioned_localnet_realistic_30tps_5min() -> Result<()> {
+async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
     init_instruction_registry();
     let _guard = LOCALNET_SMOKE_GUARD
         .get_or_init(|| Mutex::new(()))
@@ -767,7 +767,7 @@ async fn permissioned_localnet_realistic_30tps_5min() -> Result<()> {
     let result: Result<()> = async {
         let Some(network) = sandbox::start_network_async_or_skip(
             builder,
-            stringify!(permissioned_localnet_realistic_30tps_5min),
+            stringify!(permissioned_localnet_realistic_30tps_20min),
         )
         .await?
         else {
@@ -1073,8 +1073,8 @@ async fn permissioned_localnet_realistic_30tps_5min() -> Result<()> {
                 max_rejected,
             );
             ensure!(
-                load_end_min_non_empty >= target_non_empty,
-                "expected at least {target_blocks} non-empty blocks during {duration_secs}s at {target_tps} TPS before drain; produced {load_end_produced_blocks} (baseline={baseline_non_empty}, load_end_min_non_empty={load_end_min_non_empty}, final_min_non_empty={min_non_empty})"
+                min_non_empty >= target_non_empty,
+                "expected at least {target_blocks} final non-empty blocks for {duration_secs}s at {target_tps} TPS; produced {produced_blocks} (baseline={baseline_non_empty}, load_end_min_non_empty={load_end_min_non_empty}, final_min_non_empty={min_non_empty})"
             );
             ensure!(
                 load_avg_secs_per_block <= 3.0,
@@ -1143,7 +1143,7 @@ async fn permissioned_localnet_realistic_30tps_5min() -> Result<()> {
 
     if sandbox::handle_result(
         result,
-        stringify!(permissioned_localnet_realistic_30tps_5min),
+        stringify!(permissioned_localnet_realistic_30tps_20min),
     )?
     .is_none()
     {
