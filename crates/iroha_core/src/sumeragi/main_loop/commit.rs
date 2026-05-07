@@ -1531,9 +1531,9 @@ impl Actor {
                 }
                 if failure.clean_block_hash {
                     self.qc_cache
-                        .retain(|(_, hash, _, _, _), _| hash != &block_hash);
+                        .retain(|(_, hash, _, _, _, _, _), _| hash != &block_hash);
                     self.qc_signer_tally
-                        .retain(|(_, hash, _, _, _), _| hash != &block_hash);
+                        .retain(|(_, hash, _, _, _, _, _), _| hash != &block_hash);
                     self.clean_rbc_sessions_for_block(block_hash, pending_height);
                     block_hash_to_clean = Some(block_hash);
                     let latest_committed_qc = self.latest_committed_qc();
@@ -1599,9 +1599,9 @@ impl Actor {
                         );
                         if let Some(parent) = pending.block.header().prev_block_hash() {
                             self.qc_cache
-                                .retain(|(_, hash, _, _, _), _| hash != &parent);
+                                .retain(|(_, hash, _, _, _, _, _), _| hash != &parent);
                             self.qc_signer_tally
-                                .retain(|(_, hash, _, _, _), _| hash != &parent);
+                                .retain(|(_, hash, _, _, _, _, _), _| hash != &parent);
                         }
                     } else {
                         let txs: Vec<_> = pending.block.external_entrypoints_cloned().collect();
@@ -1620,9 +1620,9 @@ impl Actor {
                         );
                         self.clean_rbc_sessions_for_block(block_hash, pending_height);
                         self.qc_cache
-                            .retain(|(_, hash, _, _, _), _| hash != &block_hash);
+                            .retain(|(_, hash, _, _, _, _, _), _| hash != &block_hash);
                         self.qc_signer_tally
-                            .retain(|(_, hash, _, _, _), _| hash != &block_hash);
+                            .retain(|(_, hash, _, _, _, _, _), _| hash != &block_hash);
                         self.subsystems
                             .propose
                             .proposal_cache
@@ -1822,9 +1822,9 @@ impl Actor {
                             );
                         }
                         self.qc_cache
-                            .retain(|(_, hash, _, _, _), _| hash != &block_hash);
+                            .retain(|(_, hash, _, _, _, _, _), _| hash != &block_hash);
                         self.qc_signer_tally
-                            .retain(|(_, hash, _, _, _), _| hash != &block_hash);
+                            .retain(|(_, hash, _, _, _, _, _), _| hash != &block_hash);
                         block_hash_to_clean = Some(block_hash);
                         emit_pipeline_events_now = true;
                     } else if has_quorum_signers {
@@ -1884,9 +1884,9 @@ impl Actor {
                         }
                         if outcome.clean_block_hash {
                             self.qc_cache
-                                .retain(|(_, hash, _, _, _), _| hash != &block_hash);
+                                .retain(|(_, hash, _, _, _, _, _), _| hash != &block_hash);
                             self.qc_signer_tally
-                                .retain(|(_, hash, _, _, _), _| hash != &block_hash);
+                                .retain(|(_, hash, _, _, _, _, _), _| hash != &block_hash);
                             block_hash_to_clean = Some(block_hash);
                         }
                         emit_pipeline_events_now = outcome.drop_pending;
@@ -2310,31 +2310,32 @@ impl Actor {
                     .remove(&stale_hash);
                 self.clean_rbc_sessions_for_block(stale_hash, stale_height);
                 self.qc_cache
-                    .retain(|(_, hash, _, _, _), _| hash != &stale_hash);
+                    .retain(|(_, hash, _, _, _, _, _), _| hash != &stale_hash);
                 self.qc_signer_tally
-                    .retain(|(_, hash, _, _, _), _| hash != &stale_hash);
+                    .retain(|(_, hash, _, _, _, _, _), _| hash != &stale_hash);
                 self.block_signer_cache.remove_block(&stale_hash);
             }
-            self.qc_cache.retain(|(_, hash, height, _, _), _| {
+            self.qc_cache.retain(|(_, hash, height, _, _, _, _), _| {
                 *hash == block_hash || *height > pending_height
             });
-            self.qc_signer_tally.retain(|(_, hash, height, _, _), _| {
-                *hash == block_hash || *height > pending_height
-            });
+            self.qc_signer_tally
+                .retain(|(_, hash, height, _, _, _, _), _| {
+                    *hash == block_hash || *height > pending_height
+                });
             self.subsystems
                 .propose
                 .proposal_cache
                 .prune_height_leq(pending_height);
             if let Some(parent) = parent_to_cleanup {
                 self.qc_cache
-                    .retain(|(_, hash, _, _, _), _| hash != &parent);
+                    .retain(|(_, hash, _, _, _, _, _), _| hash != &parent);
                 self.qc_signer_tally
-                    .retain(|(_, hash, _, _, _), _| hash != &parent);
+                    .retain(|(_, hash, _, _, _, _, _), _| hash != &parent);
                 self.block_signer_cache.remove_block(&parent);
             }
             let retention_floor = pending_height.saturating_sub(1);
             self.vote_log
-                .retain(|(_, height, _, _, _), _| *height >= retention_floor);
+                .retain(|(_, _, height, _, _, _, _), _| *height >= retention_floor);
             self.try_replay_deferred_votes();
             let _ = self.maybe_request_frontier_gap_realign_after_commit(Instant::now());
         }
@@ -2445,9 +2446,9 @@ impl Actor {
             self.clean_rbc_sessions_for_committed_block_if_settled(block_hash, pending_height);
             if let Some(parent) = pending.block.header().prev_block_hash() {
                 self.qc_cache
-                    .retain(|(_, hash, _, _, _), _| hash != &parent);
+                    .retain(|(_, hash, _, _, _, _, _), _| hash != &parent);
                 self.qc_signer_tally
-                    .retain(|(_, hash, _, _, _), _| hash != &parent);
+                    .retain(|(_, hash, _, _, _, _, _), _| hash != &parent);
             }
             return true;
         }
@@ -3399,9 +3400,9 @@ impl Actor {
                 pending.mark_aborted();
                 self.clean_rbc_sessions_for_block(hash, pending_height);
                 self.qc_cache
-                    .retain(|(_, qc_hash, _, _, _), _| qc_hash != &hash);
+                    .retain(|(_, qc_hash, _, _, _, _, _), _| qc_hash != &hash);
                 self.qc_signer_tally
-                    .retain(|(_, qc_hash, _, _, _), _| qc_hash != &hash);
+                    .retain(|(_, qc_hash, _, _, _, _, _), _| qc_hash != &hash);
                 let latest_committed_qc = self.latest_committed_qc();
                 kura::reset_qcs_after_kura_abort(
                     &mut self.locked_qc,
@@ -4402,6 +4403,7 @@ impl Actor {
                 let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
                 (zero_root, zero_root)
             };
+        let (chain_order_hash, rechain_seq) = self.vnext_chain_order_binding_for(height, view);
         let mut vote = crate::sumeragi::consensus::Vote {
             phase,
             block_hash,
@@ -4410,6 +4412,8 @@ impl Actor {
             height,
             view,
             epoch,
+            chain_order_hash,
+            rechain_seq,
             highest_qc,
             signer,
             bls_sig: Vec::new(),
@@ -6579,11 +6583,11 @@ impl Actor {
         );
         self.deferred_votes.remove(&block_hash);
         self.deferred_qcs
-            .retain(|(_, hash, _, _, _), _| *hash != block_hash);
+            .retain(|(_, hash, _, _, _, _, _), _| *hash != block_hash);
         self.deferred_missing_payload_qcs
-            .retain(|(_, hash, _, _, _), _| *hash != block_hash);
+            .retain(|(_, hash, _, _, _, _, _), _| *hash != block_hash);
         self.quarantined_block_sync_qcs
-            .retain(|(_, hash, _, _, _), _| *hash != block_hash);
+            .retain(|(_, hash, _, _, _, _, _), _| *hash != block_hash);
         let orphan_keys: Vec<_> = self
             .collect_rbc_keys_for_block(block_hash)
             .into_iter()

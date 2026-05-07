@@ -2081,6 +2081,7 @@ impl Actor {
     ) {
         let chain_id = &self.common_config.chain;
         let (consensus_mode, mode_tag, _) = self.consensus_context_for_height(height);
+        let (chain_order_hash, rechain_seq) = self.vnext_chain_order_binding_for(height, view);
         let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
         let canonical_roster = super::roster::canonicalize_roster_for_mode(
             signature_topology.as_ref().to_vec(),
@@ -2111,6 +2112,8 @@ impl Actor {
                 && stored.height == height
                 && stored.view == view
                 && stored.epoch == epoch
+                && stored.chain_order_hash == chain_order_hash
+                && stored.rechain_seq == rechain_seq
         }) {
             stats.raw_votes = stats.raw_votes.saturating_add(1);
             let validation_entry = self.vote_validation_entry_for_vote(vote);
@@ -3630,6 +3633,8 @@ impl Actor {
             };
 
         let validator_set = canonical_topology.as_ref().to_vec();
+        let (chain_order_hash, rechain_seq) =
+            self.vnext_chain_order_binding_for(ctx.height, ctx.view);
         crate::sumeragi::consensus::Qc {
             phase: ctx.phase,
             subject_block_hash: ctx.block_hash,
@@ -3638,6 +3643,8 @@ impl Actor {
             height: ctx.height,
             view: ctx.view,
             epoch: ctx.epoch,
+            chain_order_hash,
+            rechain_seq,
             mode_tag: ctx.mode_tag,
             highest_qc: ctx.highest_qc,
             validator_set_hash: HashOf::new(&validator_set),
@@ -3697,10 +3704,20 @@ impl Actor {
             topology_for_view(signature_topology_source, height, view, mode_tag, prf_seed);
         let required = signature_topology.min_votes_for_commit();
         let voting_len = signature_topology.as_ref().len();
-        if let Some(existing) = self.qc_cache.get(&(phase, block_hash, height, view, epoch)) {
+        let (chain_order_hash, rechain_seq) = self.vnext_chain_order_binding_for(height, view);
+        let qc_key = (
+            phase,
+            block_hash,
+            height,
+            view,
+            epoch,
+            chain_order_hash,
+            rechain_seq,
+        );
+        if let Some(existing) = self.qc_cache.get(&qc_key) {
             let existing_signers = self
                 .qc_signer_tally
-                .get(&(phase, block_hash, height, view, epoch))
+                .get(&qc_key)
                 .map_or_else(
                     || qc_voting_signer_count(existing, voting_len),
                     QcSignerTally::voting_len,
@@ -4887,6 +4904,8 @@ impl Actor {
                     vote.height,
                     vote.view,
                     vote.epoch,
+                    vote.chain_order_hash,
+                    vote.rechain_seq,
                 ))
                 .or_default()
                 .insert(vote.signer);
@@ -4897,7 +4916,7 @@ impl Actor {
             block_known,
             qc_present,
             |key, signer_count| {
-                let (phase, block_hash, height, view, epoch) = key;
+                let (phase, block_hash, height, view, epoch, _, _) = key;
                 if matches!(phase, crate::sumeragi::consensus::Phase::NewView)
                     && self
                         .phase_tracker
@@ -4945,7 +4964,7 @@ impl Actor {
                     "rebuilding QC from cached votes"
                 );
                 self.try_form_qc_from_votes(phase, block_hash, height, view, epoch, &topology);
-                if let Some(qc) = self.qc_cache.get(&(phase, block_hash, height, view, epoch)) {
+                if let Some(qc) = self.qc_cache.get(&key) {
                     if qc.phase == phase {
                         if !cached_before {
                             super::status::inc_qc_rebuild_successes();
@@ -4972,7 +4991,7 @@ impl Actor {
         consensus_mode: ConsensusMode,
         signer_count: usize,
     ) -> bool {
-        let (_, _, height, view, _) = key;
+        let (_, _, height, view, _, _, _) = key;
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology =
             super::topology_for_view(topology, height, view, mode_tag, prf_seed);
@@ -5065,9 +5084,9 @@ impl Actor {
         self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
         self.clean_rbc_sessions_for_block(block_hash, block_height);
         self.qc_cache
-            .retain(|(_, hash, _, _, _), _| *hash != block_hash);
+            .retain(|(_, hash, _, _, _, _, _), _| *hash != block_hash);
         self.qc_signer_tally
-            .retain(|(_, hash, _, _, _), _| *hash != block_hash);
+            .retain(|(_, hash, _, _, _, _, _), _| *hash != block_hash);
         self.subsystems
             .propose
             .proposal_cache
@@ -5815,11 +5834,12 @@ impl Actor {
             self.block_signer_cache.remove_block(hash);
         }
         self.qc_signer_tally
-            .retain(|(phase, hash, height, _, _), _| {
+            .retain(|(phase, hash, height, _, _, _, _), _| {
                 *phase != crate::sumeragi::consensus::Phase::Commit
                     || !drop_blocks.contains(&(*hash, *height))
             });
-        self.qc_cache.retain(|(phase, hash, height, _, _), _| {
+        self.qc_cache
+            .retain(|(phase, hash, height, _, _, _, _), _| {
             *phase != crate::sumeragi::consensus::Phase::Commit
                 || !drop_blocks.contains(&(*hash, *height))
         });
@@ -5870,6 +5890,28 @@ impl Actor {
                 super::status::ConsensusMessageKind::Qc,
                 super::status::ConsensusMessageOutcome::Dropped,
                 super::status::ConsensusMessageReason::EpochMismatch,
+            );
+            return Ok(());
+        }
+        let (expected_chain_order_hash, expected_rechain_seq) =
+            self.vnext_chain_order_binding_for(qc.height, qc.view);
+        if qc.chain_order_hash != expected_chain_order_hash || qc.rechain_seq != expected_rechain_seq
+        {
+            warn!(
+                height = qc.height,
+                view = qc.view,
+                phase = ?qc.phase,
+                block = %qc.subject_block_hash,
+                qc_chain_order_hash = %qc.chain_order_hash,
+                expected_chain_order_hash = %expected_chain_order_hash,
+                qc_rechain_seq = qc.rechain_seq,
+                expected_rechain_seq,
+                "dropping QC with mismatched vNext chain-order binding"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Qc,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
             );
             return Ok(());
         }

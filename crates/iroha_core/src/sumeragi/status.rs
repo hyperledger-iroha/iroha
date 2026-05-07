@@ -2813,6 +2813,8 @@ pub enum VoteValidationDropReason {
     HighestQcMismatch,
     /// Conflicting vote already recorded for the signer.
     ConflictingVote,
+    /// Vote was signed for a different vNext chain order.
+    ChainOrderMismatch,
 }
 
 impl VoteValidationDropReason {
@@ -2834,6 +2836,7 @@ impl VoteValidationDropReason {
             VoteValidationDropReason::MissingHighestQc => "missing_highest_qc",
             VoteValidationDropReason::HighestQcMismatch => "highest_qc_mismatch",
             VoteValidationDropReason::ConflictingVote => "conflicting_vote",
+            VoteValidationDropReason::ChainOrderMismatch => "chain_order_mismatch",
         }
     }
 }

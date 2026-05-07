@@ -2252,6 +2252,8 @@ fn derive_block_sync_qc_from_signers(
         height: block_height,
         view: block_view,
         epoch: block_epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: mode_tag.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -9255,6 +9257,8 @@ type QcVoteKey = (
     u64,
     u64,
     u64,
+    Hash,
+    u64,
 );
 
 const KNOWN_BLOCK_QC_WORK_PER_TICK: usize = 2;
@@ -10262,7 +10266,7 @@ fn qc_cache_for_subject(
 ) -> impl Iterator<Item = &crate::sumeragi::consensus::Qc> {
     qc_cache
         .iter()
-        .filter(move |((_, hash, _, _, _), _)| *hash == subject)
+        .filter(move |((_, hash, _, _, _, _, _), _)| *hash == subject)
         .map(|(_, qc)| qc)
 }
 
@@ -10307,6 +10311,8 @@ where
             vote.height,
             vote.view,
             vote.epoch,
+            vote.chain_order_hash,
+            vote.rechain_seq,
         );
         grouped.entry(key).or_default().insert(vote.signer);
     }
@@ -13556,6 +13562,8 @@ fn validate_checkpoint_roster(
         height: block_height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -14783,6 +14791,8 @@ impl Actor {
             qc.height,
             qc.view,
             qc.epoch,
+            qc.chain_order_hash,
+            qc.rechain_seq,
         )
     }
 
@@ -15074,6 +15084,8 @@ impl Actor {
             height: qc.height,
             view: qc.view,
             epoch: qc.epoch,
+            chain_order_hash: self.vnext_chain_order_binding_for(qc.height, qc.view).0,
+            rechain_seq: self.vnext_chain_order_binding_for(qc.height, qc.view).1,
             mode_tag: mode_tag.to_string(),
             highest_qc: None,
             validator_set_hash: HashOf::new(&validator_set),
@@ -15145,6 +15157,8 @@ impl Actor {
             height: GENESIS_HEIGHT,
             view: 0,
             epoch,
+            chain_order_hash: self.vnext_chain_order_binding_for(GENESIS_HEIGHT, 0).0,
+            rechain_seq: self.vnext_chain_order_binding_for(GENESIS_HEIGHT, 0).1,
             mode_tag: mode_tag.to_string(),
             highest_qc: None,
             validator_set_hash: HashOf::new(&roster),
@@ -20401,6 +20415,61 @@ impl Actor {
             .duration_since(UNIX_EPOCH)
             .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
             .unwrap_or(0)
+    }
+
+    pub(super) fn vnext_chain_order_binding_for(&self, height: u64, view: u64) -> (Hash, u64) {
+        if let Some(reactor) = self.vnext_reactors.get(&(height, view)) {
+            return (reactor.chain_order.hash(), reactor.chain_order.rechain_seq);
+        }
+
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let mut commit_topology = self.state.commit_topology_snapshot();
+        if commit_topology.is_empty() {
+            commit_topology = self.effective_commit_topology();
+        }
+        if commit_topology.is_empty() {
+            return (
+                crate::sumeragi::consensus::default_chain_order_hash(),
+                0,
+            );
+        }
+
+        let topology = super::network_topology::Topology::new(commit_topology);
+        let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
+        let Some(quorum) = self.vnext_quorum_policy(consensus_mode, signature_topology.as_ref())
+        else {
+            return (
+                crate::sumeragi::consensus::default_chain_order_hash(),
+                0,
+            );
+        };
+        let Some(critical_prefix_len) =
+            quorum.smallest_satisfying_prefix_len(signature_topology.as_ref())
+        else {
+            return (
+                crate::sumeragi::consensus::default_chain_order_hash(),
+                0,
+            );
+        };
+        let epoch = self
+            .roster_validation_cache
+            .expected_epoch(height, consensus_mode);
+        super::vnext::ChainOrder::new(
+            height,
+            view,
+            epoch,
+            0,
+            signature_topology.as_ref().to_vec(),
+            critical_prefix_len,
+            critical_prefix_len,
+        )
+        .map(|order| (order.hash(), order.rechain_seq))
+        .unwrap_or_else(|_| {
+            (
+                crate::sumeragi::consensus::default_chain_order_hash(),
+                0,
+            )
+        })
     }
 
     fn apply_vnext_effects(&mut self, effects: Vec<super::vnext::ReactorEffect>) {

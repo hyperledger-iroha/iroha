@@ -1479,12 +1479,13 @@ impl Actor {
             .retain(|key, _| should_keep_vote_key(key));
         self.vote_validation_cache_identities
             .retain(|key, _| self.vote_log_identities.contains_key(key));
-        self.qc_cache.retain(|(_, hash, height, view, _), _| {
+        self.qc_cache
+            .retain(|(_, hash, height, view, _, _, _), _| {
             should_keep(*height, *view)
                 || (*height == active_height && preserved_active_pending_hashes.contains(hash))
         });
         self.qc_signer_tally
-            .retain(|(_, hash, height, view, _), _| {
+            .retain(|(_, hash, height, view, _, _, _), _| {
                 should_keep(*height, *view)
                     || (*height == active_height && preserved_active_pending_hashes.contains(hash))
             });
@@ -1498,11 +1499,11 @@ impl Actor {
                 || preserved_active_pending_hashes.contains(hash)
         });
         self.deferred_qcs
-            .retain(|(_, _, height, view, _), _| should_keep(*height, *view));
+            .retain(|(_, _, height, view, _, _, _), _| should_keep(*height, *view));
         self.deferred_missing_payload_qcs
-            .retain(|(_, _, height, view, _), _| should_keep(*height, *view));
+            .retain(|(_, _, height, view, _, _, _), _| should_keep(*height, *view));
         self.quarantined_block_sync_qcs
-            .retain(|(_, _, height, view, _), _| should_keep(*height, *view));
+            .retain(|(_, _, height, view, _, _, _), _| should_keep(*height, *view));
         self.deferred_votes.retain(|_, votes| {
             votes.retain(|(_, height, view, _, _), vote| {
                 should_keep(*height, *view) || preserve_active_pending_vote(vote)
@@ -2645,6 +2646,31 @@ impl Actor {
                 super::status::ConsensusMessageReason::HighestQcMismatch,
             );
             record_drop(super::status::VoteValidationDropReason::HighestQcMismatch);
+            return false;
+        }
+        let (expected_chain_order_hash, expected_rechain_seq) =
+            self.vnext_chain_order_binding_for(vote.height, vote.view);
+        if vote.chain_order_hash != expected_chain_order_hash
+            || vote.rechain_seq != expected_rechain_seq
+        {
+            debug!(
+                phase = ?vote.phase,
+                height = vote.height,
+                view = vote.view,
+                signer = vote.signer,
+                block_hash = %vote.block_hash,
+                vote_chain_order_hash = %vote.chain_order_hash,
+                expected_chain_order_hash = %expected_chain_order_hash,
+                vote_rechain_seq = vote.rechain_seq,
+                expected_rechain_seq,
+                "dropping vote with mismatched vNext chain-order binding"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::QcVote,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            record_drop(super::status::VoteValidationDropReason::ChainOrderMismatch);
             return false;
         }
         let signature_result = signature_result.unwrap_or_else(|| {

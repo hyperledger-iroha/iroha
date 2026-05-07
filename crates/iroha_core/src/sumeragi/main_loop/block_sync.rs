@@ -181,6 +181,8 @@ impl Actor {
             height: checkpoint.height,
             view: checkpoint.view,
             epoch: expected_epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             mode_tag: mode_tag.to_string(),
             highest_qc: None,
             validator_set_hash: checkpoint.validator_set_hash,

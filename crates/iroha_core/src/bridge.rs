@@ -674,6 +674,8 @@ pub fn verify_finality_proof(
         height: certificate.height,
         view: certificate.view,
         epoch: certificate.epoch,
+        chain_order_hash: certificate.chain_order_hash,
+        rechain_seq: certificate.rechain_seq,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),

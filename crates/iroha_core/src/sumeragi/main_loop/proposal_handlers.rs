@@ -2020,9 +2020,9 @@ impl Actor {
             }
             if !matches_committed {
                 self.qc_cache
-                    .retain(|(_, hash, _, _, _), _| *hash != block_hash);
+                    .retain(|(_, hash, _, _, _, _, _), _| *hash != block_hash);
                 self.qc_signer_tally
-                    .retain(|(_, hash, _, _, _), _| *hash != block_hash);
+                    .retain(|(_, hash, _, _, _, _, _), _| *hash != block_hash);
             }
             return Ok(());
         }
@@ -2358,9 +2358,9 @@ impl Actor {
                 self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
                 self.clean_rbc_sessions_for_block(block_hash, height);
                 self.qc_cache
-                    .retain(|(_, hash, _, _, _), _| *hash != block_hash);
+                    .retain(|(_, hash, _, _, _, _, _), _| *hash != block_hash);
                 self.qc_signer_tally
-                    .retain(|(_, hash, _, _, _), _| *hash != block_hash);
+                    .retain(|(_, hash, _, _, _, _, _), _| *hash != block_hash);
                 return Ok(());
             }
         }

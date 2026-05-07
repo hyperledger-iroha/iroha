@@ -1155,16 +1155,18 @@ impl Actor {
             if !keep_commit_qc {
                 self.clean_rbc_sessions_for_block(hash, height);
             }
-            self.qc_cache.retain(|(phase, qc_hash, _, _, _), _| {
+            self.qc_cache
+                .retain(|(phase, qc_hash, _, _, _, _, _), _| {
                 *qc_hash != hash
                     || (keep_commit_qc
                         && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
             });
-            self.qc_signer_tally.retain(|(phase, qc_hash, _, _, _), _| {
-                *qc_hash != hash
-                    || (keep_commit_qc
-                        && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
-            });
+            self.qc_signer_tally
+                .retain(|(phase, qc_hash, _, _, _, _, _), _| {
+                    *qc_hash != hash
+                        || (keep_commit_qc
+                            && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
+                });
             self.block_signer_cache.remove_block(&hash);
             self.pending.pending_blocks.remove(&hash);
             self.subsystems.validation.inflight.remove(&hash);
@@ -1182,9 +1184,9 @@ impl Actor {
             self.subsystems.validation.superseded_results.remove(&hash);
             self.clean_rbc_sessions_for_block(hash, height);
             self.qc_cache
-                .retain(|(_, qc_hash, _, _, _), _| qc_hash != &hash);
+                .retain(|(_, qc_hash, _, _, _, _, _), _| qc_hash != &hash);
             self.qc_signer_tally
-                .retain(|(_, qc_hash, _, _, _), _| qc_hash != &hash);
+                .retain(|(_, qc_hash, _, _, _, _, _), _| qc_hash != &hash);
             self.block_signer_cache.remove_block(&hash);
             stale_removed = stale_removed.saturating_add(1);
         }
@@ -1308,9 +1310,9 @@ impl Actor {
                 super::status::inc_prevote_timeout();
                 self.clean_rbc_sessions_for_block(key.0, key.1);
                 self.qc_cache
-                    .retain(|(_, qc_hash, _, _, _), _| qc_hash != &key.0);
+                    .retain(|(_, qc_hash, _, _, _, _, _), _| qc_hash != &key.0);
                 self.qc_signer_tally
-                    .retain(|(_, qc_hash, _, _, _), _| qc_hash != &key.0);
+                    .retain(|(_, qc_hash, _, _, _, _, _), _| qc_hash != &key.0);
                 self.block_signer_cache.remove_block(&key.0);
                 if let Some(highest) = self.highest_qc {
                     if highest.subject_block_hash == key.0
@@ -2019,16 +2021,18 @@ impl Actor {
             if !keep_commit_qc {
                 self.clean_rbc_sessions_for_block(block_hash, height);
             }
-            self.qc_cache.retain(|(phase, qc_hash, _, _, _), _| {
+            self.qc_cache
+                .retain(|(phase, qc_hash, _, _, _, _, _), _| {
                 *qc_hash != block_hash
                     || (keep_commit_qc
                         && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
             });
-            self.qc_signer_tally.retain(|(phase, qc_hash, _, _, _), _| {
-                *qc_hash != block_hash
-                    || (keep_commit_qc
-                        && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
-            });
+            self.qc_signer_tally
+                .retain(|(phase, qc_hash, _, _, _, _, _), _| {
+                    *qc_hash != block_hash
+                        || (keep_commit_qc
+                            && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
+                });
             self.pending.pending_fetch_requests.remove(&block_hash);
             self.pending.pending_block_body_requests.remove(&block_hash);
             self.subsystems.validation.inflight.remove(&block_hash);

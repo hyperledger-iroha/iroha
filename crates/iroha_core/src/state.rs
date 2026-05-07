@@ -21084,6 +21084,8 @@ impl State {
             height: qc.height,
             view: qc.view,
             epoch: qc.epoch,
+            chain_order_hash: qc.chain_order_hash,
+            rechain_seq: qc.rechain_seq,
             highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),

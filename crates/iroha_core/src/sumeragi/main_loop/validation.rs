@@ -1244,9 +1244,9 @@ impl Actor {
             .pop_hint(height, view);
         self.clean_rbc_sessions_for_block(hash, height);
         self.qc_cache
-            .retain(|(_, cached_hash, _, _, _), _| cached_hash != &hash);
+            .retain(|(_, cached_hash, _, _, _, _, _), _| cached_hash != &hash);
         self.qc_signer_tally
-            .retain(|(_, cached_hash, _, _, _), _| cached_hash != &hash);
+            .retain(|(_, cached_hash, _, _, _, _, _), _| cached_hash != &hash);
         if matches!(err, BlockValidationError::PreviousRosterEvidenceInvalid(_)) {
             let _ = self.maybe_trigger_payload_mismatch_recovery_bundle(
                 height,
