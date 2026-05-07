@@ -33,6 +33,15 @@ pub const PERMISSIONED_TAG: &str = "iroha2-consensus::permissioned-sumeragi@v1";
 /// Mode tag for `NPoS` Sumeragi used in handshakes and hashing domains.
 pub const NPOS_TAG: &str = "iroha2-consensus::npos-sumeragi@v1";
 
+/// Chain-order hash used by fixtures that do not model a live vNext order.
+///
+/// Live consensus code should populate QC votes and certificates with the
+/// selected `sumeragi::vnext::ChainOrder::hash()` for the active height/view.
+#[must_use]
+pub fn default_chain_order_hash() -> Hash {
+    Hash::new(b"iroha:sumeragi:vnext:chain-order:default")
+}
+
 /// Height alias for consensus.
 pub type Height = u64;
 /// View/round number alias.
@@ -240,6 +249,10 @@ pub struct QcVote {
     pub view: View,
     /// Epoch index for `NPoS`; 0 in permissioned.
     pub epoch: u64,
+    /// Hash of the vNext chain order this vote is valid under.
+    pub chain_order_hash: Hash,
+    /// Re-chain sequence of the vNext chain order this vote is valid under.
+    pub rechain_seq: u64,
     /// Highest known QC for `NewView` votes, bound into the vote signature.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -284,6 +297,10 @@ pub struct Qc {
     pub view: View,
     /// Epoch index.
     pub epoch: u64,
+    /// Hash of the vNext chain order this certificate is valid under.
+    pub chain_order_hash: Hash,
+    /// Re-chain sequence of the vNext chain order this certificate is valid under.
+    pub rechain_seq: u64,
     /// Consensus mode tag used to domain-separate signatures.
     pub mode_tag: String,
     /// Highest known QC that justifies a `NewView` QC, bound into the aggregate signature.

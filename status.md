@@ -62,6 +62,16 @@ Last updated: 2026-05-07
   (`5,279`), and CRC64 (`2,916`). These should follow the BN254 runtime fallback
   and consensus payload-availability work.
 
+## 2026-05-07 Iroha Config Snapshot Refresh
+
+- Refreshed `minimal_config_snapshot` so the expected minimal config includes
+  the current Sumeragi exact-body repair timing defaults, the default `Full`
+  logger format, and the empty Nexus dataspace fee-sponsor map.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_config --test fixtures`
+  - `cargo test -p iroha_config`
+
 ## 2026-05-07 Sumeragi vNext foundation
 
 - Added experimental `sumeragi::vnext` protocol state with explicit slot and

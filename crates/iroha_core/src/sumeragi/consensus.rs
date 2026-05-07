@@ -26,7 +26,7 @@ pub use iroha_data_model::block::consensus::{
     EvidencePayload, ExecKv, ExecWitness, ExecWitnessMsg, Height, NPOS_TAG, NposGenesisParams,
     PERMISSIONED_TAG, PROTO_VERSION, Proposal, Qc, QcAggregate, QcRef, QcVote, RbcChunk,
     RbcChunkRequest, RbcDeliver, RbcInit, RbcInitRequest, RbcReady, RbcReadySignature, Reconfig,
-    ValidatorIndex, View, VrfCommit, VrfReveal,
+    ValidatorIndex, View, VrfCommit, VrfReveal, default_chain_order_hash,
 };
 
 // Transitional aliases to reduce churn while the QC terminology is removed.
@@ -63,6 +63,8 @@ pub fn vote_preimage(chain_id: &ChainId, mode_tag: &str, v: &Vote) -> Vec<u8> {
     out.extend_from_slice(&v.height.to_be_bytes());
     out.extend_from_slice(&v.view.to_be_bytes());
     out.extend_from_slice(&v.epoch.to_be_bytes());
+    out.extend_from_slice(v.chain_order_hash.as_ref());
+    out.extend_from_slice(&v.rechain_seq.to_be_bytes());
     out.push(v.phase as u8);
     match v.highest_qc {
         Some(highest_qc) => {

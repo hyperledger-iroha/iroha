@@ -1426,6 +1426,8 @@ fn qc_bls_preimage(
         height: qc.height,
         view: qc.view,
         epoch: qc.epoch,
+        chain_order_hash: qc.chain_order_hash,
+        rechain_seq: qc.rechain_seq,
         highest_qc: qc.highest_qc,
         signer: 0,
         bls_sig: Vec::new(),
