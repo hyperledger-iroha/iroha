@@ -5515,6 +5515,9 @@ pub struct SumeragiBlock {
     /// Optional cap on IVM-heavy transactions included in a block (`None` = unlimited).
     #[config(env = "SUMERAGI_BLOCK_MAX_IVM_TRANSACTIONS")]
     pub max_ivm_transactions: Option<NonZeroUsize>,
+    /// Optional cap on transactions included in a fast-finality block (`None` = disabled).
+    #[config(env = "SUMERAGI_BLOCK_FAST_FINALITY_MAX_TRANSACTIONS")]
+    pub fast_finality_max_transactions: Option<NonZeroUsize>,
     /// Optional cap on block gas limit when commit time is fast (`None` = disabled).
     #[config(env = "SUMERAGI_BLOCK_FAST_GAS_LIMIT_PER_BLOCK")]
     pub fast_gas_limit_per_block: Option<NonZeroU64>,
@@ -7554,6 +7557,9 @@ impl Sumeragi {
             block: actual::SumeragiBlock {
                 max_transactions: block.max_transactions,
                 max_ivm_transactions: block.max_ivm_transactions,
+                fast_finality_max_transactions: block
+                    .fast_finality_max_transactions
+                    .or(defaults::sumeragi::FAST_FINALITY_MAX_TRANSACTIONS),
                 fast_gas_limit_per_block: block.fast_gas_limit_per_block,
                 max_payload_bytes: block.max_payload_bytes,
                 proposal_queue_scan_multiplier: block.proposal_queue_scan_multiplier,

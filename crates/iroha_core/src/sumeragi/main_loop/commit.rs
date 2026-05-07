@@ -717,15 +717,15 @@ fn commit_qc_from_cache_or_history(
     mode_tag: &str,
     commit_topology: &[PeerId],
 ) -> Option<crate::sumeragi::consensus::Qc> {
-    let key = (
+    if let Some(qc) = cached_qc_for(
+        qc_cache,
         crate::sumeragi::consensus::Phase::Commit,
         block_hash,
         height,
         view,
         epoch,
-    );
-    if let Some(qc) = qc_cache.get(&key) {
-        return Some(qc.clone());
+    ) {
+        return Some(qc);
     }
     super::status::commit_qc_history().into_iter().find(|qc| {
         qc.phase == crate::sumeragi::consensus::Phase::Commit
@@ -1372,12 +1372,16 @@ impl Actor {
                     block_hash,
                 );
                 pending_previously_marked_kura_persisted = pending.kura_persisted;
+                let (chain_order_hash, rechain_seq) =
+                    self.vnext_chain_order_binding_for(pending_height, pending_view);
                 let qc_key = (
                     crate::sumeragi::consensus::Phase::Commit,
                     block_hash,
                     pending_height,
                     pending_view,
                     lock.epoch,
+                    chain_order_hash,
+                    rechain_seq,
                 );
                 let (consensus_mode, mode_tag, _) =
                     self.consensus_context_for_height(pending_height);
@@ -1452,7 +1456,8 @@ impl Actor {
                                 signers,
                                 aggregate_signature,
                             ) {
-                                self.qc_cache.insert(qc_key, derived_qc.clone());
+                                self.qc_cache
+                                    .insert(Self::qc_tally_key(&derived_qc), derived_qc.clone());
                                 cached_qc = Some(derived_qc);
                             }
                         } else {
@@ -2335,7 +2340,7 @@ impl Actor {
             }
             let retention_floor = pending_height.saturating_sub(1);
             self.vote_log
-                .retain(|(_, _, height, _, _, _, _), _| *height >= retention_floor);
+                .retain(|(_, height, _, _, _), _| *height >= retention_floor);
             self.try_replay_deferred_votes();
             let _ = self.maybe_request_frontier_gap_realign_after_commit(Instant::now());
         }
@@ -2499,12 +2504,16 @@ impl Actor {
             );
         }
         let (consensus_mode, mode_tag, _) = self.consensus_context_for_height(pending_height);
+        let (chain_order_hash, rechain_seq) =
+            self.vnext_chain_order_binding_for(pending_height, pending_view);
         let qc_key = (
             crate::sumeragi::consensus::Phase::Commit,
             block_hash,
             pending_height,
             pending_view,
             lock.epoch,
+            chain_order_hash,
+            rechain_seq,
         );
         let cached_commit_qc = self.qc_cache.get(&qc_key).cloned();
         let certified_roster = cached_commit_qc
@@ -3910,8 +3919,8 @@ impl Actor {
         let cached_qc = self
             .qc_cache
             .keys()
-            .filter(|(_, _, height, _, _)| *height > frontier_height)
-            .map(|(_, _, height, _, _)| *height)
+            .filter(|(_, _, height, _, _, _, _)| *height > frontier_height)
+            .map(|(_, _, height, _, _, _, _)| *height)
             .max();
         let deferred_qc = self
             .deferred_missing_payload_qcs
@@ -4037,6 +4046,7 @@ impl Actor {
             .missing_commit_qc_requests
             .contains_key(&block_hash);
         let mut request_stalled = false;
+        let mut commit_qc_body_fallback = false;
         if height == self.committed_height_snapshot().saturating_add(1) {
             let stall_window = self.frontier_slot_lag_window();
             let dwell_window = stall_window.checked_mul(2).unwrap_or(stall_window);
@@ -4071,9 +4081,9 @@ impl Actor {
             {
                 catchup_advance = FrontierRecoveryAdvance::CatchUp;
             }
-            if (!payload_materialized_locally
-                && self.frontier_slot_allows_deep_catchup(height, "frontier_stall_reset"))
-                || matches!(catchup_advance, FrontierRecoveryAdvance::CatchUp)
+            if !payload_materialized_locally
+                && (self.frontier_slot_allows_deep_catchup(height, "frontier_stall_reset")
+                    || matches!(catchup_advance, FrontierRecoveryAdvance::CatchUp))
             {
                 info!(
                     height,
@@ -4086,6 +4096,7 @@ impl Actor {
                 );
                 return true;
             }
+            commit_qc_body_fallback = payload_materialized_locally && request_stalled;
         }
 
         let retry_window = self.missing_block_retry_window_with_rbc_progress(
@@ -4154,22 +4165,37 @@ impl Actor {
                     );
                     return true;
                 }
-                super::send_missing_block_request(
-                    &self.network,
-                    &self.common_config.peer.id,
-                    block_hash,
-                    height,
-                    view,
-                    super::MissingBlockPriority::Consensus,
-                    requester_roster_proof_known,
-                    &targets,
-                );
+                if payload_materialized_locally && !commit_qc_body_fallback {
+                    super::send_missing_commit_qc_request(
+                        &self.network,
+                        &self.common_config.peer.id,
+                        block_hash,
+                        height,
+                        view,
+                        super::MissingBlockPriority::Consensus,
+                        requester_roster_proof_known,
+                        &targets,
+                    );
+                } else {
+                    super::send_missing_block_request(
+                        &self.network,
+                        &self.common_config.peer.id,
+                        block_hash,
+                        height,
+                        view,
+                        super::MissingBlockPriority::Consensus,
+                        requester_roster_proof_known,
+                        &targets,
+                    );
+                }
                 info!(
                     height,
                     view,
                     block = %block_hash,
                     targets = ?targets,
                     target_kind = target_kind.label(),
+                    commit_qc_only = payload_materialized_locally && !commit_qc_body_fallback,
+                    commit_qc_body_fallback,
                     trigger,
                     retry_window_ms = retry_window.as_millis(),
                     dwell_ms,
@@ -4597,7 +4623,7 @@ impl Actor {
         let conflicting_vote = self.local_conflicting_slot_vote(height, epoch, block_hash);
         if let Some(conflict) = conflicting_vote {
             let new_view_qc_supersedes = self
-                .proposal_highest_qc_for_slot(height, view)
+                .proposal_or_new_view_highest_qc_for_slot(height, view)
                 .is_some_and(|highest_qc| {
                     self.new_view_qc_supersedes_same_height_vote_conflict(
                         height,
@@ -4778,16 +4804,21 @@ impl Actor {
         self.restore_initial_precommit_collector_state();
         let local_peer_id = self.common_config.peer.id().clone();
         let min_votes_for_commit = topology.min_votes_for_commit().max(1);
-        let mut vote_targets = self.quorum_retransmit_targets_for_missing_votes(
-            block_hash,
-            height,
-            view,
-            topology.as_ref(),
-            min_votes_for_commit,
-            1,
-        );
+        let permissioned_full_fanout = matches!(consensus_mode, ConsensusMode::Permissioned);
+        let mut vote_targets = if permissioned_full_fanout {
+            signature_topology.as_ref().to_vec()
+        } else {
+            self.quorum_retransmit_targets_for_missing_votes(
+                block_hash,
+                height,
+                view,
+                topology.as_ref(),
+                min_votes_for_commit,
+                1,
+            )
+        };
         let mut fallback_to_collector_seed = false;
-        if vote_targets.is_empty() {
+        if !permissioned_full_fanout && vote_targets.is_empty() {
             fallback_to_collector_seed = true;
             vote_targets = self
                 .subsystems
@@ -4798,7 +4829,7 @@ impl Actor {
                 .collect();
         }
         vote_targets.retain(|peer| peer != &local_peer_id);
-        if vote_targets.is_empty() {
+        if !permissioned_full_fanout && vote_targets.is_empty() {
             fallback_to_collector_seed = true;
             vote_targets = signature_topology.as_ref().to_vec();
             vote_targets.retain(|peer| peer != &local_peer_id);
@@ -5698,8 +5729,7 @@ impl Actor {
         rbc_payload_matches(sessions, handle, block_hash, height, view, payload_hash)
     }
 
-    #[cfg(test)]
-    fn local_payload_matches_hash(block: &SignedBlock, payload_hash: &Hash) -> bool {
+    pub(super) fn local_payload_matches_hash(block: &SignedBlock, payload_hash: &Hash) -> bool {
         let payload_bytes = super::proposals::block_payload_bytes(block);
         Hash::new(&payload_bytes) == *payload_hash
     }
@@ -6105,19 +6135,20 @@ impl Actor {
         qc: crate::sumeragi::consensus::QcHeaderRef,
         topology_peers: &[PeerId],
     ) -> Option<crate::sumeragi::consensus::Qc> {
-        let key = (
+        if let Some(existing) = cached_qc_for(
+            &self.qc_cache,
             qc.phase,
             qc.subject_block_hash,
             qc.height,
             qc.view,
             qc.epoch,
-        );
-        if let Some(existing) = self.qc_cache.get(&key).cloned() {
+        ) {
             return Some(existing);
         }
         if topology_peers.is_empty() {
             if let Some(recovered) = self.recover_highest_qc_from_kura(&qc) {
-                self.qc_cache.insert(key, recovered.clone());
+                self.qc_cache
+                    .insert(Self::qc_tally_key(&recovered), recovered.clone());
                 return Some(recovered);
             }
             debug!(
@@ -6138,11 +6169,19 @@ impl Actor {
             qc.epoch,
             &topology,
         );
-        if let Some(formed) = self.qc_cache.get(&key).cloned() {
+        if let Some(formed) = cached_qc_for(
+            &self.qc_cache,
+            qc.phase,
+            qc.subject_block_hash,
+            qc.height,
+            qc.view,
+            qc.epoch,
+        ) {
             return Some(formed);
         }
         if let Some(recovered) = self.recover_highest_qc_from_kura(&qc) {
-            self.qc_cache.insert(key, recovered.clone());
+            self.qc_cache
+                .insert(Self::qc_tally_key(&recovered), recovered.clone());
             return Some(recovered);
         }
 
@@ -6363,7 +6402,8 @@ impl Actor {
             aggregate_signature,
             roots,
         );
-        self.qc_cache.insert(key, rebuilt.clone());
+        self.qc_cache
+            .insert(Self::qc_tally_key(&rebuilt), rebuilt.clone());
         Some(rebuilt)
     }
 
@@ -6524,7 +6564,9 @@ impl Actor {
         }
 
         let mut stale_qcs: Vec<QcVoteKey> = Vec::new();
-        for (phase, hash, height, view, epoch) in self.qc_cache.keys() {
+        for (phase, hash, height, view, epoch, chain_order_hash, rechain_seq) in
+            self.qc_cache.keys()
+        {
             let extends = chain_extends_tip(
                 *hash,
                 *height,
@@ -6534,7 +6576,15 @@ impl Actor {
             );
             let drop_entry = *height < committed_height || matches!(extends, Some(false) | None);
             if drop_entry {
-                stale_qcs.push((*phase, *hash, *height, *view, *epoch));
+                stale_qcs.push((
+                    *phase,
+                    *hash,
+                    *height,
+                    *view,
+                    *epoch,
+                    *chain_order_hash,
+                    *rechain_seq,
+                ));
             }
         }
         for key in stale_qcs {

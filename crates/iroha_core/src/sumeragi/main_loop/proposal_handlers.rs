@@ -544,6 +544,7 @@ impl Actor {
                 "observed proposal hint for view"
             );
         }
+        let _ = self.replay_deferred_votes_for_slot(height, view, "proposal_hint");
         self.prune_proposals_seen_horizon(state_height);
         let _ = self.maybe_release_committed_edge_conflict_owner("proposal_hint_seen");
         Ok(())
@@ -672,6 +673,7 @@ impl Actor {
             reason,
         );
         self.flush_frontier_body_requesters(block);
+        self.flush_pending_block_body_requests_if_ready(block);
         self.flush_pending_fetch_requests(block);
         self.clear_missing_block_request(&block_hash, MissingBlockClearReason::PayloadAvailable);
         self.clear_missing_block_view_change(&block_hash);
@@ -1046,6 +1048,7 @@ impl Actor {
             .propose
             .proposal_cache
             .insert_proposal(proposal);
+        let _ = self.replay_deferred_votes_for_slot(height, view, "proposal");
         Ok(())
     }
 
@@ -4078,6 +4081,7 @@ impl Actor {
             .map(|pending| pending.block.clone())
         {
             self.flush_frontier_body_requesters(&block);
+            self.flush_pending_block_body_requests_if_ready(&block);
             self.flush_pending_fetch_requests(&block);
         }
         self.clear_missing_block_request(&block_hash, MissingBlockClearReason::PayloadAvailable);

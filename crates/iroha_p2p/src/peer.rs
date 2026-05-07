@@ -1852,7 +1852,7 @@ mod run {
 
         fn try_send<T: Pload + ClassifyTopic>(&mut self, msg: &T) -> Result<DatagramSend, Error> {
             // Encode a single Norito-framed payload and encrypt it with the negotiated session key.
-            ncore::to_bytes_in(msg, &mut self.buffer)?;
+            encode_wire_message(msg, &mut self.buffer)?;
             let max_plaintext = crate::frame_plaintext_cap(self.max_frame_bytes);
             if self.buffer.len() > max_plaintext {
                 return Err(Error::FrameTooLarge);
@@ -1991,7 +1991,8 @@ mod run {
     const HI_BUDGET_FALLBACK: u8 = 1;
     const HI_CONTROL_BURST_MAX: u8 = 4;
     const HI_CONSENSUS_BURST_MAX: u8 = 4;
-    const HI_PAYLOAD_BURST_MAX: u8 = 1;
+    const HI_PAYLOAD_BURST_MAX: u8 = 2;
+    const HI_AVAILABILITY_BURST_MAX: u8 = 2;
     // Drain a few queued outbound posts per loop iteration to allow `MessageSender` to
     // batch multiple logical messages into fewer encrypted frames.
     const OUTBOUND_DRAIN_HI_MAX: usize = 8;
@@ -2105,6 +2106,7 @@ mod run {
         control_burst: &mut u8,
         consensus_burst: &mut u8,
         payload_burst: &mut u8,
+        availability_burst: &mut u8,
         topic: HighTopic,
     ) {
         match topic {
@@ -2116,16 +2118,23 @@ mod run {
                 *consensus_burst = consensus_burst
                     .saturating_add(1)
                     .min(HI_CONSENSUS_BURST_MAX);
+                *availability_burst = 0;
             }
             HighTopic::ConsensusPayload => {
                 *control_burst = 0;
                 *consensus_burst = 0;
                 *payload_burst = payload_burst.saturating_add(1).min(HI_PAYLOAD_BURST_MAX);
+                *availability_burst = availability_burst
+                    .saturating_add(1)
+                    .min(HI_AVAILABILITY_BURST_MAX);
             }
             HighTopic::ConsensusChunk => {
                 *control_burst = 0;
                 *consensus_burst = 0;
                 *payload_burst = 0;
+                *availability_burst = availability_burst
+                    .saturating_add(1)
+                    .min(HI_AVAILABILITY_BURST_MAX);
             }
         }
     }
@@ -2152,17 +2161,40 @@ mod run {
         control_burst: &mut u8,
         consensus_burst: &mut u8,
         payload_burst: &mut u8,
+        availability_burst: &mut u8,
         hi_control_rx: &mut post_channel::Receiver<T>,
         hi_consensus_rx: &mut post_channel::Receiver<T>,
         hi_consensus_payload_rx: &mut post_channel::Receiver<T>,
         hi_consensus_chunk_rx: &mut post_channel::Receiver<T>,
     ) -> Option<(HighTopic, T)> {
+        let availability_pending =
+            !hi_consensus_payload_rx.is_empty() || !hi_consensus_chunk_rx.is_empty();
+        let availability_preferred = availability_pending
+            && (*availability_burst < HI_AVAILABILITY_BURST_MAX || hi_consensus_rx.is_empty());
+
         if *control_burst >= HI_CONTROL_BURST_MAX {
+            if availability_preferred
+                && let Some((topic, msg)) = try_recv_high_data_fair(
+                    *payload_burst,
+                    hi_consensus_payload_rx,
+                    hi_consensus_chunk_rx,
+                )
+            {
+                note_high_topic_served(
+                    control_burst,
+                    consensus_burst,
+                    payload_burst,
+                    availability_burst,
+                    topic,
+                );
+                return Some((topic, msg));
+            }
             if let Some(m) = hi_consensus_rx.try_recv_now() {
                 note_high_topic_served(
                     control_burst,
                     consensus_burst,
                     payload_burst,
+                    availability_burst,
                     HighTopic::Consensus,
                 );
                 return Some((HighTopic::Consensus, m));
@@ -2172,7 +2204,13 @@ mod run {
                 hi_consensus_payload_rx,
                 hi_consensus_chunk_rx,
             ) {
-                note_high_topic_served(control_burst, consensus_burst, payload_burst, topic);
+                note_high_topic_served(
+                    control_burst,
+                    consensus_burst,
+                    payload_burst,
+                    availability_burst,
+                    topic,
+                );
                 return Some((topic, msg));
             }
         }
@@ -2181,25 +2219,33 @@ mod run {
                 control_burst,
                 consensus_burst,
                 payload_burst,
+                availability_burst,
                 HighTopic::Control,
             );
             return Some((HighTopic::Control, m));
         }
-        if *consensus_burst >= HI_CONSENSUS_BURST_MAX {
-            if let Some((topic, msg)) = try_recv_high_data_fair(
+        if (availability_preferred || *consensus_burst >= HI_CONSENSUS_BURST_MAX)
+            && let Some((topic, msg)) = try_recv_high_data_fair(
                 *payload_burst,
                 hi_consensus_payload_rx,
                 hi_consensus_chunk_rx,
-            ) {
-                note_high_topic_served(control_burst, consensus_burst, payload_burst, topic);
-                return Some((topic, msg));
-            }
+            )
+        {
+            note_high_topic_served(
+                control_burst,
+                consensus_burst,
+                payload_burst,
+                availability_burst,
+                topic,
+            );
+            return Some((topic, msg));
         }
         if let Some(m) = hi_consensus_rx.try_recv_now() {
             note_high_topic_served(
                 control_burst,
                 consensus_burst,
                 payload_burst,
+                availability_burst,
                 HighTopic::Consensus,
             );
             return Some((HighTopic::Consensus, m));
@@ -2209,7 +2255,13 @@ mod run {
             hi_consensus_payload_rx,
             hi_consensus_chunk_rx,
         )?;
-        note_high_topic_served(control_burst, consensus_burst, payload_burst, next.0);
+        note_high_topic_served(
+            control_burst,
+            consensus_burst,
+            payload_burst,
+            availability_burst,
+            next.0,
+        );
         Some(next)
     }
 
@@ -2521,6 +2573,7 @@ mod run {
             let mut hi_control_burst: u8 = 0;
             let mut hi_consensus_burst: u8 = 0;
             let mut hi_payload_burst: u8 = 0;
+            let mut hi_availability_burst: u8 = 0;
             let mut malformed_payload_streak_hi: u32 = 0;
             let mut malformed_payload_streak_low: u32 = 0;
 
@@ -2588,6 +2641,7 @@ mod run {
                         &mut hi_control_burst,
                         &mut hi_consensus_burst,
                         &mut hi_payload_burst,
+                        &mut hi_availability_burst,
                         &mut hi_control_rx,
                         &mut hi_consensus_rx,
                         &mut hi_consensus_payload_rx,
@@ -2663,6 +2717,11 @@ mod run {
                     drained_lo = drained_lo.saturating_add(1);
                 }
 
+                let availability_direct_allowed = hi_availability_burst
+                    < HI_AVAILABILITY_BURST_MAX
+                    || hi_consensus_rx.is_empty()
+                    || hi_consensus_burst >= HI_CONSENSUS_BURST_MAX;
+
                 tokio::select! {
                     // High-priority topics first (budgeted to avoid starvation).
                     _ = ping_interval.tick() => {
@@ -2690,6 +2749,7 @@ mod run {
                                 &mut hi_control_burst,
                                 &mut hi_consensus_burst,
                                 &mut hi_payload_burst,
+                                &mut hi_availability_burst,
                                 HighTopic::Control,
                             );
                             iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::Control));
@@ -2706,6 +2766,7 @@ mod run {
                                 &mut hi_control_burst,
                                 &mut hi_consensus_burst,
                                 &mut hi_payload_burst,
+                                &mut hi_availability_burst,
                                 HighTopic::Consensus,
                             );
                             iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::Consensus));
@@ -2716,12 +2777,13 @@ mod run {
                             hi_budget = hi_budget.saturating_sub(1);
                         }
                     }
-                    msg = hi_consensus_payload_rx.recv(), if hi_budget > 0 => {
+                    msg = hi_consensus_payload_rx.recv(), if hi_budget > 0 && availability_direct_allowed => {
                         if let Some(m) = msg {
                             note_high_topic_served(
                                 &mut hi_control_burst,
                                 &mut hi_consensus_burst,
                                 &mut hi_payload_burst,
+                                &mut hi_availability_burst,
                                 HighTopic::ConsensusPayload,
                             );
                             iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::ConsensusPayload));
@@ -2732,12 +2794,13 @@ mod run {
                             hi_budget = hi_budget.saturating_sub(1);
                         }
                     }
-                    msg = hi_consensus_chunk_rx.recv(), if hi_budget > 0 => {
+                    msg = hi_consensus_chunk_rx.recv(), if hi_budget > 0 && availability_direct_allowed => {
                         if let Some(m) = msg {
                             note_high_topic_served(
                                 &mut hi_control_burst,
                                 &mut hi_consensus_burst,
                                 &mut hi_payload_burst,
+                                &mut hi_availability_burst,
                                 HighTopic::ConsensusChunk,
                             );
                             iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::ConsensusChunk));
@@ -3264,6 +3327,7 @@ mod run {
         framed_schema: [u8; 16],
         framed_padding: usize,
         max_frame_bytes: usize,
+        pending_malformed_payload: Option<MalformedPayloadFrameContext>,
         last_malformed_payload: Option<MalformedPayloadFrameContext>,
     }
 
@@ -3295,6 +3359,7 @@ mod run {
                 framed_schema: <M as ncore::NoritoSerialize>::schema_hash(),
                 framed_padding,
                 max_frame_bytes,
+                pending_malformed_payload: None,
                 last_malformed_payload: None,
             }
         }
@@ -3441,6 +3506,10 @@ mod run {
             if let Some(msg) = self.pending.pop_front() {
                 return Ok(Some(msg));
             }
+            if let Some(context) = self.pending_malformed_payload.take() {
+                self.last_malformed_payload = Some(context);
+                return Err(Error::MalformedPayloadFrame);
+            }
             loop {
                 // Try to get full message
                 if self.parse_next_encrypted_frame()? {
@@ -3480,28 +3549,47 @@ mod run {
             }
 
             let data = &buf[..size];
-            let mut malformed_context = None;
-            let parsed = (|| -> Result<VecDeque<(M, usize)>, Error> {
+            enum ParsedFrame<M> {
+                Messages(VecDeque<(M, usize)>),
+                Malformed {
+                    context: MalformedPayloadFrameContext,
+                    messages: VecDeque<(M, usize)>,
+                },
+            }
+
+            let parsed = (|| -> Result<ParsedFrame<M>, Error> {
                 let decrypted = self.cryptographer.decrypt_into(data, &mut self.decrypted)?;
                 // Decrypted payload may contain multiple Norito-framed messages.
-                Self::parse_decrypted_frame_messages(
+                match Self::parse_decrypted_frame_messages(
                     decrypted,
                     size,
                     self.framed_schema,
                     self.framed_padding,
                     &mut self.decode_scratch,
-                )
-                .map_err(|context| {
-                    malformed_context = Some(context);
-                    Error::MalformedPayloadFrame
-                })
+                ) {
+                    Ok(messages) => Ok(ParsedFrame::Messages(messages)),
+                    Err(context) => Ok(ParsedFrame::Malformed {
+                        context,
+                        messages: VecDeque::new(),
+                    }),
+                }
             })();
 
             self.buffer.advance(size + Self::U32_SIZE);
-            if matches!(&parsed, Err(Error::MalformedPayloadFrame)) {
-                self.last_malformed_payload = malformed_context;
+
+            match parsed? {
+                ParsedFrame::Messages(messages) => {
+                    self.pending.extend(messages);
+                }
+                ParsedFrame::Malformed { context, messages } => {
+                    if messages.is_empty() {
+                        self.last_malformed_payload = Some(context);
+                        return Err(Error::MalformedPayloadFrame);
+                    }
+                    self.pending_malformed_payload = Some(context);
+                    self.pending.extend(messages);
+                }
             }
-            self.pending.extend(parsed?);
 
             Ok(true)
         }
@@ -3542,6 +3630,8 @@ mod run {
         high_consensus_burst: usize,
         /// Number of consecutive payload frames emitted before giving chunk a turn.
         high_payload_burst: usize,
+        /// Number of consecutive availability frames emitted before giving consensus a turn.
+        high_availability_burst: usize,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3557,7 +3647,7 @@ mod run {
         fn should_isolate_plaintext(self) -> bool {
             matches!(
                 self,
-                Self::Control | Self::ConsensusPayload | Self::ConsensusChunk
+                Self::Control | Self::Consensus | Self::ConsensusPayload | Self::ConsensusChunk
             )
         }
     }
@@ -3580,7 +3670,8 @@ mod run {
         const MAX_BATCH_HI_BURST: usize = 4;
         const MAX_BATCH_CONTROL_BURST: usize = 4;
         const MAX_BATCH_CONSENSUS_BURST: usize = 4;
-        const MAX_BATCH_PAYLOAD_BURST: usize = 1;
+        const MAX_BATCH_PAYLOAD_BURST: usize = 2;
+        const MAX_BATCH_AVAILABILITY_BURST: usize = 2;
         const MAX_PLAINTEXT_MSGS_HI: usize = 16;
         const MAX_PLAINTEXT_MSGS_LO: usize = 32;
         const MAX_PLAINTEXT_BYTES_HI: usize = 64 * 1024;
@@ -3617,6 +3708,7 @@ mod run {
                 high_control_burst: 0,
                 high_consensus_burst: 0,
                 high_payload_burst: 0,
+                high_availability_burst: 0,
             }
         }
 
@@ -3628,7 +3720,7 @@ mod run {
         where
             T: Pload + ClassifyTopic,
         {
-            ncore::to_bytes_in(msg, &mut self.buffer)?;
+            encode_wire_message(msg, &mut self.buffer)?;
 
             let topic = msg.topic();
             let max_plaintext = crate::frame_plaintext_cap(self.max_frame_bytes);
@@ -3640,10 +3732,10 @@ mod run {
             match priority {
                 Priority::High => {
                     let class = classify_high_batch(topic);
-                    // Control and availability-repair traffic should not be batched with
-                    // neighbouring high-priority messages. If one encrypted frame is lost or
-                    // malformed under fault injection, this keeps the blast radius to a single
-                    // control/payload/chunk message and lets Sumeragi repair fanout make progress.
+                    // Control and consensus traffic should not be batched with neighbouring
+                    // high-priority messages. If one encrypted frame is lost or malformed under
+                    // load, this keeps the blast radius to one vote/QC/RBC/control message and
+                    // lets Sumeragi repair fanout make progress.
                     if class.should_isolate_plaintext() {
                         self.flush_plain_high()?;
                         self.enqueue_current_buffer(Priority::High, Some(class))?;
@@ -3874,6 +3966,13 @@ mod run {
 
             let background_pending = !self.queue_high_consensus_payload.is_empty()
                 || !self.queue_high_consensus_chunk.is_empty();
+            let availability_preferred = background_pending
+                && (self.high_availability_burst < Self::MAX_BATCH_AVAILABILITY_BURST
+                    || self.queue_high_consensus.is_empty());
+            if availability_preferred && let Some(class) = self.next_high_background_class() {
+                return Some(class);
+            }
+
             if !self.queue_high_consensus.is_empty()
                 && (!background_pending
                     || self.high_consensus_burst < Self::MAX_BATCH_CONSENSUS_BURST)
@@ -3959,6 +4058,7 @@ mod run {
                         .high_consensus_burst
                         .saturating_add(1)
                         .min(Self::MAX_BATCH_CONSENSUS_BURST);
+                    self.high_availability_burst = 0;
                 }
                 HighBatchClass::ConsensusPayload => {
                     self.high_control_burst = 0;
@@ -3967,11 +4067,19 @@ mod run {
                         .high_payload_burst
                         .saturating_add(1)
                         .min(Self::MAX_BATCH_PAYLOAD_BURST);
+                    self.high_availability_burst = self
+                        .high_availability_burst
+                        .saturating_add(1)
+                        .min(Self::MAX_BATCH_AVAILABILITY_BURST);
                 }
                 HighBatchClass::ConsensusChunk => {
                     self.high_control_burst = 0;
                     self.high_consensus_burst = 0;
                     self.high_payload_burst = 0;
+                    self.high_availability_burst = self
+                        .high_availability_burst
+                        .saturating_add(1)
+                        .min(Self::MAX_BATCH_AVAILABILITY_BURST);
                 }
                 HighBatchClass::Other => {
                     self.high_control_burst = 0;
@@ -4082,6 +4190,12 @@ mod run {
         ncore::to_bytes(&message)
             .map(|bytes| bytes.len())
             .unwrap_or(usize::MAX)
+    }
+
+    fn encode_wire_message<T: Pload>(msg: &T, out: &mut Vec<u8>) -> Result<(), ncore::Error> {
+        let flags = ncore::default_encode_flags();
+        let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        ncore::to_bytes_in(msg, out)
     }
 
     fn framed_message_len<M: Pload>(
@@ -4489,9 +4603,9 @@ mod run {
                 delivered,
                 vec![
                     RoutedMsg::Control(4),
-                    RoutedMsg::Consensus(3),
                     RoutedMsg::ConsensusPayload(1),
                     RoutedMsg::ConsensusChunk(2),
+                    RoutedMsg::Consensus(3),
                 ]
             );
         }
@@ -4554,6 +4668,55 @@ mod run {
         }
 
         #[tokio::test(flavor = "current_thread")]
+        async fn message_sender_isolates_consensus_encrypted_frames() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = CollectingWrite {
+                buffer: Arc::clone(&buffer),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[15u8; 32])
+                    .expect("valid key length");
+            let reader_cryptographer = cryptographer.clone();
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+
+            for msg in [RoutedMsg::Consensus(1), RoutedMsg::Consensus(2)] {
+                sender
+                    .prepare_message(&Message::Data(msg), Priority::High)
+                    .expect("prepare consensus message");
+            }
+
+            while sender.ready() {
+                sender.send().await.expect("send");
+            }
+
+            let data = {
+                let buffer = buffer.lock().expect("buffer lock");
+                assert_eq!(
+                    encrypted_wire_frame_count(&buffer),
+                    2,
+                    "consensus messages should use one encrypted frame each"
+                );
+                Bytes::from(buffer.clone())
+            };
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                MessageReader::new(read, reader_cryptographer, 1024);
+
+            let mut delivered = Vec::new();
+            while let Some((msg, _)) = reader.read_message().await.expect("read message") {
+                match msg {
+                    Message::Data(msg) => delivered.push(msg),
+                    other => panic!("expected data frame, got {other:?}"),
+                }
+            }
+
+            assert_eq!(
+                delivered,
+                vec![RoutedMsg::Consensus(1), RoutedMsg::Consensus(2)]
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
         async fn message_sender_high_lane_fairness_drains_payload_and_chunk_under_consensus() {
             let buffer = Arc::new(Mutex::new(Vec::new()));
             let writer = CollectingWrite {
@@ -4609,17 +4772,75 @@ mod run {
             assert_eq!(
                 delivered,
                 vec![
+                    RoutedMsg::ConsensusPayload(10),
+                    RoutedMsg::ConsensusChunk(11),
                     RoutedMsg::Consensus(1),
                     RoutedMsg::Consensus(2),
                     RoutedMsg::Consensus(3),
                     RoutedMsg::Consensus(4),
-                    RoutedMsg::ConsensusPayload(10),
                     RoutedMsg::Consensus(5),
                     RoutedMsg::Consensus(6),
                     RoutedMsg::Consensus(7),
                     RoutedMsg::Consensus(8),
-                    RoutedMsg::ConsensusChunk(11),
                     RoutedMsg::Consensus(9),
+                ]
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn message_sender_chunks_do_not_starve_consensus_frames() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = CollectingWrite {
+                buffer: Arc::clone(&buffer),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[16u8; 32])
+                    .expect("valid key length");
+            let reader_cryptographer = cryptographer.clone();
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+
+            for id in 1..=4 {
+                sender
+                    .prepare_message(
+                        &Message::Data(RoutedMsg::ConsensusChunk(id)),
+                        Priority::High,
+                    )
+                    .expect("prepare chunk");
+                sender.flush_plain_high().expect("flush chunk");
+            }
+            for id in 1..=2 {
+                sender
+                    .prepare_message(&Message::Data(RoutedMsg::Consensus(id)), Priority::High)
+                    .expect("prepare consensus");
+                sender.flush_plain_high().expect("flush consensus");
+            }
+
+            while sender.ready() {
+                sender.send().await.expect("send");
+            }
+
+            let data = {
+                let buffer = buffer.lock().expect("buffer lock");
+                Bytes::from(buffer.clone())
+            };
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                MessageReader::new(read, reader_cryptographer, 1024);
+
+            let mut delivered = Vec::new();
+            while let Some((msg, _)) = reader.read_message().await.expect("read message") {
+                match msg {
+                    Message::Data(msg) => delivered.push(msg),
+                    other => panic!("expected data frame, got {other:?}"),
+                }
+            }
+
+            assert_eq!(
+                &delivered[..3],
+                [
+                    RoutedMsg::ConsensusChunk(1),
+                    RoutedMsg::ConsensusChunk(2),
+                    RoutedMsg::Consensus(1),
                 ]
             );
         }
@@ -4681,13 +4902,13 @@ mod run {
             assert_eq!(
                 delivered,
                 vec![
-                    RoutedMsg::Consensus(1),
-                    RoutedMsg::Consensus(2),
-                    RoutedMsg::Consensus(3),
-                    RoutedMsg::Consensus(4),
                     RoutedMsg::ConsensusPayload(10),
                     RoutedMsg::ConsensusChunk(11),
+                    RoutedMsg::Consensus(1),
+                    RoutedMsg::Consensus(2),
                     RoutedMsg::TxGossip(90),
+                    RoutedMsg::Consensus(3),
+                    RoutedMsg::Consensus(4),
                 ]
             );
         }
@@ -4785,6 +5006,45 @@ mod run {
 
             let none = reader.read_message().await.expect("read none");
             assert!(none.is_none());
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn message_reader_decodes_frame_under_stale_decode_flags() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = CollectingWrite {
+                buffer: Arc::clone(&buffer),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[6u8; 32])
+                    .expect("valid key length");
+            let reader_cryptographer = cryptographer.clone();
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+
+            sender
+                .prepare_message(&Blob(vec![9u8]), Priority::Low)
+                .expect("prepare message");
+
+            while sender.ready() {
+                sender.send().await.expect("send");
+            }
+
+            let data = {
+                let buffer = buffer.lock().expect("buffer lock");
+                Bytes::from(buffer.clone())
+            };
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut reader: MessageReader<ChaCha20Poly1305, Blob> =
+                MessageReader::new(read, reader_cryptographer, 1024);
+
+            let stale = ncore::DecodeFlagsGuard::enter(0);
+            let (decoded, _) = reader
+                .read_message()
+                .await
+                .expect("read under stale flags")
+                .expect("message");
+            assert_eq!(decoded.0, vec![9u8]);
+            drop(stale);
+            ncore::reset_decode_state();
         }
 
         #[test]
@@ -4907,7 +5167,7 @@ mod run {
         }
 
         #[tokio::test(flavor = "current_thread")]
-        async fn high_lane_consensus_bypasses_payload_and_chunk_posts() {
+        async fn high_lane_availability_bypasses_consensus_posts() {
             let (control_tx, mut control_rx) = post_channel::channel(8);
             let (consensus_tx, mut consensus_rx) = post_channel::channel(8);
             let (payload_tx, mut payload_rx) = post_channel::channel(8);
@@ -4923,12 +5183,14 @@ mod run {
 
             let mut consensus_burst = 0u8;
             let mut payload_burst = 0u8;
+            let mut availability_burst = 0u8;
             let mut control_burst = 0u8;
 
             let first = try_recv_high_fair(
                 &mut control_burst,
                 &mut consensus_burst,
                 &mut payload_burst,
+                &mut availability_burst,
                 &mut control_rx,
                 &mut consensus_rx,
                 &mut payload_rx,
@@ -4939,6 +5201,7 @@ mod run {
                 &mut control_burst,
                 &mut consensus_burst,
                 &mut payload_burst,
+                &mut availability_burst,
                 &mut control_rx,
                 &mut consensus_rx,
                 &mut payload_rx,
@@ -4949,6 +5212,7 @@ mod run {
                 &mut control_burst,
                 &mut consensus_burst,
                 &mut payload_burst,
+                &mut availability_burst,
                 &mut control_rx,
                 &mut consensus_rx,
                 &mut payload_rx,
@@ -4956,9 +5220,9 @@ mod run {
             )
             .expect("third high message");
 
-            assert_eq!(first, (HighTopic::Consensus, "consensus"));
-            assert_eq!(second, (HighTopic::ConsensusPayload, "payload"));
-            assert_eq!(third, (HighTopic::ConsensusChunk, "chunk"));
+            assert_eq!(first, (HighTopic::ConsensusPayload, "payload"));
+            assert_eq!(second, (HighTopic::ConsensusChunk, "chunk"));
+            assert_eq!(third, (HighTopic::Consensus, "consensus"));
         }
 
         #[tokio::test(flavor = "current_thread")]
@@ -4986,12 +5250,14 @@ mod run {
 
             let mut consensus_burst = 0u8;
             let mut payload_burst = 0u8;
+            let mut availability_burst = 0u8;
             let mut control_burst = 0u8;
             let mut served = Vec::new();
             while let Some(item) = try_recv_high_fair(
                 &mut control_burst,
                 &mut consensus_burst,
                 &mut payload_burst,
+                &mut availability_burst,
                 &mut control_rx,
                 &mut consensus_rx,
                 &mut payload_rx,
@@ -5001,19 +5267,72 @@ mod run {
             }
 
             let expected = vec![
+                (HighTopic::ConsensusPayload, String::from("payload")),
+                (HighTopic::ConsensusChunk, String::from("chunk")),
                 (HighTopic::Consensus, String::from("c1")),
                 (HighTopic::Consensus, String::from("c2")),
                 (HighTopic::Consensus, String::from("c3")),
                 (HighTopic::Consensus, String::from("c4")),
-                (HighTopic::ConsensusPayload, String::from("payload")),
                 (HighTopic::Consensus, String::from("c5")),
                 (HighTopic::Consensus, String::from("c6")),
                 (HighTopic::Consensus, String::from("c7")),
                 (HighTopic::Consensus, String::from("c8")),
-                (HighTopic::ConsensusChunk, String::from("chunk")),
                 (HighTopic::Consensus, String::from("c9")),
             ];
             assert_eq!(served, expected);
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn high_lane_chunks_do_not_starve_consensus_posts() {
+            let (control_tx, mut control_rx) = post_channel::channel(16);
+            let (consensus_tx, mut consensus_rx) = post_channel::channel(16);
+            let (payload_tx, mut payload_rx) = post_channel::channel::<String>(16);
+            let (chunk_tx, mut chunk_rx) = post_channel::channel(16);
+            let _ = control_tx;
+            let _ = payload_tx;
+
+            for id in 1..=4 {
+                consensus_tx
+                    .send(format!("c{id}"))
+                    .await
+                    .expect("queue consensus");
+                chunk_tx
+                    .send(format!("chunk{id}"))
+                    .await
+                    .expect("queue chunk");
+            }
+
+            let mut consensus_burst = 0u8;
+            let mut payload_burst = 0u8;
+            let mut availability_burst = 0u8;
+            let mut control_burst = 0u8;
+            let mut served = Vec::new();
+            while let Some(item) = try_recv_high_fair(
+                &mut control_burst,
+                &mut consensus_burst,
+                &mut payload_burst,
+                &mut availability_burst,
+                &mut control_rx,
+                &mut consensus_rx,
+                &mut payload_rx,
+                &mut chunk_rx,
+            ) {
+                served.push(item);
+            }
+
+            assert_eq!(
+                &served[..3],
+                [
+                    (HighTopic::ConsensusChunk, String::from("chunk1")),
+                    (HighTopic::ConsensusChunk, String::from("chunk2")),
+                    (HighTopic::Consensus, String::from("c1")),
+                ]
+            );
+            assert!(
+                served
+                    .iter()
+                    .any(|item| item == &(HighTopic::Consensus, String::from("c2")))
+            );
         }
 
         #[tokio::test(flavor = "current_thread")]
@@ -5033,11 +5352,13 @@ mod run {
 
             let mut consensus_burst = 0u8;
             let mut payload_burst = 0u8;
+            let mut availability_burst = 0u8;
             let mut control_burst = 0u8;
             let first = try_recv_high_fair(
                 &mut control_burst,
                 &mut consensus_burst,
                 &mut payload_burst,
+                &mut availability_burst,
                 &mut control_rx,
                 &mut consensus_rx,
                 &mut payload_rx,
@@ -5123,7 +5444,7 @@ mod run {
         }
 
         #[tokio::test(flavor = "current_thread")]
-        async fn malformed_decrypted_payload_frame_is_dropped_and_next_valid_frame_is_delivered() {
+        async fn malformed_payload_frame_salvages_decoded_messages_before_error() {
             let key_byte = 5u8;
             let mut malformed_plain = blob_message_frame(&[1u8]);
             let mut truncated_inner = blob_message_frame(&[2u8]);
@@ -5147,10 +5468,21 @@ mod run {
             let mut reader: MessageReader<ChaCha20Poly1305, Message<Blob>> =
                 MessageReader::new(read, cryptographer, 1024);
 
+            let (message, encoded_len) = reader
+                .read_message()
+                .await
+                .expect("decoded messages before malformed inner frame should be delivered")
+                .expect("valid message should be salvaged");
+            assert_eq!(encoded_len, blob_message_frame(&[1u8]).len());
+            match message {
+                Message::Data(blob) => assert_eq!(blob.0, vec![1u8]),
+                other => panic!("expected salvaged data frame, got {other:?}"),
+            }
+
             let err = reader
                 .read_message()
                 .await
-                .expect_err("first decrypted frame should be dropped");
+                .expect_err("malformed remainder should be reported after salvaged messages");
             assert!(matches!(err, Error::MalformedPayloadFrame));
             let context = reader
                 .take_malformed_payload_context()

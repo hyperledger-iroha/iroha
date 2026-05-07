@@ -1155,8 +1155,7 @@ impl Actor {
             if !keep_commit_qc {
                 self.clean_rbc_sessions_for_block(hash, height);
             }
-            self.qc_cache
-                .retain(|(phase, qc_hash, _, _, _, _, _), _| {
+            self.qc_cache.retain(|(phase, qc_hash, _, _, _, _, _), _| {
                 *qc_hash != hash
                     || (keep_commit_qc
                         && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
@@ -2021,8 +2020,7 @@ impl Actor {
             if !keep_commit_qc {
                 self.clean_rbc_sessions_for_block(block_hash, height);
             }
-            self.qc_cache
-                .retain(|(phase, qc_hash, _, _, _, _, _), _| {
+            self.qc_cache.retain(|(phase, qc_hash, _, _, _, _, _), _| {
                 *qc_hash != block_hash
                     || (keep_commit_qc
                         && matches!(phase, crate::sumeragi::consensus::Phase::Commit))

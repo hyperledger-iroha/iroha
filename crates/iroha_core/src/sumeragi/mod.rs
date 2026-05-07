@@ -705,7 +705,7 @@ mod tests {
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
-        sumeragi::consensus::{Phase, QcHeaderRef, ValidatorIndex, Vote},
+        sumeragi::consensus::{Phase, Qc, QcAggregate, QcHeaderRef, ValidatorIndex, Vote},
     };
 
     const TEST_CHANNEL_CAP: usize = 16;
@@ -3077,7 +3077,7 @@ mod tests {
     }
 
     #[test]
-    fn incoming_block_message_routes_block_created_via_rbc_ingress_queue() {
+    fn incoming_block_message_routes_block_created_via_payload_ingress_queue() {
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -3132,13 +3132,13 @@ mod tests {
             frontier: None,
         }));
 
-        let received = rbc_chunk_rx
+        let received = block_payload_rx
             .try_recv()
-            .expect("BlockCreated should be enqueued to the RBC ingress channel");
+            .expect("BlockCreated should be enqueued to the payload ingress channel");
         let (queue_kind, _latency_ms) = received
             .queue_latency_ms()
             .expect("BlockCreated should record enqueue metadata");
-        assert_eq!(queue_kind, status::WorkerQueueKind::RbcChunks);
+        assert_eq!(queue_kind, status::WorkerQueueKind::BlockPayload);
         assert!(matches!(
             received,
             InboundBlockMessage {
@@ -3151,10 +3151,155 @@ mod tests {
             Err(mpsc::TryRecvError::Empty)
         ));
         assert!(matches!(
-            block_payload_rx.try_recv(),
+            rbc_chunk_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
         assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn incoming_block_message_routes_block_body_response_via_payload_ingress_queue() {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let block = test_signed_block(2, 0);
+        let block_hash = block.hash();
+        handle.incoming_block_message(BlockMessage::BlockBodyResponse(
+            message::BlockBodyResponse {
+                block_hash,
+                height: 2,
+                view: 0,
+                body: message::BlockBodyData::BlockCreated(message::BlockCreated {
+                    block,
+                    frontier: None,
+                }),
+            },
+        ));
+
+        let received = block_payload_rx
+            .try_recv()
+            .expect("BlockBodyResponse should be enqueued to the payload ingress channel");
+        let (queue_kind, _latency_ms) = received
+            .queue_latency_ms()
+            .expect("BlockBodyResponse should record enqueue metadata");
+        assert_eq!(queue_kind, status::WorkerQueueKind::BlockPayload);
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::BlockBodyResponse(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            block_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn incoming_block_message_routes_qc_via_payload_ingress_queue() {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; 32]));
+        let qc = Qc {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: Hash::prehashed([1u8; iroha_crypto::Hash::LENGTH]),
+            height: 7,
+            view: 0,
+            epoch: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
+            highest_qc: None,
+            validator_set_hash: HashOf::<Vec<PeerId>>::from_untyped_unchecked(Hash::prehashed(
+                [0x24; 32],
+            )),
+            validator_set_hash_version: 1,
+            validator_set: Vec::new(),
+            aggregate: QcAggregate {
+                signers_bitmap: vec![0b0000_0111],
+                bls_aggregate_signature: vec![0xAA; 48],
+            },
+        };
+        handle.incoming_block_message(BlockMessage::Qc(qc));
+
+        let received = block_payload_rx
+            .try_recv()
+            .expect("Qc should be enqueued to the payload ingress channel");
+        let (queue_kind, _latency_ms) = received
+            .queue_latency_ms()
+            .expect("Qc should record enqueue metadata");
+        assert_eq!(queue_kind, status::WorkerQueueKind::BlockPayload);
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::Qc(_),
+                ..
+            }
+        ));
+        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            block_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
     }
 
     #[test]
@@ -3215,7 +3360,7 @@ mod tests {
         handle.incoming_block_message(msg.clone());
         handle.incoming_block_message(msg);
 
-        let received: Vec<_> = rbc_chunk_rx.try_iter().collect();
+        let received: Vec<_> = block_payload_rx.try_iter().collect();
         assert_eq!(received.len(), 1);
         assert!(matches!(
             received.first(),
@@ -3229,7 +3374,7 @@ mod tests {
             Err(mpsc::TryRecvError::Empty)
         ));
         assert!(matches!(
-            block_payload_rx.try_recv(),
+            rbc_chunk_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
     }
@@ -3546,6 +3691,7 @@ mod tests {
             view: 0,
             priority: None,
             requester_roster_proof_known: None,
+            commit_qc_only: None,
         };
         handle.incoming_block_message(BlockMessage::FetchPendingBlock(request.clone()));
 
@@ -3817,7 +3963,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn incoming_block_message_waits_when_rbc_ingress_queue_full_for_block_created() {
+    fn incoming_block_message_waits_when_payload_ingress_queue_full_for_block_created() {
         const CAP: usize = 1;
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
         let (block_tx, block_rx) = mpsc::sync_channel(CAP);
@@ -3834,7 +3980,7 @@ mod tests {
                 BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
                 BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
             )));
-        let rbc_chunk_tx_fill = rbc_chunk_tx.clone();
+        let block_payload_tx_fill = block_payload_tx.clone();
         let handle = SumeragiHandle::new(
             block_payload_tx,
             block_tx,
@@ -3896,12 +4042,12 @@ mod tests {
             None,
         );
 
-        rbc_chunk_tx_fill
+        block_payload_tx_fill
             .send(inbound(BlockMessage::BlockCreated(message::BlockCreated {
                 block: block_one,
                 frontier: None,
             })))
-            .expect("fill RBC ingress channel");
+            .expect("fill payload ingress channel");
         let (done_tx, done_rx) = mpsc::channel();
         let handle_clone = handle.clone();
         let join = std::thread::spawn(move || {
@@ -3916,17 +4062,17 @@ mod tests {
 
         assert!(
             done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
-            "BlockCreated should wait for RBC ingress queue capacity"
+            "BlockCreated should wait for payload ingress queue capacity"
         );
-        let _ = rbc_chunk_rx
+        let _ = block_payload_rx
             .recv()
-            .expect("drain RBC ingress queue to unblock sender");
+            .expect("drain payload ingress queue to unblock sender");
         done_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("BlockCreated should be enqueued after space is available");
         join.join().expect("join BlockCreated sender");
 
-        let received = rbc_chunk_rx
+        let received = block_payload_rx
             .try_recv()
             .expect("BlockCreated should be enqueued after space is freed");
         assert!(matches!(
@@ -3937,7 +4083,7 @@ mod tests {
             }
         ));
         assert!(matches!(
-            rbc_chunk_rx.try_recv(),
+            block_payload_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
         assert!(matches!(
@@ -3945,14 +4091,14 @@ mod tests {
             Err(mpsc::TryRecvError::Empty)
         ));
         assert!(matches!(
-            block_payload_rx.try_recv(),
+            rbc_chunk_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
     }
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn try_incoming_block_message_waits_when_rbc_ingress_queue_full_for_block_created() {
+    fn try_incoming_block_message_waits_when_payload_ingress_queue_full_for_block_created() {
         const CAP: usize = 1;
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
         let (block_tx, block_rx) = mpsc::sync_channel(CAP);
@@ -3969,7 +4115,7 @@ mod tests {
                 BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
                 BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
             )));
-        let rbc_chunk_tx_fill = rbc_chunk_tx.clone();
+        let block_payload_tx_fill = block_payload_tx.clone();
         let handle = SumeragiHandle::new(
             block_payload_tx,
             block_tx,
@@ -4031,12 +4177,12 @@ mod tests {
             None,
         );
 
-        rbc_chunk_tx_fill
+        block_payload_tx_fill
             .send(inbound(BlockMessage::BlockCreated(message::BlockCreated {
                 block: block_one,
                 frontier: None,
             })))
-            .expect("fill RBC ingress channel");
+            .expect("fill payload ingress channel");
         let (done_tx, done_rx) = mpsc::channel();
         let handle_clone = handle.clone();
         let join = std::thread::spawn(move || {
@@ -4051,17 +4197,17 @@ mod tests {
 
         assert!(
             done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
-            "BlockCreated should wait for RBC ingress queue capacity"
+            "BlockCreated should wait for payload ingress queue capacity"
         );
-        let _ = rbc_chunk_rx
+        let _ = block_payload_rx
             .recv()
-            .expect("drain RBC ingress queue to unblock sender");
+            .expect("drain payload ingress queue to unblock sender");
         done_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("BlockCreated should be enqueued after space is available");
         join.join().expect("join BlockCreated sender");
 
-        let received = rbc_chunk_rx
+        let received = block_payload_rx
             .try_recv()
             .expect("BlockCreated should be enqueued after space is freed");
         assert!(matches!(
@@ -4072,7 +4218,7 @@ mod tests {
             }
         ));
         assert!(matches!(
-            rbc_chunk_rx.try_recv(),
+            block_payload_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
         assert!(matches!(
@@ -4080,7 +4226,7 @@ mod tests {
             Err(mpsc::TryRecvError::Empty)
         ));
         assert!(matches!(
-            block_payload_rx.try_recv(),
+            rbc_chunk_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
     }
@@ -5158,7 +5304,9 @@ mod tests {
         fn on_block_message(&mut self, msg: InboundBlockMessage) -> Result<()> {
             let label = match msg.message {
                 BlockMessage::QcVote(_) => "vote",
+                BlockMessage::Qc(_) => "cert",
                 BlockMessage::BlockCreated(_)
+                | BlockMessage::BlockBodyResponse(_)
                 | BlockMessage::RbcInit(_)
                 | BlockMessage::RbcChunk(_)
                 | BlockMessage::RbcChunkCompact(_)
@@ -5394,7 +5542,9 @@ mod tests {
         fn on_block_message(&mut self, msg: InboundBlockMessage) -> Result<()> {
             let label = match msg.message {
                 BlockMessage::QcVote(_) => "vote",
+                BlockMessage::Qc(_) => "cert",
                 BlockMessage::BlockCreated(_)
+                | BlockMessage::BlockBodyResponse(_)
                 | BlockMessage::RbcInit(_)
                 | BlockMessage::RbcChunk(_)
                 | BlockMessage::RbcChunkCompact(_)
@@ -5443,6 +5593,7 @@ mod tests {
                     self.events.push("vote");
                 }
                 BlockMessage::BlockCreated(_)
+                | BlockMessage::BlockBodyResponse(_)
                 | BlockMessage::RbcInit(_)
                 | BlockMessage::RbcChunk(_)
                 | BlockMessage::RbcChunkCompact(_)
@@ -5484,6 +5635,7 @@ mod tests {
         fn on_block_message(&mut self, msg: InboundBlockMessage) -> Result<()> {
             match msg.message {
                 BlockMessage::BlockCreated(_)
+                | BlockMessage::BlockBodyResponse(_)
                 | BlockMessage::RbcInit(_)
                 | BlockMessage::RbcChunk(_)
                 | BlockMessage::RbcChunkCompact(_)
@@ -5929,7 +6081,7 @@ mod tests {
             &background_rx,
         );
 
-        assert_eq!(actor.events, vec!["vote", "rbc", "block", "payload"]);
+        assert_eq!(actor.events, vec!["vote", "payload", "rbc", "block"]);
         assert_eq!(stats.votes_handled, 1);
         assert_eq!(stats.rbc_chunks_handled, 1);
         assert_eq!(stats.block_payloads_handled, 1);
@@ -6519,15 +6671,15 @@ mod tests {
     }
 
     #[test]
-    fn run_worker_iteration_treats_block_created_as_rbc_payload_after_vote_burst() {
+    fn run_worker_iteration_treats_block_created_as_critical_payload_after_vote_burst() {
         let _guard = status::worker_queue_test_guard();
         status::reset_worker_loop_snapshot_for_tests();
 
         let vote_total = VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG + 1;
         let vote_cap = vote_total.saturating_add(1);
         let (vote_tx, vote_rx) = mpsc::sync_channel(vote_cap);
-        let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -6557,10 +6709,10 @@ mod tests {
             block: test_signed_block(1, 0),
             frontier: None,
         };
-        rbc_chunk_tx
+        block_payload_tx
             .send(inbound(BlockMessage::BlockCreated(block_created)))
-            .expect("send BlockCreated on unified RBC ingress lane");
-        status::record_worker_queue_enqueue(status::WorkerQueueKind::RbcChunks);
+            .expect("send BlockCreated on critical payload ingress lane");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::BlockPayload);
 
         let config = WorkerLoopConfig {
             time_budget: Duration::from_secs(2),
@@ -6604,20 +6756,20 @@ mod tests {
             &background_rx,
         );
 
-        let rbc_index = actor
+        let payload_index = actor
             .events
             .iter()
             .position(|entry| *entry == "rbc")
-            .expect("BlockCreated on the RBC ingress lane should be drained");
-        assert_eq!(rbc_index, VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG);
+            .expect("BlockCreated on the critical payload ingress lane should be drained");
+        assert_eq!(payload_index, VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG);
         assert!(
-            actor.events[..rbc_index]
+            actor.events[..payload_index]
                 .iter()
                 .all(|entry| *entry == "vote")
         );
         assert_eq!(actor.events.len(), vote_total + 1);
         assert_eq!(stats.votes_handled, vote_total);
-        assert_eq!(stats.rbc_chunks_handled, 1);
+        assert_eq!(stats.block_payloads_handled, 1);
         assert_eq!(actor.tick_calls, 0);
     }
 
@@ -6852,7 +7004,7 @@ mod tests {
             &background_rx,
         );
 
-        assert_eq!(actor.events, vec!["rbc", "block", "payload", "vote"]);
+        assert_eq!(actor.events, vec!["vote", "payload", "rbc", "block"]);
         assert_eq!(stats.votes_handled, 1);
         assert_eq!(stats.rbc_chunks_handled, 1);
         assert_eq!(stats.block_payloads_handled, 1);
@@ -6978,7 +7130,7 @@ mod tests {
             &background_rx,
         );
 
-        assert_eq!(actor.events, vec!["other", "rbc", "other"]);
+        assert_eq!(actor.events, vec!["other", "other", "rbc"]);
         assert_eq!(stats.votes_handled, 1);
         assert_eq!(stats.rbc_chunks_handled, 1);
         assert_eq!(stats.block_payloads_handled, 1);
@@ -7214,7 +7366,7 @@ mod tests {
 
         assert_eq!(
             actor.events,
-            vec!["vote", "rbc", "block", "payload", "tick"]
+            vec!["vote", "payload", "rbc", "block", "tick"]
         );
         assert_eq!(actor.tick_calls, 1);
     }
@@ -9303,6 +9455,82 @@ mod tests {
     }
 
     #[test]
+    fn actor_gate_prioritizes_availability_waiters_over_urgent() {
+        let gate = Arc::new(ActorGate::new(Vec::<&'static str>::new()));
+        let order = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let start = Arc::new(Barrier::new(3));
+
+        {
+            let mut guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            guard.in_flight = true;
+        }
+
+        let urgent_join = {
+            let gate = Arc::clone(&gate);
+            let order = Arc::clone(&order);
+            let start = Arc::clone(&start);
+            std::thread::spawn(move || {
+                start.wait();
+                let mut guard = gate.enter(GatePriority::Urgent);
+                order.lock().expect("order lock poisoned").push("urgent");
+                guard.actor_mut().push("urgent");
+            })
+        };
+
+        let availability_join = {
+            let gate = Arc::clone(&gate);
+            let order = Arc::clone(&order);
+            let start = Arc::clone(&start);
+            std::thread::spawn(move || {
+                start.wait();
+                let mut guard = gate.enter(GatePriority::AvailabilityCritical);
+                order
+                    .lock()
+                    .expect("order lock poisoned")
+                    .push("availability");
+                guard.actor_mut().push("availability");
+            })
+        };
+
+        start.wait();
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        while Instant::now() < deadline {
+            let (waiting_availability, waiting_urgent) = {
+                let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+                (guard.waiting_availability, guard.waiting_urgent)
+            };
+            if waiting_availability > 0 && waiting_urgent > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        {
+            let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            assert!(
+                guard.waiting_availability > 0 && guard.waiting_urgent > 0,
+                "availability and urgent waiters should queue while the gate is held"
+            );
+        }
+        {
+            let mut guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            guard.in_flight = false;
+        }
+        gate.cvar.notify_all();
+
+        availability_join
+            .join()
+            .expect("availability waiter thread");
+        urgent_join.join().expect("urgent waiter thread");
+
+        let order = order.lock().expect("order lock poisoned");
+        assert_eq!(order.len(), 2);
+        assert_eq!(order[0], "availability");
+        assert_eq!(order[1], "urgent");
+    }
+
+    #[test]
     fn actor_gate_regular_waiter_not_starved_by_urgent_burst() {
         let gate = Arc::new(ActorGate::new(Vec::<&'static str>::new()));
         let order = Arc::new(Mutex::new(Vec::<&'static str>::new()));
@@ -9482,7 +9710,7 @@ mod tests {
             "test-sumeragi-rbc",
             rbc_rx,
             Arc::clone(&gate),
-            GatePriority::Urgent,
+            GatePriority::AvailabilityCritical,
             1,
             Arc::clone(&active),
             shutdown_signal.clone(),
@@ -9506,16 +9734,18 @@ mod tests {
         );
 
         let rbc_msg = InboundBlockMessage::new(
-            BlockMessage::BlockCreated(message::BlockCreated {
-                block: test_signed_block(1, 0),
-                frontier: None,
+            BlockMessage::RbcChunk(RbcChunk {
+                block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x88; Hash::LENGTH])),
+                height: 1,
+                view: 0,
+                epoch: 0,
+                idx: 0,
+                bytes: vec![0xAA],
             }),
             None,
         )
         .with_enqueue_metadata(status::WorkerQueueKind::RbcChunks);
-        rbc_tx
-            .send(rbc_msg)
-            .expect("queue BlockCreated on RBC worker");
+        rbc_tx.send(rbc_msg).expect("queue RBC chunk on RBC worker");
 
         let requester = PeerId::new(KeyPair::random().public_key().clone());
         let block_msg = InboundBlockMessage::new(
@@ -9526,6 +9756,7 @@ mod tests {
                 view: 0,
                 priority: None,
                 requester_roster_proof_known: None,
+                commit_qc_only: None,
             }),
             None,
         )
@@ -9538,11 +9769,11 @@ mod tests {
             .checked_add(Duration::from_secs(1))
             .unwrap_or_else(Instant::now);
         while Instant::now() < wait_deadline {
-            let (waiting_urgent, waiting_da_critical) = {
+            let (waiting_availability, waiting_da_critical) = {
                 let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
-                (guard.waiting_urgent, guard.waiting_da_critical)
+                (guard.waiting_availability, guard.waiting_da_critical)
             };
-            if waiting_urgent > 0 && waiting_da_critical > 0 {
+            if waiting_availability > 0 && waiting_da_critical > 0 {
                 break;
             }
             std::thread::sleep(Duration::from_millis(1));
@@ -9550,7 +9781,7 @@ mod tests {
         {
             let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
             assert!(
-                guard.waiting_urgent > 0 && guard.waiting_da_critical > 0,
+                guard.waiting_availability > 0 && guard.waiting_da_critical > 0,
                 "RBC and block workers should both be queued while the gate is held"
             );
         }
@@ -9581,6 +9812,430 @@ mod tests {
 
         let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
         assert_eq!(guard.actor.events, vec!["rbc", "block"]);
+    }
+
+    #[test]
+    fn run_parallel_worker_prioritizes_availability_ingress_before_vote_flood() {
+        let _guard = status::worker_queue_test_guard();
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let gate = Arc::new(ActorGate::new(RecordingActor::default()));
+        let active = Arc::new(AtomicUsize::new(0));
+        let shutdown_signal = ShutdownSignal::new();
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_tx, rbc_rx) = mpsc::sync_channel(1);
+
+        {
+            let mut guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            guard.in_flight = true;
+        }
+
+        let vote_join = spawn_queue_worker(
+            "test-sumeragi-votes",
+            vote_rx,
+            Arc::clone(&gate),
+            GatePriority::Urgent,
+            VOTE_PARALLEL_BATCH_LIMIT,
+            Arc::clone(&active),
+            shutdown_signal.clone(),
+            PriorityTier::Votes.stage(),
+            PriorityTier::Votes.queue_kind(),
+            "block_message",
+            |actor, msg| actor.on_block_message(msg),
+        );
+        let rbc_join = spawn_queue_worker(
+            "test-sumeragi-rbc",
+            rbc_rx,
+            Arc::clone(&gate),
+            GatePriority::AvailabilityCritical,
+            RBC_PARALLEL_BATCH_LIMIT,
+            Arc::clone(&active),
+            shutdown_signal.clone(),
+            PriorityTier::RbcChunks.stage(),
+            PriorityTier::RbcChunks.queue_kind(),
+            "block_message",
+            |actor, msg| actor.on_block_message(msg),
+        );
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x55; 32]));
+        for signer in 0_usize..VOTE_PARALLEL_BATCH_LIMIT {
+            let vote = Vote {
+                phase: Phase::Commit,
+                block_hash,
+                parent_state_root: Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+                post_state_root: Hash::prehashed([1u8; iroha_crypto::Hash::LENGTH]),
+                height: 4,
+                view: 0,
+                epoch: 0,
+                highest_qc: None,
+                signer: ValidatorIndex::try_from(signer).expect("validator index fits"),
+                bls_sig: Vec::new(),
+            };
+            vote_tx
+                .send(inbound(BlockMessage::QcVote(vote)))
+                .expect("queue vote");
+            status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
+        }
+
+        rbc_tx
+            .send(inbound(BlockMessage::RbcChunk(RbcChunk {
+                block_hash,
+                height: 4,
+                view: 0,
+                epoch: 0,
+                idx: 0,
+                bytes: vec![0x42],
+            })))
+            .expect("queue RBC repair ingress");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::RbcChunks);
+
+        let wait_deadline = Instant::now()
+            .checked_add(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        while Instant::now() < wait_deadline {
+            let (waiting_availability, waiting_urgent) = {
+                let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+                (guard.waiting_availability, guard.waiting_urgent)
+            };
+            if waiting_availability > 0 && waiting_urgent > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        {
+            let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            assert!(
+                guard.waiting_availability > 0 && guard.waiting_urgent > 0,
+                "body ingress and vote workers should both be queued while the gate is held"
+            );
+        }
+
+        {
+            let mut guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            guard.in_flight = false;
+        }
+        gate.cvar.notify_all();
+
+        let expected = VOTE_PARALLEL_BATCH_LIMIT.saturating_add(1);
+        let processed_deadline = Instant::now()
+            .checked_add(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        while Instant::now() < processed_deadline {
+            let processed = {
+                let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+                guard.actor.events.len()
+            };
+            if processed == expected {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+
+        shutdown_signal.send();
+        vote_join.join().expect("vote queue worker thread");
+        rbc_join.join().expect("RBC queue worker thread");
+
+        let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+        assert_eq!(
+            guard.actor.events.first().copied(),
+            Some("rbc"),
+            "RBC repair ingress should materialize before queued vote batches"
+        );
+        assert_eq!(
+            guard
+                .actor
+                .events
+                .iter()
+                .filter(|event| **event == "vote")
+                .count(),
+            VOTE_PARALLEL_BATCH_LIMIT
+        );
+    }
+
+    #[test]
+    fn run_parallel_worker_prioritizes_body_ingress_before_vote_flood() {
+        let _guard = status::worker_queue_test_guard();
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let gate = Arc::new(ActorGate::new(RecordingActor::default()));
+        let active = Arc::new(AtomicUsize::new(0));
+        let shutdown_signal = ShutdownSignal::new();
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (body_tx, body_rx) = mpsc::sync_channel(1);
+
+        {
+            let mut guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            guard.in_flight = true;
+        }
+
+        let vote_join = spawn_queue_worker(
+            "test-sumeragi-votes",
+            vote_rx,
+            Arc::clone(&gate),
+            GatePriority::Urgent,
+            VOTE_PARALLEL_BATCH_LIMIT,
+            Arc::clone(&active),
+            shutdown_signal.clone(),
+            PriorityTier::Votes.stage(),
+            PriorityTier::Votes.queue_kind(),
+            "block_message",
+            |actor, msg| actor.on_block_message(msg),
+        );
+        let body_join = spawn_queue_worker(
+            "test-sumeragi-payloads",
+            body_rx,
+            Arc::clone(&gate),
+            GatePriority::AvailabilityCritical,
+            1,
+            Arc::clone(&active),
+            shutdown_signal.clone(),
+            PriorityTier::BlockPayload.stage(),
+            PriorityTier::BlockPayload.queue_kind(),
+            "block_message",
+            |actor, msg| actor.on_block_message(msg),
+        );
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x66; 32]));
+        for signer in 0_usize..VOTE_PARALLEL_BATCH_LIMIT {
+            let vote = Vote {
+                phase: Phase::Commit,
+                block_hash,
+                parent_state_root: Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+                post_state_root: Hash::prehashed([1u8; iroha_crypto::Hash::LENGTH]),
+                height: 4,
+                view: 0,
+                epoch: 0,
+                highest_qc: None,
+                signer: ValidatorIndex::try_from(signer).expect("validator index fits"),
+                bls_sig: Vec::new(),
+            };
+            vote_tx
+                .send(inbound(BlockMessage::QcVote(vote)))
+                .expect("queue vote");
+            status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
+        }
+
+        body_tx
+            .send(inbound(BlockMessage::BlockCreated(message::BlockCreated {
+                block: test_signed_block(4, 0),
+                frontier: None,
+            })))
+            .expect("queue body ingress");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::BlockPayload);
+
+        let wait_deadline = Instant::now()
+            .checked_add(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        while Instant::now() < wait_deadline {
+            let (waiting_availability, waiting_urgent) = {
+                let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+                (guard.waiting_availability, guard.waiting_urgent)
+            };
+            if waiting_availability > 0 && waiting_urgent > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        {
+            let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            assert!(
+                guard.waiting_availability > 0 && guard.waiting_urgent > 0,
+                "body ingress and vote workers should both be queued while the gate is held"
+            );
+        }
+
+        {
+            let mut guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            guard.in_flight = false;
+        }
+        gate.cvar.notify_all();
+
+        let expected = VOTE_PARALLEL_BATCH_LIMIT.saturating_add(1);
+        let processed_deadline = Instant::now()
+            .checked_add(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        while Instant::now() < processed_deadline {
+            let processed = {
+                let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+                guard.actor.events.len()
+            };
+            if processed == expected {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+
+        shutdown_signal.send();
+        vote_join.join().expect("vote queue worker thread");
+        body_join.join().expect("body queue worker thread");
+
+        let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+        assert_eq!(
+            guard.actor.events.first().copied(),
+            Some("rbc"),
+            "body ingress should materialize before queued vote batches"
+        );
+        assert_eq!(
+            guard
+                .actor
+                .events
+                .iter()
+                .filter(|event| **event == "vote")
+                .count(),
+            VOTE_PARALLEL_BATCH_LIMIT
+        );
+    }
+
+    #[test]
+    fn run_parallel_worker_prioritizes_block_ingress_before_vote_cert_burst() {
+        let _guard = status::worker_queue_test_guard();
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let gate = Arc::new(ActorGate::new(RecordingActor::default()));
+        let active = Arc::new(AtomicUsize::new(0));
+        let shutdown_signal = ShutdownSignal::new();
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(1);
+
+        {
+            let mut guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            guard.in_flight = true;
+        }
+
+        let vote_join = spawn_queue_worker(
+            "test-sumeragi-votes",
+            vote_rx,
+            Arc::clone(&gate),
+            GatePriority::Urgent,
+            VOTE_PARALLEL_BATCH_LIMIT,
+            Arc::clone(&active),
+            shutdown_signal.clone(),
+            PriorityTier::Votes.stage(),
+            PriorityTier::Votes.queue_kind(),
+            "block_message",
+            |actor, msg| actor.on_block_message(msg),
+        );
+        let block_join = spawn_queue_worker(
+            "test-sumeragi-blocks",
+            block_rx,
+            Arc::clone(&gate),
+            GatePriority::AvailabilityCritical,
+            1,
+            Arc::clone(&active),
+            shutdown_signal.clone(),
+            PriorityTier::Blocks.stage(),
+            PriorityTier::Blocks.queue_kind(),
+            "block_message",
+            |actor, msg| actor.on_block_message(msg),
+        );
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; 32]));
+        for signer in 0_usize..3 {
+            let vote = Vote {
+                phase: Phase::Commit,
+                block_hash,
+                parent_state_root: Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+                post_state_root: Hash::prehashed([1u8; iroha_crypto::Hash::LENGTH]),
+                height: 4,
+                view: 0,
+                epoch: 0,
+                highest_qc: None,
+                signer: ValidatorIndex::try_from(signer).expect("validator index fits"),
+                bls_sig: Vec::new(),
+            };
+            vote_tx
+                .send(inbound(BlockMessage::QcVote(vote)))
+                .expect("queue vote");
+            status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
+        }
+
+        let qc = Qc {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: Hash::prehashed([1u8; iroha_crypto::Hash::LENGTH]),
+            height: 4,
+            view: 0,
+            epoch: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
+            highest_qc: None,
+            validator_set_hash: HashOf::<Vec<PeerId>>::from_untyped_unchecked(Hash::prehashed(
+                [0x24; 32],
+            )),
+            validator_set_hash_version: 1,
+            validator_set: Vec::new(),
+            aggregate: QcAggregate {
+                signers_bitmap: vec![0b0000_0111],
+                bls_aggregate_signature: vec![0xAA; 48],
+            },
+        };
+        vote_tx
+            .send(inbound(BlockMessage::Qc(qc)))
+            .expect("queue commit certificate");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
+
+        block_tx
+            .send(inbound(BlockMessage::ConsensusParams(
+                message::ConsensusParamsAdvert {
+                    collectors_k: 1,
+                    redundant_send_r: 1,
+                    membership: None,
+                },
+            )))
+            .expect("queue fallback block message");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::Blocks);
+
+        let wait_deadline = Instant::now()
+            .checked_add(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        while Instant::now() < wait_deadline {
+            let (waiting_urgent, waiting_availability) = {
+                let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+                (guard.waiting_urgent, guard.waiting_availability)
+            };
+            if waiting_urgent > 0 && waiting_availability > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        {
+            let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            assert!(
+                guard.waiting_urgent > 0 && guard.waiting_availability > 0,
+                "vote/cert and block workers should both be queued while the gate is held"
+            );
+        }
+
+        {
+            let mut guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            guard.in_flight = false;
+        }
+        gate.cvar.notify_all();
+
+        let processed_deadline = Instant::now()
+            .checked_add(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        while Instant::now() < processed_deadline {
+            let processed = {
+                let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+                guard.actor.events.len()
+            };
+            if processed == 5 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+
+        shutdown_signal.send();
+        vote_join.join().expect("vote queue worker thread");
+        block_join.join().expect("block queue worker thread");
+
+        let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+        assert_eq!(
+            guard.actor.events,
+            vec!["block", "vote", "vote", "vote", "cert"],
+            "block ingress should reacquire the actor before queued vote/cert bursts"
+        );
     }
 
     #[test]
@@ -10822,13 +11477,26 @@ impl SumeragiHandle {
                     mode,
                 )
             }
-            BlockMessage::Qc(cert) => enqueue_with_mode(
-                &self.votes,
-                InboundBlockMessage::new(BlockMessage::Qc(cert), sender),
-                "Qc",
-                status::WorkerQueueKind::Votes,
-                mode,
-            ),
+            BlockMessage::Qc(cert) => {
+                iroha_logger::debug!(
+                    phase = ?cert.phase,
+                    height = cert.height,
+                    view = cert.view,
+                    epoch = cert.epoch,
+                    block_hash = %cert.subject_block_hash,
+                    "enqueueing quorum certificate from network"
+                );
+                // Aggregate QCs are compact consensus evidence and are often sent as companions
+                // for missing-body repair. Keep them off the raw vote lane so a repair QC cannot
+                // sit behind a long backlog of individual votes while the frontier is blocked.
+                enqueue_with_mode(
+                    &self.block_payload,
+                    InboundBlockMessage::new(BlockMessage::Qc(cert), sender),
+                    "Qc",
+                    status::WorkerQueueKind::BlockPayload,
+                    mode,
+                )
+            }
             BlockMessage::ProposalHint(hint) => enqueue_with_mode(
                 &self.votes,
                 InboundBlockMessage::new(BlockMessage::ProposalHint(hint), sender),
@@ -10941,13 +11609,13 @@ impl SumeragiHandle {
                     );
                     return false;
                 }
-                // Keep authoritative block-body ingress on the protected RBC lane so the
-                // payload-led happy path is not delayed behind advisory proposal traffic.
+                // Keep authoritative block-body ingress on the protected payload lane so the
+                // payload-led happy path is not delayed behind RBC repair/READY floods.
                 enqueue_with_mode(
-                    &self.rbc_chunks,
+                    &self.block_payload,
                     InboundBlockMessage::new(BlockMessage::BlockCreated(created), sender),
                     "BlockCreated",
-                    status::WorkerQueueKind::RbcChunks,
+                    status::WorkerQueueKind::BlockPayload,
                     mode,
                 )
             }
@@ -10969,10 +11637,10 @@ impl SumeragiHandle {
                     return false;
                 }
                 enqueue_with_mode(
-                    &self.rbc_chunks,
+                    &self.block_payload,
                     InboundBlockMessage::new(BlockMessage::BlockBodyResponse(response), sender),
                     "BlockBodyResponse",
-                    status::WorkerQueueKind::RbcChunks,
+                    status::WorkerQueueKind::BlockPayload,
                     mode,
                 )
             }
@@ -12206,12 +12874,15 @@ struct ActorGate<A> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GatePriority {
+    AvailabilityCritical,
     Urgent,
+    #[allow(dead_code)]
     DaCritical,
     Regular,
 }
 
 const MAX_URGENT_GATE_STREAK: u32 = 32;
+const MAX_AVAILABILITY_GATE_STREAK: u32 = 2;
 #[cfg(test)]
 const MAX_URGENT_BEFORE_DA_CRITICAL: u32 =
     iroha_config::parameters::defaults::sumeragi::WORKER_MAX_URGENT_BEFORE_DA_CRITICAL;
@@ -12219,9 +12890,11 @@ const MAX_URGENT_BEFORE_DA_CRITICAL: u32 =
 struct ActorGateState<A> {
     actor: A,
     in_flight: bool,
+    waiting_availability: u32,
     waiting_urgent: u32,
     waiting_da_critical: u32,
     waiting_regular: u32,
+    availability_streak: u32,
     urgent_streak: u32,
 }
 
@@ -12242,9 +12915,11 @@ impl<A> ActorGate<A> {
             state: Mutex::new(ActorGateState {
                 actor,
                 in_flight: false,
+                waiting_availability: 0,
                 waiting_urgent: 0,
                 waiting_da_critical: 0,
                 waiting_regular: 0,
+                availability_streak: 0,
                 urgent_streak: 0,
             }),
             cvar: Condvar::new(),
@@ -12261,7 +12936,18 @@ impl<A> ActorGate<A> {
             return false;
         }
         match priority {
+            GatePriority::AvailabilityCritical => {
+                let bounded_availability_burst =
+                    state.availability_streak >= MAX_AVAILABILITY_GATE_STREAK;
+                !(bounded_availability_burst
+                    && (state.waiting_urgent > 0 || state.waiting_da_critical > 0))
+            }
             GatePriority::Urgent => {
+                if state.waiting_availability > 0
+                    && state.availability_streak < MAX_AVAILABILITY_GATE_STREAK
+                {
+                    return false;
+                }
                 if state.waiting_da_critical > 0 {
                     state.urgent_streak < max_urgent_before_da_critical
                 } else {
@@ -12269,10 +12955,14 @@ impl<A> ActorGate<A> {
                 }
             }
             GatePriority::DaCritical => {
-                state.waiting_urgent == 0 || state.urgent_streak >= max_urgent_before_da_critical
+                (state.waiting_availability == 0
+                    || state.availability_streak >= MAX_AVAILABILITY_GATE_STREAK)
+                    && (state.waiting_urgent == 0
+                        || state.urgent_streak >= max_urgent_before_da_critical)
             }
             GatePriority::Regular => {
-                state.waiting_da_critical == 0
+                state.waiting_availability == 0
+                    && state.waiting_da_critical == 0
                     && (state.waiting_urgent == 0 || state.urgent_streak >= MAX_URGENT_GATE_STREAK)
             }
         }
@@ -12281,6 +12971,9 @@ impl<A> ActorGate<A> {
     fn enter(&self, priority: GatePriority) -> ActorGuard<'_, A> {
         let mut guard = self.state.lock().expect("sumeragi actor gate poisoned");
         match priority {
+            GatePriority::AvailabilityCritical => {
+                guard.waiting_availability = guard.waiting_availability.saturating_add(1);
+            }
             GatePriority::Urgent => {
                 guard.waiting_urgent = guard.waiting_urgent.saturating_add(1);
             }
@@ -12296,17 +12989,28 @@ impl<A> ActorGate<A> {
         }
         guard.in_flight = true;
         match priority {
+            GatePriority::AvailabilityCritical => {
+                guard.waiting_availability = guard.waiting_availability.saturating_sub(1);
+                guard.availability_streak = guard
+                    .availability_streak
+                    .saturating_add(1)
+                    .min(MAX_AVAILABILITY_GATE_STREAK);
+                guard.urgent_streak = 0;
+            }
             GatePriority::Urgent => {
                 guard.waiting_urgent = guard.waiting_urgent.saturating_sub(1);
                 guard.urgent_streak = guard.urgent_streak.saturating_add(1);
+                guard.availability_streak = 0;
             }
             GatePriority::DaCritical => {
                 guard.waiting_da_critical = guard.waiting_da_critical.saturating_sub(1);
                 guard.urgent_streak = 0;
+                guard.availability_streak = 0;
             }
             GatePriority::Regular => {
                 guard.waiting_regular = guard.waiting_regular.saturating_sub(1);
                 guard.urgent_streak = 0;
+                guard.availability_streak = 0;
             }
         }
         ActorGuard {
@@ -12372,10 +13076,13 @@ const BLOCK_RX_BACKLOG_DRAIN_CAP_MEDIUM: usize = 16;
 const BLOCK_RX_BACKLOG_DRAIN_CAP_LARGE: usize = 48;
 const BLOCK_RX_BACKLOG_DRAIN_CAP_HUGE: usize = 128;
 const BLOCK_BACKLOG_PAYLOAD_RBC_MIN_CAP: usize = 8;
-// Keep the full healthy-path RBC session ingress chain together under parallel
-// ingress so BlockCreated/INIT/chunk/READY/DELIVER work is not delayed behind
-// a fresh vote/control burst.
+// Keep the RBC session ingress chain together under parallel ingress so
+// INIT/chunk/READY/DELIVER repair work is not delayed behind a fresh vote/control burst.
 const RBC_PARALLEL_BATCH_LIMIT: usize = 4;
+// Keep the vote burst large enough to clear a near-quorum vote wave, but small enough that
+// availability/body ingress cannot sit behind long vote batches while a lagging peer is trying to
+// materialize the frontier block. Aggregate QCs use the protected payload/evidence lane.
+const VOTE_PARALLEL_BATCH_LIMIT: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PriorityTier {
@@ -12391,9 +13098,9 @@ enum PriorityTier {
 impl PriorityTier {
     const ORDER: [PriorityTier; PRIORITY_TIER_COUNT] = [
         PriorityTier::Votes,
+        PriorityTier::BlockPayload,
         PriorityTier::RbcChunks,
         PriorityTier::Blocks,
-        PriorityTier::BlockPayload,
         PriorityTier::Consensus,
         PriorityTier::LaneRelay,
         PriorityTier::Background,
@@ -12438,17 +13145,17 @@ impl PriorityTier {
 
 const HIGH_PRIORITY_TIERS: [PriorityTier; 4] = [
     PriorityTier::Votes,
+    PriorityTier::BlockPayload,
     PriorityTier::RbcChunks,
     PriorityTier::Blocks,
-    PriorityTier::BlockPayload,
 ];
 const FRONTIER_BODY_REPAIR_TIERS: [PriorityTier; 3] = [
-    PriorityTier::RbcChunks,
     PriorityTier::BlockPayload,
+    PriorityTier::RbcChunks,
     PriorityTier::Blocks,
 ];
 const NON_VOTE_PAYLOAD_TIERS: [PriorityTier; 2] =
-    [PriorityTier::RbcChunks, PriorityTier::BlockPayload];
+    [PriorityTier::BlockPayload, PriorityTier::RbcChunks];
 const LOW_PRIORITY_TIERS: [PriorityTier; 3] = [
     PriorityTier::Consensus,
     PriorityTier::LaneRelay,
@@ -13635,23 +14342,37 @@ fn run_parallel_worker<A: WorkerActor + Send + 'static>(
         vote_rx,
         Arc::clone(&gate),
         GatePriority::Urgent,
-        1,
+        VOTE_PARALLEL_BATCH_LIMIT,
         Arc::clone(&active),
         shutdown_signal.clone(),
         PriorityTier::Votes.stage(),
         PriorityTier::Votes.queue_kind(),
         "block_message",
         move |actor, msg| {
-            if let BlockMessage::QcVote(vote) = &msg.message {
-                iroha_logger::debug!(
-                    height = vote.height,
-                    view = vote.view,
-                    epoch = vote.epoch,
-                    signer = vote.signer,
-                    block_hash = %vote.block_hash,
-                    queue = ?PriorityTier::Votes.queue_kind(),
-                    "received precommit vote"
-                );
+            match &msg.message {
+                BlockMessage::QcVote(vote) => {
+                    iroha_logger::debug!(
+                        height = vote.height,
+                        view = vote.view,
+                        epoch = vote.epoch,
+                        signer = vote.signer,
+                        block_hash = %vote.block_hash,
+                        queue = ?PriorityTier::Votes.queue_kind(),
+                        "received precommit vote"
+                    );
+                }
+                BlockMessage::Qc(cert) => {
+                    iroha_logger::debug!(
+                        phase = ?cert.phase,
+                        height = cert.height,
+                        view = cert.view,
+                        epoch = cert.epoch,
+                        block_hash = %cert.subject_block_hash,
+                        queue = ?PriorityTier::Votes.queue_kind(),
+                        "received quorum certificate"
+                    );
+                }
+                _ => {}
             }
             actor.on_block_message(msg)
         },
@@ -13660,7 +14381,7 @@ fn run_parallel_worker<A: WorkerActor + Send + 'static>(
         "sumeragi-rbc",
         rbc_chunk_rx,
         Arc::clone(&gate),
-        GatePriority::Urgent,
+        GatePriority::AvailabilityCritical,
         RBC_PARALLEL_BATCH_LIMIT,
         Arc::clone(&active),
         shutdown_signal.clone(),
@@ -13673,7 +14394,7 @@ fn run_parallel_worker<A: WorkerActor + Send + 'static>(
         "sumeragi-blocks",
         block_rx,
         Arc::clone(&gate),
-        GatePriority::DaCritical,
+        GatePriority::AvailabilityCritical,
         1,
         Arc::clone(&active),
         shutdown_signal.clone(),
@@ -13686,7 +14407,7 @@ fn run_parallel_worker<A: WorkerActor + Send + 'static>(
         "sumeragi-payloads",
         block_payload_rx,
         Arc::clone(&gate),
-        GatePriority::DaCritical,
+        GatePriority::AvailabilityCritical,
         1,
         Arc::clone(&active),
         shutdown_signal.clone(),

@@ -1000,6 +1000,8 @@ impl Actor {
                         vote.height,
                         vote.view,
                         vote.epoch,
+                        vote.chain_order_hash,
+                        vote.rechain_seq,
                     );
                     if let Some(tally) = self.qc_signer_tally.get(&qc_key) {
                         let proxy_tail_idx = context.signature_topology.proxy_tail_index();
@@ -1479,8 +1481,7 @@ impl Actor {
             .retain(|key, _| should_keep_vote_key(key));
         self.vote_validation_cache_identities
             .retain(|key, _| self.vote_log_identities.contains_key(key));
-        self.qc_cache
-            .retain(|(_, hash, height, view, _, _, _), _| {
+        self.qc_cache.retain(|(_, hash, height, view, _, _, _), _| {
             should_keep(*height, *view)
                 || (*height == active_height && preserved_active_pending_hashes.contains(hash))
         });
@@ -2877,7 +2878,7 @@ impl Actor {
                 signer_peer,
             ) {
                 let new_view_qc_supersedes = self
-                    .proposal_highest_qc_for_slot(vote.height, vote.view)
+                    .proposal_or_new_view_highest_qc_for_slot(vote.height, vote.view)
                     .is_some_and(|highest_qc| {
                         self.new_view_qc_supersedes_same_height_vote_conflict(
                             vote.height,
@@ -2900,6 +2901,9 @@ impl Actor {
                         signer_peer = ?signer_peer,
                         "accepting vote: NEW_VIEW QC supersedes raw same-height signer vote"
                     );
+                } else if self.should_defer_same_height_supersession_conflict(vote, &existing) {
+                    self.defer_vote_for_missing_highest_qc_context(vote, &existing, signer_peer);
+                    return false;
                 } else {
                     self.note_double_vote(Some(&existing), vote, evidence_context);
                     warn!(
@@ -3159,10 +3163,12 @@ impl Actor {
         self.replay_deferred_votes_for_block(block_hash);
     }
 
-    fn defer_vote_for_roster(
+    fn defer_vote(
         &mut self,
         vote: crate::sumeragi::consensus::Vote,
+        consensus_reason: super::status::ConsensusMessageReason,
         reason: &'static str,
+        message: &'static str,
     ) {
         let key = vote_key(&vote);
         let phase = vote.phase;
@@ -3180,7 +3186,7 @@ impl Actor {
                     signer,
                     block_hash = %block_hash,
                     reason,
-                    "deferring duplicate vote while roster is unresolved"
+                    "deferring duplicate vote while dependency is unresolved"
                 );
                 return;
             }
@@ -3190,7 +3196,7 @@ impl Actor {
         self.record_consensus_message_handling(
             super::status::ConsensusMessageKind::QcVote,
             super::status::ConsensusMessageOutcome::Deferred,
-            super::status::ConsensusMessageReason::RosterMissing,
+            consensus_reason,
         );
         info!(
             phase = ?phase,
@@ -3200,7 +3206,92 @@ impl Actor {
             block_hash = %block_hash,
             deferred,
             reason,
-            "deferring vote until commit roster is available"
+            "{message}"
+        );
+    }
+
+    fn defer_vote_for_roster(
+        &mut self,
+        vote: crate::sumeragi::consensus::Vote,
+        reason: &'static str,
+    ) {
+        self.defer_vote(
+            vote,
+            super::status::ConsensusMessageReason::RosterMissing,
+            reason,
+            "deferring vote until commit roster is available",
+        );
+    }
+
+    fn should_defer_same_height_supersession_conflict(
+        &self,
+        vote: &crate::sumeragi::consensus::Vote,
+        existing: &crate::sumeragi::consensus::Vote,
+    ) -> bool {
+        if !self.config.resilience.enabled
+            || !matches!(vote.phase, Phase::Prepare | Phase::Commit)
+            || vote.view <= existing.view
+            || vote.height != self.committed_height_snapshot().saturating_add(1)
+        {
+            return false;
+        }
+        if self
+            .locked_qc
+            .is_some_and(|locked| locked.height >= vote.height)
+        {
+            return false;
+        }
+        if self.same_height_block_has_recoverable_qc(
+            existing.block_hash,
+            vote.height,
+            existing.view,
+        ) || self.same_height_has_recoverable_qc(vote.height)
+        {
+            return false;
+        }
+        match self.proposal_or_new_view_highest_qc_for_slot(vote.height, vote.view) {
+            Some(highest_qc) => {
+                highest_qc.phase == Phase::Commit
+                    && highest_qc.height.saturating_add(1) == vote.height
+                    && self.latest_committed_qc() == Some(highest_qc)
+                    && self
+                        .cached_new_view_qc_extends_committed_frontier(
+                            vote.height,
+                            vote.view,
+                            highest_qc,
+                        )
+                        .is_none()
+            }
+            None => true,
+        }
+    }
+
+    fn defer_vote_for_missing_highest_qc_context(
+        &mut self,
+        vote: &crate::sumeragi::consensus::Vote,
+        existing: &crate::sumeragi::consensus::Vote,
+        signer_peer: &PeerId,
+    ) {
+        if !self.block_known_locally(vote.block_hash) {
+            self.maybe_request_missing_block_for_unresolved_roster(vote);
+        }
+        info!(
+            phase = ?vote.phase,
+            height = vote.height,
+            view = vote.view,
+            epoch = vote.epoch,
+            signer = vote.signer,
+            block_hash = %vote.block_hash,
+            existing_view = existing.view,
+            existing_block = %existing.block_hash,
+            signer_peer = ?signer_peer,
+            "deferring slot-conflicting vote until NEW_VIEW supersession context is available"
+        );
+        self.defer_vote(
+            vote.clone(),
+            super::status::ConsensusMessageReason::MissingHighestQc,
+            "same-height supersession context missing",
+            "deferring vote until same-height supersession context is available",
         );
     }
 
@@ -3411,6 +3502,60 @@ impl Actor {
         }
     }
 
+    pub(super) fn replay_deferred_votes_for_slot(
+        &mut self,
+        height: u64,
+        view: u64,
+        reason: &'static str,
+    ) -> bool {
+        if self.deferred_votes.is_empty() {
+            return false;
+        }
+        let replay_keys: Vec<_> = self
+            .deferred_votes
+            .iter()
+            .filter_map(|(block_hash, votes)| {
+                let keys: Vec<_> = votes
+                    .iter()
+                    .filter_map(|(key, vote)| {
+                        (vote.height == height && vote.view == view).then_some(*key)
+                    })
+                    .collect();
+                (!keys.is_empty()).then_some((*block_hash, keys))
+            })
+            .collect();
+        let replay_count: usize = replay_keys.iter().map(|(_, keys)| keys.len()).sum();
+        if replay_count == 0 {
+            return false;
+        }
+        info!(
+            height,
+            view,
+            deferred = replay_count,
+            reason,
+            "replaying deferred votes after slot context update"
+        );
+        for (block_hash, keys) in replay_keys {
+            let mut replay = Vec::new();
+            let mut remove_block = false;
+            if let Some(votes) = self.deferred_votes.get_mut(&block_hash) {
+                for key in keys {
+                    if let Some(vote) = votes.remove(&key) {
+                        replay.push(vote);
+                    }
+                }
+                remove_block = votes.is_empty();
+            }
+            if remove_block {
+                self.deferred_votes.remove(&block_hash);
+            }
+            for vote in replay {
+                self.handle_vote(vote);
+            }
+        }
+        true
+    }
+
     pub(super) fn try_replay_deferred_votes(&mut self) -> bool {
         if self.deferred_votes.is_empty() {
             return false;
@@ -3445,6 +3590,11 @@ impl Actor {
                     "deferred_vote_roster_lookup",
                 )
             };
+            if !roster.is_empty()
+                && self.deferred_vote_waiting_for_same_height_supersession_context(&vote)
+            {
+                continue;
+            }
             if !roster.is_empty() {
                 resolved.push((block_hash, roster));
             }
@@ -3461,6 +3611,25 @@ impl Actor {
             self.cache_vote_roster(block_hash, sample.0, sample.1, roster);
         }
         replayed
+    }
+
+    fn deferred_vote_waiting_for_same_height_supersession_context(
+        &self,
+        vote: &crate::sumeragi::consensus::Vote,
+    ) -> bool {
+        let Some(signer_peer) = self.vote_signer_peer(vote) else {
+            return false;
+        };
+        let Some(existing) = self.conflicting_slot_vote_for_peer(
+            vote.phase,
+            vote.height,
+            vote.epoch,
+            vote.block_hash,
+            &signer_peer,
+        ) else {
+            return false;
+        };
+        self.should_defer_same_height_supersession_conflict(vote, &existing)
     }
 
     fn note_double_vote(

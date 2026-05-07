@@ -622,6 +622,10 @@ pub struct FetchPendingBlock {
     #[norito(skip_serializing_if = "Option::is_none")]
     #[norito(default)]
     pub requester_roster_proof_known: Option<bool>,
+    /// Optional signal that requester already has the block payload and needs only the commit QC.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub commit_qc_only: Option<bool>,
 }
 
 /// Peer-local durable replica advertisement for canonical Kura block bodies.
@@ -918,6 +922,7 @@ mod tests {
             view: 0,
             priority: None,
             requester_roster_proof_known: None,
+            commit_qc_only: None,
         });
         assert_eq!(fetch.priority(), iroha_p2p::Priority::High);
     }

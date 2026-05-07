@@ -36002,6 +36002,46 @@ mod explorer_lookup_tests {
         (state, target_hash)
     }
 
+    fn build_state_with_unindexed_kura_transaction(
+        instructions: Vec<dm::InstructionBox>,
+    ) -> (Arc<State>, HashOf<TransactionEntrypoint>) {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+
+        let chain: dm::ChainId = "test-chain".parse().expect("valid chain id");
+        let authority_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = dm::AccountId::new(authority_key.public_key().clone());
+        let mut builder = dm::TransactionBuilder::new(chain, authority);
+        builder.set_creation_time(Duration::from_millis(1_710_000_000_000));
+        let signed = builder
+            .with_instructions(instructions)
+            .sign(authority_key.private_key());
+        let target_hash = signed.hash_as_entrypoint();
+        let tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let _topology = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+        let unverified = BlockBuilder::new(vec![tx])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified.header());
+        let valid: ValidBlock = unverified
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        drop(state_block);
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let signed_block: iroha_data_model::block::SignedBlock = committed.into();
+        kura.store_block(Arc::new(signed_block))
+            .expect("store Kura-only block");
+
+        (state, target_hash)
+    }
+
     #[test]
     fn explorer_instruction_history_collects_requested_page_only() {
         let instructions = vec![
@@ -36034,6 +36074,28 @@ mod explorer_lookup_tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].index, 2);
         assert_eq!(items[0].transaction_hash, target_hash.to_string());
+    }
+
+    #[test]
+    fn explorer_instruction_history_transaction_hash_index_miss_returns_empty_page() {
+        let instructions = vec![dm::Log::new(dm::Level::INFO, "indexed-miss".to_owned()).into()];
+        let (state, target_hash) = build_state_with_unindexed_kura_transaction(instructions);
+        let filters = ExplorerInstructionFilters {
+            account: None,
+            authority: None,
+            transaction_hash: Some(target_hash),
+            status: None,
+            block: None,
+            kind: None,
+            asset_id: None,
+        };
+
+        let (items, pagination) = collect_instruction_history(state.as_ref(), 1, &filters, 1, 10)
+            .expect("instruction collection should succeed");
+
+        assert!(items.is_empty());
+        assert_eq!(pagination.total_items, 0);
+        assert_eq!(pagination.total_pages, 0);
     }
 
     #[test]
@@ -36098,6 +36160,27 @@ mod explorer_lookup_tests {
         assert_eq!(items[1].index, 1);
         assert_eq!(items[0].transaction_hash, target_hash.to_string());
         assert_eq!(items[1].transaction_hash, target_hash.to_string());
+    }
+
+    #[test]
+    fn explorer_latest_instruction_history_transaction_hash_index_miss_returns_empty() {
+        let instructions =
+            vec![dm::Log::new(dm::Level::INFO, "latest-indexed-miss".to_owned()).into()];
+        let (state, target_hash) = build_state_with_unindexed_kura_transaction(instructions);
+        let filters = ExplorerInstructionFilters {
+            account: None,
+            authority: None,
+            transaction_hash: Some(target_hash),
+            status: None,
+            block: None,
+            kind: None,
+            asset_id: None,
+        };
+
+        let items = collect_latest_instruction_history(state.as_ref(), 1, &filters, 10)
+            .expect("latest instruction collection should succeed");
+
+        assert!(items.is_empty());
     }
 
     #[tokio::test]
@@ -61383,8 +61466,22 @@ fn collect_latest_instruction_history(
     if start_height == 0 {
         return Ok(out);
     }
-    let mut height = filters.block.unwrap_or(start_height);
-    let lower_bound = filters.block.unwrap_or(1);
+    let indexed_transaction_height =
+        if let Some(target) = filters.transaction_hash.as_ref().copied() {
+            let Some(height) = indexed_transaction_height(state, start_height, target) else {
+                return Ok(out);
+            };
+            if filters.block.is_some_and(|expected| expected != height) {
+                return Ok(out);
+            }
+            Some(height)
+        } else {
+            None
+        };
+    let mut height = indexed_transaction_height
+        .or(filters.block)
+        .unwrap_or(start_height);
+    let lower_bound = indexed_transaction_height.or(filters.block).unwrap_or(1);
     while height >= lower_bound {
         let height_usize: usize = height
             .try_into()
@@ -61460,8 +61557,22 @@ fn collect_instruction_history(
     if start_height == 0 {
         return Ok((out, explorer_pagination_meta(page, per_page, total_items)));
     }
-    let mut height = filters.block.unwrap_or(start_height);
-    let lower_bound = filters.block.unwrap_or(1);
+    let indexed_transaction_height =
+        if let Some(target) = filters.transaction_hash.as_ref().copied() {
+            let Some(height) = indexed_transaction_height(state, start_height, target) else {
+                return Ok((out, explorer_pagination_meta(page, per_page, total_items)));
+            };
+            if filters.block.is_some_and(|expected| expected != height) {
+                return Ok((out, explorer_pagination_meta(page, per_page, total_items)));
+            }
+            Some(height)
+        } else {
+            None
+        };
+    let mut height = indexed_transaction_height
+        .or(filters.block)
+        .unwrap_or(start_height);
+    let lower_bound = indexed_transaction_height.or(filters.block).unwrap_or(1);
     while height >= lower_bound {
         let height_usize: usize = height
             .try_into()

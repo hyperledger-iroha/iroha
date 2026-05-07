@@ -13,6 +13,7 @@ use iroha_data_model::consensus::{
 };
 use iroha_data_model::events::EventFilter;
 use iroha_data_model::prelude::Repeats;
+
 pub(super) fn resolve_prev_block_for_proposal(
     proposal_height: u64,
     highest_qc: &crate::sumeragi::consensus::QcHeaderRef,
@@ -554,8 +555,36 @@ impl Actor {
         (max_tx_target, max_in_block)
     }
 
+    pub(super) fn max_tx_budget_for_commit_time(
+        queue_len: usize,
+        block_param_limit: u64,
+        config_cap: Option<NonZeroUsize>,
+        fast_finality_config_cap: Option<NonZeroUsize>,
+        commit_time_ms: u64,
+        effective_commit_time_ms: u64,
+    ) -> (usize, NonZeroUsize, bool) {
+        let (configured_target, _) = Self::max_tx_budget(queue_len, block_param_limit, config_cap);
+        let fast_cap = fast_finality_config_cap
+            .filter(|_| Self::fast_finality_cap_applies(commit_time_ms, effective_commit_time_ms))
+            .map(NonZeroUsize::get);
+        let max_tx_target = fast_cap.map_or(configured_target, |cap| configured_target.min(cap));
+        let max_in_block = NonZeroUsize::new(queue_len.min(max_tx_target).max(1))
+            .expect("non-zero by construction");
+        let fast_tx_capped = max_tx_target < configured_target;
+        (max_tx_target, max_in_block, fast_tx_capped)
+    }
+
+    pub(super) fn fast_finality_cap_applies(
+        commit_time_ms: u64,
+        effective_commit_time_ms: u64,
+    ) -> bool {
+        let threshold = iroha_config::parameters::defaults::sumeragi::FAST_FINALITY_COMMIT_TIME_MS;
+        commit_time_ms <= threshold || effective_commit_time_ms <= threshold
+    }
+
     pub(super) fn cap_gas_limit_for_fast_commit(
         gas_limit_per_block: Option<NonZeroU64>,
+        commit_time_ms: u64,
         effective_commit_time_ms: u64,
         fast_gas_limit_per_block: Option<NonZeroU64>,
     ) -> Option<NonZeroU64> {
@@ -565,9 +594,7 @@ impl Actor {
         let Some(cap) = fast_gas_limit_per_block else {
             return Some(base_limit);
         };
-        if effective_commit_time_ms
-            > iroha_config::parameters::defaults::sumeragi::FAST_FINALITY_COMMIT_TIME_MS
-        {
+        if !Self::fast_finality_cap_applies(commit_time_ms, effective_commit_time_ms) {
             return Some(base_limit);
         }
         let capped = base_limit.get().min(cap.get());
@@ -760,11 +787,28 @@ impl Actor {
         routing_decision: crate::queue::RoutingDecision,
         warn_context: &'static str,
     ) {
+        let tx_hash = tx.as_ref().hash();
         if let Err(err) =
             self.queue
                 .push_requeued_with_routing(tx, routing_decision, self.state.as_ref())
         {
-            warn!(?err.err, "{warn_context}");
+            match err.err {
+                crate::queue::Error::IsInQueue => {
+                    trace!(
+                        tx = %tx_hash,
+                        "transaction already in queue during proposal requeue"
+                    );
+                }
+                crate::queue::Error::InBlockchain => {
+                    trace!(
+                        tx = %tx_hash,
+                        "transaction already committed during proposal requeue"
+                    );
+                }
+                err => {
+                    warn!(?err, "{warn_context}");
+                }
+            }
         }
     }
 
@@ -1738,15 +1782,13 @@ impl Actor {
             mut tx_sizes,
             deferred_transactions,
         ) = {
-            let (block_max_param, effective_commit_time_ms, base_gas_limit, digest) =
+            let (block_max_param, commit_time_ms, effective_commit_time_ms, base_gas_limit, digest) =
                 if let Some(state_view) = view_snapshot.as_ref() {
                     let block_max_param =
                         state_view.world().parameters().block().max_transactions();
-                    let effective_commit_time_ms = state_view
-                        .world()
-                        .parameters()
-                        .sumeragi()
-                        .effective_commit_time_ms();
+                    let sumeragi_params = state_view.world().parameters().sumeragi();
+                    let commit_time_ms = sumeragi_params.commit_time_ms();
+                    let effective_commit_time_ms = sumeragi_params.effective_commit_time_ms();
                     let base_gas_limit = NonZeroU64::new(crate::state::gas_limit_from_parameters(
                         state_view.world().parameters(),
                     ));
@@ -1762,6 +1804,7 @@ impl Actor {
                     );
                     (
                         block_max_param,
+                        commit_time_ms,
                         effective_commit_time_ms,
                         base_gas_limit,
                         digest,
@@ -1769,8 +1812,9 @@ impl Actor {
                 } else {
                     let world = self.state.world_view();
                     let block_max_param = world.parameters().block().max_transactions();
-                    let effective_commit_time_ms =
-                        world.parameters().sumeragi().effective_commit_time_ms();
+                    let sumeragi_params = world.parameters().sumeragi();
+                    let commit_time_ms = sumeragi_params.commit_time_ms();
+                    let effective_commit_time_ms = sumeragi_params.effective_commit_time_ms();
                     let base_gas_limit = NonZeroU64::new(crate::state::gas_limit_from_parameters(
                         world.parameters(),
                     ));
@@ -1785,19 +1829,24 @@ impl Actor {
                             .cached_confidential_feature_digest(&world, &zk, next_height);
                     (
                         block_max_param,
+                        commit_time_ms,
                         effective_commit_time_ms,
                         base_gas_limit,
                         digest,
                     )
                 };
-            let (max_tx_target, max_in_block) = Self::max_tx_budget(
+            let (max_tx_target, max_in_block, fast_tx_capped) = Self::max_tx_budget_for_commit_time(
                 queue_len,
                 block_max_param.get(),
                 self.config.block.max_transactions,
+                self.config.block.fast_finality_max_transactions,
+                commit_time_ms,
+                effective_commit_time_ms,
             );
             let fast_gas_limit_per_block = self.config.block.fast_gas_limit_per_block;
             let proposal_gas_limit = Self::cap_gas_limit_for_fast_commit(
                 base_gas_limit,
+                commit_time_ms,
                 effective_commit_time_ms,
                 fast_gas_limit_per_block,
             );
@@ -1809,7 +1858,7 @@ impl Actor {
                 let pipeline = state_view.pipeline();
                 pipeline.ivm_proved.enabled && !pipeline.ivm_proved.skip_replay
             };
-            debug!(
+            info!(
                 height,
                 view,
                 queue_len,
@@ -1819,11 +1868,13 @@ impl Actor {
                 max_ivm_transactions = max_ivm_transactions.map(NonZeroUsize::get),
                 scan_budget,
                 scan_multiplier = self.config.block.proposal_queue_scan_multiplier.get(),
+                commit_time_ms,
                 effective_commit_time_ms,
                 gas_limit_per_block = base_gas_limit.map(NonZeroU64::get),
                 fast_gas_limit_per_block = fast_gas_limit_per_block.map(NonZeroU64::get),
                 proposal_gas_limit = proposal_gas_limit.map(NonZeroU64::get),
                 fast_gas_capped,
+                fast_tx_capped,
                 "proposal assembly budget"
             );
             // Bound queue scanning to keep proposal assembly from stalling under sustained load.
@@ -2524,6 +2575,35 @@ impl Actor {
                 );
             };
 
+            let elapsed = now.elapsed();
+            let stale_window = self
+                .quorum_timeout(da_enabled)
+                .max(Duration::from_millis(1));
+            if elapsed >= stale_window {
+                self.subsystems
+                    .propose
+                    .proposal_cache
+                    .pop_hint(proposal_height, view);
+                self.subsystems
+                    .propose
+                    .proposal_cache
+                    .pop_proposal(proposal_height, view);
+                warn!(
+                    height = proposal_height,
+                    view,
+                    elapsed_ms = elapsed.as_millis(),
+                    stale_window_ms = stale_window.as_millis(),
+                    tx_count = transactions_for_plan.len(),
+                    block_hash = %block_hash,
+                    "aborting stale proposal assembly before broadcast"
+                );
+                return Err(eyre!(
+                    "proposal assembly exceeded view window: elapsed={}ms window={}ms",
+                    elapsed.as_millis(),
+                    stale_window.as_millis()
+                ));
+            }
+
             // Loop back consensus messages locally so the leader participates immediately.
             let frontier_block_created_ready = matches!(
                 &block_created_msg,
@@ -2581,22 +2661,6 @@ impl Actor {
             let block_created_encoded = Arc::new(BlockMessageWire::encode_message(
                 block_created_wire.as_ref(),
             ));
-            if let BlockMessage::BlockCreated(block_msg) = block_created_msg.clone() {
-                self.handle_block_created(block_msg, None)?;
-            }
-            if !inline_frontier_block_created_transport {
-                self.handle_proposal(proposal)?;
-                // Local handling can consume cache entries while validating or finalizing the slot.
-                // Reinsert the advisory metadata so same-view rebroadcast and recovery remain intact.
-                self.subsystems
-                    .propose
-                    .proposal_cache
-                    .insert_hint(proposal_hint);
-                self.subsystems
-                    .propose
-                    .proposal_cache
-                    .insert_proposal(proposal);
-            }
             // A locally assembled proposal is authoritative evidence that this slot was observed,
             // even when the inline BlockCreated path skips proposal handling or validation consumes
             // and reinserts the proposal cache entry.
@@ -2604,38 +2668,29 @@ impl Actor {
 
             let topology_peers = topology.as_ref();
             let local_peer_id = self.common_config.peer.id().clone();
-            if !inline_frontier_block_created_transport {
-                let proposal_hint_msg = Arc::new(BlockMessage::ProposalHint(proposal_hint));
-                let proposal_hint_encoded =
-                    Arc::new(BlockMessageWire::encode_message(proposal_hint_msg.as_ref()));
-                for peer in topology_peers {
-                    if peer == &local_peer_id {
-                        continue;
-                    }
-                    self.schedule_background(BackgroundRequest::Post {
-                        peer: peer.clone(),
-                        msg: BlockMessageWire::with_encoded(
-                            Arc::clone(&proposal_hint_msg),
-                            Arc::clone(&proposal_hint_encoded),
-                        ),
-                    });
+            // Put the exact body on the wire before local self-processing can emit READY/QC
+            // evidence. Multi-chunk frontier payloads still use Proposal + RBC for DA transport,
+            // but the body companion prevents a single missed chunk from pushing peers onto the
+            // slower recovery path.
+            for peer in topology_peers {
+                if peer == &local_peer_id {
+                    continue;
+                }
+                self.schedule_background(BackgroundRequest::Post {
+                    peer: peer.clone(),
+                    msg: BlockMessageWire::with_encoded(
+                        Arc::clone(&block_created_wire),
+                        Arc::clone(&block_created_encoded),
+                    ),
+                });
+            }
+            if let Some(plan) = rbc_plan.take() {
+                self.broadcast_rbc_session_plan(plan.primary)?;
+                if let Some(dup) = plan.duplicate {
+                    self.broadcast_rbc_session_plan(dup)?;
                 }
             }
-            if inline_frontier_block_created_transport || !frontier_block_created_ready {
-                for peer in topology_peers {
-                    if peer == &local_peer_id {
-                        continue;
-                    }
-                    self.schedule_background(BackgroundRequest::Post {
-                        peer: peer.clone(),
-                        msg: BlockMessageWire::with_encoded(
-                            Arc::clone(&block_created_wire),
-                            Arc::clone(&block_created_encoded),
-                        ),
-                    });
-                }
-            }
-            if seed_frontier_backup_transport {
+            if !inline_frontier_block_created_transport || seed_frontier_backup_transport {
                 let proposal_hint_msg = Arc::new(BlockMessage::ProposalHint(proposal_hint));
                 let proposal_hint_encoded =
                     Arc::new(BlockMessageWire::encode_message(proposal_hint_msg.as_ref()));
@@ -2670,12 +2725,21 @@ impl Actor {
                 }
             }
 
-            if let Some(plan) = rbc_plan.take() {
-                // Start body transport immediately after the frontier advertisement posts.
-                self.broadcast_rbc_session_plan(plan.primary)?;
-                if let Some(dup) = plan.duplicate {
-                    self.broadcast_rbc_session_plan(dup)?;
-                }
+            if let BlockMessage::BlockCreated(block_msg) = block_created_msg {
+                self.handle_block_created(block_msg, None)?;
+            }
+            if !inline_frontier_block_created_transport {
+                self.handle_proposal(proposal)?;
+                // Local handling can consume cache entries while validating or finalizing the slot.
+                // Reinsert the advisory metadata so same-view rebroadcast and recovery remain intact.
+                self.subsystems
+                    .propose
+                    .proposal_cache
+                    .insert_hint(proposal_hint);
+                self.subsystems
+                    .propose
+                    .proposal_cache
+                    .insert_proposal(proposal);
             }
 
             let relay_envelopes = crate::sumeragi::status::lane_relay_envelopes_snapshot();
@@ -2686,7 +2750,7 @@ impl Actor {
             self.record_phase_sample(PipelinePhase::Propose, proposal_height, view);
 
             let tx_count = transactions_for_plan.len();
-            iroha_logger::debug!(
+            iroha_logger::info!(
                 height = proposal_height,
                 view,
                 tx_count,
@@ -3428,6 +3492,31 @@ impl Actor {
         let current_view = self.phase_tracker.current_view(tracked_height);
         self.clear_consensus_recovery_for_round(tracked_height, current_view.unwrap_or(0));
         let bootstrap_view = current_view.is_none_or(|view| view == 0);
+        let missing_qc_frontier_self_proposal_qc = self
+            .missing_qc_liveness_allows_frontier_self_proposal(
+                tracked_height,
+                tracked_view,
+                committed_height,
+                pending_queue_len,
+                precommit_qc,
+            );
+        let missing_qc_frontier_self_proposal_ready =
+            missing_qc_frontier_self_proposal_qc.is_some();
+        let missing_qc_frontier_self_proposal_blocked_by_ingress =
+            missing_qc_frontier_self_proposal_ready && frontier_proposal_ingress_deferring;
+        let missing_qc_committed_frontier_fallback_allowed = missing_qc_frontier_self_proposal_qc
+            .is_some_and(|qc| {
+                self.config.resilience.enabled
+                    && tracked_view > 0
+                    && pending_queue_len > 0
+                    && tracked_height == committed_height.saturating_add(1)
+                    && qc.phase == crate::sumeragi::consensus::Phase::Commit
+                    && qc.height == committed_height
+                    && !missing_qc_frontier_self_proposal_blocked_by_ingress
+                    && !self.proposal_gated_by_missing_dependencies(tracked_height)
+            });
+        let new_view_quorum_free_frontier_proposal_allowed =
+            tracked_view == 0 || required <= 1 || missing_qc_committed_frontier_fallback_allowed;
         if let Some(view) = current_view {
             // Avoid proposing stale views by pruning NEW_VIEW entries below the local view.
             self.subsystems
@@ -3790,13 +3879,16 @@ impl Actor {
             // Fallback: bootstrap the first view using the latest committed QC when no NEW_VIEW
             // quorum has been observed yet. This prevents the pacemaker from stalling indefinitely
             // at startup before any view changes occur.
-            if !bootstrap_view {
+            if !new_view_quorum_free_frontier_proposal_allowed {
                 return None;
             }
             let _local_idx = local_idx?;
-            let qc = self.latest_committed_qc()?;
+            let qc = missing_qc_frontier_self_proposal_qc.or_else(|| self.latest_committed_qc())?;
             Some(NewViewSelection {
-                key: (qc.height.saturating_add(1), 0),
+                key: (
+                    qc.height.saturating_add(1),
+                    if bootstrap_view { 0 } else { tracked_view },
+                ),
                 quorum: required,
                 highest_qc: qc,
             })

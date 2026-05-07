@@ -2825,6 +2825,8 @@ pub mod sumeragi {
     pub const BLOCK_MAX_IVM_TRANSACTIONS: Option<NonZeroUsize> = None;
     /// Commit-time threshold (ms) for applying fast-finality proposal caps.
     pub const FAST_FINALITY_COMMIT_TIME_MS: u64 = 1_000;
+    /// Optional cap on transactions per block when commit time is <= fast-finality threshold.
+    pub const FAST_FINALITY_MAX_TRANSACTIONS: Option<NonZeroUsize> = None;
     /// Optional cap on block gas limit when commit time is <= fast-finality threshold.
     pub const FAST_FINALITY_GAS_LIMIT_PER_BLOCK: Option<NonZeroU64> = None;
     /// Optional cap on payload bytes per block when RBC is disabled (None = unlimited).
@@ -2872,7 +2874,7 @@ pub mod sumeragi {
     /// Vote burst cap used when block payload backlog is pending.
     pub const WORKER_VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG: usize = 8;
     /// Maximum urgent actor-gate streak before yielding to DA-critical work.
-    pub const WORKER_MAX_URGENT_BEFORE_DA_CRITICAL: u32 = 8;
+    pub const WORKER_MAX_URGENT_BEFORE_DA_CRITICAL: u32 = 2;
     /// Grace period before exact-frontier body repair actively fetches payloads.
     pub const RECOVERY_AUTHORITATIVE_BODY_INGRESS_FETCH_GRACE_MS: u64 = 100;
     /// Minimum retry window for exact-frontier body fetches.

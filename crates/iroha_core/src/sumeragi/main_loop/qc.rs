@@ -448,7 +448,7 @@ impl Actor {
             }
             let signer_peer = self.vote_signer_peer(vote)?;
             let new_view_qc_supersedes = highest_qc
-                .or_else(|| self.proposal_highest_qc_for_slot(height, view))
+                .or_else(|| self.proposal_or_new_view_highest_qc_for_slot(height, view))
                 .is_some_and(|highest_qc| {
                     self.new_view_qc_supersedes_same_height_vote_conflict(
                         height,
@@ -2005,12 +2005,15 @@ impl Actor {
             .state
             .commit_roster_snapshot_for_block(height, block_hash)
             .is_some();
+        let (chain_order_hash, rechain_seq) = self.vnext_chain_order_binding_for(height, view);
         let has_commit_qc = self.qc_cache.contains_key(&(
             crate::sumeragi::consensus::Phase::Commit,
             block_hash,
             height,
             view,
             epoch,
+            chain_order_hash,
+            rechain_seq,
         ));
         let has_precommit_signer_record =
             crate::sumeragi::status::precommit_signers_for_round(block_hash, height, view, epoch)
@@ -3657,6 +3660,61 @@ impl Actor {
         }
     }
 
+    fn relay_validated_qc(
+        &mut self,
+        qc: &crate::sumeragi::consensus::Qc,
+        topology: &super::network_topology::Topology,
+        reason: &'static str,
+    ) {
+        if self.is_observer() {
+            return;
+        }
+
+        let local_peer_id = self.common_config.peer.id().clone();
+        let topology_peers: Vec<_> = topology.as_ref().to_vec();
+        let mut targets: BTreeSet<PeerId> = topology_peers
+            .iter()
+            .filter(|peer| *peer != &local_peer_id)
+            .cloned()
+            .collect();
+        let topology_set: BTreeSet<_> = topology_peers.iter().cloned().collect();
+        let trusted = self.common_config.trusted_peers.value();
+        let mut extra_targets: Vec<PeerId> = trusted
+            .others
+            .iter()
+            .map(|peer| peer.id().clone())
+            .filter(|peer| !topology_set.contains(peer) && peer != &local_peer_id)
+            .collect();
+        if !extra_targets.is_empty() {
+            let online: BTreeSet<_> = self
+                .network
+                .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect());
+            extra_targets.retain(|peer| online.contains(peer));
+            targets.extend(extra_targets);
+        }
+        if targets.is_empty() {
+            return;
+        }
+
+        info!(
+            height = qc.height,
+            view = qc.view,
+            phase = ?qc.phase,
+            block = %qc.subject_block_hash,
+            targets = targets.len(),
+            reason,
+            "relaying validated QC"
+        );
+        let msg = Arc::new(BlockMessage::Qc(qc.clone()));
+        let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
+        for peer in targets {
+            self.schedule_background(BackgroundRequest::Post {
+                peer,
+                msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
+            });
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(super) fn try_form_qc_from_votes(
         &mut self,
@@ -3667,8 +3725,6 @@ impl Actor {
         epoch: u64,
         topology: &super::network_topology::Topology,
     ) {
-        // Observers still need locally aggregated QCs for block sync, but must not broadcast them.
-        let allow_broadcast = !self.is_observer();
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let canonical_roster = if matches!(phase, crate::sumeragi::consensus::Phase::NewView) {
             self.roster_for_new_view_with_mode(block_hash, height, view, consensus_mode)
@@ -3715,13 +3771,10 @@ impl Actor {
             rechain_seq,
         );
         if let Some(existing) = self.qc_cache.get(&qc_key) {
-            let existing_signers = self
-                .qc_signer_tally
-                .get(&qc_key)
-                .map_or_else(
-                    || qc_voting_signer_count(existing, voting_len),
-                    QcSignerTally::voting_len,
-                );
+            let existing_signers = self.qc_signer_tally.get(&qc_key).map_or_else(
+                || qc_voting_signer_count(existing, voting_len),
+                QcSignerTally::voting_len,
+            );
             if existing.phase == phase
                 && (matches!(consensus_mode, ConsensusMode::Npos) || existing_signers >= required)
             {
@@ -3907,7 +3960,7 @@ impl Actor {
             epoch,
             &snapshot.signers,
             &signature_topology,
-            self.proposal_highest_qc_for_slot(height, view),
+            self.proposal_or_new_view_highest_qc_for_slot(height, view),
         ) {
             warn!(
                 phase = ?phase,
@@ -4163,44 +4216,6 @@ impl Actor {
                 "failed to handle aggregated QC"
             );
             return;
-        }
-        if allow_broadcast {
-            let msg = Arc::new(BlockMessage::Qc(qc));
-            let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
-            let topology_peers = topology.as_ref();
-            let local_peer_id = self.common_config.peer.id().clone();
-            let topology_set: BTreeSet<_> = topology_peers.iter().cloned().collect();
-            for peer in topology_peers {
-                if peer == &local_peer_id {
-                    continue;
-                }
-                self.schedule_background(BackgroundRequest::Post {
-                    peer: peer.clone(),
-                    msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
-                });
-            }
-            let trusted = self.common_config.trusted_peers.value();
-            let mut extra_targets: Vec<PeerId> = trusted
-                .others
-                .iter()
-                .map(|peer| peer.id().clone())
-                .filter(|peer| !topology_set.contains(peer))
-                .collect();
-            if !extra_targets.is_empty() {
-                let online: BTreeSet<_> = self
-                    .network
-                    .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect());
-                extra_targets.retain(|peer| online.contains(peer));
-                for peer in extra_targets {
-                    if peer == local_peer_id {
-                        continue;
-                    }
-                    self.schedule_background(BackgroundRequest::Post {
-                        peer,
-                        msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
-                    });
-                }
-            }
         }
     }
 
@@ -5108,16 +5123,17 @@ impl Actor {
                 self.vote_validation_cache.remove(&key);
             }
             self.qc_signer_tally
-                .retain(|(phase, hash, height, _, _), _| {
+                .retain(|(phase, hash, height, _, _, _, _), _| {
                     *phase != crate::sumeragi::consensus::Phase::Commit
                         || *hash != block_hash
                         || *height != block_height
                 });
-            self.qc_cache.retain(|(phase, hash, height, _, _), _| {
-                *phase != crate::sumeragi::consensus::Phase::Commit
-                    || *hash != block_hash
-                    || *height != block_height
-            });
+            self.qc_cache
+                .retain(|(phase, hash, height, _, _, _, _), _| {
+                    *phase != crate::sumeragi::consensus::Phase::Commit
+                        || *hash != block_hash
+                        || *height != block_height
+                });
         }
         self.vote_roster_cache.remove(&block_hash);
         self.block_signer_cache.remove_block(&block_hash);
@@ -5840,9 +5856,9 @@ impl Actor {
             });
         self.qc_cache
             .retain(|(phase, hash, height, _, _, _, _), _| {
-            *phase != crate::sumeragi::consensus::Phase::Commit
-                || !drop_blocks.contains(&(*hash, *height))
-        });
+                *phase != crate::sumeragi::consensus::Phase::Commit
+                    || !drop_blocks.contains(&(*hash, *height))
+            });
 
         iroha_logger::debug!(
             locked_height = lock.height,
@@ -5895,7 +5911,8 @@ impl Actor {
         }
         let (expected_chain_order_hash, expected_rechain_seq) =
             self.vnext_chain_order_binding_for(qc.height, qc.view);
-        if qc.chain_order_hash != expected_chain_order_hash || qc.rechain_seq != expected_rechain_seq
+        if qc.chain_order_hash != expected_chain_order_hash
+            || qc.rechain_seq != expected_rechain_seq
         {
             warn!(
                 height = qc.height,
@@ -5970,6 +5987,28 @@ impl Actor {
             }
         }
         let qc_key = Self::qc_tally_key(&qc);
+        let qc_cache_key = qc_key;
+        if self
+            .qc_cache
+            .get(&qc_cache_key)
+            .is_some_and(|cached| cached == &qc)
+        {
+            debug!(
+                height = qc.height,
+                view = qc.view,
+                epoch = qc.epoch,
+                phase = ?qc.phase,
+                block = %qc.subject_block_hash,
+                "dropping duplicate cached QC before aggregate validation"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Qc,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::Duplicate,
+            );
+            return Ok(());
+        }
+        let was_qc_cached = self.qc_cache.contains_key(&qc_cache_key);
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
         let commit_topology = if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
             self.roster_for_new_view_with_mode(
@@ -6298,7 +6337,7 @@ impl Actor {
             &signer_set,
             &topology,
             qc.highest_qc
-                .or_else(|| self.proposal_highest_qc_for_slot(qc.height, qc.view)),
+                .or_else(|| self.proposal_or_new_view_highest_qc_for_slot(qc.height, qc.view)),
         ) {
             let allow_conflicting_frontier_commit_qc =
                 matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
@@ -6427,16 +6466,10 @@ impl Actor {
                         .record_commit_roster(&qc, &checkpoint, stake_snapshot);
                     super::status::record_commit_qc(qc.clone());
                 }
-                self.qc_cache.insert(
-                    (
-                        qc.phase,
-                        qc.subject_block_hash,
-                        qc.height,
-                        qc.view,
-                        qc.epoch,
-                    ),
-                    qc.clone(),
-                );
+                self.qc_cache.insert(qc_cache_key, qc.clone());
+                if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
+                    let _ = self.replay_deferred_votes_for_slot(qc.height, qc.view, "new_view_qc");
+                }
                 return Ok(());
             }
             CommittedQcDecision::Drop => return Ok(()),
@@ -6745,16 +6778,10 @@ impl Actor {
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             super::status::record_commit_qc(qc.clone());
         }
-        self.qc_cache.insert(
-            (
-                qc.phase,
-                qc.subject_block_hash,
-                qc.height,
-                qc.view,
-                qc.epoch,
-            ),
-            qc.clone(),
-        );
+        self.qc_cache.insert(qc_cache_key, qc.clone());
+        if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
+            let _ = self.replay_deferred_votes_for_slot(qc.height, qc.view, "new_view_qc");
+        }
         iroha_logger::info!(
             height = qc.height,
             view = qc.view,
@@ -6764,6 +6791,9 @@ impl Actor {
             cache_len = self.qc_cache.len(),
             "cached validated QC"
         );
+        if !was_qc_cached {
+            self.relay_validated_qc(&qc, &topology, "first_validated");
+        }
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
             && block_known_locally
             && !block_known_for_lock

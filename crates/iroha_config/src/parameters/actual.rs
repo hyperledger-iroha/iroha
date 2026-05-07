@@ -4615,6 +4615,8 @@ pub struct SumeragiBlock {
     pub max_transactions: Option<NonZeroUsize>,
     /// Optional cap on IVM-heavy transactions included in a single block (None = unlimited).
     pub max_ivm_transactions: Option<NonZeroUsize>,
+    /// Optional cap on transactions included in fast-finality blocks (None = disabled).
+    pub fast_finality_max_transactions: Option<NonZeroUsize>,
     /// Optional cap on block gas limit when commit time is fast (None = disabled).
     pub fast_gas_limit_per_block: Option<NonZeroU64>,
     /// Optional cap on block payload bytes when RBC is disabled (None = unlimited).

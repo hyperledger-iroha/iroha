@@ -7283,6 +7283,11 @@ impl Actor {
             self.subsystems
                 .da_rbc
                 .rbc
+                .targeted_payload_rescue_last_sent
+                .remove(key);
+            self.subsystems
+                .da_rbc
+                .rbc
                 .ready_rebroadcast_last_sent
                 .remove(key);
             self.subsystems
@@ -7338,6 +7343,11 @@ impl Actor {
                 .da_rbc
                 .rbc
                 .payload_rebroadcast_last_sent
+                .remove(key);
+            self.subsystems
+                .da_rbc
+                .rbc
+                .targeted_payload_rescue_last_sent
                 .remove(key);
             self.subsystems
                 .da_rbc

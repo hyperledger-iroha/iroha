@@ -201,6 +201,26 @@ fn header_flags_guard_mismatch_fails_fast() {
 }
 
 #[test]
+fn decode_from_bytes_isolated_from_stale_decode_flags() {
+    core::reset_decode_state();
+
+    let value = (7u8, String::from("wire-frame"));
+    let bytes = norito::to_bytes(&value).expect("encode compact payload");
+
+    let stale = core::DecodeFlagsGuard::enter(0);
+    let decoded: (u8, String) =
+        norito::decode_from_bytes(&bytes).expect("decode must use the frame header flags");
+    assert_eq!(decoded, value);
+    assert!(
+        !core::use_compact_len(),
+        "outer stale flags should be restored"
+    );
+    drop(stale);
+
+    core::reset_decode_state();
+}
+
+#[test]
 fn tuple_decodes_do_not_leak_layout_flags() {
     core::reset_decode_state();
 
