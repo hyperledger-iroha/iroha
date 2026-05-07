@@ -545,7 +545,6 @@ impl FrontierSlot {
                     }
                     self.candidate.vote_state = FrontierVoteState::VotesObserved;
                     self.quorum_progress.votes_observed = true;
-                    self.quorum_progress.last_vote_at = Some(now);
                     if body_missing {
                         self.candidate.exact_fetch_armed = true;
                         self.phase = FrontierSlotPhase::AwaitBody;
@@ -555,6 +554,7 @@ impl FrontierSlot {
                         self.phase = FrontierSlotPhase::AwaitCommitQc;
                     }
                     if fresh_vote_observation {
+                        self.quorum_progress.last_vote_at = Some(now);
                         self.record_progress(now);
                     } else {
                         self.timers.last_updated_at = now;
@@ -596,7 +596,6 @@ impl FrontierSlot {
                     );
                 self.candidate.vote_state = FrontierVoteState::CommitQcObserved;
                 self.quorum_progress.commit_qc_observed = true;
-                self.quorum_progress.last_commit_qc_at = Some(now);
                 if body_missing {
                     self.candidate.exact_fetch_armed = true;
                     self.phase = FrontierSlotPhase::AwaitBody;
@@ -607,6 +606,7 @@ impl FrontierSlot {
                     actions.request_commit_pipeline_for = Some(block_hash);
                 }
                 if fresh_commit_qc_observation {
+                    self.quorum_progress.last_commit_qc_at = Some(now);
                     self.record_progress(now);
                 } else {
                     self.timers.last_updated_at = now;

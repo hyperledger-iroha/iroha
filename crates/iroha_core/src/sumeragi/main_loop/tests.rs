@@ -14621,6 +14621,158 @@ async fn fetch_pending_block_consensus_priority_bypasses_background_queue() {
         }),
         "consensus-priority fetch should include an exact BlockBodyResponse companion"
     );
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn qc_bearing_block_body_response_sends_direct_qc_companion() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers: BTreeSet<ValidatorIndex> = (0..topology.as_ref().len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        actor.epoch_for_height(height),
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let mut update = super::message::BlockSyncUpdate::from(&block);
+    update.commit_qc = Some(qc);
+    let response = super::message::BlockBodyResponse {
+        block_hash,
+        height,
+        view,
+        body: super::message::BlockBodyData::BlockSyncUpdate(update),
+    };
+    let peer = actor
+        .effective_commit_topology()
+        .into_iter()
+        .find(|peer| peer != actor.common_config.peer.id())
+        .expect("remote peer");
+
+    actor.dispatch_block_body_response_with_plain_fallback(peer.clone(), &block, response);
+
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries.iter().any(|entry| {
+            matches!(
+                entry,
+                super::BackgroundRequestLogEntry {
+                    kind: super::BackgroundRequestLogKind::Post,
+                    msg_kind: Some("BlockBodyResponse"),
+                    peer: Some(entry_peer),
+                } if entry_peer == &peer
+            )
+        }),
+        "QC-bearing exact body response should still send the body"
+    );
+    assert!(
+        entries.iter().any(|entry| {
+            matches!(
+                entry,
+                super::BackgroundRequestLogEntry {
+                    kind: super::BackgroundRequestLogKind::Post,
+                    msg_kind: Some("CommitCert"),
+                    peer: Some(entry_peer),
+                } if entry_peer == &peer
+            )
+        }),
+        "commit QC must be sent outside the body response so frame-cap trimming cannot strip it"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn qc_bearing_fetch_pending_block_update_sends_direct_qc_companion() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers: BTreeSet<ValidatorIndex> = (0..topology.as_ref().len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        actor.epoch_for_height(height),
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    actor.qc_cache.insert(
+        (
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            actor.epoch_for_height(height),
+        ),
+        qc,
+    );
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+    let peer = actor
+        .effective_commit_topology()
+        .into_iter()
+        .find(|peer| peer != actor.common_config.peer.id())
+        .expect("remote peer");
+
+    actor
+        .handle_fetch_pending_block(super::message::FetchPendingBlock {
+            requester: peer.clone(),
+            block_hash,
+            height,
+            view,
+            priority: None,
+            requester_roster_proof_known: Some(true),
+        })
+        .expect("fetch pending block");
+
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries.iter().any(|entry| {
+            matches!(
+                entry,
+                super::BackgroundRequestLogEntry {
+                    kind: super::BackgroundRequestLogKind::Post,
+                    msg_kind: Some("CommitCert"),
+                    peer: Some(entry_peer),
+                } if entry_peer == &peer
+            )
+        }),
+        "QC-bearing fetch responses must send the commit QC outside the BlockSyncUpdate path"
+    );
 
     harness.shutdown.send();
 }
@@ -54160,8 +54312,7 @@ async fn frontier_recovery_allows_cleanup_after_same_height_rbc_sender_activity_
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn frontier_recovery_suppresses_cleanup_while_same_slot_missing_commit_qc_repair_remains_recent()
- {
+async fn frontier_recovery_arms_rotation_after_same_slot_missing_commit_qc_repair_hard_cap() {
     let mut harness = test_actor_harness_with_config(4, test_sumeragi_config(), None).await;
     let actor = &mut harness.actor;
     let genesis_hash = seed_genesis_block_for_state(&actor.state);
@@ -54227,22 +54378,33 @@ async fn frontier_recovery_suppresses_cleanup_while_same_slot_missing_commit_qc_
         last_cause: "quorum_timeout",
     });
 
-    let advance =
+    let first_advance =
         actor.advance_frontier_recovery("quorum_timeout", height, view, false, true, true, now);
     assert_eq!(
-        advance,
+        first_advance,
         super::FrontierRecoveryAdvance::None,
-        "recent same-slot known-block commit-QC repair should suppress quorum-timeout cleanup"
+        "first hard-capped same-slot known-block commit-QC repair pass should consume the deterministic rebroadcast slot"
+    );
+    let second_advance = actor.advance_frontier_recovery(
+        "quorum_timeout",
+        height,
+        view,
+        false,
+        true,
+        true,
+        now.checked_add(Duration::from_millis(1)).unwrap_or(now),
+    );
+    assert_eq!(
+        second_advance,
+        super::FrontierRecoveryAdvance::Rotate,
+        "same-slot known-block commit-QC repair must not suppress quorum-timeout rotation after the hard cap"
     );
     assert!(
-        actor.frontier_recovery.is_some_and(|state| {
-            state.frontier_height == height
-                && state.phase == super::FrontierRecoveryPhase::CatchUp
-                && !state.cleanup_done
-                && state.last_action_at.is_none()
-                && state.last_cause == "quorum_timeout"
-        }),
-        "cleanup suppression should preserve the active quorum-timeout frontier owner"
+        actor
+            .phase_tracker
+            .current_view(height)
+            .is_some_and(|current_view| current_view > view),
+        "exhausted same-slot repair must advance the current view"
     );
     assert!(
         actor.pending.pending_blocks.contains_key(&block_hash),
@@ -54260,8 +54422,7 @@ async fn frontier_recovery_suppresses_cleanup_while_same_slot_missing_commit_qc_
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn frontier_recovery_suppresses_rotation_while_same_slot_missing_commit_qc_repair_remains_recent()
- {
+async fn frontier_recovery_rotates_after_same_slot_missing_commit_qc_repair_hard_cap() {
     let _view_change_guard = super::status::view_change_proof_test_guard();
     super::status::reset_view_change_cause_counters_for_tests();
 
@@ -54331,28 +54492,34 @@ async fn frontier_recovery_suppresses_rotation_while_same_slot_missing_commit_qc
     });
 
     let before = super::status::snapshot();
-    let advance =
+    let first_advance =
         actor.advance_frontier_recovery("quorum_timeout", height, view, false, true, true, now);
+    assert_eq!(
+        first_advance,
+        super::FrontierRecoveryAdvance::None,
+        "first hard-capped same-slot known-block commit-QC repair pass should consume the deterministic rebroadcast slot"
+    );
+    let second_advance = actor.advance_frontier_recovery(
+        "quorum_timeout",
+        height,
+        view,
+        false,
+        true,
+        true,
+        now.checked_add(Duration::from_millis(1)).unwrap_or(now),
+    );
     let after = super::status::snapshot();
     assert_eq!(
-        advance,
-        super::FrontierRecoveryAdvance::None,
-        "recent same-slot known-block commit-QC repair should suppress quorum-timeout rotation"
+        second_advance,
+        super::FrontierRecoveryAdvance::Rotate,
+        "same-slot known-block commit-QC repair must not suppress quorum-timeout rotation after the hard cap"
     );
     assert!(
-        actor.frontier_recovery.is_some_and(|state| {
-            state.frontier_height == height
-                && state.phase == super::FrontierRecoveryPhase::RotateArmed
-                && state.cleanup_done
-                && state.last_rotation_view.is_none()
-                && state.last_cause == "quorum_timeout"
-        }),
-        "rotation suppression should preserve the armed quorum-timeout frontier owner"
-    );
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(view),
-        "suppressed rotation must keep the current view"
+        actor
+            .phase_tracker
+            .current_view(height)
+            .is_some_and(|current_view| current_view > view),
+        "exhausted same-slot repair must advance the current view"
     );
     assert!(
         actor
@@ -54363,8 +54530,11 @@ async fn frontier_recovery_suppresses_rotation_while_same_slot_missing_commit_qc
     );
     assert_eq!(
         after.view_change_causes.quorum_timeout_total,
-        before.view_change_causes.quorum_timeout_total,
-        "same-slot known-block commit-QC repair must not trigger an extra quorum-timeout view change"
+        before
+            .view_change_causes
+            .quorum_timeout_total
+            .saturating_add(1),
+        "exhausted same-slot repair should trigger one quorum-timeout view change"
     );
 
     super::status::reset_view_change_cause_counters_for_tests();
@@ -117992,6 +118162,21 @@ async fn frontier_recovery_same_slot_activity_is_exact_slot_scoped() {
         "old-view missing-payload repair must not suppress later views"
     );
 
+    let window = actor
+        .frontier_recovery_window()
+        .max(Duration::from_millis(1));
+    let refreshed_at = now.checked_add(Duration::from_millis(1)).unwrap_or(now);
+    let stale_progress_at = now.checked_sub(window * 2).unwrap_or(now);
+    let slot = actor.frontier_slot.as_mut().expect("frontier slot seeded");
+    slot.quorum_progress.last_vote_at = Some(stale_progress_at);
+    slot.timers.last_progress_at = stale_progress_at;
+    slot.timers.last_updated_at = refreshed_at;
+    slot.sync_compat_fields();
+    assert!(
+        !actor.frontier_recovery_same_slot_vote_backed_recovery_active(height, view, refreshed_at),
+        "bookkeeping-only refreshes must not keep stale sub-quorum vote-backed recovery active"
+    );
+
     harness.shutdown.send();
 }
 
@@ -137019,7 +137204,7 @@ async fn commit_pipeline_arms_missing_commit_qc_recovery_for_stalled_local_vote(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn commit_pipeline_inlines_validation_when_inflight_is_stalled() {
+async fn commit_pipeline_supersedes_stalled_inflight_validation_inline() {
     use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
 
     let mut harness = test_actor_harness(4).await;
@@ -137062,6 +137247,8 @@ async fn commit_pipeline_inlines_validation_when_inflight_is_stalled() {
             frontier_generation: None,
         },
     );
+    let (work_tx, _work_rx) = std::sync::mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
 
     actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
 
@@ -137073,23 +137260,24 @@ async fn commit_pipeline_inlines_validation_when_inflight_is_stalled() {
     assert_eq!(
         pending_after.validation_status,
         ValidationStatus::Valid,
-        "stalled inflight validation should be bypassed with inline validation"
+        "stalled inflight validation must be superseded so the voter can rejoin quorum"
     );
     assert!(
         pending_after.parent_state_root.is_some(),
-        "inline fallback should capture parent state root"
+        "inline validation should set parent state root"
     );
     assert!(
         pending_after.post_state_root.is_some(),
-        "inline fallback should capture post state root"
+        "inline validation should set post state root"
     );
     assert!(
-        !actor
+        actor
             .subsystems
             .validation
             .inflight
-            .contains_key(&block_hash),
-        "stalled inflight entry should be cleared"
+            .get(&block_hash)
+            .is_none(),
+        "stalled inflight entry should be superseded before inline validation"
     );
 
     harness.shutdown.send();

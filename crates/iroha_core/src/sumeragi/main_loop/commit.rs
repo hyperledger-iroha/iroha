@@ -3018,8 +3018,7 @@ impl Actor {
                                     view = pending_view_snapshot,
                                     block = %hash,
                                     inflight_elapsed_ms = inflight_elapsed.as_millis(),
-                                    inline_fallback_timeout_ms =
-                                        inline_fallback_timeout.as_millis(),
+                                    inline_fallback_timeout_ms = inline_fallback_timeout.as_millis(),
                                     "validation inflight exceeded inline fallback timeout; forcing inline pre-vote validation"
                                 );
                             }

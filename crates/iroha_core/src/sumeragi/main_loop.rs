@@ -6570,11 +6570,7 @@ impl Actor {
                     .last_commit_qc_at
                     .or(slot.quorum_progress.last_vote_at)
                     .is_some_and(recent)
-                    || recent(
-                        slot.timers
-                            .last_progress_at
-                            .max(slot.timers.last_updated_at),
-                    );
+                    || recent(slot.timers.last_progress_at);
                 slot.height == frontier_height
                     && slot.view == frontier_view
                     && !matches!(
@@ -32365,11 +32361,15 @@ impl Actor {
                 same_slot_ingress_active && !same_slot_ingress_hard_cap_elapsed;
             let suppress_same_slot_reassembly =
                 same_slot_reassembly_active && !same_slot_ingress_hard_cap_elapsed;
+            let suppress_same_slot_missing_commit_qc_repair =
+                same_slot_missing_commit_qc_repair_active && !same_slot_ingress_hard_cap_elapsed;
+            let suppress_same_slot_vote_backed_recovery =
+                same_slot_vote_backed_recovery_active && !same_slot_ingress_hard_cap_elapsed;
             if same_height_dependency_backlog_active
                 || suppress_same_slot_ingress
                 || same_slot_missing_payload_recovery_active
-                || same_slot_missing_commit_qc_repair_active
-                || same_slot_vote_backed_recovery_active
+                || suppress_same_slot_missing_commit_qc_repair
+                || suppress_same_slot_vote_backed_recovery
                 || suppress_same_slot_reassembly
                 || same_height_rbc_sender_activity_active
             {
