@@ -2,6 +2,16 @@
 
 Last updated: 2026-05-07
 
+## 2026-05-07 Iroha Config Snapshot Refresh
+
+- Refreshed `minimal_config_snapshot` so the expected minimal config includes
+  the current Sumeragi exact-body repair timing defaults, the default `Full`
+  logger format, and the empty Nexus dataspace fee-sponsor map.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_config --test fixtures`
+  - `cargo test -p iroha_config`
+
 ## 2026-05-07 IVM Staging and Sumeragi Targeted Recovery
 
 - The staged `ivm_contract_deploy` fixtures were retested against the contract

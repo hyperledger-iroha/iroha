@@ -1304,6 +1304,8 @@ fn minimal_config_snapshot() {
                     pending_block_sync_cap: 256,
                     pending_proposal_cap: 128,
                     missing_fetch_aggressive_after_attempts: 2,
+                    authoritative_body_ingress_fetch_grace: 100ms,
+                    exact_body_fetch_retry_floor: 25ms,
                 },
                 fanout: SumeragiFanout {
                     large_set_threshold: 256,
@@ -1448,7 +1450,7 @@ fn minimal_config_snapshot() {
             logger: Logger {
                 level: INFO,
                 filter: None,
-                format: Json,
+                format: Full,
                 terminal_colors: false,
             },
             queue: Queue {
@@ -1634,6 +1636,7 @@ fn minimal_config_snapshot() {
                         },
                     ],
                 },
+                dataspace_fee_sponsors: {},
                 routing_policy: LaneRoutingPolicy {
                     default_lane: LaneId(
                         0,
