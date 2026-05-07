@@ -1457,3 +1457,634 @@ impl PartialOrd for RecordSoracloudRuntimeReceipt {
         Some(encoded_order(self, other))
     }
 }
+
+fn soracloud_decode_flags() -> u8 {
+    norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
+}
+
+macro_rules! impl_soracloud_decode_from_slice {
+    ($ty:ty { $($field:ident : $field_ty:ty),+ $(,)? }) => {
+        impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+                let flags = soracloud_decode_flags();
+                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+                    return super::decode_packed_instruction_payload::<Self>(bytes);
+                }
+
+                let mut offset = 0usize;
+                $(
+                    let $field = super::decode_aos_canonical_field::<$field_ty>(
+                        super::read_aos_field(bytes, &mut offset, flags)?,
+                        flags,
+                    )?;
+                )+
+                if offset != bytes.len() {
+                    return Err(norito::core::Error::LengthMismatch);
+                }
+                norito::core::note_payload_access(bytes, offset);
+                Ok((Self { $($field),+ }, offset))
+            }
+        }
+    };
+}
+
+macro_rules! impl_soracloud_unit_decode_from_slice {
+    ($ty:ty) => {
+        impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+                let flags = soracloud_decode_flags();
+                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+                    return super::decode_packed_instruction_payload::<Self>(bytes);
+                }
+                if !bytes.is_empty() {
+                    return Err(norito::core::Error::LengthMismatch);
+                }
+                norito::core::note_payload_access(bytes, 0);
+                Ok((Self, 0))
+            }
+        }
+    };
+}
+
+impl_soracloud_decode_from_slice!(DeploySoracloudService {
+    bundle: SoraDeploymentBundleV1,
+    initial_service_configs: BTreeMap<String, Json>,
+    initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(UpgradeSoracloudService {
+    bundle: SoraDeploymentBundleV1,
+    initial_service_configs: BTreeMap<String, Json>,
+    initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(RollbackSoracloudService {
+    service_name: Name,
+    target_version: Option<String>,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(SetSoracloudServiceConfig {
+    service_name: Name,
+    config_name: String,
+    value_json: Json,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(DeleteSoracloudServiceConfig {
+    service_name: Name,
+    config_name: String,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(SetSoracloudServiceSecret {
+    service_name: Name,
+    secret_name: String,
+    secret: SecretEnvelopeV1,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(DeleteSoracloudServiceSecret {
+    service_name: Name,
+    secret_name: String,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(MutateSoracloudState {
+    service_name: Name,
+    binding_name: Name,
+    state_key: String,
+    operation: SoraStateMutationOperationV1,
+    value_size_bytes: Option<u64>,
+    encryption: SoraStateEncryptionV1,
+    governance_tx_hash: Hash,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(RunSoracloudFheJob {
+    service_name: Name,
+    binding_name: Name,
+    job: FheJobSpecV1,
+    policy: FheExecutionPolicyV1,
+    param_set: FheParamSetV1,
+    governance_tx_hash: Hash,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(RecordSoracloudDecryptionRequest {
+    service_name: Name,
+    policy: DecryptionAuthorityPolicyV1,
+    request: DecryptionRequestV1,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(JoinSoracloudHfSharedLease {
+    repo_id: String,
+    resolved_revision: String,
+    model_name: String,
+    service_name: Name,
+    apartment_name: Option<Name>,
+    storage_class: StorageClass,
+    lease_term_ms: u64,
+    lease_asset_definition_id: AssetDefinitionId,
+    base_fee_nanos: u128,
+    resource_profile: Option<SoraHfResourceProfileV1>,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(LeaveSoracloudHfSharedLease {
+    repo_id: String,
+    resolved_revision: String,
+    storage_class: StorageClass,
+    lease_term_ms: u64,
+    service_name: Option<Name>,
+    apartment_name: Option<Name>,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(RenewSoracloudHfSharedLease {
+    repo_id: String,
+    resolved_revision: String,
+    model_name: String,
+    service_name: Name,
+    apartment_name: Option<Name>,
+    storage_class: StorageClass,
+    lease_term_ms: u64,
+    lease_asset_definition_id: AssetDefinitionId,
+    base_fee_nanos: u128,
+    resource_profile: Option<SoraHfResourceProfileV1>,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(AdvertiseSoracloudModelHost {
+    capability: SoraModelHostCapabilityRecordV1,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(HeartbeatSoracloudModelHost {
+    validator_account_id: AccountId,
+    heartbeat_expires_at_ms: u64,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(WithdrawSoracloudModelHost {
+    validator_account_id: AccountId,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_unit_decode_from_slice!(ReconcileSoracloudModelHosts);
+
+impl_soracloud_decode_from_slice!(AdvertiseSoracloudInrouHost {
+    capability: SoraInrouHostCapabilityRecordV1,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(WithdrawSoracloudInrouHost {
+    validator_account_id: AccountId,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_unit_decode_from_slice!(ReconcileSoracloudInrouPlacements);
+
+impl_soracloud_decode_from_slice!(ReportSoracloudModelHostViolation {
+    validator_account_id: AccountId,
+    kind: SoraModelHostViolationKindV1,
+    placement_id: Option<Hash>,
+    detail: Option<String>,
+});
+
+impl_soracloud_decode_from_slice!(DeploySoracloudAgentApartment {
+    manifest: AgentApartmentManifestV1,
+    lease_ticks: u64,
+    autonomy_budget_units: u64,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(RenewSoracloudAgentLease {
+    apartment_name: Name,
+    lease_ticks: u64,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(RestartSoracloudAgentApartment {
+    apartment_name: Name,
+    reason: String,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(RevokeSoracloudAgentPolicy {
+    apartment_name: Name,
+    capability: String,
+    reason: Option<String>,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(RequestSoracloudAgentWalletSpend {
+    apartment_name: Name,
+    asset_definition: String,
+    amount_nanos: u64,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(ApproveSoracloudAgentWalletSpend {
+    apartment_name: Name,
+    request_id: String,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(EnqueueSoracloudAgentMessage {
+    from_apartment: Name,
+    to_apartment: Name,
+    channel: String,
+    payload: String,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(AcknowledgeSoracloudAgentMessage {
+    apartment_name: Name,
+    message_id: String,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(AllowSoracloudAgentAutonomyArtifact {
+    apartment_name: Name,
+    artifact_hash: String,
+    provenance_hash: Option<String>,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(RunSoracloudAgentAutonomy {
+    apartment_name: Name,
+    artifact_hash: String,
+    provenance_hash: Option<String>,
+    budget_units: u64,
+    run_label: String,
+    workflow_input_json: Option<String>,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(RecordSoracloudAgentAutonomyExecution {
+    apartment_name: Name,
+    run_id: String,
+    process_generation: u64,
+    succeeded: bool,
+    result_commitment: Hash,
+    service_name: Option<Name>,
+    service_version: Option<String>,
+    handler_name: Option<Name>,
+    runtime_receipt_id: Option<Hash>,
+    journal_artifact_hash: Option<Hash>,
+    checkpoint_artifact_hash: Option<Hash>,
+    error: Option<String>,
+});
+
+impl_soracloud_decode_from_slice!(StartSoracloudTrainingJob {
+    service_name: Name,
+    model_name: String,
+    job_id: String,
+    worker_group_size: u16,
+    target_steps: u32,
+    checkpoint_interval_steps: u32,
+    max_retries: u8,
+    step_compute_units: u64,
+    compute_budget_units: u64,
+    storage_budget_bytes: u64,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(CheckpointSoracloudTrainingJob {
+    service_name: Name,
+    job_id: String,
+    completed_step: u32,
+    checkpoint_size_bytes: u64,
+    metrics_hash: Hash,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(RetrySoracloudTrainingJob {
+    service_name: Name,
+    job_id: String,
+    reason: String,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(RegisterSoracloudModelArtifact {
+    service_name: Name,
+    model_name: String,
+    training_job_id: String,
+    weight_artifact_hash: Hash,
+    dataset_ref: String,
+    training_config_hash: Hash,
+    reproducibility_hash: Hash,
+    provenance_attestation_hash: Hash,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(RegisterSoracloudModelWeight {
+    service_name: Name,
+    model_name: String,
+    weight_version: String,
+    training_job_id: String,
+    parent_version: Option<String>,
+    weight_artifact_hash: Hash,
+    dataset_ref: String,
+    training_config_hash: Hash,
+    reproducibility_hash: Hash,
+    provenance_attestation_hash: Hash,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(PromoteSoracloudModelWeight {
+    service_name: Name,
+    model_name: String,
+    weight_version: String,
+    gate_approved: bool,
+    gate_report_hash: Hash,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(RollbackSoracloudModelWeight {
+    service_name: Name,
+    model_name: String,
+    target_version: String,
+    reason: String,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(RegisterSoracloudUploadedModelBundle {
+    bundle: SoraUploadedModelBundleV1,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(AppendSoracloudUploadedModelChunk {
+    chunk: SoraUploadedModelChunkV1,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(FinalizeSoracloudUploadedModelBundle {
+    service_name: Name,
+    model_name: String,
+    model_id: String,
+    artifact_id: String,
+    weight_version: String,
+    bundle_root: Hash,
+    privacy_mode: SoraModelPrivacyModeV1,
+    weight_artifact_hash: Hash,
+    dataset_ref: String,
+    training_config_hash: Hash,
+    reproducibility_hash: Hash,
+    provenance_attestation_hash: Hash,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(AdmitSoracloudPrivateCompileProfile {
+    service_name: Name,
+    model_id: String,
+    weight_version: String,
+    bundle_root: Hash,
+    compile_profile: SoraPrivateCompileProfileV1,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(AllowSoracloudUploadedModel {
+    apartment_name: Name,
+    service_name: Name,
+    model_name: String,
+    model_id: String,
+    artifact_id: String,
+    weight_version: String,
+    bundle_root: Hash,
+    compile_profile_hash: Hash,
+    privacy_mode: SoraModelPrivacyModeV1,
+    require_model_inference: bool,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(StartSoracloudPrivateInference {
+    session: SoraPrivateInferenceSessionV1,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(RecordSoracloudPrivateInferenceCheckpoint {
+    session_id: String,
+    status: SoraPrivateInferenceSessionStatusV1,
+    receipt_root: Hash,
+    xor_cost_nanos: u128,
+    checkpoint: SoraPrivateInferenceCheckpointV1,
+});
+
+impl_soracloud_decode_from_slice!(AdvanceSoracloudRollout {
+    service_name: Name,
+    rollout_handle: String,
+    healthy: bool,
+    promote_to_percent: Option<u8>,
+    governance_tx_hash: Hash,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(SetSoracloudRuntimeState {
+    state: SoraServiceRuntimeStateV1,
+});
+
+impl_soracloud_decode_from_slice!(SetSoracloudInrouReplicaRuntimeState {
+    state: SoraInrouReplicaRuntimeStateV1,
+});
+
+impl_soracloud_decode_from_slice!(ClearSoracloudInrouReplicaRuntimeState {
+    service_name: Name,
+    service_version: String,
+    replica_slot: u16,
+});
+
+impl_soracloud_decode_from_slice!(ReportSoracloudServiceLeaseUsage {
+    service_name: Name,
+    active_service_version: String,
+    accounted_egress_bytes: u64,
+});
+
+impl_soracloud_decode_from_slice!(RecordSoracloudMailboxMessage {
+    message: SoraServiceMailboxMessageV1,
+});
+
+impl_soracloud_decode_from_slice!(RecordSoracloudRuntimeReceipt {
+    receipt: SoraRuntimeReceiptV1,
+});
+
+#[cfg(test)]
+mod tests {
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use norito::core::DecodeFromSlice;
+
+    use super::*;
+
+    fn name(raw: &str) -> Name {
+        raw.parse().expect("valid name")
+    }
+
+    fn account(seed: u8) -> AccountId {
+        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    fn hash(label: &str) -> Hash {
+        Hash::new(label)
+    }
+
+    fn provenance(seed: u8) -> ManifestProvenance {
+        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let signature = Signature::new(key_pair.private_key(), b"soracloud-isi-slice");
+        ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        }
+    }
+
+    fn assert_slice_roundtrip<T>(value: T)
+    where
+        T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
+        for<'a> T: DecodeFromSlice<'a>,
+    {
+        let bytes = value.encode();
+        let (decoded, used) = T::decode_from_slice(&bytes).expect("decode from slice");
+        assert_eq!(used, bytes.len());
+        assert_eq!(decoded, value);
+    }
+
+    fn assert_registry_decodes<T>(
+        registry: &crate::isi::InstructionRegistry,
+        wire_id: &str,
+        value: T,
+    ) where
+        T: crate::isi::Instruction
+            + norito::codec::Encode
+            + 'static
+            + norito::core::NoritoSerialize,
+        for<'de> T: norito::core::NoritoDeserialize<'de>,
+    {
+        let (payload, flags) = norito::codec::encode_with_header_flags(&value);
+        let framed =
+            norito::core::frame_bare_with_header_flags::<T>(&payload, flags).expect("frame");
+        let decoded = crate::isi::InstructionRegistry::decode(registry, wire_id, &framed)
+            .expect("registered")
+            .expect("decode");
+        assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
+    }
+
+    #[test]
+    fn soracloud_decode_from_slice_roundtrips_simple_instructions() {
+        assert_slice_roundtrip(RollbackSoracloudService {
+            service_name: name("portal"),
+            target_version: Some("2026.5".to_owned()),
+            provenance: provenance(1),
+        });
+        assert_slice_roundtrip(SetSoracloudServiceConfig {
+            service_name: name("portal"),
+            config_name: "replicas".to_owned(),
+            value_json: Json::from(norito::json!({"target": 2_u64})),
+            provenance: provenance(2),
+        });
+        assert_slice_roundtrip(DeleteSoracloudServiceSecret {
+            service_name: name("portal"),
+            secret_name: "openai_api_key".to_owned(),
+            provenance: provenance(3),
+        });
+        assert_slice_roundtrip(HeartbeatSoracloudModelHost {
+            validator_account_id: account(4),
+            heartbeat_expires_at_ms: 42_000,
+            provenance: provenance(4),
+        });
+        assert_slice_roundtrip(WithdrawSoracloudInrouHost {
+            validator_account_id: account(5),
+            provenance: provenance(5),
+        });
+        assert_slice_roundtrip(ReconcileSoracloudModelHosts);
+        assert_slice_roundtrip(ReconcileSoracloudInrouPlacements);
+        assert_slice_roundtrip(ReportSoracloudModelHostViolation {
+            validator_account_id: account(6),
+            kind: SoraModelHostViolationKindV1::AssignedHeartbeatMiss,
+            placement_id: Some(hash("placement")),
+            detail: Some("heartbeat expired".to_owned()),
+        });
+        assert_slice_roundtrip(RevokeSoracloudAgentPolicy {
+            apartment_name: name("agent_home"),
+            capability: "wallet.spend".to_owned(),
+            reason: Some("limit exceeded".to_owned()),
+            provenance: provenance(7),
+        });
+        assert_slice_roundtrip(RecordSoracloudAgentAutonomyExecution {
+            apartment_name: name("agent_home"),
+            run_id: "run-1".to_owned(),
+            process_generation: 9,
+            succeeded: true,
+            result_commitment: hash("result"),
+            service_name: Some(name("generated_service")),
+            service_version: Some("1".to_owned()),
+            handler_name: Some(name("infer")),
+            runtime_receipt_id: Some(hash("receipt")),
+            journal_artifact_hash: Some(hash("journal")),
+            checkpoint_artifact_hash: Some(hash("checkpoint")),
+            error: None,
+        });
+        assert_slice_roundtrip(RegisterSoracloudModelWeight {
+            service_name: name("portal"),
+            model_name: "vision".to_owned(),
+            weight_version: "v2".to_owned(),
+            training_job_id: "job-1".to_owned(),
+            parent_version: Some("v1".to_owned()),
+            weight_artifact_hash: hash("weight"),
+            dataset_ref: "dataset://train".to_owned(),
+            training_config_hash: hash("config"),
+            reproducibility_hash: hash("repro"),
+            provenance_attestation_hash: hash("attestation"),
+            provenance: provenance(8),
+        });
+        assert_slice_roundtrip(ClearSoracloudInrouReplicaRuntimeState {
+            service_name: name("portal"),
+            service_version: "2026.5".to_owned(),
+            replica_slot: 1,
+        });
+        assert_slice_roundtrip(ReportSoracloudServiceLeaseUsage {
+            service_name: name("portal"),
+            active_service_version: "2026.5".to_owned(),
+            accounted_egress_bytes: 4096,
+        });
+    }
+
+    #[test]
+    fn soracloud_default_registry_decodes_type_names_and_stable_ids() {
+        let registry = crate::isi::registry::default();
+        let rollback = RollbackSoracloudService {
+            service_name: name("portal"),
+            target_version: Some("2026.5".to_owned()),
+            provenance: provenance(9),
+        };
+        assert_registry_decodes(
+            &registry,
+            std::any::type_name::<RollbackSoracloudService>(),
+            rollback.clone(),
+        );
+        assert_registry_decodes(&registry, "soracloud::RollbackSoracloudService", rollback);
+        assert_registry_decodes(
+            &registry,
+            std::any::type_name::<SetSoracloudServiceConfig>(),
+            SetSoracloudServiceConfig {
+                service_name: name("portal"),
+                config_name: "replicas".to_owned(),
+                value_json: Json::from(norito::json!({"target": 3_u64})),
+                provenance: provenance(10),
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            std::any::type_name::<ReconcileSoracloudInrouPlacements>(),
+            ReconcileSoracloudInrouPlacements,
+        );
+        assert_registry_decodes(
+            &registry,
+            "soracloud::ReconcileSoracloudInrouPlacements",
+            ReconcileSoracloudInrouPlacements,
+        );
+    }
+}

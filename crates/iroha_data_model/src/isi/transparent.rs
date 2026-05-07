@@ -543,6 +543,31 @@ impl From<Log> for super::InstructionBox {
     }
 }
 
+impl<'a> norito::core::DecodeFromSlice<'a> for Log {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let level = super::decode_aos_canonical_field::<Level>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let msg = super::decode_aos_slice_field::<String>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { level, msg }, offset))
+    }
+}
+
 isi! {
     /// Custom executor-defined instruction envelope.
     ///
@@ -667,6 +692,581 @@ impl crate::seal::Instruction for Revoke<Permission, Role> {}
 impl crate::seal::Instruction for ExecuteTrigger {}
 impl crate::seal::Instruction for Upgrade {}
 impl crate::seal::Instruction for Log {}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for SetParameter {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let parameter = super::decode_aos_canonical_field::<Parameter>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self(parameter), offset))
+    }
+}
+
+impl<'a, O> norito::core::DecodeFromSlice<'a> for SetKeyValue<O>
+where
+    O: Identifiable,
+    O::Id: for<'de> norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+    Self: norito::codec::Decode,
+{
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let object = super::decode_aos_canonical_field::<O::Id>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let key = super::decode_aos_slice_field::<Name>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let value = super::decode_aos_canonical_field::<Json>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { object, key, value }, offset))
+    }
+}
+
+impl<'a, O> norito::core::DecodeFromSlice<'a> for RemoveKeyValue<O>
+where
+    O: Identifiable,
+    O::Id: for<'de> norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+    Self: norito::codec::Decode,
+{
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let object = super::decode_aos_canonical_field::<O::Id>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let key = super::decode_aos_slice_field::<Name>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { object, key }, offset))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for SetAssetKeyValue {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let asset = super::decode_aos_canonical_field::<AssetId>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let key = super::decode_aos_slice_field::<Name>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let value = super::decode_aos_canonical_field::<Json>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { asset, key, value }, offset))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for RemoveAssetKeyValue {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let asset = super::decode_aos_canonical_field::<AssetId>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let key = super::decode_aos_slice_field::<Name>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { asset, key }, offset))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for AddSignatory {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let account = super::decode_aos_canonical_field::<AccountId>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let signatory = super::decode_aos_canonical_field::<PublicKey>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { account, signatory }, offset))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for RemoveSignatory {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let account = super::decode_aos_canonical_field::<AccountId>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let signatory = super::decode_aos_canonical_field::<PublicKey>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { account, signatory }, offset))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for SetAccountQuorum {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let account = super::decode_aos_canonical_field::<AccountId>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let quorum = super::decode_aos_canonical_field::<NonZeroU16>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { account, quorum }, offset))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for super::SetKeyValueBox {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+        let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
+        let tag = u32::from_le_bytes(
+            tag_bytes
+                .try_into()
+                .map_err(|_| norito::core::Error::LengthMismatch)?,
+        );
+        let mut offset = 4usize;
+        let value = match tag {
+            0 => Self::Domain(super::decode_aos_slice_field::<SetKeyValue<Domain>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            1 => Self::Account(super::decode_aos_slice_field::<SetKeyValue<Account>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            2 => Self::AssetDefinition(super::decode_aos_slice_field::<
+                SetKeyValue<AssetDefinition>,
+            >(
+                super::read_aos_field(bytes, &mut offset, flags)?, flags
+            )?),
+            3 => Self::Nft(super::decode_aos_slice_field::<SetKeyValue<Nft>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            4 => Self::Trigger(super::decode_aos_slice_field::<SetKeyValue<Trigger>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            _ => {
+                return Err(norito::core::Error::Message(format!(
+                    "invalid SetKeyValueBox tag {tag}"
+                )));
+            }
+        };
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((value, offset))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for super::RemoveKeyValueBox {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+        let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
+        let tag = u32::from_le_bytes(
+            tag_bytes
+                .try_into()
+                .map_err(|_| norito::core::Error::LengthMismatch)?,
+        );
+        let mut offset = 4usize;
+        let value = match tag {
+            0 => Self::Domain(super::decode_aos_slice_field::<RemoveKeyValue<Domain>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            1 => Self::Account(super::decode_aos_slice_field::<RemoveKeyValue<Account>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            2 => Self::AssetDefinition(super::decode_aos_slice_field::<
+                RemoveKeyValue<AssetDefinition>,
+            >(
+                super::read_aos_field(bytes, &mut offset, flags)?, flags
+            )?),
+            3 => Self::Nft(super::decode_aos_slice_field::<RemoveKeyValue<Nft>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            4 => Self::Trigger(super::decode_aos_slice_field::<RemoveKeyValue<Trigger>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            _ => {
+                return Err(norito::core::Error::Message(format!(
+                    "invalid RemoveKeyValueBox tag {tag}"
+                )));
+            }
+        };
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((value, offset))
+    }
+}
+
+impl<'a, O, D> norito::core::DecodeFromSlice<'a> for Grant<O, D>
+where
+    O: for<'de> norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+    D: Identifiable,
+    D::Id: for<'de> norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+    Self: norito::codec::Decode,
+{
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let object = super::decode_aos_canonical_field::<O>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let destination = super::decode_aos_canonical_field::<D::Id>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((
+            Self {
+                object,
+                destination,
+            },
+            offset,
+        ))
+    }
+}
+
+impl<'a, O, D> norito::core::DecodeFromSlice<'a> for Revoke<O, D>
+where
+    O: for<'de> norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+    D: Identifiable,
+    D::Id: for<'de> norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+    Self: norito::codec::Decode,
+{
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let object = super::decode_aos_canonical_field::<O>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let destination = super::decode_aos_canonical_field::<D::Id>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((
+            Self {
+                object,
+                destination,
+            },
+            offset,
+        ))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for super::GrantBox {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+        let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
+        let tag = u32::from_le_bytes(
+            tag_bytes
+                .try_into()
+                .map_err(|_| norito::core::Error::LengthMismatch)?,
+        );
+        let mut offset = 4usize;
+        let value = match tag {
+            0 => Self::Permission(super::decode_aos_slice_field::<Grant<Permission, Account>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            1 => Self::Role(super::decode_aos_slice_field::<Grant<RoleId, Account>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            2 => Self::RolePermission(super::decode_aos_slice_field::<Grant<Permission, Role>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            _ => {
+                return Err(norito::core::Error::Message(format!(
+                    "invalid GrantBox tag {tag}"
+                )));
+            }
+        };
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((value, offset))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for super::RevokeBox {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+        let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
+        let tag = u32::from_le_bytes(
+            tag_bytes
+                .try_into()
+                .map_err(|_| norito::core::Error::LengthMismatch)?,
+        );
+        let mut offset = 4usize;
+        let value = match tag {
+            0 => Self::Permission(
+                super::decode_aos_slice_field::<Revoke<Permission, Account>>(
+                    super::read_aos_field(bytes, &mut offset, flags)?,
+                    flags,
+                )?,
+            ),
+            1 => Self::Role(super::decode_aos_slice_field::<Revoke<RoleId, Account>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            2 => Self::RolePermission(super::decode_aos_slice_field::<Revoke<Permission, Role>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            _ => {
+                return Err(norito::core::Error::Message(format!(
+                    "invalid RevokeBox tag {tag}"
+                )));
+            }
+        };
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((value, offset))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for ExecuteTrigger {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let trigger = super::decode_aos_canonical_field::<TriggerId>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let args = super::decode_aos_canonical_field::<Json>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { trigger, args }, offset))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for Upgrade {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let executor = super::decode_aos_canonical_field::<Executor>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { executor }, offset))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for CustomInstruction {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let payload = super::decode_aos_canonical_field::<Json>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { payload }, offset))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for InvalidInstruction {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let wire_id = super::decode_aos_canonical_field::<String>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let payload_hash = super::decode_aos_canonical_field::<[u8; 32]>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let message = super::decode_aos_canonical_field::<String>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((
+            Self {
+                wire_id,
+                payload_hash,
+                message,
+            },
+            offset,
+        ))
+    }
+}
 
 // Allow direct conversion into `InstructionBox` for common built-in instructions
 impl From<SetParameter> for super::InstructionBox {
@@ -908,7 +1508,69 @@ impl SetParameter {
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::{Algorithm, KeyPair};
+    use norito::{codec::Encode as _, core::DecodeFromSlice};
+
     use super::*;
+
+    fn public_key(seed: u8) -> PublicKey {
+        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        key_pair.public_key().clone()
+    }
+
+    fn account(seed: u8) -> AccountId {
+        AccountId::new(public_key(seed))
+    }
+
+    fn asset_definition() -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
+            "rose".parse().expect("asset name"),
+        )
+    }
+
+    fn asset_id() -> AssetId {
+        AssetId::of(asset_definition(), account(0x51))
+    }
+
+    fn permission(name: &str) -> Permission {
+        Permission::new(name.to_owned(), Json::new(()))
+    }
+
+    fn role_id(name: &str) -> RoleId {
+        name.parse().expect("role id")
+    }
+
+    fn assert_registry_decodes_name<T>(
+        registry: &crate::isi::InstructionRegistry,
+        name: &str,
+        value: T,
+    ) where
+        T: crate::isi::Instruction
+            + norito::codec::Encode
+            + 'static
+            + norito::core::NoritoSerialize,
+        for<'de> T: norito::core::NoritoDeserialize<'de>,
+    {
+        let (payload, flags) = norito::codec::encode_with_header_flags(&value);
+        let framed =
+            norito::core::frame_bare_with_header_flags::<T>(&payload, flags).expect("frame isi");
+        let decoded = crate::isi::InstructionRegistry::decode(registry, name, &framed)
+            .unwrap_or_else(|| panic!("registered {name}"))
+            .unwrap_or_else(|err| panic!("decode {name}: {err}"));
+        assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
+    }
+
+    fn assert_registry_decodes_type_name<T>(registry: &crate::isi::InstructionRegistry, value: T)
+    where
+        T: crate::isi::Instruction
+            + norito::codec::Encode
+            + 'static
+            + norito::core::NoritoSerialize,
+        for<'de> T: norito::core::NoritoDeserialize<'de>,
+    {
+        assert_registry_decodes_name(registry, std::any::type_name::<T>(), value);
+    }
 
     #[test]
     fn log_getters_expose_level_and_message() {
@@ -916,5 +1578,350 @@ mod tests {
 
         assert_eq!(*log.level(), Level::INFO);
         assert_eq!(log.msg(), "hello ffi");
+    }
+
+    #[test]
+    fn set_remove_key_value_decode_from_slice_roundtrips() {
+        let key: Name = "memo".parse().expect("metadata key");
+        let account = account(0x52);
+        let trigger: TriggerId = "nightly_tick".parse().expect("trigger id");
+
+        let set = SetKeyValue::account(account.clone(), key.clone(), Json::new(1_u32));
+        let set_bytes = set.encode();
+        let (decoded, used) =
+            SetKeyValue::<Account>::decode_from_slice(&set_bytes).expect("decode set account");
+        assert_eq!(used, set_bytes.len());
+        assert_eq!(decoded, set);
+
+        let set = SetKeyValue::trigger(trigger.clone(), key.clone(), Json::new("on"));
+        let set_bytes = set.encode();
+        let (decoded, used) =
+            SetKeyValue::<Trigger>::decode_from_slice(&set_bytes).expect("decode set trigger");
+        assert_eq!(used, set_bytes.len());
+        assert_eq!(decoded, set);
+
+        let remove = RemoveKeyValue::account(account, key.clone());
+        let remove_bytes = remove.encode();
+        let (decoded, used) = RemoveKeyValue::<Account>::decode_from_slice(&remove_bytes)
+            .expect("decode remove account");
+        assert_eq!(used, remove_bytes.len());
+        assert_eq!(decoded, remove);
+
+        let remove = RemoveKeyValue::trigger(trigger, key);
+        let remove_bytes = remove.encode();
+        let (decoded, used) = RemoveKeyValue::<Trigger>::decode_from_slice(&remove_bytes)
+            .expect("decode remove trigger");
+        assert_eq!(used, remove_bytes.len());
+        assert_eq!(decoded, remove);
+    }
+
+    #[test]
+    fn asset_key_value_decode_from_slice_roundtrips() {
+        let key: Name = "memo".parse().expect("metadata key");
+        let set = SetAssetKeyValue::new(asset_id(), key.clone(), Json::new(2_u32));
+        let set_bytes = set.encode();
+        let (decoded, used) =
+            SetAssetKeyValue::decode_from_slice(&set_bytes).expect("decode asset set");
+        assert_eq!(used, set_bytes.len());
+        assert_eq!(decoded, set);
+
+        let remove = RemoveAssetKeyValue::new(asset_id(), key);
+        let remove_bytes = remove.encode();
+        let (decoded, used) =
+            RemoveAssetKeyValue::decode_from_slice(&remove_bytes).expect("decode asset remove");
+        assert_eq!(used, remove_bytes.len());
+        assert_eq!(decoded, remove);
+    }
+
+    #[test]
+    fn signatory_quorum_decode_from_slice_roundtrips() {
+        let account = account(0x57);
+        let signatory = public_key(0x58);
+
+        let add = AddSignatory::new(account.clone(), signatory.clone());
+        let add_bytes = add.encode();
+        let (decoded, used) = AddSignatory::decode_from_slice(&add_bytes).expect("decode add");
+        assert_eq!(used, add_bytes.len());
+        assert_eq!(decoded, add);
+
+        let remove = RemoveSignatory::new(account.clone(), signatory);
+        let remove_bytes = remove.encode();
+        let (decoded, used) =
+            RemoveSignatory::decode_from_slice(&remove_bytes).expect("decode remove");
+        assert_eq!(used, remove_bytes.len());
+        assert_eq!(decoded, remove);
+
+        let quorum = SetAccountQuorum::new(account, NonZeroU16::new(2).expect("nonzero quorum"));
+        let quorum_bytes = quorum.encode();
+        let (decoded, used) =
+            SetAccountQuorum::decode_from_slice(&quorum_bytes).expect("decode quorum");
+        assert_eq!(used, quorum_bytes.len());
+        assert_eq!(decoded, quorum);
+    }
+
+    #[test]
+    fn signatory_quorum_default_registry_decodes_type_names() {
+        let registry = crate::isi::registry::default();
+        let account = account(0x59);
+        let signatory = public_key(0x5a);
+
+        assert_registry_decodes_type_name(
+            &registry,
+            AddSignatory::new(account.clone(), signatory.clone()),
+        );
+        assert_registry_decodes_type_name(
+            &registry,
+            RemoveSignatory::new(account.clone(), signatory),
+        );
+        assert_registry_decodes_type_name(
+            &registry,
+            SetAccountQuorum::new(account, NonZeroU16::new(3).expect("nonzero quorum")),
+        );
+    }
+
+    #[test]
+    fn set_parameter_decode_from_slice_roundtrips() {
+        let instruction = SetParameter::new(Parameter::Transaction(
+            crate::parameter::TransactionParameter::RequireSequence(true),
+        ));
+        let bytes = instruction.encode();
+        let (decoded, used) =
+            SetParameter::decode_from_slice(&bytes).expect("decode set parameter");
+        assert_eq!(used, bytes.len());
+        assert_eq!(decoded, instruction);
+    }
+
+    #[test]
+    fn set_parameter_registry_decodes_stable_id() {
+        let registry = crate::isi::registry::default();
+        assert_registry_decodes_name(
+            &registry,
+            SetParameter::WIRE_ID,
+            SetParameter::new(Parameter::Transaction(
+                crate::parameter::TransactionParameter::RequireSequence(true),
+            )),
+        );
+    }
+
+    #[test]
+    fn key_value_boxes_registry_decode_stable_ids() {
+        let key: Name = "memo".parse().expect("metadata key");
+        let domain = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let registry = crate::isi::InstructionRegistry::new()
+            .register_with_id_slice::<SetKeyValueBox>(SetKeyValueBox::WIRE_ID)
+            .register_with_id_slice::<RemoveKeyValueBox>(RemoveKeyValueBox::WIRE_ID);
+
+        let set_cases = [
+            SetKeyValueBox::Domain(SetKeyValue::domain(
+                domain.clone(),
+                key.clone(),
+                Json::new(1_u32),
+            )),
+            SetKeyValueBox::Account(SetKeyValue::account(
+                account(0x53),
+                key.clone(),
+                Json::new(2_u32),
+            )),
+            SetKeyValueBox::AssetDefinition(SetKeyValue::asset_definition(
+                asset_definition(),
+                key.clone(),
+                Json::new(3_u32),
+            )),
+        ];
+        for value in set_cases {
+            let (payload, flags) = norito::codec::encode_with_header_flags(&value);
+            let framed =
+                norito::core::frame_bare_with_header_flags::<SetKeyValueBox>(&payload, flags)
+                    .expect("frame set key value box");
+            let decoded = crate::isi::InstructionRegistry::decode(
+                &registry,
+                SetKeyValueBox::WIRE_ID,
+                &framed,
+            )
+            .expect("registered set key value box")
+            .expect("decode set key value box");
+            assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
+        }
+
+        let remove_cases = [
+            RemoveKeyValueBox::Domain(RemoveKeyValue::domain(domain, key.clone())),
+            RemoveKeyValueBox::Account(RemoveKeyValue::account(account(0x54), key.clone())),
+            RemoveKeyValueBox::AssetDefinition(RemoveKeyValue::asset_definition(
+                asset_definition(),
+                key,
+            )),
+        ];
+        for value in remove_cases {
+            let (payload, flags) = norito::codec::encode_with_header_flags(&value);
+            let framed =
+                norito::core::frame_bare_with_header_flags::<RemoveKeyValueBox>(&payload, flags)
+                    .expect("frame remove key value box");
+            let decoded = crate::isi::InstructionRegistry::decode(
+                &registry,
+                RemoveKeyValueBox::WIRE_ID,
+                &framed,
+            )
+            .expect("registered remove key value box")
+            .expect("decode remove key value box");
+            assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
+        }
+    }
+
+    #[test]
+    fn grant_revoke_decode_from_slice_roundtrips() {
+        let holder = account(0x55);
+        let role = role_id("auditor");
+
+        let grant = Grant::account_permission(permission("can_read"), holder.clone());
+        let grant_bytes = grant.encode();
+        let (decoded, used) = Grant::<Permission, Account>::decode_from_slice(&grant_bytes)
+            .expect("decode account permission grant");
+        assert_eq!(used, grant_bytes.len());
+        assert_eq!(decoded, grant);
+
+        let grant = Grant::account_role(role.clone(), holder.clone());
+        let grant_bytes = grant.encode();
+        let (decoded, used) = Grant::<RoleId, Account>::decode_from_slice(&grant_bytes)
+            .expect("decode account role grant");
+        assert_eq!(used, grant_bytes.len());
+        assert_eq!(decoded, grant);
+
+        let grant = Grant::role_permission(permission("can_audit"), role.clone());
+        let grant_bytes = grant.encode();
+        let (decoded, used) = Grant::<Permission, Role>::decode_from_slice(&grant_bytes)
+            .expect("decode role permission grant");
+        assert_eq!(used, grant_bytes.len());
+        assert_eq!(decoded, grant);
+
+        let revoke = Revoke::account_permission(permission("can_read"), holder.clone());
+        let revoke_bytes = revoke.encode();
+        let (decoded, used) = Revoke::<Permission, Account>::decode_from_slice(&revoke_bytes)
+            .expect("decode account permission revoke");
+        assert_eq!(used, revoke_bytes.len());
+        assert_eq!(decoded, revoke);
+
+        let revoke = Revoke::account_role(role.clone(), holder);
+        let revoke_bytes = revoke.encode();
+        let (decoded, used) = Revoke::<RoleId, Account>::decode_from_slice(&revoke_bytes)
+            .expect("decode account role revoke");
+        assert_eq!(used, revoke_bytes.len());
+        assert_eq!(decoded, revoke);
+
+        let revoke = Revoke::role_permission(permission("can_audit"), role);
+        let revoke_bytes = revoke.encode();
+        let (decoded, used) = Revoke::<Permission, Role>::decode_from_slice(&revoke_bytes)
+            .expect("decode role permission revoke");
+        assert_eq!(used, revoke_bytes.len());
+        assert_eq!(decoded, revoke);
+    }
+
+    #[test]
+    fn grant_revoke_boxes_registry_decode_stable_ids() {
+        let holder = account(0x56);
+        let role = role_id("operator");
+        let registry = crate::isi::InstructionRegistry::new()
+            .register_with_id_slice::<GrantBox>(GrantBox::WIRE_ID)
+            .register_with_id_slice::<RevokeBox>(RevokeBox::WIRE_ID);
+
+        let grant_cases = [
+            GrantBox::Permission(Grant::account_permission(
+                permission("can_read"),
+                holder.clone(),
+            )),
+            GrantBox::Role(Grant::account_role(role.clone(), holder.clone())),
+            GrantBox::RolePermission(Grant::role_permission(
+                permission("can_operate"),
+                role.clone(),
+            )),
+        ];
+        for value in grant_cases {
+            let (payload, flags) = norito::codec::encode_with_header_flags(&value);
+            let framed = norito::core::frame_bare_with_header_flags::<GrantBox>(&payload, flags)
+                .expect("frame grant box");
+            let decoded =
+                crate::isi::InstructionRegistry::decode(&registry, GrantBox::WIRE_ID, &framed)
+                    .expect("registered grant box")
+                    .expect("decode grant box");
+            assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
+        }
+
+        let revoke_cases = [
+            RevokeBox::Permission(Revoke::account_permission(
+                permission("can_read"),
+                holder.clone(),
+            )),
+            RevokeBox::Role(Revoke::account_role(role.clone(), holder)),
+            RevokeBox::RolePermission(Revoke::role_permission(permission("can_operate"), role)),
+        ];
+        for value in revoke_cases {
+            let (payload, flags) = norito::codec::encode_with_header_flags(&value);
+            let framed = norito::core::frame_bare_with_header_flags::<RevokeBox>(&payload, flags)
+                .expect("frame revoke box");
+            let decoded =
+                crate::isi::InstructionRegistry::decode(&registry, RevokeBox::WIRE_ID, &framed)
+                    .expect("registered revoke box")
+                    .expect("decode revoke box");
+            assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
+        }
+    }
+
+    #[test]
+    fn trigger_upgrade_custom_decode_from_slice_roundtrips() {
+        let trigger: TriggerId = "nightly_tick".parse().expect("trigger id");
+        let execute = ExecuteTrigger::new(trigger).with_args(norito::json!({"a": 1_u32}));
+        let execute_bytes = execute.encode();
+        let (decoded, used) =
+            ExecuteTrigger::decode_from_slice(&execute_bytes).expect("decode execute trigger");
+        assert_eq!(used, execute_bytes.len());
+        assert_eq!(decoded, execute);
+
+        let executor = Executor::new(crate::transaction::executable::IvmBytecode::from_compiled(
+            vec![1, 2, 3],
+        ));
+        let upgrade = Upgrade::new(executor);
+        let upgrade_bytes = upgrade.encode();
+        let (decoded, used) = Upgrade::decode_from_slice(&upgrade_bytes).expect("decode upgrade");
+        assert_eq!(used, upgrade_bytes.len());
+        assert_eq!(decoded, upgrade);
+
+        let custom = CustomInstruction::new(Json::new(()));
+        let custom_bytes = custom.encode();
+        let (decoded, used) =
+            CustomInstruction::decode_from_slice(&custom_bytes).expect("decode custom");
+        assert_eq!(used, custom_bytes.len());
+        assert_eq!(decoded, custom);
+
+        let invalid = InvalidInstruction::new("iroha.unknown", [0xAB; 32], "bad payload");
+        let invalid_bytes = invalid.encode();
+        let (decoded, used) =
+            InvalidInstruction::decode_from_slice(&invalid_bytes).expect("decode invalid");
+        assert_eq!(used, invalid_bytes.len());
+        assert_eq!(decoded, invalid);
+    }
+
+    #[test]
+    fn trigger_upgrade_custom_registry_decode_stable_ids() {
+        let registry = crate::isi::registry::default();
+        let trigger: TriggerId = "nightly_tick".parse().expect("trigger id");
+        assert_registry_decodes_name(
+            &registry,
+            ExecuteTrigger::WIRE_ID,
+            ExecuteTrigger::new(trigger).with_args(norito::json!({"a": 1_u32})),
+        );
+
+        let executor = Executor::new(crate::transaction::executable::IvmBytecode::from_compiled(
+            vec![1, 2, 3],
+        ));
+        assert_registry_decodes_name(&registry, Upgrade::WIRE_ID, Upgrade::new(executor));
+        assert_registry_decodes_name(
+            &registry,
+            CustomInstruction::WIRE_ID,
+            CustomInstruction::new(Json::new(())),
+        );
+        assert_registry_decodes_name(
+            &registry,
+            InvalidInstruction::WIRE_ID,
+            InvalidInstruction::new("iroha.unknown", [0xAB; 32], "bad payload"),
+        );
     }
 }

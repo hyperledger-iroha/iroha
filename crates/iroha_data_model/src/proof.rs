@@ -799,10 +799,6 @@ mod tests {
     use iroha_crypto::LaneCommitmentId;
 
     use super::*;
-    fn run_or_skip() -> bool {
-        std::env::var("IROHA_RUN_IGNORED").ok().as_deref() == Some("1")
-    }
-
     #[test]
     fn proof_attachment_list_roundtrip_bare() {
         let mut attachment = ProofAttachment::new_inline(
@@ -835,12 +831,6 @@ mod tests {
 
     #[test]
     fn proofbox_norito_roundtrip() {
-        if !run_or_skip() {
-            eprintln!(
-                "Skipping: Norito derive decode mismatch (Ident, Vec<u8>). Set IROHA_RUN_IGNORED=1 to run."
-            );
-            return;
-        }
         let backend: iroha_schema::Ident = "halo2/ipa".into();
         let bytes = vec![0xde, 0xad, 0xbe, 0xef, 0x01, 0x02];
         let p = ProofBox::new(backend, bytes.clone());
@@ -853,10 +843,6 @@ mod tests {
 
     #[test]
     fn verifying_key_roundtrip() {
-        if !run_or_skip() {
-            eprintln!("Skipping: Norito derive decode mismatch. Set IROHA_RUN_IGNORED=1 to run.");
-            return;
-        }
         let backend: iroha_schema::Ident = "halo2/ipa".into();
         let vk = VerifyingKeyBox::new(backend, vec![7, 7, 7]);
         let enc = norito::to_bytes(&vk).expect("encode");
@@ -868,10 +854,6 @@ mod tests {
 
     #[test]
     fn vk_record_roundtrip() {
-        if !run_or_skip() {
-            eprintln!("Skipping: Norito derive decode mismatch. Set IROHA_RUN_IGNORED=1 to run.");
-            return;
-        }
         let rec = VerifyingKeyRecord {
             version: 1,
             circuit_id: "transfer_v1".into(),
@@ -921,10 +903,6 @@ mod tests {
 
     #[test]
     fn proof_attachment_roundtrip() {
-        if !run_or_skip() {
-            eprintln!("Skipping: Norito derive decode mismatch. Set IROHA_RUN_IGNORED=1 to run.");
-            return;
-        }
         let p = ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]);
         let id = VerifyingKeyId::new("halo2/ipa", "vk_1");
         let a = ProofAttachment::new_ref("halo2/ipa".into(), p.clone(), id);
@@ -947,12 +925,6 @@ mod tests {
         use iroha_crypto::{Hash, HashOf};
 
         use crate::query::CommittedTransaction;
-        if !run_or_skip() {
-            eprintln!(
-                "Skipping: Norito derive decode mismatch (nested). Set IROHA_RUN_IGNORED=1 to run."
-            );
-            return;
-        }
         // Minimal dummy CommittedTransaction with empty merkle items.
         let empty: [u8; 32] = [0; 32];
         let h_block =
@@ -1008,10 +980,6 @@ mod tests {
 
     #[test]
     fn proof_record_roundtrip() {
-        if !run_or_skip() {
-            eprintln!("Skipping: Norito derive decode mismatch. Set IROHA_RUN_IGNORED=1 to run.");
-            return;
-        }
         let id = ProofId {
             backend: "halo2/ipa".into(),
             proof_hash: [0xAA; 32],

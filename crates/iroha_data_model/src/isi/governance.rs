@@ -378,25 +378,197 @@ pub struct RestituteGovernanceLock {
 
 impl crate::seal::Instruction for RestituteGovernanceLock {}
 
+fn governance_decode_flags() -> u8 {
+    norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
+}
+
+macro_rules! impl_governance_decode_from_slice {
+    ($ty:ty { $($field:ident : $field_ty:ty),+ $(,)? }) => {
+        impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+                let flags = governance_decode_flags();
+                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+                    return super::decode_packed_instruction_payload::<Self>(bytes);
+                }
+
+                let mut offset = 0usize;
+                $(
+                    let $field = super::decode_aos_canonical_field::<$field_ty>(
+                        super::read_aos_field(bytes, &mut offset, flags)?,
+                        flags,
+                    )?;
+                )+
+                if offset != bytes.len() {
+                    return Err(norito::core::Error::LengthMismatch);
+                }
+                norito::core::note_payload_access(bytes, offset);
+                Ok((Self { $($field),+ }, offset))
+            }
+        }
+    };
+}
+
+impl_governance_decode_from_slice!(ProposeDeployContract {
+    contract_address: crate::smart_contract::ContractAddress,
+    code_hash_hex: String,
+    abi_hash_hex: String,
+    abi_version: String,
+    window: Option<AtWindow>,
+    mode: Option<VotingMode>,
+    manifest_provenance: Option<ManifestProvenance>,
+});
+
+impl_governance_decode_from_slice!(ProposeRuntimeUpgradeProposal {
+    manifest: RuntimeUpgradeManifest,
+    window: Option<AtWindow>,
+    mode: Option<VotingMode>,
+});
+
+impl_governance_decode_from_slice!(CastZkBallot {
+    election_id: String,
+    proof_b64: String,
+    public_inputs_json: String,
+});
+
+impl_governance_decode_from_slice!(CastPlainBallot {
+    referendum_id: String,
+    owner: AccountId,
+    amount: u128,
+    duration_blocks: u64,
+    direction: u8,
+});
+
+impl_governance_decode_from_slice!(SlashGovernanceLock {
+    referendum_id: String,
+    owner: AccountId,
+    amount: u128,
+    reason: String,
+});
+
+impl_governance_decode_from_slice!(RestituteGovernanceLock {
+    referendum_id: String,
+    owner: AccountId,
+    amount: u128,
+    reason: String,
+});
+
+impl_governance_decode_from_slice!(EnactReferendum {
+    referendum_id: [u8; 32],
+    preimage_hash: [u8; 32],
+    at_window: AtWindow,
+});
+
+impl_governance_decode_from_slice!(FinalizeReferendum {
+    referendum_id: String,
+    proposal_id: [u8; 32],
+});
+
+impl_governance_decode_from_slice!(ApproveGovernanceProposal {
+    body: ParliamentBody,
+    proposal_id: [u8; 32],
+});
+
+impl_governance_decode_from_slice!(PersistCouncilForEpoch {
+    epoch: u64,
+    members: Vec<crate::account::AccountId>,
+    alternates: Vec<crate::account::AccountId>,
+    verified: u32,
+    candidates_count: u32,
+    derived_by: CouncilDerivationKind,
+});
+
+impl_governance_decode_from_slice!(RecordCitizenServiceOutcome {
+    owner: AccountId,
+    epoch: u64,
+    role: String,
+    event: CitizenServiceEvent,
+});
+
+impl_governance_decode_from_slice!(RegisterCitizen {
+    owner: AccountId,
+    amount: u128,
+});
+
+impl_governance_decode_from_slice!(UnregisterCitizen { owner: AccountId });
+
 #[cfg(test)]
 mod tests {
-    #[cfg(not(feature = "governance"))]
+    use iroha_crypto::{Algorithm, KeyPair};
     use norito::core::DecodeFromSlice;
 
     use super::*;
+
+    fn account(seed: u8) -> AccountId {
+        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    fn window() -> AtWindow {
+        AtWindow {
+            lower: 10,
+            upper: 20,
+        }
+    }
+
+    fn contract_address() -> crate::smart_contract::ContractAddress {
+        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            .parse()
+            .expect("contract address")
+    }
+
+    fn runtime_manifest() -> RuntimeUpgradeManifest {
+        RuntimeUpgradeManifest {
+            name: "runtime-upgrade".to_string(),
+            description: "isi roundtrip".to_string(),
+            abi_version: 1,
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+            added_syscalls: Vec::new(),
+            added_pointer_types: Vec::new(),
+            start_height: 100,
+            end_height: 200,
+            sbom_digests: Vec::new(),
+            slsa_attestation: Vec::new(),
+            provenance: Vec::new(),
+        }
+    }
+
+    fn assert_slice_roundtrip<T>(value: T)
+    where
+        T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
+        for<'a> T: DecodeFromSlice<'a>,
+    {
+        let bytes = value.encode();
+        let (decoded, used) = T::decode_from_slice(&bytes).expect("decode from slice");
+        assert_eq!(used, bytes.len());
+        assert_eq!(decoded, value);
+    }
+
+    fn assert_registry_decodes<T>(registry: &crate::isi::InstructionRegistry, value: T)
+    where
+        T: crate::isi::Instruction
+            + norito::codec::Encode
+            + 'static
+            + norito::core::NoritoSerialize,
+        for<'de> T: norito::core::NoritoDeserialize<'de>,
+    {
+        let wire_id = std::any::type_name::<T>();
+        let (payload, flags) = norito::codec::encode_with_header_flags(&value);
+        let framed =
+            norito::core::frame_bare_with_header_flags::<T>(&payload, flags).expect("frame");
+        let decoded = crate::isi::InstructionRegistry::decode(registry, wire_id, &framed)
+            .expect("registered")
+            .expect("decode");
+        assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
+    }
+
     #[test]
     fn encode_roundtrip_basic() {
         let p = ProposeDeployContract {
-            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
-                .parse()
-                .expect("contract address"),
+            contract_address: contract_address(),
             code_hash_hex: "aa".repeat(32),
             abi_hash_hex: "bb".repeat(32),
             abi_version: "1".into(),
-            window: Some(AtWindow {
-                lower: 10,
-                upper: 20,
-            }),
+            window: Some(window()),
             mode: Some(VotingMode::Zk),
             manifest_provenance: None,
         };
@@ -409,23 +581,8 @@ mod tests {
     #[test]
     fn runtime_upgrade_proposal_roundtrip() {
         let ins = ProposeRuntimeUpgradeProposal {
-            manifest: RuntimeUpgradeManifest {
-                name: "runtime-upgrade".to_string(),
-                description: "isi roundtrip".to_string(),
-                abi_version: 1,
-                abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-                added_syscalls: Vec::new(),
-                added_pointer_types: Vec::new(),
-                start_height: 100,
-                end_height: 200,
-                sbom_digests: Vec::new(),
-                slsa_attestation: Vec::new(),
-                provenance: Vec::new(),
-            },
-            window: Some(AtWindow {
-                lower: 10,
-                upper: 20,
-            }),
+            manifest: runtime_manifest(),
+            window: Some(window()),
             mode: Some(VotingMode::Plain),
         };
         let enc = norito::codec::Encode::encode(&ins);
@@ -455,7 +612,6 @@ mod tests {
         assert_eq!(ins, dec);
     }
 
-    #[cfg(not(feature = "governance"))]
     #[test]
     fn at_window_decodes_from_slice_via_norito() {
         let window = AtWindow {
@@ -467,5 +623,134 @@ mod tests {
             .expect("decode_from_slice should succeed");
         assert_eq!(decoded, window);
         assert_eq!(used, bytes.len());
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn governance_decode_from_slice_roundtrips() {
+        assert_slice_roundtrip(ProposeDeployContract {
+            contract_address: contract_address(),
+            code_hash_hex: "aa".repeat(32),
+            abi_hash_hex: "bb".repeat(32),
+            abi_version: "1".into(),
+            window: Some(window()),
+            mode: Some(VotingMode::Zk),
+            manifest_provenance: None,
+        });
+        assert_slice_roundtrip(ProposeRuntimeUpgradeProposal {
+            manifest: runtime_manifest(),
+            window: Some(window()),
+            mode: Some(VotingMode::Plain),
+        });
+        assert_slice_roundtrip(CastZkBallot {
+            election_id: "referendum-1".to_owned(),
+            proof_b64: "AQID".to_owned(),
+            public_inputs_json: "{\"vote\":\"aye\"}".to_owned(),
+        });
+        assert_slice_roundtrip(CastPlainBallot {
+            referendum_id: "referendum-1".to_owned(),
+            owner: account(1),
+            amount: 1_000,
+            duration_blocks: 100,
+            direction: 0,
+        });
+        assert_slice_roundtrip(SlashGovernanceLock {
+            referendum_id: "referendum-1".to_owned(),
+            owner: account(1),
+            amount: 100,
+            reason: "misconduct".to_owned(),
+        });
+        assert_slice_roundtrip(RestituteGovernanceLock {
+            referendum_id: "referendum-1".to_owned(),
+            owner: account(1),
+            amount: 50,
+            reason: "appeal accepted".to_owned(),
+        });
+        assert_slice_roundtrip(EnactReferendum {
+            referendum_id: [0x11; 32],
+            preimage_hash: [0x22; 32],
+            at_window: window(),
+        });
+        assert_slice_roundtrip(FinalizeReferendum {
+            referendum_id: "referendum-1".to_owned(),
+            proposal_id: [0x33; 32],
+        });
+        assert_slice_roundtrip(ApproveGovernanceProposal {
+            body: ParliamentBody::AgendaCouncil,
+            proposal_id: [0x44; 32],
+        });
+        assert_slice_roundtrip(PersistCouncilForEpoch {
+            epoch: 7,
+            members: vec![account(1), account(2)],
+            alternates: vec![account(3)],
+            verified: 2,
+            candidates_count: 4,
+            derived_by: CouncilDerivationKind::Vrf,
+        });
+        assert_slice_roundtrip(RecordCitizenServiceOutcome {
+            owner: account(1),
+            epoch: 7,
+            role: "policy_jury".to_owned(),
+            event: CitizenServiceEvent::NoShow,
+        });
+        assert_slice_roundtrip(RegisterCitizen {
+            owner: account(1),
+            amount: 2_000,
+        });
+        assert_slice_roundtrip(UnregisterCitizen { owner: account(1) });
+    }
+
+    #[test]
+    fn governance_default_registry_decodes_type_names() {
+        let registry = crate::isi::registry::default();
+
+        assert_registry_decodes(
+            &registry,
+            ProposeDeployContract {
+                contract_address: contract_address(),
+                code_hash_hex: "aa".repeat(32),
+                abi_hash_hex: "bb".repeat(32),
+                abi_version: "1".into(),
+                window: Some(window()),
+                mode: Some(VotingMode::Zk),
+                manifest_provenance: None,
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            ProposeRuntimeUpgradeProposal {
+                manifest: runtime_manifest(),
+                window: Some(window()),
+                mode: Some(VotingMode::Plain),
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            CastPlainBallot {
+                referendum_id: "referendum-1".to_owned(),
+                owner: account(1),
+                amount: 1_000,
+                duration_blocks: 100,
+                direction: 0,
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            PersistCouncilForEpoch {
+                epoch: 7,
+                members: vec![account(1), account(2)],
+                alternates: Vec::new(),
+                verified: 2,
+                candidates_count: 4,
+                derived_by: CouncilDerivationKind::Fallback,
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            RegisterCitizen {
+                owner: account(1),
+                amount: 2_000,
+            },
+        );
     }
 }

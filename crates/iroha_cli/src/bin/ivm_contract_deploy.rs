@@ -319,11 +319,14 @@ fn assemble_program_with_literals(code: &[u8], literal_data: &[u8]) -> Vec<u8> {
     program.extend_from_slice(&DEFAULT_MAX_CYCLES.to_le_bytes());
     program.push(1);
     if !literal_data.is_empty() {
+        let unpadded_literal_len = 16 + literal_data.len();
+        let post_pad = (4 - (unpadded_literal_len % 4)) % 4;
         program.extend_from_slice(b"LTLB");
         program.extend_from_slice(&0u32.to_le_bytes());
-        program.extend_from_slice(&0u32.to_le_bytes());
+        program.extend_from_slice(&(post_pad as u32).to_le_bytes());
         program.extend_from_slice(&(literal_data.len() as u32).to_le_bytes());
         program.extend_from_slice(literal_data);
+        program.extend(std::iter::repeat_n(0u8, post_pad));
     }
     program.extend_from_slice(code);
     program

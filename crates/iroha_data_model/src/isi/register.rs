@@ -344,6 +344,220 @@ impl crate::seal::Instruction for Unregister<Nft> {}
 impl crate::seal::Instruction for Unregister<Role> {}
 impl crate::seal::Instruction for Unregister<Trigger> {}
 
+impl<'a> norito::core::DecodeFromSlice<'a> for RegisterPeerWithPop {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let peer = super::decode_aos_canonical_field::<PeerId>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let pop = super::decode_aos_canonical_field::<Vec<u8>>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let activation_at = super::decode_aos_canonical_field::<Option<u64>>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let expiry_at = super::decode_aos_canonical_field::<Option<u64>>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let hsm = super::decode_aos_canonical_field::<Option<HsmBinding>>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((
+            Self {
+                peer,
+                pop,
+                activation_at,
+                expiry_at,
+                hsm,
+            },
+            offset,
+        ))
+    }
+}
+
+impl<'a, O> norito::core::DecodeFromSlice<'a> for Register<O>
+where
+    O: Registered,
+    O::With: for<'de> norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+    Self: norito::codec::Decode,
+{
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let object = super::decode_aos_canonical_field::<O::With>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { object }, offset))
+    }
+}
+
+impl<'a, O> norito::core::DecodeFromSlice<'a> for Unregister<O>
+where
+    O: Identifiable,
+    O::Id: for<'de> norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+    Self: norito::codec::Decode,
+{
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let object = super::decode_aos_canonical_field::<O::Id>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { object }, offset))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for RegisterBox {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+        let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
+        let tag = u32::from_le_bytes(
+            tag_bytes
+                .try_into()
+                .map_err(|_| norito::core::Error::LengthMismatch)?,
+        );
+        let mut offset = 4usize;
+        let value = match tag {
+            0 => Self::Peer(super::decode_aos_slice_field::<RegisterPeerWithPop>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            1 => Self::Domain(super::decode_aos_slice_field::<Register<Domain>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            2 => Self::Account(super::decode_aos_slice_field::<Register<Account>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            3 => Self::AssetDefinition(super::decode_aos_slice_field::<Register<AssetDefinition>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            4 => Self::Nft(super::decode_aos_slice_field::<Register<Nft>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            5 => Self::Role(super::decode_aos_slice_field::<Register<Role>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            6 => Self::Trigger(super::decode_aos_slice_field::<Register<Trigger>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            _ => {
+                return Err(norito::core::Error::Message(format!(
+                    "invalid RegisterBox tag {tag}"
+                )));
+            }
+        };
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((value, offset))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for UnregisterBox {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+        let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
+        let tag = u32::from_le_bytes(
+            tag_bytes
+                .try_into()
+                .map_err(|_| norito::core::Error::LengthMismatch)?,
+        );
+        let mut offset = 4usize;
+        let value = match tag {
+            0 => Self::Peer(super::decode_aos_slice_field::<Unregister<Peer>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            1 => Self::Domain(super::decode_aos_slice_field::<Unregister<Domain>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            2 => Self::Account(super::decode_aos_slice_field::<Unregister<Account>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            3 => Self::AssetDefinition(
+                super::decode_aos_slice_field::<Unregister<AssetDefinition>>(
+                    super::read_aos_field(bytes, &mut offset, flags)?,
+                    flags,
+                )?,
+            ),
+            4 => Self::Nft(super::decode_aos_slice_field::<Unregister<Nft>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            5 => Self::Role(super::decode_aos_slice_field::<Unregister<Role>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            6 => Self::Trigger(super::decode_aos_slice_field::<Unregister<Trigger>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            _ => {
+                return Err(norito::core::Error::Message(format!(
+                    "invalid UnregisterBox tag {tag}"
+                )));
+            }
+        };
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((value, offset))
+    }
+}
+
 // Stable wire IDs for encoding
 impl RegisterBox {
     /// Norito wire identifier for boxed register instructions.
@@ -356,36 +570,150 @@ impl UnregisterBox {
 
 #[cfg(test)]
 mod tests {
-    use norito::codec::{Decode, Encode};
+    use iroha_crypto::{Algorithm, KeyPair, PublicKey};
+    use norito::{
+        codec::{Decode, Encode},
+        core::DecodeFromSlice,
+    };
 
     use super::*;
     use crate::peer::PeerId;
 
+    fn public_key(seed: u8) -> PublicKey {
+        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        key_pair.public_key().clone()
+    }
+
+    fn account(seed: u8) -> AccountId {
+        AccountId::new(public_key(seed))
+    }
+
+    fn domain_id() -> DomainId {
+        DomainId::try_new("wonderland", "universal").expect("domain id")
+    }
+
+    fn asset_definition_id() -> AssetDefinitionId {
+        AssetDefinitionId::new(domain_id(), "rose".parse().expect("asset name"))
+    }
+
+    fn nft_id() -> NftId {
+        NftId::of(domain_id(), "cheshire".parse().expect("nft name"))
+    }
+
+    fn role_id() -> RoleId {
+        "auditor".parse().expect("role id")
+    }
+
+    fn register_peer_with_pop() -> RegisterPeerWithPop {
+        RegisterPeerWithPop {
+            peer: PeerId::new(public_key(0x60)),
+            pop: vec![1u8, 2, 3, 4, 5],
+            activation_at: Some(10),
+            expiry_at: Some(100),
+            hsm: Some(HsmBinding {
+                provider: "softkey".to_owned(),
+                key_label: "validator-1".to_owned(),
+                slot: Some(7),
+            }),
+        }
+    }
+
+    fn assert_slice_roundtrip<T>(value: T)
+    where
+        T: Encode + for<'de> DecodeFromSlice<'de> + PartialEq + core::fmt::Debug,
+    {
+        let bytes = value.encode();
+        let (decoded, used) = T::decode_from_slice(&bytes).expect("decode from slice");
+        assert_eq!(used, bytes.len());
+        assert_eq!(decoded, value);
+    }
+
+    fn assert_registry_decodes<T>(registry: &crate::isi::InstructionRegistry, name: &str, value: T)
+    where
+        T: crate::isi::Instruction
+            + Encode
+            + 'static
+            + norito::core::NoritoSerialize
+            + core::fmt::Debug,
+        for<'de> T: norito::core::NoritoDeserialize<'de>,
+    {
+        let (payload, flags) = norito::codec::encode_with_header_flags(&value);
+        let framed =
+            norito::core::frame_bare_with_header_flags::<T>(&payload, flags).expect("frame isi");
+        let decoded = crate::isi::InstructionRegistry::decode(registry, name, &framed)
+            .unwrap_or_else(|| panic!("registered {name}"))
+            .unwrap_or_else(|err| panic!("decode {name}: {err}"));
+        assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
+    }
+
     #[test]
     fn register_peer_with_pop_roundtrip() {
-        if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-            eprintln!(
-                "Skipping: PublicKey Norito decode mismatch pending stabilization. Set IROHA_RUN_IGNORED=1 to run."
-            );
-            return;
-        }
-        // Use the default algorithm to avoid depending on optional variants
-        let pk = iroha_crypto::KeyPair::random().public_key().clone();
-        let peer = PeerId::new(pk);
-        let pop = vec![1u8, 2, 3, 4, 5];
-        let isi = RegisterPeerWithPop {
-            peer: peer.clone(),
-            pop: pop.clone(),
-            activation_at: None,
-            expiry_at: None,
-            hsm: None,
-        };
+        let isi = register_peer_with_pop();
         let encoded = isi.encode();
         let decoded = RegisterPeerWithPop::decode(&mut &encoded[..]).expect("decode");
-        assert_eq!(decoded.peer, peer);
-        assert_eq!(decoded.pop, pop);
-        assert!(decoded.activation_at.is_none());
-        assert!(decoded.expiry_at.is_none());
-        assert!(decoded.hsm.is_none());
+        assert_eq!(decoded, isi);
+    }
+
+    #[test]
+    fn register_unregister_decode_from_slice_roundtrips() {
+        let account = account(0x61);
+        assert_slice_roundtrip(register_peer_with_pop());
+        assert_slice_roundtrip(Register::domain(Domain::new(domain_id())));
+        assert_slice_roundtrip(Register::account(Account::new(account.clone())));
+        assert_slice_roundtrip(Register::asset_definition(AssetDefinition::numeric(
+            asset_definition_id(),
+        )));
+        assert_slice_roundtrip(Register::nft(Nft::new(nft_id(), Metadata::default())));
+        assert_slice_roundtrip(Register::role(Role::new(role_id(), account.clone())));
+
+        assert_slice_roundtrip(Unregister::peer(PeerId::new(public_key(0x62))));
+        assert_slice_roundtrip(Unregister::domain(domain_id()));
+        assert_slice_roundtrip(Unregister::account(account));
+        assert_slice_roundtrip(Unregister::asset_definition(asset_definition_id()));
+        assert_slice_roundtrip(Unregister::nft(nft_id()));
+        assert_slice_roundtrip(Unregister::role(role_id()));
+        assert_slice_roundtrip(Unregister::trigger(
+            "nightly_tick".parse().expect("trigger id"),
+        ));
+    }
+
+    #[test]
+    fn register_unregister_boxes_registry_decode_stable_ids() {
+        let account = account(0x63);
+        let registry = crate::isi::registry::default();
+        assert_registry_decodes(
+            &registry,
+            std::any::type_name::<RegisterPeerWithPop>(),
+            register_peer_with_pop(),
+        );
+
+        let register_cases = [
+            RegisterBox::Peer(register_peer_with_pop()),
+            RegisterBox::Domain(Register::domain(Domain::new(domain_id()))),
+            RegisterBox::Account(Register::account(Account::new(account.clone()))),
+            RegisterBox::AssetDefinition(Register::asset_definition(AssetDefinition::numeric(
+                asset_definition_id(),
+            ))),
+            RegisterBox::Nft(Register::nft(Nft::new(nft_id(), Metadata::default()))),
+            RegisterBox::Role(Register::role(Role::new(role_id(), account.clone()))),
+        ];
+        for value in register_cases {
+            assert_registry_decodes(&registry, RegisterBox::WIRE_ID, value);
+        }
+
+        let unregister_cases = [
+            UnregisterBox::Peer(Unregister::peer(PeerId::new(public_key(0x64)))),
+            UnregisterBox::Domain(Unregister::domain(domain_id())),
+            UnregisterBox::Account(Unregister::account(account)),
+            UnregisterBox::AssetDefinition(Unregister::asset_definition(asset_definition_id())),
+            UnregisterBox::Nft(Unregister::nft(nft_id())),
+            UnregisterBox::Role(Unregister::role(role_id())),
+            UnregisterBox::Trigger(Unregister::trigger(
+                "nightly_tick".parse().expect("trigger id"),
+            )),
+        ];
+        for value in unregister_cases {
+            assert_registry_decodes(&registry, UnregisterBox::WIRE_ID, value);
+        }
     }
 }

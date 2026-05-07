@@ -29,6 +29,14 @@ const BASE_SECTION_BPM: [f32; TOTAL_SECTIONS] = [52.4, 54.6, 56.2];
 const SECTION_WANDER_BPM: [f32; TOTAL_SECTIONS] = [0.04, 0.06, 0.08];
 const TEMPO_SUBDIVISIONS_PER_BEAT: usize = 128;
 const MIDI_TICKS_PER_BEAT: u16 = 480;
+#[cfg_attr(
+    not(any(
+        target_os = "macos",
+        target_os = "windows",
+        all(target_os = "linux", feature = "linux-builtin-synth")
+    )),
+    allow(dead_code)
+)]
 const A4_TUNING_HZ: f32 = 430.0;
 const APPROX_SECONDS_PER_BEAT: f32 = 74.0 / TOTAL_BEATS;
 
@@ -157,6 +165,14 @@ pub struct SequenceEvent {
     pub note: u8,
     pub vel: u8,
     pub layer: SequenceLayer,
+    #[cfg_attr(
+        not(any(
+            target_os = "macos",
+            target_os = "windows",
+            all(target_os = "linux", feature = "linux-builtin-synth")
+        )),
+        allow(dead_code)
+    )]
     pub ornaments: Ornaments,
 }
 
@@ -237,6 +253,14 @@ impl TempoMap {
         t0 + (t1 - t0).mul_add(frac, 0.0)
     }
 
+    #[cfg_attr(
+        not(any(
+            target_os = "macos",
+            target_os = "windows",
+            all(target_os = "linux", feature = "linux-builtin-synth")
+        )),
+        allow(dead_code)
+    )]
     fn beat_at(&self, seconds: f32) -> f32 {
         if self.times.is_empty() {
             return 0.0;
@@ -286,6 +310,14 @@ impl ScoreTimeline {
         self.tempo.seconds_at(beat)
     }
 
+    #[cfg_attr(
+        not(any(
+            target_os = "macos",
+            target_os = "windows",
+            all(target_os = "linux", feature = "linux-builtin-synth")
+        )),
+        allow(dead_code)
+    )]
     pub fn beat_at(&self, seconds: f32) -> f32 {
         self.tempo.beat_at(seconds)
     }
@@ -774,6 +806,14 @@ pub fn hyoshi_breath_scalar(beat: f32) -> f32 {
     0.55_f32.mul_add(sin.powi(2), 0.45)
 }
 
+#[cfg_attr(
+    not(any(
+        target_os = "macos",
+        target_os = "windows",
+        all(target_os = "linux", feature = "linux-builtin-synth")
+    )),
+    allow(dead_code)
+)]
 pub fn layer_intonation_cents(layer: SequenceLayer, note: u8) -> f32 {
     let base_offset = 1200.0 * (A4_TUNING_HZ / 440.0).ln() / LN_2;
     let scale_adjust = match note % 12 {

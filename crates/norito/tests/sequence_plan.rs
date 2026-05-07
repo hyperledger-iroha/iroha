@@ -192,3 +192,21 @@ fn planned_sequence_parallel_decode_preserves_order() {
 
     assert_eq!(decoded, values);
 }
+
+#[cfg(feature = "parallel-decode")]
+#[test]
+fn vec_decode_large_sequence_uses_parallel_capable_plan() {
+    let values: Vec<u64> = (0..16_384).map(|idx| idx as u64).collect();
+    let mut bytes = fixed_seq_header(values.len() as u64);
+    let flags = core::default_encode_flags();
+    for value in &values {
+        core::write_len_with_flags(&mut bytes, 8, flags).expect("write element length");
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    let (decoded, used) = <Vec<u64> as core::DecodeFromSlice>::decode_from_slice(&bytes)
+        .expect("decode large planned sequence");
+
+    assert_eq!(used, bytes.len());
+    assert_eq!(decoded, values);
+}

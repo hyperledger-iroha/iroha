@@ -1297,9 +1297,24 @@ impl<'tx> AcceptedTransaction<'tx> {
         tx: SignedTransaction,
         signed_bytes: Option<Arc<Vec<u8>>>,
     ) -> Self {
-        let signed_bytes = signed_bytes.unwrap_or_else(|| {
-            Arc::new(norito::to_bytes(&tx).expect("encode accepted signed transaction"))
-        });
+        let (signed_bytes, entrypoint_hash) = if let Some(signed_bytes) = signed_bytes {
+            let entrypoint_hash = Self::external_entrypoint_hash_from_signed_frame(&signed_bytes)
+                .unwrap_or_else(|_| Self::external_entrypoint_hash_from_signed(&tx));
+            (signed_bytes, entrypoint_hash)
+        } else {
+            let (signed_payload, signed_payload_flags) =
+                Self::canonical_signed_payload_with_flags(&tx);
+            let entrypoint_hash =
+                Self::external_entrypoint_hash_from_signed_payload(&signed_payload);
+            let signed_bytes = Arc::new(
+                norito::core::frame_bare_with_header_flags::<SignedTransaction>(
+                    &signed_payload,
+                    signed_payload_flags,
+                )
+                .expect("frame accepted signed transaction"),
+            );
+            (signed_bytes, entrypoint_hash)
+        };
         debug_assert_eq!(
             signed_bytes.as_slice(),
             norito::to_bytes(&tx)
@@ -1310,7 +1325,6 @@ impl<'tx> AcceptedTransaction<'tx> {
         let encoded_len = signed_bytes.len();
         let payload_hash = HashOf::new(tx.payload());
         let single_ed25519_key = Self::parsed_single_ed25519_key(&tx);
-        let entrypoint_hash = Self::external_entrypoint_hash_from_signed(&tx);
         let entrypoint = TransactionEntrypoint::External(tx);
         let signed_hash = Self::compat_signed_hash(entrypoint_hash);
         let accepted = Self::from_entrypoint(Cow::Owned(entrypoint));
@@ -1373,6 +1387,18 @@ impl<'tx> AcceptedTransaction<'tx> {
     ) -> HashOf<TransactionEntrypoint> {
         let signed_payload = Self::canonical_signed_payload(tx);
         Self::external_entrypoint_hash_from_signed_payload(&signed_payload)
+    }
+
+    fn external_entrypoint_hash_from_signed_frame(
+        signed_frame: &[u8],
+    ) -> Result<HashOf<TransactionEntrypoint>, norito::core::Error> {
+        let view = norito::core::from_bytes_view(signed_frame)?;
+        if view.schema() != <SignedTransaction as norito::core::NoritoSerialize>::schema_hash() {
+            return Err(norito::core::Error::SchemaMismatch);
+        }
+        Ok(Self::external_entrypoint_hash_from_signed_payload(
+            view.as_bytes(),
+        ))
     }
 
     fn write_external_entrypoint_hash_prefix(
@@ -7149,6 +7175,33 @@ pub mod tests {
             AcceptedTransaction::external_entrypoint_hash_from_signed_payload(&versioned[1..]),
             signed.hash_as_entrypoint()
         );
+    }
+
+    #[test]
+    fn signed_frame_entrypoint_hash_matches_canonical_hash() {
+        let chain: ChainId = "accepted-signed-frame-entrypoint-hash-chain"
+            .parse()
+            .unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let signed = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "signed-frame-hash".into())])
+            .sign(keypair.private_key());
+        let signed_bytes = norito::to_bytes(&signed).expect("signed transaction encodes");
+
+        assert_eq!(
+            AcceptedTransaction::external_entrypoint_hash_from_signed_frame(&signed_bytes)
+                .expect("signed frame hashes"),
+            signed.hash_as_entrypoint()
+        );
+
+        let mut corrupted = signed_bytes.clone();
+        let payload_start = norito::core::Header::SIZE
+            + AcceptedTransaction::framed_padding_for::<SignedTransaction>();
+        corrupted[payload_start] ^= 0x01;
+        assert!(matches!(
+            AcceptedTransaction::external_entrypoint_hash_from_signed_frame(&corrupted),
+            Err(norito::core::Error::ChecksumMismatch)
+        ));
     }
 
     #[test]

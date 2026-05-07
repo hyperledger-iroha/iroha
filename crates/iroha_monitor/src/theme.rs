@@ -9,10 +9,16 @@
 //! The builtin audio path renders a gagaku-inspired chamber arrangement of
 //! Etenraku with softer winds and a slower shō bed.
 
+use std::{fs, io::Write as _, path::PathBuf};
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(target_os = "linux", feature = "linux-builtin-synth")
+))]
 use std::{
-    fs,
-    io::{BufWriter, Write as _},
-    path::{Path, PathBuf},
+    io::BufWriter,
+    path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -22,11 +28,38 @@ use tokio::{
     time::{Duration, sleep},
 };
 
-use crate::{ascii::AsciiAnimator, etenraku, synth};
+use crate::{ascii::AsciiAnimator, etenraku};
 
+#[cfg(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(target_os = "linux", feature = "linux-builtin-synth")
+))]
+use crate::synth;
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(target_os = "linux", feature = "linux-builtin-synth")
+))]
 const THEME_WAV_SAMPLE_RATE: u32 = 44_100;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(target_os = "linux", feature = "linux-builtin-synth")
+))]
 const THEME_WAV_CHANNELS: usize = 2;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(target_os = "linux", feature = "linux-builtin-synth")
+))]
 const THEME_WAV_SECONDS: u32 = 82;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(target_os = "linux", feature = "linux-builtin-synth")
+))]
 const THEME_WAV_CHUNK_FRAMES: usize = 2048;
 
 pub struct ThemeIntro;
@@ -114,6 +147,11 @@ async fn render_ascii_intro() -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(target_os = "linux", feature = "linux-builtin-synth")
+))]
 fn start_builtin_synth_demo() -> eyre::Result<(Child, PathBuf)> {
     #[cfg(test)]
     if crate::theme::test_support::should_force_failure() {
@@ -126,6 +164,25 @@ fn start_builtin_synth_demo() -> eyre::Result<(Child, PathBuf)> {
     Ok((child, path))
 }
 
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(target_os = "linux", feature = "linux-builtin-synth")
+)))]
+fn start_builtin_synth_demo() -> eyre::Result<(Child, PathBuf)> {
+    #[cfg(test)]
+    let _ = crate::theme::test_support::should_force_failure();
+
+    Err(eyre::eyre!(
+        "built-in synth unavailable; rebuild with linux-builtin-synth or pass --midi-player"
+    ))
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(target_os = "linux", feature = "linux-builtin-synth")
+))]
 fn render_builtin_theme_wav() -> Result<PathBuf> {
     let path = std::env::temp_dir().join(format!(
         "iroha-monitor-etenraku-{}-{}.wav",
@@ -157,6 +214,11 @@ fn render_builtin_theme_wav() -> Result<PathBuf> {
     Ok(path)
 }
 
+#[cfg(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(target_os = "linux", feature = "linux-builtin-synth")
+))]
 fn write_wav_header(writer: &mut impl std::io::Write, frames: u32) -> Result<()> {
     let channels = THEME_WAV_CHANNELS as u16;
     let bits_per_sample = 16u16;
@@ -199,7 +261,7 @@ fn spawn_default_audio_player(path: &Path) -> Result<Child> {
         .wrap_err("spawn powershell audio player")
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(unix, not(target_os = "macos"), feature = "linux-builtin-synth"))]
 fn spawn_default_audio_player(path: &Path) -> Result<Child> {
     let candidates: &[(&str, &[&str])] = &[
         ("paplay", &[]),

@@ -114,3 +114,303 @@ impl RefundExpiredVpnLease {
 impl crate::seal::Instruction for OpenVpnLeaseEscrow {}
 impl crate::seal::Instruction for SettleVpnLease {}
 impl crate::seal::Instruction for RefundExpiredVpnLease {}
+
+fn vpn_decode_flags() -> u8 {
+    norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for OpenVpnLeaseEscrow {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = vpn_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let lease_id = super::decode_aos_canonical_field::<[u8; 32]>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let session_id = super::decode_aos_canonical_field::<[u8; 16]>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let quote_id = super::decode_aos_canonical_field::<[u8; 32]>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let relay_id = super::decode_aos_canonical_field::<crate::soranet::RelayId>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let operator_account_id = super::decode_aos_canonical_field::<crate::account::AccountId>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let metering_public_key = super::decode_aos_canonical_field::<iroha_crypto::PublicKey>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let asset_definition = super::decode_aos_canonical_field::<crate::asset::AssetDefinitionId>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let lease_fee = super::decode_aos_canonical_field::<iroha_primitives::numeric::Numeric>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let tariff = super::decode_aos_canonical_field::<crate::soranet::vpn::VpnTariffV1>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let expires_at_ms = super::decode_aos_canonical_field::<u64>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let settlement_grace_ms = super::decode_aos_canonical_field::<u64>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((
+            Self {
+                lease_id,
+                session_id,
+                quote_id,
+                relay_id,
+                operator_account_id,
+                metering_public_key,
+                asset_definition,
+                lease_fee,
+                tariff,
+                expires_at_ms,
+                settlement_grace_ms,
+            },
+            offset,
+        ))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for SettleVpnLease {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = vpn_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let lease_id = super::decode_aos_canonical_field::<[u8; 32]>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let relay_receipt = super::decode_aos_canonical_field::<
+            crate::soranet::vpn::VpnSessionReceiptV1,
+        >(super::read_aos_field(bytes, &mut offset, flags)?, flags)?;
+        let client_voucher = super::decode_aos_canonical_field::<
+            crate::soranet::vpn::VpnUsageVoucherV1,
+        >(super::read_aos_field(bytes, &mut offset, flags)?, flags)?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((
+            Self {
+                lease_id,
+                relay_receipt,
+                client_voucher,
+            },
+            offset,
+        ))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for RefundExpiredVpnLease {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = vpn_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let lease_id = super::decode_aos_canonical_field::<[u8; 32]>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { lease_id }, offset))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use norito::{codec::Encode as _, core::DecodeFromSlice};
+
+    use super::*;
+    use crate::{
+        account::AccountId,
+        asset::AssetDefinitionId,
+        domain::DomainId,
+        soranet::vpn::{
+            VpnExitClassV1, VpnSessionReceiptV1, VpnTariffV1, VpnUsageVoucherBodyV1,
+            VpnUsageVoucherV1,
+        },
+    };
+
+    fn account(seed: u8) -> AccountId {
+        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    fn public_key(seed: u8) -> iroha_crypto::PublicKey {
+        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        key_pair.public_key().clone()
+    }
+
+    fn asset_definition() -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
+            "xor".parse().expect("asset name"),
+        )
+    }
+
+    fn tariff() -> VpnTariffV1 {
+        VpnTariffV1 {
+            lease_fee_nanos: 10_000,
+            active_fee_nanos_per_minute: 60,
+            ingress_fee_nanos_per_mib: 100,
+            egress_fee_nanos_per_mib: 200,
+        }
+    }
+
+    fn usage_voucher() -> VpnUsageVoucherV1 {
+        let key_pair = KeyPair::from_seed(vec![0x43; 32], Algorithm::Ed25519);
+        let body = VpnUsageVoucherBodyV1 {
+            session_id: [0x11; 16],
+            quote_id: [0x22; 32],
+            relay_id: [0x33; 32],
+            sequence: 7,
+            ingress_bytes: 128,
+            egress_bytes: 256,
+            active_ms: 1_500,
+            issued_at_ms: 1_700_000_000_000,
+        };
+        let signature = Signature::new(key_pair.private_key(), &body.encode());
+        VpnUsageVoucherV1 {
+            body,
+            client_public_key: key_pair.public_key().clone(),
+            signature,
+        }
+    }
+
+    fn session_receipt(voucher: &VpnUsageVoucherV1) -> VpnSessionReceiptV1 {
+        VpnSessionReceiptV1 {
+            session_id: [0x11; 16],
+            quote_id: [0x22; 32],
+            payment_tx_hash: [0x44; 32],
+            account_hash: [0x55; 32],
+            relay_id: [0x33; 32],
+            ingress_bytes: 128,
+            egress_bytes: 256,
+            cover_bytes: 64,
+            uptime_secs: 90,
+            started_at_ms: 1_700_000_000_000,
+            ended_at_ms: 1_700_000_090_000,
+            exit_class: VpnExitClassV1::Standard,
+            meter_hash: [0x66; 32],
+            earned_fee_nanos: tariff().earned_fee_nanos(&voucher.body),
+            highest_voucher_sequence: voucher.body.sequence,
+            client_voucher_hash: voucher.hash(),
+        }
+    }
+
+    fn assert_slice_roundtrip<T>(value: T)
+    where
+        T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
+        for<'a> T: DecodeFromSlice<'a>,
+    {
+        let bytes = value.encode();
+        let (decoded, used) = T::decode_from_slice(&bytes).expect("decode from slice");
+        assert_eq!(used, bytes.len());
+        assert_eq!(decoded, value);
+    }
+
+    fn assert_registry_decodes<T>(registry: &crate::isi::InstructionRegistry, value: T)
+    where
+        T: crate::isi::Instruction
+            + norito::codec::Encode
+            + 'static
+            + norito::core::NoritoSerialize,
+        for<'de> T: norito::core::NoritoDeserialize<'de>,
+    {
+        let wire_id = std::any::type_name::<T>();
+        let (payload, flags) = norito::codec::encode_with_header_flags(&value);
+        let framed =
+            norito::core::frame_bare_with_header_flags::<T>(&payload, flags).expect("frame");
+        let decoded = crate::isi::InstructionRegistry::decode(registry, wire_id, &framed)
+            .expect("registered")
+            .expect("decode");
+        assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
+    }
+
+    #[test]
+    fn vpn_decode_from_slice_roundtrips() {
+        let voucher = usage_voucher();
+        assert_slice_roundtrip(OpenVpnLeaseEscrow::new(
+            [0xAA; 32],
+            [0x11; 16],
+            [0x22; 32],
+            [0x33; 32],
+            account(0x42),
+            public_key(0x43),
+            asset_definition(),
+            tariff().lease_fee_numeric(),
+            tariff(),
+            1_700_000_600_000,
+            60_000,
+        ));
+        assert_slice_roundtrip(SettleVpnLease::new(
+            [0xAA; 32],
+            session_receipt(&voucher),
+            voucher,
+        ));
+        assert_slice_roundtrip(RefundExpiredVpnLease::new([0xAA; 32]));
+    }
+
+    #[test]
+    fn vpn_registry_decodes_type_names() {
+        let voucher = usage_voucher();
+        let registry = crate::isi::InstructionRegistry::new()
+            .register_slice::<OpenVpnLeaseEscrow>()
+            .register_slice::<SettleVpnLease>()
+            .register_slice::<RefundExpiredVpnLease>();
+
+        assert_registry_decodes(
+            &registry,
+            OpenVpnLeaseEscrow::new(
+                [0xAA; 32],
+                [0x11; 16],
+                [0x22; 32],
+                [0x33; 32],
+                account(0x42),
+                public_key(0x43),
+                asset_definition(),
+                tariff().lease_fee_numeric(),
+                tariff(),
+                1_700_000_600_000,
+                60_000,
+            ),
+        );
+        assert_registry_decodes(
+            &registry,
+            SettleVpnLease::new([0xAA; 32], session_receipt(&voucher), voucher),
+        );
+        assert_registry_decodes(&registry, RefundExpiredVpnLease::new([0xAA; 32]));
+    }
+}

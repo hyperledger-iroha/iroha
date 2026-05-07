@@ -395,10 +395,93 @@ impl_into_box! {
 
 impl crate::seal::Instruction for SettlementInstructionBox {}
 
+fn settlement_decode_flags() -> u8 {
+    norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
+}
+
+macro_rules! impl_settlement_decode_from_slice {
+    ($ty:ty { $($field:ident : $field_ty:ty),+ $(,)? }) => {
+        impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+                let flags = settlement_decode_flags();
+                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+                    return super::decode_packed_instruction_payload::<Self>(bytes);
+                }
+
+                let mut offset = 0usize;
+                $(
+                    let $field = super::decode_aos_canonical_field::<$field_ty>(
+                        super::read_aos_field(bytes, &mut offset, flags)?,
+                        flags,
+                    )?;
+                )+
+                if offset != bytes.len() {
+                    return Err(norito::core::Error::LengthMismatch);
+                }
+                norito::core::note_payload_access(bytes, offset);
+                Ok((Self { $($field),+ }, offset))
+            }
+        }
+    };
+}
+
+impl_settlement_decode_from_slice!(DvpIsi {
+    settlement_id: SettlementId,
+    delivery_leg: SettlementLeg,
+    payment_leg: SettlementLeg,
+    plan: SettlementPlan,
+    metadata: Metadata,
+});
+
+impl_settlement_decode_from_slice!(PvpIsi {
+    settlement_id: SettlementId,
+    primary_leg: SettlementLeg,
+    counter_leg: SettlementLeg,
+    plan: SettlementPlan,
+    metadata: Metadata,
+});
+
+impl<'a> norito::core::DecodeFromSlice<'a> for SettlementInstructionBox {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = settlement_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+        let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
+        let tag = u32::from_le_bytes(
+            tag_bytes
+                .try_into()
+                .map_err(|_| norito::core::Error::LengthMismatch)?,
+        );
+        let mut offset = 4usize;
+        let value = match tag {
+            0 => Self::Dvp(super::decode_aos_slice_field::<DvpIsi>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            1 => Self::Pvp(super::decode_aos_slice_field::<PvpIsi>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            _ => {
+                return Err(norito::core::Error::Message(format!(
+                    "invalid SettlementInstructionBox tag {tag}"
+                )));
+            }
+        };
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((value, offset))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::DomainId;
+    use norito::core::DecodeFromSlice;
 
     const ALICE_SIGNATORY: &str =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
@@ -414,6 +497,89 @@ mod tests {
             DomainId::try_new(domain, "universal").expect("domain"),
             name.parse().expect("name"),
         )
+    }
+
+    fn dvp_instruction() -> DvpIsi {
+        let settlement_id: SettlementId = "dvp_trade_1".parse().expect("settlement id");
+        let delivery_leg = SettlementLeg::new(
+            asset("wonderland", "bond"),
+            1_000u32.into(),
+            account(ALICE_SIGNATORY, "test"),
+            account(BOB_SIGNATORY, "test"),
+        );
+        let payment_leg = SettlementLeg::new(
+            asset("wonderland", "usd"),
+            1_005u32.into(),
+            account(BOB_SIGNATORY, "test"),
+            account(ALICE_SIGNATORY, "test"),
+        );
+        DvpIsi {
+            settlement_id,
+            delivery_leg,
+            payment_leg,
+            plan: SettlementPlan::new(
+                SettlementExecutionOrder::DeliveryThenPayment,
+                SettlementAtomicity::AllOrNothing,
+            ),
+            metadata: Metadata::default(),
+        }
+    }
+
+    fn pvp_instruction() -> PvpIsi {
+        let settlement_id: SettlementId = "pvp_fx_1".parse().expect("settlement id");
+        let primary_leg = SettlementLeg::new(
+            asset("wonderland", "usd"),
+            1_000u32.into(),
+            account(ALICE_SIGNATORY, "test"),
+            account(BOB_SIGNATORY, "test"),
+        );
+        let counter_leg = SettlementLeg::new(
+            asset("wonderland", "eur"),
+            920u32.into(),
+            account(BOB_SIGNATORY, "test"),
+            account(ALICE_SIGNATORY, "test"),
+        );
+        PvpIsi {
+            settlement_id,
+            primary_leg,
+            counter_leg,
+            plan: SettlementPlan::new(
+                SettlementExecutionOrder::PaymentThenDelivery,
+                SettlementAtomicity::CommitSecondLeg,
+            ),
+            metadata: Metadata::default(),
+        }
+    }
+
+    fn assert_slice_roundtrip<T>(value: T)
+    where
+        T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
+        for<'a> T: DecodeFromSlice<'a>,
+    {
+        let bytes = value.encode();
+        let (decoded, used) = T::decode_from_slice(&bytes).expect("decode from slice");
+        assert_eq!(used, bytes.len());
+        assert_eq!(decoded, value);
+    }
+
+    fn assert_registry_decodes<T>(
+        registry: &crate::isi::InstructionRegistry,
+        wire_id: &str,
+        value: T,
+    ) where
+        T: crate::isi::Instruction
+            + norito::codec::Encode
+            + 'static
+            + norito::core::NoritoSerialize,
+        for<'de> T: norito::core::NoritoDeserialize<'de>,
+    {
+        let (payload, flags) = norito::codec::encode_with_header_flags(&value);
+        let framed =
+            norito::core::frame_bare_with_header_flags::<T>(&payload, flags).expect("frame");
+        let decoded = crate::isi::InstructionRegistry::decode(registry, wire_id, &framed)
+            .expect("registered")
+            .expect("decode");
+        assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
 
     #[test]
@@ -487,5 +653,35 @@ mod tests {
         assert!(formatted.contains("pvp_fx_1"));
         assert!(formatted.contains("PaymentThenDelivery"));
         assert!(formatted.contains("CommitSecondLeg"));
+    }
+
+    #[test]
+    fn settlement_decode_from_slice_roundtrips() {
+        assert_slice_roundtrip(dvp_instruction());
+        assert_slice_roundtrip(pvp_instruction());
+        assert_slice_roundtrip(SettlementInstructionBox::Dvp(dvp_instruction()));
+        assert_slice_roundtrip(SettlementInstructionBox::Pvp(pvp_instruction()));
+    }
+
+    #[test]
+    fn settlement_registry_decodes_type_names_and_stable_ids() {
+        let registry = crate::isi::registry::default();
+        assert_registry_decodes(
+            &registry,
+            std::any::type_name::<SettlementInstructionBox>(),
+            SettlementInstructionBox::Dvp(dvp_instruction()),
+        );
+        assert_registry_decodes(
+            &registry,
+            std::any::type_name::<DvpIsi>(),
+            dvp_instruction(),
+        );
+        assert_registry_decodes(&registry, DvpIsi::WIRE_ID, dvp_instruction());
+        assert_registry_decodes(
+            &registry,
+            std::any::type_name::<PvpIsi>(),
+            pvp_instruction(),
+        );
+        assert_registry_decodes(&registry, PvpIsi::WIRE_ID, pvp_instruction());
     }
 }

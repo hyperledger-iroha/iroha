@@ -1,6 +1,6 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-05-05
+Last updated: 2026-05-07
 
 Completed history lives in `status.md`. This file should only track unfinished work.
 
@@ -77,8 +77,19 @@ Completed history lives in `status.md`. This file should only track unfinished w
     `npos_pacemaker_resumes_after_downtime`,
     `confidential_combined_peer_downtime_and_timeout_pressure_localnet`, and
     `confidential_dual_restart_stress_mid_flow_localnet`.
+    The 2026-05-07 follow-up also has focused green reruns for the staged
+    consensus failures exposed in the latest broad workspace attempt:
+    selective-drop recovery, conflicting-ready invalidation, Kura eviction DA
+    rehydration, NPoS baseline metrics, pacemaker latency, pacemaker restart
+    liveness, stale-evidence rejection, and the VRF randomness module. The
+    focused `integration_tests --test consensus_and_da` compile check is green
+    in `CARGO_TARGET_DIR=/tmp/iroha-codex-keepgoing-workspace-check`.
   - Remaining validation: rerun `cargo test --workspace` from a clean start to
     completion in an uncontended multi-hour window.
+  - Broad workspace all-target compile validation is green as of 2026-05-07
+    with `CARGO_TARGET_DIR=/tmp/iroha-codex-keepgoing-workspace-check` after
+    repairing the default Linux monitor synth gate and stale
+    `LaneBlockCommitment` fixture initializers in Python/`xtask`.
 - Carry the RAM-LFE API/proof hardening through the remaining signing and clean
   full-workspace Cargo corridor.
   - Focused OpenAPI detached-envelope tests, crypto RAM-LFE tests, the new
@@ -291,6 +302,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
     headers, and moving Kotodama test helpers to host-private SCALLX numbers.
     The optimized `cargo test -p ivm --test shifts_prop` focused rerun is also
     green.
+  - The `ivm_contract_deploy` staged copy/register fixture tests are green as
+    of 2026-05-07 after the literal-table padding repair:
+    `cargo test -p iroha_cli --bin ivm_contract_deploy staged_ -- --nocapture`
+    with `CARGO_TARGET_DIR=/tmp/iroha-codex-keepgoing-workspace-check`.
   - Follow-up widened checks are green as of 2026-05-02:
     `cargo test -p ivm_abi`, `cargo test -p kotodama_lang`,
     `cargo clippy -p ivm_abi -p kotodama_lang --all-targets -- -D warnings`,
@@ -501,9 +516,7 @@ Completed history lives in `status.md`. This file should only track unfinished w
     finalization, the final `fastpq-gpu` 120s release gate accepted all
     `2,400,000` offered submissions and reached `36,986` strict-approved
     transactions, and the delayed load-window sampled peer stacks have no
-    scalar `poseidon3_permute` or CPU FASTPQ fallback. Keep CUDA runtime
-    parity/perf validation as a separate CUDA-host follow-up; macOS
-    compile/manifest coverage is not CUDA hardware evidence.
+    scalar `poseidon3_permute` or CPU FASTPQ fallback.
   - The next throughput slice should target the post-GPU peer CPU stack:
     Ed25519/Curve25519 public-key parse and verification, Norito
     transaction/transfer serialization and decode, transaction metadata
@@ -717,19 +730,13 @@ Completed history lives in `status.md`. This file should only track unfinished w
     30s sampled 20k profile and a 120s gate with `--fastpq-poseidon-mode gpu`
     against the latest scalar release artifacts.
   - Carry the Norito sequence span planner through the remaining acceleration
-    corridor: validate the CUDA sequence planner with the real `cuda-kernel`
-    feature on a GPU host, replace the length-prefixed helper's serial device
-    parser with a tuned prefix-scan/chunked planner if profiling shows it is on
-    the hot path, wire `decode_planned_sequence_parallel` into specific typed
-    transaction/admission/block-validation call sites that can prove `T: Send`
-    and lowest-index error ordering, then rerun the 30s sampled 20k profile and
-    120s gate with the target host's acceleration features. CUDA host validation
-    commands to run when hardware is available: `JSONSTAGE1_CUDA_REQUIRE=1 cargo
-    test -p jsonstage1_cuda --features cuda-kernel binary_sequence_plan`,
-    `JSONSTAGE1_CUDA_REQUIRE=1 cargo test -p norito sequence_plan --features
-    codec-gpu-cuda`, `GPUZSTD_CUDA_REQUIRE=1 cargo test -p norito gpu_zstd
-    --features gpu-compression`, and a Norito CRC64 pass with `cuda-crc64`
-    enabled after building the CUDA helper.
+    corridor: replace the length-prefixed helper's serial device parser with a
+    tuned prefix-scan/chunked planner if profiling shows it is on the hot path,
+    expand typed parallel sequence decode beyond the current hidden
+    `parallel-decode` `Vec<T: Send>` path if profiling proves narrower
+    transaction/admission/block-validation call sites need it, then rerun the
+    30s sampled 20k profile and 120s gate with the target host's acceleration
+    features.
   - The latest scalar release 4-peer no-fault prebuilt `20k TPS` / `120s` gate
     after the Norito span-planner pass is
     `dist/izanami-prebuilt-20k-rerun-release-norito-span-120s-20260502-015557`;
@@ -742,10 +749,59 @@ Completed history lives in `status.md`. This file should only track unfinished w
     scheduling, allocation/copy churn, TLS/context lookup, and Torii admission
     queue routing. Use this artifact as the baseline before the next
     optimization pass.
-  - Reduce Norito decode/allocation overhead on the direct and gossip admission
-    corridors without changing wire bytes or canonical hashes. The next useful
-    targets are repeated compact-length walks, instruction-registry decode
-    paths, and allocation/memmove churn around canonical transaction material.
+  - Continue reducing Norito decode/allocation overhead on the direct and
+    gossip admission corridors without changing wire bytes or canonical hashes.
+    `InstructionBox::DecodeFromSlice` now uses the borrowed tuple parser
+    directly and `ExecutionStep::DecodeFromSlice` now delegates its inner
+    instruction list to `ConstVec<InstructionBox>`. `ConstVec<T>` slice decode
+    now tries the scalar Norito sequence planner directly for non-`u8` elements
+    before falling back to the canonical `Vec<T>` field path, removing the
+    top-level archive/canonical-length pass from the hot instruction-vector
+    route. `AcceptedTransaction` also now derives the cached signed frame and
+    external entrypoint hash from one canonical signed payload in the hot-cache
+    path, avoiding a second signed-transaction serialization. `SignedTransaction`
+    and `TransactionPayload` slice decoders now walk AoS fields directly, and
+    `Executable::Instructions` routes the instruction vector into the planned
+    `ConstVec<InstructionBox>` decoder before falling back for other executable
+    variants. A fresh WSL2 no-profiler validation run after this
+    admission-decode pass is recorded in `status.md`:
+    `dist/izanami-prebuilt-20k-admission-decode-unsampled-30s-20260506-020112`
+    accepted/succeeded all `600,000` offered submissions, and
+    `dist/izanami-prebuilt-20k-admission-decode-120s-20260506-020335`
+    accepted/succeeded `2,379,055` submissions with no safety failures but only
+    `20,553` strict-approved transactions. Treat these as fresh ingress/safety
+    evidence, not a bottleneck profile: the host had neither `sample` nor
+    `perf`, and the 2.4M prebuilt-buffer run consumed nearly all WSL2 memory.
+    Individual instruction payload slice paths are now in place for `Log`,
+    `RecordSccpMessage`, transfer instructions, transfer batches, mint/burn
+    asset and trigger instructions, key-value metadata instructions,
+    Grant/Revoke permission changes, account signatory/quorum changes, the
+    stable core SetParameter/trigger/upgrade/custom ISIs, Register/Unregister
+    instructions and boxes, asset-definition alias/balance-policy instructions,
+    asset transfer-control instructions, account alias binding/lease
+    instructions, contract-alias instructions, account-recovery instructions,
+    RAM-LFE program-policy instructions, hidden-identifier instructions,
+    consensus-key lifecycle instructions, domain-endorsement instructions,
+    verifying-key instructions, Offline V2 note instructions, verified Nexus
+    lane-relay/fee-budget instructions, RWA/repo/settlement stable boxes,
+    native and anonymous asset escrow lifecycle instructions, Musubi
+    package-registry instructions, smart-contract-code
+    manifest/instance/bytecode instructions, the Space Directory manifest
+    lifecycle instructions, SoraFS pin/capacity/replication/provider-owner
+    instructions, oracle feed/observation/dispute/governance/Twitter binding
+    instructions, bridge proof/receipt/SCCP instructions, Ministry citizen-agenda
+    proposal submission, social Twitter reward/escrow instructions, registered
+    public-lane staking instructions, invalid-instruction placeholders, SoraNet
+    VPN lease open/settle/refund instructions, runtime-upgrade ISIs, SNS name
+    ISIs, ZK proof/confidential/election ISIs, Kaigi session/relay ISIs, and
+    governance proposal/ballot/citizen ISIs, Soracloud service lifecycle,
+    host/placement, agent, model/training, rollout, runtime-state, mailbox, and
+    receipt ISIs, `RegisterPeerWithPop`, and Nexus emergency-validator override
+    ISIs via an opt-in registry constructor. No default registry instruction
+    remains on the generic instruction decoder path. Remaining targets are
+    broader allocation/memmove churn around transaction admission material, and
+    a sampled 30s profile plus clean 120s gate on a profiler-equipped host after
+    the next scalar admission-decode pass.
   - Keep the FASTPQ BN254 Metal path validation separate from scalar profiling:
     after installing the Apple Metal toolchain, run the Metal parity tests and a
     `fastpq-gpu` 30s/120s comparison with `--fastpq-poseidon-mode gpu`.

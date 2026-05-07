@@ -3,12 +3,6 @@ use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
 
 #[test]
 fn norito_roundtrip_open_verify_envelope() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!(
-            "Skipping: OpenVerifyEnvelope Norito derive packed-struct bug. Set IROHA_RUN_IGNORED=1 to run."
-        );
-        return;
-    }
     let mut vk = [0u8; 32];
     vk[0] = 1;
     vk[31] = 2;

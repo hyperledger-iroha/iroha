@@ -485,10 +485,12 @@ fn da_kura_source_disk_budget_bytes(payload_bytes: usize) -> i64 {
 fn kura_eviction_override_layer(payload_bytes: usize) -> Table {
     let mut table = Table::new();
     let mut writer = TomlWriter::new(&mut table);
-    writer.write(["kura", "blocks_in_memory"], 1_i64).write(
-        ["nexus", "storage", "max_disk_usage_bytes"],
-        da_kura_eviction_disk_budget_bytes(payload_bytes),
-    );
+    let disk_budget = da_kura_eviction_disk_budget_bytes(payload_bytes).saturating_mul(4);
+    writer
+        .write(["kura", "blocks_in_memory"], 1_i64)
+        .write(["kura", "max_disk_usage_bytes"], disk_budget)
+        .write(["kura", "eviction_required_replicas"], 1_i64)
+        .write(["nexus", "storage", "max_disk_usage_bytes"], disk_budget);
     table
 }
 
@@ -776,22 +778,19 @@ async fn sumeragi_rbc_background_queue_synchronous() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
     let scenario_name = stringify!(sumeragi_da_kura_eviction_rehydrates_from_da_store);
-    let payload_bytes = 128 * 1024;
+    let payload_bytes = 64 * 1024;
     let tx_limit =
         u64::try_from(torii_max_content_len_for_payload(payload_bytes)).unwrap_or(u64::MAX);
     let tx_limit_nz =
         NonZeroU64::new(tx_limit).ok_or_else(|| eyre!("tx_limit must be non-zero"))?;
     let rbc_chunk_max_bytes = i64::try_from(payload_bytes).unwrap_or(i64::MAX);
-    let lane_teu_capacity = da_lane_teu_capacity_for_payload(payload_bytes);
-    let fusion_floor_teu = da_fusion_floor_teu_for_payload(payload_bytes);
-    let stake_amount = SumeragiNposParameters::default().min_self_bond();
-
     let mut config_table = toml::Table::new();
     {
         let mut writer = TomlWriter::new(&mut config_table);
         writer
             .write("telemetry_enabled", true)
             .write("telemetry_profile", "full")
+            .write(["nexus", "enabled"], false)
             .write(["logger", "level"], "WARN")
             .write(["network", "max_frame_bytes"], CONSENSUS_FRAME_BUDGET_BYTES)
             .write(
@@ -817,7 +816,7 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
                 ["network", "max_frame_bytes_tx_gossip"],
                 P2P_TX_FRAME_BUDGET_BYTES,
             )
-            .write(["sumeragi", "consensus_mode"], "npos")
+            .write(["sumeragi", "consensus_mode"], "permissioned")
             .write(
                 ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                 rbc_chunk_max_bytes,
@@ -836,72 +835,10 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
             );
     }
 
-    let mut nexus = toml::map::Map::new();
-    nexus.insert("enabled".into(), toml::Value::Boolean(true));
-    nexus.insert("lane_count".into(), toml::Value::Integer(1));
-
-    let mut lane = toml::map::Map::new();
-    lane.insert("alias".into(), toml::Value::String("lane0".into()));
-    lane.insert("index".into(), toml::Value::Integer(0));
-    let mut metadata = toml::map::Map::new();
-    metadata.insert(
-        "scheduler.teu_capacity".into(),
-        toml::Value::String(lane_teu_capacity.to_string()),
-    );
-    lane.insert("metadata".into(), toml::Value::Table(metadata));
-    nexus.insert(
-        "lane_catalog".into(),
-        toml::Value::Array(vec![toml::Value::Table(lane)]),
-    );
-
-    let mut fusion = toml::map::Map::new();
-    fusion.insert("floor_teu".into(), toml::Value::Integer(fusion_floor_teu));
-    fusion.insert("exit_teu".into(), toml::Value::Integer(lane_teu_capacity));
-    nexus.insert("fusion".into(), toml::Value::Table(fusion));
-
-    let da_sample = 1_i64;
-    let da_threshold = 1_i64;
-    let mut da = toml::map::Map::new();
-    da.insert(
-        "q_in_slot_total".into(),
-        toml::Value::Integer(da_sample.max(1)),
-    );
-    da.insert("q_in_slot_per_ds_min".into(), toml::Value::Integer(1));
-    da.insert("sample_size_base".into(), toml::Value::Integer(da_sample));
-    da.insert("sample_size_max".into(), toml::Value::Integer(da_sample));
-    da.insert("threshold_base".into(), toml::Value::Integer(da_threshold));
-    da.insert("per_attester_shards".into(), toml::Value::Integer(1));
-    let mut audit = toml::map::Map::new();
-    audit.insert("sample_size".into(), toml::Value::Integer(da_sample));
-    audit.insert("window_count".into(), toml::Value::Integer(1));
-    audit.insert("interval_ms".into(), toml::Value::Integer(60_000));
-    da.insert("audit".into(), toml::Value::Table(audit));
-    nexus.insert("da".into(), toml::Value::Table(da));
-
-    let mut storage = toml::map::Map::new();
-    storage.insert(
-        "max_disk_usage_bytes".into(),
-        toml::Value::Integer(da_kura_source_disk_budget_bytes(payload_bytes)),
-    );
-    let mut weights = toml::map::Map::new();
-    weights.insert("kura_blocks_bps".into(), toml::Value::Integer(9_000));
-    weights.insert("wsv_snapshots_bps".into(), toml::Value::Integer(500));
-    weights.insert("sorafs_bps".into(), toml::Value::Integer(250));
-    weights.insert("soranet_spool_bps".into(), toml::Value::Integer(200));
-    weights.insert("soravpn_spool_bps".into(), toml::Value::Integer(50));
-    storage.insert("disk_budget_weights".into(), toml::Value::Table(weights));
-    nexus.insert("storage".into(), toml::Value::Table(storage));
-
-    {
-        let mut writer = TomlWriter::new(&mut config_table);
-        writer.write("nexus", toml::Value::Table(nexus));
-    }
-
     let eviction_layer = kura_eviction_override_layer(payload_bytes);
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_npos_genesis_bootstrap(stake_amount)
         .with_data_availability_enabled(true)
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxTxBytes(tx_limit_nz),

@@ -684,7 +684,15 @@ fn posting_stale_evidence_is_not_persisted() -> Result<()> {
     let (evidence, _first, _second) =
         valid_double_prepare_evidence(&network, &client, stale_height, 0)?;
 
-    client.post_sumeragi_evidence_hex(&evidence_hex(&evidence)?)?;
+    if let Err(err) = client.post_sumeragi_evidence_hex(&evidence_hex(&evidence)?) {
+        let err_text = format!("{err:?}");
+        ensure!(
+            err_text.contains("stale")
+                || err_text.contains("evidence horizon")
+                || err_text.contains("consensus vote BLS signature verification failed"),
+            "stale evidence should be rejected before persistence, got {err_text}"
+        );
+    }
 
     let status_before = client.get_status()?;
     advance_to_height(

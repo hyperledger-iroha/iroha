@@ -5,10 +5,6 @@ use iroha_data_model::prelude::*;
 
 #[test]
 fn instruction_box_deserialize_log_without_explicit_init() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!("Skipping: packed-struct hybrid decode pending. Set IROHA_RUN_IGNORED=1 to run.");
-        return;
-    }
     // Prepare a Log instruction wrapped in InstructionBox
     let original: InstructionBox = Log::new(Level::INFO, "hello".to_owned()).into();
 

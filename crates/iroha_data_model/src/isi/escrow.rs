@@ -492,10 +492,125 @@ impl crate::seal::Instruction for CancelAnonymousAssetEscrow {}
 impl crate::seal::Instruction for OpenAnonymousEscrowDispute {}
 impl crate::seal::Instruction for ResolveAnonymousEscrowDispute {}
 
+fn escrow_decode_flags() -> u8 {
+    norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
+}
+
+macro_rules! impl_escrow_decode_from_slice {
+    ($ty:ty { $($field:ident : $field_ty:ty),+ $(,)? }) => {
+        impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+                let flags = escrow_decode_flags();
+                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+                    return super::decode_packed_instruction_payload::<Self>(bytes);
+                }
+
+                let mut offset = 0usize;
+                $(
+                    let $field = super::decode_aos_canonical_field::<$field_ty>(
+                        super::read_aos_field(bytes, &mut offset, flags)?,
+                        flags,
+                    )?;
+                )+
+                if offset != bytes.len() {
+                    return Err(norito::core::Error::LengthMismatch);
+                }
+                norito::core::note_payload_access(bytes, offset);
+                Ok((Self { $($field),+ }, offset))
+            }
+        }
+    };
+}
+
+impl_escrow_decode_from_slice!(OpenAssetEscrow {
+    escrow_id: crate::escrow::EscrowId,
+    asset_definition: crate::asset::AssetDefinitionId,
+    amount: iroha_primitives::numeric::Numeric,
+    evidence_hashes: Vec<iroha_crypto::Hash>,
+});
+
+impl_escrow_decode_from_slice!(AcceptAssetEscrow {
+    escrow_id: crate::escrow::EscrowId,
+});
+
+impl_escrow_decode_from_slice!(MarkEscrowPaymentSent {
+    escrow_id: crate::escrow::EscrowId,
+});
+
+impl_escrow_decode_from_slice!(ReleaseAssetEscrow {
+    escrow_id: crate::escrow::EscrowId,
+});
+
+impl_escrow_decode_from_slice!(CancelAssetEscrow {
+    escrow_id: crate::escrow::EscrowId,
+});
+
+impl_escrow_decode_from_slice!(OpenEscrowDispute {
+    escrow_id: crate::escrow::EscrowId,
+    evidence_hashes: Vec<iroha_crypto::Hash>,
+});
+
+impl_escrow_decode_from_slice!(ResolveEscrowDispute {
+    escrow_id: crate::escrow::EscrowId,
+    buyer_amount: iroha_primitives::numeric::Numeric,
+    seller_amount: iroha_primitives::numeric::Numeric,
+    evidence_hashes: Vec<iroha_crypto::Hash>,
+});
+
+impl_escrow_decode_from_slice!(OpenAnonymousAssetEscrow {
+    escrow_id: crate::escrow::EscrowId,
+    asset_definition: crate::asset::AssetDefinitionId,
+    funding_nullifiers: Vec<[u8; 32]>,
+    escrow_commitment: [u8; 32],
+    proof: crate::proof::ProofAttachment,
+    root_hint: Option<[u8; 32]>,
+    evidence_hashes: Vec<iroha_crypto::Hash>,
+});
+
+impl_escrow_decode_from_slice!(AcceptAnonymousAssetEscrow {
+    escrow_id: crate::escrow::EscrowId,
+});
+
+impl_escrow_decode_from_slice!(MarkAnonymousEscrowPaymentSent {
+    escrow_id: crate::escrow::EscrowId,
+});
+
+impl_escrow_decode_from_slice!(ReleaseAnonymousAssetEscrow {
+    escrow_id: crate::escrow::EscrowId,
+    escrow_nullifiers: Vec<[u8; 32]>,
+    buyer_output_commitments: Vec<[u8; 32]>,
+    proof: crate::proof::ProofAttachment,
+    root_hint: Option<[u8; 32]>,
+});
+
+impl_escrow_decode_from_slice!(CancelAnonymousAssetEscrow {
+    escrow_id: crate::escrow::EscrowId,
+    escrow_nullifiers: Vec<[u8; 32]>,
+    seller_output_commitments: Vec<[u8; 32]>,
+    proof: crate::proof::ProofAttachment,
+    root_hint: Option<[u8; 32]>,
+});
+
+impl_escrow_decode_from_slice!(OpenAnonymousEscrowDispute {
+    escrow_id: crate::escrow::EscrowId,
+    evidence_hashes: Vec<iroha_crypto::Hash>,
+});
+
+impl_escrow_decode_from_slice!(ResolveAnonymousEscrowDispute {
+    escrow_id: crate::escrow::EscrowId,
+    escrow_nullifiers: Vec<[u8; 32]>,
+    buyer_output_commitments: Vec<[u8; 32]>,
+    seller_output_commitments: Vec<[u8; 32]>,
+    proof: crate::proof::ProofAttachment,
+    root_hint: Option<[u8; 32]>,
+    evidence_hashes: Vec<iroha_crypto::Hash>,
+});
+
 #[cfg(test)]
 mod tests {
     use iroha_crypto::Hash;
     use iroha_primitives::numeric::Numeric;
+    use norito::core::DecodeFromSlice;
 
     use super::*;
     use crate::{
@@ -511,6 +626,50 @@ mod tests {
             ProofBox::new(backend.clone(), vec![1, 2, 3]),
             VerifyingKeyBox::new(backend, Vec::new()),
         )
+    }
+
+    fn escrow_id() -> crate::escrow::EscrowId {
+        crate::escrow::EscrowId::new(Hash::new("escrow-slice"))
+    }
+
+    fn asset_definition_id() -> crate::asset::AssetDefinitionId {
+        crate::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse::<Name>().unwrap(),
+        )
+    }
+
+    fn evidence_hashes() -> Vec<Hash> {
+        vec![Hash::new("escrow-slice-evidence")]
+    }
+
+    fn assert_slice_roundtrip<T>(value: T)
+    where
+        T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
+        for<'a> T: DecodeFromSlice<'a>,
+    {
+        let bytes = value.encode();
+        let (decoded, used) = T::decode_from_slice(&bytes).expect("decode from slice");
+        assert_eq!(used, bytes.len());
+        assert_eq!(decoded, value);
+    }
+
+    fn assert_registry_decodes<T>(registry: &crate::isi::InstructionRegistry, value: T)
+    where
+        T: crate::isi::Instruction
+            + norito::codec::Encode
+            + 'static
+            + norito::core::NoritoSerialize,
+        for<'de> T: norito::core::NoritoDeserialize<'de>,
+    {
+        let wire_id = std::any::type_name::<T>();
+        let (payload, flags) = norito::codec::encode_with_header_flags(&value);
+        let framed =
+            norito::core::frame_bare_with_header_flags::<T>(&payload, flags).expect("frame");
+        let decoded = crate::isi::InstructionRegistry::decode(registry, wire_id, &framed)
+            .expect("registered")
+            .expect("decode");
+        assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
 
     #[test]
@@ -641,6 +800,161 @@ mod tests {
             )
             .seller_output_commitments,
             vec![[0x66; 32]]
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn escrow_decode_from_slice_roundtrips() {
+        let escrow_id = escrow_id();
+        let asset_definition = asset_definition_id();
+        let proof = proof_attachment();
+        let evidence = evidence_hashes();
+
+        assert_slice_roundtrip(OpenAssetEscrow::with_evidence_hashes(
+            escrow_id,
+            asset_definition.clone(),
+            Numeric::from(10_u64),
+            evidence.clone(),
+        ));
+        assert_slice_roundtrip(AcceptAssetEscrow::new(escrow_id));
+        assert_slice_roundtrip(MarkEscrowPaymentSent::new(escrow_id));
+        assert_slice_roundtrip(ReleaseAssetEscrow::new(escrow_id));
+        assert_slice_roundtrip(CancelAssetEscrow::new(escrow_id));
+        assert_slice_roundtrip(OpenEscrowDispute::with_evidence_hashes(
+            escrow_id,
+            evidence.clone(),
+        ));
+        assert_slice_roundtrip(ResolveEscrowDispute::with_evidence_hashes(
+            escrow_id,
+            Numeric::from(7_u64),
+            Numeric::from(3_u64),
+            evidence.clone(),
+        ));
+        assert_slice_roundtrip(OpenAnonymousAssetEscrow::with_evidence_hashes(
+            escrow_id,
+            asset_definition,
+            vec![[0x11; 32]],
+            [0x22; 32],
+            proof.clone(),
+            Some([0x33; 32]),
+            evidence.clone(),
+        ));
+        assert_slice_roundtrip(AcceptAnonymousAssetEscrow::new(escrow_id));
+        assert_slice_roundtrip(MarkAnonymousEscrowPaymentSent::new(escrow_id));
+        assert_slice_roundtrip(ReleaseAnonymousAssetEscrow::new(
+            escrow_id,
+            vec![[0x44; 32]],
+            vec![[0x55; 32]],
+            proof.clone(),
+            None,
+        ));
+        assert_slice_roundtrip(CancelAnonymousAssetEscrow::new(
+            escrow_id,
+            vec![[0x44; 32]],
+            vec![[0x66; 32]],
+            proof.clone(),
+            None,
+        ));
+        assert_slice_roundtrip(OpenAnonymousEscrowDispute::with_evidence_hashes(
+            escrow_id,
+            evidence.clone(),
+        ));
+        assert_slice_roundtrip(ResolveAnonymousEscrowDispute::with_evidence_hashes(
+            escrow_id,
+            vec![[0x44; 32]],
+            vec![[0x55; 32]],
+            vec![[0x66; 32]],
+            proof,
+            Some([0x77; 32]),
+            evidence,
+        ));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn escrow_default_registry_decodes_type_names() {
+        let registry = crate::isi::registry::default();
+        let escrow_id = escrow_id();
+        let asset_definition = asset_definition_id();
+        let proof = proof_attachment();
+        let evidence = evidence_hashes();
+
+        assert_registry_decodes(
+            &registry,
+            OpenAssetEscrow::with_evidence_hashes(
+                escrow_id,
+                asset_definition.clone(),
+                Numeric::from(10_u64),
+                evidence.clone(),
+            ),
+        );
+        assert_registry_decodes(&registry, AcceptAssetEscrow::new(escrow_id));
+        assert_registry_decodes(&registry, MarkEscrowPaymentSent::new(escrow_id));
+        assert_registry_decodes(&registry, ReleaseAssetEscrow::new(escrow_id));
+        assert_registry_decodes(&registry, CancelAssetEscrow::new(escrow_id));
+        assert_registry_decodes(
+            &registry,
+            OpenEscrowDispute::with_evidence_hashes(escrow_id, evidence.clone()),
+        );
+        assert_registry_decodes(
+            &registry,
+            ResolveEscrowDispute::with_evidence_hashes(
+                escrow_id,
+                Numeric::from(7_u64),
+                Numeric::from(3_u64),
+                evidence.clone(),
+            ),
+        );
+        assert_registry_decodes(
+            &registry,
+            OpenAnonymousAssetEscrow::with_evidence_hashes(
+                escrow_id,
+                asset_definition,
+                vec![[0x11; 32]],
+                [0x22; 32],
+                proof.clone(),
+                Some([0x33; 32]),
+                evidence.clone(),
+            ),
+        );
+        assert_registry_decodes(&registry, AcceptAnonymousAssetEscrow::new(escrow_id));
+        assert_registry_decodes(&registry, MarkAnonymousEscrowPaymentSent::new(escrow_id));
+        assert_registry_decodes(
+            &registry,
+            ReleaseAnonymousAssetEscrow::new(
+                escrow_id,
+                vec![[0x44; 32]],
+                vec![[0x55; 32]],
+                proof.clone(),
+                None,
+            ),
+        );
+        assert_registry_decodes(
+            &registry,
+            CancelAnonymousAssetEscrow::new(
+                escrow_id,
+                vec![[0x44; 32]],
+                vec![[0x66; 32]],
+                proof.clone(),
+                None,
+            ),
+        );
+        assert_registry_decodes(
+            &registry,
+            OpenAnonymousEscrowDispute::with_evidence_hashes(escrow_id, evidence.clone()),
+        );
+        assert_registry_decodes(
+            &registry,
+            ResolveAnonymousEscrowDispute::with_evidence_hashes(
+                escrow_id,
+                vec![[0x44; 32]],
+                vec![[0x55; 32]],
+                vec![[0x66; 32]],
+                proof,
+                Some([0x77; 32]),
+                evidence,
+            ),
         );
     }
 }

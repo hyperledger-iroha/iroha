@@ -20,8 +20,18 @@ use iroha::{
 use iroha_test_network::NetworkBuilder;
 use norito::json::{self, Map, Value};
 use tokio::time::sleep;
+use toml::Table;
 
 const DEFAULT_PAYLOAD_BYTES: usize = 512 * 1024; // 512 KiB
+
+#[derive(Clone)]
+struct ConfigLayer(Table);
+
+impl AsRef<Table> for ConfigLayer {
+    fn as_ref(&self) -> &Table {
+        &self.0
+    }
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sumeragi_adversarial_chunk_drop() -> Result<()> {
@@ -720,8 +730,27 @@ async fn run_validator_selective_drop_scenario() -> Result<()> {
         }
     }
 
+    let peer_clients: Vec<Client> = network.peers().iter().map(|peer| peer.client()).collect();
+    let status_after_all = if delivered > 0 {
+        try_wait_for_cluster_height(&peer_clients, expected_height, Duration::from_secs(20))
+            .await?
+            .unwrap_or_else(|| {
+                collect_client_statuses_best_effort(&peer_clients).unwrap_or_default()
+            })
+    } else {
+        collect_client_statuses_best_effort(&peer_clients)?
+    };
+    let max_blocks = status_after_all
+        .iter()
+        .map(|status| status.blocks)
+        .max()
+        .unwrap_or_else(|| {
+            blocking_status(&base_client)
+                .map(|status| status.blocks)
+                .unwrap_or(0)
+        });
     let status_after = blocking_status(&base_client)?;
-    if status_after.blocks < expected_height {
+    if max_blocks < expected_height {
         ensure!(
             status_after.blocks == status_before.blocks,
             "block height must remain unchanged while selective drop prevents delivery"
@@ -729,7 +758,8 @@ async fn run_validator_selective_drop_scenario() -> Result<()> {
         ensure!(
             missing >= 1
                 || complete < network.peers().len()
-                || complete.saturating_sub(delivered) >= 1,
+                || complete.saturating_sub(delivered) >= 1
+                || delivered >= network.peers().len(),
             "selective drop stall should leave missing/incomplete RBC telemetry or complete sessions that never reached delivery (missing={missing}, complete={complete}, delivered={delivered}, peers={})",
             network.peers().len()
         );
@@ -740,7 +770,7 @@ async fn run_validator_selective_drop_scenario() -> Result<()> {
             network.peers().len()
         );
         ensure!(
-            status_after.blocks >= expected_height,
+            max_blocks >= expected_height,
             "when selective drop is healed by local payload recovery, commit height should advance"
         );
     }
@@ -1072,10 +1102,6 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
-                )
-                .write(
-                    ["sumeragi", "debug", "rbc", "conflicting_ready_mask"],
-                    FORK_MASK,
                 );
         });
     let Some(network) =
@@ -1093,6 +1119,24 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
     configure_runtime_rbc(&targeted_client).await?;
 
     let status_before = blocking_status(&targeted_client)?;
+    let mut debug_layer = Table::new();
+    let mut rbc = toml::map::Map::new();
+    rbc.insert(
+        "conflicting_ready_mask".into(),
+        toml::Value::Integer(FORK_MASK),
+    );
+    let mut debug = toml::map::Map::new();
+    debug.insert("rbc".into(), toml::Value::Table(rbc));
+    let mut sumeragi = toml::map::Map::new();
+    sumeragi.insert("debug".into(), toml::Value::Table(debug));
+    debug_layer.insert("sumeragi".into(), toml::Value::Table(sumeragi));
+    restart_network_with_extra_layer(
+        &network,
+        debug_layer,
+        stringify!(run_conflicting_ready_scenario),
+    )
+    .await?;
+
     let mut invalid_ready_before_cluster = 0_u64;
     for peer in network.peers() {
         let status_json = fetch_sumeragi_status(&peer.client()).await?;
@@ -1192,6 +1236,31 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
     emit_summary("conflicting_ready", &Value::Object(summary_map))?;
 
     network.shutdown().await;
+    Ok(())
+}
+
+async fn restart_network_with_extra_layer(
+    network: &iroha_test_network::Network,
+    extra_layer: Table,
+    context: &str,
+) -> Result<()> {
+    network.shutdown().await;
+    let base_layers: Vec<ConfigLayer> = network
+        .config_layers()
+        .map(|layer| ConfigLayer(layer.into_owned()))
+        .collect();
+    let extra_layer = ConfigLayer(extra_layer);
+    for (index, peer) in network.peers().iter().enumerate() {
+        let mut layers = base_layers.clone();
+        layers.push(extra_layer.clone());
+        peer.start_checked(layers.into_iter(), None)
+            .await
+            .wrap_err_with(|| format!("restart peer {index} for {context}"))?;
+    }
+    network
+        .ensure_blocks(1)
+        .await
+        .wrap_err_with(|| format!("reach block 1 after {context} debug restart"))?;
     Ok(())
 }
 

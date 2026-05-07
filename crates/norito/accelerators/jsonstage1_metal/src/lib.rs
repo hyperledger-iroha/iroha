@@ -207,7 +207,7 @@ pub unsafe extern "C" fn norito_binary_sequence_plan(
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (flags, layout_kind, out_spans, out_capacity);
+        let _ = (input_len, flags, layout_kind, out_spans, out_capacity);
         unsafe {
             *out_count = 0;
             *out_used = 0;
