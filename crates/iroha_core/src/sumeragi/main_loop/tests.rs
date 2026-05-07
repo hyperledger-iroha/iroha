@@ -79134,26 +79134,6 @@ async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
     harness.shutdown.send();
 }
 
-fn record_test_worker_slot_ingress(
-    queue: super::status::WorkerQueueKind,
-    _height: u64,
-    _view: u64,
-    _kind: super::status::ConsensusMessageKind,
-    _block_hash: Option<HashOf<BlockHeader>>,
-) {
-    super::status::record_worker_queue_enqueue(queue);
-}
-
-fn drain_test_worker_slot_ingress(
-    queue: super::status::WorkerQueueKind,
-    _height: u64,
-    _view: u64,
-    _kind: super::status::ConsensusMessageKind,
-    _block_hash: Option<HashOf<BlockHeader>>,
-) {
-    super::status::record_worker_queue_drain(queue, 1);
-}
-
 #[tokio::test(flavor = "current_thread")]
 async fn force_view_change_if_idle_defers_empty_frontier_while_block_ingress_is_queued() {
     use std::borrow::Cow;
