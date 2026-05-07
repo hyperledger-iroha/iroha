@@ -2,6 +2,77 @@
 
 Last updated: 2026-05-07
 
+## 2026-05-07 Izanami 20k Metal sampled profile
+
+- A 90s `/usr/bin/sample` profile of one peer during the same prebuilt 20k
+  workload completed at
+  `dist/izanami-profile-20k-fastpq-gpu-metal-return-sampled-90s-20260507-080927`;
+  both Izanami and the sampler exited `0`.
+- The sampled run still offered, accepted, and succeeded all `2,400,000`
+  submissions with `0` failures, validation rejects, confirmation failures, or
+  queue drops. Sampling reduced progress versus the clean gate: final
+  quorum/strict height was `16/16`, final strict approved was `57,581`, submit
+  latency was `p50=3ms`, `p95=21ms`, `p99=82ms`, `max=251ms`, and final queue
+  depth was `871,355 / 2,400,000`.
+- The sampled peer reported a `3.4G` physical footprint. The top active
+  application leaf frames moved away from scalar BN254 Poseidon digest hashing:
+  SHA256 (`3,810` top-of-stack samples), Curve25519 field operations
+  (`3,606` and `3,543`), Blake2 compression (`2,867`), CRC64 (`1,306`), and
+  Norito length/write helpers (`841`, plus lower Norito encode/decode frames)
+  now lead the sample. Lower `ark_ff` field operations remain visible, but
+  scalar `iroha_zkp_halo2::poseidon::hash_u64_words_internal` is no longer the
+  dominant CPU frame seen in the previous CPU-fallback profile.
+- All peers again logged BN254 Poseidon digest GPU preflight `ok=true`, and the
+  profile diagnostics did not log BN254 Metal batch command-buffer fallback.
+  General FASTPQ Poseidon prover preflight still failed on Metal/CPU parity and
+  used the CPU prover backend.
+- The main remaining bottleneck is commit validation cadence and queue drain:
+  diagnostics logged `60` slow commit-pipeline blocks with validation time
+  `min=1053ms`, `avg=1946ms`, `max=3152ms`, plus `57` inline validation
+  fallbacks after the `750ms` inflight timeout. Queue saturation persisted, with
+  `113` pacemaker backpressure deferrals, while RBC store pressure, view
+  changes, missing-block fetches, and validation rejects stayed at `0`.
+
+## 2026-05-07 Bounded node shutdown
+
+- `iroha_futures::Supervisor` now sends cancellation to the supervised child
+  task before detaching the monitor on shutdown timeout, so slow graceful exits
+  no longer leave the underlying Tokio task running until runtime teardown.
+- `irohad` now shuts down the Tokio runtime with a bounded timeout after the
+  node future completes, preventing non-preemptible blocking work from keeping
+  the process alive indefinitely.
+- Validation passed with `cargo test -p iroha_futures -- --nocapture` and
+  `cargo check -p irohad`.
+
+## 2026-05-07 Izanami 20k Metal return gate
+
+- A fresh release build with the restored Metal toolchain completed for
+  `iroha3d` and `izanami` using
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-20k-metal-return-20260507-075339 cargo
+  build --release -p irohad --bin iroha3d -p izanami --bin izanami --features
+  irohad/fastpq-gpu`.
+- The fresh 4-peer no-fault prebuilt `20k TPS` / `120s` `fastpq-gpu` Metal
+  return gate at
+  `dist/izanami-prebuilt-20k-fastpq-gpu-metal-return-120s-20260507-080246`
+  exited `0`. It offered, accepted, and succeeded all `2,400,000`
+  submissions, used all `2,400,000` prebuilt transactions, and reported `0`
+  submit failures, validation rejects, confirmation failures, confirmation
+  queue drops, prebuild fallbacks, prebuild skips, prebuild build failures,
+  ingress failovers, or unhealthy endpoints.
+- Final quorum/strict height was `18/18`; final quorum/strict approved
+  transactions were `65,652/65,652`. Submit latency was `p50=3ms`,
+  `p95=17ms`, `p99=79ms`, and `max=186ms`. Final queue depth was
+  `823,854 / 2,400,000`, with `156` pacemaker backpressure deferrals and
+  commit-pipeline EMA `27ms`. This clears the 20k return thresholds
+  (`>53,461` strict-approved and `<850,745` queue depth).
+- Metal state is improved but not yet fully clean: every peer logged BN254
+  Poseidon digest GPU preflight `ok=true`, while general FASTPQ Poseidon prover
+  preflight still fell back to CPU with a Metal/CPU parity mismatch. At least
+  two BN254 digest batches later hit a Metal command-buffer error and fell back
+  deterministically to scalar hashing, so this is successful 20k return-gate
+  evidence with Metal digest preflight restored, not evidence of a fully
+  sustained GPU-backed proof/digest run.
+
 ## 2026-05-07 Metal toolchain preflight restored
 
 - The host Metal compiler component is installed and active. `xcodebuild
@@ -16,8 +87,8 @@ Last updated: 2026-05-07
   fastpq-gpu -- --nocapture`. The build produced
   `/tmp/iroha-codex-metal-preflight-20260507-073454/debug/build/fastpq_prover-48ecd44d01176b1e/out/fastpq.metallib`
   and the test passed `1` case.
-- Follow-up `iroha_core` digest-gate validation was blocked before execution by
-  an existing unmerged conflict in
+- At the time of the focused preflight, follow-up `iroha_core` digest-gate
+  validation was blocked before execution by an existing unmerged conflict in
   `crates/iroha_core/src/sumeragi/main_loop/propose.rs` at line `913`.
 
 ## 2026-05-06 Izanami 20k return gate

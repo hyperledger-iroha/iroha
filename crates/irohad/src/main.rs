@@ -118,6 +118,8 @@ use tokio::{
     task,
 };
 
+const NODE_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+
 fn startup_trace_enabled() -> bool {
     env::var_os("IROHA_STARTUP_TRACE").is_some()
 }
@@ -8023,7 +8025,9 @@ fn run_main(build_line: BuildLine) -> ReportResult<(), MainError> {
         .map_err(Report::from)
         .change_context(MainError::IrohaStart)?;
 
-    rt.block_on(run_node(config, genesis))
+    let result = rt.block_on(run_node(config, genesis));
+    rt.shutdown_timeout(NODE_RUNTIME_SHUTDOWN_TIMEOUT);
+    result
 }
 
 fn enforce_build_line(build_line: BuildLine, config: &mut Config) -> ReportResult<(), MainError> {
