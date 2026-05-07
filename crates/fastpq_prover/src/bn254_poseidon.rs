@@ -1,8 +1,8 @@
 //! BN254 Poseidon batch helpers for FASTPQ host-side transcript work.
 
 use std::sync::{
-    OnceLock,
     atomic::{AtomicBool, Ordering},
+    OnceLock,
 };
 
 #[cfg(feature = "fastpq-gpu")]
@@ -346,6 +346,42 @@ mod tests {
     use super::*;
     use halo2curves::bn256::Fr as Bn254Fr;
 
+    #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+    fn metal_backend_selected() -> bool {
+        crate::backend::current_gpu_backend() == Some(crate::backend::GpuBackend::Metal)
+    }
+
+    #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+    fn generated_word_batch(batch_count: usize) -> (Vec<u64>, Vec<Bn254PoseidonBatchSlice>) {
+        let mut words = Vec::new();
+        let mut slices = Vec::with_capacity(batch_count);
+        for idx in 0..batch_count {
+            let len = match idx % 11 {
+                0 => 0,
+                1 => 1,
+                2 => 2,
+                3 => 3,
+                4 => 5,
+                5 => 17,
+                6 => 18,
+                7 => 23,
+                8 => 31,
+                9 => 64,
+                _ => 7,
+            };
+            let offset = words.len();
+            for word in 0..len {
+                let seed = ((idx as u64) << 32) ^ word as u64;
+                words.push(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+            }
+            if len > 0 && idx % 13 == 0 {
+                words[offset] = u64::MAX;
+            }
+            slices.push(Bn254PoseidonBatchSlice::new(offset, len));
+        }
+        (words, slices)
+    }
+
     #[test]
     fn batch_slice_reports_offsets_and_lengths() {
         let slice = Bn254PoseidonBatchSlice::new(7, 3);
@@ -381,7 +417,7 @@ mod tests {
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     #[test]
     fn metal_bn254_poseidon_word_batch_matches_cpu_self_test_cases() {
-        if crate::backend::current_gpu_backend() != Some(crate::backend::GpuBackend::Metal) {
+        if !metal_backend_selected() {
             return;
         }
         let (words, slices) = bn254_poseidon_self_test_batch();
@@ -389,6 +425,42 @@ mod tests {
             .expect("Metal BN254 Poseidon word batch should run");
         let expected = expected_bn254_poseidon_word_hashes(&words, &slices);
         assert_eq!(actual, expected);
+    }
+
+    #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+    #[test]
+    fn metal_bn254_poseidon_word_batches_match_cpu_large_shapes() {
+        if !metal_backend_selected() {
+            return;
+        }
+        for batch_count in [64, 128, 512, 1_024] {
+            let (words, slices) = generated_word_batch(batch_count);
+            let actual = crate::metal::bn254_poseidon_hash_words(&words, &slices)
+                .expect("Metal BN254 Poseidon word batch should run");
+            let expected = expected_bn254_poseidon_word_hashes(&words, &slices);
+            assert_eq!(
+                actual, expected,
+                "Metal BN254 Poseidon mismatch for batch_count={batch_count}"
+            );
+        }
+    }
+
+    #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+    #[test]
+    fn metal_bn254_poseidon_repeated_word_batches_are_stable() {
+        if !metal_backend_selected() {
+            return;
+        }
+        let (words, slices) = generated_word_batch(512);
+        let expected = expected_bn254_poseidon_word_hashes(&words, &slices);
+        for iteration in 0..8 {
+            let actual = crate::metal::bn254_poseidon_hash_words(&words, &slices)
+                .expect("repeated Metal BN254 Poseidon word batch should run");
+            assert_eq!(
+                actual, expected,
+                "Metal BN254 Poseidon output drifted on iteration {iteration}"
+            );
+        }
     }
 
     #[cfg(not(feature = "fastpq-gpu"))]

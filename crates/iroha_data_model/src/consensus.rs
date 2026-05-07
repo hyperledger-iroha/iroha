@@ -43,6 +43,10 @@ pub struct ValidatorSetCheckpoint {
     pub parent_state_root: Hash,
     /// Post-state root bound into the checkpoint.
     pub post_state_root: Hash,
+    /// Hash of the vNext chain order bound into the checkpoint's aggregate signature.
+    pub chain_order_hash: Hash,
+    /// Re-chain sequence bound into the checkpoint's aggregate signature.
+    pub rechain_seq: u64,
     /// Stable hash of the validator set encoded with [`VALIDATOR_SET_HASH_VERSION_V1`].
     pub validator_set_hash: HashOf<Vec<crate::peer::PeerId>>,
     /// Version of the validator-set hashing scheme.
@@ -74,6 +78,39 @@ impl ValidatorSetCheckpoint {
         validator_set_hash_version: u16,
         expires_at_height: Option<u64>,
     ) -> Self {
+        Self::new_with_chain_order(
+            height,
+            view,
+            block_hash,
+            default_chain_order_hash(),
+            0,
+            parent_state_root,
+            post_state_root,
+            validator_set,
+            signers_bitmap,
+            bls_aggregate_signature,
+            validator_set_hash_version,
+            expires_at_height,
+        )
+    }
+
+    /// Construct a checkpoint with an explicit vNext chain-order binding.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_chain_order(
+        height: u64,
+        view: u64,
+        block_hash: HashOf<crate::block::BlockHeader>,
+        chain_order_hash: Hash,
+        rechain_seq: u64,
+        parent_state_root: Hash,
+        post_state_root: Hash,
+        validator_set: Vec<crate::peer::PeerId>,
+        signers_bitmap: Vec<u8>,
+        bls_aggregate_signature: Vec<u8>,
+        validator_set_hash_version: u16,
+        expires_at_height: Option<u64>,
+    ) -> Self {
         let validator_set_hash = HashOf::new(&validator_set);
         Self {
             height,
@@ -81,6 +118,8 @@ impl ValidatorSetCheckpoint {
             block_hash,
             parent_state_root,
             post_state_root,
+            chain_order_hash,
+            rechain_seq,
             validator_set_hash,
             validator_set_hash_version,
             validator_set,
@@ -727,6 +766,8 @@ mod tests {
 
         let expected_hash = HashOf::new(&validator_set);
         assert_eq!(checkpoint.validator_set_hash, expected_hash);
+        assert_eq!(checkpoint.chain_order_hash, default_chain_order_hash());
+        assert_eq!(checkpoint.rechain_seq, 0);
 
         let buf = checkpoint.encode();
         let decoded =
@@ -735,8 +776,28 @@ mod tests {
         assert_eq!(decoded.view, 7);
         assert_eq!(decoded.parent_state_root, parent_state_root);
         assert_eq!(decoded.post_state_root, post_state_root);
+        assert_eq!(decoded.chain_order_hash, default_chain_order_hash());
+        assert_eq!(decoded.rechain_seq, 0);
         assert_eq!(decoded.validator_set_hash, expected_hash);
         assert_eq!(decoded.validator_set, validator_set);
+
+        let chain_order_hash = iroha_crypto::Hash::new(b"checkpoint-chain-order");
+        let explicit = ValidatorSetCheckpoint::new_with_chain_order(
+            42,
+            7,
+            block_hash,
+            chain_order_hash,
+            5,
+            parent_state_root,
+            post_state_root,
+            decoded.validator_set,
+            vec![0x01],
+            vec![0xAA, 0xBB],
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+        assert_eq!(explicit.chain_order_hash, chain_order_hash);
+        assert_eq!(explicit.rechain_seq, 5);
     }
 
     #[test]

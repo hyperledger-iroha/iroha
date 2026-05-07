@@ -6385,6 +6385,8 @@ impl Actor {
                     height: qc.height,
                     view: qc.view,
                     epoch: qc.epoch,
+                    chain_order_hash: qc.chain_order_hash,
+                    rechain_seq: qc.rechain_seq,
                     parent_state_root: qc.parent_state_root,
                     post_state_root: qc.post_state_root,
                     signers: signer_set,
@@ -6450,10 +6452,12 @@ impl Actor {
                         .state
                         .commit_roster_snapshot_for_block(qc.height, qc.subject_block_hash)
                         .and_then(|snapshot| snapshot.stake_snapshot);
-                    let checkpoint = ValidatorSetCheckpoint::new(
+                    let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
                         qc.height,
                         qc.view,
                         qc.subject_block_hash,
+                        qc.chain_order_hash,
+                        qc.rechain_seq,
                         qc.parent_state_root,
                         qc.post_state_root,
                         qc.validator_set.clone(),
@@ -6479,10 +6483,12 @@ impl Actor {
 
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             // Persist roster artifacts on QC arrival so block sync can validate missing payloads.
-            let checkpoint = ValidatorSetCheckpoint::new(
+            let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
                 qc.height,
                 qc.view,
                 qc.subject_block_hash,
+                qc.chain_order_hash,
+                qc.rechain_seq,
                 qc.parent_state_root,
                 qc.post_state_root,
                 qc.validator_set.clone(),

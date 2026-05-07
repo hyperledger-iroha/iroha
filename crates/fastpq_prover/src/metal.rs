@@ -15,8 +15,8 @@ use std::{
     process::{Command, Stdio},
     ptr,
     sync::{
-        Condvar, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU32, Ordering},
+        Condvar, Mutex, OnceLock,
     },
     thread,
     time::{Duration, Instant},
@@ -38,8 +38,8 @@ use crate::{
     backend::GpuBackend,
     bn254_poseidon::Bn254PoseidonBatchSlice,
     bn254_poseidon_params::{
-        BN254_LIMBS, BN254_POSEIDON_WIDTH, Bn254PoseidonWidth3Params, bn254_limbs_to_bytes,
-        bn254_poseidon_width3_params,
+        bn254_limbs_to_bytes, bn254_poseidon_width3_params, Bn254PoseidonWidth3Params, BN254_LIMBS,
+        BN254_POSEIDON_WIDTH,
     },
     gpu::GpuError,
     metal_config::{self, DeviceHints},
@@ -77,6 +77,7 @@ const FFT_TILE_STAGE_LIMIT: u32 = 32;
 /// Must match `FFT_TILE_STAGE_CAP` in `metal/kernels/ntt_stage.metal`.
 const LDE_TILE_STAGE_ENV: &str = "FASTPQ_METAL_LDE_TILE_STAGES";
 const POSEIDON_THREADGROUP_CAPACITY: u32 = 256;
+const BN254_POSEIDON_THREADGROUP_CAPACITY: u64 = 128;
 const POSEIDON_TARGET_THREADS: u32 = 8_192;
 const MIN_POSEIDON_STATES_PER_BATCH: u32 = 1;
 const QUEUE_FANOUT_ENV: &str = "FASTPQ_METAL_QUEUE_FANOUT";
@@ -1518,7 +1519,11 @@ impl QueueLaneStats {
 
 fn saturating_sub_ms(current: f64, previous: f64) -> f64 {
     let delta = current - previous;
-    if delta <= 0.0 { 0.0 } else { delta }
+    if delta <= 0.0 {
+        0.0
+    } else {
+        delta
+    }
 }
 
 /// Kernel categories profiled by the Metal backend.
@@ -1580,7 +1585,8 @@ const METAL_KERNEL_DESCRIPTORS: &[MetalKernelDescriptor] = &[
         kind: KernelKind::Fft,
         threadgroup_cap: Some(FFT_THREADGROUP_CAPACITY),
         tile_stage_cap: Some(FFT_TILE_STAGE_LIMIT),
-        notes: "Forward FFT over trace columns. Uses shared-memory tiles up to FFT_TILE_STAGE_LIMIT \
+        notes:
+            "Forward FFT over trace columns. Uses shared-memory tiles up to FFT_TILE_STAGE_LIMIT \
                 stages with coset=1 and applies inverse scaling when requested.",
     },
     MetalKernelDescriptor {
@@ -1644,8 +1650,9 @@ const METAL_KERNEL_DESCRIPTORS: &[MetalKernelDescriptor] = &[
         threadgroup_cap: Some(POSEIDON_THREADGROUP_CAPACITY),
         tile_stage_cap: None,
         notes: "Hashes flattened BN254 Poseidon word batches for FASTPQ transcript digests. \
-                Inputs and parameters are staged in canonical limbs, converted to Montgomery \
-                form inside the kernel, and outputs are canonical BN254 field bytes.",
+                Inputs, parameters, and outputs are staged as raw canonical limb buffers, \
+                converted to Montgomery form inside the kernel, and returned as canonical \
+                BN254 field bytes.",
     },
 ];
 
@@ -2049,6 +2056,42 @@ struct Bn254PoseidonArgs {
 struct Bn254PoseidonMetalSlice {
     offset: u32,
     len: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Bn254PoseidonDispatchEvidence {
+    batch_count: u32,
+    word_count: usize,
+    logical_threads: u64,
+    threadgroups: u64,
+    threadgroup_width: u64,
+    states_per_lane: u32,
+    queue_index: usize,
+    byte_estimate: u64,
+}
+
+impl Bn254PoseidonDispatchEvidence {
+    fn contextualize_error(self, error: GpuError) -> GpuError {
+        match error {
+            GpuError::Execution { backend, message } => GpuError::Execution {
+                backend,
+                message: format!(
+                    "{message}; BN254 Poseidon dispatch context: batch_count={}, word_count={}, \
+                     logical_threads={}, threadgroups={}, threadgroup_width={}, \
+                     states_per_lane={}, queue_index={}, byte_estimate={}",
+                    self.batch_count,
+                    self.word_count,
+                    self.logical_threads,
+                    self.threadgroups,
+                    self.threadgroup_width,
+                    self.states_per_lane,
+                    self.queue_index,
+                    self.byte_estimate
+                ),
+            },
+            other => other,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2866,6 +2909,31 @@ fn poseidon_dispatch_geometry(
     )
 }
 
+fn bn254_poseidon_dispatch_geometry(
+    batch_count: u32,
+    tuning: metal_config::PoseidonTuning,
+    limits: &PipelineLimits,
+) -> (MTLSize, MTLSize, u64, u32) {
+    let states_per_lane = tuning.states_per_lane.max(1);
+    let states = u64::from(batch_count);
+    let logical_threads = states.div_ceil(u64::from(states_per_lane)).max(1);
+    let default_lanes = tuning.threadgroup_lanes.max(1);
+    let override_width = threadgroup_override().unwrap_or(u64::from(default_lanes));
+    let max_threads = u64::from(limits.max_threads.max(1));
+    let threadgroup_width = override_width
+        .min(max_threads)
+        .min(BN254_POSEIDON_THREADGROUP_CAPACITY)
+        .min(logical_threads.max(1))
+        .max(1);
+    let threadgroups = logical_threads.div_ceil(threadgroup_width).max(1);
+    (
+        MTLSize::new(threadgroups, 1, 1),
+        MTLSize::new(threadgroup_width, 1, 1),
+        logical_threads.max(1),
+        states_per_lane,
+    )
+}
+
 fn poseidon_recommended_states_per_batch(
     state_count: u32,
     tuning: metal_config::PoseidonTuning,
@@ -3495,6 +3563,7 @@ pub(crate) struct PendingBn254PoseidonWords {
     output: PooledBuffer,
     _output_buffer: Buffer,
     ticket: Option<DispatchTicket>,
+    evidence: Bn254PoseidonDispatchEvidence,
     completed: bool,
 }
 
@@ -3518,7 +3587,22 @@ impl PendingBn254PoseidonWords {
             .ticket
             .take()
             .expect("pending BN254 Poseidon dispatch missing ticket");
-        let result = wait_for_ticket(ticket);
+        let result = wait_for_ticket(ticket).map_err(|error| {
+            warn!(
+                target: "fastpq::metal",
+                batch_count = self.evidence.batch_count,
+                word_count = self.evidence.word_count,
+                logical_threads = self.evidence.logical_threads,
+                threadgroups = self.evidence.threadgroups,
+                threadgroup_width = self.evidence.threadgroup_width,
+                states_per_lane = self.evidence.states_per_lane,
+                queue_index = self.evidence.queue_index,
+                byte_estimate = self.evidence.byte_estimate,
+                %error,
+                "BN254 Poseidon Metal runtime dispatch failed"
+            );
+            self.evidence.contextualize_error(error)
+        });
         self.completed = true;
         result
     }
@@ -3597,21 +3681,32 @@ pub(crate) fn bn254_poseidon_hash_words_async(
     let limits = pipeline_limits(&context.bn254_poseidon_hash);
     let tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
     let (threadgroups, threadgroup, logical_threads, states_per_lane) =
-        poseidon_dispatch_geometry(batch_count, tuning, &limits);
+        bn254_poseidon_dispatch_geometry(batch_count, tuning, &limits);
     let args = Bn254PoseidonArgs {
         batch_count,
         states_per_lane,
         round_count: params.round_count,
         _reserved: 0,
     };
+    let byte_estimate = bn254_poseidon_hash_bytes(words.len(), slices.len(), params);
     let profile = KernelProfileParams {
         kind: KernelKind::Poseidon,
-        bytes: bn254_poseidon_hash_bytes(words.len(), slices.len(), params),
+        bytes: byte_estimate,
         elements: u64::from(batch_count)
             .saturating_mul(u64::try_from(BN254_POSEIDON_WIDTH).unwrap_or(u64::MAX)),
         columns: batch_count,
     };
     let (queue, queue_index) = context.queues.select(batch_count, 0);
+    let evidence = Bn254PoseidonDispatchEvidence {
+        batch_count,
+        word_count: words.len(),
+        logical_threads,
+        threadgroups: threadgroups.width,
+        threadgroup_width: threadgroup.width,
+        states_per_lane,
+        queue_index,
+        byte_estimate,
+    };
     let ticket = submit_compute_with_geometry(
         queue,
         queue_index,
@@ -3645,6 +3740,7 @@ pub(crate) fn bn254_poseidon_hash_words_async(
         output,
         _output_buffer: output_buffer,
         ticket: Some(ticket),
+        evidence,
         completed: false,
     })
 }
@@ -5011,10 +5107,10 @@ fn compute_stage_twiddles(log_len: u32, root: u64, inverse: bool) -> Vec<u64> {
 #[cfg(test)]
 mod helper_tests {
     use super::{
-        MAX_QUEUE_FANOUT, QueuePolicy, STATE_WIDTH, default_queue_column_threshold,
-        lde_tile_stage_limit, parse_queue_fanout_override, parse_queue_threshold_override,
-        poseidon_element_range, poseidon_recommended_states_per_batch, post_tile_stage_start,
-        queue_total_columns_hint, select_poseidon_batch,
+        default_queue_column_threshold, lde_tile_stage_limit, parse_queue_fanout_override,
+        parse_queue_threshold_override, poseidon_element_range,
+        poseidon_recommended_states_per_batch, post_tile_stage_start, queue_total_columns_hint,
+        select_poseidon_batch, QueuePolicy, MAX_QUEUE_FANOUT, STATE_WIDTH,
     };
     use crate::metal_config::{self, DeviceHints};
 
@@ -5229,7 +5325,7 @@ mod bn254_helper_tests {
 mod tests {
     use std::{thread, time::Duration};
 
-    use fastpq_isi::{CANONICAL_PARAMETER_SETS, poseidon as cpu_poseidon};
+    use fastpq_isi::{poseidon as cpu_poseidon, CANONICAL_PARAMETER_SETS};
 
     use super::{ensure_multi_queue_env, unwrap_or_skip, *};
     use crate::fft::Planner;
@@ -5374,6 +5470,50 @@ mod tests {
         assert_eq!(states_per_lane, 4);
         assert_eq!(group.width, 32);
         assert!(groups.width >= 1);
+    }
+
+    #[test]
+    fn bn254_poseidon_dispatch_geometry_uses_actual_work() {
+        let limits = super::PipelineLimits {
+            exec_width: 32,
+            max_threads: 64,
+        };
+        let tuning = super::metal_config::PoseidonTuning {
+            threadgroup_lanes: 32,
+            states_per_lane: 4,
+        };
+        let (groups, group, logical_threads, states_per_lane) =
+            super::bn254_poseidon_dispatch_geometry(64, tuning, &limits);
+        assert_eq!(logical_threads, 16);
+        assert!(
+            logical_threads < u64::from(super::POSEIDON_TARGET_THREADS),
+            "BN254 digest batches must not inherit the prover Poseidon dispatch floor"
+        );
+        assert_eq!(states_per_lane, 4);
+        assert_eq!(group.width, 16);
+        assert_eq!(groups.width, 1);
+
+        let (groups, group, logical_threads, states_per_lane) =
+            super::bn254_poseidon_dispatch_geometry(513, tuning, &limits);
+        assert_eq!(logical_threads, 129);
+        assert_eq!(states_per_lane, 4);
+        assert_eq!(group.width, 32);
+        assert_eq!(groups.width, 5);
+
+        let wide_tuning = super::metal_config::PoseidonTuning {
+            threadgroup_lanes: 256,
+            states_per_lane: 2,
+        };
+        let wide_limits = super::PipelineLimits {
+            exec_width: 32,
+            max_threads: 512,
+        };
+        let (groups, group, logical_threads, states_per_lane) =
+            super::bn254_poseidon_dispatch_geometry(512, wide_tuning, &wide_limits);
+        assert_eq!(logical_threads, 256);
+        assert_eq!(states_per_lane, 2);
+        assert_eq!(group.width, super::BN254_POSEIDON_THREADGROUP_CAPACITY);
+        assert_eq!(groups.width, 2);
     }
 
     #[test]

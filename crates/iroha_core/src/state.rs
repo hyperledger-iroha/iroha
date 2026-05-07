@@ -14113,6 +14113,41 @@ pub trait WorldReadOnly {
             })
     }
 
+    /// Iterate borrowed asset entries matching any of the specified definitions.
+    ///
+    /// This owns only the indexed asset identifiers while yielding borrowed
+    /// storage entries, so callers can stream selected definition results
+    /// without materializing cloned asset values per definition.
+    fn asset_entries_by_definition_ids_iter<'a>(
+        &'a self,
+        ids: impl IntoIterator<Item = AssetDefinitionId> + 'a,
+    ) -> impl Iterator<Item = AssetEntry<'a>> + 'a {
+        ids.into_iter().flat_map(move |definition_id| {
+            self.asset_definition_assets()
+                .get(&definition_id)
+                .cloned()
+                .into_iter()
+                .flatten()
+                .filter_map(move |asset_id| {
+                    self.assets()
+                        .get_key_value(&asset_id)
+                        .map(|(asset_id, value)| AssetEntry::new(asset_id, value))
+                })
+        })
+    }
+
+    /// Iterate borrowed asset entries for owned asset identifiers.
+    fn asset_entries_by_ids_iter<'a>(
+        &'a self,
+        ids: impl IntoIterator<Item = AssetId> + 'a,
+    ) -> impl Iterator<Item = AssetEntry<'a>> + 'a {
+        ids.into_iter().filter_map(move |asset_id| {
+            self.assets()
+                .get_key_value(&asset_id)
+                .map(|(asset_id, value)| AssetEntry::new(asset_id, value))
+        })
+    }
+
     /// Iterate assets held by all accounts within the specified domain.
     #[allow(clippy::type_complexity)]
     fn assets_in_domain_iter<'a>(
@@ -14332,6 +14367,18 @@ pub trait WorldReadOnly {
                     .get_key_value(nft_id)
                     .map(|(id, value)| NftEntry::new(id, value))
             })
+    }
+
+    /// Iterate borrowed NFT entries for owned NFT identifiers.
+    fn nft_entries_by_ids_iter<'a>(
+        &'a self,
+        ids: impl IntoIterator<Item = NftId> + 'a,
+    ) -> impl Iterator<Item = NftEntry<'a>> + 'a {
+        ids.into_iter().filter_map(move |nft_id| {
+            self.nfts()
+                .get_key_value(&nft_id)
+                .map(|(nft_id, value)| NftEntry::new(nft_id, value))
+        })
     }
 
     /// Get `Rwa` immutable view.
@@ -24830,10 +24877,12 @@ impl<'state> StateBlock<'state> {
                 CommitStakeSnapshot::from_roster(self.world(), &checkpoint_topology);
             if let Some(commit_cert) = commit_cert_for_block {
                 if commit_cert.validator_set == checkpoint_topology {
-                    let checkpoint = ValidatorSetCheckpoint::new(
+                    let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
                         checkpoint_block_height,
                         commit_cert.view,
                         checkpoint_block_hash,
+                        commit_cert.chain_order_hash,
+                        commit_cert.rechain_seq,
                         commit_cert.parent_state_root,
                         commit_cert.post_state_root,
                         commit_cert.validator_set.clone(),
@@ -33961,6 +34010,35 @@ mod tests {
         assert_eq!(
             owner_ids, expected,
             "owner index should only return RWA lots owned by the requested account",
+        );
+    }
+
+    #[test]
+    fn nft_entries_by_ids_iter_resolves_selected_entries() {
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let domain = DomainId::try_new("gallery", "universal").expect("domain");
+        let alpha_id = NftId::new(domain.clone(), "alpha".parse().unwrap());
+        let beta_id = NftId::new(domain, "beta".parse().unwrap());
+
+        let mut world = World::default();
+        for nft_id in [alpha_id.clone(), beta_id.clone()] {
+            let (id, value) = Nft::new(nft_id, Metadata::default())
+                .build(&owner)
+                .into_key_value();
+            world.nfts.insert(id, value);
+        }
+        world.rebuild_nft_owner_index();
+
+        let selected_ids = world
+            .view()
+            .nft_entries_by_ids_iter(vec![beta_id.clone()])
+            .map(|entry| entry.id().clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            selected_ids,
+            vec![beta_id],
+            "NFT id iterator should resolve exactly the selected stored entries"
         );
     }
 
@@ -45244,6 +45322,16 @@ mod tests {
             .map(|asset| asset.id().clone())
             .collect();
         entry_assets.sort();
+        let mut entry_assets_from_many: Vec<_> = world
+            .asset_entries_by_definition_ids_iter(vec![asset_def_id.clone()])
+            .map(|asset| asset.id().clone())
+            .collect();
+        entry_assets_from_many.sort();
+        let mut entry_assets_from_ids: Vec<_> = world
+            .asset_entries_by_ids_iter(vec![global_asset_id.clone(), scoped_asset_id.clone()])
+            .map(|asset| asset.id().clone())
+            .collect();
+        entry_assets_from_ids.sort();
 
         assert_eq!(
             assets,
@@ -45253,6 +45341,14 @@ mod tests {
         assert_eq!(
             entry_assets, assets,
             "borrowed definition iterator should match the owned iterator"
+        );
+        assert_eq!(
+            entry_assets_from_many, assets,
+            "multi-definition borrowed iterator should match the single-definition iterator"
+        );
+        assert_eq!(
+            entry_assets_from_ids, assets,
+            "asset-id borrowed iterator should resolve the selected stored entries"
         );
     }
 

@@ -593,7 +593,7 @@ mod tests {
     }
 
     #[test]
-    fn preimages_use_v1_domain_tags() {
+    fn preimages_use_current_domain_tags() {
         let chain = ChainId::from("iroha:test:preimage-tags");
         let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([7u8; 32]));
         let roster_hash = iroha_crypto::Hash::prehashed([3u8; 32]);
@@ -616,11 +616,11 @@ mod tests {
         let vote_preimage = vote_preimage(&chain, PERMISSIONED_TAG, &vote);
         assert_eq!(
             &vote_preimage[..32],
-            &consensus_domain(&chain, "Vote", b"v1", PERMISSIONED_TAG)
+            &consensus_domain(&chain, "Vote", b"v2", PERMISSIONED_TAG)
         );
         assert_ne!(
             &vote_preimage[..32],
-            &consensus_domain(&chain, "Vote", b"v2", PERMISSIONED_TAG)
+            &consensus_domain(&chain, "Vote", b"v1", PERMISSIONED_TAG)
         );
 
         let vrf_commit = VrfCommit {
@@ -686,6 +686,38 @@ mod tests {
             &deliver_preimage[..32],
             &consensus_domain(&chain, "RbcDeliver", b"v2", PERMISSIONED_TAG)
         );
+    }
+
+    #[test]
+    fn vote_preimage_binds_chain_order() {
+        let chain = ChainId::from("iroha:test:chain-order-binding");
+        let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([7u8; 32]));
+        let vote = Vote {
+            block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([1u8; 32]),
+            post_state_root: iroha_crypto::Hash::prehashed([2u8; 32]),
+            height: 11,
+            view: 2,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            phase: Phase::Prepare,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let base = vote_preimage(&chain, PERMISSIONED_TAG, &vote);
+
+        let mut changed_order = vote.clone();
+        changed_order.chain_order_hash = iroha_crypto::Hash::new(b"alternate-chain-order");
+        assert_ne!(
+            base,
+            vote_preimage(&chain, PERMISSIONED_TAG, &changed_order)
+        );
+
+        let mut changed_seq = vote;
+        changed_seq.rechain_seq = 1;
+        assert_ne!(base, vote_preimage(&chain, PERMISSIONED_TAG, &changed_seq));
     }
 
     #[test]

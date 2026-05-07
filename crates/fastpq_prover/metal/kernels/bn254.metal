@@ -382,20 +382,38 @@ inline Bn254 bn254_pow5(Bn254 value) {
     return bn254_montgomery_mul(fourth, value);
 }
 
+inline Bn254 bn254_load_limb_value(device const ulong *limbs, uint index) {
+    uint base = index * 4U;
+    return bn254_from_limbs(ulong4(
+        limbs[base],
+        limbs[base + 1U],
+        limbs[base + 2U],
+        limbs[base + 3U]));
+}
+
+inline void bn254_store_limb_value(device ulong *limbs, uint index, Bn254 value) {
+    uint base = index * 4U;
+    limbs[base] = value.limbs.x;
+    limbs[base + 1U] = value.limbs.y;
+    limbs[base + 2U] = value.limbs.z;
+    limbs[base + 3U] = value.limbs.w;
+}
+
 inline Bn254 bn254_poseidon_round_constant(
-    device const Bn254 *round_constants,
+    device const ulong *round_constants,
     uint round,
     uint word
 ) {
     return bn254_from_canonical_value(
-        round_constants[round * BN254_POSEIDON_WIDTH + word]);
+        bn254_load_limb_value(round_constants, round * BN254_POSEIDON_WIDTH + word));
 }
 
-inline Bn254 bn254_poseidon_mds_coeff(device const Bn254 *mds, uint row, uint col) {
-    return bn254_from_canonical_value(mds[row * BN254_POSEIDON_WIDTH + col]);
+inline Bn254 bn254_poseidon_mds_coeff(device const ulong *mds, uint row, uint col) {
+    return bn254_from_canonical_value(
+        bn254_load_limb_value(mds, row * BN254_POSEIDON_WIDTH + col));
 }
 
-inline void bn254_poseidon_apply_mds(thread Bn254 (&state)[3], device const Bn254 *mds) {
+inline void bn254_poseidon_apply_mds(thread Bn254 (&state)[3], device const ulong *mds) {
     thread Bn254 next[3] = {bn254_zero(), bn254_zero(), bn254_zero()};
     for (uint row = 0U; row < BN254_POSEIDON_WIDTH; ++row) {
         Bn254 acc = bn254_zero();
@@ -412,8 +430,8 @@ inline void bn254_poseidon_apply_mds(thread Bn254 (&state)[3], device const Bn25
 
 inline void bn254_poseidon_permute(
     thread Bn254 (&state)[3],
-    device const Bn254 *round_constants,
-    device const Bn254 *mds
+    device const ulong *round_constants,
+    device const ulong *mds
 ) {
     for (uint round = 0U; round < BN254_POSEIDON_FULL_ROUNDS_HALF; ++round) {
         for (uint word = 0U; word < BN254_POSEIDON_WIDTH; ++word) {
@@ -451,8 +469,8 @@ inline void bn254_poseidon_absorb_pair(
     thread Bn254 (&state)[3],
     Bn254 first,
     Bn254 second,
-    device const Bn254 *round_constants,
-    device const Bn254 *mds
+    device const ulong *round_constants,
+    device const ulong *mds
 ) {
     state[0] = bn254_add(state[0], first);
     state[1] = bn254_add(state[1], second);
@@ -462,8 +480,8 @@ inline void bn254_poseidon_absorb_pair(
 inline Bn254 bn254_poseidon_hash_slice(
     device const ulong *words,
     Bn254PoseidonSlice slice,
-    device const Bn254 *round_constants,
-    device const Bn254 *mds
+    device const ulong *round_constants,
+    device const ulong *mds
 ) {
     thread Bn254 state[3] = {bn254_zero(), bn254_zero(), bn254_zero()};
     uint cursor = 0U;
@@ -485,9 +503,9 @@ inline Bn254 bn254_poseidon_hash_slice(
 kernel void bn254_poseidon_hash_words(
     device const ulong *words [[ buffer(0) ]],
     device const Bn254PoseidonSlice *slices [[ buffer(1) ]],
-    device Bn254 *outputs [[ buffer(2) ]],
-    device const Bn254 *round_constants [[ buffer(3) ]],
-    device const Bn254 *mds [[ buffer(4) ]],
+    device ulong *outputs [[ buffer(2) ]],
+    device const ulong *round_constants [[ buffer(3) ]],
+    device const ulong *mds [[ buffer(4) ]],
     constant Bn254PoseidonArgs &args [[ buffer(5) ]],
     uint3 grid_pos [[ thread_position_in_grid ]]
 ) {
@@ -502,11 +520,8 @@ kernel void bn254_poseidon_hash_words(
         if (index >= args.batch_count) {
             break;
         }
-        outputs[index] = bn254_poseidon_hash_slice(
-            words,
-            slices[index],
-            round_constants,
-            mds);
+        Bn254 digest = bn254_poseidon_hash_slice(words, slices[index], round_constants, mds);
+        bn254_store_limb_value(outputs, index, digest);
         ++processed;
     }
 }

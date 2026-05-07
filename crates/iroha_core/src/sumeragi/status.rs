@@ -4072,6 +4072,10 @@ pub struct PrecommitSignerRecord {
     pub view: u64,
     /// Epoch (permissioned mode uses zero).
     pub epoch: u64,
+    /// Hash of the vNext chain order that the precommit votes were signed under.
+    pub chain_order_hash: Hash,
+    /// Re-chain sequence of the vNext chain order that the precommit votes were signed under.
+    pub rechain_seq: u64,
     /// Parent state root bound into commit vote preimages.
     pub parent_state_root: Hash,
     /// Post-state root bound into commit vote preimages.
@@ -9301,6 +9305,8 @@ mod tests {
             height: 1,
             view: 0,
             epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             parent_state_root: zero_root,
             post_state_root: zero_root,
             signers,

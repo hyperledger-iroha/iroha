@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-05-07
+Last updated: 2026-05-08
 
 ## 2026-05-07 Sumeragi vNext live control path
 
@@ -249,6 +249,38 @@ Last updated: 2026-05-07
   `cargo test -p iroha_torii explorer:: --lib -- --nocapture`, and
   `cargo test -p iroha_torii asset_holder --lib -- --nocapture`, plus the
   focused asset-holder projection catalog/archive tests.
+
+## 2026-05-08 Core asset query WSV streaming
+
+- WSV now exposes `asset_entries_by_definition_ids_iter(...)` and
+  `asset_entries_by_ids_iter(...)` so query plans that already narrowed to
+  asset ids or asset-definition ids can stream borrowed storage entries and
+  clone asset values only at the final query output boundary.
+- `FindAssets` definition/domain/id and subject-scoped indexed paths now use
+  those borrowed-entry helpers instead of materializing intermediate
+  `Vec<Asset>` batches per definition or subject.
+- Validation passed with `cargo check -p iroha_core --lib` and
+  `cargo check -p iroha_torii --lib`. The focused `cargo test -p iroha_core
+  find_assets_filters_by_definition_predicate --lib -- --nocapture` test build
+  is currently blocked by unrelated dirty Sumeragi test initializers for
+  `PrecommitSignerRecord` and `derive_block_sync_qc_from_signers`.
+
+## 2026-05-08 NFT/domain and subscription indexed reads
+
+- WSV now exposes `nft_entries_by_ids_iter(...)`; `FindNfts` owner/domain/id
+  plans and `FindNftsByAccountId` use it to stream borrowed NFT entries after
+  narrowing by owner indexes, domain ranges, or exact ids.
+- `FindDomains` owner-filter plans now resolve domain ids from the maintained
+  domain-owner index and clone only the selected domain rows, avoiding
+  intermediate `Vec<Domain>` materialization per owner.
+- Torii subscription listing now uses the WSV NFT owner index when `owned_by`
+  is supplied, while still applying the existing subscription metadata,
+  provider, and status filters afterward.
+- Validation passed with `cargo check -p iroha_core --lib` and
+  `cargo check -p iroha_torii --lib`. The focused
+  `cargo test -p iroha_torii subscription --lib -- --nocapture` build is
+  currently blocked by unrelated dirty consensus test initializers for
+  `Qc`/`QcVote` chain-order fields.
 
 ## 2026-05-07 IVM Staging and Sumeragi Targeted Recovery
 

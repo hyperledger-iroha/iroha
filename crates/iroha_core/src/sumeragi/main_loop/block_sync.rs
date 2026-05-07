@@ -181,8 +181,8 @@ impl Actor {
             height: checkpoint.height,
             view: checkpoint.view,
             epoch: expected_epoch,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
+            chain_order_hash: checkpoint.chain_order_hash,
+            rechain_seq: checkpoint.rechain_seq,
             mode_tag: mode_tag.to_string(),
             highest_qc: None,
             validator_set_hash: checkpoint.validator_set_hash,
@@ -2099,10 +2099,12 @@ impl Actor {
                     ));
                     drop(world_view);
                     let checkpoint = validator_checkpoint.clone().unwrap_or_else(|| {
-                        ValidatorSetCheckpoint::new(
+                        ValidatorSetCheckpoint::new_with_chain_order(
                             qc.height,
                             qc.view,
                             qc.subject_block_hash,
+                            qc.chain_order_hash,
+                            qc.rechain_seq,
                             qc.parent_state_root,
                             qc.post_state_root,
                             qc.validator_set.clone(),
@@ -2234,10 +2236,12 @@ impl Actor {
                 ));
                 drop(world_view);
                 let checkpoint = validator_checkpoint.clone().unwrap_or_else(|| {
-                    ValidatorSetCheckpoint::new(
+                    ValidatorSetCheckpoint::new_with_chain_order(
                         qc.height,
                         qc.view,
                         qc.subject_block_hash,
+                        qc.chain_order_hash,
+                        qc.rechain_seq,
                         qc.parent_state_root,
                         qc.post_state_root,
                         qc.validator_set.clone(),
@@ -3077,10 +3081,12 @@ impl Actor {
         // Persist commit rosters only once the block is known locally.
         let commit_roster_record = selection.commit_qc.as_ref().map(|cert| {
             let checkpoint = selection.checkpoint.clone().unwrap_or_else(|| {
-                ValidatorSetCheckpoint::new(
+                ValidatorSetCheckpoint::new_with_chain_order(
                     cert.height,
                     cert.view,
                     cert.subject_block_hash,
+                    cert.chain_order_hash,
+                    cert.rechain_seq,
                     cert.parent_state_root,
                     cert.post_state_root,
                     cert.validator_set.clone(),
@@ -4100,6 +4106,8 @@ impl Actor {
                                 height: qc.height,
                                 view: qc.view,
                                 epoch: qc.epoch,
+                                chain_order_hash: qc.chain_order_hash,
+                                rechain_seq: qc.rechain_seq,
                                 parent_state_root: qc.parent_state_root,
                                 post_state_root: qc.post_state_root,
                                 signers: tally.voting_signers.clone(),
@@ -4444,6 +4452,8 @@ impl Actor {
                         height: qc.height,
                         view: qc.view,
                         epoch: qc.epoch,
+                        chain_order_hash: qc.chain_order_hash,
+                        rechain_seq: qc.rechain_seq,
                         parent_state_root: qc.parent_state_root,
                         post_state_root: qc.post_state_root,
                         signers: tally.voting_signers.clone(),
@@ -5677,6 +5687,8 @@ impl Actor {
                 height: qc.height,
                 view: qc.view,
                 epoch: qc.epoch,
+                chain_order_hash: qc.chain_order_hash,
+                rechain_seq: qc.rechain_seq,
                 parent_state_root: qc.parent_state_root,
                 post_state_root: qc.post_state_root,
                 signers: tally.voting_signers.clone(),
@@ -5730,10 +5742,12 @@ impl Actor {
             }
             return true;
         }
-        let checkpoint = ValidatorSetCheckpoint::new(
+        let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
             qc.height,
             qc.view,
             qc.subject_block_hash,
+            qc.chain_order_hash,
+            qc.rechain_seq,
             qc.parent_state_root,
             qc.post_state_root,
             qc.validator_set.clone(),

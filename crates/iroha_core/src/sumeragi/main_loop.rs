@@ -2147,6 +2147,8 @@ fn derive_block_sync_qc_from_signers(
     block_height: u64,
     block_view: u64,
     block_epoch: u64,
+    chain_order_hash: Hash,
+    rechain_seq: u64,
     parent_state_root: Hash,
     post_state_root: Hash,
     commit_topology: &[PeerId],
@@ -2252,8 +2254,8 @@ fn derive_block_sync_qc_from_signers(
         height: block_height,
         view: block_view,
         epoch: block_epoch,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
+        chain_order_hash,
+        rechain_seq,
         mode_tag: mode_tag.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -12649,6 +12651,8 @@ fn block_sync_history_roster_for_block(
                 record.height,
                 record.view,
                 record.epoch,
+                record.chain_order_hash,
+                record.rechain_seq,
                 record.parent_state_root,
                 record.post_state_root,
                 &record.validator_set,
@@ -13714,8 +13718,8 @@ fn validate_checkpoint_roster(
         height: block_height,
         view,
         epoch,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
+        chain_order_hash: checkpoint.chain_order_hash,
+        rechain_seq: checkpoint.rechain_seq,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -14128,6 +14132,8 @@ impl Actor {
                     height,
                     view,
                     epoch,
+                    record.chain_order_hash,
+                    record.rechain_seq,
                     record.parent_state_root,
                     record.post_state_root,
                     roster,
@@ -14171,10 +14177,12 @@ impl Actor {
             self.epoch_for_height(height),
             consensus_mode,
         ) {
-            let checkpoint = ValidatorSetCheckpoint::new(
+            let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
                 cert.height,
                 cert.view,
                 cert.subject_block_hash,
+                cert.chain_order_hash,
+                cert.rechain_seq,
                 cert.parent_state_root,
                 cert.post_state_root,
                 cert.validator_set.clone(),
@@ -15293,6 +15301,7 @@ impl Actor {
         let bitmap_len = roster.len().div_ceil(8);
         let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
         let epoch = self.epoch_for_height(GENESIS_HEIGHT);
+        let (chain_order_hash, rechain_seq) = self.vnext_chain_order_binding_for(GENESIS_HEIGHT, 0);
         let qc = crate::sumeragi::consensus::Qc {
             phase: crate::sumeragi::consensus::Phase::Commit,
             subject_block_hash: genesis_hash,
@@ -15301,8 +15310,8 @@ impl Actor {
             height: GENESIS_HEIGHT,
             view: 0,
             epoch,
-            chain_order_hash: self.vnext_chain_order_binding_for(GENESIS_HEIGHT, 0).0,
-            rechain_seq: self.vnext_chain_order_binding_for(GENESIS_HEIGHT, 0).1,
+            chain_order_hash,
+            rechain_seq,
             mode_tag: mode_tag.to_string(),
             highest_qc: None,
             validator_set_hash: HashOf::new(&roster),
@@ -15313,10 +15322,12 @@ impl Actor {
                 bls_aggregate_signature: Vec::new(),
             },
         };
-        let checkpoint = ValidatorSetCheckpoint::new(
+        let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
             qc.height,
             qc.view,
             qc.subject_block_hash,
+            qc.chain_order_hash,
+            qc.rechain_seq,
             qc.parent_state_root,
             qc.post_state_root,
             qc.validator_set.clone(),

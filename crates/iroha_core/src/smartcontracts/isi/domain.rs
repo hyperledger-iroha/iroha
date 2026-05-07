@@ -3469,9 +3469,12 @@ pub mod query {
                 DomainQueryPlan::Owners(owners) => {
                     Box::new(owners.into_iter().flat_map(move |owner| {
                         world
-                            .domains_owned_by_iter(&owner)
+                            .domains_by_owner()
+                            .get(&owner)
                             .cloned()
-                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(move |domain_id| world.domain(&domain_id).ok().cloned())
                     }))
                 }
                 DomainQueryPlan::Full => Box::new(world.domains_iter().cloned()),

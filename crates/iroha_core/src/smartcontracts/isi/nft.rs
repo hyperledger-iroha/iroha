@@ -812,24 +812,27 @@ pub mod query {
                 .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
 
             let iter: Box<dyn Iterator<Item = Nft> + '_> = match predicate_view.plan() {
-                NftQueryPlan::Ids(ids) => Box::new(
-                    ids.into_iter()
-                        .filter_map(move |id| world.nft(&id).ok().map(nft_from_entry)),
-                ),
+                NftQueryPlan::Ids(ids) => {
+                    Box::new(world.nft_entries_by_ids_iter(ids).map(nft_from_entry))
+                }
                 NftQueryPlan::Owners(owners) => {
                     Box::new(owners.into_iter().flat_map(move |owner| {
-                        world
-                            .nfts_in_account_iter(&owner)
-                            .map(nft_from_entry)
-                            .collect::<Vec<_>>()
+                        let nft_ids = world
+                            .nfts_by_owner()
+                            .get(&owner)
+                            .cloned()
+                            .into_iter()
+                            .flatten();
+                        world.nft_entries_by_ids_iter(nft_ids).map(nft_from_entry)
                     }))
                 }
                 NftQueryPlan::Domains(domains) => {
                     Box::new(domains.into_iter().flat_map(move |domain| {
-                        world
+                        let nft_ids = world
                             .nfts_in_domain_iter(&domain)
-                            .map(nft_from_entry)
-                            .collect::<Vec<_>>()
+                            .map(|entry| entry.id().clone())
+                            .collect::<Vec<_>>();
+                        world.nft_entries_by_ids_iter(nft_ids).map(nft_from_entry)
                     }))
                 }
                 NftQueryPlan::Full => Box::new(world.nfts_iter().map(nft_from_entry)),
@@ -857,9 +860,14 @@ pub mod query {
             let account_id = self.account_id().clone();
             state_ro.world().account(&account_id)?;
 
-            let nfts = state_ro
-                .world()
-                .nfts_in_account_iter(&account_id)
+            let world = state_ro.world();
+            let nft_ids = world
+                .nfts_by_owner()
+                .get(&account_id)
+                .cloned()
+                .unwrap_or_default();
+            let nfts = world
+                .nft_entries_by_ids_iter(nft_ids)
                 .filter_map(move |entry| {
                     let details = entry.value().clone().into_inner();
                     let nft = Nft {

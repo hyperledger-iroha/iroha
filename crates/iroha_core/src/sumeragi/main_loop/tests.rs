@@ -15006,6 +15006,8 @@ async fn fetch_pending_block_uses_block_sync_update_when_roster_available() {
             height,
             view,
             epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             parent_state_root: zero_state_root(),
             post_state_root: zero_state_root(),
             signers: signers.clone(),
@@ -15148,6 +15150,8 @@ async fn fetch_pending_block_consensus_priority_bypasses_background_queue() {
             height,
             view,
             epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             parent_state_root: zero_state_root(),
             post_state_root: zero_state_root(),
             signers,
@@ -16169,6 +16173,8 @@ async fn fetch_block_body_response_rehydrates_commit_qc_from_precommit_signer_hi
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         parent_state_root: zero_state_root(),
         post_state_root: zero_state_root(),
         signers,
@@ -23712,6 +23718,8 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
         height,
         view,
         0,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
         zero_state_root(),
         zero_state_root(),
         &commit_topology,
@@ -23728,6 +23736,8 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
             height,
             view,
             epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             parent_state_root: zero_state_root(),
             post_state_root: zero_state_root(),
             signers: signers.clone(),
@@ -31500,6 +31510,8 @@ async fn materialize_qc_for_header_recovers_with_empty_roster() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         parent_state_root: zero_state_root(),
         post_state_root: zero_state_root(),
         signers,
@@ -52908,6 +52920,8 @@ fn block_sync_update_includes_commit_qc_from_precommit_signers() {
         height,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         parent_state_root: zero_state_root(),
         post_state_root: zero_state_root(),
         signers,
@@ -53015,6 +53029,8 @@ fn block_sync_selection_falls_back_to_exact_precommit_signer_history() {
         height,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         parent_state_root: zero_state_root(),
         post_state_root: zero_state_root(),
         signers,
@@ -53116,6 +53132,8 @@ fn block_sync_selection_rejects_precommit_signer_history_without_commit_quorum()
         height,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         parent_state_root: zero_state_root(),
         post_state_root: zero_state_root(),
         signers,
@@ -60652,6 +60670,8 @@ fn validate_checkpoint_roster_rejects_hash_mismatch() {
         block_hash,
         parent_state_root: zero_state_root(),
         post_state_root: zero_state_root(),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         validator_set_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; 32])),
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
         validator_set: vec![peer],
@@ -60714,6 +60734,8 @@ fn validate_checkpoint_roster_rejects_missing_pop() {
         block_hash,
         parent_state_root: zero_state_root(),
         post_state_root: zero_state_root(),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         validator_set_hash: HashOf::new(&vec![peer.clone()]),
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
         validator_set: vec![peer],
@@ -60752,6 +60774,99 @@ fn validate_checkpoint_roster_rejects_missing_pop() {
 }
 
 #[test]
+fn validate_checkpoint_roster_binds_chain_order() {
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let peer = PeerId::new(kp.public_key().clone());
+    let keypairs = vec![kp.clone()];
+    let world = world_with_consensus_keys(std::slice::from_ref(&peer), &keypairs);
+    let world_view = world.view();
+    let chain: ChainId = "checkpoint-chain-order".parse().expect("chain id parses");
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCE; Hash::LENGTH]));
+    let topology = super::network_topology::Topology::new(vec![peer.clone()]);
+    let signers_bitmap = vec![0b0000_0001];
+    let chain_order_hash = Hash::new(b"checkpoint-explicit-chain-order");
+    let rechain_seq = 7;
+    let vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 2,
+        view: 0,
+        epoch: 0,
+        chain_order_hash,
+        rechain_seq,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let preimage = super::vote_preimage(&chain, PERMISSIONED_TAG, &vote);
+    let signature = Signature::new(kp.private_key(), &preimage);
+    let bls_aggregate_signature =
+        iroha_crypto::bls_normal_aggregate_signatures(&[signature.payload()])
+            .expect("single-signature aggregate succeeds");
+    let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
+        2,
+        0,
+        block_hash,
+        chain_order_hash,
+        rechain_seq,
+        zero_state_root(),
+        zero_state_root(),
+        topology.as_ref().to_vec(),
+        signers_bitmap,
+        bls_aggregate_signature,
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        &checkpoint.validator_set,
+        ConsensusMode::Permissioned,
+        None,
+    );
+    super::validate_checkpoint_roster(
+        &checkpoint,
+        block_hash,
+        checkpoint.height,
+        Some(checkpoint.view),
+        ConsensusMode::Permissioned,
+        &chain,
+        PERMISSIONED_TAG,
+        0,
+        Some((zero_state_root(), zero_state_root())),
+        false,
+        &inputs,
+    )
+    .expect("matching chain-order binding should validate");
+
+    let mut wrong_binding = checkpoint;
+    wrong_binding.rechain_seq = rechain_seq + 1;
+    let result = super::validate_checkpoint_roster(
+        &wrong_binding,
+        block_hash,
+        wrong_binding.height,
+        Some(wrong_binding.view),
+        ConsensusMode::Permissioned,
+        &chain,
+        PERMISSIONED_TAG,
+        0,
+        Some((zero_state_root(), zero_state_root())),
+        false,
+        &inputs,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(super::RosterValidationError::AggregateSignatureInvalid)
+        ),
+        "checkpoint aggregate signature must be bound to re-chain sequence"
+    );
+}
+
+#[test]
 fn validate_checkpoint_roster_accepts_genesis_stub_when_allowed() {
     let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(kp.public_key().clone());
@@ -60767,6 +60882,8 @@ fn validate_checkpoint_roster_accepts_genesis_stub_when_allowed() {
         block_hash,
         parent_state_root: zero_state_root(),
         post_state_root: zero_state_root(),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         validator_set_hash: HashOf::new(&vec![peer.clone()]),
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
         validator_set: vec![peer.clone()],
@@ -60937,6 +61054,8 @@ fn validate_checkpoint_roster_rejects_hash_version_mismatch() {
         block_hash,
         parent_state_root: zero_state_root(),
         post_state_root: zero_state_root(),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         validator_set_hash: HashOf::new(&vec![peer.clone()]),
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1.saturating_add(1),
         validator_set: vec![peer],
@@ -60989,6 +61108,8 @@ fn validate_checkpoint_roster_rejects_view_mismatch() {
         block_hash,
         parent_state_root: zero_state_root(),
         post_state_root: zero_state_root(),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         validator_set_hash: HashOf::new(&vec![peer.clone()]),
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
         validator_set: vec![peer],
@@ -61041,6 +61162,8 @@ fn validate_checkpoint_roster_rejects_expired_checkpoint() {
         block_hash,
         parent_state_root: zero_state_root(),
         post_state_root: zero_state_root(),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         validator_set_hash: HashOf::new(&vec![peer.clone()]),
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
         validator_set: vec![peer],
@@ -61225,6 +61348,8 @@ fn synthesize_commit_qc_accepts_valid_roster() {
         height,
         view,
         0,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
         zero_state_root(),
         zero_state_root(),
         &roster,
@@ -61276,6 +61401,8 @@ fn synthesize_commit_qc_uses_precommit_signers_when_history_missing() {
         height,
         view,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         parent_state_root: zero_state_root(),
         post_state_root: zero_state_root(),
         signers,
@@ -127339,6 +127466,8 @@ fn derive_block_sync_qc_requires_commit_quorum() {
         10,
         3,
         0,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
         zero_state_root(),
         zero_state_root(),
         topology.as_ref(),
@@ -127365,6 +127494,8 @@ fn derive_block_sync_qc_npos_requires_stake_snapshot() {
         block_hash,
         10,
         3,
+        0,
+        crate::sumeragi::consensus::default_chain_order_hash(),
         0,
         zero_state_root(),
         zero_state_root(),
@@ -127450,6 +127581,8 @@ fn derive_block_sync_qc_from_committed_signers() {
         block.header().height().get(),
         block.header().view_change_index(),
         epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
         zero_state_root(),
         zero_state_root(),
         topology.as_ref(),
@@ -128269,6 +128402,8 @@ fn derive_block_sync_qc_uses_block_signers_without_topology_hint() {
         6,
         2,
         0,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
         zero_state_root(),
         zero_state_root(),
         topology.as_ref(),
@@ -128298,6 +128433,8 @@ fn derive_block_sync_qc_rejects_signers_outside_commit_topology() {
         block_hash,
         6,
         2,
+        0,
+        crate::sumeragi::consensus::default_chain_order_hash(),
         0,
         zero_state_root(),
         zero_state_root(),

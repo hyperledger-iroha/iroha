@@ -2249,11 +2249,11 @@ pub mod query {
                                     .map(entry_to_asset),
                             )
                         } else {
-                            Box::new(definitions.into_iter().flat_map(move |definition| {
+                            Box::new(
                                 world
-                                    .assets_by_definition_iter(&definition)
-                                    .collect::<Vec<_>>()
-                            }))
+                                    .asset_entries_by_definition_ids_iter(definitions)
+                                    .map(entry_to_asset),
+                            )
                         }
                     }
                     AssetSimplePath::Domains(domains) => {
@@ -2286,40 +2286,28 @@ pub mod query {
                                         .cloned(),
                                 );
                             }
-                            Box::new(definitions.into_iter().flat_map(move |definition| {
+                            Box::new(
                                 world
-                                    .assets_by_definition_iter(&definition)
-                                    .collect::<Vec<_>>()
-                            }))
+                                    .asset_entries_by_definition_ids_iter(definitions)
+                                    .map(entry_to_asset),
+                            )
                         }
                     }
-                    AssetSimplePath::Ids(asset_ids) => {
-                        Box::new(asset_ids.into_iter().filter_map(move |asset_id| {
-                            world
-                                .assets()
-                                .get_key_value(&asset_id)
-                                .map(|(asset_id, value)| Asset {
-                                    id: asset_id.clone(),
-                                    value: value.clone().into_inner(),
-                                })
-                        }))
-                    }
+                    AssetSimplePath::Ids(asset_ids) => Box::new(
+                        world
+                            .asset_entries_by_ids_iter(asset_ids)
+                            .map(entry_to_asset),
+                    ),
                 };
                 return Ok(iter);
             }
 
             let iter: Box<dyn Iterator<Item = Asset> + '_> = match plan {
-                AssetQueryPlan::Ids(asset_ids) => {
-                    Box::new(asset_ids.into_iter().filter_map(move |asset_id| {
-                        world
-                            .assets()
-                            .get_key_value(&asset_id)
-                            .map(|(asset_id, value)| Asset {
-                                id: asset_id.clone(),
-                                value: value.clone().into_inner(),
-                            })
-                    }))
-                }
+                AssetQueryPlan::Ids(asset_ids) => Box::new(
+                    world
+                        .asset_entries_by_ids_iter(asset_ids)
+                        .map(entry_to_asset),
+                ),
                 AssetQueryPlan::Subjects {
                     subjects,
                     domains,
@@ -2352,20 +2340,22 @@ pub mod query {
                             definitions
                         };
                         Box::new(subjects.into_iter().flat_map(move |subject| {
-                            let mut assets = Vec::new();
+                            let mut asset_ids = Vec::new();
                             for definition in definitions.iter() {
-                                assets.extend(
+                                asset_ids.extend(
                                     world
                                         .assets_in_account_by_definition_iter(&subject, definition)
-                                        .map(entry_to_asset),
+                                        .map(|entry| entry.id().clone()),
                                 );
                             }
-                            assets
+                            world
+                                .asset_entries_by_ids_iter(asset_ids)
+                                .map(entry_to_asset)
                         }))
                     } else {
                         Box::new(subjects.into_iter().flat_map(move |subject| {
                             let domains = domains.clone();
-                            world
+                            let asset_ids = world
                                 .assets_in_account_iter(&subject)
                                 .filter(move |entry| {
                                     domains.as_ref().is_none_or(|domains| {
@@ -2376,8 +2366,11 @@ pub mod query {
                                             .is_some_and(|domain| domains.contains(domain))
                                     })
                                 })
+                                .map(|entry| entry.id().clone())
+                                .collect::<Vec<_>>();
+                            world
+                                .asset_entries_by_ids_iter(asset_ids)
                                 .map(entry_to_asset)
-                                .collect::<Vec<_>>()
                         }))
                     }
                 }
@@ -2410,19 +2403,19 @@ pub mod query {
                             definitions
                         }
                     };
-                    Box::new(definitions.into_iter().flat_map(move |definition| {
+                    Box::new(
                         world
-                            .assets_by_definition_iter(&definition)
-                            .collect::<Vec<_>>()
-                    }))
+                            .asset_entries_by_definition_ids_iter(definitions)
+                            .map(entry_to_asset),
+                    )
                 }
                 AssetQueryPlan::Definitions(definitions) => {
                     let definitions: BTreeSet<_> = definitions.into_iter().collect();
-                    Box::new(definitions.into_iter().flat_map(move |definition| {
+                    Box::new(
                         world
-                            .assets_by_definition_iter(&definition)
-                            .collect::<Vec<_>>()
-                    }))
+                            .asset_entries_by_definition_ids_iter(definitions)
+                            .map(entry_to_asset),
+                    )
                 }
                 AssetQueryPlan::Full => Box::new(world.assets_iter().map(entry_to_asset)),
             };

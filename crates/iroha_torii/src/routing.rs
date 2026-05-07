@@ -66396,7 +66396,13 @@ pub async fn handle_v1_subscriptions(
     let mut plan_cache: std::collections::BTreeMap<AssetDefinitionId, SubscriptionPlan> =
         std::collections::BTreeMap::new();
     let mut items_with_keys = Vec::new();
-    for nft in world.nfts_iter() {
+    let nft_iter: Box<dyn Iterator<Item = iroha_data_model::nft::NftEntry<'_>> + '_> =
+        if let Some(owner_id) = owned_by.as_ref() {
+            Box::new(world.nfts_in_account_iter(owner_id))
+        } else {
+            Box::new(world.nfts_iter())
+        };
+    for nft in nft_iter {
         let Some(subscription) = subscription_state_from_metadata(&nft.content)? else {
             continue;
         };

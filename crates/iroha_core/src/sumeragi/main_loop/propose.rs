@@ -96,10 +96,12 @@ fn previous_roster_evidence_for_parent(
     )?;
     let checkpoint = metadata.validator_checkpoint.or_else(|| {
         metadata.commit_qc.as_ref().map(|qc| {
-            ValidatorSetCheckpoint::new(
+            ValidatorSetCheckpoint::new_with_chain_order(
                 qc.height,
                 qc.view,
                 qc.subject_block_hash,
+                qc.chain_order_hash,
+                qc.rechain_seq,
                 qc.parent_state_root,
                 qc.post_state_root,
                 qc.validator_set.clone(),

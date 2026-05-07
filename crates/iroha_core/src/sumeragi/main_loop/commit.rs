@@ -852,6 +852,8 @@ impl Actor {
                     height,
                     view,
                     record.epoch,
+                    record.chain_order_hash,
+                    record.rechain_seq,
                     record.parent_state_root,
                     record.post_state_root,
                     &record.validator_set,
@@ -878,10 +880,12 @@ impl Actor {
         if update.validator_checkpoint.is_none()
             && let Some(qc) = update.commit_qc.as_ref()
         {
-            update.validator_checkpoint = Some(ValidatorSetCheckpoint::new(
+            update.validator_checkpoint = Some(ValidatorSetCheckpoint::new_with_chain_order(
                 qc.height,
                 qc.view,
                 qc.subject_block_hash,
+                qc.chain_order_hash,
+                qc.rechain_seq,
                 qc.parent_state_root,
                 qc.post_state_root,
                 qc.validator_set.clone(),
@@ -1037,6 +1041,8 @@ impl Actor {
             height: qc.height,
             view: qc.view,
             epoch: qc.epoch,
+            chain_order_hash: qc.chain_order_hash,
+            rechain_seq: qc.rechain_seq,
             parent_state_root: qc.parent_state_root,
             post_state_root: qc.post_state_root,
             signers: parsed.voting,
@@ -1442,11 +1448,15 @@ impl Actor {
                         if let Some((parent_state_root, post_state_root)) =
                             pending.parent_state_root.zip(pending.post_state_root)
                         {
+                            let (chain_order_hash, rechain_seq) =
+                                self.vnext_chain_order_binding_for(pending_height, pending_view);
                             if let Some(derived_qc) = super::derive_block_sync_qc_from_signers(
                                 block_hash,
                                 pending_height,
                                 pending_view,
                                 lock.epoch,
+                                chain_order_hash,
+                                rechain_seq,
                                 parent_state_root,
                                 post_state_root,
                                 &commit_topology,
@@ -2094,12 +2104,24 @@ impl Actor {
                             .or_else(|| pending.parent_state_root.zip(pending.post_state_root));
                         if let Some((parent_state_root, post_state_root)) = roots {
                             let stake_snapshot = post_apply_snapshot.stake_snapshot.clone();
+                            let (chain_order_hash, rechain_seq) =
+                                committed_cached_qc_tail.as_ref().map_or_else(
+                                    || {
+                                        self.vnext_chain_order_binding_for(
+                                            pending_height,
+                                            pending_view,
+                                        )
+                                    },
+                                    |qc| (qc.chain_order_hash, qc.rechain_seq),
+                                );
                             crate::sumeragi::status::record_precommit_signers(
                                 crate::sumeragi::status::PrecommitSignerRecord {
                                     block_hash,
                                     height: pending_height,
                                     view: pending_view,
                                     epoch: lock.epoch,
+                                    chain_order_hash,
+                                    rechain_seq,
                                     parent_state_root,
                                     post_state_root,
                                     signers: signers.clone(),
@@ -2130,10 +2152,12 @@ impl Actor {
                     }
                 }
                 if let Some(qc) = committed_cached_qc_tail.as_ref() {
-                    let checkpoint = ValidatorSetCheckpoint::new(
+                    let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
                         qc.height,
                         qc.view,
                         qc.subject_block_hash,
+                        qc.chain_order_hash,
+                        qc.rechain_seq,
                         qc.parent_state_root,
                         qc.post_state_root,
                         qc.validator_set.clone(),
@@ -2667,11 +2691,15 @@ impl Actor {
                 if let Some((parent_state_root, post_state_root)) =
                     pending.parent_state_root.zip(pending.post_state_root)
                 {
+                    let (chain_order_hash, rechain_seq) =
+                        self.vnext_chain_order_binding_for(pending_height, pending_view);
                     if let Some(derived_qc) = super::derive_block_sync_qc_from_signers(
                         block_hash,
                         pending_height,
                         pending_view,
                         lock.epoch,
+                        chain_order_hash,
+                        rechain_seq,
                         parent_state_root,
                         post_state_root,
                         &commit_topology,
@@ -6438,6 +6466,8 @@ impl Actor {
             qc.height,
             qc.view,
             qc.epoch,
+            record.chain_order_hash,
+            record.rechain_seq,
             record.parent_state_root,
             record.post_state_root,
             &record.validator_set,
@@ -9265,6 +9295,8 @@ mod tests {
                 height,
                 view,
                 epoch,
+                chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                rechain_seq: 0,
                 parent_state_root: zero_root,
                 post_state_root: zero_root,
                 signers,
@@ -9600,6 +9632,8 @@ mod tests {
                 height: qc_header.height,
                 view: qc_header.view,
                 epoch: qc_header.epoch,
+                chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                rechain_seq: 0,
                 parent_state_root: zero_root,
                 post_state_root: zero_root,
                 signers,
