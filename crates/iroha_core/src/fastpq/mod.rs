@@ -13,7 +13,9 @@ use fastpq_prover::{
     gadgets::transfer::attach_transfer_smt_witnesses, try_hash_bn254_poseidon_word_batches,
     try_submit_bn254_poseidon_word_batches,
 };
-use iroha_config::parameters::actual::{Fastpq, FastpqExecutionMode, FastpqPoseidonMode};
+#[cfg(test)]
+use iroha_config::parameters::actual::FastpqExecutionMode;
+use iroha_config::parameters::actual::{Fastpq, FastpqPoseidonMode};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     DataSpaceId,
@@ -104,12 +106,10 @@ pub(crate) fn configure_poseidon_digest_acceleration(cfg: &Fastpq) {
 pub(crate) fn poseidon_digest_acceleration_configured(cfg: &Fastpq) -> bool {
     match cfg.poseidon_mode {
         FastpqPoseidonMode::Cpu => false,
-        FastpqPoseidonMode::Gpu => true,
-        FastpqPoseidonMode::Auto => !matches!(cfg.execution_mode, FastpqExecutionMode::Cpu),
+        FastpqPoseidonMode::Auto | FastpqPoseidonMode::Gpu => true,
     }
 }
 
-#[cfg(any(test, feature = "fastpq-gpu"))]
 pub(crate) fn set_poseidon_digest_acceleration_enabled(enabled: bool) {
     DIGEST_ACCELERATION_ENABLED.store(enabled, Ordering::Release);
 }
@@ -340,8 +340,13 @@ impl PoseidonDigestBatch {
         {
             return None;
         }
-        try_hash_bn254_poseidon_word_batches(&self.words, &self.slices)
-            .map(|digests| digests.into_iter().map(Hash::prehashed).collect::<Vec<_>>())
+        match try_hash_bn254_poseidon_word_batches(&self.words, &self.slices) {
+            Some(digests) => Some(digests.into_iter().map(Hash::prehashed).collect::<Vec<_>>()),
+            None => {
+                set_poseidon_digest_acceleration_enabled(false);
+                None
+            }
+        }
     }
 
     fn hash_cpu_or_gpu(&self) -> Vec<Hash> {
@@ -354,7 +359,13 @@ impl PoseidonDigestBatch {
         {
             return None;
         }
-        try_submit_bn254_poseidon_word_batches(&self.words, &self.slices)
+        match try_submit_bn254_poseidon_word_batches(&self.words, &self.slices) {
+            Some(pending) => Some(pending),
+            None => {
+                set_poseidon_digest_acceleration_enabled(false);
+                None
+            }
+        }
     }
 
     fn hash_cpu(&self) -> Vec<Hash> {
@@ -396,10 +407,13 @@ pub(crate) struct PendingTransferTranscriptDigests {
 impl PendingTransferTranscriptDigests {
     fn into_digests(self) -> Vec<Hash> {
         let Self { batch, pending, .. } = self;
-        pending
-            .wait()
-            .map(|digests| digests.into_iter().map(Hash::prehashed).collect::<Vec<_>>())
-            .unwrap_or_else(|| batch.hash_cpu())
+        match pending.wait() {
+            Some(digests) => digests.into_iter().map(Hash::prehashed).collect::<Vec<_>>(),
+            None => {
+                set_poseidon_digest_acceleration_enabled(false);
+                batch.hash_cpu()
+            }
+        }
     }
 }
 
@@ -1313,6 +1327,26 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "fastpq-gpu"))]
+    fn poseidon_digest_batch_failed_gpu_submission_disables_acceleration() {
+        let _guard = DigestAccelerationGuard::new();
+        set_poseidon_digest_acceleration_enabled(true);
+        let mut batch = PoseidonDigestBatch::with_capacity(DIGEST_FINALIZE_GPU_THRESHOLD);
+
+        for idx in 0..DIGEST_FINALIZE_GPU_THRESHOLD {
+            let mut transcript = sample_transcript();
+            transcript.batch_hash = Hash::prehashed([idx as u8; Hash::LENGTH]);
+            batch.push(&transcript.deltas[0], &transcript.batch_hash);
+        }
+
+        assert_eq!(batch.hash_cpu_or_gpu(), batch.hash_cpu());
+        assert!(
+            !poseidon_digest_acceleration_enabled(),
+            "failed GPU submission should latch the core digest gate off"
+        );
+    }
+
+    #[test]
     fn digest_acceleration_respects_configured_modes() {
         let _guard = DigestAccelerationGuard::new();
         let auto = fastpq_cfg(FastpqExecutionMode::Auto, FastpqPoseidonMode::Auto);
@@ -1338,11 +1372,18 @@ mod tests {
         ));
         assert!(poseidon_digest_acceleration_enabled());
 
-        let cpu = fastpq_cfg(FastpqExecutionMode::Cpu, FastpqPoseidonMode::Auto);
-        assert!(!poseidon_digest_acceleration_configured(&cpu));
-        assert!(!configure_poseidon_digest_acceleration_with_preflight(
-            &cpu,
+        let auto_cpu_lane = fastpq_cfg(FastpqExecutionMode::Cpu, FastpqPoseidonMode::Auto);
+        assert!(poseidon_digest_acceleration_configured(&auto_cpu_lane));
+        assert!(configure_poseidon_digest_acceleration_with_preflight(
+            &auto_cpu_lane,
             || true
+        ));
+        assert!(poseidon_digest_acceleration_enabled());
+
+        set_poseidon_digest_acceleration_enabled(true);
+        assert!(!configure_poseidon_digest_acceleration_with_preflight(
+            &auto_cpu_lane,
+            || false
         ));
         assert!(!poseidon_digest_acceleration_enabled());
 

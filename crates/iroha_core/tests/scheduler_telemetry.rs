@@ -704,7 +704,6 @@ fn nexus_config_diff_counter_and_event_emitted() {
         relay_worker: NexusRelayWorker::default(),
         staking: NexusStaking::default(),
         fees: NexusFees::default(),
-        relay_worker: NexusRelayWorker::default(),
         hf_shared_leases: Default::default(),
         uploaded_models: Default::default(),
         endorsement: NexusEndorsement::default(),

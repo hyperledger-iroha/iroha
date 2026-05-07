@@ -1234,8 +1234,6 @@ impl Actor {
                 });
             let pending = self.pending.pending_blocks.remove(&hash);
             let _ = self.supersede_validation_inflight(hash);
-            let commit_inflight_cleared =
-                self.clear_stale_commit_inflight_for_block(hash, height, old_view, true);
             self.pending.pending_fetch_requests.remove(&hash);
             self.pending.pending_block_body_requests.remove(&hash);
             self.clear_missing_block_request(&hash, MissingBlockClearReason::Obsolete);
@@ -1262,7 +1260,6 @@ impl Actor {
                     superseded_view = old_view,
                     incoming_block = %incoming_hash,
                     superseded_block = %hash,
-                    commit_inflight_cleared = commit_inflight_cleared.is_some(),
                     "retiring superseded contiguous-frontier owner with commit evidence for payload recovery"
                 );
                 continue;
@@ -1274,7 +1271,6 @@ impl Actor {
                 superseded_view = old_view,
                 incoming_block = %incoming_hash,
                 superseded_block = %hash,
-                commit_inflight_cleared = commit_inflight_cleared.is_some(),
                 "dropping superseded contiguous-frontier owner after stronger same-height evidence"
             );
         }
@@ -2031,6 +2027,7 @@ impl Actor {
             return Ok(());
         }
         let da_enabled = self.runtime_da_enabled();
+        let now = Instant::now();
         let stale_view = self.stale_view(height, view);
         let stale_retired_match =
             self.pending
@@ -2059,9 +2056,15 @@ impl Actor {
                     )
                 })
             });
+        let local_conflicting_vote_can_rotate = local_conflicting_same_height_vote
+            .as_ref()
+            .is_some_and(|vote| {
+                !self.local_same_height_vote_blocks_fresh_proposal(height, view, vote, now, true)
+            });
         let passive_conflicting_same_height_vote = !authoritative_frontier_owner_supersede
             && local_conflicting_same_height_vote.is_some()
-            && !new_view_qc_supersedes_local_vote;
+            && !new_view_qc_supersedes_local_vote
+            && !local_conflicting_vote_can_rotate;
         let conflicting_same_height_owner =
             self.frontier_slot_conflicts_with_live_local_owner(height, view, block_hash);
         let new_view_qc_supersedes_local_owner = conflicting_same_height_owner
@@ -2077,9 +2080,29 @@ impl Actor {
                     )
                 })
             });
+        let stale_owner_can_rotate =
+            conflicting_same_height_owner
+                .as_ref()
+                .is_some_and(|(owner_hash, owner_view)| {
+                    let min_stale_age = self
+                        .quorum_timeout(self.runtime_da_enabled())
+                        .max(self.frontier_slot_lag_window())
+                        .max(Duration::from_millis(1));
+                    let hard_stale_age = min_stale_age.saturating_mul(3);
+                    !self.same_height_block_has_observed_qc(*owner_hash, height, *owner_view)
+                        && (self
+                            .stale_same_height_recovery_age(height, *owner_view, now)
+                            .is_some_and(|age| age >= hard_stale_age)
+                            || self.same_height_vote_recovery_view_gap_exhausted(
+                                *owner_view,
+                                view,
+                                self.effective_commit_topology().len(),
+                            ))
+                });
         let passive_conflicting_same_height_owner = !authoritative_frontier_owner_supersede
             && conflicting_same_height_owner.is_some()
-            && !new_view_qc_supersedes_local_owner;
+            && !new_view_qc_supersedes_local_owner
+            && !stale_owner_can_rotate;
         let same_height_vote_lock =
             self.same_height_vote_lock_blocking_candidate(height, view, Some(block_hash));
         let new_view_qc_supersedes_vote_lock = same_height_vote_lock.as_ref().is_some_and(|lock| {
@@ -2087,10 +2110,27 @@ impl Actor {
                 self.new_view_qc_supersedes_same_height_vote_lock(height, view, highest_qc, lock)
             })
         });
+        let stale_vote_lock_can_rotate = same_height_vote_lock.as_ref().is_some_and(|lock| {
+            let min_stale_age = self
+                .quorum_timeout(self.runtime_da_enabled())
+                .max(self.frontier_slot_lag_window())
+                .max(Duration::from_millis(1));
+            let hard_stale_age = min_stale_age.saturating_mul(3);
+            !self.same_height_block_has_observed_qc(lock.block_hash, height, lock.view)
+                && (self
+                    .stale_same_height_recovery_age(height, lock.view, now)
+                    .is_some_and(|age| age >= hard_stale_age)
+                    || self.same_height_vote_recovery_view_gap_exhausted(
+                        lock.view,
+                        view,
+                        lock.total_validators,
+                    ))
+        });
         let quorum_locked_same_height_conflict = !authoritative_frontier_owner_supersede
             && observed_commit_qc_epoch.is_none()
             && same_height_vote_lock.is_some()
-            && !new_view_qc_supersedes_vote_lock;
+            && !new_view_qc_supersedes_vote_lock
+            && !stale_vote_lock_can_rotate;
         let passive_conflicting_same_height = passive_conflicting_same_height_vote
             || passive_conflicting_same_height_owner
             || quorum_locked_same_height_conflict;

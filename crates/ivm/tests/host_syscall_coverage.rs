@@ -23,12 +23,10 @@ fn wsv_host() -> WsvHost {
 }
 
 fn assert_not_unknown_syscall(result: Result<u64, VMError>, host_name: &str, number: u32) {
-    if let Err(error) = result {
-        if let VMError::UnknownSyscall(actual) = error.as_unmetered() {
-            panic!(
-                "{host_name} returned UnknownSyscall({actual:#x}) for ABI v1 syscall {number:#x}"
-            );
-        }
+    if let Err(error) = result
+        && let VMError::UnknownSyscall(actual) = error.as_unmetered()
+    {
+        panic!("{host_name} returned UnknownSyscall({actual:#x}) for ABI v1 syscall {number:#x}");
     }
 }
 

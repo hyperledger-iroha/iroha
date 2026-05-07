@@ -262,7 +262,7 @@ fn append_bootstrap_authority_overlay(
         {
             existing_fee_funding = existing_fee_funding
                 .checked_add(mint_asset.object().clone())
-                .unwrap_or(required_fee_funding.clone());
+                .unwrap_or_else(|| required_fee_funding.clone());
         }
         let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() else {
             continue;

@@ -4818,14 +4818,16 @@ mod evidence_http_tests {
         let successor_hex = hex::encode(successor);
 
         let payload = Client::build_sorafs_pin_register_payload(
-            &authority,
-            key_pair.private_key(),
-            &manifest,
+            SorafsPinRegisterArgs {
+                authority: &authority,
+                private_key: key_pair.private_key(),
+                manifest: &manifest,
+                chunk_digest_sha3_256: chunk_digest,
+                submitted_epoch: 9,
+                alias: Some(alias),
+                successor_of: Some(successor),
+            },
             None,
-            chunk_digest,
-            9,
-            Some(alias),
-            Some(successor),
         )
         .expect("payload build succeeds");
 
@@ -8546,26 +8548,8 @@ impl Client {
         params: SorafsPinRegisterArgs<'_>,
         manifest_digest: Option<[u8; 32]>,
     ) -> Result<norito::json::Value> {
-        let SorafsPinRegisterArgs {
-            authority,
-            private_key,
-            manifest,
-            chunk_digest_sha3_256,
-            submitted_epoch,
-            alias,
-            successor_of,
-        } = params;
         let url = join_torii_url(&self.torii_url, "v1/sorafs/pin/register");
-        let payload = Self::build_sorafs_pin_register_payload(
-            authority,
-            private_key,
-            manifest,
-            manifest_digest,
-            chunk_digest_sha3_256,
-            submitted_epoch,
-            alias,
-            successor_of,
-        )?;
+        let payload = Self::build_sorafs_pin_register_payload(params, manifest_digest)?;
         let body = norito::json::to_vec(&payload)?;
         let resp = self
             .default_request(HttpMethod::POST, url)
@@ -9439,15 +9423,18 @@ impl Client {
     }
 
     fn build_sorafs_pin_register_payload(
-        authority: &iroha_data_model::account::AccountId,
-        private_key: &iroha_crypto::PrivateKey,
-        manifest: &sorafs_manifest::ManifestV1,
+        params: SorafsPinRegisterArgs<'_>,
         manifest_digest_override: Option<[u8; 32]>,
-        chunk_digest_sha3_256: [u8; 32],
-        submitted_epoch: u64,
-        alias: Option<SorafsPinAlias<'_>>,
-        successor_of: Option<[u8; 32]>,
     ) -> Result<norito::json::Value> {
+        let SorafsPinRegisterArgs {
+            authority,
+            private_key,
+            manifest,
+            chunk_digest_sha3_256,
+            submitted_epoch,
+            alias,
+            successor_of,
+        } = params;
         let manifest_digest = match manifest_digest_override {
             Some(digest) => digest,
             None => *manifest

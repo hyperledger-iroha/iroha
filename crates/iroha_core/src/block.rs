@@ -529,7 +529,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use crate::queue::{LaneSchedulingLimits, QueueLimits};
 use crate::{
     da::proof_policy_bundle_hash,
-    executor::{charge_fees_for_applied_overlay, configure_executor_fuel_budget},
+    executor::{charge_fees_for_applied_overlay_with_encoded_len, configure_executor_fuel_budget},
     kura::{PipelineDagSnapshot, PipelineRecoverySidecar, PipelineTxSnapshot},
     pipeline::{
         gpu::{self, AccessTriplet},
@@ -2603,6 +2603,7 @@ pub(crate) mod valid {
         tx: &iroha_data_model::transaction::SignedTransaction,
         authority: &AccountId,
         overlay: &crate::pipeline::overlay::TxOverlay,
+        encoded_len: usize,
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
         rejection_reason: &TransactionRejectionReason,
@@ -2623,8 +2624,14 @@ pub(crate) mod valid {
         fee_tx.tx_call_hash = Some(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
         fee_tx.current_tx_hash = Some(tx.hash());
 
-        charge_fees_for_applied_overlay(&mut fee_tx, authority, tx, overlay)
-            .map_err(TransactionRejectionReason::Validation)?;
+        charge_fees_for_applied_overlay_with_encoded_len(
+            &mut fee_tx,
+            authority,
+            tx,
+            overlay,
+            encoded_len,
+        )
+        .map_err(TransactionRejectionReason::Validation)?;
         fee_tx.apply();
         Ok(())
     }
@@ -9043,6 +9050,7 @@ pub(crate) mod valid {
                                         tx,
                                         &authority,
                                         overlay.as_ref(),
+                                        prepared_txs[idx].metadata.encoded_len,
                                         routing_decisions[idx].lane_id,
                                         routing_decisions[idx].dataspace_id,
                                         &rejection_reason,
@@ -9052,12 +9060,15 @@ pub(crate) mod valid {
                                     }
                                 }
                                 Ok(()) => {
-                                    if let Err(err) = charge_fees_for_applied_overlay(
-                                        &mut state_tx,
-                                        &authority,
-                                        tx,
-                                        overlay.as_ref(),
-                                    ) {
+                                    if let Err(err) =
+                                        charge_fees_for_applied_overlay_with_encoded_len(
+                                            &mut state_tx,
+                                            &authority,
+                                            tx,
+                                            overlay.as_ref(),
+                                            prepared_txs[idx].metadata.encoded_len,
+                                        )
+                                    {
                                         Err(TransactionRejectionReason::Validation(err))
                                     } else {
                                         match state_tx.execute_data_triggers_dfs(&authority) {
@@ -9068,6 +9079,7 @@ pub(crate) mod valid {
                                                     tx,
                                                     &authority,
                                                     overlay.as_ref(),
+                                                    prepared_txs[idx].metadata.encoded_len,
                                                     routing_decisions[idx].lane_id,
                                                     routing_decisions[idx].dataspace_id,
                                                     &err,
@@ -9413,6 +9425,7 @@ pub(crate) mod valid {
                                                     tx,
                                                     &authority,
                                                     overlay.as_ref(),
+                                                    prepared_txs[idx].metadata.encoded_len,
                                                     routing_decisions[idx].lane_id,
                                                     routing_decisions[idx].dataspace_id,
                                                     &rejection_reason,
@@ -9422,12 +9435,15 @@ pub(crate) mod valid {
                                                 }
                                             }
                                             Ok(()) => {
-                                                if let Err(err) = charge_fees_for_applied_overlay(
-                                                    &mut state_tx,
-                                                    &authority,
-                                                    tx,
-                                                    overlay.as_ref(),
-                                                ) {
+                                                if let Err(err) =
+                                                    charge_fees_for_applied_overlay_with_encoded_len(
+                                                        &mut state_tx,
+                                                        &authority,
+                                                        tx,
+                                                        overlay.as_ref(),
+                                                        prepared_txs[idx].metadata.encoded_len,
+                                                    )
+                                                {
                                                     Err(
                                                     iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                                                         err,
@@ -9444,6 +9460,9 @@ pub(crate) mod valid {
                                                                 tx,
                                                                 &authority,
                                                                 overlay.as_ref(),
+                                                                prepared_txs[idx]
+                                                                    .metadata
+                                                                    .encoded_len,
                                                                 routing_decisions[idx].lane_id,
                                                                 routing_decisions[idx].dataspace_id,
                                                                 &err,
@@ -9609,6 +9628,7 @@ pub(crate) mod valid {
                                                 tx,
                                                 &authority,
                                                 overlay.as_ref(),
+                                                prepared_txs[idx].metadata.encoded_len,
                                                 routing_decisions[idx].lane_id,
                                                 routing_decisions[idx].dataspace_id,
                                                 &rejection_reason,
@@ -9618,12 +9638,15 @@ pub(crate) mod valid {
                                             }
                                         }
                                         Ok(()) => {
-                                            if let Err(err) = charge_fees_for_applied_overlay(
-                                                &mut state_tx,
-                                                &authority,
-                                                tx,
-                                                overlay.as_ref(),
-                                            ) {
+                                            if let Err(err) =
+                                                charge_fees_for_applied_overlay_with_encoded_len(
+                                                    &mut state_tx,
+                                                    &authority,
+                                                    tx,
+                                                    overlay.as_ref(),
+                                                    prepared_txs[idx].metadata.encoded_len,
+                                                )
+                                            {
                                                 Err(
                                                 iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                                                     err,
@@ -9639,6 +9662,7 @@ pub(crate) mod valid {
                                                             tx,
                                                             &authority,
                                                             overlay.as_ref(),
+                                                            prepared_txs[idx].metadata.encoded_len,
                                                             routing_decisions[idx].lane_id,
                                                             routing_decisions[idx].dataspace_id,
                                                             &err,

@@ -1297,17 +1297,13 @@ pub(crate) fn configure_executor_fuel_budget(
 ///
 /// Overlay execution bypasses `Executor::execute_transaction`, so this helper mirrors the
 /// fee-accounting behavior that `execute_transaction` performs for each committed transaction.
+#[allow(dead_code)]
 pub(crate) fn charge_fees_for_applied_overlay(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
     transaction: &SignedTransaction,
     overlay: &crate::pipeline::overlay::TxOverlay,
 ) -> Result<(), ValidationFail> {
-    // Genesis transactions are bootstrap operations and must remain fee-free.
-    if state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty() {
-        return Ok(());
-    }
-
     let tx_bytes_len = to_bytes(transaction)
         .map(|bytes| bytes.len())
         .map_err(|err| {
@@ -1315,6 +1311,30 @@ pub(crate) fn charge_fees_for_applied_overlay(
                 "failed to encode transaction for fee metering: {err}"
             ))
         })?;
+    charge_fees_for_applied_overlay_with_encoded_len(
+        state_transaction,
+        authority,
+        transaction,
+        overlay,
+        tx_bytes_len,
+    )
+}
+
+/// Charge gas and Nexus fees for an overlay-applied transaction using trusted local metadata.
+///
+/// The `tx_bytes_len` value must come from locally prepared transaction metadata for the same
+/// signed transaction. Network-provided byte lengths must not be forwarded here.
+pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    transaction: &SignedTransaction,
+    overlay: &crate::pipeline::overlay::TxOverlay,
+    tx_bytes_len: usize,
+) -> Result<(), ValidationFail> {
+    // Genesis transactions are bootstrap operations and must remain fee-free.
+    if state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty() {
+        return Ok(());
+    }
 
     let md = transaction.metadata();
     let fee_sponsor = resolve_effective_fee_sponsor(

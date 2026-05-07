@@ -1,7 +1,7 @@
 //! Vote handling for consensus messages.
 
 use std::{
-    collections::btree_map::Entry,
+    collections::{BTreeSet, btree_map::Entry},
     num::NonZeroUsize,
     sync::{Arc, mpsc},
     time::Instant,
@@ -1132,6 +1132,13 @@ impl Actor {
                     count,
                     "recorded NEW_VIEW vote"
                 );
+                self.maybe_follow_future_new_view_quorum(
+                    vote.height,
+                    vote.view,
+                    highest,
+                    &context.topology,
+                    now,
+                );
                 self.try_form_qc_from_votes(
                     vote.phase,
                     vote.block_hash,
@@ -1147,6 +1154,134 @@ impl Actor {
             super::status::RoundEventCauseTrace::VoteReceived,
             None,
         );
+    }
+
+    fn maybe_follow_future_new_view_quorum(
+        &mut self,
+        height: u64,
+        view: u64,
+        highest: crate::sumeragi::consensus::QcHeaderRef,
+        topology: &super::network_topology::Topology,
+        now: Instant,
+    ) -> bool {
+        let committed_height = self.committed_height_snapshot();
+        if height != committed_height.saturating_add(1) {
+            return false;
+        }
+        if highest.height.saturating_add(1) != height {
+            return false;
+        }
+        let Some(local_view) = self.phase_tracker.current_view(height) else {
+            return false;
+        };
+        if view <= local_view {
+            return false;
+        }
+        let future_window = self.config.gating.future_view_window;
+        if future_window > 0 && view > local_view.saturating_add(future_window) {
+            debug!(
+                height,
+                view,
+                local_view,
+                future_window,
+                "not following NEW_VIEW evidence beyond the configured future-view window"
+            );
+            return false;
+        }
+        let local_peer = self.common_config.peer.id().clone();
+        if !topology.as_ref().iter().any(|peer| peer == &local_peer) {
+            return false;
+        }
+        let roster: BTreeSet<_> = topology.as_ref().iter().cloned().collect();
+        let Some(entry) = self
+            .subsystems
+            .propose
+            .new_view_tracker
+            .entries
+            .get(&(height, view))
+        else {
+            return false;
+        };
+
+        let view_change_required = topology.min_votes_for_view_change().max(1);
+        let actual_support = entry.count_in_roster(&roster, None);
+        let epoch = self.epoch_for_height(height);
+        let local_vote_recorded = self
+            .local_same_slot_vote(
+                crate::sumeragi::consensus::Phase::NewView,
+                height,
+                view,
+                epoch,
+            )
+            .is_some();
+        let local_recorded = entry.senders.contains(&local_peer) || local_vote_recorded;
+        let mut emitted = false;
+        if !local_recorded && actual_support >= view_change_required {
+            emitted = self.emit_new_view_vote(height, view, highest, topology);
+            if self
+                .phase_tracker
+                .current_view(height)
+                .is_some_and(|current| view <= current)
+            {
+                return emitted;
+            }
+        }
+
+        let local_vote_recorded = self
+            .local_same_slot_vote(
+                crate::sumeragi::consensus::Phase::NewView,
+                height,
+                view,
+                epoch,
+            )
+            .is_some();
+        let support = self
+            .subsystems
+            .propose
+            .new_view_tracker
+            .entries
+            .get(&(height, view))
+            .map_or(0, |entry| {
+                entry.count_in_roster(&roster, local_vote_recorded.then_some(&local_peer))
+            });
+        let required = topology.min_votes_for_commit().max(1);
+        if support < required {
+            return emitted;
+        }
+
+        // Moving the local round has side effects: it prunes stale slot state and can retire an
+        // in-progress proposal.  Only install a future view once actual NEW_VIEW votes reach the
+        // commit quorum; f+1 support is only enough to echo a local view-change vote.
+        self.phase_tracker.on_view_change(height, view, now);
+        self.subsystems.propose.pacemaker.next_deadline = now;
+        let min_view = if future_window == 0 {
+            view
+        } else {
+            view.saturating_sub(future_window)
+        };
+        self.subsystems
+            .propose
+            .new_view_tracker
+            .drop_below_view(height, min_view);
+        self.prune_stale_view_state(height, view);
+        super::status::set_view_change_index(view);
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.set_view_changes(view);
+            telemetry.inc_view_change_install();
+        }
+        super::status::inc_view_change_install();
+        info!(
+            height,
+            view,
+            local_view,
+            support,
+            required,
+            view_change_required,
+            highest_height = highest.height,
+            highest_view = highest.view,
+            "following higher NEW_VIEW support at active frontier"
+        );
+        true
     }
 
     fn try_dispatch_vote_verification(

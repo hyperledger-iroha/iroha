@@ -868,6 +868,29 @@ impl Actor {
                 }
             }
         }
+        if update.commit_qc.is_none() {
+            update.commit_qc = crate::block_sync::BlockSynchronizer::block_sync_qc_for_world(
+                &world,
+                fallback_consensus_mode,
+                &update.block,
+            );
+        }
+        if update.validator_checkpoint.is_none()
+            && let Some(qc) = update.commit_qc.as_ref()
+        {
+            update.validator_checkpoint = Some(ValidatorSetCheckpoint::new(
+                qc.height,
+                qc.view,
+                qc.subject_block_hash,
+                qc.parent_state_root,
+                qc.post_state_root,
+                qc.validator_set.clone(),
+                qc.aggregate.signers_bitmap.clone(),
+                qc.aggregate.bls_aggregate_signature.clone(),
+                qc.validator_set_hash_version,
+                None,
+            ));
+        }
         if matches!(consensus_mode, ConsensusMode::Npos)
             && (update.commit_qc.is_some() || update.validator_checkpoint.is_some())
         {
@@ -2711,6 +2734,7 @@ impl Actor {
             allow_quorum_bypass,
             post_commit_qc,
             enqueue_time: now,
+            timeout_reported: false,
         };
         self.record_round_trace_event(super::RoundTraceEvent {
             key: super::RoundTraceKey {
@@ -2735,83 +2759,36 @@ impl Actor {
         self.drain_commit_results().progress
     }
 
-    fn abort_inflight_commit_if_timed_out(&mut self, now: Instant) -> bool {
+    fn report_inflight_commit_if_timed_out(&mut self, now: Instant) -> bool {
         let timeout = self.config.persistence.commit_inflight_timeout;
         if timeout.is_zero() {
             return false;
         }
-        let Some(inflight) = self.subsystems.commit.inflight.as_ref() else {
+        let Some(inflight) = self.subsystems.commit.inflight.as_mut() else {
             return false;
         };
         let elapsed = now.saturating_duration_since(inflight.enqueue_time);
         if elapsed < timeout {
             return false;
         }
-        let inflight = self
-            .subsystems
-            .commit
-            .inflight
-            .take()
-            .expect("inflight present for timeout");
-        let mut pending = inflight.pending;
-        let height = pending.height;
-        let view = pending.view;
-        let block_hash = inflight.block_hash;
-        let txs: Vec<_> = pending.block.external_entrypoints_cloned().collect();
-        let (requeued, failures, duplicate_failures, _) =
-            requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), txs);
-        if failures > 0 {
-            warn!(
-                height,
-                view,
-                failures,
-                requeued,
-                duplicate_failures,
-                "failed to requeue some transactions after inflight commit timeout"
-            );
+        if inflight.timeout_reported {
+            return false;
         }
-        pending.mark_aborted();
-        pending.tx_batch = None;
-        self.clean_rbc_sessions_for_block(block_hash, height);
-        self.qc_cache
-            .retain(|(_, hash, _, _, _), _| hash != &block_hash);
-        self.qc_signer_tally
-            .retain(|(_, hash, _, _, _), _| hash != &block_hash);
-        self.subsystems
-            .propose
-            .proposal_cache
-            .pop_hint(height, view);
-        self.subsystems
-            .propose
-            .proposal_cache
-            .pop_proposal(height, view);
-        let session_key = Self::session_key(&block_hash, height, view);
-        self.subsystems
-            .da_rbc
-            .rbc
-            .payload_rebroadcast_last_sent
-            .remove(&session_key);
-        self.subsystems
-            .da_rbc
-            .rbc
-            .ready_rebroadcast_last_sent
-            .remove(&session_key);
-        self.subsystems
-            .da_rbc
-            .rbc
-            .deliver_deferral
-            .remove(&session_key);
-        self.pending.pending_blocks.insert(block_hash, pending);
+        inflight.timeout_reported = true;
+        let height = inflight.pending.height;
+        let view = inflight.pending.view;
+        let block_hash = inflight.block_hash;
         super::status::record_commit_inflight_timeout(height, view, block_hash, elapsed);
-        super::status::record_commit_inflight_finish(inflight.id);
-        self.trigger_view_change_after_commit_failure(height, view);
         warn!(
             height,
             view,
             block = %block_hash,
+            commit_id = inflight.id,
             elapsed_ms = elapsed.as_millis(),
             timeout_ms = timeout.as_millis(),
-            "aborting inflight commit after timeout"
+            has_commit_qc = inflight.commit_qc.is_some(),
+            quorum_signers = inflight.qc_signers.as_ref().map_or(0, BTreeSet::len),
+            "inflight commit exceeded timeout; waiting for commit worker result"
         );
         true
     }
@@ -2929,9 +2906,9 @@ impl Actor {
         timings.drain_state_apply_ms = drain_summary.state_apply_ms;
         timings.drain_state_commit_ms = drain_summary.state_commit_ms;
         let now = Instant::now();
-        let abort_start = Instant::now();
-        let _ = self.abort_inflight_commit_if_timed_out(now);
-        timings.abort_inflight += abort_start.elapsed();
+        let timeout_start = Instant::now();
+        let _ = self.report_inflight_commit_if_timed_out(now);
+        timings.abort_inflight += timeout_start.elapsed();
         if self.commit_pipeline_budget_exhausted(tick_deadline, now) {
             return finish_timings(timings);
         }
@@ -2997,10 +2974,20 @@ impl Actor {
             timings.qc_rebuild += rebuild_start.elapsed();
         }
 
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        let active_pending_exists =
+            self.active_pending_blocks_len_for_tip(tip_height, tip_hash) > 0;
+        let include_recovery_candidate = include_recovery_candidates && !active_pending_exists;
         let mut pending_hashes: Vec<_> = self
             .pending
             .pending_blocks
             .iter()
+            .filter(|(hash, pending)| {
+                self.pending_block_is_active_for_tip(**hash, pending, tip_height, tip_hash)
+                    || (include_recovery_candidate
+                        && self.pending_block_is_commit_recovery_candidate(**hash, pending))
+            })
             .map(|(hash, pending)| (pending.height, pending.view, *hash))
             .collect();
         pending_hashes.sort_by(|(h1, v1, hash1), (h2, v2, hash2)| {
@@ -4548,7 +4535,14 @@ impl Actor {
                         conflict.view,
                     )
                 });
-            if new_view_qc_supersedes {
+            let stale_vote_can_rotate = !self.local_same_height_vote_blocks_fresh_proposal(
+                height,
+                view,
+                &conflict,
+                Instant::now(),
+                true,
+            );
+            if new_view_qc_supersedes || stale_vote_can_rotate {
                 info!(
                     height,
                     view,
@@ -4558,7 +4552,9 @@ impl Actor {
                     previous_phase = ?conflict.phase,
                     previous_block = ?conflict.block_hash,
                     signer = local_idx,
-                    "allowing precommit: NEW_VIEW QC supersedes raw same-height local vote"
+                    new_view_qc_supersedes,
+                    stale_vote_can_rotate,
+                    "allowing precommit: same-height local vote is superseded"
                 );
             } else {
                 warn!(

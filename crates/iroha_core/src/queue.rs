@@ -10,7 +10,7 @@ pub(crate) mod routing_ledger;
 
 use core::time::Duration;
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fmt,
     num::NonZeroUsize,
     ops::Deref,
@@ -431,6 +431,17 @@ struct PreparedQueueAdmission {
     enqueued_at_ms: u64,
     #[cfg(feature = "telemetry")]
     pending_teu: u64,
+}
+
+fn first_batch_duplicate_index(prepared: &[PreparedQueueAdmission]) -> Option<usize> {
+    let mut seen = HashSet::with_capacity(prepared.len());
+    prepared.iter().enumerate().find_map(|(idx, admission)| {
+        if seen.insert(admission.hash) {
+            None
+        } else {
+            Some(idx)
+        }
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -2560,6 +2571,7 @@ impl Queue {
     ) -> Result<Vec<QueueAdmissionNotification>, (Vec<QueueAdmissionNotification>, Failure)> {
         let mut notifications = Vec::with_capacity(prepared.len());
         let mut failure = None;
+        let batch_duplicate_idx = first_batch_duplicate_index(&prepared);
         #[cfg(feature = "telemetry")]
         let mut dirty_teu_lanes = BTreeSet::new();
         #[cfg(feature = "telemetry")]
@@ -2569,16 +2581,15 @@ impl Queue {
             let base_len = self.active_len();
             let capacity = self.capacity.get();
             let mut accepted_count = 0usize;
-            let mut seen_hashes = BTreeSet::new();
-            let mut checked_user_increments = BTreeMap::<&AccountId, usize>::new();
+            let mut checked_user_increments = HashMap::<&AccountId, usize>::new();
 
-            for admission in &prepared {
+            for (idx, admission) in prepared.iter().enumerate() {
                 let checked = &admission.checked;
                 let hash = admission.hash;
                 let lane_id = admission.routing_decision.lane_id;
                 let dataspace_id = admission.routing_decision.dataspace_id;
 
-                if self.txs.contains_key(&hash) || !seen_hashes.insert(hash) {
+                if self.txs.contains_key(&hash) || batch_duplicate_idx == Some(idx) {
                     failure = Some(Failure {
                         tx: checked.as_accepted().clone().into(),
                         err: Error::IsInQueue,
@@ -2625,7 +2636,7 @@ impl Queue {
             }
             drop(checked_user_increments);
 
-            let mut applied_user_increments = BTreeMap::<AccountId, usize>::new();
+            let mut applied_user_increments = HashMap::<AccountId, usize>::new();
             for admission in prepared.into_iter().take(accepted_count) {
                 let PreparedQueueAdmission {
                     checked,
@@ -4378,7 +4389,7 @@ impl Queue {
             .map_or(0, |count| *count.value())
     }
 
-    fn apply_per_user_tx_count_increments(&self, increments: BTreeMap<AccountId, usize>) {
+    fn apply_per_user_tx_count_increments(&self, increments: HashMap<AccountId, usize>) {
         for (account_id, delta) in increments {
             if delta == 0 {
                 continue;
@@ -8548,9 +8559,17 @@ pub mod tests {
         assert_eq!(queue.active_len(), 1);
         assert_eq!(queue.queued_len(), 1);
         assert_eq!(queue.current_backpressure().queued(), 1);
+        assert_eq!(
+            queue.tx_gossip.pop(),
+            Some(hash),
+            "accepted prefix should publish one gossip notification"
+        );
+        assert!(
+            queue.tx_gossip.pop().is_none(),
+            "duplicate suffix must not publish a notification"
+        );
         let batch = queue.gossip_batch_with_state(2, &state);
-        assert_eq!(batch.len(), 1);
-        assert_eq!(batch[0].tx.as_ref().hash(), hash);
+        assert_eq!(batch.len(), 0);
     }
 
     #[test]
