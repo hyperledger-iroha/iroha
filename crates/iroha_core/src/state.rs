@@ -17568,21 +17568,30 @@ impl State {
     }
 
     fn upsert_commit_qc_in_world(&self, commit_qc: &Qc) {
-        let mut commit_qcs = self.world.commit_qcs.block();
-        let should_update = commit_qcs
-            .get(&commit_qc.subject_block_hash)
-            .is_none_or(|existing| {
-                if existing.height != commit_qc.height {
-                    warn!(
-                        height = commit_qc.height,
-                        block = %commit_qc.subject_block_hash,
-                        existing_height = existing.height,
-                        "overwriting commit QC with mismatched height in world storage"
-                    );
-                }
-                existing.view <= commit_qc.view
-            });
+        let should_update = {
+            let commit_qcs = self.world.commit_qcs.view();
+            commit_qcs
+                .get(&commit_qc.subject_block_hash)
+                .is_none_or(|existing| {
+                    if existing.height != commit_qc.height {
+                        warn!(
+                            height = commit_qc.height,
+                            block = %commit_qc.subject_block_hash,
+                            existing_height = existing.height,
+                            "overwriting commit QC with mismatched height in world storage"
+                        );
+                    }
+                    existing.view < commit_qc.view
+                })
+        };
         if !should_update {
+            return;
+        }
+        let mut commit_qcs = self.world.commit_qcs.block();
+        if commit_qcs
+            .get(&commit_qc.subject_block_hash)
+            .is_some_and(|existing| existing.view >= commit_qc.view)
+        {
             return;
         }
         commit_qcs.insert(commit_qc.subject_block_hash, commit_qc.clone());
@@ -17677,6 +17686,23 @@ impl State {
                 .as_ref()
                 .and_then(|snapshot| snapshot.stake_snapshot.clone())
         });
+        if existing_snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot.commit_qc == *commit_qc
+                && snapshot.validator_checkpoint == *checkpoint
+                && snapshot.stake_snapshot == stake_snapshot
+        }) {
+            if update_status {
+                status::record_commit_qc(commit_qc.clone());
+                status::record_validator_checkpoint(checkpoint.clone());
+            }
+            debug!(
+                height = commit_qc.height,
+                view = commit_qc.view,
+                block = %commit_qc.subject_block_hash,
+                "skipping duplicate commit roster persistence"
+            );
+            return true;
+        }
         if update_world {
             self.upsert_commit_qc_in_world(commit_qc);
         }

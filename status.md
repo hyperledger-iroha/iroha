@@ -1,6 +1,66 @@
 # Status
 
-Last updated: 2026-05-06
+Last updated: 2026-05-07
+
+## 2026-05-07 Metal toolchain preflight restored
+
+- The host Metal compiler component is installed and active. `xcodebuild
+  -downloadComponent MetalToolchain` downloaded Metal Toolchain `17E188`, and
+  `xcrun --find metal` / `xcrun --find metallib` now resolve through the
+  mounted MobileAsset Metal toolchain instead of the inactive Xcode stub.
+  `xcrun metal -v` exits `0`.
+- Focused FASTPQ BN254 Metal validation passed with
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-metal-preflight-20260507-073454 cargo test
+  -p fastpq_prover
+  metal_bn254_poseidon_word_batch_matches_cpu_self_test_cases --features
+  fastpq-gpu -- --nocapture`. The build produced
+  `/tmp/iroha-codex-metal-preflight-20260507-073454/debug/build/fastpq_prover-48ecd44d01176b1e/out/fastpq.metallib`
+  and the test passed `1` case.
+- Follow-up `iroha_core` digest-gate validation was blocked before execution by
+  an existing unmerged conflict in
+  `crates/iroha_core/src/sumeragi/main_loop/propose.rs` at line `913`.
+
+## 2026-05-06 Izanami 20k return gate
+
+- The fresh 4-peer no-fault prebuilt `20k TPS` / `120s` `fastpq-gpu`
+  return gate at
+  `dist/izanami-prebuilt-20k-fastpq-gpu-return-120s-20260506-195652`
+  completed the Izanami workload successfully. It offered, accepted, and
+  succeeded all `2,400,000` submissions, used all `2,400,000` prebuilt
+  transactions, and reported `0` submit failures, validation rejects,
+  confirmation failures, confirmation queue drops, prebuild fallbacks, prebuild
+  skips, prebuild build failures, ingress failovers, or unhealthy endpoints.
+  The shell wrapper exited `1` after completion because zsh treats `status` as
+  read-only; `izanami_status.txt` records the workload status as `0`.
+- Final quorum/strict height was `19/19`; final quorum/strict approved
+  transactions were `69,806/69,806`. Submit latency was `p50=3ms`, `p95=7ms`,
+  `p99=18ms`, and `max=202ms`. Final queue depth was
+  `835,396 / 2,400,000`, with `120` pacemaker backpressure deferrals and
+  commit-pipeline EMA `1ms`. The host did not provide a hardware-backed FASTPQ
+  path: the release build reported a missing Metal toolchain, and peer logs
+  show BN254 Poseidon digest and Poseidon GPU preflights both `ok=false`, so the
+  run is valid CPU-fallback evidence rather than GPU-backed BN254 evidence.
+
+## 2026-05-06 Izanami 20k sampled profile
+
+- A 90s `/usr/bin/sample` profile of one peer during the same 20k prebuilt
+  workload completed at
+  `dist/izanami-profile-20k-fastpq-gpu-return-sampled-90s-20260506-200245`.
+  The sampled Izanami run still accepted and succeeded all `2,400,000`
+  submissions with `0` failures, rejects, or queue drops, but sampling
+  materially reduced progress: final strict approved fell to `53,346`, queue
+  depth rose to `877,159 / 2,400,000`, and submit latency widened to
+  `p50=3ms`, `p95=18ms`, `p99=76ms`, `max=418ms`.
+- The sampled peer reported a `5.2G` physical footprint. Its top active
+  application frame was scalar BN254 Poseidon:
+  `iroha_zkp_halo2::poseidon::hash_u64_words_internal` accounted for `33,013`
+  collapsed top-of-stack samples. SHA256 (`9,355`), Curve25519 field
+  multiplication (`6,113`), Blake2 compression (`5,227`), CRC/Norito helpers,
+  and queue admission were visible but lower. All sampled peer logs again show
+  BN254 digest and prover Poseidon GPU preflights `ok=false`; this profile
+  therefore identifies the deterministic CPU fallback as the current primary
+  validation bottleneck, with queue drain/backpressure still the main end-to-end
+  throughput limit.
 
 ## 2026-05-06 Izanami 20k current gate
 
@@ -30,6 +90,21 @@ Last updated: 2026-05-06
   dataspace default sponsor without requiring every caller account to hold a
   direct `CanUseFeeSponsor` grant. Existing explicit grants remain supported,
   and configured dataspace sponsors still require `nexus.fees.sponsorship_enabled`.
+
+## 2026-05-06 BPNG fee-sponsor routing drift fix
+
+- Queue proposal selection and outbound gossip now refresh cached
+  lane/dataspace routing from the committed state immediately before exposing a
+  queued transaction, update the routing decision cache and ledger with the
+  refreshed route, and explicitly reject queued transactions that can no longer
+  be routed.
+- State-backed account-permission query routing now uses the same account-scope
+  fallback as block validation, so `CanUseFeeSponsor` grants for BPNG-scoped
+  holders derive the BPNG lane/dataspace consistently while no-state routing
+  still defers when committed state is required.
+- Focused validation passed with `cargo test -p iroha_core queue::router`,
+  `cargo test -p iroha_core queue::`, and
+  `cargo test -p iroha_core validate_static_state_dependent`.
 
 ## 2026-05-05 Sumeragi VRF late-reveal ingress hardening
 
@@ -197,6 +272,16 @@ Last updated: 2026-05-06
   attempt failed with `No space left on device`; removing the generated
   `target/codex-offline-body-auth` tree freed enough space for the successful
   normal-target build.
+- The full workspace all-target clippy gate is green with
+  `cargo clippy --workspace --all-targets -- -D warnings` after clearing
+  current-tree blockers in `fastpq_prover`, `iroha_executor`, the SoraFS pin
+  client helper, Kagami genesis/localnet code, scheduler telemetry tests, and
+  IVM host syscall coverage tests.
+- Follow-up focused tests for the nontrivial clippy fixes also passed:
+  `cargo test -p fastpq_prover metal_config --lib` (`17` passed,
+  `275` filtered out) and
+  `cargo test -p iroha build_register_manifest_payload_contains_expected_fields --lib`
+  (`1` passed, `283` filtered out).
 - Kotlin/Java validation is green when Gradle is pointed at the local Homebrew
   OpenJDK 21 install:
   `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --console=plain`

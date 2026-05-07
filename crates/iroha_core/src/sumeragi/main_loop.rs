@@ -5603,11 +5603,25 @@ impl Actor {
         view: u64,
         epoch: u64,
     ) -> bool {
-        height == self.committed_height_snapshot().saturating_add(1)
-            && view > 0
-            && self.same_height_conflicting_consensus_evidence_at_or_before_view(
-                height, view, epoch, block_hash,
+        if height != self.committed_height_snapshot().saturating_add(1) || view == 0 {
+            return false;
+        }
+        if let Some(existing_vote) = self
+            .local_same_height_vote(height, epoch)
+            .filter(|vote| vote.block_hash != block_hash && vote.view <= view)
+            && !self.local_same_height_vote_blocks_fresh_proposal(
+                height,
+                view,
+                &existing_vote,
+                Instant::now(),
+                true,
             )
+        {
+            return false;
+        }
+        self.same_height_conflicting_consensus_evidence_at_or_before_view(
+            height, view, epoch, block_hash,
+        )
     }
 
     fn authoritative_block_payload_available(&self, hash: HashOf<BlockHeader>) -> bool {
@@ -11341,6 +11355,7 @@ struct CommitInFlight {
     allow_quorum_bypass: bool,
     post_commit_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
     enqueue_time: Instant,
+    timeout_reported: bool,
 }
 
 struct CommitState {

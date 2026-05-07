@@ -948,7 +948,7 @@ mod da_tests {
                     else {
                         return false;
                     };
-                    let permission_name: &str = grant.object().name().as_ref();
+                    let permission_name: &str = grant.object().name();
                     grant.destination() == &genesis_account_id
                         && permission_name == "CanManageVerifyingKeys"
                 })

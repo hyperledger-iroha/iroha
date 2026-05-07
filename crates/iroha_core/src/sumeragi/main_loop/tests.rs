@@ -641,6 +641,7 @@ fn commit_inflight_for_block(
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     }
 }
 
@@ -1436,6 +1437,7 @@ async fn apply_mode_flip_defers_while_commit_pipeline_active() {
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     });
 
     actor
@@ -11214,6 +11216,7 @@ async fn block_sync_update_defers_while_commit_inflight_and_replays() {
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     };
     actor.subsystems.commit.inflight = Some(inflight);
 
@@ -15182,6 +15185,77 @@ async fn fetch_block_body_response_for_committed_block_preserves_commit_sidecars
         }
     }
 
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn fetch_block_body_response_rehydrates_commit_qc_from_precommit_signer_history() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    status::reset_precommit_signer_history_for_tests();
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 2, 0, Some(genesis_hash));
+    let block_hash = block.hash();
+    let height = block.header().height().get();
+    let view = block.header().view_change_index();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers: BTreeSet<ValidatorIndex> = (0..topology.as_ref().len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let epoch = actor.epoch_for_height(height);
+    let aggregate_signature = aggregate_vote_signature_for_bitmap(
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        block_hash,
+        height,
+        view,
+        epoch,
+        &signers_bitmap,
+        &topology,
+        &harness.key_pairs,
+    );
+    status::record_precommit_signers(status::PrecommitSignerRecord {
+        block_hash,
+        height,
+        view,
+        epoch,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        signers,
+        bls_aggregate_signature: aggregate_signature,
+        roster_len: topology.as_ref().len(),
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        validator_set: topology.as_ref().to_vec(),
+        stake_snapshot: None,
+    });
+
+    let response = actor.block_body_response_for_wire(&block);
+    match response.body {
+        super::message::BlockBodyData::BlockSyncUpdate(update) => {
+            let qc = update
+                .commit_qc
+                .as_ref()
+                .expect("precommit signer history should rehydrate commit QC");
+            assert_eq!(qc.subject_block_hash, block_hash);
+            assert_eq!(qc.height, height);
+            assert_eq!(qc.view, view);
+            assert!(
+                update.validator_checkpoint.is_some(),
+                "rehydrated commit QC should be sent with a matching checkpoint"
+            );
+        }
+        super::message::BlockBodyData::BlockCreated(_) => {
+            panic!("exact body response should carry rehydrated commit proof")
+        }
+    }
+
+    status::reset_precommit_signer_history_for_tests();
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
     harness.shutdown.send();
 }
 
@@ -20899,6 +20973,7 @@ async fn drain_commit_results_reports_stage_timings() {
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     };
     harness.actor.subsystems.commit.inflight = Some(inflight);
 
@@ -20999,6 +21074,7 @@ fn start_commit_job_fixture(
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     };
     let work = commit::CommitWork {
         id,
@@ -22455,6 +22531,7 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     };
     actor.subsystems.commit.inflight = Some(inflight);
 
@@ -22803,6 +22880,7 @@ async fn commit_outcome_persists_roster_sidecar_from_vote_log_and_flushes_fetch_
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     };
     actor.subsystems.commit.inflight = Some(inflight);
 
@@ -22947,6 +23025,7 @@ async fn commit_outcome_seeds_genesis_commit_roster_after_commit() {
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     };
     actor.subsystems.commit.inflight = Some(inflight);
 
@@ -23132,6 +23211,7 @@ async fn commit_outcome_kickstarts_next_proposal_and_records_round_gap() {
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     };
     actor.subsystems.commit.inflight = Some(inflight);
 
@@ -23507,6 +23587,7 @@ async fn successful_commit_keeps_latest_block_aligned_with_committed_height() {
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     });
 
     let (result_tx, result_rx) = mpsc::sync_channel(1);
@@ -23661,6 +23742,7 @@ async fn cached_future_proposal_does_not_immediately_timeout_after_parent_commit
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     });
 
     let (result_tx, result_rx) = mpsc::sync_channel(1);
@@ -24479,6 +24561,7 @@ async fn commit_pipeline_drains_inflight_result_with_empty_pending() {
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     };
     harness.actor.subsystems.commit.inflight = Some(inflight);
 
@@ -24553,6 +24636,7 @@ async fn commit_rejection_records_invalid_proposal_view() {
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     };
     actor.subsystems.commit.inflight = Some(inflight);
 
@@ -24591,7 +24675,7 @@ async fn commit_rejection_records_invalid_proposal_view() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn commit_inflight_timeout_triggers_view_change_and_retains_aborted_pending() {
+async fn commit_inflight_timeout_reports_and_keeps_inflight_result_attachable() {
     let mut cfg = test_sumeragi_config();
     cfg.consensus_mode = ConsensusMode::Permissioned;
     cfg.da.enabled = true;
@@ -24631,6 +24715,7 @@ async fn commit_inflight_timeout_triggers_view_change_and_retains_aborted_pendin
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now() - Duration::from_millis(50),
+        timeout_reported: false,
     };
     harness.actor.subsystems.commit.inflight = Some(inflight);
     harness
@@ -24643,35 +24728,134 @@ async fn commit_inflight_timeout_triggers_view_change_and_retains_aborted_pendin
         .actor
         .process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
 
-    assert!(harness.actor.subsystems.commit.inflight.is_none());
-    let pending = harness
+    let inflight = harness
         .actor
-        .pending
-        .pending_blocks
-        .get(&block_hash)
-        .expect("aborted pending should remain available after timeout");
-    assert!(pending.aborted, "pending payload should be marked aborted");
+        .subsystems
+        .commit
+        .inflight
+        .as_ref()
+        .expect("timed-out commit must remain inflight until the worker result arrives");
+    assert_eq!(inflight.block_hash, block_hash);
+    assert!(
+        inflight.timeout_reported,
+        "timeout should be recorded without detaching the worker result"
+    );
     assert!(
         !harness
+            .actor
+            .pending
+            .pending_blocks
+            .contains_key(&block_hash),
+        "timed-out inflight work must not be reinserted as an aborted pending block"
+    );
+    assert!(
+        harness
             .actor
             .slot_tracker
             .proposals_seen
             .contains(&(height, view)),
-        "timed-out view should be pruned after view change"
+        "timed-out inflight work should not prune the active view"
     );
     assert_eq!(
         harness.actor.phase_tracker.current_view(height),
-        Some(view.saturating_add(1))
+        None,
+        "timeout reporting should not trigger a view change"
     );
     assert_eq!(
-        harness.actor.subsystems.propose.forced_view_after_timeout,
-        Some((height, view.saturating_add(1)))
+        harness.actor.subsystems.propose.forced_view_after_timeout, None,
+        "timeout reporting should not force a proposal view"
     );
     let snapshot = super::status::snapshot().view_change_causes;
-    assert_eq!(snapshot.commit_failure_total, 1);
-    assert_eq!(snapshot.last_cause.as_deref(), Some("commit_failure"));
+    assert_eq!(snapshot.commit_failure_total, 0);
 
     super::status::reset_view_change_cause_counters_for_tests();
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn late_successful_commit_result_after_timeout_is_applied() {
+    let mut cfg = test_sumeragi_config();
+    cfg.consensus_mode = ConsensusMode::Permissioned;
+    cfg.da.enabled = true;
+    cfg.persistence.commit_inflight_timeout = Duration::from_millis(10);
+    let mut harness = test_actor_harness_with_config(1, cfg, None).await;
+    let actor = &mut harness.actor;
+    let (block_hash, height, _block, mut inflight, work) =
+        start_commit_job_fixture(actor, &harness.key_pairs, 95);
+    inflight.enqueue_time = Instant::now() - Duration::from_millis(50);
+
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    actor.subsystems.commit.result_rx = Some(result_rx);
+    actor.subsystems.commit.inflight = Some(inflight);
+
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
+    assert!(
+        actor
+            .subsystems
+            .commit
+            .inflight
+            .as_ref()
+            .is_some_and(|inflight| {
+                inflight.block_hash == block_hash && inflight.timeout_reported
+            }),
+        "timeout should leave the matching inflight marker in place"
+    );
+
+    let (outcome, timings) = commit::execute_commit_work(
+        actor.state.as_ref(),
+        actor.kura.as_ref(),
+        &actor.common_config.chain,
+        &actor.genesis_account,
+        work,
+    );
+    match &outcome {
+        commit::CommitOutcome::Success { .. } => {}
+        commit::CommitOutcome::Rejected { error, .. } => {
+            panic!("commit work should succeed after timeout: rejected with {error:?}");
+        }
+        commit::CommitOutcome::KuraStoreFailed { error, .. } => {
+            panic!("commit work should succeed after timeout: Kura store failed: {error:?}");
+        }
+        commit::CommitOutcome::StateCommitFailed { error, .. } => {
+            panic!("commit work should succeed after timeout: state commit failed: {error}");
+        }
+    }
+    result_tx
+        .send(commit::CommitResult {
+            id: 95,
+            outcome,
+            timings,
+        })
+        .expect("send late commit result");
+
+    let summary = actor.drain_commit_results();
+    assert!(
+        summary.progress,
+        "late worker result should still be applied"
+    );
+    assert_eq!(summary.results, 1);
+    assert!(
+        actor.subsystems.commit.inflight.is_none(),
+        "applying the late result should clear inflight state"
+    );
+    assert_eq!(
+        actor.state.latest_block_hash_fast(),
+        Some(block_hash),
+        "late successful result should reconcile the actor to the committed block"
+    );
+    assert!(
+        u64::try_from(actor.state.committed_height()).unwrap_or_default() >= height,
+        "late successful result should keep committed height advanced"
+    );
+    assert!(
+        !actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .is_some_and(|pending| pending.aborted),
+        "late successful result must not leave an aborted pending wrapper behind"
+    );
 
     harness.shutdown.send();
 }
@@ -34760,6 +34944,7 @@ async fn handle_qc_marks_pending_with_commit_qc() {
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     };
     actor.subsystems.commit.inflight = Some(inflight);
 
@@ -41376,7 +41561,13 @@ async fn recover_block_from_rbc_session_defers_view_change_on_queue_backlog() {
     session.test_set_delivered(true);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
-    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
+    record_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::BlockPayload,
+        height,
+        view,
+        super::status::ConsensusMessageKind::BlockCreated,
+        Some(block_hash),
+    );
     actor.recover_block_from_rbc_session(key);
 
     assert!(
@@ -53549,7 +53740,13 @@ async fn frontier_recovery_cleans_stale_same_slot_ingress_after_no_progress_wind
         ));
     actor.slot_tracker.proposals_seen.insert((height, view));
 
-    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
+    record_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::BlockPayload,
+        height,
+        view,
+        super::status::ConsensusMessageKind::BlockCreated,
+        None,
+    );
     actor.frontier_recovery = Some(super::FrontierRecoveryState {
         frontier_height: height,
         phase: super::FrontierRecoveryPhase::CatchUp,
@@ -78259,6 +78456,7 @@ async fn apply_commit_outcome_updates_view_change_install() {
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     };
 
     actor.subsystems.commit.inflight = Some(inflight);
@@ -80798,6 +80996,7 @@ async fn force_view_change_if_idle_skips_when_commit_inflight() {
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     });
 
     assert!(
@@ -83022,7 +83221,13 @@ async fn maybe_force_view_change_for_stalled_pending_defers_frontier_advance_whi
     )
     .expect("queue threshold fits usize");
     for _ in 0..vote_queue_backlog_threshold {
-        super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Votes);
+        record_test_worker_slot_ingress(
+            super::status::WorkerQueueKind::Votes,
+            height,
+            view_idx,
+            super::status::ConsensusMessageKind::QcVote,
+            Some(block_hash),
+        );
     }
 
     assert!(
@@ -89182,7 +89387,35 @@ async fn pacemaker_assembles_after_hard_stale_active_tip_owner_without_qc_lock()
                 })
         })
         .expect("find later view where local peer is leader");
+    let required = super::network_topology::Topology::new(topology.clone()).min_votes_for_commit();
+    let mut recorded = 0usize;
+    for peer in topology.iter() {
+        if peer == &local_peer {
+            continue;
+        }
+        actor.subsystems.propose.new_view_tracker.record(
+            frontier_height,
+            fresh_view,
+            peer.clone(),
+            highest_qc,
+        );
+        recorded = recorded.saturating_add(1);
+        if recorded.saturating_add(1) >= required {
+            break;
+        }
+    }
+    assert!(
+        actor.subsystems.propose.new_view_tracker.count_with_local(
+            frontier_height,
+            fresh_view,
+            Some(&local_peer)
+        ) >= required,
+        "test setup requires a NEW_VIEW quorum for the later-view proposal candidate"
+    );
     let now = Instant::now();
+    // The harness has no remote peers online; keep this focused on stale-owner yielding.
+    actor.subsystems.propose.last_successful_proposal =
+        Some(now.checked_sub(Duration::from_millis(1)).unwrap_or(now));
     let min_stale_age = actor
         .quorum_timeout(actor.runtime_da_enabled())
         .max(actor.frontier_slot_lag_window())
@@ -89302,7 +89535,7 @@ async fn pacemaker_assembles_after_hard_stale_active_tip_owner_without_qc_lock()
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn proposal_yields_stale_frontier_owner_with_exhausted_commit_inflight_without_qc_lock() {
+async fn proposal_waits_for_stale_commit_inflight_worker_result() {
     use std::borrow::Cow;
 
     let mut consensus_cfg = test_sumeragi_config();
@@ -89379,7 +89612,7 @@ async fn proposal_yields_stale_frontier_owner_with_exhausted_commit_inflight_wit
         "stale commit-inflight should initially keep the old owner live"
     );
     assert!(
-        actor.maybe_yield_stale_frontier_owner_for_fresh_proposal(
+        !actor.maybe_yield_stale_frontier_owner_for_fresh_proposal(
             frontier_height,
             fresh_view,
             owner_hash,
@@ -89387,21 +89620,26 @@ async fn proposal_yields_stale_frontier_owner_with_exhausted_commit_inflight_wit
             now,
             actor.queue.queued_len(),
         ),
-        "exhausted recovery should yield stale commit-inflight owners that have no QC lock"
+        "active commit-inflight work must stay attached until the worker result is drained"
     );
     assert!(
-        actor.subsystems.commit.inflight.is_none(),
-        "yielding should clear the stale local commit-inflight marker"
+        actor
+            .subsystems
+            .commit
+            .inflight
+            .as_ref()
+            .is_some_and(|inflight| inflight.block_hash == owner_hash),
+        "yielding must not clear a running local commit-inflight marker"
     );
     assert!(
-        !actor.pending.pending_blocks.contains_key(&owner_hash),
-        "yielding should drop the stale pending wrapper"
+        actor.pending.pending_blocks.contains_key(&owner_hash),
+        "yielding must not drop the pending wrapper while commit work is still active"
     );
     assert!(
         actor
             .frontier_slot_live_local_owner_for_round(frontier_height, fresh_view)
-            .is_none(),
-        "yielding should clear the frontier owner blocker for fresh proposal assembly"
+            .is_some(),
+        "the active commit worker should keep the frontier owner live"
     );
 
     harness.shutdown.send();
@@ -95550,6 +95788,230 @@ async fn future_new_view_votes_still_form_qc_when_local_view_lags() {
     assert!(
         actor.qc_cache.contains_key(&qc_key),
         "far-future NEW_VIEW quorum should still aggregate into a QC"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn future_new_view_commit_quorum_advances_local_view_and_emits_vote() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.gating.future_view_window = 4;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    seed_genesis_block_for_state(&actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
+
+    let view = actor.state.view();
+    let committed_height = view.height() as u64;
+    let highest_qc = QcHeaderRef {
+        subject_block_hash: view.latest_block_hash().expect("committed block hash"),
+        height: committed_height,
+        view: 0,
+        epoch: actor.epoch_for_height(committed_height),
+        phase: Phase::Commit,
+    };
+    drop(view);
+
+    let height = highest_qc.height.saturating_add(1);
+    let local_view = 1_u64;
+    let future_view = 3_u64;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, local_view, now);
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology =
+        super::topology_for_view(&topology, height, future_view, mode_tag, prf_seed);
+    let local_peer = actor.common_config.peer.id().clone();
+    let remote_signers: Vec<_> = signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, peer)| {
+            (peer != &local_peer).then(|| ValidatorIndex::try_from(idx).expect("signer fits"))
+        })
+        .take(topology.min_votes_for_commit().saturating_sub(1))
+        .collect();
+    assert_eq!(
+        remote_signers.len(),
+        topology.min_votes_for_commit().saturating_sub(1),
+        "test requires enough remote signers to finish the future-view NEW_VIEW commit quorum"
+    );
+    let epoch = actor.epoch_for_height(height);
+
+    for (idx, remote_signer) in remote_signers.into_iter().enumerate() {
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::NewView,
+            block_hash: highest_qc.subject_block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view: future_view,
+            epoch,
+            highest_qc: Some(highest_qc),
+            signer: remote_signer,
+            bls_sig: Vec::new(),
+        };
+        sign_vote_for_view_with_seed(
+            &mut vote,
+            &actor.common_config.chain,
+            &topology,
+            &harness.key_pairs,
+            mode_tag,
+            prf_seed,
+        );
+
+        actor.handle_vote(vote);
+
+        if idx == 0 {
+            assert_eq!(
+                actor.phase_tracker.current_view(height),
+                Some(local_view),
+                "f+1 higher NEW_VIEW support must not move the local pacemaker"
+            );
+            assert!(
+                !actor.stored_votes().any(|vote| {
+                    vote.phase == Phase::NewView
+                        && vote.height == height
+                        && vote.view == future_view
+                        && actor
+                            .vote_signer_peer(vote)
+                            .as_ref()
+                            .is_some_and(|peer| peer == &local_peer)
+                }),
+                "the local validator should not echo future NEW_VIEW support before commit quorum"
+            );
+        }
+    }
+
+    let roster: BTreeSet<_> = topology.as_ref().iter().cloned().collect();
+    let effective_support = actor
+        .subsystems
+        .propose
+        .new_view_tracker
+        .entries
+        .get(&(height, future_view))
+        .map_or(0, |entry| entry.count_in_roster(&roster, Some(&local_peer)));
+    assert_eq!(
+        effective_support,
+        topology.min_votes_for_commit(),
+        "test setup should provide a full NEW_VIEW commit quorum"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(future_view),
+        "future NEW_VIEW commit quorum should move the local pacemaker to that view"
+    );
+    assert!(
+        actor.stored_votes().any(|vote| {
+            vote.phase == Phase::NewView
+                && vote.height == height
+                && vote.view == future_view
+                && actor
+                    .vote_signer_peer(vote)
+                    .as_ref()
+                    .is_some_and(|peer| peer == &local_peer)
+        }),
+        "following the future view should emit the local NEW_VIEW vote"
+    );
+    assert!(
+        actor.subsystems.propose.new_view_tracker.count_with_local(
+            height,
+            future_view,
+            Some(&local_peer)
+        ) >= topology.min_votes_for_commit(),
+        "the followed view should retain commit-quorum support to keep converging"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn future_new_view_support_beyond_window_does_not_advance_local_view() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.gating.future_view_window = 1;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    seed_genesis_block_for_state(&actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
+
+    let view = actor.state.view();
+    let committed_height = view.height() as u64;
+    let highest_qc = QcHeaderRef {
+        subject_block_hash: view.latest_block_hash().expect("committed block hash"),
+        height: committed_height,
+        view: 0,
+        epoch: actor.epoch_for_height(committed_height),
+        phase: Phase::Commit,
+    };
+    drop(view);
+
+    let height = highest_qc.height.saturating_add(1);
+    let local_view = 1_u64;
+    let future_view = 3_u64;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, local_view, now);
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology =
+        super::topology_for_view(&topology, height, future_view, mode_tag, prf_seed);
+    let local_peer = actor.common_config.peer.id().clone();
+    let remote_signer = signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .find_map(|(idx, peer)| {
+            (peer != &local_peer).then(|| ValidatorIndex::try_from(idx).expect("signer fits"))
+        })
+        .expect("remote signer available");
+    let epoch = actor.epoch_for_height(height);
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::NewView,
+        block_hash: highest_qc.subject_block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view: future_view,
+        epoch,
+        highest_qc: Some(highest_qc),
+        signer: remote_signer,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view_with_seed(
+        &mut vote,
+        &actor.common_config.chain,
+        &topology,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
+
+    actor.handle_vote(vote);
+
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(local_view),
+        "far-future NEW_VIEW support should be retained but not move the pacemaker"
+    );
+    assert!(
+        !actor.stored_votes().any(|vote| {
+            vote.phase == Phase::NewView
+                && vote.height == height
+                && vote.view == future_view
+                && actor
+                    .vote_signer_peer(vote)
+                    .as_ref()
+                    .is_some_and(|peer| peer == &local_peer)
+        }),
+        "the local validator should not echo far-future NEW_VIEW support"
     );
 
     harness.shutdown.send();
@@ -111811,6 +112273,7 @@ async fn block_created_clears_missing_request_when_processing_or_inflight() {
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     });
     actor.pending.missing_block_requests.insert(
         hash_inflight,
@@ -116648,8 +117111,8 @@ async fn block_sync_payload_mismatch_with_commit_evidence_replaces_stale_frontie
     let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
     let signer_peer = signature_topology
         .as_ref()
-        .first()
-        .expect("signature topology has validator");
+        .get(1)
+        .expect("test requires a second validator signer for a distinct valid payload");
     let signer_kp = harness
         .key_pairs
         .iter()
@@ -116659,43 +117122,14 @@ async fn block_sync_payload_mismatch_with_commit_evidence_replaces_stale_frontie
         .position(signer_peer.public_key())
         .expect("signer index");
 
-    let tx_params = actor
-        .state
-        .view()
-        .world()
-        .parameters()
-        .transaction()
-        .clone();
-    let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(7));
-    let heartbeat_signer = deterministic_keypair(
-        b"block-sync-payload-mismatch-owner-replacement",
-        Algorithm::Ed25519,
-    );
-    let heartbeat = crate::tx::build_heartbeat_transaction_with_time_source(
-        actor.common_config.chain.clone(),
-        &heartbeat_signer,
-        &tx_params,
+    let conflicting_block = heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.common_config.chain,
         height,
-        &time_source,
-    );
-    time_handle.advance(Duration::from_millis(1));
-    let creation_time_ms =
-        u64::try_from(time_source.get_unix_time().as_millis()).expect("creation time fits in u64");
-    let mut builder = BlockBuilder::new(BlockHeader::new(
-        NonZeroU64::new(height).expect("block height"),
-        parent,
-        None,
-        None,
-        creation_time_ms,
         view,
-    ));
-    builder.push_transaction(heartbeat);
-    let default_policies =
-        crate::da::proof_policy_bundle(&iroha_config::parameters::actual::LaneConfig::default());
-    builder.set_da_proof_policies(Some(default_policies));
-    let conflicting_block = builder.build_with_signature(
+        parent,
+        signer_kp,
         u64::try_from(signer_idx).expect("signer index fits u64"),
-        signer_kp.private_key(),
     );
     let conflicting_hash = conflicting_block.hash();
     assert_ne!(
@@ -116725,9 +117159,18 @@ async fn block_sync_payload_mismatch_with_commit_evidence_replaces_stale_frontie
         .handle_block_sync_update(update, None)
         .expect("block sync update");
 
+    assert_eq!(
+        actor.authoritative_slot_owner_hash(height, view),
+        Some(conflicting_hash),
+        "commit-evidenced block sync update should replace the stale frontier owner"
+    );
+    let frontier_slot = actor.frontier_slot.as_ref().expect("frontier slot");
+    assert_eq!(frontier_slot.height, height);
+    assert_eq!(frontier_slot.view, view);
+    assert_eq!(frontier_slot.block_hash, conflicting_hash);
     assert!(
-        actor.block_known_locally(conflicting_hash),
-        "commit-evidenced block sync update should be accepted"
+        frontier_slot.body_present,
+        "commit-evidenced block sync update should retain the incoming body in the exact frontier slot"
     );
     assert!(
         !actor.pending.pending_blocks.contains_key(&owner_hash),
@@ -119808,6 +120251,7 @@ async fn frontier_block_sync_commit_qc_replays_deferred_missing_payload_qc_when_
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     });
 
     let checkpoint = ValidatorSetCheckpoint::new(
@@ -119910,6 +120354,7 @@ async fn frontier_block_sync_checkpoint_only_replays_deferred_missing_payload_qc
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     });
 
     let checkpoint = ValidatorSetCheckpoint::new(
@@ -120013,6 +120458,7 @@ async fn frontier_block_sync_checkpoint_only_rejects_uncertified_sidecar_when_bl
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     });
 
     let mut checkpoint = ValidatorSetCheckpoint::new(
@@ -120442,6 +120888,7 @@ async fn block_created_skips_pending_insert_while_commit_inflight() {
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     });
 
     actor
@@ -134870,7 +135317,13 @@ async fn reschedule_near_quorum_vote_backed_defers_while_single_slot_ingress_bac
     actor.pending.pending_blocks.insert(block_hash, pending);
     actor.note_proposal_seen(height, view_idx, payload_hash);
 
-    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
+    record_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::BlockPayload,
+        height,
+        view_idx,
+        super::status::ConsensusMessageKind::BlockCreated,
+        Some(block_hash),
+    );
     assert!(
         !actor.reschedule_stale_pending_blocks_with_now(now, None),
         "single inbound block-payload work item should suppress near-quorum vote-backed reschedule"
@@ -134885,8 +135338,20 @@ async fn reschedule_near_quorum_vote_backed_defers_while_single_slot_ingress_bac
         "single inbound block-payload work item should keep the near-quorum gate closed"
     );
 
-    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::BlockPayload, 1);
-    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Blocks);
+    drain_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::BlockPayload,
+        height,
+        view_idx,
+        super::status::ConsensusMessageKind::BlockCreated,
+        Some(block_hash),
+    );
+    record_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::Blocks,
+        height,
+        view_idx,
+        super::status::ConsensusMessageKind::BlockCreated,
+        Some(block_hash),
+    );
     assert!(
         !actor.reschedule_stale_pending_blocks_with_now(now, None),
         "single inbound block work item should suppress near-quorum vote-backed reschedule"
@@ -134901,7 +135366,13 @@ async fn reschedule_near_quorum_vote_backed_defers_while_single_slot_ingress_bac
         "single inbound block work item should keep the near-quorum gate closed"
     );
 
-    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::Blocks, 1);
+    drain_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::Blocks,
+        height,
+        view_idx,
+        super::status::ConsensusMessageKind::BlockCreated,
+        Some(block_hash),
+    );
     assert!(
         actor.reschedule_stale_pending_blocks_with_now(now, None),
         "near-quorum vote-backed reschedule should rearm once same-slot ingress drains"
@@ -138787,6 +139258,7 @@ async fn parent_hash_for_uses_inflight_block() {
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     });
 
     let got = harness
@@ -139167,6 +139639,7 @@ fn insert_rbc_init_local_payload_source(
                 allow_quorum_bypass: false,
                 post_commit_qc: None,
                 enqueue_time: Instant::now(),
+                timeout_reported: false,
             });
         }
         RbcInitLocalPayloadSource::Kura => {
@@ -140174,9 +140647,11 @@ async fn stale_view_async_commit_votes_for_known_pending_block_still_form_qc() {
                 Phase::Commit,
                 block_hash,
                 height,
+                view,
                 epoch,
                 &filtered_signers,
                 &signature_topology,
+                None,
             )
             .is_some();
         let candidate = QcHeaderRef {
@@ -143120,6 +143595,7 @@ async fn state_commit_failure_after_kura_store_keeps_partial_head_hidden() {
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     });
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     actor.subsystems.commit.result_rx = Some(result_rx);
@@ -143197,6 +143673,7 @@ async fn state_commit_height_mismatch_drops_stale_pending_when_state_advanced() 
         allow_quorum_bypass: false,
         post_commit_qc: None,
         enqueue_time: Instant::now(),
+        timeout_reported: false,
     });
 
     let chain_id = actor.common_config.chain.clone();
