@@ -4518,6 +4518,35 @@ impl Default for SumeragiResilience {
     }
 }
 
+/// Experimental Sumeragi vNext performance-fault configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SumeragiVNext {
+    /// Number of samples in the EWMA performance window.
+    pub performance_window_samples: u16,
+    /// Hard timeout before asynchronous validation is treated as overdue.
+    pub suspicion_timeout: Duration,
+    /// Performance threshold over the EWMA baseline, in basis points.
+    pub performance_threshold_bps: u16,
+    /// Maximum validators tainted in one view before view change is required.
+    pub max_tainted_per_view: u16,
+    /// Minimum delay between accepted re-chainings.
+    pub rechain_cooldown: Duration,
+}
+
+impl Default for SumeragiVNext {
+    fn default() -> Self {
+        Self {
+            performance_window_samples: defaults::sumeragi::VNEXT_PERFORMANCE_WINDOW_SAMPLES,
+            suspicion_timeout: Duration::from_millis(
+                defaults::sumeragi::VNEXT_SUSPICION_TIMEOUT_MS,
+            ),
+            performance_threshold_bps: defaults::sumeragi::VNEXT_PERFORMANCE_THRESHOLD_BPS,
+            max_tainted_per_view: defaults::sumeragi::VNEXT_MAX_TAINTED_PER_VIEW,
+            rechain_cooldown: Duration::from_millis(defaults::sumeragi::VNEXT_RECHAIN_COOLDOWN_MS),
+        }
+    }
+}
+
 /// Deterministic pacing governor configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct SumeragiPacingGovernor {
@@ -4937,6 +4966,8 @@ pub struct Sumeragi {
     pub pacing_governor: SumeragiPacingGovernor,
     /// Volatile resilience tuning limits.
     pub resilience: SumeragiResilience,
+    /// Experimental vNext performance-fault configuration.
+    pub vnext: SumeragiVNext,
     /// DA (data-availability) configuration.
     pub da: SumeragiDa,
     /// Persistence/retry configuration.

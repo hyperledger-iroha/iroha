@@ -972,6 +972,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 use_stake_snapshot_roster: false,
             },
             resilience: A::SumeragiResilience::default(),
+            vnext: A::SumeragiVNext::default(),
             adaptive_observability: A::AdaptiveObservability::default(),
             debug: A::SumeragiDebug {
                 force_soft_fork: false,

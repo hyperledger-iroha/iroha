@@ -6391,11 +6391,7 @@ impl Actor {
                     .last_commit_qc_at
                     .or(slot.quorum_progress.last_vote_at)
                     .is_some_and(recent)
-                    || recent(
-                        slot.timers
-                            .last_progress_at
-                            .max(slot.timers.last_updated_at),
-                    );
+                    || recent(slot.timers.last_progress_at);
                 slot.height == frontier_height
                     && slot.view == frontier_view
                     && !matches!(
@@ -11389,6 +11385,7 @@ struct ValidationState {
     result_rx: Option<mpsc::Receiver<validation::ValidationResult>>,
     inflight: BTreeMap<HashOf<BlockHeader>, ValidationInFlight>,
     superseded_results: BTreeMap<HashOf<BlockHeader>, u64>,
+    duration_ema: Option<Duration>,
     next_id: u64,
     next_worker: usize,
 }
@@ -11407,6 +11404,7 @@ impl ValidationState {
             result_rx: None,
             inflight: BTreeMap::new(),
             superseded_results: BTreeMap::new(),
+            duration_ema: None,
             next_id: 0,
             next_worker: 0,
         }
@@ -11416,6 +11414,19 @@ impl ValidationState {
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
         id
+    }
+
+    fn record_duration(&mut self, duration: Duration) {
+        const EMA_ALPHA: f64 = 0.2;
+
+        self.duration_ema = Some(match self.duration_ema {
+            Some(previous) => Duration::from_secs_f64(
+                previous
+                    .as_secs_f64()
+                    .mul_add(1.0 - EMA_ALPHA, duration.as_secs_f64() * EMA_ALPHA),
+            ),
+            None => duration,
+        });
     }
 }
 
@@ -20188,6 +20199,13 @@ impl Actor {
             BlockMessage::RbcDeliver(deliver) => self.handle_rbc_deliver(deliver),
             BlockMessage::FetchPendingBlock(request) => self.handle_fetch_pending_block(request),
             BlockMessage::Proposal(proposal) => self.handle_proposal(proposal),
+            BlockMessage::VNext(message) => {
+                debug!(
+                    ?message,
+                    "ignoring experimental vNext message in legacy Sumeragi main loop"
+                );
+                Ok(())
+            }
         };
         if defer_committed_block_poll {
             self.process_committed_blocks_before_consensus("VrfMetadataPostHandle");
@@ -20700,6 +20718,7 @@ impl Actor {
             | BlockMessage::ProposalHint(_)
             | BlockMessage::Qc(_)
             | BlockMessage::QcVote(_)
+            | BlockMessage::VNext(_)
             | BlockMessage::VrfCommit(_)
             | BlockMessage::VrfReveal(_) => self.consensus_frame_cap,
         }
@@ -21019,6 +21038,20 @@ impl Actor {
             }
             BlockMessage::QcVote(vote) => Some((vote.height, vote.view)),
             BlockMessage::Qc(cert) => Some((cert.height, cert.view)),
+            BlockMessage::VNext(message) => match message {
+                super::vnext::ConsensusMessage::Suspect(suspect) => {
+                    Some((suspect.slot.height, suspect.slot.view))
+                }
+                super::vnext::ConsensusMessage::RechainProposal(proposal) => {
+                    Some((proposal.slot.height, proposal.slot.view))
+                }
+                super::vnext::ConsensusMessage::RechainCertificate(certificate) => {
+                    Some((certificate.slot.height, certificate.slot.view))
+                }
+                super::vnext::ConsensusMessage::ViewChangeCertificate(certificate) => certificate
+                    .highest_slot
+                    .map(|slot| (slot.height, slot.view)),
+            },
         }
     }
 
@@ -21053,6 +21086,7 @@ impl Actor {
             BlockMessage::KuraReplicaAdvert(_) => "KuraReplicaAdvert",
             BlockMessage::ProposalHint(_) => "ProposalHint",
             BlockMessage::Proposal(_) => "Proposal",
+            BlockMessage::VNext(_) => "VNext",
         }
     }
 
@@ -32205,11 +32239,15 @@ impl Actor {
                 same_slot_ingress_active && !same_slot_ingress_hard_cap_elapsed;
             let suppress_same_slot_reassembly =
                 same_slot_reassembly_active && !same_slot_ingress_hard_cap_elapsed;
+            let suppress_same_slot_missing_commit_qc_repair =
+                same_slot_missing_commit_qc_repair_active && !same_slot_ingress_hard_cap_elapsed;
+            let suppress_same_slot_vote_backed_recovery =
+                same_slot_vote_backed_recovery_active && !same_slot_ingress_hard_cap_elapsed;
             if same_height_dependency_backlog_active
                 || suppress_same_slot_ingress
                 || same_slot_missing_payload_recovery_active
-                || same_slot_missing_commit_qc_repair_active
-                || same_slot_vote_backed_recovery_active
+                || suppress_same_slot_missing_commit_qc_repair
+                || suppress_same_slot_vote_backed_recovery
                 || suppress_same_slot_reassembly
                 || same_height_rbc_sender_activity_active
             {

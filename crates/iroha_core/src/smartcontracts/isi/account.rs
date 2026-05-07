@@ -1332,6 +1332,16 @@ pub mod query {
         }
     }
 
+    fn nonzero_asset_holders_for_definition(
+        world: &impl WorldReadOnly,
+        definition_id: &AssetDefinitionId,
+    ) -> BTreeSet<AccountId> {
+        world
+            .asset_definition_nonzero_holders_iter(definition_id)
+            .cloned()
+            .collect()
+    }
+
     enum AccountSimpleIdPath {
         One(AccountId),
         Set(Arc<BTreeSet<AccountId>>),
@@ -1660,6 +1670,27 @@ pub mod query {
                 return Ok(iter);
             }
 
+            let candidate_ids = predicate_json
+                .as_ref()
+                .and_then(account_predicate_candidate_ids);
+            let id_only_predicate = predicate_json.as_ref().is_some_and(predicate_is_id_only);
+            if let Some(candidates) = candidate_ids {
+                let candidates = candidates.iter().cloned().collect::<Vec<_>>();
+                let iter: Box<dyn Iterator<Item = AccountId> + '_> =
+                    Box::new(candidates.into_iter().filter_map(move |account_id| {
+                        let Some((account_id, _)) = world.accounts().get_key_value(&account_id)
+                        else {
+                            return None;
+                        };
+                        if id_only_predicate || filter.applies(account_id) {
+                            Some(account_id.clone())
+                        } else {
+                            None
+                        }
+                    }));
+                return Ok(iter);
+            }
+
             let iter: Box<dyn Iterator<Item = AccountId> + '_> = Box::new(
                 world
                     .accounts_iter()
@@ -1684,11 +1715,9 @@ pub mod query {
             trace!(%asset_definition_id);
 
             if filter_payload.is_none() {
-                let subjects = world
-                    .asset_definition_holders()
-                    .get(&asset_definition_id)
-                    .map(|holders| holders.iter().cloned().collect::<Vec<_>>())
-                    .unwrap_or_default();
+                let subjects = nonzero_asset_holders_for_definition(world, &asset_definition_id)
+                    .into_iter()
+                    .collect::<Vec<_>>();
                 let iter: Box<dyn Iterator<Item = Account> + '_> =
                     Box::new(subjects.into_iter().filter_map(move |subject| {
                         let Some((account_id, account_value)) =
@@ -1696,15 +1725,6 @@ pub mod query {
                         else {
                             return None;
                         };
-
-                        let has_balance = world
-                            .assets_in_account_by_definition_iter(account_id, &asset_definition_id)
-                            // Skip zero-valued placeholders (including genesis seeds).
-                            .any(|asset| !asset.value().is_zero());
-
-                        if !has_balance {
-                            return None;
-                        }
 
                         Some(account_from_entry(world, account_id, account_value))
                     }));
@@ -1718,21 +1738,18 @@ pub mod query {
                 .and_then(account_predicate_simple_id_path);
 
             if let Some(path) = simple_id_path {
-                let subjects = match (
-                    world.asset_definition_holders().get(&asset_definition_id),
-                    path,
-                ) {
-                    (Some(holders), AccountSimpleIdPath::One(account_id)) => holders
+                let holders = nonzero_asset_holders_for_definition(world, &asset_definition_id);
+                let subjects = match path {
+                    AccountSimpleIdPath::One(account_id) => holders
                         .contains(&account_id)
                         .then_some(account_id)
                         .into_iter()
                         .collect::<Vec<_>>(),
-                    (Some(holders), AccountSimpleIdPath::Set(account_ids)) => account_ids
+                    AccountSimpleIdPath::Set(account_ids) => account_ids
                         .iter()
                         .filter(|account_id| holders.contains(*account_id))
                         .cloned()
                         .collect::<Vec<_>>(),
-                    (None, _) => Vec::new(),
                 };
 
                 let iter: Box<dyn Iterator<Item = Account> + '_> =
@@ -1742,15 +1759,6 @@ pub mod query {
                         else {
                             return None;
                         };
-
-                        let has_balance = world
-                            .assets_in_account_by_definition_iter(account_id, &asset_definition_id)
-                            // Skip zero-valued placeholders (including genesis seeds).
-                            .any(|asset| !asset.value().is_zero());
-
-                        if !has_balance {
-                            return None;
-                        }
 
                         Some(account_from_entry(world, account_id, account_value))
                     }));
@@ -1767,17 +1775,14 @@ pub mod query {
             );
             let id_only_predicate = predicate_json.as_ref().is_some_and(predicate_is_id_only);
 
-            let subjects = match (
-                world.asset_definition_holders().get(&asset_definition_id),
-                candidate_ids.as_ref(),
-            ) {
-                (Some(holders), Some(candidates)) => candidates
+            let holders = nonzero_asset_holders_for_definition(world, &asset_definition_id);
+            let subjects = match candidate_ids.as_ref() {
+                Some(candidates) => candidates
                     .iter()
                     .filter(|account_id| holders.contains(*account_id))
                     .cloned()
                     .collect::<Vec<_>>(),
-                (Some(holders), None) => holders.iter().cloned().collect::<Vec<_>>(),
-                (None, _) => Vec::new(),
+                None => holders.into_iter().collect::<Vec<_>>(),
             };
 
             let iter: Box<dyn Iterator<Item = Account> + '_> =
@@ -1787,15 +1792,6 @@ pub mod query {
                     else {
                         return None;
                     };
-
-                    let has_balance = world
-                        .assets_in_account_by_definition_iter(account_id, &asset_definition_id)
-                        // Skip zero-valued placeholders (including genesis seeds).
-                        .any(|asset| !asset.value().is_zero());
-
-                    if !has_balance {
-                        return None;
-                    }
 
                     if id_only_predicate {
                         return Some(account_from_entry(world, account_id, account_value));
@@ -2846,6 +2842,52 @@ pub mod query {
         }
 
         #[test]
+        fn find_account_ids_uses_candidate_lookup_for_id_predicates_with_exists() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+            Register::domain(Domain::new(domain_id))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let (acc1, _kp1) = gen_account_in("wonderland");
+            let (acc2, _kp2) = gen_account_in("wonderland");
+            for account_id in [&acc1, &acc2] {
+                Register::account(Account::new(account_id.clone()))
+                    .execute(&ALICE_ID, &mut stx)
+                    .unwrap();
+            }
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let predicate = CompoundPredicate::<AccountId>::build(|p| {
+                p.in_values(
+                    "id",
+                    [
+                        acc1.to_string(),
+                        "not-an-account-id".to_owned(),
+                        acc2.to_string(),
+                    ],
+                )
+                .exists("id")
+            });
+            let mut results: Vec<_> = FindAccountIds.execute(predicate, &view).unwrap().collect();
+            results.sort();
+
+            let mut expected = vec![acc1, acc2];
+            expected.sort();
+            assert_eq!(results, expected);
+        }
+
+        #[test]
         fn find_accounts_with_asset_applies_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -2907,6 +2949,64 @@ pub mod query {
                 .map(|account| account.id)
                 .collect();
             assert_eq!(results, vec![acc1]);
+        }
+
+        #[test]
+        fn find_accounts_with_asset_uses_nonzero_definition_asset_index() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let (zero_holder, _zero_kp) = gen_account_in("wonderland");
+            let (nonzero_holder, _nonzero_kp) = gen_account_in("wonderland");
+            for account_id in [&zero_holder, &nonzero_holder] {
+                Register::account(Account::new(account_id.clone()))
+                    .execute(&ALICE_ID, &mut stx)
+                    .unwrap();
+            }
+
+            let definition_id = AssetDefinitionId::new(domain_id, "test_coin".parse().unwrap());
+            Register::asset_definition({
+                let definition_id = definition_id.clone();
+                AssetDefinition::numeric(definition_id.clone())
+                    .with_name(definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+            let zero_asset_id = AssetId::new(definition_id.clone(), zero_holder);
+            stx.world
+                .asset_or_insert(&zero_asset_id, Numeric::zero())
+                .expect("zero placeholder inserted");
+            Mint::asset_numeric(
+                1u32,
+                AssetId::new(definition_id.clone(), nonzero_holder.clone()),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+            let holders = nonzero_asset_holders_for_definition(&stx.world, &definition_id);
+            assert_eq!(holders, BTreeSet::from([nonzero_holder.clone()]));
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let results: Vec<_> = FindAccountsWithAsset::new(definition_id)
+                .execute(CompoundPredicate::PASS, &view)
+                .unwrap()
+                .map(|account| account.id)
+                .collect();
+            assert_eq!(results, vec![nonzero_holder]);
         }
 
         #[test]

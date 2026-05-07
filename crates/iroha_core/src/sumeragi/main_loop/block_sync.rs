@@ -779,12 +779,13 @@ impl Actor {
         }
     }
 
-    fn dispatch_block_body_response_with_plain_fallback(
+    pub(super) fn dispatch_block_body_response_with_plain_fallback(
         &mut self,
         peer: PeerId,
         block: &SignedBlock,
         response: super::message::BlockBodyResponse,
     ) {
+        let direct_commit_qc = self.direct_commit_qc_from_block_body_response(&response);
         if matches!(
             response.body,
             super::message::BlockBodyData::BlockSyncUpdate(_)
@@ -797,8 +798,85 @@ impl Actor {
             );
         }
         self.dispatch_fetch_pending_block_response(
-            peer,
+            peer.clone(),
             BlockMessage::BlockBodyResponse(response),
+            /*bypass_queue*/ true,
+        );
+        if let Some(qc) = direct_commit_qc {
+            let header = block.header();
+            self.dispatch_direct_commit_qc_companion(
+                peer,
+                qc,
+                block.hash(),
+                header.height().get(),
+                header.view_change_index(),
+                "exact_block_body_response",
+            );
+        }
+    }
+
+    fn direct_commit_qc_from_block_sync_update(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        update: &super::message::BlockSyncUpdate,
+    ) -> Option<crate::sumeragi::consensus::Qc> {
+        update.commit_qc.clone().or_else(|| {
+            update.validator_checkpoint.as_ref().and_then(|checkpoint| {
+                self.commit_qc_from_validator_checkpoint(
+                    block_hash,
+                    height,
+                    view,
+                    checkpoint,
+                    update.stake_snapshot.as_ref(),
+                )
+            })
+        })
+    }
+
+    fn direct_commit_qc_from_block_body_response(
+        &self,
+        response: &super::message::BlockBodyResponse,
+    ) -> Option<crate::sumeragi::consensus::Qc> {
+        let super::message::BlockBodyData::BlockSyncUpdate(update) = &response.body else {
+            return None;
+        };
+        let header = update.block.header();
+        if update.block.hash() != response.block_hash
+            || header.height().get() != response.height
+            || header.view_change_index() != response.view
+        {
+            return None;
+        }
+        self.direct_commit_qc_from_block_sync_update(
+            response.block_hash,
+            response.height,
+            response.view,
+            update,
+        )
+    }
+
+    fn dispatch_direct_commit_qc_companion(
+        &mut self,
+        peer: PeerId,
+        qc: crate::sumeragi::consensus::Qc,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        source: &'static str,
+    ) {
+        info!(
+            height,
+            view,
+            block = %block_hash,
+            peer = %peer,
+            source,
+            "sending direct commit QC companion"
+        );
+        self.dispatch_fetch_pending_block_response(
+            peer,
+            BlockMessage::Qc(qc),
             /*bypass_queue*/ true,
         );
     }
@@ -900,6 +978,7 @@ impl Actor {
         allow_hintless_block_sync_bypass: bool,
         requester_roster_proof_known: bool,
     ) {
+        let mut direct_commit_qc = None;
         let mut hintless_block_sync = matches!(
             &msg,
             BlockMessage::BlockSyncUpdate(update)
@@ -950,6 +1029,9 @@ impl Actor {
                 self.state.as_ref(),
                 self.config.consensus_mode,
             );
+            direct_commit_qc = self
+                .direct_commit_qc_from_block_sync_update(block_hash, height, view, update)
+                .map(|qc| (qc, block_hash, height, view));
             if !self.trim_block_sync_update_for_frame_cap(update) {
                 let fallback = BlockMessage::BlockCreated(super::message::BlockCreated {
                     block: update.block.clone(),
@@ -976,11 +1058,31 @@ impl Actor {
                     fallback_len,
                     "block sync response exceeds frame cap; sending BlockCreated instead"
                 );
-                self.dispatch_fetch_pending_block_response(peer, fallback, bypass_queue);
+                self.dispatch_fetch_pending_block_response(peer.clone(), fallback, bypass_queue);
+                if let Some((qc, block_hash, height, view)) = direct_commit_qc {
+                    self.dispatch_direct_commit_qc_companion(
+                        peer,
+                        qc,
+                        block_hash,
+                        height,
+                        view,
+                        "fetch_pending_block_response_fallback",
+                    );
+                }
                 return;
             }
         }
-        self.dispatch_fetch_pending_block_response(peer, msg, bypass_queue);
+        self.dispatch_fetch_pending_block_response(peer.clone(), msg, bypass_queue);
+        if let Some((qc, block_hash, height, view)) = direct_commit_qc {
+            self.dispatch_direct_commit_qc_companion(
+                peer,
+                qc,
+                block_hash,
+                height,
+                view,
+                "fetch_pending_block_response",
+            );
+        }
     }
 
     pub(super) fn build_fetch_pending_block_payload(&self, block: &SignedBlock) -> BlockMessage {
@@ -4685,6 +4787,7 @@ impl Actor {
             block_hash: response.block_hash,
             evidence_hash: super::block_body_response_evidence_hash(&response),
         };
+        let detached_commit_qc = self.direct_commit_qc_from_block_body_response(&response);
         if !self.frontier_slot_is_exact_height(response.height) {
             if let super::message::BlockBodyData::BlockSyncUpdate(update) = response.body {
                 let header = update.block.header();
@@ -4712,6 +4815,13 @@ impl Actor {
                     return self.handle_block_sync_update(update, sender);
                 }
             }
+            self.handle_detached_block_body_commit_qc(
+                detached_commit_qc,
+                response.block_hash,
+                response.height,
+                response.view,
+                "non_frontier_height",
+            );
             self.release_block_payload_dedup(&dedup_key);
             return Ok(());
         }
@@ -4723,6 +4833,13 @@ impl Actor {
         let allow_same_height_repair =
             !slot_matches && self.allow_same_height_block_body_repair(&response);
         if !slot_matches && !allow_same_height_repair {
+            self.handle_detached_block_body_commit_qc(
+                detached_commit_qc,
+                response.block_hash,
+                response.height,
+                response.view,
+                "body_not_requested",
+            );
             self.release_block_payload_dedup(&dedup_key);
             return Ok(());
         }
@@ -4884,6 +5001,36 @@ impl Actor {
             self.release_block_payload_dedup(&dedup_key);
         }
         result
+    }
+
+    fn handle_detached_block_body_commit_qc(
+        &mut self,
+        qc: Option<crate::sumeragi::consensus::Qc>,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        context: &'static str,
+    ) {
+        let Some(qc) = qc else {
+            return;
+        };
+        info!(
+            height,
+            view,
+            block = %block_hash,
+            context,
+            "processing commit QC from ignored BlockBodyResponse"
+        );
+        if let Err(err) = self.handle_qc(qc) {
+            warn!(
+                ?err,
+                height,
+                view,
+                block = %block_hash,
+                context,
+                "failed to process commit QC from ignored BlockBodyResponse"
+            );
+        }
     }
 
     fn materialize_frontier_block_sync_payload_for_qc_recovery(

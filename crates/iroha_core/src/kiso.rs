@@ -1363,6 +1363,7 @@ mod tests {
                         iroha_config::parameters::defaults::sumeragi::USE_STAKE_SNAPSHOT_ROSTER,
                 },
                 resilience: iroha_config::parameters::actual::SumeragiResilience::default(),
+                vnext: iroha_config::parameters::actual::SumeragiVNext::default(),
                 adaptive_observability:
                     iroha_config::parameters::actual::AdaptiveObservability::default(),
                 debug: iroha_config::parameters::actual::SumeragiDebug {

@@ -431,7 +431,7 @@ mod tests {
         }));
         let cfg = Fastpq {
             execution_mode: FastpqExecutionMode::Cpu,
-            poseidon_mode: FastpqPoseidonMode::Auto,
+            poseidon_mode: FastpqPoseidonMode::Cpu,
             device_class: None,
             chip_family: None,
             gpu_kind: None,
@@ -443,7 +443,15 @@ mod tests {
             metal_debug_enum: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_ENUM,
             metal_debug_fused: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
         };
-        let (handle, _task) = start(&cfg).expect("lane starts");
+        let (handle, _task) = {
+            let _digest_lock = super::super::DIGEST_ACCELERATION_TEST_LOCK
+                .lock()
+                .expect("digest acceleration test lock poisoned");
+            let previous = crate::fastpq::poseidon_digest_acceleration_enabled();
+            let started = start(&cfg).expect("lane starts");
+            crate::fastpq::set_poseidon_digest_acceleration_enabled(previous);
+            started
+        };
         let deadline = Instant::now() + Duration::from_secs(1);
         loop {
             if handle.is_ready_for_test() {
@@ -564,6 +572,9 @@ mod tests {
     #[test]
     #[cfg(feature = "fastpq-gpu")]
     fn prover_poseidon_preflight_failure_preserves_digest_acceleration() {
+        let _digest_lock = super::super::DIGEST_ACCELERATION_TEST_LOCK
+            .lock()
+            .expect("digest acceleration test lock poisoned");
         let previous = crate::fastpq::poseidon_digest_acceleration_enabled();
         crate::fastpq::set_poseidon_digest_acceleration_enabled(false);
         let cfg = Fastpq {

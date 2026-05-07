@@ -3038,6 +3038,16 @@ pub mod sumeragi {
     pub const RESILIENCE_MAX_PARALLEL_TOPOLOGY_FANOUT: usize = 8;
     /// Pipeline-status reads reserved while transaction ingress is saturated.
     pub const RESILIENCE_STATUS_QUERY_RESERVED_CAPACITY: usize = 1024;
+    /// vNext performance-fault EWMA window size.
+    pub const VNEXT_PERFORMANCE_WINDOW_SAMPLES: u16 = 128;
+    /// vNext hard suspicion timeout for overdue asynchronous validation.
+    pub const VNEXT_SUSPICION_TIMEOUT_MS: u64 = 750;
+    /// vNext performance threshold over the EWMA baseline, in basis points.
+    pub const VNEXT_PERFORMANCE_THRESHOLD_BPS: u16 = 1_100;
+    /// Maximum tainted validators accepted in one vNext view before view change is required.
+    pub const VNEXT_MAX_TAINTED_PER_VIEW: u16 = 2;
+    /// Minimum delay between accepted vNext re-chainings in one view.
+    pub const VNEXT_RECHAIN_COOLDOWN_MS: u64 = 250;
     /// Number of recent blocks to sample for the pacing governor window.
     pub const PACING_GOVERNOR_WINDOW_BLOCKS: usize = 20;
     /// View-change pressure threshold (permille of view-change increments per block).

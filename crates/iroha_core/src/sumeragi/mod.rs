@@ -9724,6 +9724,7 @@ pub mod rbc_store;
 pub(crate) mod smt;
 pub(crate) mod stake_snapshot;
 pub mod status;
+pub mod vnext;
 pub mod witness;
 pub use evidence::EvidenceValidationContext;
 pub use evidence::evidence_subject_height_view;

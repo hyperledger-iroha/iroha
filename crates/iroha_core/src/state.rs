@@ -392,12 +392,15 @@ macro_rules! build_world_block {
             asset_definitions_by_owner: $state.asset_definitions_by_owner.$method(),
             asset_definition_holders: $state.asset_definition_holders.$method(),
             asset_definition_assets: $state.asset_definition_assets.$method(),
+            asset_definition_nonzero_holders: $state.asset_definition_nonzero_holders.$method(),
             assets: $state.assets.$method(),
             asset_metadata: $state.asset_metadata.$method(),
             nfts: $state.nfts.$method(),
             nfts_by_owner: $state.nfts_by_owner.$method(),
             rwas: $state.rwas.$method(),
             rwas_by_owner: $state.rwas_by_owner.$method(),
+            rwas_by_status: $state.rwas_by_status.$method(),
+            rwas_by_frozen: $state.rwas_by_frozen.$method(),
             roles: $state.roles.$method(),
             account_permissions: $state.account_permissions.$method(),
             account_roles: $state.account_roles.$method(),
@@ -592,12 +595,15 @@ macro_rules! build_world_transaction {
             asset_definitions_by_owner: $state.asset_definitions_by_owner.transaction(),
             asset_definition_holders: $state.asset_definition_holders.transaction(),
             asset_definition_assets: $state.asset_definition_assets.transaction(),
+            asset_definition_nonzero_holders: $state.asset_definition_nonzero_holders.transaction(),
             assets: $state.assets.transaction(),
             asset_metadata: $state.asset_metadata.transaction(),
             nfts: $state.nfts.transaction(),
             nfts_by_owner: $state.nfts_by_owner.transaction(),
             rwas: $state.rwas.transaction(),
             rwas_by_owner: $state.rwas_by_owner.transaction(),
+            rwas_by_status: $state.rwas_by_status.transaction(),
+            rwas_by_frozen: $state.rwas_by_frozen.transaction(),
             roles: $state.roles.transaction(),
             account_permissions: $state.account_permissions.transaction(),
             account_roles: $state.account_roles.transaction(),
@@ -1655,6 +1661,9 @@ pub struct World {
     /// Asset-id index keyed by asset definition id.
     #[norito(skip)]
     pub(crate) asset_definition_assets: Storage<AssetDefinitionId, BTreeSet<AssetId>>,
+    /// Non-zero holder index keyed by asset definition id.
+    #[norito(skip)]
+    pub(crate) asset_definition_nonzero_holders: Storage<AssetDefinitionId, BTreeSet<AccountId>>,
     /// Registered assets.
     pub(crate) assets: Storage<AssetId, AssetValue>,
     /// Metadata attached to concrete asset balances.
@@ -1669,6 +1678,12 @@ pub struct World {
     /// Read-side index from RWA owner account to owned RWA lot ids.
     #[norito(skip)]
     pub(crate) rwas_by_owner: Storage<AccountId, BTreeSet<RwaId>>,
+    /// Read-side index from RWA status to RWA lot ids.
+    #[norito(skip)]
+    pub(crate) rwas_by_status: Storage<Option<Name>, BTreeSet<RwaId>>,
+    /// Read-side index from RWA frozen state to RWA lot ids.
+    #[norito(skip)]
+    pub(crate) rwas_by_frozen: Storage<bool, BTreeSet<RwaId>>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: Storage<RoleId, Role>,
     /// Permission tokens of an account.
@@ -2118,6 +2133,9 @@ pub struct WorldBlock<'world> {
         StorageBlock<'world, AssetDefinitionId, BTreeSet<AccountId>>,
     /// Asset-id index keyed by asset definition id.
     pub(crate) asset_definition_assets: StorageBlock<'world, AssetDefinitionId, BTreeSet<AssetId>>,
+    /// Non-zero holder index keyed by asset definition id.
+    pub(crate) asset_definition_nonzero_holders:
+        StorageBlock<'world, AssetDefinitionId, BTreeSet<AccountId>>,
     /// Registered assets.
     pub(crate) assets: StorageBlock<'world, AssetId, AssetValue>,
     /// Metadata attached to concrete asset balances.
@@ -2130,6 +2148,10 @@ pub struct WorldBlock<'world> {
     pub(crate) rwas: StorageBlock<'world, RwaId, RwaValue>,
     /// Read-side index from RWA owner account to owned RWA lot ids.
     pub(crate) rwas_by_owner: StorageBlock<'world, AccountId, BTreeSet<RwaId>>,
+    /// Read-side index from RWA status to RWA lot ids.
+    pub(crate) rwas_by_status: StorageBlock<'world, Option<Name>, BTreeSet<RwaId>>,
+    /// Read-side index from RWA frozen state to RWA lot ids.
+    pub(crate) rwas_by_frozen: StorageBlock<'world, bool, BTreeSet<RwaId>>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageBlock<'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -2708,6 +2730,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Asset-id index keyed by asset definition id.
     pub(crate) asset_definition_assets:
         StorageTransaction<'block, 'world, AssetDefinitionId, BTreeSet<AssetId>>,
+    /// Non-zero holder index keyed by asset definition id.
+    pub(crate) asset_definition_nonzero_holders:
+        StorageTransaction<'block, 'world, AssetDefinitionId, BTreeSet<AccountId>>,
     /// Registered assets.
     pub(crate) assets: StorageTransaction<'block, 'world, AssetId, AssetValue>,
     /// Metadata attached to concrete asset balances.
@@ -2720,6 +2745,10 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) rwas: StorageTransaction<'block, 'world, RwaId, RwaValue>,
     /// Read-side index from RWA owner account to owned RWA lot ids.
     pub(crate) rwas_by_owner: StorageTransaction<'block, 'world, AccountId, BTreeSet<RwaId>>,
+    /// Read-side index from RWA status to RWA lot ids.
+    pub(crate) rwas_by_status: StorageTransaction<'block, 'world, Option<Name>, BTreeSet<RwaId>>,
+    /// Read-side index from RWA frozen state to RWA lot ids.
+    pub(crate) rwas_by_frozen: StorageTransaction<'block, 'world, bool, BTreeSet<RwaId>>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageTransaction<'block, 'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -3342,6 +3371,47 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
     }
 
+    /// Record that the given account has a non-zero balance for the definition.
+    pub(crate) fn track_nonzero_asset_holder(&mut self, asset_id: &AssetId) {
+        if let Some(holders) = self
+            .asset_definition_nonzero_holders
+            .get_mut(asset_id.definition())
+        {
+            holders.insert(asset_id.account().clone());
+        } else {
+            self.asset_definition_nonzero_holders.insert(
+                asset_id.definition().clone(),
+                BTreeSet::from([asset_id.account().clone()]),
+            );
+        }
+    }
+
+    /// Drop a non-zero holder entry when no remaining partition for that account is non-zero.
+    pub(crate) fn refresh_nonzero_asset_holder(&mut self, asset_id: &AssetId) {
+        let has_nonzero_for_definition =
+            self.assets
+                .range::<dyn AsAssetIdAccountDefinitionCompare>(
+                    AssetByAccountDefinitionBounds::new(asset_id.account(), asset_id.definition()),
+                )
+                .any(|(_, value)| !value.as_ref().is_zero());
+        if has_nonzero_for_definition {
+            self.track_nonzero_asset_holder(asset_id);
+            return;
+        }
+
+        let remove_index_entry = self
+            .asset_definition_nonzero_holders
+            .get_mut(asset_id.definition())
+            .is_some_and(|holders| {
+                holders.remove(asset_id.account());
+                holders.is_empty()
+            });
+        if remove_index_entry {
+            self.asset_definition_nonzero_holders
+                .remove(asset_id.definition().clone());
+        }
+    }
+
     /// Drop asset-id linkage, then remove the holder linkage when the account no longer has any
     /// remaining balance partition for the definition.
     pub(crate) fn untrack_asset_holder_if_empty(&mut self, asset_id: &AssetId) {
@@ -3386,6 +3456,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         let removed = self.assets.remove(asset_id.clone());
         self.asset_metadata.remove(asset_id.clone());
         if removed.is_some() {
+            self.refresh_nonzero_asset_holder(asset_id);
             self.untrack_asset_holder_if_empty(asset_id);
         }
         removed
@@ -3549,6 +3620,48 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
     }
 
+    /// Record RWA lot status in the read-side status index.
+    pub(crate) fn track_rwa_status(&mut self, rwa_id: &RwaId, status: &Option<Name>) {
+        if let Some(rwas) = self.rwas_by_status.get_mut(status) {
+            rwas.insert(rwa_id.clone());
+        } else {
+            self.rwas_by_status
+                .insert(status.clone(), BTreeSet::from([rwa_id.clone()]));
+        }
+    }
+
+    /// Drop RWA lot status from the read-side status index.
+    pub(crate) fn untrack_rwa_status(&mut self, rwa_id: &RwaId, status: &Option<Name>) {
+        let remove_status_entry = self.rwas_by_status.get_mut(status).is_some_and(|rwas| {
+            rwas.remove(rwa_id);
+            rwas.is_empty()
+        });
+        if remove_status_entry {
+            self.rwas_by_status.remove(status.clone());
+        }
+    }
+
+    /// Record RWA lot frozen state in the read-side frozen-state index.
+    pub(crate) fn track_rwa_frozen(&mut self, rwa_id: &RwaId, is_frozen: bool) {
+        if let Some(rwas) = self.rwas_by_frozen.get_mut(&is_frozen) {
+            rwas.insert(rwa_id.clone());
+        } else {
+            self.rwas_by_frozen
+                .insert(is_frozen, BTreeSet::from([rwa_id.clone()]));
+        }
+    }
+
+    /// Drop RWA lot frozen state from the read-side frozen-state index.
+    pub(crate) fn untrack_rwa_frozen(&mut self, rwa_id: &RwaId, is_frozen: bool) {
+        let remove_frozen_entry = self.rwas_by_frozen.get_mut(&is_frozen).is_some_and(|rwas| {
+            rwas.remove(rwa_id);
+            rwas.is_empty()
+        });
+        if remove_frozen_entry {
+            self.rwas_by_frozen.remove(is_frozen);
+        }
+    }
+
     /// Insert an RWA lot and keep the owner index consistent.
     pub(crate) fn insert_rwa_entry(
         &mut self,
@@ -3556,11 +3669,17 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         rwa_value: RwaValue,
     ) -> Option<RwaValue> {
         let owner = rwa_value.owned_by.clone();
+        let status = rwa_value.status.clone();
+        let is_frozen = rwa_value.is_frozen;
         let previous = self.rwas.insert(rwa_id.clone(), rwa_value);
         if let Some(previous) = previous.as_ref() {
             self.untrack_rwa_owner(&rwa_id, &previous.owned_by);
+            self.untrack_rwa_status(&rwa_id, &previous.status);
+            self.untrack_rwa_frozen(&rwa_id, previous.is_frozen);
         }
         self.track_rwa_owner(&rwa_id, &owner);
+        self.track_rwa_status(&rwa_id, &status);
+        self.track_rwa_frozen(&rwa_id, is_frozen);
         previous
     }
 
@@ -3577,6 +3696,21 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
         self.untrack_rwa_owner(rwa_id, previous_owner);
         self.track_rwa_owner(rwa_id, next_owner);
+    }
+
+    /// Move an existing RWA lot id between frozen-state index buckets.
+    pub(crate) fn replace_rwa_frozen_index(
+        &mut self,
+        rwa_id: &RwaId,
+        previous_is_frozen: bool,
+        next_is_frozen: bool,
+    ) {
+        if previous_is_frozen == next_is_frozen {
+            self.track_rwa_frozen(rwa_id, next_is_frozen);
+            return;
+        }
+        self.untrack_rwa_frozen(rwa_id, previous_is_frozen);
+        self.track_rwa_frozen(rwa_id, next_is_frozen);
     }
 
     fn track_escrow_index<K: MvKey>(
@@ -4059,6 +4193,9 @@ pub struct WorldView<'world> {
         StorageView<'world, AssetDefinitionId, BTreeSet<AccountId>>,
     /// Asset-id index keyed by asset definition id.
     pub(crate) asset_definition_assets: StorageView<'world, AssetDefinitionId, BTreeSet<AssetId>>,
+    /// Non-zero holder index keyed by asset definition id.
+    pub(crate) asset_definition_nonzero_holders:
+        StorageView<'world, AssetDefinitionId, BTreeSet<AccountId>>,
     /// Registered assets.
     pub(crate) assets: StorageView<'world, AssetId, AssetValue>,
     /// Metadata attached to concrete asset balances.
@@ -4071,6 +4208,10 @@ pub struct WorldView<'world> {
     pub(crate) rwas: StorageView<'world, RwaId, RwaValue>,
     /// Read-side index from RWA owner account to owned RWA lot ids.
     pub(crate) rwas_by_owner: StorageView<'world, AccountId, BTreeSet<RwaId>>,
+    /// Read-side index from RWA status to RWA lot ids.
+    pub(crate) rwas_by_status: StorageView<'world, Option<Name>, BTreeSet<RwaId>>,
+    /// Read-side index from RWA frozen state to RWA lot ids.
+    pub(crate) rwas_by_frozen: StorageView<'world, bool, BTreeSet<RwaId>>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageView<'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -11095,17 +11236,26 @@ impl DetachedStateTransactionDelta {
             }
             // Apply asset additions (aggregated per id) and defer event emission until totals update.
             for (id, qty) in &asset_adds {
-                let dst = stx
-                    .world
-                    .asset_or_insert(id, iroha_primitives::numeric::Numeric::zero())?;
-                let qref: &mut iroha_primitives::numeric::Numeric = &mut *dst;
-                // Witness: record pre-value
-                crate::sumeragi::witness::record_read_asset(id, Some(qref));
-                *qref = qref.clone().checked_add(qty.clone()).ok_or_else(|| {
-                    iroha_data_model::ValidationFail::NotPermitted("numeric overflow".to_owned())
-                })?;
-                // Witness: record post-value
-                crate::sumeragi::witness::record_write_asset(id, qref);
+                let is_nonzero = {
+                    let dst = stx
+                        .world
+                        .asset_or_insert(id, iroha_primitives::numeric::Numeric::zero())?;
+                    let qref: &mut iroha_primitives::numeric::Numeric = &mut *dst;
+                    // Witness: record pre-value
+                    crate::sumeragi::witness::record_read_asset(id, Some(qref));
+                    *qref = qref.clone().checked_add(qty.clone()).ok_or_else(|| {
+                        iroha_data_model::ValidationFail::NotPermitted(
+                            "numeric overflow".to_owned(),
+                        )
+                    })?;
+                    let is_nonzero = !qref.is_zero();
+                    // Witness: record post-value
+                    crate::sumeragi::witness::record_write_asset(id, qref);
+                    is_nonzero
+                };
+                if is_nonzero {
+                    stx.world.track_nonzero_asset_holder(id);
+                }
             }
             // Update asset definition totals
             for (def, qty) in &asset_def_adds {
@@ -12089,12 +12239,15 @@ impl World {
             asset_definitions_by_owner: Storage::default(),
             asset_definition_holders: Storage::default(),
             asset_definition_assets: Storage::default(),
+            asset_definition_nonzero_holders: Storage::default(),
             assets,
             asset_metadata: Storage::default(),
             nfts,
             nfts_by_owner: Storage::default(),
             rwas: Storage::default(),
             rwas_by_owner: Storage::default(),
+            rwas_by_status: Storage::default(),
+            rwas_by_frozen: Storage::default(),
             proofs: Storage::default(),
             proofs_by_status: Storage::default(),
             contract_manifests: Storage::default(),
@@ -12154,7 +12307,7 @@ impl World {
             .expect("duplicate contract alias in world constructor");
         world.rebuild_asset_definition_indexes();
         world.rebuild_nft_owner_index();
-        world.rebuild_rwa_owner_index();
+        world.rebuild_rwa_indexes();
         world.rebuild_escrow_indexes();
         world.rebuild_repo_agreement_indexes();
         world.rebuild_proof_status_index();
@@ -12486,7 +12639,8 @@ impl World {
         }
         let mut holders = BTreeMap::<AssetDefinitionId, BTreeSet<AccountId>>::new();
         let mut definition_assets = BTreeMap::<AssetDefinitionId, BTreeSet<AssetId>>::new();
-        for (asset_id, _) in self.assets.view().iter() {
+        let mut nonzero_holders = BTreeMap::<AssetDefinitionId, BTreeSet<AccountId>>::new();
+        for (asset_id, asset_value) in self.assets.view().iter() {
             holders
                 .entry(asset_id.definition().clone())
                 .or_default()
@@ -12495,11 +12649,18 @@ impl World {
                 .entry(asset_id.definition().clone())
                 .or_default()
                 .insert(asset_id.clone());
+            if !asset_value.as_ref().is_zero() {
+                nonzero_holders
+                    .entry(asset_id.definition().clone())
+                    .or_default()
+                    .insert(asset_id.account().clone());
+            }
         }
         self.domain_asset_definitions = domain_definitions.into_iter().collect();
         self.asset_definitions_by_owner = definitions_by_owner.into_iter().collect();
         self.asset_definition_holders = holders.into_iter().collect();
         self.asset_definition_assets = definition_assets.into_iter().collect();
+        self.asset_definition_nonzero_holders = nonzero_holders.into_iter().collect();
     }
 
     fn rebuild_domain_owner_index(&mut self) {
@@ -12524,15 +12685,27 @@ impl World {
         self.nfts_by_owner = by_owner.into_iter().collect();
     }
 
-    fn rebuild_rwa_owner_index(&mut self) {
+    fn rebuild_rwa_indexes(&mut self) {
         let mut by_owner = BTreeMap::<AccountId, BTreeSet<RwaId>>::new();
+        let mut by_status = BTreeMap::<Option<Name>, BTreeSet<RwaId>>::new();
+        let mut by_frozen = BTreeMap::<bool, BTreeSet<RwaId>>::new();
         for (rwa_id, rwa) in self.rwas.view().iter() {
             by_owner
                 .entry(rwa.owned_by.clone())
                 .or_default()
                 .insert(rwa_id.clone());
+            by_status
+                .entry(rwa.status.clone())
+                .or_default()
+                .insert(rwa_id.clone());
+            by_frozen
+                .entry(rwa.is_frozen)
+                .or_default()
+                .insert(rwa_id.clone());
         }
         self.rwas_by_owner = by_owner.into_iter().collect();
+        self.rwas_by_status = by_status.into_iter().collect();
+        self.rwas_by_frozen = by_frozen.into_iter().collect();
     }
 
     fn rebuild_escrow_indexes(&mut self) {
@@ -12762,12 +12935,15 @@ impl World {
             asset_definitions_by_owner: self.asset_definitions_by_owner.view(),
             asset_definition_holders: self.asset_definition_holders.view(),
             asset_definition_assets: self.asset_definition_assets.view(),
+            asset_definition_nonzero_holders: self.asset_definition_nonzero_holders.view(),
             assets: self.assets.view(),
             asset_metadata: self.asset_metadata.view(),
             nfts: self.nfts.view(),
             nfts_by_owner: self.nfts_by_owner.view(),
             rwas: self.rwas.view(),
             rwas_by_owner: self.rwas_by_owner.view(),
+            rwas_by_status: self.rwas_by_status.view(),
+            rwas_by_frozen: self.rwas_by_frozen.view(),
             roles: self.roles.view(),
             account_permissions: self.account_permissions.view(),
             account_roles: self.account_roles.view(),
@@ -13112,6 +13288,10 @@ pub trait WorldReadOnly {
     fn asset_definition_assets(
         &self,
     ) -> &impl StorageReadOnly<AssetDefinitionId, BTreeSet<AssetId>>;
+    /// Non-zero holder index keyed by asset definition id.
+    fn asset_definition_nonzero_holders(
+        &self,
+    ) -> &impl StorageReadOnly<AssetDefinitionId, BTreeSet<AccountId>>;
     /// Asset storage (read-only).
     fn assets(&self) -> &impl StorageReadOnly<AssetId, AssetValue>;
     /// Asset metadata storage (read-only).
@@ -13124,6 +13304,10 @@ pub trait WorldReadOnly {
     fn rwas(&self) -> &impl StorageReadOnly<RwaId, RwaValue>;
     /// RWA owner index (read-only).
     fn rwas_by_owner(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<RwaId>>;
+    /// RWA status index (read-only).
+    fn rwas_by_status(&self) -> &impl StorageReadOnly<Option<Name>, BTreeSet<RwaId>>;
+    /// RWA frozen-state index (read-only).
+    fn rwas_by_frozen(&self) -> &impl StorageReadOnly<bool, BTreeSet<RwaId>>;
     /// Role storage (read-only).
     fn roles(&self) -> &impl StorageReadOnly<RoleId, Role>;
     /// Account permissions mapping (read-only).
@@ -13882,6 +14066,17 @@ pub trait WorldReadOnly {
             .flat_map(BTreeSet::iter)
     }
 
+    /// Iterate accounts with at least one non-zero balance partition for an asset definition.
+    fn asset_definition_nonzero_holders_iter<'a>(
+        &'a self,
+        definition_id: &'a AssetDefinitionId,
+    ) -> impl Iterator<Item = &'a AccountId> {
+        self.asset_definition_nonzero_holders()
+            .get(definition_id)
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+    }
+
     /// Iterate assets in account
     #[allow(clippy::type_complexity)]
     fn assets_in_account_iter(&self, id: &AccountId) -> impl Iterator<Item = AssetEntry<'_>> {
@@ -14170,6 +14365,35 @@ pub trait WorldReadOnly {
             })
     }
 
+    /// Iterate RWAs with the given status.
+    fn rwas_by_status_iter<'a>(
+        &'a self,
+        status: &'a Option<Name>,
+    ) -> impl Iterator<Item = RwaEntry<'a>> {
+        self.rwas_by_status()
+            .get(status)
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+            .filter_map(|rwa_id| {
+                self.rwas()
+                    .get_key_value(rwa_id)
+                    .map(|(id, value)| RwaEntry::new(id, value))
+            })
+    }
+
+    /// Iterate RWAs with the given frozen state.
+    fn rwas_by_frozen_iter(&self, is_frozen: bool) -> impl Iterator<Item = RwaEntry<'_>> {
+        self.rwas_by_frozen()
+            .get(&is_frozen)
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+            .filter_map(|rwa_id| {
+                self.rwas()
+                    .get_key_value(rwa_id)
+                    .map(|(id, value)| RwaEntry::new(id, value))
+            })
+    }
+
     // Role-related methods
 
     /// Get `Role` and return reference to it.
@@ -14322,6 +14546,11 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<AssetDefinitionId, BTreeSet<AssetId>> {
                 &self.asset_definition_assets
             }
+            fn asset_definition_nonzero_holders(
+                &self,
+            ) -> &impl StorageReadOnly<AssetDefinitionId, BTreeSet<AccountId>> {
+                &self.asset_definition_nonzero_holders
+            }
             fn assets(&self) -> &impl StorageReadOnly<AssetId, AssetValue> {
                 &self.assets
             }
@@ -14339,6 +14568,12 @@ macro_rules! impl_world_ro {
             }
             fn rwas_by_owner(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<RwaId>> {
                 &self.rwas_by_owner
+            }
+            fn rwas_by_status(&self) -> &impl StorageReadOnly<Option<Name>, BTreeSet<RwaId>> {
+                &self.rwas_by_status
+            }
+            fn rwas_by_frozen(&self) -> &impl StorageReadOnly<bool, BTreeSet<RwaId>> {
+                &self.rwas_by_frozen
             }
             fn roles(&self) -> &impl StorageReadOnly<RoleId, Role> {
                 &self.roles
@@ -15087,12 +15322,15 @@ impl<'world> WorldBlock<'world> {
             asset_definitions_by_owner,
             asset_definition_holders,
             asset_definition_assets,
+            asset_definition_nonzero_holders,
             assets,
             asset_metadata,
             nfts,
             nfts_by_owner,
             rwas,
             rwas_by_owner,
+            rwas_by_status,
+            rwas_by_frozen,
             roles,
             account_permissions,
             account_roles,
@@ -15372,6 +15610,8 @@ impl<'world> WorldBlock<'world> {
         roles.commit();
         rwas.commit();
         rwas_by_owner.commit();
+        rwas_by_status.commit();
+        rwas_by_frozen.commit();
         nfts.commit();
         nfts_by_owner.commit();
         assets.commit();
@@ -15386,6 +15626,7 @@ impl<'world> WorldBlock<'world> {
         asset_definition_aliases.commit();
         contract_alias_bindings.commit();
         contract_aliases.commit();
+        asset_definition_nonzero_holders.commit();
         asset_definition_assets.commit();
         asset_definition_holders.commit();
         asset_definitions_by_owner.commit();
@@ -16337,12 +16578,15 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             asset_definitions_by_owner,
             asset_definition_holders,
             asset_definition_assets,
+            asset_definition_nonzero_holders,
             assets,
             asset_metadata,
             nfts,
             nfts_by_owner,
             rwas,
             rwas_by_owner,
+            rwas_by_status,
+            rwas_by_frozen,
             roles,
             account_permissions,
             account_roles,
@@ -16601,6 +16845,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         roles.apply();
         rwas.apply();
         rwas_by_owner.apply();
+        rwas_by_status.apply();
+        rwas_by_frozen.apply();
         nfts.apply();
         nfts_by_owner.apply();
         identifier_claims.apply();
@@ -16615,6 +16861,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         asset_definition_aliases.apply();
         contract_alias_bindings.apply();
         contract_aliases.apply();
+        asset_definition_nonzero_holders.apply();
         asset_definition_assets.apply();
         asset_definition_holders.apply();
         asset_definitions_by_owner.apply();
@@ -16836,7 +17083,11 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
 
             self.emit_events(Some(AssetEvent::Created(asset.clone())));
             let (asset_id, asset_value) = asset.into_key_value();
+            let is_nonzero = !asset_value.as_ref().is_zero();
             self.track_asset_holder(&asset_id);
+            if is_nonzero {
+                self.track_nonzero_asset_holder(&asset_id);
+            }
             self.assets.insert(asset_id, asset_value);
         }
         Ok(self
@@ -31713,12 +31964,15 @@ pub(crate) mod deserialize {
             asset_definitions_by_owner: Storage::default(),
             asset_definition_holders: Storage::default(),
             asset_definition_assets: Storage::default(),
+            asset_definition_nonzero_holders: Storage::default(),
             assets,
             asset_metadata,
             nfts,
             nfts_by_owner: Storage::default(),
             rwas,
             rwas_by_owner: Storage::default(),
+            rwas_by_status: Storage::default(),
+            rwas_by_frozen: Storage::default(),
             roles,
             account_permissions,
             account_roles,
@@ -31904,7 +32158,7 @@ pub(crate) mod deserialize {
             })?;
         world.rebuild_asset_definition_indexes();
         world.rebuild_nft_owner_index();
-        world.rebuild_rwa_owner_index();
+        world.rebuild_rwa_indexes();
         world.rebuild_escrow_indexes();
         world.rebuild_repo_agreement_indexes();
         world.rebuild_proof_status_index();
@@ -33681,7 +33935,7 @@ mod tests {
         world.rwas.insert(id, value);
         let (id, value) = lot(owner_second_id.clone(), owner.clone());
         world.rwas.insert(id, value);
-        world.rebuild_rwa_owner_index();
+        world.rebuild_rwa_indexes();
 
         let owner_ids = world
             .view()
@@ -33694,6 +33948,66 @@ mod tests {
         assert_eq!(
             owner_ids, expected,
             "owner index should only return RWA lots owned by the requested account",
+        );
+    }
+
+    #[test]
+    fn rwas_status_and_frozen_iters_use_secondary_indexes() {
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let domain = DomainId::try_new("vault", "universal").expect("domain");
+        let vaulted = Some("vaulted".parse::<Name>().expect("vaulted status"));
+        let pending = Some("pending".parse::<Name>().expect("pending status"));
+        let target_id = RwaId::generated(domain.clone(), Hash::new("target"));
+        let other_vaulted_id = RwaId::generated(domain.clone(), Hash::new("other-vaulted"));
+        let pending_id = RwaId::generated(domain, Hash::new("pending"));
+
+        let lot = |id: RwaId, status: Option<Name>, is_frozen: bool| {
+            let mut rwa = Rwa::new(
+                id,
+                Numeric::new(1, 0),
+                NumericSpec::integer(),
+                "certificate".to_owned(),
+                status,
+                Metadata::default(),
+                Vec::new(),
+                RwaControlPolicy::default(),
+                owner.clone(),
+            );
+            rwa.is_frozen = is_frozen;
+            rwa.into_key_value()
+        };
+
+        let mut world = World::default();
+        let (id, value) = lot(target_id.clone(), vaulted.clone(), true);
+        world.rwas.insert(id, value);
+        let (id, value) = lot(other_vaulted_id.clone(), vaulted.clone(), false);
+        world.rwas.insert(id, value);
+        let (id, value) = lot(pending_id, pending, false);
+        world.rwas.insert(id, value);
+        world.rebuild_rwa_indexes();
+
+        let mut vaulted_ids = world
+            .view()
+            .rwas_by_status_iter(&vaulted)
+            .map(|entry| entry.id().clone())
+            .collect::<Vec<_>>();
+        vaulted_ids.sort();
+        let mut expected_vaulted = vec![target_id.clone(), other_vaulted_id];
+        expected_vaulted.sort();
+        assert_eq!(
+            vaulted_ids, expected_vaulted,
+            "status index should only return RWA lots with the requested status",
+        );
+
+        let frozen_ids = world
+            .view()
+            .rwas_by_frozen_iter(true)
+            .map(|entry| entry.id().clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            frozen_ids,
+            vec![target_id],
+            "frozen-state index should only return frozen RWA lots in key order",
         );
     }
 
@@ -44686,6 +45000,13 @@ mod tests {
                 .is_some_and(|asset_ids| asset_ids.contains(&asset_id)),
             "definition index should include concrete asset id after insert"
         );
+        assert!(
+            stx.world
+                .asset_definition_nonzero_holders
+                .get(&asset_def_id)
+                .is_some_and(|holders| holders.contains(&alice_id)),
+            "non-zero holder index should include account after non-zero insert"
+        );
 
         let removed = stx.world.remove_asset_and_metadata(&asset_id);
         assert!(removed.is_some(), "asset removed");
@@ -44702,6 +45023,13 @@ mod tests {
                 .get(&asset_def_id)
                 .is_none(),
             "definition index should remove empty asset-id set"
+        );
+        assert!(
+            stx.world
+                .asset_definition_nonzero_holders
+                .get(&asset_def_id)
+                .is_none(),
+            "non-zero holder index should remove empty holder set"
         );
     }
 
@@ -44742,6 +45070,7 @@ mod tests {
             .assets
             .insert(global_asset_id.clone(), global_asset_value);
         stx.world.track_asset_holder(&global_asset_id);
+        stx.world.track_nonzero_asset_holder(&global_asset_id);
 
         let scoped_asset_id = AssetId::with_scope(
             asset_def_id.clone(),
@@ -44756,6 +45085,7 @@ mod tests {
             .assets
             .insert(scoped_asset_id.clone(), scoped_asset_value);
         stx.world.track_asset_holder(&scoped_asset_id);
+        stx.world.track_nonzero_asset_holder(&scoped_asset_id);
 
         let removed_global = stx.world.remove_asset_and_metadata(&global_asset_id);
         assert!(removed_global.is_some(), "global partition removed");
@@ -44775,6 +45105,13 @@ mod tests {
                 }),
             "definition index should keep only the surviving partition"
         );
+        assert!(
+            stx.world
+                .asset_definition_nonzero_holders
+                .get(&asset_def_id)
+                .is_some_and(|holders| holders.contains(&ALICE_ID)),
+            "non-zero holder should remain while another non-zero partition exists"
+        );
 
         let removed_scoped = stx.world.remove_asset_and_metadata(&scoped_asset_id);
         assert!(removed_scoped.is_some(), "scoped partition removed");
@@ -44791,6 +45128,13 @@ mod tests {
                 .get(&asset_def_id)
                 .is_none(),
             "definition index should be removed after last partition disappears"
+        );
+        assert!(
+            stx.world
+                .asset_definition_nonzero_holders
+                .get(&asset_def_id)
+                .is_none(),
+            "non-zero holder entry should be removed after last non-zero partition disappears"
         );
     }
 

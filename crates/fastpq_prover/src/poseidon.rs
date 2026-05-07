@@ -312,9 +312,15 @@ fn run_poseidon_gpu_self_test(backend: GpuBackend) -> bool {
     match result {
         Ok(()) if actual == expected => true,
         Ok(()) => {
+            let (mismatch_state, mismatch_lane, expected_value, actual_value) =
+                first_poseidon_state_mismatch(&expected, &actual).unwrap_or((0, 0, 0, None));
             warn!(
                 target: "fastpq::poseidon",
                 backend = backend.as_str(),
+                mismatch_state,
+                mismatch_lane,
+                expected = expected_value,
+                actual = ?actual_value,
                 "FASTPQ Poseidon GPU preflight produced a CPU parity mismatch; falling back to CPU"
             );
             false
@@ -329,6 +335,35 @@ fn run_poseidon_gpu_self_test(backend: GpuBackend) -> bool {
             false
         }
     }
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn first_poseidon_state_mismatch(
+    expected: &[u64],
+    actual: &[u64],
+) -> Option<(usize, usize, u64, Option<u64>)> {
+    let mismatch = expected
+        .iter()
+        .zip(actual.iter().map(Some).chain(core::iter::repeat(None)))
+        .enumerate()
+        .find_map(|(idx, (expected, actual))| {
+            (actual != Some(expected)).then_some((
+                idx / STATE_WIDTH,
+                idx % STATE_WIDTH,
+                *expected,
+                actual.copied(),
+            ))
+        });
+    mismatch.or_else(|| {
+        actual.get(expected.len()).map(|actual| {
+            (
+                expected.len() / STATE_WIDTH,
+                expected.len() % STATE_WIDTH,
+                0,
+                Some(*actual),
+            )
+        })
+    })
 }
 
 /// Hash the provided field elements with the active Poseidon backend.
