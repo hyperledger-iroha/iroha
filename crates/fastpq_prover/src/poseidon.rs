@@ -478,7 +478,29 @@ mod tests {
     #[cfg(all(test, feature = "fastpq-gpu"))]
     #[test]
     fn preflight_gpu_backend_returns_safely() {
-        let _ = super::preflight_gpu_backend();
+        if crate::backend::current_gpu_backend().is_none() {
+            return;
+        }
+        assert!(
+            super::preflight_gpu_backend(),
+            "Poseidon GPU preflight must pass when a GPU backend is available"
+        );
+    }
+
+    #[cfg(all(test, feature = "fastpq-gpu"))]
+    #[test]
+    fn gpu_poseidon_preflight_passes_after_bn254_digest_preflight() {
+        if crate::backend::current_gpu_backend().is_none() {
+            return;
+        }
+        assert!(
+            crate::preflight_bn254_poseidon_word_batches(),
+            "BN254 digest preflight must pass before checking prover Poseidon independence"
+        );
+        assert!(
+            super::preflight_gpu_backend(),
+            "Poseidon prover preflight must remain independent after BN254 digest preflight"
+        );
     }
 
     #[cfg(all(test, feature = "fastpq-gpu"))]

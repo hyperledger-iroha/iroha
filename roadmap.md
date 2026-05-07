@@ -6,15 +6,20 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Sumeragi vNext consensus replacement
 
-- Wire the experimental `sumeragi::vnext::Reactor` into the live Sumeragi
-  runtime shell, replacing the legacy cooperative tick/commit sweep and its
-  inline validation fallback with typed DA/RBC, validation-worker,
-  commit-persistence, and block-sync events/effects.
-- Feed parsed vNext performance-fault parameters from live Sumeragi config into
-  the runtime reactor once the replacement shell owns consensus execution.
-- Wire vNext signature/quorum verification into the live runtime ingress path
-  and bind the selected chain-order hash into any remaining QC vote/certificate
-  preimages used by the replacement shell.
+- Finish moving proposal, DA/RBC availability, validation-worker start/result,
+  commit-persistence, timeout-tick, and block-sync sidecar flows onto typed
+  `sumeragi::vnext::ReactorEvent`/`ReactorEffect` adapters. vNext control
+  frames now enter the live reactor, but the broader block consensus shell
+  still needs the remaining effect adapters before the legacy cooperative
+  tick/commit sweep and inline validation fallback can be deleted.
+- Bind the selected vNext chain-order hash and `rechain_seq` into the remaining
+  QC vote/certificate preimages, signer-tally/cache keys, deferred vote/QC
+  caches, block-sync sidecars, and evidence replay paths used by the
+  replacement shell.
+- Reconstruct vNext chain order from committed/replayed re-chain and
+  view-change certificates during block-sync catch-up. The live actor now keeps
+  a bounded in-memory certificate journal; persistence/sidecar replay remains
+  open.
 - Add model and integration coverage for slow validation, queue saturation,
   malicious accusers, head failure during re-chain, NPoS stake-quorum
   quarantine edges, and DA/RBC loss during re-chain.
@@ -647,8 +652,23 @@ Completed history lives in `status.md`. This file should only track unfinished w
     the next open work is Ed25519/public-key parse and verify work, Norito
     transaction and transfer encode/decode/length accounting, allocation/copy
     churn, queue-admission/world-view preparation, and queue drain under
-    saturated 20k ingress. Do not spend the next pass on scalar FASTPQ/Poseidon
-    fallback unless a later profile reintroduces it.
+    saturated 20k ingress. That older profile avoided scalar FASTPQ/Poseidon
+    fallback work until new evidence; the May 7 load-window sample below
+    reintroduces scalar cost specifically in the BN254 runtime digest path,
+    while general FASTPQ prover parity remains fixed.
+    The 2026-05-07 Metal final return gate fixes general FASTPQ Poseidon
+    preflight parity and removes normal commit-QC inline validation supersedes;
+    keep the next Izanami pass on queue drain/block-validation cost and BN254
+    runtime Metal batch stability, not on prover Poseidon preflight parity.
+    The corrected load-window profile at
+    `dist/izanami-profile-20k-fastpq-gpu-final-loadsample-90s-20260507-225637`
+    sharpens that order: scalar Halo2 BN254 Poseidon is again the top sampled
+    application leaf after runtime Metal batch failures, while consensus
+    progress is limited by payload availability and exact-frontier recovery
+    signals under a saturated queue. Fix BN254 runtime batch stability first,
+    then reduce local READY/DELIVER deferrals and block-body reacquisition
+    latency before revisiting the secondary Norito, Ed25519/Curve25519, SHA-2,
+    Blake2, CRC64, and allocation hot paths.
   - Avoid repeating the rejected process-wide Ed25519 public-key parse cache
     approach without new evidence: the 2026-05-03 sharded shared-cache
     experiment regressed short-gate commit progress and was backed out. Keep

@@ -681,7 +681,7 @@ impl Actor {
         effective
     }
 
-    fn maybe_validate_pending_for_commit_qc(
+    pub(in crate::sumeragi::main_loop) fn maybe_validate_pending_for_commit_qc(
         &mut self,
         qc: &crate::sumeragi::consensus::Qc,
         commit_topology: &[PeerId],
@@ -698,35 +698,100 @@ impl Actor {
         {
             return false;
         }
-        let needs_validation = match self.pending.pending_blocks.get(&hash) {
-            Some(pending)
-                if !pending.aborted && pending.validation_status == ValidationStatus::Pending =>
-            {
-                let state_height = self.state.committed_height();
-                let tip_hash = self.state.latest_block_hash_fast();
-                pending_extends_tip(
-                    pending.height,
-                    pending.block.header().prev_block_hash(),
-                    state_height,
-                    tip_hash,
-                )
-            }
-            None => return false,
-            Some(_) => false,
-        };
+        let (pending_height, pending_view, needs_validation) =
+            match self.pending.pending_blocks.get(&hash) {
+                Some(pending)
+                    if !pending.aborted
+                        && pending.validation_status == ValidationStatus::Pending =>
+                {
+                    let state_height = self.state.committed_height();
+                    let tip_hash = self.state.latest_block_hash_fast();
+                    (
+                        pending.height,
+                        pending.view,
+                        pending_extends_tip(
+                            pending.height,
+                            pending.block.header().prev_block_hash(),
+                            state_height,
+                            tip_hash,
+                        ),
+                    )
+                }
+                None => return false,
+                Some(pending) => (pending.height, pending.view, false),
+            };
         if !needs_validation {
             return false;
         }
-        if let Some(inflight) = self.supersede_validation_inflight(hash) {
-            info!(
-                height = qc.height,
-                view = qc.view,
-                block = %hash,
-                inflight_elapsed_ms = inflight.started_at.elapsed().as_millis(),
-                "commit QC superseded background validation; forcing inline pre-vote validation"
-            );
+        let mut force_inline_validation = false;
+        if self.validation_inflight_elapsed(hash).is_some() {
+            match self.validation_inflight_inline_reason(hash, pending_height) {
+                Some(reason) => {
+                    if self.supersede_validation_inflight(hash).is_some() {
+                        match reason {
+                            super::validation::ValidationInflightInlineReason::WorkerDisconnected => {
+                                warn!(
+                                    height = pending_height,
+                                    view = pending_view,
+                                    block = %hash,
+                                    qc_height = qc.height,
+                                    qc_view = qc.view,
+                                    "commit QC validation worker channel disconnected; forcing inline pre-vote validation"
+                                );
+                            }
+                            super::validation::ValidationInflightInlineReason::StaleFrontier {
+                                frontier_generation,
+                            } => {
+                                warn!(
+                                    height = pending_height,
+                                    view = pending_view,
+                                    block = %hash,
+                                    qc_height = qc.height,
+                                    qc_view = qc.view,
+                                    frontier_generation,
+                                    "commit QC validation inflight frontier generation is stale; forcing inline pre-vote validation"
+                                );
+                            }
+                            super::validation::ValidationInflightInlineReason::Stalled {
+                                elapsed,
+                                stall_timeout,
+                            } => {
+                                warn!(
+                                    height = pending_height,
+                                    view = pending_view,
+                                    block = %hash,
+                                    qc_height = qc.height,
+                                    qc_view = qc.view,
+                                    inflight_elapsed_ms = elapsed.as_millis(),
+                                    worker_stall_timeout_ms = stall_timeout.as_millis(),
+                                    validation_duration_ema_ms = self
+                                        .validation_duration_ema()
+                                        .map(|duration| duration.as_millis()),
+                                    "commit QC validation inflight exceeded worker stall timeout; forcing inline pre-vote validation"
+                                );
+                            }
+                        }
+                        force_inline_validation = true;
+                    }
+                }
+                None => {
+                    debug!(
+                        height = pending_height,
+                        view = pending_view,
+                        block = %hash,
+                        qc_height = qc.height,
+                        qc_view = qc.view,
+                        "commit QC waiting for background validation result"
+                    );
+                    return false;
+                }
+            }
         }
-        let outcome = self.validate_pending_block_for_voting_inline(hash, commit_topology);
+        let outcome = if force_inline_validation {
+            self.validate_pending_block_for_voting_inline(hash, commit_topology)
+        } else {
+            self.validate_pending_block_for_voting(hash, commit_topology)
+        };
         match outcome {
             ValidationGateOutcome::Valid => true,
             ValidationGateOutcome::Deferred => false,

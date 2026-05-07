@@ -339,9 +339,9 @@ pub(crate) struct ExplorerAssetDefinitionDto {
 }
 
 impl ExplorerAssetDefinitionDto {
-    pub(crate) fn from_definition(
+    pub(crate) fn from_definition_with_asset_count(
         definition: &AssetDefinition,
-        aggregates: &ExplorerAggregates,
+        assets: u32,
     ) -> Self {
         Self {
             id: definition.id().to_string(),
@@ -349,11 +349,21 @@ impl ExplorerAssetDefinitionDto {
             logo: definition.logo().as_ref().map(ToString::to_string),
             metadata: metadata_to_json(definition.metadata()),
             owned_by: definition.owned_by().to_string(),
-            assets: aggregates.definition_instance_count(definition.id()),
+            assets,
             total_quantity: definition.total_quantity().to_string(),
             locked_quantity: None,
             circulating_quantity: None,
         }
+    }
+
+    pub(crate) fn from_definition(
+        definition: &AssetDefinition,
+        aggregates: &ExplorerAggregates,
+    ) -> Self {
+        Self::from_definition_with_asset_count(
+            definition,
+            aggregates.definition_instance_count(definition.id()),
+        )
     }
 }
 
@@ -1519,6 +1529,110 @@ where
     ExplorerAccountsPage { pagination, items }
 }
 
+pub(crate) fn account_counters_from_world(
+    world: &impl WorldReadOnly,
+    id: &AccountId,
+) -> AccountCounters {
+    AccountCounters {
+        domains: world
+            .domains_by_owner()
+            .get(id)
+            .map_or(0, |domains| saturating_usize_to_u32(domains.len())),
+        assets: saturating_usize_to_u32(world.assets_in_account_iter(id).count()),
+        nfts: world
+            .nfts_by_owner()
+            .get(id)
+            .map_or(0, |nfts| saturating_usize_to_u32(nfts.len())),
+    }
+}
+
+pub(crate) fn domain_counters_from_world(
+    world: &impl WorldReadOnly,
+    id: &DomainId,
+) -> DomainCounters {
+    let assets = world.domain_asset_definitions().get(id).map_or(0, |defs| {
+        saturating_usize_to_u32(
+            defs.iter()
+                .map(|definition_id| {
+                    world
+                        .asset_definition_assets()
+                        .get(definition_id)
+                        .map_or(0, BTreeSet::len)
+                })
+                .sum::<usize>(),
+        )
+    });
+    DomainCounters {
+        accounts: saturating_usize_to_u32(world.accounts_in_domain_iter(id).count()),
+        assets,
+        nfts: saturating_usize_to_u32(world.nfts_in_domain_iter(id).count()),
+    }
+}
+
+pub(crate) fn definition_instance_count_from_world(
+    world: &impl WorldReadOnly,
+    id: &AssetDefinitionId,
+) -> u32 {
+    world
+        .asset_definition_assets()
+        .get(id)
+        .map_or(0, |assets| saturating_usize_to_u32(assets.len()))
+}
+
+fn account_holds_definition_from_world(
+    world: &impl WorldReadOnly,
+    definition: &AssetDefinitionId,
+    account: &AccountId,
+) -> bool {
+    world
+        .asset_definition_holders()
+        .get(definition)
+        .map_or(false, |holders| holders.contains(account))
+}
+
+pub(crate) fn accounts_page_for_filters<'world>(
+    world: &'world impl WorldReadOnly,
+    domain_filter: Option<&'world DomainId>,
+    definition_filter: Option<&'world AssetDefinitionId>,
+    page: u64,
+    per_page: u64,
+) -> ExplorerAccountsPage {
+    let accounts: Box<dyn Iterator<Item = AccountEntry<'world>> + 'world> =
+        if let Some(definition) = definition_filter {
+            Box::new(world.asset_definition_holders_iter(definition).filter_map(
+                move |account_id| {
+                    world
+                        .accounts()
+                        .get_key_value(account_id)
+                        .map(|(id, value)| AccountEntry::new(id, value))
+                },
+            ))
+        } else if let Some(domain) = domain_filter {
+            Box::new(world.accounts_in_domain_iter(domain))
+        } else {
+            Box::new(world.accounts_iter())
+        };
+
+    let mut items = Vec::new();
+    for entry in accounts {
+        if let Some(domain) = domain_filter
+            && !world.account_has_alias_domain(entry.id(), domain)
+        {
+            continue;
+        }
+        if let Some(definition) = definition_filter
+            && !account_holds_definition_from_world(world, definition, entry.id())
+        {
+            continue;
+        }
+        let counts = account_counters_from_world(world, entry.id());
+        items.push(ExplorerAccountDto::from_entry(entry, counts));
+    }
+    items.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
+    let (items, pagination) = paginate(items, page, per_page);
+    ExplorerAccountsPage { pagination, items }
+}
+
 pub(crate) fn domains_page<'world, I>(
     domains: I,
     aggregates: &ExplorerAggregates,
@@ -1537,6 +1651,33 @@ where
             }
         }
         let counts = aggregates.domain_counters(domain.id());
+        items.push(ExplorerDomainDto::from_domain(domain, counts));
+    }
+    items.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
+    let (items, pagination) = paginate(items, page, per_page);
+    ExplorerDomainsPage { pagination, items }
+}
+
+pub(crate) fn domains_page_for_filters<'world>(
+    world: &'world impl WorldReadOnly,
+    owned_by: Option<&'world AccountId>,
+    page: u64,
+    per_page: u64,
+) -> ExplorerDomainsPage {
+    let domains: Box<dyn Iterator<Item = &'world Domain> + 'world> = if let Some(owner) = owned_by {
+        Box::new(world.domains_owned_by_iter(owner))
+    } else {
+        Box::new(world.domains_iter())
+    };
+
+    let mut items = Vec::new();
+    for domain in domains {
+        if let Some(owner) = owned_by
+            && domain.owned_by() != owner
+        {
+            continue;
+        }
+        let counts = domain_counters_from_world(world, domain.id());
         items.push(ExplorerDomainDto::from_domain(domain, counts));
     }
     items.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
@@ -1570,6 +1711,46 @@ where
         items.push(ExplorerAssetDefinitionDto::from_definition(
             definition, aggregates,
         ));
+    }
+    items.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
+    let (items, pagination) = paginate(items, page, per_page);
+    ExplorerAssetDefinitionsPage { pagination, items }
+}
+
+pub(crate) fn asset_definitions_page_for_filters<'world>(
+    world: &'world impl WorldReadOnly,
+    domain_filter: Option<&'world DomainId>,
+    owner_filter: Option<&'world AccountId>,
+    page: u64,
+    per_page: u64,
+) -> ExplorerAssetDefinitionsPage {
+    let definitions: Box<dyn Iterator<Item = &'world AssetDefinition> + 'world> =
+        if let Some(owner) = owner_filter {
+            Box::new(world.asset_definitions_owned_by_iter(owner))
+        } else if let Some(domain) = domain_filter {
+            Box::new(world.asset_definitions_in_domain_iter(domain))
+        } else {
+            Box::new(world.asset_definitions_iter())
+        };
+
+    let mut items = Vec::new();
+    for definition in definitions {
+        if let Some(domain) = domain_filter
+            && definition.id().try_domain() != Some(domain)
+        {
+            continue;
+        }
+        if let Some(owner) = owner_filter
+            && definition.owned_by() != owner
+        {
+            continue;
+        }
+        items.push(
+            ExplorerAssetDefinitionDto::from_definition_with_asset_count(
+                definition,
+                definition_instance_count_from_world(world, definition.id()),
+            ),
+        );
     }
     items.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
     let (items, pagination) = paginate(items, page, per_page);
@@ -1611,6 +1792,38 @@ where
     ExplorerAssetsPage { pagination, items }
 }
 
+pub(crate) fn assets_page_for_filters<'world>(
+    world: &'world impl WorldReadOnly,
+    owned_by: Option<&'world AccountId>,
+    definition_filter: Option<&'world AssetDefinitionId>,
+    asset_filter: Option<&'world AssetId>,
+    page: u64,
+    per_page: u64,
+) -> ExplorerAssetsPage {
+    let assets: Box<dyn Iterator<Item = AssetEntry<'world>> + 'world> =
+        if let Some(asset_id) = asset_filter {
+            Box::new(world.asset(asset_id).ok().into_iter())
+        } else if let Some(owner) = owned_by {
+            if let Some(definition) = definition_filter {
+                Box::new(world.assets_in_account_by_definition_iter(owner, definition))
+            } else {
+                Box::new(world.assets_in_account_iter(owner))
+            }
+        } else if let Some(definition) = definition_filter {
+            Box::new(world.asset_entries_by_definition_iter(definition))
+        } else {
+            Box::new(world.assets_iter())
+        };
+    assets_page(
+        assets,
+        owned_by,
+        definition_filter,
+        asset_filter,
+        page,
+        per_page,
+    )
+}
+
 pub(crate) fn nfts_page<'world, I>(
     nfts: I,
     owned_by: Option<&AccountId>,
@@ -1640,6 +1853,23 @@ where
     ExplorerNftsPage { pagination, items }
 }
 
+pub(crate) fn nfts_page_for_filters<'world>(
+    world: &'world impl WorldReadOnly,
+    owned_by: Option<&'world AccountId>,
+    domain_filter: Option<&'world DomainId>,
+    page: u64,
+    per_page: u64,
+) -> ExplorerNftsPage {
+    let nfts: Box<dyn Iterator<Item = NftEntry<'world>> + 'world> = if let Some(owner) = owned_by {
+        Box::new(world.nfts_in_account_iter(owner))
+    } else if let Some(domain) = domain_filter {
+        Box::new(world.nfts_in_domain_iter(domain))
+    } else {
+        Box::new(world.nfts_iter())
+    };
+    nfts_page(nfts, owned_by, domain_filter, page, per_page)
+}
+
 pub(crate) fn rwas_page<'world, I>(
     rwas: I,
     owned_by: Option<&AccountId>,
@@ -1667,6 +1897,23 @@ where
     items.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
     let (items, pagination) = paginate(items, page, per_page);
     ExplorerRwasPage { pagination, items }
+}
+
+pub(crate) fn rwas_page_for_filters<'world>(
+    world: &'world impl WorldReadOnly,
+    owned_by: Option<&'world AccountId>,
+    domain_filter: Option<&'world DomainId>,
+    page: u64,
+    per_page: u64,
+) -> ExplorerRwasPage {
+    let rwas: Box<dyn Iterator<Item = RwaEntry<'world>> + 'world> = if let Some(owner) = owned_by {
+        Box::new(world.rwas_in_account_iter(owner))
+    } else if let Some(domain) = domain_filter {
+        Box::new(world.rwas_in_domain_iter(domain))
+    } else {
+        Box::new(world.rwas_iter())
+    };
+    rwas_page(rwas, owned_by, domain_filter, page, per_page)
 }
 
 pub(crate) fn block_created_at(duration: Duration) -> String {

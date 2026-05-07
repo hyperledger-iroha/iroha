@@ -518,6 +518,33 @@ fn seed_near_quorum_commit_votes_for_block(
     required
 }
 
+fn commit_qc_for_block(
+    actor: &Actor,
+    keypairs: &[KeyPair],
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    commit_topology: &[PeerId],
+) -> crate::sumeragi::consensus::Qc {
+    let topology = super::network_topology::Topology::new(commit_topology.to_vec());
+    let required = topology.min_votes_for_commit().max(1);
+    let signers: BTreeSet<_> = (0..required)
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, commit_topology.len());
+    qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        actor.epoch_for_height(height),
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        keypairs,
+    )
+}
+
 fn seed_remote_commit_votes_for_block(
     actor: &mut Actor,
     keypairs: &[KeyPair],
@@ -2654,6 +2681,154 @@ async fn test_actor_harness_uses_unique_peer_seed_salts_per_instance() {
         first_block.hash(),
         second_block.hash(),
         "separate harnesses should not produce identical signed blocks for the same round inputs"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn vnext_quorum_policy_uses_npos_stake_snapshot() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    let harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let view = harness.actor.state.view();
+    let roster = harness.actor.effective_commit_topology_from_view(&view);
+    drop(view);
+
+    let quorum = harness
+        .actor
+        .vnext_quorum_policy(ConsensusMode::Npos, &roster)
+        .expect("NPoS vNext quorum policy");
+
+    assert!(matches!(
+        quorum,
+        crate::sumeragi::vnext::QuorumPolicy::Stake { .. }
+    ));
+    assert!(
+        quorum.smallest_satisfying_prefix_len(&roster).is_some(),
+        "fallback or live stake snapshot should produce a satisfying prefix"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_message_vnext_rechain_certificate_installs_reactor_chain_order() {
+    let mut harness = test_actor_harness(7).await;
+    let height = {
+        let view = harness.actor.state.view();
+        u64::try_from(view.height())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1)
+    };
+    let view = 0;
+    let epoch = harness.actor.epoch_for_height(height);
+    let block_hash = pending_session_key(height).0;
+    let roster = harness.actor.effective_commit_topology();
+    let (_, mode_tag, prf_seed) = harness.actor.consensus_context_for_height(height);
+    let topology = super::network_topology::Topology::new(roster);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let roster = signature_topology.as_ref().to_vec();
+    let quorum = harness
+        .actor
+        .vnext_quorum_policy(ConsensusMode::Permissioned, &roster)
+        .expect("permissioned vNext quorum");
+    let critical_prefix_len = quorum
+        .smallest_satisfying_prefix_len(&roster)
+        .expect("permissioned quorum has satisfying prefix");
+    let order = crate::sumeragi::vnext::ChainOrder::new(
+        height,
+        view,
+        epoch,
+        0,
+        roster.clone(),
+        critical_prefix_len,
+        critical_prefix_len,
+    )
+    .expect("base chain order");
+    let mut suspect = crate::sumeragi::vnext::Suspect::unsigned(
+        crate::sumeragi::vnext::SlotId {
+            height,
+            view,
+            epoch,
+            block_hash,
+        },
+        roster[1].clone(),
+        roster[2].clone(),
+        crate::sumeragi::vnext::MissedObligation::AckValidation,
+        &order,
+        900,
+    );
+    let accuser_keypair = harness
+        .key_pairs
+        .iter()
+        .find(|keypair| keypair.public_key() == roster[1].public_key())
+        .expect("accuser keypair");
+    suspect
+        .sign(
+            &harness.actor.common_config.chain,
+            mode_tag,
+            accuser_keypair.private_key(),
+        )
+        .expect("sign suspicion");
+    let mut certificate = order
+        .rechain_after_suspect(suspect, &quorum)
+        .expect("re-chain certificate body");
+    let signer_roster = certificate.new_order.critical_path().to_vec();
+    let signer_count = usize::from(
+        quorum
+            .smallest_satisfying_prefix_len(&signer_roster)
+            .expect("new order satisfies quorum"),
+    );
+    let signer_indices = (0..signer_count).collect::<Vec<_>>();
+    certificate.signer_bitmap =
+        crate::sumeragi::vnext::build_signer_bitmap(&signer_indices, signer_roster.len())
+            .expect("signer bitmap");
+    let preimage = certificate
+        .signing_preimage(&harness.actor.common_config.chain, mode_tag)
+        .expect("certificate preimage");
+    let signatures = signer_indices
+        .iter()
+        .map(|index| {
+            let peer = &signer_roster[*index];
+            let keypair = harness
+                .key_pairs
+                .iter()
+                .find(|keypair| keypair.public_key() == peer.public_key())
+                .expect("signer keypair");
+            Signature::new(keypair.private_key(), &preimage)
+                .payload()
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+    let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    certificate.aggregate_signature =
+        iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+            .expect("aggregate vNext re-chain certificate signatures");
+    let expected_order = certificate.new_order.clone();
+
+    harness
+        .actor
+        .on_block_message(crate::sumeragi::InboundBlockMessage::new(
+            BlockMessage::VNext(
+                crate::sumeragi::vnext::ConsensusMessage::RechainCertificate(certificate),
+            ),
+            None,
+        ))
+        .expect("vNext re-chain certificate handled");
+
+    let reactor = harness
+        .actor
+        .vnext_reactors
+        .get(&(height, view))
+        .expect("vNext reactor created for certificate");
+    assert_eq!(reactor.chain_order, expected_order);
+    assert_eq!(harness.actor.vnext_rechain_journal.len(), 1);
+    assert_eq!(
+        harness
+            .actor
+            .vnext_rechain_journal
+            .back()
+            .expect("journaled certificate")
+            .new_order,
+        expected_order
     );
 }
 
@@ -79134,26 +79309,6 @@ async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
     harness.shutdown.send();
 }
 
-fn record_test_worker_slot_ingress(
-    queue: super::status::WorkerQueueKind,
-    _height: u64,
-    _view: u64,
-    _kind: super::status::ConsensusMessageKind,
-    _block_hash: Option<HashOf<BlockHeader>>,
-) {
-    super::status::record_worker_queue_enqueue(queue);
-}
-
-fn drain_test_worker_slot_ingress(
-    queue: super::status::WorkerQueueKind,
-    _height: u64,
-    _view: u64,
-    _kind: super::status::ConsensusMessageKind,
-    _block_hash: Option<HashOf<BlockHeader>>,
-) {
-    super::status::record_worker_queue_drain(queue, 1);
-}
-
 #[tokio::test(flavor = "current_thread")]
 async fn force_view_change_if_idle_defers_empty_frontier_while_block_ingress_is_queued() {
     use std::borrow::Cow;
@@ -122182,6 +122337,228 @@ async fn validation_dispatches_near_tip_commit_qc_to_workers() {
     assert_eq!(pending.validation_status, ValidationStatus::Pending);
     assert!(pending.parent_state_root.is_none());
     assert!(pending.post_state_root.is_none());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_qc_dispatches_validation_to_worker_when_no_inflight() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+
+    let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    let (_result_tx, result_rx) = mpsc::sync_channel::<super::validation::ValidationResult>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+    actor.subsystems.validation.result_rx = Some(result_rx);
+    actor.subsystems.validation.inflight.clear();
+
+    let commit_topology = actor.effective_commit_topology();
+    let qc = commit_qc_for_block(
+        actor,
+        &harness.key_pairs,
+        block_hash,
+        height,
+        view,
+        &commit_topology,
+    );
+    actor.qc_cache.insert(
+        (Phase::Commit, block_hash, height, view, qc.epoch),
+        qc.clone(),
+    );
+
+    assert!(
+        !actor.maybe_validate_pending_for_commit_qc(&qc, &commit_topology),
+        "commit QC should defer until worker validation completes"
+    );
+    let queued_work = work_rx
+        .try_recv()
+        .expect("commit-QC-backed validation should be queued to workers");
+    assert_eq!(queued_work.hash, block_hash);
+    assert_eq!(queued_work.height, height);
+    assert_eq!(queued_work.view, view);
+    assert!(
+        actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&block_hash),
+        "commit QC worker dispatch should leave validation inflight"
+    );
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert_eq!(pending.validation_status, ValidationStatus::Pending);
+    assert!(pending.parent_state_root.is_none());
+    assert!(pending.post_state_root.is_none());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_qc_keeps_fresh_inflight_validation_deferred_past_inline_fallback() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+
+    let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    let (_result_tx, result_rx) = mpsc::sync_channel::<super::validation::ValidationResult>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+    actor.subsystems.validation.result_rx = Some(result_rx);
+    let inline_fallback_timeout = actor.commit_validation_inline_fallback_timeout();
+    actor.subsystems.validation.inflight.insert(
+        block_hash,
+        super::ValidationInFlight {
+            id: 23,
+            started_at: Instant::now()
+                - inline_fallback_timeout.saturating_add(Duration::from_millis(1)),
+            frontier_generation: None,
+        },
+    );
+
+    let commit_topology = actor.effective_commit_topology();
+    let qc = commit_qc_for_block(
+        actor,
+        &harness.key_pairs,
+        block_hash,
+        height,
+        view,
+        &commit_topology,
+    );
+    actor.qc_cache.insert(
+        (Phase::Commit, block_hash, height, view, qc.epoch),
+        qc.clone(),
+    );
+
+    assert!(
+        !actor.maybe_validate_pending_for_commit_qc(&qc, &commit_topology),
+        "fresh inflight validation should stay deferred beyond the old inline fallback"
+    );
+    assert!(
+        matches!(work_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "commit QC should not enqueue duplicate validation while fresh inflight exists"
+    );
+    assert!(
+        actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&block_hash),
+        "fresh inflight validation should not be superseded"
+    );
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert_eq!(pending.validation_status, ValidationStatus::Pending);
+    assert!(pending.parent_state_root.is_none());
+    assert!(pending.post_state_root.is_none());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_qc_recovers_from_stale_inflight_validation_inline() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+    actor.note_proposal_seen(height, view, payload_hash);
+
+    let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    let (_result_tx, result_rx) = mpsc::sync_channel::<super::validation::ValidationResult>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+    actor.subsystems.validation.result_rx = Some(result_rx);
+    actor.subsystems.validation.inflight.insert(
+        block_hash,
+        super::ValidationInFlight {
+            id: 24,
+            started_at: Instant::now(),
+            frontier_generation: Some(1),
+        },
+    );
+
+    let commit_topology = actor.effective_commit_topology();
+    let qc = commit_qc_for_block(
+        actor,
+        &harness.key_pairs,
+        block_hash,
+        height,
+        view,
+        &commit_topology,
+    );
+    actor.qc_cache.insert(
+        (Phase::Commit, block_hash, height, view, qc.epoch),
+        qc.clone(),
+    );
+
+    assert!(
+        actor.maybe_validate_pending_for_commit_qc(&qc, &commit_topology),
+        "stale inflight validation should recover inline after commit QC"
+    );
+    assert!(
+        matches!(work_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "stale inflight recovery should not enqueue duplicate validation"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&block_hash),
+        "stale inflight entry should be cleared"
+    );
+    if let Some(pending) = actor.pending.pending_blocks.get(&block_hash) {
+        assert_eq!(pending.validation_status, ValidationStatus::Valid);
+        assert!(pending.parent_state_root.is_some());
+        assert!(pending.post_state_root.is_some());
+    } else {
+        assert!(
+            actor.kura.get_block_height_by_hash(block_hash).is_some(),
+            "stale inflight validation should either leave a validated pending block or commit it"
+        );
+    }
 
     harness.shutdown.send();
 }

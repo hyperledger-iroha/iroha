@@ -258,6 +258,8 @@ const QUORUM_RESCHEDULE_BACKOFF_DIVISOR: u32 = 4;
 const BLOCK_SYNC_WARN_COOLDOWN_FLOOR: Duration = Duration::from_secs(3);
 /// Prevent repeated insufficient-QC warnings for the same block/phase tuple across short intervals.
 const QC_INSUFFICIENT_WARN_COOLDOWN: Duration = Duration::from_secs(3);
+/// Keep recent vNext order-changing certificates in memory for replay/catch-up sidecars.
+const VNEXT_CERTIFICATE_JOURNAL_CAP: usize = 256;
 /// Cap the number of block-sync quorum-miss warnings emitted per burst window.
 const BLOCK_SYNC_WARN_BURST_CAP: u32 = 3;
 /// Window used by block-sync warning burst suppression.
@@ -10443,6 +10445,9 @@ pub(super) struct Actor {
     block_signer_cache: BlockSignerCache,
     qc_cache: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
     qc_signer_tally: BTreeMap<QcVoteKey, QcSignerTally>,
+    vnext_reactors: BTreeMap<(u64, u64), super::vnext::Reactor>,
+    vnext_rechain_journal: VecDeque<super::vnext::RechainCertificate>,
+    vnext_view_change_journal: VecDeque<super::vnext::ViewChangeCertificate>,
     epoch_manager: Option<EpochManager>,
     pending_npos_vrf_records: BTreeMap<u64, VrfEpochRecord>,
     npos_collectors: Option<NposCollectorConfig>,
@@ -18039,6 +18044,9 @@ impl Actor {
             block_signer_cache: BlockSignerCache::new(BLOCK_SIGNER_CACHE_LIMIT),
             qc_cache: BTreeMap::new(),
             qc_signer_tally: BTreeMap::new(),
+            vnext_reactors: BTreeMap::new(),
+            vnext_rechain_journal: VecDeque::new(),
+            vnext_view_change_journal: VecDeque::new(),
             epoch_manager,
             pending_npos_vrf_records: BTreeMap::new(),
             npos_collectors,
@@ -20199,18 +20207,495 @@ impl Actor {
             BlockMessage::RbcDeliver(deliver) => self.handle_rbc_deliver(deliver),
             BlockMessage::FetchPendingBlock(request) => self.handle_fetch_pending_block(request),
             BlockMessage::Proposal(proposal) => self.handle_proposal(proposal),
-            BlockMessage::VNext(message) => {
-                debug!(
-                    ?message,
-                    "ignoring experimental vNext message in legacy Sumeragi main loop"
-                );
-                Ok(())
-            }
+            BlockMessage::VNext(message) => self.handle_vnext_message(message),
         };
         if defer_committed_block_poll {
             self.process_committed_blocks_before_consensus("VrfMetadataPostHandle");
         }
         result
+    }
+
+    fn handle_vnext_message(&mut self, message: super::vnext::ConsensusMessage) -> Result<()> {
+        let (height, view) = self.vnext_message_height_view(&message);
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let commit_topology = {
+            let cached = self.state.commit_topology.view();
+            if cached.is_empty() {
+                self.effective_commit_topology()
+            } else {
+                cached.iter().cloned().collect()
+            }
+        };
+        if commit_topology.is_empty() {
+            debug!(
+                ?message,
+                height, view, "dropping vNext message without commit roster"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::VNext,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::RosterMissing,
+            );
+            return Ok(());
+        }
+
+        let topology = super::network_topology::Topology::new(commit_topology.iter().cloned());
+        let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
+        let Some(quorum) = self.vnext_quorum_policy(consensus_mode, signature_topology.as_ref())
+        else {
+            debug!(
+                ?message,
+                height,
+                view,
+                ?consensus_mode,
+                "dropping vNext message without a verifiable quorum policy"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::VNext,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::QuorumMissing,
+            );
+            return Ok(());
+        };
+        let Some(critical_prefix_len) =
+            quorum.smallest_satisfying_prefix_len(signature_topology.as_ref())
+        else {
+            debug!(
+                ?message,
+                height,
+                view,
+                ?consensus_mode,
+                "dropping vNext message because no chain-order prefix satisfies quorum"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::VNext,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::QuorumMissing,
+            );
+            return Ok(());
+        };
+        let epoch = self
+            .roster_validation_cache
+            .expected_epoch(height, consensus_mode);
+        let Ok(base_chain_order) = super::vnext::ChainOrder::new(
+            height,
+            view,
+            epoch,
+            0,
+            signature_topology.as_ref().to_vec(),
+            critical_prefix_len,
+            critical_prefix_len,
+        ) else {
+            debug!(
+                ?message,
+                height, view, "dropping vNext message with invalid chain order"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::VNext,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return Ok(());
+        };
+        let chain_order = self
+            .vnext_reactors
+            .get(&(height, view))
+            .map(|reactor| reactor.chain_order.clone())
+            .unwrap_or(base_chain_order);
+
+        let signer_roster = match &message {
+            super::vnext::ConsensusMessage::RechainVote(vote) => {
+                Cow::Owned(vote.new_order.critical_path().to_vec())
+            }
+            super::vnext::ConsensusMessage::RechainCertificate(certificate) => {
+                Cow::Owned(certificate.new_order.critical_path().to_vec())
+            }
+            _ => Cow::Borrowed(chain_order.critical_path()),
+        };
+        let Some(signer_pops) = self.vnext_signer_pops(signer_roster.as_ref()) else {
+            debug!(
+                ?message,
+                height, view, "dropping vNext message without proof-of-possession roster"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::VNext,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::RosterMissing,
+            );
+            return Ok(());
+        };
+        let signer_pop_refs = signer_pops.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let context = super::vnext::VNextIngressContext {
+            chain_id: &self.chain_id,
+            mode_tag,
+            head: chain_order.ordered_validators.first(),
+            signer_roster: signer_roster.as_ref(),
+            signer_pops: &signer_pop_refs,
+            quorum: Some(&quorum),
+            chain_order: Some(&chain_order),
+        };
+        if let Err(error) = message.verify_ingress(&context) {
+            let reason = Self::vnext_drop_reason(error);
+            debug!(
+                ?message,
+                ?error,
+                ?reason,
+                height,
+                view,
+                "dropping invalid experimental vNext message"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::VNext,
+                super::status::ConsensusMessageOutcome::Dropped,
+                reason,
+            );
+            return Ok(());
+        }
+
+        let event = match message {
+            super::vnext::ConsensusMessage::Suspect(suspect) => {
+                super::vnext::ReactorEvent::SuspectReceived {
+                    suspect,
+                    now_ms: Self::vnext_now_ms(),
+                }
+            }
+            super::vnext::ConsensusMessage::RechainProposal(proposal) => {
+                super::vnext::ReactorEvent::RechainProposalReceived { proposal }
+            }
+            super::vnext::ConsensusMessage::RechainVote(vote) => {
+                super::vnext::ReactorEvent::RechainVoteReceived { vote }
+            }
+            super::vnext::ConsensusMessage::RechainCertificate(certificate) => {
+                super::vnext::ReactorEvent::RechainCertificateReceived {
+                    certificate,
+                    now_ms: Self::vnext_now_ms(),
+                }
+            }
+            super::vnext::ConsensusMessage::ViewChangeVote(vote) => {
+                super::vnext::ReactorEvent::ViewChangeVoteReceived { vote }
+            }
+            super::vnext::ConsensusMessage::ViewChangeCertificate(certificate) => {
+                super::vnext::ReactorEvent::ViewChangeCertificateReceived { certificate }
+            }
+        };
+        let config = super::vnext::PerformanceFaultConfig::from(&self.config.vnext);
+        let effects = {
+            let reactor = self
+                .vnext_reactors
+                .entry((height, view))
+                .or_insert_with(|| {
+                    super::vnext::Reactor::new(chain_order.clone(), quorum.clone(), config)
+                });
+            reactor.quorum = quorum;
+            reactor.config = config;
+            reactor.handle_event(event)
+        };
+        self.apply_vnext_effects(effects);
+        Ok(())
+    }
+
+    fn vnext_now_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+            .unwrap_or(0)
+    }
+
+    fn apply_vnext_effects(&mut self, effects: Vec<super::vnext::ReactorEffect>) {
+        for effect in effects {
+            match effect {
+                super::vnext::ReactorEffect::DispatchValidation {
+                    slot,
+                    id,
+                    generation,
+                } => {
+                    debug!(
+                        height = slot.height,
+                        view = slot.view,
+                        block = %slot.block_hash,
+                        id,
+                        generation,
+                        "vNext reactor requested validation dispatch"
+                    );
+                }
+                super::vnext::ReactorEffect::AcceptValidated { slot, roots } => {
+                    debug!(
+                        height = slot.height,
+                        view = slot.view,
+                        block = %slot.block_hash,
+                        parent_state_root = %roots.parent_state_root,
+                        post_state_root = %roots.post_state_root,
+                        "vNext reactor accepted validated slot"
+                    );
+                }
+                super::vnext::ReactorEffect::RejectValidation { slot, failure } => {
+                    debug!(
+                        height = slot.height,
+                        view = slot.view,
+                        block = %slot.block_hash,
+                        reason = %failure.reason_label,
+                        "vNext reactor rejected validation"
+                    );
+                }
+                super::vnext::ReactorEffect::BroadcastVNext { mut message } => {
+                    self.sign_local_vnext_message(&mut message);
+                    self.schedule_background(BackgroundRequest::Broadcast {
+                        msg: BlockMessageWire::new(BlockMessage::VNext(message)),
+                    });
+                }
+                super::vnext::ReactorEffect::StartRecovery { slot, reason } => {
+                    debug!(
+                        height = slot.height,
+                        view = slot.view,
+                        block = %slot.block_hash,
+                        ?reason,
+                        "vNext reactor entered recovery"
+                    );
+                }
+                super::vnext::ReactorEffect::InstallRechain { certificate } => {
+                    self.install_vnext_rechain_certificate(certificate);
+                }
+                super::vnext::ReactorEffect::AcceptRechainProposal {
+                    proposal: _,
+                    certificate,
+                } => {
+                    self.broadcast_vnext_rechain_vote(certificate);
+                }
+                super::vnext::ReactorEffect::AcceptRechainVote { vote } => {
+                    debug!(
+                        height = vote.slot.height,
+                        view = vote.slot.view,
+                        signer = %vote.signer,
+                        "vNext reactor accepted re-chain vote"
+                    );
+                }
+                super::vnext::ReactorEffect::AcceptViewChangeVote { vote } => {
+                    debug!(
+                        new_view = vote.new_view,
+                        signer = %vote.signer,
+                        "vNext reactor accepted view-change vote"
+                    );
+                }
+                super::vnext::ReactorEffect::InstallViewChange { certificate } => {
+                    self.push_vnext_view_change_certificate(certificate);
+                }
+                super::vnext::ReactorEffect::RequireViewChange { slot, reason_label } => {
+                    debug!(
+                        height = slot.height,
+                        view = slot.view,
+                        block = %slot.block_hash,
+                        reason = %reason_label,
+                        "vNext reactor requires view change"
+                    );
+                }
+                super::vnext::ReactorEffect::DropStaleWorkerResult {
+                    slot,
+                    id,
+                    generation,
+                } => {
+                    debug!(
+                        height = slot.height,
+                        view = slot.view,
+                        block = %slot.block_hash,
+                        id,
+                        generation,
+                        "vNext reactor dropped stale worker result"
+                    );
+                }
+                super::vnext::ReactorEffect::RejectSuspicion { slot, reason_label } => {
+                    debug!(
+                        height = slot.height,
+                        view = slot.view,
+                        block = %slot.block_hash,
+                        reason = %reason_label,
+                        "vNext reactor rejected suspicion/evidence"
+                    );
+                }
+            }
+        }
+    }
+
+    fn install_vnext_rechain_certificate(&mut self, certificate: super::vnext::RechainCertificate) {
+        while self.vnext_rechain_journal.len() >= VNEXT_CERTIFICATE_JOURNAL_CAP {
+            self.vnext_rechain_journal.pop_front();
+        }
+        debug!(
+            height = certificate.slot.height,
+            view = certificate.slot.view,
+            block = %certificate.slot.block_hash,
+            rechain_seq = certificate.rechain_seq,
+            "installed vNext re-chain certificate"
+        );
+        self.vnext_rechain_journal.push_back(certificate);
+    }
+
+    fn push_vnext_view_change_certificate(
+        &mut self,
+        certificate: super::vnext::ViewChangeCertificate,
+    ) {
+        while self.vnext_view_change_journal.len() >= VNEXT_CERTIFICATE_JOURNAL_CAP {
+            self.vnext_view_change_journal.pop_front();
+        }
+        debug!(
+            new_view = certificate.new_view,
+            highest_slot = ?certificate.highest_slot,
+            "installed vNext view-change certificate"
+        );
+        self.vnext_view_change_journal.push_back(certificate);
+    }
+
+    fn sign_local_vnext_message(&self, message: &mut super::vnext::ConsensusMessage) {
+        let super::vnext::ConsensusMessage::Suspect(suspect) = message else {
+            return;
+        };
+        if &suspect.accuser != self.common_config.peer.id() || !suspect.signature.is_empty() {
+            return;
+        }
+        let (_, mode_tag, _) = self.consensus_context_for_height(suspect.slot.height);
+        if let Err(err) = suspect.sign(
+            &self.chain_id,
+            mode_tag,
+            self.common_config.key_pair.private_key(),
+        ) {
+            warn!(?err, "failed to sign local vNext suspicion");
+        }
+    }
+
+    fn broadcast_vnext_rechain_vote(&mut self, certificate: super::vnext::RechainCertificate) {
+        let local_peer = self.common_config.peer.id().clone();
+        if !certificate
+            .new_order
+            .critical_path()
+            .iter()
+            .any(|peer| peer == &local_peer)
+        {
+            return;
+        }
+        let (_, mode_tag, _) = self.consensus_context_for_height(certificate.slot.height);
+        let mut vote = super::vnext::RechainVote::unsigned(&certificate, local_peer);
+        if let Err(err) = vote.sign(
+            &self.chain_id,
+            mode_tag,
+            self.common_config.key_pair.private_key(),
+        ) {
+            warn!(?err, "failed to sign vNext re-chain vote");
+            return;
+        }
+        self.schedule_background(BackgroundRequest::Broadcast {
+            msg: BlockMessageWire::new(BlockMessage::VNext(
+                super::vnext::ConsensusMessage::RechainVote(vote),
+            )),
+        });
+    }
+
+    fn vnext_message_height_view(&self, message: &super::vnext::ConsensusMessage) -> (u64, u64) {
+        match message {
+            super::vnext::ConsensusMessage::Suspect(suspect) => {
+                (suspect.slot.height, suspect.slot.view)
+            }
+            super::vnext::ConsensusMessage::RechainProposal(proposal) => {
+                (proposal.slot.height, proposal.slot.view)
+            }
+            super::vnext::ConsensusMessage::RechainVote(vote) => (vote.slot.height, vote.slot.view),
+            super::vnext::ConsensusMessage::RechainCertificate(certificate) => {
+                (certificate.slot.height, certificate.slot.view)
+            }
+            super::vnext::ConsensusMessage::ViewChangeVote(vote) => {
+                let height = vote.highest_slot.map_or_else(
+                    || self.committed_height_snapshot().saturating_add(1),
+                    |slot| slot.height,
+                );
+                (height, vote.new_view)
+            }
+            super::vnext::ConsensusMessage::ViewChangeCertificate(certificate) => {
+                let height = certificate.highest_slot.map_or_else(
+                    || self.committed_height_snapshot().saturating_add(1),
+                    |slot| slot.height,
+                );
+                (height, certificate.new_view)
+            }
+        }
+    }
+
+    fn vnext_signer_pops(&self, signer_roster: &[PeerId]) -> Option<Vec<Vec<u8>>> {
+        signer_roster
+            .iter()
+            .map(|peer| {
+                self.roster_validation_cache
+                    .pops
+                    .get(peer.public_key())
+                    .cloned()
+            })
+            .collect()
+    }
+
+    fn vnext_quorum_policy(
+        &self,
+        consensus_mode: ConsensusMode,
+        signer_roster: &[PeerId],
+    ) -> Option<super::vnext::QuorumPolicy> {
+        match consensus_mode {
+            ConsensusMode::Permissioned => {
+                let topology = super::network_topology::Topology::new(signer_roster.to_vec());
+                let required = u16::try_from(topology.min_votes_for_commit().max(1)).ok()?;
+                Some(super::vnext::QuorumPolicy::Count { required })
+            }
+            ConsensusMode::Npos => {
+                let snapshot = self
+                    .roster_validation_cache
+                    .stake_snapshot_for_roster(signer_roster)?;
+                let mut total = Numeric::from(0_u64);
+                let mut weights = Vec::with_capacity(snapshot.entries.len());
+                for entry in snapshot.entries {
+                    total = total.checked_add(entry.stake.clone())?;
+                    weights.push(super::vnext::StakeWeight {
+                        peer_id: entry.peer_id,
+                        weight: entry.stake,
+                    });
+                }
+                (!total.is_zero()).then_some(super::vnext::QuorumPolicy::Stake { total, weights })
+            }
+        }
+    }
+
+    fn vnext_drop_reason(
+        error: super::vnext::VNextSignatureError,
+    ) -> super::status::ConsensusMessageReason {
+        use super::vnext::VNextSignatureError;
+
+        match error {
+            VNextSignatureError::MissingSignature
+            | VNextSignatureError::BadSignature
+            | VNextSignatureError::MissingAggregateSignature
+            | VNextSignatureError::BadAggregateSignature
+            | VNextSignatureError::UnsupportedAggregateKeyAlgorithm { .. } => {
+                super::status::ConsensusMessageReason::InvalidSignature
+            }
+            VNextSignatureError::QuorumNotMet { .. }
+            | VNextSignatureError::MissingQuorum
+            | VNextSignatureError::EmptySignerSet => {
+                super::status::ConsensusMessageReason::QuorumMissing
+            }
+            VNextSignatureError::MissingHead
+            | VNextSignatureError::EmptySignerRoster
+            | VNextSignatureError::SignerNotInRoster
+            | VNextSignatureError::SignerPopLength { .. } => {
+                super::status::ConsensusMessageReason::RosterMissing
+            }
+            VNextSignatureError::CanonicalEncoding
+            | VNextSignatureError::SignerBitmapLength { .. }
+            | VNextSignatureError::SignerBitmapOutOfRange { .. }
+            | VNextSignatureError::SignerIndexOutOfRange { .. }
+            | VNextSignatureError::DuplicateSignerIndex { .. }
+            | VNextSignatureError::EmptyEvidence
+            | VNextSignatureError::ChainOrderValidation
+            | VNextSignatureError::RechainEvidenceMismatch
+            | VNextSignatureError::SlotMismatch
+            | VNextSignatureError::ChainOrderHashMismatch
+            | VNextSignatureError::RechainSequenceMismatch => {
+                super::status::ConsensusMessageReason::InvalidPayload
+            }
+        }
     }
 
     pub(super) fn on_lane_relay_message(&mut self, message: super::LaneRelayMessage) -> Result<()> {
@@ -21045,8 +21530,14 @@ impl Actor {
                 super::vnext::ConsensusMessage::RechainProposal(proposal) => {
                     Some((proposal.slot.height, proposal.slot.view))
                 }
+                super::vnext::ConsensusMessage::RechainVote(vote) => {
+                    Some((vote.slot.height, vote.slot.view))
+                }
                 super::vnext::ConsensusMessage::RechainCertificate(certificate) => {
                     Some((certificate.slot.height, certificate.slot.view))
+                }
+                super::vnext::ConsensusMessage::ViewChangeVote(vote) => {
+                    vote.highest_slot.map(|slot| (slot.height, slot.view))
                 }
                 super::vnext::ConsensusMessage::ViewChangeCertificate(certificate) => certificate
                     .highest_slot

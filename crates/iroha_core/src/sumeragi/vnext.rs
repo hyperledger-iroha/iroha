@@ -16,6 +16,7 @@ use iroha_data_model::{
     },
     peer::PeerId,
 };
+use iroha_primitives::numeric::{Numeric, NumericSpec};
 use norito::codec::{Decode, Encode};
 
 // TODO: Wire these vNext types through the live consensus runner once the
@@ -364,6 +365,76 @@ impl ChainOrder {
             .then(|| &self.ordered_validators[successor_pos])
     }
 
+    /// Apply successor-scoped suspicions and return the deterministic re-chain
+    /// certificate body.
+    ///
+    /// All suspicions must target this order's slot, chain-order hash, and
+    /// re-chain sequence. The evidence is then canonicalized by the suspicion
+    /// signing-body hash and applied sequentially to the evolving order. If an
+    /// earlier suspicion changes the order so a later suspicion is no longer
+    /// successor-scoped, the whole re-chain is rejected.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RechainError`] when evidence is empty, belongs to another
+    /// order, is not successor-scoped after deterministic ordering, or
+    /// quarantine would weaken the required quorum.
+    pub fn rechain_after_suspicions(
+        &self,
+        suspicions: Vec<Suspect>,
+        quorum: &QuorumPolicy,
+    ) -> Result<RechainCertificate, RechainError> {
+        if suspicions.is_empty() {
+            return Err(RechainError::EmptyEvidence);
+        }
+
+        let previous_chain_order_hash = self.hash();
+        let mut canonical = BTreeMap::new();
+        for suspect in suspicions {
+            self.validate_successor_suspicion(&suspect)?;
+            let evidence_hash = suspect
+                .signing_body_hash()
+                .ok_or(RechainError::CanonicalEvidenceEncoding)?;
+            if canonical.insert(evidence_hash, suspect).is_some() {
+                return Err(RechainError::DuplicateEvidence);
+            }
+        }
+
+        let ordered_suspicions = canonical.into_values().collect::<Vec<_>>();
+        let mut current = self.clone();
+        let mut tainted = Vec::with_capacity(ordered_suspicions.len().saturating_mul(2));
+        let mut tainted_peers = Vec::<PeerId>::with_capacity(tainted.capacity());
+
+        for suspect in &ordered_suspicions {
+            current.validate_successor_pair(&suspect.accuser, &suspect.accused)?;
+            push_tainted(
+                &mut tainted,
+                &mut tainted_peers,
+                suspect.accuser.clone(),
+                TaintReason::Accuser,
+            );
+            push_tainted(
+                &mut tainted,
+                &mut tainted_peers,
+                suspect.accused.clone(),
+                TaintReason::Accused,
+            );
+            current = current.rebuild_with_tainted_tail(&tainted_peers, quorum)?;
+        }
+
+        Ok(RechainCertificate {
+            slot: ordered_suspicions[0].slot,
+            previous_chain_order_hash,
+            new_chain_order_hash: current.hash(),
+            new_order: current.clone(),
+            rechain_seq: current.rechain_seq,
+            tainted,
+            suspicions: ordered_suspicions,
+            signer_bitmap: Vec::new(),
+            aggregate_signature: Vec::new(),
+        })
+    }
+
     /// Apply a successor-scoped suspicion and return the re-chain certificate.
     ///
     /// # Errors
@@ -375,75 +446,36 @@ impl ChainOrder {
         suspect: Suspect,
         quorum: &QuorumPolicy,
     ) -> Result<RechainCertificate, RechainError> {
-        self.validate_suspicion(&suspect)?;
+        self.rechain_after_suspicions(vec![suspect], quorum)
+    }
+
+    /// Validate that `suspect` is scoped to this order and accuses the
+    /// accuser's current critical-path successor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RechainError`] when the suspicion belongs to another slot or
+    /// re-chain sequence, or when it is not successor-scoped.
+    pub fn validate_successor_suspicion(&self, suspect: &Suspect) -> Result<(), RechainError> {
+        self.validate_suspicion(suspect)?;
+        self.validate_successor_pair(&suspect.accuser, &suspect.accused)
+    }
+
+    fn validate_successor_pair(
+        &self,
+        accuser: &PeerId,
+        accused: &PeerId,
+    ) -> Result<(), RechainError> {
         let expected_successor = self
-            .successor_of(&suspect.accuser)
+            .successor_of(accuser)
             .cloned()
             .ok_or(RechainError::AccuserHasNoCriticalSuccessor)?;
-        if expected_successor != suspect.accused {
+        if &expected_successor != accused {
             return Err(RechainError::AccusedIsNotSuccessor {
                 expected: expected_successor,
             });
         }
-
-        let mut untainted = Vec::with_capacity(self.ordered_validators.len());
-        let mut tainted_peers = Vec::with_capacity(2);
-        for peer in &self.ordered_validators {
-            if peer == &suspect.accuser || peer == &suspect.accused {
-                tainted_peers.push(peer.clone());
-            } else {
-                untainted.push(peer.clone());
-            }
-        }
-
-        if untainted.len() < usize::from(self.critical_prefix_len) {
-            return Err(RechainError::InsufficientUntaintedValidators {
-                untainted: untainted.len(),
-                critical_prefix_len: usize::from(self.critical_prefix_len),
-            });
-        }
-
-        let rechain_seq = self
-            .rechain_seq
-            .checked_add(1)
-            .ok_or(RechainError::RechainSequenceExhausted)?;
-        let mut reordered = untainted;
-        reordered.extend(tainted_peers);
-        let next = Self::new(
-            self.height,
-            self.view,
-            self.epoch,
-            rechain_seq,
-            reordered,
-            self.critical_prefix_len,
-            self.quarantine_start,
-        )
-        .expect("reordered chain must preserve validated bounds");
-
-        if !quorum.satisfied_by(next.critical_path()) {
-            return Err(RechainError::InsufficientQuorumAfterQuarantine);
-        }
-
-        Ok(RechainCertificate {
-            slot: suspect.slot,
-            previous_chain_order_hash: self.hash(),
-            new_chain_order_hash: next.hash(),
-            new_order: next,
-            rechain_seq,
-            tainted: vec![
-                TaintedValidator {
-                    peer_id: suspect.accuser.clone(),
-                    reason: TaintReason::Accuser,
-                },
-                TaintedValidator {
-                    peer_id: suspect.accused.clone(),
-                    reason: TaintReason::Accused,
-                },
-            ],
-            suspicions: vec![suspect],
-            signer_bitmap: Vec::new(),
-            aggregate_signature: Vec::new(),
-        })
+        Ok(())
     }
 
     fn validate_suspicion(&self, suspect: &Suspect) -> Result<(), RechainError> {
@@ -461,6 +493,62 @@ impl ChainOrder {
         }
         Ok(())
     }
+
+    fn rebuild_with_tainted_tail(
+        &self,
+        tainted_peers: &[PeerId],
+        quorum: &QuorumPolicy,
+    ) -> Result<Self, RechainError> {
+        let mut untainted = Vec::with_capacity(self.ordered_validators.len());
+        for peer in &self.ordered_validators {
+            if !tainted_peers.iter().any(|tainted| tainted == peer) {
+                untainted.push(peer.clone());
+            }
+        }
+
+        if untainted.len() < usize::from(self.critical_prefix_len) {
+            return Err(RechainError::InsufficientUntaintedValidators {
+                untainted: untainted.len(),
+                critical_prefix_len: usize::from(self.critical_prefix_len),
+            });
+        }
+
+        let rechain_seq = self
+            .rechain_seq
+            .checked_add(1)
+            .ok_or(RechainError::RechainSequenceExhausted)?;
+        let mut reordered = untainted;
+        reordered.extend(tainted_peers.iter().cloned());
+        let next = Self::new(
+            self.height,
+            self.view,
+            self.epoch,
+            rechain_seq,
+            reordered,
+            self.critical_prefix_len,
+            self.quarantine_start,
+        )
+        .expect("reordered chain must preserve validated bounds");
+
+        if !quorum.satisfied_by(next.critical_path()) {
+            return Err(RechainError::InsufficientQuorumAfterQuarantine);
+        }
+
+        Ok(next)
+    }
+}
+
+fn push_tainted(
+    tainted: &mut Vec<TaintedValidator>,
+    tainted_peers: &mut Vec<PeerId>,
+    peer_id: PeerId,
+    reason: TaintReason,
+) {
+    if tainted_peers.iter().any(|peer| peer == &peer_id) {
+        return;
+    }
+    tainted_peers.push(peer_id.clone());
+    tainted.push(TaintedValidator { peer_id, reason });
 }
 
 /// Chain-order construction error.
@@ -484,8 +572,8 @@ pub enum QuorumPolicy {
     },
     /// Stake-based quorum for NPoS mode.
     Stake {
-        /// Required stake weight.
-        required: u64,
+        /// Total active stake in the validator roster.
+        total: Numeric,
         /// Stake weights by validator.
         weights: Vec<StakeWeight>,
     },
@@ -497,14 +585,22 @@ impl QuorumPolicy {
     pub fn satisfied_by(&self, validators: &[PeerId]) -> bool {
         match self {
             Self::Count { required } => validators.len() >= usize::from(*required),
-            Self::Stake { required, weights } => {
-                let stake = validators
-                    .iter()
-                    .map(|validator| stake_weight(weights, validator))
-                    .sum::<u64>();
-                stake >= *required
-            }
+            Self::Stake { total, weights } => stake_quorum_satisfied(total, weights, validators),
         }
+    }
+
+    /// Return the smallest deterministic prefix of `validators` that satisfies
+    /// this quorum policy.
+    #[must_use]
+    pub fn smallest_satisfying_prefix_len(&self, validators: &[PeerId]) -> Option<u16> {
+        let mut prefix_len = 1usize;
+        while prefix_len <= validators.len() {
+            if self.satisfied_by(&validators[..prefix_len]) {
+                return u16::try_from(prefix_len).ok();
+            }
+            prefix_len = prefix_len.saturating_add(1);
+        }
+        None
     }
 }
 
@@ -514,7 +610,34 @@ pub struct StakeWeight {
     /// Validator peer id.
     pub peer_id: PeerId,
     /// Stake weight used for quorum checks.
-    pub weight: u64,
+    pub weight: Numeric,
+}
+
+fn stake_quorum_satisfied(total: &Numeric, weights: &[StakeWeight], validators: &[PeerId]) -> bool {
+    if total.is_zero() {
+        return false;
+    }
+    let mut stake = Numeric::from(0_u64);
+    for validator in validators {
+        let Some(weight) = stake_weight(weights, validator) else {
+            return false;
+        };
+        stake = match stake.checked_add(weight) {
+            Some(stake) => stake,
+            None => return false,
+        };
+    }
+    let Some(signed_scaled) = stake.checked_mul(Numeric::from(3_u64), NumericSpec::default())
+    else {
+        return false;
+    };
+    let Some(total_scaled) = total
+        .clone()
+        .checked_mul(Numeric::from(2_u64), NumericSpec::default())
+    else {
+        return false;
+    };
+    signed_scaled >= total_scaled
 }
 
 /// A missed obligation that can justify performance suspicion.
@@ -587,6 +710,11 @@ impl Suspect {
         chain_id: &ChainId,
         mode_tag: &str,
     ) -> Result<Vec<u8>, VNextSignatureError> {
+        let body = self.signing_body();
+        vnext_signing_preimage(chain_id, mode_tag, "Suspect", &body)
+    }
+
+    fn signing_body(&self) -> SuspectSigningBody {
         let body = SuspectSigningBody {
             slot: self.slot,
             accuser: self.accuser.clone(),
@@ -596,7 +724,13 @@ impl Suspect {
             rechain_seq: self.rechain_seq,
             observed_delay_ms: self.observed_delay_ms,
         };
-        vnext_signing_preimage(chain_id, mode_tag, "Suspect", &body)
+        body
+    }
+
+    fn signing_body_hash(&self) -> Option<Hash> {
+        norito::to_bytes(&self.signing_body())
+            .ok()
+            .map(|bytes| Hash::new(&bytes))
     }
 
     /// Sign this suspicion with the accuser's private key.
@@ -712,6 +846,113 @@ impl RechainProposal {
     }
 }
 
+/// Validator vote accepting a proposed re-chain certificate body.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct RechainVote {
+    /// Slot being re-chained.
+    pub slot: SlotId,
+    /// Previous chain-order hash.
+    pub previous_chain_order_hash: Hash,
+    /// New chain-order hash.
+    pub new_chain_order_hash: Hash,
+    /// New chain order accepted by this vote.
+    pub new_order: ChainOrder,
+    /// Re-chain sequence accepted by this vote.
+    pub rechain_seq: u64,
+    /// Validators tainted by this re-chain.
+    pub tainted: Vec<TaintedValidator>,
+    /// Suspicion messages that triggered this re-chain.
+    pub suspicions: Vec<Suspect>,
+    /// Validator signing the certificate body.
+    pub signer: PeerId,
+    /// BLS signature over the canonical re-chain certificate preimage.
+    pub signature: Vec<u8>,
+}
+
+impl RechainVote {
+    /// Build an unsigned vote from the deterministic re-chain certificate body.
+    #[must_use]
+    pub fn unsigned(certificate: &RechainCertificate, signer: PeerId) -> Self {
+        Self {
+            slot: certificate.slot,
+            previous_chain_order_hash: certificate.previous_chain_order_hash,
+            new_chain_order_hash: certificate.new_chain_order_hash,
+            new_order: certificate.new_order.clone(),
+            rechain_seq: certificate.rechain_seq,
+            tainted: certificate.tainted.clone(),
+            suspicions: certificate.suspicions.clone(),
+            signer,
+            signature: Vec::new(),
+        }
+    }
+
+    /// Return the canonical preimage that can later be aggregated into a
+    /// [`RechainCertificate`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VNextSignatureError::CanonicalEncoding`] if the signing body
+    /// cannot be encoded.
+    pub fn signing_preimage(
+        &self,
+        chain_id: &ChainId,
+        mode_tag: &str,
+    ) -> Result<Vec<u8>, VNextSignatureError> {
+        rechain_certificate_signing_preimage(
+            chain_id,
+            mode_tag,
+            self.slot,
+            self.previous_chain_order_hash,
+            self.new_chain_order_hash,
+            &self.new_order,
+            self.rechain_seq,
+            &self.tainted,
+            &self.suspicions,
+        )
+    }
+
+    /// Sign this vote with the validator's private key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VNextSignatureError::CanonicalEncoding`] if the signing body
+    /// cannot be encoded.
+    pub fn sign(
+        &mut self,
+        chain_id: &ChainId,
+        mode_tag: &str,
+        private_key: &PrivateKey,
+    ) -> Result<(), VNextSignatureError> {
+        let preimage = self.signing_preimage(chain_id, mode_tag)?;
+        self.signature = Signature::new(private_key, &preimage).payload().to_vec();
+        Ok(())
+    }
+
+    /// Verify the vote signature against the embedded signer.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`VNextSignatureError`] when the signer is outside the supplied
+    /// roster, the signature is absent, or verification fails.
+    pub fn verify_signature(
+        &self,
+        chain_id: &ChainId,
+        mode_tag: &str,
+        signer_roster: &[PeerId],
+    ) -> Result<(), VNextSignatureError> {
+        if !signer_roster.iter().any(|peer| peer == &self.signer) {
+            return Err(VNextSignatureError::SignerNotInRoster);
+        }
+        if self.signature.is_empty() {
+            return Err(VNextSignatureError::MissingSignature);
+        }
+        let preimage = self.signing_preimage(chain_id, mode_tag)?;
+        Signature::from_bytes(&self.signature)
+            .verify(self.signer.public_key(), &preimage)
+            .map_err(|_| VNextSignatureError::BadSignature)
+    }
+}
+
 /// Validator tainted by a re-chain.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct TaintedValidator {
@@ -765,16 +1006,17 @@ impl RechainCertificate {
         chain_id: &ChainId,
         mode_tag: &str,
     ) -> Result<Vec<u8>, VNextSignatureError> {
-        let body = RechainCertificateSigningBody {
-            slot: self.slot,
-            previous_chain_order_hash: self.previous_chain_order_hash,
-            new_chain_order_hash: self.new_chain_order_hash,
-            new_order: self.new_order.clone(),
-            rechain_seq: self.rechain_seq,
-            tainted: self.tainted.clone(),
-            suspicions: self.suspicions.clone(),
-        };
-        vnext_signing_preimage(chain_id, mode_tag, "RechainCertificate", &body)
+        rechain_certificate_signing_preimage(
+            chain_id,
+            mode_tag,
+            self.slot,
+            self.previous_chain_order_hash,
+            self.new_chain_order_hash,
+            &self.new_order,
+            self.rechain_seq,
+            &self.tainted,
+            &self.suspicions,
+        )
     }
 
     /// Verify this certificate's aggregate BLS signature and quorum.
@@ -824,6 +1066,97 @@ impl RechainCertificate {
     }
 }
 
+/// Validator vote accepting a new-view certificate body.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct ViewChangeVote {
+    /// New view number.
+    pub new_view: View,
+    /// Highest certified slot known to the signer.
+    pub highest_slot: Option<SlotId>,
+    /// Chain order hash carried into the new view.
+    pub chain_order_hash: Hash,
+    /// Validator signing the view-change body.
+    pub signer: PeerId,
+    /// BLS signature over the canonical view-change certificate preimage.
+    pub signature: Vec<u8>,
+}
+
+impl ViewChangeVote {
+    /// Build an unsigned vote from a view-change certificate body.
+    #[must_use]
+    pub fn unsigned(certificate: &ViewChangeCertificate, signer: PeerId) -> Self {
+        Self {
+            new_view: certificate.new_view,
+            highest_slot: certificate.highest_slot,
+            chain_order_hash: certificate.chain_order_hash,
+            signer,
+            signature: Vec::new(),
+        }
+    }
+
+    /// Return the canonical preimage that can later be aggregated into a
+    /// [`ViewChangeCertificate`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VNextSignatureError::CanonicalEncoding`] if the signing body
+    /// cannot be encoded.
+    pub fn signing_preimage(
+        &self,
+        chain_id: &ChainId,
+        mode_tag: &str,
+    ) -> Result<Vec<u8>, VNextSignatureError> {
+        view_change_certificate_signing_preimage(
+            chain_id,
+            mode_tag,
+            self.new_view,
+            self.highest_slot,
+            self.chain_order_hash,
+        )
+    }
+
+    /// Sign this vote with the validator's private key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VNextSignatureError::CanonicalEncoding`] if the signing body
+    /// cannot be encoded.
+    pub fn sign(
+        &mut self,
+        chain_id: &ChainId,
+        mode_tag: &str,
+        private_key: &PrivateKey,
+    ) -> Result<(), VNextSignatureError> {
+        let preimage = self.signing_preimage(chain_id, mode_tag)?;
+        self.signature = Signature::new(private_key, &preimage).payload().to_vec();
+        Ok(())
+    }
+
+    /// Verify the vote signature against the embedded signer.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`VNextSignatureError`] when the signer is outside the supplied
+    /// roster, the signature is absent, or verification fails.
+    pub fn verify_signature(
+        &self,
+        chain_id: &ChainId,
+        mode_tag: &str,
+        signer_roster: &[PeerId],
+    ) -> Result<(), VNextSignatureError> {
+        if !signer_roster.iter().any(|peer| peer == &self.signer) {
+            return Err(VNextSignatureError::SignerNotInRoster);
+        }
+        if self.signature.is_empty() {
+            return Err(VNextSignatureError::MissingSignature);
+        }
+        let preimage = self.signing_preimage(chain_id, mode_tag)?;
+        Signature::from_bytes(&self.signature)
+            .verify(self.signer.public_key(), &preimage)
+            .map_err(|_| VNextSignatureError::BadSignature)
+    }
+}
+
 /// View-change certificate for replacing a faulty head.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct ViewChangeCertificate {
@@ -851,12 +1184,13 @@ impl ViewChangeCertificate {
         chain_id: &ChainId,
         mode_tag: &str,
     ) -> Result<Vec<u8>, VNextSignatureError> {
-        let body = ViewChangeCertificateSigningBody {
-            new_view: self.new_view,
-            highest_slot: self.highest_slot,
-            chain_order_hash: self.chain_order_hash,
-        };
-        vnext_signing_preimage(chain_id, mode_tag, "ViewChangeCertificate", &body)
+        view_change_certificate_signing_preimage(
+            chain_id,
+            mode_tag,
+            self.new_view,
+            self.highest_slot,
+            self.chain_order_hash,
+        )
     }
 
     /// Verify this certificate's aggregate BLS signature and quorum.
@@ -934,6 +1268,8 @@ pub enum VNextSignatureError {
         /// Duplicated signer index.
         index: usize,
     },
+    /// Single-signer vote was signed by a peer outside the expected roster.
+    SignerNotInRoster,
     /// Aggregate verification currently accepts only BLS normal validator keys.
     UnsupportedAggregateKeyAlgorithm {
         /// Unsupported public-key algorithm.
@@ -944,6 +1280,16 @@ pub enum VNextSignatureError {
         /// Number of signers selected by the bitmap.
         signer_count: usize,
     },
+    /// The current chain head is required but unavailable.
+    MissingHead,
+    /// Quorum policy is required but unavailable.
+    MissingQuorum,
+    /// Re-chain evidence was empty.
+    EmptyEvidence,
+    /// Re-chain evidence could not be validated against the current order.
+    ChainOrderValidation,
+    /// Re-chain proposal/certificate does not match deterministic evidence.
+    RechainEvidenceMismatch,
     /// Certificate slot and embedded order do not agree.
     SlotMismatch,
     /// Certificate chain-order hash does not match the embedded order.
@@ -1087,6 +1433,45 @@ fn vnext_signing_preimage<T: Encode>(
     Ok(preimage)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn rechain_certificate_signing_preimage(
+    chain_id: &ChainId,
+    mode_tag: &str,
+    slot: SlotId,
+    previous_chain_order_hash: Hash,
+    new_chain_order_hash: Hash,
+    new_order: &ChainOrder,
+    rechain_seq: u64,
+    tainted: &[TaintedValidator],
+    suspicions: &[Suspect],
+) -> Result<Vec<u8>, VNextSignatureError> {
+    let body = RechainCertificateSigningBody {
+        slot,
+        previous_chain_order_hash,
+        new_chain_order_hash,
+        new_order: new_order.clone(),
+        rechain_seq,
+        tainted: tainted.to_vec(),
+        suspicions: suspicions.to_vec(),
+    };
+    vnext_signing_preimage(chain_id, mode_tag, "RechainCertificate", &body)
+}
+
+fn view_change_certificate_signing_preimage(
+    chain_id: &ChainId,
+    mode_tag: &str,
+    new_view: View,
+    highest_slot: Option<SlotId>,
+    chain_order_hash: Hash,
+) -> Result<Vec<u8>, VNextSignatureError> {
+    let body = ViewChangeCertificateSigningBody {
+        new_view,
+        highest_slot,
+        chain_order_hash,
+    };
+    vnext_signing_preimage(chain_id, mode_tag, "ViewChangeCertificate", &body)
+}
+
 #[derive(Clone, Debug, Decode, Encode)]
 struct SuspectSigningBody {
     slot: SlotId,
@@ -1131,10 +1516,215 @@ pub enum ConsensusMessage {
     Suspect(Suspect),
     /// Proposal to install a new chain order.
     RechainProposal(RechainProposal),
+    /// Validator vote accepting a re-chain proposal before aggregation.
+    RechainVote(RechainVote),
     /// Certificate confirming a new chain order.
     RechainCertificate(RechainCertificate),
+    /// Validator vote accepting a view change before aggregation.
+    ViewChangeVote(ViewChangeVote),
     /// Certificate moving to a new view.
     ViewChangeCertificate(ViewChangeCertificate),
+}
+
+impl ConsensusMessage {
+    /// Verify this vNext message at a live ingress boundary.
+    ///
+    /// This checks canonical single-signer signatures, aggregate BLS signatures
+    /// with proof-of-possession inputs, quorum satisfaction, and, when a current
+    /// chain order is provided, the successor-scoped re-chain evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VNextSignatureError`] when any signature, quorum, bitmap, or
+    /// evidence check fails.
+    pub fn verify_ingress(
+        &self,
+        context: &VNextIngressContext<'_>,
+    ) -> Result<(), VNextSignatureError> {
+        match self {
+            Self::Suspect(suspect) => {
+                verify_suspect_ingress(suspect, context)?;
+            }
+            Self::RechainProposal(proposal) => {
+                verify_rechain_proposal_ingress(proposal, context)?;
+            }
+            Self::RechainVote(vote) => {
+                verify_rechain_vote_ingress(vote, context)?;
+            }
+            Self::RechainCertificate(certificate) => {
+                verify_rechain_certificate_ingress(certificate, context)?;
+            }
+            Self::ViewChangeVote(vote) => {
+                verify_view_change_vote_ingress(vote, context)?;
+            }
+            Self::ViewChangeCertificate(certificate) => {
+                verify_view_change_certificate_ingress(certificate, context)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Context needed to verify a vNext message at consensus ingress.
+pub struct VNextIngressContext<'a> {
+    /// Chain id used in canonical signing domains.
+    pub chain_id: &'a ChainId,
+    /// Consensus-mode tag used in canonical signing domains.
+    pub mode_tag: &'a str,
+    /// Current chain head expected to sign re-chain proposals.
+    pub head: Option<&'a PeerId>,
+    /// Roster indexed by aggregate signer bitmaps.
+    pub signer_roster: &'a [PeerId],
+    /// Proof-of-possession entries aligned with `signer_roster`.
+    pub signer_pops: &'a [&'a [u8]],
+    /// Quorum policy for aggregate certificates and deterministic re-chain checks.
+    pub quorum: Option<&'a QuorumPolicy>,
+    /// Current chain order used to validate successor-scoped evidence.
+    pub chain_order: Option<&'a ChainOrder>,
+}
+
+fn verify_suspect_ingress(
+    suspect: &Suspect,
+    context: &VNextIngressContext<'_>,
+) -> Result<(), VNextSignatureError> {
+    suspect.verify_signature(context.chain_id, context.mode_tag)?;
+    if let Some(order) = context.chain_order {
+        order
+            .validate_successor_suspicion(suspect)
+            .map_err(|_| VNextSignatureError::ChainOrderValidation)?;
+    }
+    Ok(())
+}
+
+fn verify_rechain_proposal_ingress(
+    proposal: &RechainProposal,
+    context: &VNextIngressContext<'_>,
+) -> Result<(), VNextSignatureError> {
+    if proposal.suspicions.is_empty() {
+        return Err(VNextSignatureError::EmptyEvidence);
+    }
+    for suspect in &proposal.suspicions {
+        verify_suspect_ingress(suspect, context)?;
+    }
+    let head = context.head.ok_or(VNextSignatureError::MissingHead)?;
+    proposal.verify_head_signature(context.chain_id, context.mode_tag, head)?;
+
+    let Some(order) = context.chain_order else {
+        return Ok(());
+    };
+    if proposal.previous_chain_order_hash != order.hash() {
+        return Err(VNextSignatureError::ChainOrderHashMismatch);
+    }
+    let quorum = context.quorum.ok_or(VNextSignatureError::MissingQuorum)?;
+    let expected = order
+        .rechain_after_suspicions(proposal.suspicions.clone(), quorum)
+        .map_err(|_| VNextSignatureError::ChainOrderValidation)?;
+    if proposal.proposed_order != expected.new_order || proposal.suspicions != expected.suspicions {
+        return Err(VNextSignatureError::RechainEvidenceMismatch);
+    }
+    Ok(())
+}
+
+fn verify_rechain_vote_ingress(
+    vote: &RechainVote,
+    context: &VNextIngressContext<'_>,
+) -> Result<(), VNextSignatureError> {
+    if vote.suspicions.is_empty() {
+        return Err(VNextSignatureError::EmptyEvidence);
+    }
+    for suspect in &vote.suspicions {
+        verify_suspect_ingress(suspect, context)?;
+    }
+    let Some(order) = context.chain_order else {
+        vote.verify_signature(context.chain_id, context.mode_tag, context.signer_roster)?;
+        return Ok(());
+    };
+    if vote.previous_chain_order_hash != order.hash() {
+        return Err(VNextSignatureError::ChainOrderHashMismatch);
+    }
+    let quorum = context.quorum.ok_or(VNextSignatureError::MissingQuorum)?;
+    let expected = order
+        .rechain_after_suspicions(vote.suspicions.clone(), quorum)
+        .map_err(|_| VNextSignatureError::ChainOrderValidation)?;
+    if vote.new_order != expected.new_order
+        || vote.new_chain_order_hash != expected.new_chain_order_hash
+        || vote.rechain_seq != expected.rechain_seq
+        || vote.tainted != expected.tainted
+        || vote.suspicions != expected.suspicions
+    {
+        return Err(VNextSignatureError::RechainEvidenceMismatch);
+    }
+    vote.verify_signature(context.chain_id, context.mode_tag, context.signer_roster)?;
+    Ok(())
+}
+
+fn verify_rechain_certificate_ingress(
+    certificate: &RechainCertificate,
+    context: &VNextIngressContext<'_>,
+) -> Result<(), VNextSignatureError> {
+    if certificate.suspicions.is_empty() {
+        return Err(VNextSignatureError::EmptyEvidence);
+    }
+    for suspect in &certificate.suspicions {
+        verify_suspect_ingress(suspect, context)?;
+    }
+    let quorum = context.quorum.ok_or(VNextSignatureError::MissingQuorum)?;
+    if let Some(order) = context.chain_order {
+        if certificate.previous_chain_order_hash != order.hash() {
+            return Err(VNextSignatureError::ChainOrderHashMismatch);
+        }
+        let expected = order
+            .rechain_after_suspicions(certificate.suspicions.clone(), quorum)
+            .map_err(|_| VNextSignatureError::ChainOrderValidation)?;
+        if certificate.new_order != expected.new_order
+            || certificate.new_chain_order_hash != expected.new_chain_order_hash
+            || certificate.rechain_seq != expected.rechain_seq
+            || certificate.tainted != expected.tainted
+            || certificate.suspicions != expected.suspicions
+        {
+            return Err(VNextSignatureError::RechainEvidenceMismatch);
+        }
+    }
+    certificate.verify_aggregate_signature(
+        context.chain_id,
+        context.mode_tag,
+        context.signer_roster,
+        context.signer_pops,
+        quorum,
+    )?;
+    Ok(())
+}
+
+fn verify_view_change_vote_ingress(
+    vote: &ViewChangeVote,
+    context: &VNextIngressContext<'_>,
+) -> Result<(), VNextSignatureError> {
+    if let Some(order) = context.chain_order
+        && vote.chain_order_hash != order.hash()
+    {
+        return Err(VNextSignatureError::ChainOrderHashMismatch);
+    }
+    vote.verify_signature(context.chain_id, context.mode_tag, context.signer_roster)
+}
+
+fn verify_view_change_certificate_ingress(
+    certificate: &ViewChangeCertificate,
+    context: &VNextIngressContext<'_>,
+) -> Result<(), VNextSignatureError> {
+    if let Some(order) = context.chain_order
+        && certificate.chain_order_hash != order.hash()
+    {
+        return Err(VNextSignatureError::ChainOrderHashMismatch);
+    }
+    let quorum = context.quorum.ok_or(VNextSignatureError::MissingQuorum)?;
+    certificate.verify_aggregate_signature(
+        context.chain_id,
+        context.mode_tag,
+        context.signer_roster,
+        context.signer_pops,
+        quorum,
+    )?;
+    Ok(())
 }
 
 /// Event consumed by the vNext reactor.
@@ -1213,6 +1803,33 @@ pub enum ReactorEvent {
         /// Logical timestamp in milliseconds.
         now_ms: u64,
     },
+    /// A re-chain proposal was received from the network.
+    RechainProposalReceived {
+        /// Received proposal.
+        proposal: RechainProposal,
+    },
+    /// A validator re-chain vote was received from the network.
+    RechainVoteReceived {
+        /// Received vote.
+        vote: RechainVote,
+    },
+    /// A re-chain certificate was received from the network.
+    RechainCertificateReceived {
+        /// Received certificate.
+        certificate: RechainCertificate,
+        /// Logical timestamp in milliseconds.
+        now_ms: u64,
+    },
+    /// A validator view-change vote was received from the network.
+    ViewChangeVoteReceived {
+        /// Received vote.
+        vote: ViewChangeVote,
+    },
+    /// A view-change certificate was received from the network.
+    ViewChangeCertificateReceived {
+        /// Received certificate.
+        certificate: ViewChangeCertificate,
+    },
 }
 
 /// Effect emitted by the vNext reactor.
@@ -1257,6 +1874,28 @@ pub enum ReactorEffect {
     InstallRechain {
         /// Re-chain certificate.
         certificate: RechainCertificate,
+    },
+    /// Accept a validated re-chain proposal for local aggregation.
+    AcceptRechainProposal {
+        /// Accepted proposal.
+        proposal: RechainProposal,
+        /// Deterministic certificate body validators should sign.
+        certificate: RechainCertificate,
+    },
+    /// Accept a validated re-chain vote for local aggregation.
+    AcceptRechainVote {
+        /// Accepted vote.
+        vote: RechainVote,
+    },
+    /// Accept a validated view-change vote for local aggregation.
+    AcceptViewChangeVote {
+        /// Accepted vote.
+        vote: ViewChangeVote,
+    },
+    /// Install a certified view change.
+    InstallViewChange {
+        /// View-change certificate.
+        certificate: ViewChangeCertificate,
     },
     /// A view change is required instead of local re-chain.
     RequireViewChange {
@@ -1444,6 +2083,22 @@ impl Reactor {
             ),
             ReactorEvent::SuspectReceived { suspect, now_ms } => {
                 self.handle_suspect_received(suspect, now_ms)
+            }
+            ReactorEvent::RechainProposalReceived { proposal } => {
+                self.handle_rechain_proposal_received(proposal)
+            }
+            ReactorEvent::RechainVoteReceived { vote } => {
+                vec![ReactorEffect::AcceptRechainVote { vote }]
+            }
+            ReactorEvent::RechainCertificateReceived {
+                certificate,
+                now_ms,
+            } => self.handle_rechain_certificate_received(certificate, now_ms),
+            ReactorEvent::ViewChangeVoteReceived { vote } => {
+                vec![ReactorEffect::AcceptViewChangeVote { vote }]
+            }
+            ReactorEvent::ViewChangeCertificateReceived { certificate } => {
+                self.handle_view_change_certificate_received(certificate)
             }
         }
     }
@@ -1633,11 +2288,127 @@ impl Reactor {
             }],
         }
     }
+
+    fn handle_rechain_proposal_received(
+        &mut self,
+        proposal: RechainProposal,
+    ) -> Vec<ReactorEffect> {
+        let slot = proposal.slot;
+        if proposal.previous_chain_order_hash != self.chain_order.hash() {
+            return vec![ReactorEffect::RejectSuspicion {
+                slot,
+                reason_label: "chain_order_hash_mismatch".to_owned(),
+            }];
+        }
+        match self
+            .chain_order
+            .rechain_after_suspicions(proposal.suspicions.clone(), &self.quorum)
+        {
+            Ok(expected)
+                if proposal.proposed_order == expected.new_order
+                    && proposal.suspicions == expected.suspicions =>
+            {
+                vec![ReactorEffect::AcceptRechainProposal {
+                    proposal,
+                    certificate: expected,
+                }]
+            }
+            Ok(_) => vec![ReactorEffect::RejectSuspicion {
+                slot,
+                reason_label: "rechain_evidence_mismatch".to_owned(),
+            }],
+            Err(RechainError::InsufficientUntaintedValidators { .. })
+            | Err(RechainError::InsufficientQuorumAfterQuarantine) => {
+                vec![ReactorEffect::RequireViewChange {
+                    slot,
+                    reason_label: "rechain_would_weaken_quorum".to_owned(),
+                }]
+            }
+            Err(err) => vec![ReactorEffect::RejectSuspicion {
+                slot,
+                reason_label: rechain_error_label(&err).to_owned(),
+            }],
+        }
+    }
+
+    fn handle_rechain_certificate_received(
+        &mut self,
+        certificate: RechainCertificate,
+        now_ms: u64,
+    ) -> Vec<ReactorEffect> {
+        let slot = certificate.slot;
+        if certificate.previous_chain_order_hash != self.chain_order.hash() {
+            if certificate.new_chain_order_hash == self.chain_order.hash()
+                && certificate.new_order == self.chain_order
+            {
+                return Vec::new();
+            }
+            return vec![ReactorEffect::RejectSuspicion {
+                slot,
+                reason_label: "chain_order_hash_mismatch".to_owned(),
+            }];
+        }
+        match self
+            .chain_order
+            .rechain_after_suspicions(certificate.suspicions.clone(), &self.quorum)
+        {
+            Ok(expected)
+                if certificate.new_order == expected.new_order
+                    && certificate.new_chain_order_hash == expected.new_chain_order_hash
+                    && certificate.rechain_seq == expected.rechain_seq
+                    && certificate.tainted == expected.tainted
+                    && certificate.suspicions == expected.suspicions =>
+            {
+                if certificate.tainted.len() > usize::from(self.config.max_tainted_per_view) {
+                    return vec![ReactorEffect::RequireViewChange {
+                        slot,
+                        reason_label: "max_tainted_per_view_exceeded".to_owned(),
+                    }];
+                }
+                self.chain_order = certificate.new_order.clone();
+                self.last_rechain_ms = Some(now_ms);
+                vec![ReactorEffect::InstallRechain { certificate }]
+            }
+            Ok(_) => vec![ReactorEffect::RejectSuspicion {
+                slot,
+                reason_label: "rechain_evidence_mismatch".to_owned(),
+            }],
+            Err(RechainError::InsufficientUntaintedValidators { .. })
+            | Err(RechainError::InsufficientQuorumAfterQuarantine) => {
+                vec![ReactorEffect::RequireViewChange {
+                    slot,
+                    reason_label: "rechain_would_weaken_quorum".to_owned(),
+                }]
+            }
+            Err(err) => vec![ReactorEffect::RejectSuspicion {
+                slot,
+                reason_label: rechain_error_label(&err).to_owned(),
+            }],
+        }
+    }
+
+    fn handle_view_change_certificate_received(
+        &mut self,
+        certificate: ViewChangeCertificate,
+    ) -> Vec<ReactorEffect> {
+        if let Some(slot) = certificate.highest_slot {
+            self.slot_mut(slot).slot_state = SlotState::Aborted {
+                reason_label: "view_change_certificate".to_owned(),
+            };
+        }
+        vec![ReactorEffect::InstallViewChange { certificate }]
+    }
 }
 
 /// Re-chain validation error.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RechainError {
+    /// Re-chain evidence was empty.
+    EmptyEvidence,
+    /// Re-chain evidence could not be canonically encoded.
+    CanonicalEvidenceEncoding,
+    /// Re-chain evidence repeated the same canonical suspicion body.
+    DuplicateEvidence,
     /// Suspicion slot does not match the chain order.
     SlotMismatch,
     /// Suspicion chain-order hash does not match the local order.
@@ -1672,15 +2443,17 @@ fn duration_millis(duration: std::time::Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-fn stake_weight(weights: &[StakeWeight], validator: &PeerId) -> u64 {
+fn stake_weight(weights: &[StakeWeight], validator: &PeerId) -> Option<Numeric> {
     weights
         .iter()
-        .find_map(|entry| (&entry.peer_id == validator).then_some(entry.weight))
-        .unwrap_or(0)
+        .find_map(|entry| (&entry.peer_id == validator).then_some(entry.weight.clone()))
 }
 
 fn rechain_error_label(err: &RechainError) -> &'static str {
     match err {
+        RechainError::EmptyEvidence => "empty_evidence",
+        RechainError::CanonicalEvidenceEncoding => "canonical_evidence_encoding",
+        RechainError::DuplicateEvidence => "duplicate_evidence",
         RechainError::SlotMismatch => "slot_mismatch",
         RechainError::ChainOrderHashMismatch => "chain_order_hash_mismatch",
         RechainError::RechainSequenceMismatch => "rechain_sequence_mismatch",
@@ -1757,6 +2530,10 @@ mod tests {
                 iroha_crypto::bls_normal_pop_prove(key_pair.private_key()).expect("pop proves")
             })
             .collect()
+    }
+
+    fn pop_refs(pops: &[Vec<u8>]) -> Vec<&[u8]> {
+        pops.iter().map(Vec::as_slice).collect()
     }
 
     fn block_hash(seed: u8) -> HashOf<BlockHeader> {
@@ -2262,19 +3039,48 @@ mod tests {
         let weights = validators
             .iter()
             .cloned()
-            .map(|peer_id| StakeWeight { peer_id, weight: 1 })
+            .map(|peer_id| StakeWeight {
+                peer_id,
+                weight: Numeric::from(1_u64),
+            })
             .collect();
 
         assert_eq!(
             order.rechain_after_suspect(
                 suspect,
                 &QuorumPolicy::Stake {
-                    required: 4,
+                    total: Numeric::from(5_u64),
                     weights,
                 },
             ),
             Err(RechainError::InsufficientQuorumAfterQuarantine)
         );
+    }
+
+    #[test]
+    fn stake_quorum_uses_numeric_two_thirds_without_rounding() {
+        let validators = peers(3);
+        let policy = QuorumPolicy::Stake {
+            total: Numeric::new(100, 2),
+            weights: vec![
+                StakeWeight {
+                    peer_id: validators[0].clone(),
+                    weight: Numeric::new(50, 2),
+                },
+                StakeWeight {
+                    peer_id: validators[1].clone(),
+                    weight: Numeric::new(25, 2),
+                },
+                StakeWeight {
+                    peer_id: validators[2].clone(),
+                    weight: Numeric::new(25, 2),
+                },
+            ],
+        };
+
+        assert!(!policy.satisfied_by(&validators[..1]));
+        assert!(policy.satisfied_by(&validators[..2]));
+        assert_eq!(policy.smallest_satisfying_prefix_len(&validators), Some(2));
     }
 
     #[test]
@@ -2365,6 +3171,479 @@ mod tests {
                 &validators[1],
             ),
             Err(VNextSignatureError::BadSignature)
+        );
+    }
+
+    #[test]
+    fn vnext_ingress_verifies_successor_suspicion_signature_and_scope() {
+        let keypairs = bls_keypairs(5);
+        let validators = peers_from_keypairs(&keypairs);
+        let order = ChainOrder::new(7, 2, 0, 0, validators.clone(), 3, 3).expect("valid order");
+        let chain = chain_id();
+        let quorum = QuorumPolicy::Count { required: 3 };
+        let pops = pops_for_roster(order.critical_path(), &keypairs);
+        let pop_refs = pop_refs(&pops);
+        let context = VNextIngressContext {
+            chain_id: &chain,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG,
+            head: order.ordered_validators.first(),
+            signer_roster: order.critical_path(),
+            signer_pops: &pop_refs,
+            quorum: Some(&quorum),
+            chain_order: Some(&order),
+        };
+        let mut suspect = Suspect::unsigned(
+            slot(9),
+            validators[1].clone(),
+            validators[2].clone(),
+            MissedObligation::AckValidation,
+            &order,
+            900,
+        );
+        suspect
+            .sign(
+                &chain,
+                crate::sumeragi::consensus::PERMISSIONED_TAG,
+                keypairs[1].private_key(),
+            )
+            .expect("sign suspicion");
+
+        assert!(
+            ConsensusMessage::Suspect(suspect)
+                .verify_ingress(&context)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn vnext_ingress_rejects_non_successor_suspicion() {
+        let keypairs = bls_keypairs(5);
+        let validators = peers_from_keypairs(&keypairs);
+        let order = ChainOrder::new(7, 2, 0, 0, validators.clone(), 3, 3).expect("valid order");
+        let chain = chain_id();
+        let quorum = QuorumPolicy::Count { required: 3 };
+        let pops = pops_for_roster(order.critical_path(), &keypairs);
+        let pop_refs = pop_refs(&pops);
+        let context = VNextIngressContext {
+            chain_id: &chain,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG,
+            head: order.ordered_validators.first(),
+            signer_roster: order.critical_path(),
+            signer_pops: &pop_refs,
+            quorum: Some(&quorum),
+            chain_order: Some(&order),
+        };
+        let mut suspect = Suspect::unsigned(
+            slot(9),
+            validators[1].clone(),
+            validators[3].clone(),
+            MissedObligation::AckValidation,
+            &order,
+            900,
+        );
+        suspect
+            .sign(
+                &chain,
+                crate::sumeragi::consensus::PERMISSIONED_TAG,
+                keypairs[1].private_key(),
+            )
+            .expect("sign suspicion");
+
+        assert_eq!(
+            ConsensusMessage::Suspect(suspect).verify_ingress(&context),
+            Err(VNextSignatureError::ChainOrderValidation)
+        );
+    }
+
+    #[test]
+    fn vnext_ingress_verifies_rechain_proposal_head_and_evidence() {
+        let keypairs = bls_keypairs(5);
+        let validators = peers_from_keypairs(&keypairs);
+        let order = ChainOrder::new(7, 2, 0, 0, validators.clone(), 3, 3).expect("valid order");
+        let chain = chain_id();
+        let quorum = QuorumPolicy::Count { required: 3 };
+        let pops = pops_for_roster(order.critical_path(), &keypairs);
+        let pop_refs = pop_refs(&pops);
+        let mut suspect = Suspect::unsigned(
+            slot(9),
+            validators[1].clone(),
+            validators[2].clone(),
+            MissedObligation::AckValidation,
+            &order,
+            900,
+        );
+        suspect
+            .sign(
+                &chain,
+                crate::sumeragi::consensus::PERMISSIONED_TAG,
+                keypairs[1].private_key(),
+            )
+            .expect("sign suspicion");
+        let cert = order
+            .rechain_after_suspect(suspect.clone(), &quorum)
+            .expect("rechain certificate");
+        let mut proposal = RechainProposal {
+            slot: suspect.slot,
+            previous_chain_order_hash: cert.previous_chain_order_hash,
+            proposed_order: cert.new_order,
+            suspicions: vec![suspect],
+            head_signature: Vec::new(),
+        };
+        proposal
+            .sign_head(
+                &chain,
+                crate::sumeragi::consensus::PERMISSIONED_TAG,
+                keypairs[0].private_key(),
+            )
+            .expect("sign proposal");
+        let context = VNextIngressContext {
+            chain_id: &chain,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG,
+            head: order.ordered_validators.first(),
+            signer_roster: order.critical_path(),
+            signer_pops: &pop_refs,
+            quorum: Some(&quorum),
+            chain_order: Some(&order),
+        };
+
+        assert!(
+            ConsensusMessage::RechainProposal(proposal)
+                .verify_ingress(&context)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn vnext_ingress_rejects_duplicate_suspicion_rechain_evidence() {
+        let keypairs = bls_keypairs(5);
+        let validators = peers_from_keypairs(&keypairs);
+        let order = ChainOrder::new(7, 2, 0, 0, validators.clone(), 3, 3).expect("valid order");
+        let chain = chain_id();
+        let quorum = QuorumPolicy::Count { required: 3 };
+        let pops = pops_for_roster(order.critical_path(), &keypairs);
+        let pop_refs = pop_refs(&pops);
+        let mut suspect = Suspect::unsigned(
+            slot(9),
+            validators[1].clone(),
+            validators[2].clone(),
+            MissedObligation::AckValidation,
+            &order,
+            900,
+        );
+        suspect
+            .sign(
+                &chain,
+                crate::sumeragi::consensus::PERMISSIONED_TAG,
+                keypairs[1].private_key(),
+            )
+            .expect("sign suspicion");
+        let cert = order
+            .rechain_after_suspect(suspect.clone(), &quorum)
+            .expect("rechain certificate");
+        let mut proposal = RechainProposal {
+            slot: suspect.slot,
+            previous_chain_order_hash: cert.previous_chain_order_hash,
+            proposed_order: cert.new_order,
+            suspicions: vec![suspect.clone(), suspect],
+            head_signature: Vec::new(),
+        };
+        proposal
+            .sign_head(
+                &chain,
+                crate::sumeragi::consensus::PERMISSIONED_TAG,
+                keypairs[0].private_key(),
+            )
+            .expect("sign proposal");
+        let context = VNextIngressContext {
+            chain_id: &chain,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG,
+            head: order.ordered_validators.first(),
+            signer_roster: order.critical_path(),
+            signer_pops: &pop_refs,
+            quorum: Some(&quorum),
+            chain_order: Some(&order),
+        };
+
+        assert_eq!(
+            ConsensusMessage::RechainProposal(proposal).verify_ingress(&context),
+            Err(VNextSignatureError::ChainOrderValidation)
+        );
+    }
+
+    #[test]
+    fn vnext_ingress_accepts_canonical_multi_suspicion_rechain_evidence() {
+        let keypairs = bls_keypairs(9);
+        let validators = peers_from_keypairs(&keypairs);
+        let order = ChainOrder::new(7, 2, 0, 0, validators.clone(), 5, 5).expect("valid order");
+        let chain = chain_id();
+        let quorum = QuorumPolicy::Count { required: 3 };
+        let pops = pops_for_roster(order.critical_path(), &keypairs);
+        let pop_refs = pop_refs(&pops);
+        let mut first = Suspect::unsigned(
+            slot(9),
+            validators[1].clone(),
+            validators[2].clone(),
+            MissedObligation::AckValidation,
+            &order,
+            900,
+        );
+        first
+            .sign(
+                &chain,
+                crate::sumeragi::consensus::PERMISSIONED_TAG,
+                keypairs[1].private_key(),
+            )
+            .expect("sign first suspicion");
+        let mut second = Suspect::unsigned(
+            slot(9),
+            validators[3].clone(),
+            validators[4].clone(),
+            MissedObligation::RbcReady,
+            &order,
+            950,
+        );
+        second
+            .sign(
+                &chain,
+                crate::sumeragi::consensus::PERMISSIONED_TAG,
+                keypairs[3].private_key(),
+            )
+            .expect("sign second suspicion");
+        let expected = order
+            .rechain_after_suspicions(vec![second, first], &quorum)
+            .expect("deterministic multi-suspicion rechain");
+        assert_eq!(expected.rechain_seq, 2);
+        assert_eq!(expected.tainted.len(), 4);
+        assert_eq!(
+            expected.new_order.critical_path(),
+            &[
+                validators[0].clone(),
+                validators[5].clone(),
+                validators[6].clone(),
+                validators[7].clone(),
+                validators[8].clone(),
+            ]
+        );
+        let mut proposal = RechainProposal {
+            slot: expected.slot,
+            previous_chain_order_hash: expected.previous_chain_order_hash,
+            proposed_order: expected.new_order,
+            suspicions: expected.suspicions,
+            head_signature: Vec::new(),
+        };
+        proposal
+            .sign_head(
+                &chain,
+                crate::sumeragi::consensus::PERMISSIONED_TAG,
+                keypairs[0].private_key(),
+            )
+            .expect("sign proposal");
+        let context = VNextIngressContext {
+            chain_id: &chain,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG,
+            head: order.ordered_validators.first(),
+            signer_roster: order.critical_path(),
+            signer_pops: &pop_refs,
+            quorum: Some(&quorum),
+            chain_order: Some(&order),
+        };
+
+        assert!(
+            ConsensusMessage::RechainProposal(proposal)
+                .verify_ingress(&context)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn multi_suspicion_rechain_rejects_no_longer_successor_after_prior_application() {
+        let keypairs = bls_keypairs(9);
+        let validators = peers_from_keypairs(&keypairs);
+        let order = ChainOrder::new(7, 2, 0, 0, validators.clone(), 5, 5).expect("valid order");
+        let quorum = QuorumPolicy::Count { required: 3 };
+        let first = Suspect::unsigned(
+            slot(9),
+            validators[1].clone(),
+            validators[2].clone(),
+            MissedObligation::AckValidation,
+            &order,
+            900,
+        );
+        let second = Suspect::unsigned(
+            slot(9),
+            validators[2].clone(),
+            validators[3].clone(),
+            MissedObligation::RbcReady,
+            &order,
+            950,
+        );
+
+        assert!(matches!(
+            order.rechain_after_suspicions(vec![first, second], &quorum),
+            Err(RechainError::AccusedIsNotSuccessor { .. }
+                | RechainError::AccuserHasNoCriticalSuccessor)
+        ));
+    }
+
+    #[test]
+    fn vnext_ingress_verifies_rechain_certificate_aggregate() {
+        let keypairs = bls_keypairs(5);
+        let validators = peers_from_keypairs(&keypairs);
+        let order = ChainOrder::new(7, 2, 0, 0, validators.clone(), 3, 3).expect("valid order");
+        let chain = chain_id();
+        let quorum = QuorumPolicy::Count { required: 3 };
+        let mut suspect = Suspect::unsigned(
+            slot(9),
+            validators[1].clone(),
+            validators[2].clone(),
+            MissedObligation::AckValidation,
+            &order,
+            900,
+        );
+        suspect
+            .sign(
+                &chain,
+                crate::sumeragi::consensus::PERMISSIONED_TAG,
+                keypairs[1].private_key(),
+            )
+            .expect("sign suspicion");
+        let mut cert = order
+            .rechain_after_suspect(suspect, &quorum)
+            .expect("rechain certificate");
+        let signer_roster = cert.new_order.critical_path().to_vec();
+        let signer_indices = [0, 1, 2];
+        cert.signer_bitmap =
+            build_signer_bitmap(&signer_indices, signer_roster.len()).expect("signer bitmap");
+        let preimage = cert
+            .signing_preimage(&chain, crate::sumeragi::consensus::PERMISSIONED_TAG)
+            .expect("preimage");
+        cert.aggregate_signature =
+            aggregate_for_signers(&preimage, &signer_roster, &signer_indices, &keypairs);
+        let pops = pops_for_roster(&signer_roster, &keypairs);
+        let pop_refs = pop_refs(&pops);
+        let context = VNextIngressContext {
+            chain_id: &chain,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG,
+            head: order.ordered_validators.first(),
+            signer_roster: &signer_roster,
+            signer_pops: &pop_refs,
+            quorum: Some(&quorum),
+            chain_order: Some(&order),
+        };
+
+        assert!(
+            ConsensusMessage::RechainCertificate(cert)
+                .verify_ingress(&context)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn vnext_ingress_verifies_rechain_vote_signature_and_evidence() {
+        let keypairs = bls_keypairs(5);
+        let validators = peers_from_keypairs(&keypairs);
+        let order = ChainOrder::new(7, 2, 0, 0, validators.clone(), 3, 3).expect("valid order");
+        let chain = chain_id();
+        let quorum = QuorumPolicy::Count { required: 3 };
+        let pops = pops_for_roster(order.critical_path(), &keypairs);
+        let pop_refs = pop_refs(&pops);
+        let mut suspect = Suspect::unsigned(
+            slot(9),
+            validators[1].clone(),
+            validators[2].clone(),
+            MissedObligation::AckValidation,
+            &order,
+            900,
+        );
+        suspect
+            .sign(
+                &chain,
+                crate::sumeragi::consensus::PERMISSIONED_TAG,
+                keypairs[1].private_key(),
+            )
+            .expect("sign suspicion");
+        let cert = order
+            .rechain_after_suspect(suspect, &quorum)
+            .expect("rechain certificate");
+        let mut vote = RechainVote::unsigned(&cert, validators[0].clone());
+        vote.sign(
+            &chain,
+            crate::sumeragi::consensus::PERMISSIONED_TAG,
+            keypairs[0].private_key(),
+        )
+        .expect("sign rechain vote");
+        let context = VNextIngressContext {
+            chain_id: &chain,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG,
+            head: order.ordered_validators.first(),
+            signer_roster: order.critical_path(),
+            signer_pops: &pop_refs,
+            quorum: Some(&quorum),
+            chain_order: Some(&order),
+        };
+
+        assert!(
+            ConsensusMessage::RechainVote(vote.clone())
+                .verify_ingress(&context)
+                .is_ok()
+        );
+        assert_eq!(
+            vote.verify_signature(
+                &ChainId::from("iroha:test:other-chain"),
+                crate::sumeragi::consensus::PERMISSIONED_TAG,
+                order.critical_path(),
+            ),
+            Err(VNextSignatureError::BadSignature)
+        );
+    }
+
+    #[test]
+    fn vnext_ingress_verifies_view_change_vote_signature() {
+        let keypairs = bls_keypairs(5);
+        let validators = peers_from_keypairs(&keypairs);
+        let order = ChainOrder::new(7, 2, 0, 0, validators.clone(), 3, 3).expect("valid order");
+        let chain = chain_id();
+        let quorum = QuorumPolicy::Count { required: 3 };
+        let pops = pops_for_roster(order.critical_path(), &keypairs);
+        let pop_refs = pop_refs(&pops);
+        let certificate = ViewChangeCertificate {
+            new_view: 3,
+            highest_slot: Some(slot(9)),
+            chain_order_hash: order.hash(),
+            signer_bitmap: Vec::new(),
+            aggregate_signature: Vec::new(),
+        };
+        let mut vote = ViewChangeVote::unsigned(&certificate, validators[0].clone());
+        vote.sign(
+            &chain,
+            crate::sumeragi::consensus::PERMISSIONED_TAG,
+            keypairs[0].private_key(),
+        )
+        .expect("sign view-change vote");
+        let context = VNextIngressContext {
+            chain_id: &chain,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG,
+            head: order.ordered_validators.first(),
+            signer_roster: order.critical_path(),
+            signer_pops: &pop_refs,
+            quorum: Some(&quorum),
+            chain_order: Some(&order),
+        };
+
+        assert!(
+            ConsensusMessage::ViewChangeVote(vote.clone())
+                .verify_ingress(&context)
+                .is_ok()
+        );
+        let mut wrong_roster = order.critical_path().to_vec();
+        wrong_roster.remove(0);
+        assert_eq!(
+            vote.verify_signature(
+                &chain,
+                crate::sumeragi::consensus::PERMISSIONED_TAG,
+                &wrong_roster,
+            ),
+            Err(VNextSignatureError::SignerNotInRoster)
         );
     }
 
@@ -2480,6 +3759,47 @@ mod tests {
                 )
                 .expect("aggregate verifies"),
             signer_roster[..3].to_vec()
+        );
+    }
+
+    #[test]
+    fn vnext_ingress_verifies_view_change_certificate_aggregate() {
+        let keypairs = bls_keypairs(5);
+        let validators = peers_from_keypairs(&keypairs);
+        let order = ChainOrder::new(7, 3, 0, 0, validators, 3, 3).expect("valid order");
+        let signer_roster = order.critical_path().to_vec();
+        let signer_indices = [0, 1, 2];
+        let chain = chain_id();
+        let quorum = QuorumPolicy::Count { required: 3 };
+        let mut certificate = ViewChangeCertificate {
+            new_view: 3,
+            highest_slot: Some(slot(9)),
+            chain_order_hash: order.hash(),
+            signer_bitmap: build_signer_bitmap(&signer_indices, signer_roster.len())
+                .expect("signer bitmap"),
+            aggregate_signature: Vec::new(),
+        };
+        let preimage = certificate
+            .signing_preimage(&chain, crate::sumeragi::consensus::PERMISSIONED_TAG)
+            .expect("preimage");
+        certificate.aggregate_signature =
+            aggregate_for_signers(&preimage, &signer_roster, &signer_indices, &keypairs);
+        let pops = pops_for_roster(&signer_roster, &keypairs);
+        let pop_refs = pop_refs(&pops);
+        let context = VNextIngressContext {
+            chain_id: &chain,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG,
+            head: order.ordered_validators.first(),
+            signer_roster: &signer_roster,
+            signer_pops: &pop_refs,
+            quorum: Some(&quorum),
+            chain_order: Some(&order),
+        };
+
+        assert!(
+            ConsensusMessage::ViewChangeCertificate(certificate)
+                .verify_ingress(&context)
+                .is_ok()
         );
     }
 

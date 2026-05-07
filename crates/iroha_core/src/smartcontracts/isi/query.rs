@@ -1191,13 +1191,25 @@ where
         return Ok((QueryOutput::new(batch, remaining_items, None), count));
     }
 
-    let (mut batched, processed_items) =
-        apply_query_postprocessing_with_budget(iter, selector, params, limits, budget_items)?;
-    let (batch, _next) = batched.next_batch(0)?;
-    Ok((
-        QueryOutput::new(batch, batched.remaining(), None),
-        processed_items,
-    ))
+    let fetch_size = usize::try_from(batch_size.get()).unwrap_or(usize::MAX);
+    let mut count = 0_u64;
+    let mut first_batch_values = Vec::with_capacity(fetch_size.min(1024));
+    for value in iter.paginate(params.pagination) {
+        count = count.saturating_add(1);
+        if budget_items.is_some_and(|limit| count > limit) {
+            return Err(Error::GasBudgetExceeded);
+        }
+        if first_batch_values.len() < fetch_size {
+            first_batch_values.push(value);
+        }
+    }
+
+    let batch_len = first_batch_values.len();
+    let mut batch_iter =
+        ErasedQueryIterator::new(first_batch_values.into_iter(), selector, batch_size);
+    let (batch, _next) = batch_iter.next_batch(0)?;
+    let remaining_items = count.saturating_sub(u64::try_from(batch_len).unwrap_or(u64::MAX));
+    Ok((QueryOutput::new(batch, remaining_items, None), count))
 }
 
 fn apply_query_postprocessing_with_budget<I>(
@@ -3686,6 +3698,43 @@ mod tests {
         assert_eq!(v.len(), 2);
         assert_eq!(v[0].id, d2.id);
         assert_eq!(v[1].id, d3.id);
+    }
+
+    #[tokio::test]
+    async fn ephemeral_unsorted_query_returns_first_batch_and_remaining_without_cursor() {
+        use iroha_data_model::{
+            domain::Domain,
+            query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
+        };
+        use nonzero_ext::nonzero;
+
+        let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
+        let d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
+        let d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);
+
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting::default(),
+            fetch_size: FetchSize {
+                fetch_size: Some(nonzero!(2_u64)),
+            },
+        };
+        let selector = SelectorTuple::<Domain>::default();
+
+        let (output, processed_items) = apply_query_postprocessing_ephemeral_with_budget(
+            vec![d1.clone(), d2.clone(), d3].into_iter(),
+            selector,
+            &params,
+            QueryLimits::default(),
+            None,
+        )
+        .expect("postprocess");
+
+        let (batch, remaining, cursor) = output.into_parts();
+        assert!(cursor.is_none());
+        assert_eq!(remaining, 1);
+        assert_eq!(processed_items, 3);
+        assert_eq!(domain_ids_from_batch(batch), vec![d1.id, d2.id]);
     }
 
     fn domain_ids_from_batch(

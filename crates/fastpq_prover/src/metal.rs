@@ -3292,7 +3292,11 @@ pub fn poseidon_permute(states: &mut [u64]) -> MetalResult<()> {
     let state_count = u32::try_from(states.len() / STATE_WIDTH)
         .map_err(|_| GpuError::InvalidInput("poseidon batch exceeds u32::MAX states"))?;
     let limits = pipeline_limits(&context.poseidon_permute);
-    let tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
+    let mut tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
+    // `poseidon_permute` backs the sponge/preflight path where each input state is
+    // independent. Keep that kernel on one state per lane; the trace kernels keep
+    // their multi-state batching and have separate parity coverage.
+    tuning.states_per_lane = 1;
     let poseidon_selection = select_poseidon_batch(state_count, tuning);
     let batch_states = poseidon_selection.columns();
     let batches = column_batch_ranges(state_count, batch_states);

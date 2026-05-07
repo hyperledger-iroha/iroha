@@ -14100,6 +14100,19 @@ pub trait WorldReadOnly {
             .map(|(id, value)| AssetEntry::new(id, value))
     }
 
+    /// Iterate borrowed asset entries matching a specific definition.
+    fn asset_entries_by_definition_iter<'a>(
+        &'a self,
+        id: &'a AssetDefinitionId,
+    ) -> impl Iterator<Item = AssetEntry<'a>> + 'a {
+        self.asset_definition_assets_iter(id)
+            .filter_map(move |asset_id| {
+                self.assets()
+                    .get_key_value(asset_id)
+                    .map(|(asset_id, value)| AssetEntry::new(asset_id, value))
+            })
+    }
+
     /// Iterate assets held by all accounts within the specified domain.
     #[allow(clippy::type_complexity)]
     fn assets_in_domain_iter<'a>(
@@ -14123,14 +14136,10 @@ pub trait WorldReadOnly {
         &'a self,
         id: &'a AssetDefinitionId,
     ) -> impl Iterator<Item = Asset> + 'a {
-        self.asset_definition_assets_iter(id)
-            .filter_map(move |asset_id| {
-                self.assets()
-                    .get_key_value(asset_id)
-                    .map(|(asset_id, value)| Asset {
-                        id: asset_id.clone(),
-                        value: value.clone().into_inner(),
-                    })
+        self.asset_entries_by_definition_iter(id)
+            .map(|entry| Asset {
+                id: entry.id().clone(),
+                value: entry.value().clone().into_inner(),
             })
     }
 
@@ -45210,11 +45219,20 @@ mod tests {
             .map(|asset| asset.id)
             .collect();
         assets.sort();
+        let mut entry_assets: Vec<_> = world
+            .asset_entries_by_definition_iter(&asset_def_id)
+            .map(|asset| asset.id().clone())
+            .collect();
+        entry_assets.sort();
 
         assert_eq!(
             assets,
             vec![global_asset_id, scoped_asset_id],
             "definition iterator should return every tracked partition for the definition"
+        );
+        assert_eq!(
+            entry_assets, assets,
+            "borrowed definition iterator should match the owned iterator"
         );
     }
 

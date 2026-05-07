@@ -2,6 +2,66 @@
 
 Last updated: 2026-05-07
 
+## 2026-05-07 Sumeragi vNext live control path
+
+- `BlockMessage::VNext` is no longer a validate-and-ignore path in the
+  Sumeragi main loop. Valid vNext control frames are routed into a per
+  height/view `sumeragi::vnext::Reactor`; re-chain certificates install the
+  reactor's live chain order and are retained in a bounded in-memory journal,
+  re-chain proposals trigger locally signed `RechainVote` broadcasts when the
+  local validator belongs to the certified new-order critical path, and
+  view-change certificates are journaled for follow-up catch-up sidecars.
+- Added explicit `RechainVote` and `ViewChangeVote` vNext wire messages. They
+  sign the same canonical certificate bodies that are later aggregated, verify
+  signer roster membership at ingress, and retain the existing chain-id plus
+  consensus-mode signing domains and PoP-aware BLS aggregate checks for final
+  certificates.
+- Multi-suspicion re-chain evidence is now deterministic instead of being
+  rejected wholesale. Evidence must share slot, chain-order hash, and
+  `rechain_seq`; duplicate canonical suspicion bodies are rejected; accepted
+  suspicions are sorted by canonical signing-body hash and applied sequentially
+  to the evolving order with cumulative tainted validators held in the
+  quarantine tail. Proposals/certificates must match the deterministic
+  `new_order`, tainted set, canonical suspicion order, and final
+  `rechain_seq`.
+- Focused validation passed with
+  `cargo test -p iroha_core --lib vnext -- --nocapture` (`36` passed) and
+  `cargo check -p iroha_core --lib`.
+
+## 2026-05-07 Izanami 20k final load-window profile critique
+
+- Captured a corrected load-window `90s` macOS sample during the `120s` 20k
+  Izanami gate at
+  `dist/izanami-profile-20k-fastpq-gpu-final-loadsample-90s-20260507-225637`.
+  The run completed with `2,400,000` submissions offered, accepted, and
+  succeeded; `0` ingress failures, validation rejects, queue drops, confirmation
+  failures, prebuild fallbacks, prebuild skips, or view changes; and all four
+  peers reported both general FASTPQ Poseidon prover preflight and BN254 digest
+  GPU preflight as `ok=true`.
+- Sampling perturbed the gate slightly versus the clean final return run: final
+  strict height was `16` with `57,410` strict-approved transactions, submit
+  latency was p50 `3ms`, p95 `24ms`, p99 `84ms`, max `534ms`, and the
+  transaction queue ended saturated at `842,171 / 2,400,000`.
+- The sampled peer's top application leaf frame is now scalar
+  `iroha_zkp_halo2::poseidon::hash_u64_words_internal` (`21,729` samples).
+  This is corroborated by four runtime `BN254 Poseidon Metal batch failed while
+  waiting; falling back to scalar hashing` warnings across the peers, even
+  though the BN254 preflight itself passed. The next GPU issue is runtime BN254
+  batch stability, not the already-fixed general FASTPQ prover Poseidon
+  preflight parity.
+- Consensus progress is queue-drain limited: each peer committed `15` blocks in
+  the profiled run, with average commit intervals around `8.0s` to `8.35s`.
+  RBC store pressure, evictions, and drops stayed at zero, but diagnostics show
+  `542` local READY deferrals, `486` DELIVER deferrals, `229` exact-frontier
+  block-body fetches, `60` range-pull logs, and `105` not-enough-votes logs.
+  That points to payload availability and exact-frontier recovery delaying
+  commit cadence, not ingress rejection or RBC capacity pressure.
+- Secondary CPU costs remain meaningful after the two primary bottlenecks:
+  Ed25519/Curve25519 (`14,583` application leaf samples), Norito
+  encode/decode/length/write paths (`13,942`), SHA-256 (`9,060`), Blake2
+  (`5,279`), and CRC64 (`2,916`). These should follow the BN254 runtime fallback
+  and consensus payload-availability work.
+
 ## 2026-05-07 Sumeragi vNext foundation
 
 - Added experimental `sumeragi::vnext` protocol state with explicit slot and
@@ -13,8 +73,12 @@ Last updated: 2026-05-07
   validation timeout or queue saturation without inline fallback, broadcasts
   successor-scoped suspicion, and installs or escalates re-chain outcomes.
 - Added the `BlockMessage::VNext` consensus-wire variant. The current legacy
-  Sumeragi main loop classifies vNext frames as consensus traffic and ignores
-  them until the replacement reactor is wired in.
+  Sumeragi main loop classifies vNext frames as consensus traffic, validates
+  vNext signatures/quorum/evidence at ingress, records malformed drops in
+  consensus-message telemetry, and only then ignores valid frames until the
+  replacement reactor is wired in. Permissioned ingress uses the count quorum;
+  NPoS ingress now derives a `Numeric` stake quorum from the live roster cache
+  without rounding stake weights into integers.
 - Threaded vNext performance-fault parameters through `iroha_config` defaults,
   user/env parsing, actual config, documentation, and conversion into
   `PerformanceFaultConfig`; zero-valued vNext knobs now fail config parsing.
@@ -24,12 +88,20 @@ Last updated: 2026-05-07
   peer keys, certificate aggregate verification is PoP-aware for BLS-normal
   signers, signer bitmaps reject malformed/out-of-range bits, and the reactor
   escalates to view change when a re-chain would exceed the configured tainted
-  validator budget.
+  validator budget. The same checks are exposed through
+  `ConsensusMessage::verify_ingress` so live ingress and unit tests share one
+  verifier, and stake quorum uses the same `signed * 3 >= total * 2`
+  cross-multiplication shape as the live NPoS QC path. Ingress also rejects
+  multi-suspicion re-chain evidence until the deterministic multi-evidence
+  ordering rule is explicitly modeled.
 - Focused validation passed with
   `cargo test -p iroha_config sumeragi_vnext --test fixtures -- --nocapture`
   (`2` passed) and
-  `cargo test -p iroha_core --lib vnext -- --nocapture` (`23` passed).
-  Repository-wide formatting was checked with `cargo fmt --all --check`.
+  `cargo test -p iroha_core --lib vnext -- --nocapture` (`31` passed), plus
+  `cargo test -p iroha_core --lib consensus_message_handling_labels_include_new_variants -- --nocapture`
+  (`1` passed).
+  `cargo check -p iroha_core --lib` passed, repository-wide formatting was
+  checked with `cargo fmt --all --check`, and `git diff --check` passed.
 
 ## 2026-05-07 RWA query WSV secondary indexes
 
@@ -69,6 +141,104 @@ Last updated: 2026-05-07
   `cargo test -p iroha_core asset_definition_holder_index_waits_for_last_partition_removal --lib -- --nocapture`.
 - Library validation passed with `cargo check -p iroha_core --lib`; the
   serialization guard `scripts/check_no_scale.sh` also passed.
+
+## 2026-05-07 Torii ephemeral query first-batch path
+
+- Ephemeral iterable query execution without metadata sorting now keeps only
+  the first response batch in memory while counting paginated results for the
+  existing `remaining_items` contract. Stored cursors still materialize owned
+  iterators because they can outlive the state snapshot borrow.
+- Added unit coverage for the no-sort ephemeral first-batch/remaining-count
+  path. `cargo check -p iroha_core --lib` and `scripts/check_no_scale.sh`
+  passed; the focused `cargo test -p iroha_core
+  ephemeral_unsorted_query_returns_first_batch_and_remaining_without_cursor
+  --lib -- --nocapture` also passed.
+
+## 2026-05-07 Torii account-asset WSV range reads
+
+- Torii account-asset GET/query handlers now project rows from WSV account-keyed
+  asset ranges instead of scanning every world asset and filtering by account.
+  The projection path also caches asset-definition name/alias lookups per
+  response.
+- Asset-holder GET now uses the WSV account+definition range when `account_id`
+  is supplied, avoiding a full definition-holder walk for exact account reads.
+- Asset-holder query fallback now extracts safe exact `account_id` constraints
+  from `eq`, `in`, `and`, and fully-constrained `or` filters and uses the same
+  WSV account+definition ranges instead of building candidates from every
+  holder of the asset definition.
+- Focused validation passed with `cargo check -p iroha_torii --lib`,
+  `cargo test -p iroha_torii
+  collect_projected_account_assets_reads_only_scoped_account_assets --lib --
+  --nocapture`, and `cargo test -p iroha_torii
+  accumulate_asset_holder_quantity_respects_scope_filter --lib -- --nocapture`,
+  and `cargo test -p iroha_torii
+  asset_holder_filter_account_candidates_extracts_safe_exact_constraints --lib
+  -- --nocapture`.
+
+## 2026-05-07 Torii repo-agreement indexed filters
+
+- Torii repo-agreement list/query handlers now plan exact `id`, `initiator`,
+  `counterparty`, and `custodian` filters against the WSV repo-agreement
+  participant indexes before projecting rows. The full route filter is still
+  applied afterward, so indexed candidates are only a safe narrowing step.
+- Focused validation passed with `cargo check -p iroha_torii --lib` and
+  `cargo test -p iroha_torii
+  repo_filter_candidate_ids_extracts_safe_indexed_constraints --lib --
+  --nocapture`, plus the route-level
+  `repo_agreements_list_filter_accepts_canonical_accounts` and
+  `repo_agreements_query_filter_accepts_canonical_accounts` focused tests.
+
+## 2026-05-07 Torii NFT/RWA id-filter streaming
+
+- Torii NFT and RWA list/query handlers now stream from WSV instead of eagerly
+  collecting every row into a `Vec`, and exact `id` filters are planned as
+  direct WSV lookups for `eq`, `in`, `and`, and fully-constrained `or`
+  expressions.
+- Focused validation passed with `cargo check -p iroha_torii --lib`,
+  `cargo test -p iroha_torii
+  nft_filter_candidate_ids_extracts_safe_exact_constraints --lib --
+  --nocapture`, and `cargo test -p iroha_torii
+  rwa_filter_candidate_ids_extracts_safe_exact_constraints --lib --
+  --nocapture`.
+
+## 2026-05-07 Torii account and asset-definition exact-key planning
+
+- Torii account list/query handlers now extract safe exact canonical `id`
+  constraints and read those account keys directly from WSV before applying the
+  full filter/projection, avoiding full account scans for targeted reads.
+- Torii asset-definition list/query handlers now use exact canonical
+  asset-definition `id` constraints as direct WSV key lookups. Alias predicates
+  intentionally remain on the full filtered path so the existing enriched alias
+  projection semantics are preserved.
+- Focused validation passed with `cargo check -p iroha_torii --lib`,
+  `cargo test -p iroha_torii extracts_safe --lib -- --nocapture`, the account
+  list/query canonical/alias filter route tests, and
+  `assets_definitions_query_filters_name_alias_and_null_alias`.
+
+## 2026-05-07 Torii explorer WSV indexed dispatch
+
+- WSV now exposes a borrowed `asset_entries_by_definition_iter(...)` over the
+  maintained asset-definition asset index, and the owned
+  `assets_by_definition_iter(...)` delegates to it. Torii asset-holder live
+  scans and selected-definition query-projection archive builders now aggregate
+  borrowed asset entries instead of cloning full assets.
+- Torii explorer handlers now pass filtered WSV index iterators into the page
+  builders for account domain/definition filters, domain owner filters,
+  asset-definition domain/owner filters, asset owner/definition/id filters,
+  NFT owner/domain filters, and RWA owner/domain filters. Explorer network
+  metrics now use storage `len()` for entity counts instead of counting full
+  iterators.
+- Explorer account/domain/asset-definition list and detail handlers no longer
+  build a full `ExplorerAggregates` snapshot per request; row counters are
+  derived on demand from maintained WSV indexes such as domain-owner,
+  account-asset, NFT-owner, domain-asset-definition, and asset-definition asset
+  indexes.
+- Focused validation passed with `cargo check -p iroha_core --lib`,
+  `cargo check -p iroha_torii --lib`, the focused core
+  `assets_by_definition_iter_includes_all_tracked_partitions` test,
+  `cargo test -p iroha_torii explorer:: --lib -- --nocapture`, and
+  `cargo test -p iroha_torii asset_holder --lib -- --nocapture`, plus the
+  focused asset-holder projection catalog/archive tests.
 
 ## 2026-05-07 IVM Staging and Sumeragi Targeted Recovery
 
@@ -541,6 +711,54 @@ Last updated: 2026-05-07
   - `cargo test -p fastpq_prover --lib --features fastpq-gpu cuda -- --nocapture`
   - `cargo run -p fastpq_prover --bin fastpq_cuda_bench --release --features fastpq-gpu -- --rows 20000 --iterations 3 --warmups 1 --column-count 16 --require-gpu --device "NVIDIA GeForce RTX 3080 Laptop GPU cc8.6 driver 527.56" --output dist/fastpq_cuda_bench_20260505.json --notes "CUDA roadmap closure on WSL2"`
   - `git diff --check`
+
+## 2026-05-07 Izanami 20k Metal final return gate
+
+- The general FASTPQ Metal Poseidon prover preflight now passes on the Apple
+  Metal host. `fastpq_prover::metal::poseidon_permute` keeps the
+  sponge/preflight permutation on one independent state per Metal lane, while
+  the trace kernels keep their separate multi-state batching path. Focused
+  FASTPQ validation passed with `cargo test -p fastpq_prover poseidon
+  --features fastpq-gpu -- --nocapture` (`39` lib tests plus matching bin and
+  integration filters passed), including single-state, batched-state,
+  preflight, trace GPU parity, and BN254-independent preflight coverage.
+- Sumeragi commit-QC validation now defers to a fresh background validation
+  inflight instead of treating the old inline fallback window as permission to
+  duplicate work. It only supersedes and inlines when the worker is
+  disconnected, the inflight frontier generation is stale, or the worker stall
+  timeout is exceeded. Focused coverage passed for no-inflight worker dispatch,
+  fresh inflight deferral past the old inline fallback, stale inflight recovery,
+  and the broader `commit_pipeline` slice (`55` passed).
+- A fresh release build completed with
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-20k-return-fixed-20260507-201449 cargo
+  build --release -p irohad --bin iroha3d -p izanami --bin izanami --features
+  irohad/fastpq-gpu`.
+- The fresh 4-peer no-fault prebuilt `20k TPS` / `120s` `fastpq-gpu` Metal run
+  at
+  `dist/izanami-prebuilt-20k-fastpq-gpu-return-final-120s-20260507-221432`
+  offered, accepted, and succeeded all `2,400,000` submissions and used all
+  `2,400,000` prebuilt transactions. It reported `0` submit failures,
+  validation rejects, confirmation failures, confirmation queue drops, prebuild
+  fallbacks, prebuild skips, prebuild build failures, ingress failovers, or
+  unhealthy endpoints. All four peers exited `0` and emitted empty stderr; the
+  local wrapper failed only after Izanami completed because the zsh bookkeeping
+  used Bash's `PIPESTATUS` variable.
+- Final quorum/strict height was `17/17`; final quorum/strict approved
+  transactions were `61,622/61,622`. Submit latency was `p50=2ms`,
+  `p95=8ms`, `p99=60ms`, and `max=190ms`. Final queue depth was
+  `861,515 / 2,400,000`, with `94` pacemaker backpressure deferrals and
+  commit-pipeline EMA `2ms`.
+- All peers logged BN254 Poseidon digest GPU preflight `ok=true` and general
+  FASTPQ Poseidon prover preflight `ok=true`. Diagnostics had no normal
+  commit-QC inline supersede logs and no inline pre-vote validation fallback
+  logs. Two peers still logged the existing BN254 Poseidon Metal runtime batch
+  command-buffer fallback to deterministic scalar hashing, so the remaining
+  throughput work is queue drain/block-validation cost and BN254 runtime batch
+  stability rather than prover Poseidon preflight parity.
+- Additional validation passed with `cargo fmt --all`,
+  `cargo check -p iroha_core --features fastpq-gpu`, and
+  `cargo check -p irohad --features fastpq-gpu`.
+
 ## 2026-05-07 Izanami 20k Metal sampled profile
 
 - A 90s `/usr/bin/sample` profile of one peer during the same prebuilt 20k

@@ -1512,7 +1512,7 @@ fn build_asset_holders_projection_shard_catalog_entries(
         BTreeMap::new();
     match selected_definition_id {
         Some(definition_id) => {
-            for asset in world.assets_by_definition_iter(&definition_id) {
+            for asset in world.asset_entries_by_definition_iter(&definition_id) {
                 let partition_id = query_projection_default_partition_for_account(
                     &asset.id().account().to_string(),
                 );
@@ -1577,13 +1577,13 @@ pub(crate) fn build_asset_holders_projection_shard_archive(
         ),
         iroha_primitives::numeric::Numeric,
     > = BTreeMap::new();
-    for asset in world.assets_by_definition_iter(&definition_id) {
+    for asset in world.asset_entries_by_definition_iter(&definition_id) {
         let account_id = asset.id().account().clone();
         let scope = asset.id().scope().clone();
         let entry = aggregated
             .entry((account_id, scope))
             .or_insert_with(iroha_primitives::numeric::Numeric::zero);
-        if let Some(sum) = entry.clone().checked_add(asset.value().clone()) {
+        if let Some(sum) = entry.clone().checked_add(asset.value().as_ref().clone()) {
             *entry = sum;
         }
     }

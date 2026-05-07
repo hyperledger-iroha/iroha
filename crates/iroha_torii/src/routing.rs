@@ -39069,6 +39069,126 @@ mod app_api_integration_tests {
         ))
     }
 
+    #[test]
+    fn collect_projected_account_assets_reads_only_scoped_account_assets() {
+        let _guard = app_query_limits_guard();
+        use iroha_crypto::KeyPair;
+
+        let alice_id = AccountId::new(KeyPair::random().public_key().clone());
+        let bob_id = AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
+        let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
+        let lily_def = AssetDefinitionId::new(domain_id.clone(), "lily".parse().unwrap());
+        let assets = vec![
+            Asset::new(
+                AssetId::new(rose_def.clone(), alice_id.clone()),
+                Numeric::from(10_u32),
+            ),
+            Asset::new(
+                AssetId::new(lily_def.clone(), alice_id.clone()),
+                Numeric::from(7_u32),
+            ),
+            Asset::new(
+                AssetId::new(rose_def.clone(), bob_id.clone()),
+                Numeric::from(99_u32),
+            ),
+        ];
+        let state = state_with_assets(
+            domain_id,
+            alice_id.clone(),
+            vec![alice_id.clone(), bob_id],
+            vec![rose_def.clone(), lily_def],
+            assets,
+        );
+        let world = state.world_view();
+        let scoped_accounts = vec![alice_id.clone()];
+
+        let projected = collect_projected_account_assets(
+            state.as_ref(),
+            &world,
+            &alice_id,
+            &scoped_accounts,
+            Some(&rose_def),
+            None,
+        );
+
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].account_id, alice_id.to_string());
+        assert_eq!(projected[0].asset, rose_def.to_string());
+        assert_eq!(projected[0].quantity, Numeric::from(10_u32));
+    }
+
+    #[test]
+    fn accumulate_asset_holder_quantity_respects_scope_filter() {
+        use iroha_crypto::KeyPair;
+
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
+        let asset_def = AssetDefinitionId::new(domain_id, "rose".parse().unwrap());
+        let global_asset_id = AssetId::new(asset_def.clone(), account_id.clone());
+        let scoped_asset_id = AssetId::with_scope(
+            asset_def,
+            account_id.clone(),
+            AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
+        );
+        let scope_filter = AssetBalanceScope::Global;
+        let mut map = BTreeMap::new();
+
+        accumulate_asset_holder_quantity(
+            &mut map,
+            &global_asset_id,
+            &Numeric::from(10_u32),
+            Some(&scope_filter),
+        );
+        accumulate_asset_holder_quantity(
+            &mut map,
+            &scoped_asset_id,
+            &Numeric::from(99_u32),
+            Some(&scope_filter),
+        );
+
+        assert_eq!(map.len(), 1);
+        assert_eq!(
+            map.get(&(account_id, AssetBalanceScope::Global)),
+            Some(&Numeric::from(10_u32))
+        );
+    }
+
+    #[test]
+    fn asset_holder_filter_account_candidates_extracts_safe_exact_constraints() {
+        use iroha_crypto::KeyPair;
+
+        let alice_id = AccountId::new(KeyPair::random().public_key().clone());
+        let bob_id = AccountId::new(KeyPair::random().public_key().clone());
+        let expr = FilterExpr::And(vec![
+            FilterExpr::In(
+                FieldPath("account_id".into()),
+                vec![
+                    Value::from(alice_id.to_string()),
+                    Value::from(bob_id.to_string()),
+                ],
+            ),
+            FilterExpr::Eq(
+                FieldPath("account_id".into()),
+                Value::from(alice_id.to_string()),
+            ),
+            FilterExpr::Gt(FieldPath("quantity".into()), Value::from(1_u64)),
+        ]);
+
+        let candidates = asset_holder_filter_account_candidates(Some(&expr)).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates.contains(&alice_id));
+
+        let unsafe_or = FilterExpr::Or(vec![
+            FilterExpr::Eq(
+                FieldPath("account_id".into()),
+                Value::from(alice_id.to_string()),
+            ),
+            FilterExpr::Gt(FieldPath("quantity".into()), Value::from(1_u64)),
+        ]);
+        assert!(asset_holder_filter_account_candidates(Some(&unsafe_or)).is_none());
+    }
+
     #[tokio::test]
     async fn tx_query_empty_ok() {
         let _guard = app_query_limits_guard();
@@ -50291,6 +50411,144 @@ impl RepoAgreementProjection {
 }
 
 #[cfg(feature = "app_api")]
+#[derive(Clone, Copy)]
+enum RepoAgreementAccountIndex {
+    Initiator,
+    Counterparty,
+    Custodian,
+}
+
+#[cfg(feature = "app_api")]
+fn repo_agreement_id_from_filter_value(value: &Value) -> Option<RepoAgreementId> {
+    value
+        .as_str()
+        .and_then(|raw| raw.parse::<RepoAgreementId>().ok())
+}
+
+#[cfg(feature = "app_api")]
+fn repo_agreement_account_index(field: &str) -> Option<RepoAgreementAccountIndex> {
+    match field {
+        "initiator" => Some(RepoAgreementAccountIndex::Initiator),
+        "counterparty" => Some(RepoAgreementAccountIndex::Counterparty),
+        "custodian" => Some(RepoAgreementAccountIndex::Custodian),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn repo_agreement_ids_for_accounts(
+    world: &impl WorldReadOnly,
+    index: RepoAgreementAccountIndex,
+    accounts: impl IntoIterator<Item = AccountId>,
+) -> BTreeSet<RepoAgreementId> {
+    let mut ids = BTreeSet::new();
+    for account_id in accounts {
+        let agreements = match index {
+            RepoAgreementAccountIndex::Initiator => {
+                world.repo_agreements_by_initiator().get(&account_id)
+            }
+            RepoAgreementAccountIndex::Counterparty => {
+                world.repo_agreements_by_counterparty().get(&account_id)
+            }
+            RepoAgreementAccountIndex::Custodian => {
+                world.repo_agreements_by_custodian().get(&account_id)
+            }
+        };
+        if let Some(agreements) = agreements {
+            ids.extend(agreements.iter().cloned());
+        }
+    }
+    ids
+}
+
+#[cfg(feature = "app_api")]
+fn intersect_repo_agreement_candidates(
+    selected: &mut Option<BTreeSet<RepoAgreementId>>,
+    candidates: BTreeSet<RepoAgreementId>,
+) {
+    if let Some(selected) = selected {
+        selected.retain(|agreement_id| candidates.contains(agreement_id));
+    } else {
+        *selected = Some(candidates);
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn repo_filter_candidate_ids(
+    world: &impl WorldReadOnly,
+    expr: Option<&crate::filter::FilterExpr>,
+) -> Option<BTreeSet<RepoAgreementId>> {
+    use crate::filter::FilterExpr as F;
+
+    match expr? {
+        F::And(list) => {
+            let mut selected = None;
+            for nested in list {
+                if let Some(candidates) = repo_filter_candidate_ids(world, Some(nested)) {
+                    intersect_repo_agreement_candidates(&mut selected, candidates);
+                }
+            }
+            selected
+        }
+        F::Or(list) => {
+            let mut union = BTreeSet::new();
+            for nested in list {
+                let candidates = repo_filter_candidate_ids(world, Some(nested))?;
+                union.extend(candidates);
+            }
+            Some(union)
+        }
+        F::Eq(field, value) if field.0 == "id" => Some(
+            repo_agreement_id_from_filter_value(value)
+                .into_iter()
+                .collect(),
+        ),
+        F::In(field, values) if field.0 == "id" => Some(
+            values
+                .iter()
+                .filter_map(repo_agreement_id_from_filter_value)
+                .collect(),
+        ),
+        F::Eq(field, value) => repo_agreement_account_index(field.0.as_str()).map(|index| {
+            repo_agreement_ids_for_accounts(
+                world,
+                index,
+                account_id_from_filter_value(value).into_iter(),
+            )
+        }),
+        F::In(field, values) => repo_agreement_account_index(field.0.as_str()).map(|index| {
+            repo_agreement_ids_for_accounts(
+                world,
+                index,
+                values.iter().filter_map(account_id_from_filter_value),
+            )
+        }),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn repo_agreements_for_filter<'a>(
+    world: &'a impl WorldReadOnly,
+    filter: Option<&crate::filter::FilterExpr>,
+) -> Box<dyn Iterator<Item = &'a RepoAgreement> + 'a> {
+    if let Some(candidate_ids) = repo_filter_candidate_ids(world, filter) {
+        return Box::new(
+            candidate_ids
+                .into_iter()
+                .filter_map(move |agreement_id| world.repo_agreements().get(&agreement_id)),
+        );
+    }
+
+    Box::new(
+        world
+            .repo_agreements()
+            .iter()
+            .map(|(_, agreement)| agreement),
+    )
+}
+
+#[cfg(feature = "app_api")]
 fn repo_agreement_projection_to_query_row(proj: &RepoAgreementProjection) -> norito::json::Map {
     let mut row = norito::json::Map::new();
     row.insert("id".into(), Value::from(proj.canonical_id.clone()));
@@ -52909,6 +53167,103 @@ struct AccountAssetListItem {
 }
 
 #[cfg(feature = "app_api")]
+fn asset_definition_projection_fields(
+    world: &impl WorldReadOnly,
+    definition_id: &AssetDefinitionId,
+    cache: &mut BTreeMap<AssetDefinitionId, (String, Option<String>)>,
+) -> (String, Option<String>) {
+    cache
+        .entry(definition_id.clone())
+        .or_insert_with(|| match world.asset_definition(definition_id) {
+            Ok(definition) => (
+                definition.name().clone(),
+                definition
+                    .alias()
+                    .as_ref()
+                    .map(|alias| alias.as_ref().to_owned()),
+            ),
+            Err(_) => (definition_id.to_string(), None),
+        })
+        .clone()
+}
+
+#[cfg(feature = "app_api")]
+fn push_account_asset_projection(
+    world: &impl WorldReadOnly,
+    asset_id: &AssetId,
+    asset_value: &iroha_data_model::asset::AssetValue,
+    primary_alias: &PrimaryAliasProjection,
+    definition_cache: &mut BTreeMap<AssetDefinitionId, (String, Option<String>)>,
+    projected_assets: &mut Vec<AccountAssetListItem>,
+) {
+    let definition_id = asset_id.definition().clone();
+    let (asset_name, asset_alias) =
+        asset_definition_projection_fields(world, &definition_id, definition_cache);
+    projected_assets.push(AccountAssetListItem {
+        asset: definition_id.to_string(),
+        account_id: asset_id.account().to_string(),
+        scope: asset_balance_scope_literal(asset_id.scope()),
+        asset_name,
+        asset_alias,
+        quantity: asset_value.clone().into_inner(),
+        primary_alias: primary_alias.clone(),
+    });
+}
+
+#[cfg(feature = "app_api")]
+fn collect_projected_account_assets(
+    state: &CoreState,
+    world: &impl WorldReadOnly,
+    account: &AccountId,
+    scoped_accounts: &[AccountId],
+    asset_filter: Option<&AssetDefinitionId>,
+    scope_filter: Option<&AssetBalanceScope>,
+) -> Vec<AccountAssetListItem> {
+    let primary_alias = primary_alias_projection_for_account_id(state, account);
+    let mut definition_cache = BTreeMap::new();
+    let mut projected_assets = Vec::new();
+
+    for scoped_account in scoped_accounts {
+        if let Some(definition_id) = asset_filter {
+            for asset in world.assets_in_account_by_definition_iter(scoped_account, definition_id) {
+                if let Some(expected_scope) = scope_filter
+                    && asset.id().scope() != expected_scope
+                {
+                    continue;
+                }
+                push_account_asset_projection(
+                    world,
+                    asset.id(),
+                    asset.value(),
+                    &primary_alias,
+                    &mut definition_cache,
+                    &mut projected_assets,
+                );
+            }
+            continue;
+        }
+
+        for asset in world.assets_in_account_iter(scoped_account) {
+            if let Some(expected_scope) = scope_filter
+                && asset.id().scope() != expected_scope
+            {
+                continue;
+            }
+            push_account_asset_projection(
+                world,
+                asset.id(),
+                asset.value(),
+                &primary_alias,
+                &mut definition_cache,
+                &mut projected_assets,
+            );
+        }
+    }
+
+    projected_assets
+}
+
+#[cfg(feature = "app_api")]
 #[derive(Clone, Copy)]
 enum AccountAssetSortField {
     Asset,
@@ -53253,47 +53608,14 @@ pub async fn handle_v1_account_assets_with_policy(
         .clamp_fetch_size(None)?
         .map(|cap| cap.min(pagination.cap));
     let scoped_accounts = scoped_accounts_for_subject_sorted(&world, &acct);
-    let primary_alias = primary_alias_projection_for_account_id(state.as_ref(), &acct);
-
-    let mut projected_assets = Vec::new();
-    for asset in world.assets_iter() {
-        if !scoped_accounts
-            .iter()
-            .any(|account_id| asset.id().account() == account_id)
-        {
-            continue;
-        }
-        if let Some(expected) = asset_filter.as_ref()
-            && asset.id().definition() != expected
-        {
-            continue;
-        }
-        if let Some(expected_scope) = scope_filter.as_ref()
-            && asset.id().scope() != expected_scope
-        {
-            continue;
-        }
-        let definition_id = asset.id().definition().clone();
-        let (asset_name, asset_alias) = match world.asset_definition(&definition_id) {
-            Ok(definition) => (
-                definition.name().clone(),
-                definition
-                    .alias()
-                    .as_ref()
-                    .map(|alias| alias.as_ref().to_owned()),
-            ),
-            Err(_) => (definition_id.to_string(), None),
-        };
-        projected_assets.push(AccountAssetListItem {
-            asset: definition_id.to_string(),
-            account_id: asset.id().account().to_string(),
-            scope: asset_balance_scope_literal(asset.id().scope()),
-            asset_name,
-            asset_alias,
-            quantity: asset.value().clone().into_inner(),
-            primary_alias: primary_alias.clone(),
-        });
-    }
+    let projected_assets = collect_projected_account_assets(
+        state.as_ref(),
+        &world,
+        &acct,
+        &scoped_accounts,
+        asset_filter.as_ref(),
+        scope_filter.as_ref(),
+    );
 
     let (items, total) = collect_page_streaming(
         projected_assets
@@ -53359,12 +53681,6 @@ pub async fn handle_v1_repo_agreements(
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     let world = state.world_view();
-    let agreements: Vec<_> = world
-        .repo_agreements()
-        .iter()
-        .map(|(_, agreement)| agreement.clone())
-        .collect();
-
     let mut filter_expr = p
         .filter
         .as_ref()
@@ -53383,10 +53699,10 @@ pub async fn handle_v1_repo_agreements(
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_REPO_AGREEMENTS_LIST)?;
 
-    let mapped_iter = agreements.into_iter().filter_map({
+    let mapped_iter = repo_agreements_for_filter(&world, filter_ref).filter_map({
         let selectors = selectors.clone();
         move |agreement| {
-            let projection = RepoAgreementProjection::from_agreement(&agreement);
+            let projection = RepoAgreementProjection::from_agreement(agreement);
             if let Some(expr) = filter_ref {
                 if !repo_filter_projection(expr, &projection) {
                     return None;
@@ -53426,11 +53742,6 @@ pub async fn handle_v1_repo_agreements_query(
 ) -> Result<impl IntoResponse> {
     let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
     let world = state.world_view();
-    let agreements: Vec<_> = world
-        .repo_agreements()
-        .iter()
-        .map(|(_, agreement)| agreement.clone())
-        .collect();
 
     if let Some(expr) = envelope.filter.as_mut() {
         if !generic_mode {
@@ -53457,8 +53768,8 @@ pub async fn handle_v1_repo_agreements_query(
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
 
     if generic_mode {
-        let rows = agreements.into_iter().map(|agreement| {
-            let projection = RepoAgreementProjection::from_agreement(&agreement);
+        let rows = repo_agreements_for_filter(&world, filter_ref).map(|agreement| {
+            let projection = RepoAgreementProjection::from_agreement(agreement);
             repo_agreement_projection_to_query_row(&projection)
         });
         return execute_generic_resource_query(
@@ -53470,10 +53781,10 @@ pub async fn handle_v1_repo_agreements_query(
         );
     }
 
-    let mapped_iter = agreements.into_iter().filter_map({
+    let mapped_iter = repo_agreements_for_filter(&world, filter_ref).filter_map({
         let selectors = selectors.clone();
         move |agreement| {
-            let projection = RepoAgreementProjection::from_agreement(&agreement);
+            let projection = RepoAgreementProjection::from_agreement(agreement);
             if let Some(expr) = filter_ref {
                 if !repo_filter_projection(expr, &projection) {
                     return None;
@@ -53820,6 +54131,61 @@ async fn repo_agreements_query_filter_accepts_canonical_accounts() {
         fixture.agreements.len() as u64,
         "canonical counterparty literal should match all agreements"
     );
+}
+
+#[cfg(all(test, feature = "app_api"))]
+#[test]
+fn repo_filter_candidate_ids_extracts_safe_indexed_constraints() {
+    let fixture = build_repo_state_for_tests();
+    let world = fixture.state.world_view();
+    let first_id = fixture.agreements[0].0.clone();
+
+    let initiator_expr = FilterExpr::Eq(
+        FieldPath("initiator".to_owned()),
+        norito::json::Value::from(fixture.initiator_id.to_string()),
+    );
+    let candidates = repo_filter_candidate_ids(&world, Some(&initiator_expr))
+        .expect("initiator equality should use repo agreement index");
+    assert_eq!(candidates.len(), fixture.agreements.len());
+
+    let exact_expr = FilterExpr::And(vec![
+        FilterExpr::Eq(
+            FieldPath("id".to_owned()),
+            norito::json::Value::from(first_id.clone()),
+        ),
+        FilterExpr::Eq(
+            FieldPath("counterparty".to_owned()),
+            norito::json::Value::from(fixture.counterparty_id.to_string()),
+        ),
+    ]);
+    let exact_ids = repo_filter_candidate_ids(&world, Some(&exact_expr))
+        .expect("id and counterparty equality should intersect candidates");
+    assert_eq!(exact_ids, BTreeSet::from([first_id.parse().unwrap()]));
+
+    let impossible_expr = FilterExpr::And(vec![
+        initiator_expr.clone(),
+        FilterExpr::Eq(
+            FieldPath("counterparty".to_owned()),
+            norito::json::Value::from(fixture.initiator_id.to_string()),
+        ),
+    ]);
+    let impossible_ids = repo_filter_candidate_ids(&world, Some(&impossible_expr))
+        .expect("conflicting indexed constraints should still produce candidates");
+    assert!(impossible_ids.is_empty());
+
+    let unsafe_or = FilterExpr::Or(vec![
+        initiator_expr,
+        FilterExpr::IsNull(FieldPath("custodian".to_owned())),
+    ]);
+    assert!(
+        repo_filter_candidate_ids(&world, Some(&unsafe_or)).is_none(),
+        "OR pushdown is safe only when every branch has an indexed exact constraint"
+    );
+
+    let candidate_rows: Vec<_> = repo_agreements_for_filter(&world, Some(&exact_expr))
+        .map(|agreement| agreement.id().to_string())
+        .collect();
+    assert_eq!(candidate_rows, vec![first_id]);
 }
 
 // ---------------------- Domains listing ----------------------
@@ -54592,9 +54958,17 @@ fn account_filter_projection(expr: &FilterExpr, proj: &AccountListItem) -> bool 
 fn account_from_world_entry(
     entry: iroha_data_model::account::AccountEntry<'_>,
 ) -> iroha_data_model::account::Account {
-    let details = entry.value().clone().into_inner();
+    account_from_key_value(entry.id(), entry.value())
+}
+
+#[cfg(feature = "app_api")]
+fn account_from_key_value(
+    id: &AccountId,
+    value: &iroha_data_model::account::AccountValue,
+) -> iroha_data_model::account::Account {
+    let details = value.clone().into_inner();
     iroha_data_model::account::Account {
-        id: entry.id().clone(),
+        id: id.clone(),
         metadata: details.metadata,
         label: details.label,
         uaid: details.uaid,
@@ -54619,11 +54993,17 @@ fn account_read_response_from_world_entry(
 pub(crate) fn collect_subject_accounts(
     world: &impl WorldReadOnly,
 ) -> Vec<iroha_data_model::account::Account> {
+    collect_subject_accounts_from_iter(world.accounts_iter().map(account_from_world_entry))
+}
+
+#[cfg(feature = "app_api")]
+fn collect_subject_accounts_from_iter(
+    accounts: impl IntoIterator<Item = iroha_data_model::account::Account>,
+) -> Vec<iroha_data_model::account::Account> {
     use std::collections::{BTreeMap, btree_map::Entry};
 
     let mut by_subject = BTreeMap::new();
-    for entry in world.accounts_iter() {
-        let account = account_from_world_entry(entry);
+    for account in accounts {
         let subject = account.id().subject_id();
         match by_subject.entry(subject) {
             Entry::Vacant(slot) => {
@@ -54634,6 +55014,62 @@ pub(crate) fn collect_subject_accounts(
     }
 
     by_subject.into_values().collect()
+}
+
+#[cfg(feature = "app_api")]
+fn account_filter_candidate_ids(
+    expr: Option<&crate::filter::FilterExpr>,
+) -> Option<BTreeSet<AccountId>> {
+    use crate::filter::FilterExpr as F;
+
+    match expr? {
+        F::And(list) => {
+            let mut selected = None;
+            for nested in list {
+                if let Some(candidates) = account_filter_candidate_ids(Some(nested)) {
+                    intersect_account_candidates(&mut selected, candidates);
+                }
+            }
+            selected
+        }
+        F::Or(list) => {
+            let mut union = BTreeSet::new();
+            for nested in list {
+                let candidates = account_filter_candidate_ids(Some(nested))?;
+                union.extend(candidates);
+            }
+            Some(union)
+        }
+        F::Eq(field, value) if field.0 == "id" => {
+            Some(account_id_from_filter_value(value).into_iter().collect())
+        }
+        F::In(field, values) if field.0 == "id" => Some(
+            values
+                .iter()
+                .filter_map(account_id_from_filter_value)
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn collect_subject_accounts_for_filter(
+    world: &impl WorldReadOnly,
+    filter: Option<&crate::filter::FilterExpr>,
+) -> Vec<iroha_data_model::account::Account> {
+    if let Some(candidate_ids) = account_filter_candidate_ids(filter) {
+        return collect_subject_accounts_from_iter(candidate_ids.into_iter().filter_map(
+            |account_id| {
+                world
+                    .accounts()
+                    .get_key_value(&account_id)
+                    .map(|(id, value)| account_from_key_value(id, value))
+            },
+        ));
+    }
+
+    collect_subject_accounts(world)
 }
 
 #[cfg(all(test, feature = "app_api"))]
@@ -57037,8 +57473,6 @@ pub async fn handle_v1_accounts(
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     let world = state.world_view();
-    let accounts = collect_subject_accounts(&world);
-    drop(world);
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_account_sort_spec(&sort_spec);
     record_account_literal_selection(&telemetry, ENDPOINT_ACCOUNTS_LIST);
@@ -57062,6 +57496,8 @@ pub async fn handle_v1_accounts(
     }
 
     let filter_ref = filter_expr.as_ref();
+    let accounts = collect_subject_accounts_for_filter(&world, filter_ref);
+    drop(world);
     let mapped_iter = accounts.into_iter().filter_map({
         let selectors = selectors;
         let state = state.clone();
@@ -57159,7 +57595,7 @@ pub async fn handle_v1_accounts_query(
     )?;
     let fetch_size = envelope.fetch_size;
     let world = state.world_view();
-    let accounts = collect_subject_accounts(&world);
+    let accounts = collect_subject_accounts_for_filter(&world, filter_projection_ref);
     drop(world);
     if envelope.select.is_some() || envelope.aggregate.is_some() {
         let state_for_alias = state.clone();
@@ -59970,10 +60406,8 @@ pub async fn handle_v1_explorer_accounts(
     definition: Option<AssetDefinitionId>,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
-    let aggregates = crate::explorer::ExplorerAggregates::build(&world);
-    let page = crate::explorer::accounts_page(
-        world.accounts_iter(),
-        &aggregates,
+    let page = crate::explorer::accounts_page_for_filters(
+        &world,
         domain.as_ref(),
         definition.as_ref(),
         pagination.page,
@@ -59989,10 +60423,8 @@ pub async fn handle_v1_explorer_domains(
     owned_by: Option<AccountId>,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
-    let aggregates = crate::explorer::ExplorerAggregates::build(&world);
-    let page = crate::explorer::domains_page(
-        world.domains_iter(),
-        &aggregates,
+    let page = crate::explorer::domains_page_for_filters(
+        &world,
         owned_by.as_ref(),
         pagination.page,
         pagination.per_page,
@@ -60009,10 +60441,8 @@ pub async fn handle_v1_explorer_asset_definitions(
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
     let governance = state.governance_snapshot();
-    let aggregates = crate::explorer::ExplorerAggregates::build(&world);
-    let mut page = crate::explorer::asset_definitions_page(
-        world.asset_definitions_iter(),
-        &aggregates,
+    let mut page = crate::explorer::asset_definitions_page_for_filters(
+        &world,
         domain.as_ref(),
         owned_by.as_ref(),
         pagination.page,
@@ -60068,8 +60498,8 @@ pub async fn handle_v1_explorer_assets(
     asset_id: Option<AssetId>,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
-    let page = crate::explorer::assets_page(
-        world.assets_iter(),
+    let page = crate::explorer::assets_page_for_filters(
+        &world,
         owned_by.as_ref(),
         definition.as_ref(),
         asset_id.as_ref(),
@@ -60087,8 +60517,8 @@ pub async fn handle_v1_explorer_nfts(
     domain: Option<DomainId>,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
-    let page = crate::explorer::nfts_page(
-        world.nfts_iter(),
+    let page = crate::explorer::nfts_page_for_filters(
+        &world,
         owned_by.as_ref(),
         domain.as_ref(),
         pagination.page,
@@ -60105,8 +60535,8 @@ pub async fn handle_v1_explorer_rwas(
     domain: Option<DomainId>,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
-    let page = crate::explorer::rwas_page(
-        world.rwas_iter(),
+    let page = crate::explorer::rwas_page_for_filters(
+        &world,
         owned_by.as_ref(),
         domain.as_ref(),
         pagination.page,
@@ -60319,9 +60749,9 @@ async fn explorer_network_metrics_snapshot(
     let metrics = telemetry.metrics().await;
     let world = state.world_view();
     let peers = world.peers().len() as u64;
-    let domains = world.domains_iter().count() as u64;
-    let accounts = world.accounts_iter().count() as u64;
-    let assets = world.assets_iter().count() as u64 + world.nfts().iter().count() as u64;
+    let domains = world.domains().len() as u64;
+    let accounts = world.accounts().len() as u64;
+    let assets = world.assets().len() as u64 + world.nfts().len() as u64;
     let finalized_block = state.committed_height() as u64;
 
     let transactions_accepted = metrics.txs.with_label_values(&["accepted"]).get();
@@ -61272,13 +61702,12 @@ pub async fn handle_v1_explorer_account_detail(
     account_id: AccountId,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
-    let aggregates = crate::explorer::ExplorerAggregates::build(&world);
     let dto = world
         .account(&account_id)
         .map(|entry| {
             crate::explorer::ExplorerAccountDto::from_entry(
                 entry,
-                aggregates.account_counters(&account_id),
+                crate::explorer::account_counters_from_world(&world, &account_id),
             )
         })
         .map_err(|_| explorer_not_found())?;
@@ -61307,13 +61736,12 @@ pub async fn handle_v1_explorer_domain_detail(
     domain_id: DomainId,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
-    let aggregates = crate::explorer::ExplorerAggregates::build(&world);
     let dto = world
         .domain(&domain_id)
         .map(|domain| {
             crate::explorer::ExplorerDomainDto::from_domain(
                 domain,
-                aggregates.domain_counters(&domain_id),
+                crate::explorer::domain_counters_from_world(&world, &domain_id),
             )
         })
         .map_err(|_| explorer_not_found())?;
@@ -61327,12 +61755,13 @@ pub async fn handle_v1_explorer_asset_definition_detail(
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
     let governance = state.governance_snapshot();
-    let aggregates = crate::explorer::ExplorerAggregates::build(&world);
     let definition = world
         .asset_definition(&definition_id)
         .map_err(|_| explorer_not_found())?;
-    let mut dto =
-        crate::explorer::ExplorerAssetDefinitionDto::from_definition(&definition, &aggregates);
+    let mut dto = crate::explorer::ExplorerAssetDefinitionDto::from_definition_with_asset_count(
+        &definition,
+        crate::explorer::definition_instance_count_from_world(&world, &definition_id),
+    );
 
     if definition_id == governance.voting_asset_id {
         use iroha_primitives::numeric::Numeric;
@@ -62786,6 +63215,52 @@ fn validate_accounts_filter_adapter(expr: &FilterExpr) -> Result<()> {
     }
 }
 
+#[cfg(all(test, feature = "app_api"))]
+#[test]
+fn account_filter_candidate_ids_extracts_safe_exact_constraints() {
+    let first = AccountId::new(iroha_crypto::KeyPair::random().public_key().clone());
+    let second = AccountId::new(iroha_crypto::KeyPair::random().public_key().clone());
+    let exact = FilterExpr::Eq(
+        FieldPath("id".to_owned()),
+        norito::json::Value::from(first.to_string()),
+    );
+
+    let candidates = account_filter_candidate_ids(Some(&exact))
+        .expect("account id equality should produce direct lookup candidates");
+    assert_eq!(candidates, BTreeSet::from([first.clone()]));
+
+    let combined = FilterExpr::And(vec![
+        exact.clone(),
+        FilterExpr::Eq(
+            FieldPath("has_primary_alias".to_owned()),
+            norito::json::Value::from(false),
+        ),
+    ]);
+    let candidates = account_filter_candidate_ids(Some(&combined))
+        .expect("AND should preserve safe account id candidates");
+    assert_eq!(candidates, BTreeSet::from([first]));
+
+    let many = FilterExpr::In(
+        FieldPath("id".to_owned()),
+        vec![
+            norito::json::Value::from("not-an-account-id"),
+            norito::json::Value::from(second.to_string()),
+        ],
+    );
+    let candidates =
+        account_filter_candidate_ids(Some(&many)).expect("account id IN should produce candidates");
+    assert_eq!(candidates, BTreeSet::from([second]));
+
+    let unsafe_or = FilterExpr::Or(vec![
+        exact,
+        FilterExpr::Eq(
+            FieldPath("has_primary_alias".to_owned()),
+            norito::json::Value::from(false),
+        ),
+    ]);
+    assert!(account_filter_candidate_ids(Some(&unsafe_or)).is_none());
+}
+
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 enum AssetDefinitionSortField {
@@ -63252,6 +63727,96 @@ fn asset_definition_to_json_value(
     Ok(value)
 }
 
+#[cfg(feature = "app_api")]
+fn asset_definition_id_from_filter_value(value: &Value) -> Option<AssetDefinitionId> {
+    value.as_str()?.parse().ok()
+}
+
+#[cfg(feature = "app_api")]
+fn intersect_asset_definition_candidates(
+    selected: &mut Option<BTreeSet<AssetDefinitionId>>,
+    candidates: BTreeSet<AssetDefinitionId>,
+) {
+    if let Some(selected) = selected {
+        selected.retain(|definition_id| candidates.contains(definition_id));
+    } else {
+        *selected = Some(candidates);
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn asset_definition_filter_candidate_ids(
+    world: &impl WorldReadOnly,
+    expr: Option<&crate::filter::FilterExpr>,
+) -> Option<BTreeSet<AssetDefinitionId>> {
+    use crate::filter::FilterExpr as F;
+
+    match expr? {
+        F::And(list) => {
+            let mut selected = None;
+            for nested in list {
+                if let Some(candidates) = asset_definition_filter_candidate_ids(world, Some(nested))
+                {
+                    intersect_asset_definition_candidates(&mut selected, candidates);
+                }
+            }
+            selected
+        }
+        F::Or(list) => {
+            let mut union = BTreeSet::new();
+            for nested in list {
+                let candidates = asset_definition_filter_candidate_ids(world, Some(nested))?;
+                union.extend(candidates);
+            }
+            Some(union)
+        }
+        F::Eq(field, value) if field.0 == "id" => Some(
+            asset_definition_id_from_filter_value(value)
+                .into_iter()
+                .collect(),
+        ),
+        F::In(field, values) if field.0 == "id" => Some(
+            values
+                .iter()
+                .filter_map(asset_definition_id_from_filter_value)
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn asset_definitions_for_filter<'a>(
+    world: &'a impl WorldReadOnly,
+    filter: Option<&crate::filter::FilterExpr>,
+) -> Box<dyn Iterator<Item = iroha_data_model::asset::definition::AssetDefinition> + 'a> {
+    if let Some(candidate_ids) = asset_definition_filter_candidate_ids(world, filter) {
+        return Box::new(
+            candidate_ids
+                .into_iter()
+                .filter_map(move |definition_id| world.asset_definition(&definition_id).ok()),
+        );
+    }
+
+    Box::new(
+        world
+            .asset_definitions_iter()
+            .filter_map(|definition| world.asset_definition(definition.id()).ok()),
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn asset_definition_alias_binding_for(
+    world: &impl WorldReadOnly,
+    definition_id: &AssetDefinitionId,
+    now_ms: u64,
+) -> Option<AssetAliasBindingDto> {
+    world
+        .asset_definition_alias_bindings()
+        .get(definition_id)
+        .map(|binding| asset_alias_binding_dto(binding, now_ms))
+}
+
 /// GET /v1/assets/definitions — List asset definitions as full objects.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
@@ -63261,21 +63826,6 @@ pub async fn handle_v1_assets_definitions(
 ) -> Result<impl IntoResponse> {
     let world = state.world_view();
     let now_ms = asset_alias_observation_time_ms(&state);
-    let alias_bindings: BTreeMap<AssetDefinitionId, AssetAliasBindingDto> = world
-        .asset_definition_alias_bindings()
-        .iter()
-        .map(|(definition_id, binding)| {
-            (
-                definition_id.clone(),
-                asset_alias_binding_dto(binding, now_ms),
-            )
-        })
-        .collect();
-    let definitions: Vec<_> = world
-        .asset_definitions_iter()
-        .filter_map(|definition| world.asset_definition(definition.id()).ok())
-        .collect();
-    drop(world);
 
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_asset_definition_sort_spec(&sort_spec);
@@ -63294,12 +63844,12 @@ pub async fn handle_v1_assets_definitions(
     }
 
     let filter_ref = filter_expr.as_ref();
-    let alias_bindings_ref = &alias_bindings;
-    let mapped_iter = definitions.into_iter().filter_map({
+    let world_ref = &world;
+    let mapped_iter = asset_definitions_for_filter(world_ref, filter_ref).filter_map({
         let selectors = selectors;
         move |def| {
-            let projected =
-                project_asset_definition_list_item(&def, alias_bindings_ref.get(def.id()));
+            let alias_binding = asset_definition_alias_binding_for(world_ref, def.id(), now_ms);
+            let projected = project_asset_definition_list_item(&def, alias_binding.as_ref());
             if let Some(expr) = filter_ref {
                 if asset_definition_filter_mentions_metadata(expr)
                     && !asset_definition_filter_object(expr, &def)
@@ -63321,7 +63871,7 @@ pub async fn handle_v1_assets_definitions(
     for it in &items {
         arr.push(asset_definition_to_json_value(
             &it.definition,
-            alias_bindings.get(it.definition.id()),
+            it.alias_binding.as_ref(),
         )?);
     }
     let mut top = norito::json::Map::new();
@@ -63387,21 +63937,6 @@ pub async fn handle_v1_assets_definitions_query(
     let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
     let world = state.world_view();
     let now_ms = asset_alias_observation_time_ms(&state);
-    let alias_bindings: BTreeMap<AssetDefinitionId, AssetAliasBindingDto> = world
-        .asset_definition_alias_bindings()
-        .iter()
-        .map(|(definition_id, binding)| {
-            (
-                definition_id.clone(),
-                asset_alias_binding_dto(binding, now_ms),
-            )
-        })
-        .collect();
-    let definitions: Vec<_> = world
-        .asset_definitions_iter()
-        .filter_map(|definition| world.asset_definition(definition.id()).ok())
-        .collect();
-    drop(world);
 
     let selectors = compile_asset_definition_sort_spec(&envelope.sort);
     let cap = app_query_page_cap(&state);
@@ -63436,10 +63971,11 @@ pub async fn handle_v1_assets_definitions_query(
     }
 
     if generic_mode {
-        let rows = definitions
-            .into_iter()
+        let world_ref = &world;
+        let rows = asset_definitions_for_filter(world_ref, envelope.filter.as_ref())
             .map(|def| {
-                let row = asset_definition_to_json_value(&def, alias_bindings.get(def.id()))?;
+                let alias_binding = asset_definition_alias_binding_for(world_ref, def.id(), now_ms);
+                let row = asset_definition_to_json_value(&def, alias_binding.as_ref())?;
                 object_row_from_value(row)
             })
             .collect::<Result<Vec<_>, Error>>()?;
@@ -63453,12 +63989,12 @@ pub async fn handle_v1_assets_definitions_query(
     }
 
     let filter_ref = envelope.filter.as_ref();
-    let alias_bindings_ref = &alias_bindings;
-    let mapped_iter = definitions.into_iter().filter_map({
+    let world_ref = &world;
+    let mapped_iter = asset_definitions_for_filter(world_ref, filter_ref).filter_map({
         let selectors = selectors;
         move |def| {
-            let projected =
-                project_asset_definition_list_item(&def, alias_bindings_ref.get(def.id()));
+            let alias_binding = asset_definition_alias_binding_for(world_ref, def.id(), now_ms);
+            let projected = project_asset_definition_list_item(&def, alias_binding.as_ref());
             if let Some(expr) = filter_ref {
                 if asset_definition_filter_mentions_metadata(expr)
                     && !asset_definition_filter_object(expr, &def)
@@ -63480,7 +64016,7 @@ pub async fn handle_v1_assets_definitions_query(
     for it in &items {
         arr.push(asset_definition_to_json_value(
             &it.definition,
-            alias_bindings.get(it.definition.id()),
+            it.alias_binding.as_ref(),
         )?);
     }
     let mut top = norito::json::Map::new();
@@ -63608,6 +64144,48 @@ fn validate_defs_filter_adapter(expr: &FilterExpr) -> Result<()> {
             }
         }
     }
+}
+
+#[cfg(all(test, feature = "app_api"))]
+#[test]
+fn asset_definition_filter_candidate_ids_extracts_safe_exact_constraints() {
+    let world_storage = iroha_core::state::World::new();
+    let world = world_storage.view();
+    let first = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554405f1");
+    let second = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554405f2");
+    let exact = FilterExpr::Eq(
+        FieldPath("id".to_owned()),
+        norito::json::Value::from(first.to_string()),
+    );
+
+    let candidates = asset_definition_filter_candidate_ids(&world, Some(&exact))
+        .expect("asset definition id equality should produce direct lookup candidates");
+    assert_eq!(candidates, BTreeSet::from([first.clone()]));
+
+    let combined = FilterExpr::And(vec![
+        exact.clone(),
+        FilterExpr::Exists(FieldPath("alias".to_owned())),
+    ]);
+    let candidates = asset_definition_filter_candidate_ids(&world, Some(&combined))
+        .expect("AND should preserve safe asset definition id candidates");
+    assert_eq!(candidates, BTreeSet::from([first]));
+
+    let many = FilterExpr::In(
+        FieldPath("id".to_owned()),
+        vec![
+            norito::json::Value::from("not-an-asset-definition-id"),
+            norito::json::Value::from(second.to_string()),
+        ],
+    );
+    let candidates = asset_definition_filter_candidate_ids(&world, Some(&many))
+        .expect("asset definition id IN should produce candidates");
+    assert_eq!(candidates, BTreeSet::from([second]));
+
+    let unsafe_or = FilterExpr::Or(vec![
+        exact,
+        FilterExpr::Exists(FieldPath("alias".to_owned())),
+    ]);
+    assert!(asset_definition_filter_candidate_ids(&world, Some(&unsafe_or)).is_none());
 }
 
 #[iroha_futures::telemetry_future]
@@ -64035,6 +64613,55 @@ fn public_lane_unbonding_to_json(unbonding: &PublicLaneUnbonding) -> Value {
     Value::Object(map)
 }
 
+#[cfg(feature = "app_api")]
+fn exact_field_filter_candidates<T>(
+    expr: Option<&crate::filter::FilterExpr>,
+    field_name: &str,
+) -> Option<BTreeSet<T>>
+where
+    T: FromStr + Ord,
+{
+    fn parse_value<T>(value: &Value) -> Option<T>
+    where
+        T: FromStr,
+    {
+        value.as_str()?.parse().ok()
+    }
+
+    use crate::filter::FilterExpr as F;
+
+    match expr? {
+        F::And(list) => {
+            let mut selected: Option<BTreeSet<T>> = None;
+            for nested in list {
+                if let Some(candidates) = exact_field_filter_candidates(Some(nested), field_name) {
+                    if let Some(selected) = selected.as_mut() {
+                        selected.retain(|id| candidates.contains(id));
+                    } else {
+                        selected = Some(candidates);
+                    }
+                }
+            }
+            selected
+        }
+        F::Or(list) => {
+            let mut union = BTreeSet::new();
+            for nested in list {
+                let candidates = exact_field_filter_candidates(Some(nested), field_name)?;
+                union.extend(candidates);
+            }
+            Some(union)
+        }
+        F::Eq(field, value) if field.0 == field_name => {
+            Some(parse_value(value).into_iter().collect())
+        }
+        F::In(field, values) if field.0 == field_name => {
+            Some(values.iter().filter_map(parse_value).collect())
+        }
+        _ => None,
+    }
+}
+
 // ---------------------- NFTs listing ----------------------
 
 #[cfg(feature = "app_api")]
@@ -64272,6 +64899,42 @@ fn nft_to_query_row(nft: &iroha_data_model::nft::Nft) -> norito::json::Map {
     row
 }
 
+#[cfg(feature = "app_api")]
+fn nft_filter_candidate_ids(expr: Option<&crate::filter::FilterExpr>) -> Option<BTreeSet<NftId>> {
+    exact_field_filter_candidates(expr, "id")
+}
+
+#[cfg(feature = "app_api")]
+fn nft_from_key_value(id: &NftId, value: &iroha_data_model::nft::NftValue) -> Nft {
+    let details = value.clone().into_inner();
+    Nft {
+        id: id.clone(),
+        content: details.content,
+        owned_by: details.owned_by,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn nfts_for_filter<'a>(
+    world: &'a impl WorldReadOnly,
+    filter: Option<&crate::filter::FilterExpr>,
+) -> Box<dyn Iterator<Item = Nft> + 'a> {
+    if let Some(candidate_ids) = nft_filter_candidate_ids(filter) {
+        return Box::new(candidate_ids.into_iter().filter_map(move |nft_id| {
+            world
+                .nfts()
+                .get_key_value(&nft_id)
+                .map(|(id, value)| nft_from_key_value(id, value))
+        }));
+    }
+
+    Box::new(
+        world
+            .nfts_iter()
+            .map(|entry| nft_from_key_value(entry.id(), entry.value())),
+    )
+}
+
 /// GET /v1/nfts — List NFTs with basic pagination.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
@@ -64280,17 +64943,6 @@ pub async fn handle_v1_nfts(
     crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
 ) -> Result<impl IntoResponse> {
     let world = state.world_view();
-    let nfts: Vec<_> = world
-        .nfts_iter()
-        .map(|entry| {
-            let details = entry.value().clone().into_inner();
-            Nft {
-                id: entry.id().clone(),
-                content: details.content,
-                owned_by: details.owned_by,
-            }
-        })
-        .collect();
 
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_nft_sort_spec(&sort_spec);
@@ -64308,7 +64960,7 @@ pub async fn handle_v1_nfts(
     }
 
     let filter_ref = filter_expr.as_ref();
-    let mapped_iter = nfts.into_iter().filter_map({
+    let mapped_iter = nfts_for_filter(&world, filter_ref).filter_map({
         let selectors = selectors;
         move |nft| {
             if let Some(expr) = filter_ref {
@@ -64362,17 +65014,6 @@ pub async fn handle_v1_nfts_query(
 ) -> Result<impl IntoResponse> {
     let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
     let world = state.world_view();
-    let nfts: Vec<_> = world
-        .nfts_iter()
-        .map(|entry| {
-            let details = entry.value().clone().into_inner();
-            Nft {
-                id: entry.id().clone(),
-                content: details.content,
-                owned_by: details.owned_by,
-            }
-        })
-        .collect();
 
     let selectors = compile_nft_sort_spec(&envelope.sort);
     let cap = app_query_page_cap(&state);
@@ -64407,7 +65048,8 @@ pub async fn handle_v1_nfts_query(
     }
 
     if generic_mode {
-        let rows = nfts.iter().map(nft_to_query_row);
+        let rows =
+            nfts_for_filter(&world, envelope.filter.as_ref()).map(|nft| nft_to_query_row(&nft));
         return execute_generic_resource_query(
             state.as_ref(),
             crate::generic_query::RESOURCE_NFTS,
@@ -64418,7 +65060,7 @@ pub async fn handle_v1_nfts_query(
     }
 
     let filter_ref = envelope.filter.as_ref();
-    let mapped_iter = nfts.into_iter().filter_map({
+    let mapped_iter = nfts_for_filter(&world, filter_ref).filter_map({
         let selectors = selectors;
         move |nft| {
             if let Some(expr) = filter_ref {
@@ -64504,6 +65146,46 @@ fn validate_nfts_filter_adapter(expr: &FilterExpr) -> Result<()> {
     }
 }
 
+#[cfg(all(test, feature = "app_api"))]
+#[test]
+fn nft_filter_candidate_ids_extracts_safe_exact_constraints() {
+    let first: NftId = "ticket$art".parse().unwrap();
+    let second: NftId = "receipt$art".parse().unwrap();
+    let exact = FilterExpr::Eq(
+        FieldPath("id".to_owned()),
+        norito::json::Value::from(first.to_string()),
+    );
+
+    let candidates = nft_filter_candidate_ids(Some(&exact))
+        .expect("NFT id equality should produce direct lookup candidates");
+    assert_eq!(candidates, BTreeSet::from([first.clone()]));
+
+    let combined = FilterExpr::And(vec![
+        exact.clone(),
+        FilterExpr::Exists(FieldPath("metadata.kind".to_owned())),
+    ]);
+    let candidates =
+        nft_filter_candidate_ids(Some(&combined)).expect("AND should preserve safe id candidates");
+    assert_eq!(candidates, BTreeSet::from([first]));
+
+    let many = FilterExpr::In(
+        FieldPath("id".to_owned()),
+        vec![
+            norito::json::Value::from("not-an-nft-id"),
+            norito::json::Value::from(second.to_string()),
+        ],
+    );
+    let candidates =
+        nft_filter_candidate_ids(Some(&many)).expect("NFT id IN should produce candidates");
+    assert_eq!(candidates, BTreeSet::from([second]));
+
+    let unsafe_or = FilterExpr::Or(vec![
+        exact,
+        FilterExpr::Exists(FieldPath("metadata.kind".to_owned())),
+    ]);
+    assert!(nft_filter_candidate_ids(Some(&unsafe_or)).is_none());
+}
+
 // ---------------------- RWAs listing ----------------------
 
 #[cfg(feature = "app_api")]
@@ -64570,19 +65252,44 @@ fn rwa_filter_object(expr: &FilterExpr, item: &RwaListItem) -> bool {
 }
 
 #[cfg(feature = "app_api")]
+fn rwa_filter_candidate_ids(expr: Option<&crate::filter::FilterExpr>) -> Option<BTreeSet<RwaId>> {
+    exact_field_filter_candidates(expr, "id")
+}
+
+#[cfg(feature = "app_api")]
+fn rwa_list_item_from_id(id: &RwaId) -> RwaListItem {
+    RwaListItem { id: id.to_string() }
+}
+
+#[cfg(feature = "app_api")]
+fn rwas_for_filter<'a>(
+    world: &'a impl WorldReadOnly,
+    filter: Option<&crate::filter::FilterExpr>,
+) -> Box<dyn Iterator<Item = RwaListItem> + 'a> {
+    if let Some(candidate_ids) = rwa_filter_candidate_ids(filter) {
+        return Box::new(candidate_ids.into_iter().filter_map(move |rwa_id| {
+            world
+                .rwas()
+                .get_key_value(&rwa_id)
+                .map(|(id, _)| rwa_list_item_from_id(id))
+        }));
+    }
+
+    Box::new(
+        world
+            .rwas_iter()
+            .map(|entry| rwa_list_item_from_id(entry.id())),
+    )
+}
+
+#[cfg(feature = "app_api")]
 /// GET /v1/rwas — List RWA lots with basic pagination.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_rwas(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
 ) -> Result<impl IntoResponse> {
-    let items: Vec<RwaListItem> = state
-        .world_view()
-        .rwas_iter()
-        .map(|entry| RwaListItem {
-            id: entry.id().to_string(),
-        })
-        .collect();
+    let world = state.world_view();
 
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_rwa_sort_spec(&sort_spec);
@@ -64600,7 +65307,7 @@ pub async fn handle_v1_rwas(
     }
 
     let filter_ref = filter_expr.as_ref();
-    let mapped_iter = items.into_iter().filter_map({
+    let mapped_iter = rwas_for_filter(&world, filter_ref).filter_map({
         let selectors = selectors;
         move |item| {
             if let Some(expr) = filter_ref
@@ -64645,13 +65352,7 @@ pub async fn handle_v1_rwas_query(
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
 ) -> Result<impl IntoResponse> {
     let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
-    let items: Vec<RwaListItem> = state
-        .world_view()
-        .rwas_iter()
-        .map(|entry| RwaListItem {
-            id: entry.id().to_string(),
-        })
-        .collect();
+    let world = state.world_view();
 
     let selectors = compile_rwa_sort_spec(&envelope.sort);
     let cap = app_query_page_cap(&state);
@@ -64684,9 +65385,9 @@ pub async fn handle_v1_rwas_query(
     }
 
     if generic_mode {
-        let rows = items.iter().map(|item| {
+        let rows = rwas_for_filter(&world, envelope.filter.as_ref()).map(|item| {
             let mut row = Map::new();
-            row.insert("id".into(), Value::from(item.id.clone()));
+            row.insert("id".into(), Value::from(item.id));
             row
         });
         return execute_generic_resource_query(
@@ -64699,7 +65400,7 @@ pub async fn handle_v1_rwas_query(
     }
 
     let filter_ref = envelope.filter.as_ref();
-    let mapped_iter = items.into_iter().filter_map({
+    let mapped_iter = rwas_for_filter(&world, filter_ref).filter_map({
         let selectors = selectors;
         move |item| {
             if let Some(expr) = filter_ref
@@ -64769,6 +65470,47 @@ fn validate_rwas_filter_adapter(expr: &FilterExpr) -> Result<()> {
             Err(Error::Query(iroha_data_model::ValidationFail::TooComplex))
         }
     }
+}
+
+#[cfg(all(test, feature = "app_api"))]
+#[test]
+fn rwa_filter_candidate_ids_extracts_safe_exact_constraints() {
+    let domain = DomainId::try_new("vault", "universal").unwrap();
+    let first = RwaId::generated(domain.clone(), Hash::prehashed([0x11; Hash::LENGTH]));
+    let second = RwaId::generated(domain, Hash::prehashed([0x22; Hash::LENGTH]));
+    let exact = FilterExpr::Eq(
+        FieldPath("id".to_owned()),
+        norito::json::Value::from(first.to_string()),
+    );
+
+    let candidates = rwa_filter_candidate_ids(Some(&exact))
+        .expect("RWA id equality should produce direct lookup candidates");
+    assert_eq!(candidates, BTreeSet::from([first.clone()]));
+
+    let combined = FilterExpr::And(vec![
+        exact.clone(),
+        FilterExpr::Exists(FieldPath("owner".to_owned())),
+    ]);
+    let candidates =
+        rwa_filter_candidate_ids(Some(&combined)).expect("AND should preserve safe id candidates");
+    assert_eq!(candidates, BTreeSet::from([first]));
+
+    let many = FilterExpr::In(
+        FieldPath("id".to_owned()),
+        vec![
+            norito::json::Value::from("not-an-rwa-id"),
+            norito::json::Value::from(second.to_string()),
+        ],
+    );
+    let candidates =
+        rwa_filter_candidate_ids(Some(&many)).expect("RWA id IN should produce candidates");
+    assert_eq!(candidates, BTreeSet::from([second]));
+
+    let unsafe_or = FilterExpr::Or(vec![
+        exact,
+        FilterExpr::Exists(FieldPath("owner".to_owned())),
+    ]);
+    assert!(rwa_filter_candidate_ids(Some(&unsafe_or)).is_none());
 }
 
 // ---------------------- Subscription API ----------------------
@@ -67820,36 +68562,14 @@ pub async fn handle_v1_account_assets_query_with_policy(
     )?;
     let world = state.world_view();
     let scoped_accounts = scoped_accounts_for_subject_sorted(&world, &acct);
-    let primary_alias = primary_alias_projection_for_account_id(state.as_ref(), &acct);
-    let mut projected_assets = Vec::new();
-    for asset in world.assets_iter() {
-        if !scoped_accounts
-            .iter()
-            .any(|account_id| asset.id().account() == account_id)
-        {
-            continue;
-        }
-        let definition_id = asset.id().definition().clone();
-        let (asset_name, asset_alias) = match world.asset_definition(&definition_id) {
-            Ok(definition) => (
-                definition.name().clone(),
-                definition
-                    .alias()
-                    .as_ref()
-                    .map(|alias| alias.as_ref().to_owned()),
-            ),
-            Err(_) => (definition_id.to_string(), None),
-        };
-        projected_assets.push(AccountAssetListItem {
-            asset: definition_id.to_string(),
-            account_id: asset.id().account().to_string(),
-            scope: asset_balance_scope_literal(asset.id().scope()),
-            asset_name,
-            asset_alias,
-            quantity: asset.value().clone().into_inner(),
-            primary_alias: primary_alias.clone(),
-        });
-    }
+    let projected_assets = collect_projected_account_assets(
+        state.as_ref(),
+        &world,
+        &acct,
+        &scoped_accounts,
+        None,
+        None,
+    );
     drop(world);
     let crate::filter::QueryEnvelope {
         filter,
@@ -68057,6 +68777,29 @@ struct AssetHolderListItem {
 }
 
 #[cfg(feature = "app_api")]
+fn accumulate_asset_holder_quantity(
+    map: &mut BTreeMap<
+        (AccountId, iroha_data_model::asset::AssetBalanceScope),
+        iroha_primitives::numeric::Numeric,
+    >,
+    asset_id: &AssetId,
+    quantity: &iroha_primitives::numeric::Numeric,
+    scope_filter: Option<&iroha_data_model::asset::AssetBalanceScope>,
+) {
+    if let Some(expected_scope) = scope_filter
+        && asset_id.scope() != expected_scope
+    {
+        return;
+    }
+    let entry = map
+        .entry((asset_id.account().clone(), asset_id.scope().clone()))
+        .or_insert_with(iroha_primitives::numeric::Numeric::zero);
+    if let Some(sum) = entry.clone().checked_add(quantity.clone()) {
+        *entry = sum;
+    }
+}
+
+#[cfg(feature = "app_api")]
 #[derive(Clone, Copy)]
 enum AssetHolderSortField {
     AccountId,
@@ -68239,6 +68982,62 @@ fn filter_asset_holder_item(expr: &crate::filter::FilterExpr, item: &AssetHolder
 }
 
 #[cfg(feature = "app_api")]
+fn account_id_from_filter_value(value: &Value) -> Option<AccountId> {
+    AccountId::parse_encoded(value.as_str()?)
+        .ok()
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+}
+
+#[cfg(feature = "app_api")]
+fn intersect_account_candidates(
+    selected: &mut Option<BTreeSet<AccountId>>,
+    candidates: BTreeSet<AccountId>,
+) {
+    if let Some(selected) = selected {
+        selected.retain(|account_id| candidates.contains(account_id));
+    } else {
+        *selected = Some(candidates);
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn asset_holder_filter_account_candidates(
+    expr: Option<&crate::filter::FilterExpr>,
+) -> Option<BTreeSet<AccountId>> {
+    use crate::filter::FilterExpr as F;
+
+    match expr? {
+        F::And(list) => {
+            let mut selected = None;
+            for nested in list {
+                if let Some(candidates) = asset_holder_filter_account_candidates(Some(nested)) {
+                    intersect_account_candidates(&mut selected, candidates);
+                }
+            }
+            selected
+        }
+        F::Or(list) => {
+            let mut union = BTreeSet::new();
+            for nested in list {
+                let candidates = asset_holder_filter_account_candidates(Some(nested))?;
+                union.extend(candidates);
+            }
+            Some(union)
+        }
+        F::Eq(field, value) if field.0 == "account_id" => {
+            Some(account_id_from_filter_value(value).into_iter().collect())
+        }
+        F::In(field, values) if field.0 == "account_id" => Some(
+            values
+                .iter()
+                .filter_map(account_id_from_filter_value)
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "app_api")]
 pub(crate) fn asset_balance_scope_literal(
     scope: &iroha_data_model::asset::AssetBalanceScope,
 ) -> String {
@@ -68288,30 +69087,28 @@ pub async fn handle_v1_asset_holders(
         .asset_definition(&def_id)
         .ok()
         .and_then(|definition| definition.alias().as_ref().map(ToString::to_string));
-    let assets: Vec<_> = world.assets_by_definition_iter(&def_id).collect();
     // Aggregate balances per account and scope.
     let mut map: BTreeMap<
         (AccountId, iroha_data_model::asset::AssetBalanceScope),
         iroha_primitives::numeric::Numeric,
     > = BTreeMap::new();
-    for asset in assets {
-        if let Some(expected_account) = account_filter.as_ref()
-            && asset.id().account() != expected_account
-        {
-            continue;
+    if let Some(account_id) = account_filter.as_ref() {
+        for asset in world.assets_in_account_by_definition_iter(account_id, &def_id) {
+            accumulate_asset_holder_quantity(
+                &mut map,
+                asset.id(),
+                asset.value().as_ref(),
+                scope_filter.as_ref(),
+            );
         }
-        if let Some(expected_scope) = scope_filter.as_ref()
-            && asset.id().scope() != expected_scope
-        {
-            continue;
-        }
-        let acct = asset.id().account().clone();
-        let scope = asset.id().scope().clone();
-        let entry = map
-            .entry((acct, scope))
-            .or_insert_with(iroha_primitives::numeric::Numeric::zero);
-        if let Some(sum) = entry.clone().checked_add(asset.value().clone()) {
-            *entry = sum;
+    } else {
+        for asset in world.asset_entries_by_definition_iter(&def_id) {
+            accumulate_asset_holder_quantity(
+                &mut map,
+                asset.id(),
+                asset.value(),
+                scope_filter.as_ref(),
+            );
         }
     }
     let alias_cache: BTreeMap<_, _> = map
@@ -68485,6 +69282,7 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
         )?;
     }
     generic_envelope.filter = filter.clone();
+    let account_candidates = asset_holder_filter_account_candidates(filter.as_ref());
     if generic_mode {
         if let Some((rows, indexed_snapshot, query_source)) = asset_holder_projection_query_rows(
             app.as_ref(),
@@ -68530,14 +69328,20 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
         (AccountId, iroha_data_model::asset::AssetBalanceScope),
         iroha_primitives::numeric::Numeric,
     > = BTreeMap::new();
-    for asset in world.assets_by_definition_iter(&def_id) {
-        let acct = asset.id().account().clone();
-        let scope = asset.id().scope().clone();
-        let entry = map
-            .entry((acct, scope))
-            .or_insert_with(iroha_primitives::numeric::Numeric::zero);
-        if let Some(sum) = entry.clone().checked_add(asset.value().clone()) {
-            *entry = sum;
+    if let Some(account_candidates) = account_candidates.as_ref() {
+        for account_id in account_candidates {
+            for asset in world.assets_in_account_by_definition_iter(account_id, &def_id) {
+                accumulate_asset_holder_quantity(
+                    &mut map,
+                    asset.id(),
+                    asset.value().as_ref(),
+                    None,
+                );
+            }
+        }
+    } else {
+        for asset in world.asset_entries_by_definition_iter(&def_id) {
+            accumulate_asset_holder_quantity(&mut map, asset.id(), asset.value(), None);
         }
     }
     let alias_cache: BTreeMap<_, _> = map
@@ -69571,15 +70375,8 @@ async fn handle_v1_asset_holders_query_aggregate(
         (AccountId, iroha_data_model::asset::AssetBalanceScope),
         iroha_primitives::numeric::Numeric,
     > = BTreeMap::new();
-    for asset in world.assets_by_definition_iter(&def_id) {
-        let account_id = asset.id().account().clone();
-        let scope = asset.id().scope().clone();
-        let entry = map
-            .entry((account_id, scope))
-            .or_insert_with(iroha_primitives::numeric::Numeric::zero);
-        if let Some(sum) = entry.clone().checked_add(asset.value().clone()) {
-            *entry = sum;
-        }
+    for asset in world.asset_entries_by_definition_iter(&def_id) {
+        accumulate_asset_holder_quantity(&mut map, asset.id(), asset.value(), None);
     }
     let alias_cache: BTreeMap<_, _> = map
         .keys()
