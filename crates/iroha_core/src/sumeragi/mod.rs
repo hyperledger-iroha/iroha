@@ -5697,6 +5697,47 @@ mod tests {
     }
 
     #[derive(Default)]
+    struct IngressKindRecordingActor {
+        events: Vec<&'static str>,
+    }
+
+    impl WorkerActor for IngressKindRecordingActor {
+        fn on_block_message(&mut self, msg: InboundBlockMessage) -> Result<()> {
+            let label = match msg.message {
+                BlockMessage::BlockCreated(_) | BlockMessage::BlockBodyResponse(_) => "body",
+                BlockMessage::RbcInit(_)
+                | BlockMessage::RbcChunk(_)
+                | BlockMessage::RbcChunkCompact(_)
+                | BlockMessage::RbcReady(_)
+                | BlockMessage::RbcDeliver(_) => "rbc",
+                BlockMessage::ConsensusParams(_) | BlockMessage::FetchPendingBlock(_) => "block",
+                BlockMessage::QcVote(_) => "vote",
+                BlockMessage::Qc(_) => "cert",
+                BlockMessage::Proposal(_) => "payload",
+                _ => "other",
+            };
+            self.events.push(label);
+            Ok(())
+        }
+
+        fn on_consensus_control(&mut self, _msg: ControlFlow) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_lane_relay(&mut self, _message: LaneRelayMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_background_request(&mut self, _request: BackgroundRequest) -> Result<()> {
+            Ok(())
+        }
+
+        fn tick(&mut self) -> bool {
+            false
+        }
+    }
+
+    #[derive(Default)]
     struct BatchRecordingActor {
         events: Vec<u8>,
     }
@@ -9887,6 +9928,113 @@ mod tests {
     }
 
     #[test]
+    fn run_parallel_worker_prioritizes_body_ingress_before_rbc_repair() {
+        let gate = Arc::new(ActorGate::new(IngressKindRecordingActor::default()));
+        let active = Arc::new(AtomicUsize::new(0));
+        let shutdown_signal = ShutdownSignal::new();
+        let (body_tx, body_rx) = mpsc::sync_channel(1);
+        let (rbc_tx, rbc_rx) = mpsc::sync_channel(1);
+
+        {
+            let mut guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            guard.in_flight = true;
+        }
+
+        let rbc_join = spawn_queue_worker(
+            "test-sumeragi-rbc",
+            rbc_rx,
+            Arc::clone(&gate),
+            GatePriority::AvailabilityCritical,
+            1,
+            Arc::clone(&active),
+            shutdown_signal.clone(),
+            PriorityTier::RbcChunks.stage(),
+            PriorityTier::RbcChunks.queue_kind(),
+            "block_message",
+            |actor, msg| actor.on_block_message(msg),
+        );
+        let body_join = spawn_queue_worker(
+            "test-sumeragi-payloads",
+            body_rx,
+            Arc::clone(&gate),
+            GatePriority::AvailabilityBody,
+            1,
+            Arc::clone(&active),
+            shutdown_signal.clone(),
+            PriorityTier::BlockPayload.stage(),
+            PriorityTier::BlockPayload.queue_kind(),
+            "block_message",
+            |actor, msg| actor.on_block_message(msg),
+        );
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x77; 32]));
+        rbc_tx
+            .send(inbound(BlockMessage::RbcChunk(RbcChunk {
+                block_hash,
+                height: 4,
+                view: 0,
+                epoch: 0,
+                idx: 0,
+                bytes: vec![0x42],
+            })))
+            .expect("queue RBC repair ingress");
+        body_tx
+            .send(inbound(BlockMessage::BlockCreated(message::BlockCreated {
+                block: test_signed_block(4, 0),
+                frontier: None,
+            })))
+            .expect("queue body ingress");
+
+        let wait_deadline = Instant::now()
+            .checked_add(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        while Instant::now() < wait_deadline {
+            let (waiting_availability_body, waiting_availability) = {
+                let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+                (guard.waiting_availability_body, guard.waiting_availability)
+            };
+            if waiting_availability_body > 0 && waiting_availability > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        {
+            let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            assert!(
+                guard.waiting_availability_body > 0 && guard.waiting_availability > 0,
+                "body and RBC workers should both be queued while the gate is held"
+            );
+        }
+
+        {
+            let mut guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            guard.in_flight = false;
+        }
+        gate.cvar.notify_all();
+
+        let processed_deadline = Instant::now()
+            .checked_add(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        while Instant::now() < processed_deadline {
+            let processed = {
+                let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+                guard.actor.events.len()
+            };
+            if processed == 2 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+
+        shutdown_signal.send();
+        body_join.join().expect("body queue worker thread");
+        rbc_join.join().expect("RBC queue worker thread");
+
+        let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+        assert_eq!(guard.actor.events, vec!["body", "rbc"]);
+    }
+
+    #[test]
     fn run_parallel_worker_prioritizes_availability_ingress_before_vote_flood() {
         let _guard = status::worker_queue_test_guard();
         status::reset_worker_loop_snapshot_for_tests();
@@ -10059,7 +10207,7 @@ mod tests {
             "test-sumeragi-payloads",
             body_rx,
             Arc::clone(&gate),
-            GatePriority::AvailabilityCritical,
+            GatePriority::AvailabilityBody,
             1,
             Arc::clone(&active),
             shutdown_signal.clone(),
@@ -10103,11 +10251,11 @@ mod tests {
             .checked_add(Duration::from_secs(1))
             .unwrap_or_else(Instant::now);
         while Instant::now() < wait_deadline {
-            let (waiting_availability, waiting_urgent) = {
+            let (waiting_availability_body, waiting_urgent) = {
                 let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
-                (guard.waiting_availability, guard.waiting_urgent)
+                (guard.waiting_availability_body, guard.waiting_urgent)
             };
-            if waiting_availability > 0 && waiting_urgent > 0 {
+            if waiting_availability_body > 0 && waiting_urgent > 0 {
                 break;
             }
             std::thread::sleep(Duration::from_millis(1));
@@ -10115,7 +10263,7 @@ mod tests {
         {
             let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
             assert!(
-                guard.waiting_availability > 0 && guard.waiting_urgent > 0,
+                guard.waiting_availability_body > 0 && guard.waiting_urgent > 0,
                 "body ingress and vote workers should both be queued while the gate is held"
             );
         }
@@ -12954,6 +13102,7 @@ struct ActorGate<A> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GatePriority {
+    AvailabilityBody,
     AvailabilityCritical,
     Urgent,
     #[allow(dead_code)]
@@ -12963,6 +13112,7 @@ enum GatePriority {
 
 const MAX_URGENT_GATE_STREAK: u32 = 32;
 const MAX_AVAILABILITY_GATE_STREAK: u32 = 2;
+const MAX_AVAILABILITY_BODY_GATE_STREAK: u32 = 2;
 #[cfg(test)]
 const MAX_URGENT_BEFORE_DA_CRITICAL: u32 =
     iroha_config::parameters::defaults::sumeragi::WORKER_MAX_URGENT_BEFORE_DA_CRITICAL;
@@ -12970,10 +13120,13 @@ const MAX_URGENT_BEFORE_DA_CRITICAL: u32 =
 struct ActorGateState<A> {
     actor: A,
     in_flight: bool,
+    waiting_availability_body: u32,
     waiting_availability: u32,
     waiting_urgent: u32,
     waiting_da_critical: u32,
     waiting_regular: u32,
+    // Preserve this across urgent turns so RBC repair gets a turn after a bounded body/QC burst.
+    availability_body_streak: u32,
     availability_streak: u32,
     urgent_streak: u32,
 }
@@ -12995,10 +13148,12 @@ impl<A> ActorGate<A> {
             state: Mutex::new(ActorGateState {
                 actor,
                 in_flight: false,
+                waiting_availability_body: 0,
                 waiting_availability: 0,
                 waiting_urgent: 0,
                 waiting_da_critical: 0,
                 waiting_regular: 0,
+                availability_body_streak: 0,
                 availability_streak: 0,
                 urgent_streak: 0,
             }),
@@ -13015,15 +13170,33 @@ impl<A> ActorGate<A> {
         if state.in_flight {
             return false;
         }
+        let waiting_any_availability =
+            state.waiting_availability_body > 0 || state.waiting_availability > 0;
         match priority {
+            GatePriority::AvailabilityBody => {
+                if state.waiting_availability > 0
+                    && state.availability_body_streak >= MAX_AVAILABILITY_BODY_GATE_STREAK
+                {
+                    return false;
+                }
+                let bounded_availability_burst =
+                    state.availability_streak >= MAX_AVAILABILITY_GATE_STREAK;
+                !(bounded_availability_burst
+                    && (state.waiting_urgent > 0 || state.waiting_da_critical > 0))
+            }
             GatePriority::AvailabilityCritical => {
+                if state.waiting_availability_body > 0
+                    && state.availability_body_streak < MAX_AVAILABILITY_BODY_GATE_STREAK
+                {
+                    return false;
+                }
                 let bounded_availability_burst =
                     state.availability_streak >= MAX_AVAILABILITY_GATE_STREAK;
                 !(bounded_availability_burst
                     && (state.waiting_urgent > 0 || state.waiting_da_critical > 0))
             }
             GatePriority::Urgent => {
-                if state.waiting_availability > 0
+                if waiting_any_availability
                     && state.availability_streak < MAX_AVAILABILITY_GATE_STREAK
                 {
                     return false;
@@ -13035,13 +13208,13 @@ impl<A> ActorGate<A> {
                 }
             }
             GatePriority::DaCritical => {
-                (state.waiting_availability == 0
+                (!waiting_any_availability
                     || state.availability_streak >= MAX_AVAILABILITY_GATE_STREAK)
                     && (state.waiting_urgent == 0
                         || state.urgent_streak >= max_urgent_before_da_critical)
             }
             GatePriority::Regular => {
-                state.waiting_availability == 0
+                !waiting_any_availability
                     && state.waiting_da_critical == 0
                     && (state.waiting_urgent == 0 || state.urgent_streak >= MAX_URGENT_GATE_STREAK)
             }
@@ -13051,6 +13224,9 @@ impl<A> ActorGate<A> {
     fn enter(&self, priority: GatePriority) -> ActorGuard<'_, A> {
         let mut guard = self.state.lock().expect("sumeragi actor gate poisoned");
         match priority {
+            GatePriority::AvailabilityBody => {
+                guard.waiting_availability_body = guard.waiting_availability_body.saturating_add(1);
+            }
             GatePriority::AvailabilityCritical => {
                 guard.waiting_availability = guard.waiting_availability.saturating_add(1);
             }
@@ -13069,12 +13245,25 @@ impl<A> ActorGate<A> {
         }
         guard.in_flight = true;
         match priority {
+            GatePriority::AvailabilityBody => {
+                guard.waiting_availability_body = guard.waiting_availability_body.saturating_sub(1);
+                guard.availability_streak = guard
+                    .availability_streak
+                    .saturating_add(1)
+                    .min(MAX_AVAILABILITY_GATE_STREAK);
+                guard.availability_body_streak = guard
+                    .availability_body_streak
+                    .saturating_add(1)
+                    .min(MAX_AVAILABILITY_BODY_GATE_STREAK);
+                guard.urgent_streak = 0;
+            }
             GatePriority::AvailabilityCritical => {
                 guard.waiting_availability = guard.waiting_availability.saturating_sub(1);
                 guard.availability_streak = guard
                     .availability_streak
                     .saturating_add(1)
                     .min(MAX_AVAILABILITY_GATE_STREAK);
+                guard.availability_body_streak = 0;
                 guard.urgent_streak = 0;
             }
             GatePriority::Urgent => {
@@ -14487,7 +14676,7 @@ fn run_parallel_worker<A: WorkerActor + Send + 'static>(
         "sumeragi-payloads",
         block_payload_rx,
         Arc::clone(&gate),
-        GatePriority::AvailabilityCritical,
+        GatePriority::AvailabilityBody,
         1,
         Arc::clone(&active),
         shutdown_signal.clone(),
