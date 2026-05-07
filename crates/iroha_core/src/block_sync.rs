@@ -5193,9 +5193,13 @@ pub mod message {
                     filtered.push((block, qc));
                     continue;
                 };
-                let stake_snapshot = rosters
-                    .get(&block_hash)
-                    .and_then(|meta| meta.stake_snapshot.as_ref());
+                let roster_metadata = rosters.get(&block_hash);
+                let stake_snapshot = roster_metadata.and_then(|meta| meta.stake_snapshot.as_ref());
+                let qc_candidate = qc.or_else(|| {
+                    roster_metadata
+                        .and_then(|meta| meta.commit_qc.as_ref())
+                        .cloned()
+                });
                 let (context, signature_check, sanitized_qc) = {
                     let world_view = state.world_view();
                     let mode_tag = mode_tag_for_block_sync_from_world(
@@ -5225,7 +5229,7 @@ pub mod message {
                         state.chain_id_ref(),
                         fallback_consensus_mode,
                         &block,
-                        qc,
+                        qc_candidate,
                         &context,
                         &topology,
                         &block_signers,
@@ -8138,6 +8142,63 @@ pub mod message {
             assert_eq!(filtered.len(), 1);
             assert_eq!(filtered[0].0.hash(), block.hash());
             assert!(filtered[0].1.is_some());
+        }
+
+        #[test]
+        fn filter_blocks_accepts_roster_metadata_qc_without_block_signature_quorum() {
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_validator.public_key().clone()),
+            ]);
+            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
+            let state_view = state.view();
+            let (chain_id, mode_tag) = test_chain_config();
+
+            let mut block: SignedBlock = unique_dummy_block(kp_leader.private_key(), |header| {
+                header.set_height(nonzero_ext::nonzero!(2_u64));
+            })
+            .into();
+            let signature_topology =
+                signature_topology_for_block(&block, &topology, &state_view, &mode_tag);
+            let leader_candidates = [&kp_leader, &kp_validator];
+            let leader = leader_keypair(&signature_topology, &leader_candidates);
+            block = sign_block_for_topology(block, &signature_topology, &[leader]);
+
+            let qc = qc_from_signers_with_aggregate(
+                &chain_id,
+                &mode_tag,
+                block.hash(),
+                block.header().height().get(),
+                block.header().view_change_index(),
+                0,
+                signer_indices_for_topology(&signature_topology, &[&kp_leader, &kp_validator]),
+                &signature_topology,
+                &topology,
+                &[kp_leader.clone(), kp_validator.clone()],
+            );
+            let rosters = BTreeMap::from([(
+                block.hash(),
+                RosterMetadata {
+                    commit_qc: Some(qc.clone()),
+                    validator_checkpoint: None,
+                    stake_snapshot: None,
+                },
+            )]);
+
+            let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
+                vec![(block.clone(), None)],
+                &rosters,
+                Some(&topology),
+                &state,
+                ConsensusMode::Permissioned,
+            );
+
+            assert_eq!(dropped, 0);
+            assert_eq!(filtered.len(), 1);
+            assert_eq!(filtered[0].0.hash(), block.hash());
+            assert_eq!(filtered[0].1, Some(qc));
         }
 
         #[test]

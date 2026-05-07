@@ -218,9 +218,11 @@ impl Actor {
         phase: crate::sumeragi::consensus::Phase,
         block_hash: HashOf<BlockHeader>,
         height: u64,
+        view: u64,
         epoch: u64,
         signers: &BTreeSet<ValidatorIndex>,
         topology: &super::network_topology::Topology,
+        highest_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
     ) -> Option<(PeerId, crate::sumeragi::consensus::Vote)> {
         if !matches!(
             phase,
@@ -238,6 +240,31 @@ impl Actor {
                 return None;
             }
             let signer_peer = self.vote_signer_peer(vote)?;
+            let new_view_qc_supersedes = highest_qc
+                .or_else(|| self.proposal_highest_qc_for_slot(height, view))
+                .is_some_and(|highest_qc| {
+                    self.new_view_qc_supersedes_same_height_vote_conflict(
+                        height,
+                        view,
+                        highest_qc,
+                        vote.block_hash,
+                        vote.view,
+                    )
+                });
+            if new_view_qc_supersedes {
+                info!(
+                    phase = ?phase,
+                    height,
+                    view,
+                    epoch,
+                    block = %block_hash,
+                    conflicting_view = vote.view,
+                    conflicting_block = %vote.block_hash,
+                    signer_peer = ?signer_peer,
+                    "allowing QC aggregation: NEW_VIEW QC supersedes raw same-height signer history"
+                );
+                return None;
+            }
             signer_peers
                 .contains(&signer_peer)
                 .then_some((signer_peer, vote.clone()))
@@ -3435,9 +3462,11 @@ impl Actor {
             phase,
             block_hash,
             height,
+            view,
             epoch,
             &snapshot.signers,
             &signature_topology,
+            self.proposal_highest_qc_for_slot(height, view),
         ) {
             warn!(
                 phase = ?phase,
@@ -5830,9 +5859,12 @@ impl Actor {
             qc.phase,
             qc.subject_block_hash,
             qc.height,
+            qc.view,
             qc.epoch,
             &signer_set,
             &topology,
+            qc.highest_qc
+                .or_else(|| self.proposal_highest_qc_for_slot(qc.height, qc.view)),
         ) {
             let allow_conflicting_frontier_commit_qc =
                 matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
