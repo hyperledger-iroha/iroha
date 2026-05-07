@@ -16,6 +16,7 @@ env:
   JSONSTAGE1_CUDA_ARCH: -arch=sm_86
   GPUZSTD_CUDA_REQUIRE: "1"
   JSONSTAGE1_CUDA_REQUIRE: "1"
+  NORITO_CRC64_CUDA_REQUIRE: "1"
   CARGO_TARGET_DIR: target/cuda-nightly
   RUST_TEST_THREADS: "1"
 
@@ -39,6 +40,7 @@ jobs:
             echo "- IVM_CUDA_GENCODE: ${IVM_CUDA_GENCODE}"
             echo "- GPUZSTD_CUDA_ARCH: ${GPUZSTD_CUDA_ARCH}"
             echo "- JSONSTAGE1_CUDA_ARCH: ${JSONSTAGE1_CUDA_ARCH}"
+            echo "- NORITO_CRC64_CUDA_REQUIRE: ${NORITO_CRC64_CUDA_REQUIRE}"
             echo
             echo "## nvidia-smi"
             nvidia-smi --query-gpu=name,compute_cap,driver_version --format=csv,noheader || true
@@ -61,6 +63,8 @@ jobs:
         run: |
           cargo test -p jsonstage1_cuda --features cuda-kernel -- --nocapture
           cargo build -p jsonstage1_cuda --features cuda-kernel
+          cargo test -p norito sequence_plan --features codec-gpu-cuda -- --nocapture
+          cargo test -p norito crc64 --features cuda-crc64 -- --nocapture
           cargo test -p norito stage1_helper --features cuda-stage1,stage1-validate -- --nocapture
           cargo test -p norito cuda_stage1_backend_matches_scalar_when_required_or_available --features cuda-stage1,stage1-validate -- --nocapture
       - name: Upload CUDA inventory

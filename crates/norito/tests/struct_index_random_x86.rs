@@ -20,7 +20,7 @@ fn make_mix(seed: u64, kib: usize) -> String {
         rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
         let idx = (rng >> 33) as usize % pats.len();
         let pat = pats[idx];
-        let pad = ((rng >> 5) as usize % 16);
+        let pad = (rng >> 5) as usize % 16;
         if !first {
             s.push(',');
             written += 1;

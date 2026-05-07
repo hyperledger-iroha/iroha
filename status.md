@@ -70,6 +70,477 @@ Last updated: 2026-05-07
 - Library validation passed with `cargo check -p iroha_core --lib`; the
   serialization guard `scripts/check_no_scale.sh` also passed.
 
+## 2026-05-07 IVM Staging and Sumeragi Targeted Recovery
+
+- The staged `ivm_contract_deploy` fixtures were retested against the contract
+  runtime host after the literal-table padding fix. The four staged copy/register
+  tests now load the generated programs instead of failing metadata validation.
+- NPoS block validation now accepts monotonic, same-epoch VRF epoch-record
+  extensions from staged consensus effects while continuing to reject rewrites
+  of existing participant data. This covers the case where late reveals or
+  participant additions extend a pre-block epoch snapshot before finalization.
+- The late-VRF-reveal integration scenario now gives the consensus actor a
+  wider active-epoch window and a longer local processing poll before forcing
+  progress blocks, avoiding the race where an accepted Torii reveal was handled
+  only after the epoch had closed. The randomness module, including the
+  zero-participation case, is green with the wider short epoch.
+- Focused consensus/DA regressions that failed in the broad workspace attempt
+  are green again: selective-drop recovery, conflicting-ready invalidation,
+  Kura eviction DA rehydration, NPoS baseline metrics, pacemaker latency,
+  pacemaker restart liveness, stale-evidence rejection, and VRF randomness.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-keepgoing-workspace-check cargo test -p iroha_cli --bin ivm_contract_deploy staged_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-keepgoing-workspace-check cargo test -p iroha_core validate_npos_effects --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-keepgoing-workspace-check IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test consensus_and_da sumeragi_randomness:: -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-keepgoing-workspace-check cargo check -p integration_tests --test consensus_and_da`
+
+## 2026-05-07 Workspace All-Target Compile Fallout
+
+- The default Linux `iroha_monitor` build no longer imports the gated built-in
+  synth module when `linux-builtin-synth` is disabled. The theme intro now
+  degrades to a soft audio-unavailable message in that build, and synth-only
+  score helpers are marked as such for the default no-synth target.
+- Python and `xtask` Nexus lane commitment fixtures now include empty
+  `nexus_fee_receipts`, matching the current `LaneBlockCommitment` layout.
+- Removed stale Norito CRC64 x86 helper residue and quieted the Metal sequence
+  planner's non-Mac unused-argument warning exposed by the broad check.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-keepgoing-workspace-check cargo check --workspace --all-targets`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-keepgoing-workspace-check cargo check -p iroha_python_rs --all-targets`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-keepgoing-workspace-check cargo check -p xtask --all-targets`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-keepgoing-workspace-check cargo test -p iroha_monitor --bin iroha_monitor intro -- --nocapture`
+
+## 2026-05-07 Norito Registry Test Re-enable
+
+- Stale `IROHA_RUN_IGNORED` guards were removed from the instruction registry,
+  trait-object instruction, lazy registry initialization, ZK envelope, block
+  signature, signed-transaction attachment, and proof Norito roundtrip tests.
+  The direct registry tests now feed header-framed instruction payloads, matching
+  the current `InstructionRegistry::decode` contract.
+- The legacy block-header decode fixture now includes the current optional
+  NPoS effects hash field before the SCCP commitment root, keeping the
+  backwards-compatibility fixture aligned with the actual header layout.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model --test registry_decode_roundtrip --test instruction_registry_reset -- --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model --test trait_objects -- --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model --test instruction_registry_lazy_init -- --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model --test zk_envelope_roundtrip -- --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model register_and_decode_instruction -- --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model default_registry_roundtrip -- --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model ordering_is_preserved_across_roundtrip -- --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model block_signature_roundtrip_diagnostics -- --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model signed_tx_with_attachments_roundtrip -- --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model proof -- --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model registry -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model header_decodes_legacy_payload_without_execution_context_hash -- --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model --lib` (`1212 passed; 0 failed; 2 ignored`)
+
+## 2026-05-06 Core Instruction Slice Decode
+
+- `Transfer<...>`, `TransferBox`, `TransferAssetBatchEntry`, and
+  `TransferAssetBatch` now have narrow `DecodeFromSlice` implementations for
+  ordinary AoS Norito payloads, with the existing codec cursor retained for
+  packed-struct payloads.
+- `Mint<...>`, `MintBox`, `Burn<...>`, and `BurnBox` now use the same narrow
+  ordinary-AoS slice path for both asset-numeric and trigger-repetition
+  variants.
+- `SetKeyValue<...>`, `RemoveKeyValue<...>`, `SetAssetKeyValue`,
+  `RemoveAssetKeyValue`, `SetKeyValueBox`, and `RemoveKeyValueBox` now have
+  narrow ordinary-AoS slice decoders for metadata instructions.
+- `Grant<...>`, `Revoke<...>`, `GrantBox`, and `RevokeBox` now use narrow
+  ordinary-AoS slice decoders for account/role permission changes. The account
+  authority instructions `AddSignatory`, `RemoveSignatory`, and
+  `SetAccountQuorum` now do the same.
+- `SetParameter`, `ExecuteTrigger`, `Upgrade`, and `CustomInstruction` now use
+  narrow ordinary-AoS slice decoders while preserving their stable wire IDs.
+- `Register<...>`, `Unregister<...>`, `RegisterBox`, and `UnregisterBox` now
+  use narrow ordinary-AoS slice decoders for domain/account/asset definition/
+  NFT/role/trigger entities. `RegisterPeerWithPop` now uses the same slice
+  path, including the `RegisterBox::Peer` stable boxed registration path.
+- RWA lot lifecycle instructions, RWA metadata edits inside
+  `RwaInstructionBox`, repo initiate/reverse/margin-call instructions inside
+  `RepoInstructionBox`, and settlement DvP/PvP instructions inside
+  `SettlementInstructionBox` now use narrow ordinary-AoS slice decoders while
+  preserving their existing stable registry lookup strings.
+- Asset-definition alias/balance-policy instructions and asset transfer-control
+  freeze/blacklist/limit instructions now use narrow ordinary-AoS slice
+  decoders while preserving their stable wire IDs.
+- Account alias binding/primary-alias instructions, paid account-alias lease
+  acquire/renew instructions, and contract-alias binding instructions now use
+  narrow ordinary-AoS slice decoders. The existing identity lookup strings for
+  account alias binding remain unchanged.
+- Account controller replacement and social-recovery policy/propose/approve/
+  cancel/finalize instructions now use narrow ordinary-AoS slice decoders while
+  preserving their stable account-recovery wire IDs.
+- RAM-LFE program-policy instructions, hidden-identifier policy/claim/revoke
+  instructions, and consensus-key register/rotate/disable instructions now use
+  narrow ordinary-AoS slice decoders while preserving their existing
+  `identity::...` and `consensus::...` registry lookup strings.
+- Domain-endorsement committee/policy/submission instructions now use narrow
+  ordinary-AoS slice decoders while preserving the `nexus::...` registry lookup
+  strings.
+- Verifying-key register/update instructions and Offline V2 issue/redeem/audit
+  instructions now use narrow ordinary-AoS slice decoders on their type-name
+  wire IDs.
+- Verified Nexus lane-relay and public fee-budget registration instructions now
+  use narrow ordinary-AoS slice decoders while preserving their `nexus::...`
+  stable lookup strings. The emergency lane-relay validator override now also
+  uses a narrow ordinary-AoS slice decoder on both its type-name and
+  `nexus::SetLaneRelayEmergencyValidators` stable lookup strings.
+- Native and anonymous asset escrow open/accept/payment-sent/release/cancel/
+  dispute/resolve instructions now use narrow ordinary-AoS slice decoders on
+  their type-name wire IDs.
+- Musubi release publish/yank, short-alias binding, and release-existence
+  assertion instructions now use narrow ordinary-AoS slice decoders while
+  preserving their `iroha.musubi.*` stable wire IDs.
+- Smart-contract-code manifest, instance activation/deactivation, bytecode
+  registration, and bytecode removal instructions now use narrow ordinary-AoS
+  slice decoders on their type-name wire IDs.
+- Space Directory manifest publish/revoke/expire instructions now use narrow
+  ordinary-AoS slice decoders on their type-name wire IDs.
+- SoraFS pin manifest, alias, capacity declaration/telemetry/dispute,
+  replication order, provider-owner, replication receipt, pricing schedule, and
+  provider credit instructions now use narrow ordinary-AoS slice decoders. The
+  default registry uses that slice path for the SoraFS instruction subset it
+  currently exposes on type-name wire IDs.
+- Oracle feed registration, observation submission, aggregation, dispute,
+  governance-change, Twitter binding, and Twitter binding revocation
+  instructions now use narrow ordinary-AoS slice decoders on their type-name
+  wire IDs. The oracle fetch-plan backoff regression expectation was refreshed
+  to the current deterministic schedule `[10, 13, 14]`.
+- Bridge proof submission, bridge receipt recording, and SCCP message recording
+  instructions now use narrow ordinary-AoS slice decoders on their type-name
+  wire IDs.
+- Ministry citizen-agenda proposal submission now uses a narrow ordinary-AoS
+  slice decoder on its type-name wire ID.
+- Social Twitter follow reward/send/cancel instructions now use narrow
+  ordinary-AoS slice decoders on their type-name wire IDs.
+- Public-lane validator register/rebind/activate/exit instructions and the
+  consensus-evidence penalty cancellation instruction now use narrow
+  ordinary-AoS slice decoders. The existing `iroha.staking.*` stable lookup
+  strings for activate/rebind/exit now use the same slice path.
+- `InvalidInstruction` now uses a narrow ordinary-AoS slice decoder on both its
+  type-name registration and stable `iroha.invalid_instruction` lookup string.
+- SoraNet VPN lease open/settle/refund instructions now use narrow ordinary-AoS
+  slice decoders on their type-name wire IDs.
+- ZK proof verification/pruning, ZK asset registration, confidential policy
+  transition schedule/cancel, shield/transfer/unshield, and private election
+  create/ballot/finalize instructions now use narrow ordinary-AoS slice
+  decoders. The existing `zk::ScheduleConfidentialPolicyTransition` and
+  `zk::CancelConfidentialPolicyTransition` stable lookup strings now use the
+  same slice path.
+- Kaigi create/join/leave/end, usage, relay-manifest, relay-registration, and
+  relay-health instructions now use narrow ordinary-AoS slice decoders on their
+  type-name wire IDs.
+- Governance deploy/runtime-upgrade proposals, ZK/plain ballots, lock slash/
+  restitution, referendum enact/finalize, proposal approval, council
+  persistence, citizen service outcome, and citizen register/unregister
+  instructions now use narrow ordinary-AoS slice decoders on their type-name
+  wire IDs.
+- Soracloud service lifecycle, config/secret, state/FHE/decryption, shared HF
+  lease, model-host/Inrou placement, agent-apartment, autonomy, training,
+  model-weight/upload/private-inference, rollout, runtime-state, lease-usage,
+  mailbox, and runtime-receipt instructions now use narrow ordinary-AoS slice
+  decoders. The existing Soracloud stable lookup strings that the default
+  registry exposes now use the same slice path, and the unit reconcile
+  instructions explicitly accept empty AoS payloads.
+- The default instruction registry now uses the opt-in slice constructor for
+  the four concrete transfer ISIs, `TransferBox`, `TransferAssetBatch`, the
+  two concrete mint ISIs, `MintBox`, the two concrete burn ISIs, `BurnBox`, the
+  concrete key-value metadata ISIs, the Grant/Revoke ISIs, and the signatory
+  quorum ISIs. It also uses the slice constructor for the stable core
+  SetParameter/trigger/upgrade/custom ISIs, register/unregister box dispatch,
+  asset alias/balance-policy dispatch, asset transfer-control dispatch, account
+  alias binding/lease dispatch, contract-alias dispatch, and account-recovery
+  dispatch, plus RAM-LFE, identifier, consensus-key, domain-endorsement,
+  verified Nexus relay/budget/emergency-validator override, RWA/repo/
+  settlement stable boxes, asset escrow, verifying-key, Offline V2, Musubi, and
+  smart-contract-code, Space Directory, SoraFS, oracle, bridge/SCCP, ministry,
+  social, registered public-lane staking, invalid-instruction, SoraNet VPN
+  lease, ZK, Kaigi, governance, and Soracloud dispatch. No default registry
+  entry remains on the generic instruction decoder path.
+  Stable wire identifiers remain unchanged for
+  `iroha.transfer`, `iroha.transfer_batch`, `iroha.mint`, `iroha.burn`,
+  `iroha.set_key_value`, `iroha.remove_key_value`, `iroha.grant`, and
+  `iroha.revoke`, plus `iroha.set_parameter`, `iroha.execute_trigger`,
+  `iroha.upgrade`, `iroha.custom`, `iroha.register`, `iroha.unregister`,
+  `iroha.asset_definition.alias.set`,
+  `iroha.asset_definition.balance_policy.set`,
+  `iroha.asset.transfer.freeze.set`,
+  `iroha.asset.transfer.blacklist.set`, and
+  `iroha.asset.transfer.control.set`, plus
+  `identity::SetAccountAliasBinding`, `identity::SetPrimaryAccountAlias`, and
+  `iroha.contract.alias.set`, plus `iroha.rwa`, `iroha.repo.initiate`,
+  `iroha.repo.reverse`, `iroha.settlement.dvp`,
+  `iroha.settlement.pvp`, `zk::ScheduleConfidentialPolicyTransition`, and
+  `zk::CancelConfidentialPolicyTransition`.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-transfer-slice cargo test -p iroha_data_model transfer_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-transfer-slice cargo test -p iroha_data_model mint_burn -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-transfer-slice cargo test -p iroha_data_model registry -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-transfer-slice cargo check -p iroha_data_model --bench decode_registry`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kv-slice cargo test -p iroha_data_model key_value -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kv-slice cargo test -p iroha_data_model registry -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kv-slice cargo check -p iroha_data_model --bench decode_registry`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-grant-slice cargo test -p iroha_data_model grant_revoke -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-grant-slice cargo test -p iroha_data_model signatory_quorum -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-grant-slice cargo test -p iroha_data_model trigger_upgrade_custom -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-grant-slice cargo test -p iroha_data_model set_parameter -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-grant-slice cargo test -p iroha_data_model registry -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-grant-slice cargo check -p iroha_data_model --bench decode_registry`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-register-slice cargo test -p iroha_data_model register_unregister -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-register-slice cargo test -p iroha_data_model registry -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-register-slice cargo check -p iroha_data_model --bench decode_registry`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model asset_transfer_control -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model asset_alias -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model registry -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo check -p iroha_data_model --bench decode_registry`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model account_alias -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model contract_alias -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model registry -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo check -p iroha_data_model --bench decode_registry`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model account_recovery -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model registry -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo check -p iroha_data_model --bench decode_registry`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model ram_lfe -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model identifier -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model consensus_key -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model endorsement -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model verifying_key -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model offline_note_v2 -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model register -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model nexus_verified -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model nexus -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model escrow -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model rwa -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model repo -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model settlement -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model musubi -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model smart_contract_code -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model space_directory -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model sorafs -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model oracle -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model bridge -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model ministry -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model social -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model staking -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model trigger_upgrade_custom -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model vpn -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model zk -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model kaigi -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model governance -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model soracloud -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model registry -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo check -p iroha_data_model --bench decode_registry`
+
+## 2026-05-06 Instruction Payload Slice Decode
+
+- `InstructionRegistry` now has an internal opt-in constructor path for
+  instruction types that implement `DecodeFromSlice`. The ordinary registration
+  path remains compatible with instructions that still require the existing
+  framed Norito decoder.
+- `Log`, `RecordSccpMessage`, the runtime-upgrade ISIs, and the SNS name ISIs
+  now have narrow slice decoders for their ordinary AoS Norito payloads, with
+  the codec cursor retained for packed-struct payloads. The default registry
+  uses the slice constructor for those instructions, including `Log`'s stable
+  `iroha.log` wire identifier and the runtime-upgrade stable wire identifiers.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-instruction-registry-slice cargo test -p iroha_data_model registry_decode_accepts_misaligned_framed_payload -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-instruction-registry-slice cargo test -p iroha_data_model sccp -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-instruction-registry-slice cargo test -p iroha_data_model instruction_box -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-instruction-registry-slice cargo test -p iroha_data_model registry -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-instruction-registry-slice cargo test -p iroha_data_model transaction::signed::tests:: -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-instruction-registry-slice cargo check -p iroha_data_model --bench decode_registry`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-runtime-upgrade-slice cargo test -p iroha_data_model runtime_upgrade -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-runtime-upgrade-slice cargo test -p iroha_data_model sns -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-runtime-upgrade-slice cargo check -p iroha_data_model --bench decode_registry`
+  - `git diff --check`
+
+## 2026-05-06 Izanami Admission-Decode Gate Rerun
+
+- Built isolated scalar release Izanami/Iroha gate binaries in
+  `/tmp/iroha-codex-20k-admission-decode` with
+  `ENABLE_RANS_BUNDLES=1 NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-20k-admission-decode cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`.
+  The build passed in `12m27s`; warning output was limited to the existing
+  unused-code set in `iroha_crypto`, `ivm`, `iroha_core`, and Izanami test
+  helpers.
+- This WSL2 host has neither `sample` nor `perf`, so the 30s follow-up is an
+  unsampled no-fault validation run rather than a CPU profile. Artifact:
+  `dist/izanami-prebuilt-20k-admission-decode-unsampled-30s-20260506-020112`.
+  It exited `0`, offered/accepted/succeeded all `600,000` submissions, built
+  and used all `600,000` prebuilt transactions, reported `0` failures,
+  prebuild fallback/build failures, ingress failovers, unhealthy endpoints,
+  view changes, validation rejects, or RBC pressure. Submit latency was
+  `p50=5ms`, `p95=17ms`, `p99=45ms`, `max=344ms`; final strict progress was
+  `4,133` approved transactions at height `3`, with queue saturation
+  `159,593 / 600,000`.
+- The full 4-peer no-fault prebuilt `20k TPS` / `120s` scalar gate artifact is
+  `dist/izanami-prebuilt-20k-admission-decode-120s-20260506-020335`. It
+  exited `0`, offered/accepted/succeeded `2,379,055` submissions, built all
+  `2,400,000` prebuilt transactions, used `2,379,055`, and reported `0`
+  failures, prebuild fallback/build failures, ingress failovers, unhealthy
+  endpoints, view changes, validation rejects, or RBC pressure. Submit latency
+  was `p50=5ms`, `p95=25ms`, `p99=210ms`, `max=9288ms`; final strict progress
+  was `20,553` approved transactions at height `7`, with queue saturation
+  `812,857 / 2,400,000`. Treat this as fresh ingress/safety evidence for the
+  admission-decode pass, not a committed-20k throughput win.
+- Validation:
+  - `command -v sample || true; command -v perf || true`
+  - `/tmp/iroha-codex-20k-admission-decode/release/izanami --help`
+  - 30s no-fault prebuilt run with `--duration 30s --tps 20000 --max-inflight 600000 --submitters 4096 --prebuild-tx-buffer 600000 --prebuild-tx-workers 20`
+  - 120s no-fault prebuilt run with `--duration 120s --tps 20000 --max-inflight 2400000 --submitters 4096 --prebuild-tx-buffer 2400000 --prebuild-tx-workers 20`
+
+## 2026-05-06 Signed Transaction Slice Decode Field Walkers
+
+- `SignedTransaction::DecodeFromSlice` now walks the ordinary AoS Norito
+  fields directly instead of routing the whole transaction through the cursor
+  decoder. Its payload field delegates to a new `TransactionPayload` slice
+  decoder, preserving the cursor fallback for packed-struct layouts and small
+  codec-only fields whose custom codecs do not expose slice-safe decoders.
+- `TransactionPayload::DecodeFromSlice` now decodes the hot `Executable` field
+  through a narrow `Executable::Instructions` slice path, which keeps the
+  instruction vector on the `ConstVec<InstructionBox>` planned decoder added in
+  the previous pass. Non-instruction executable variants still use the existing
+  cursor path.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-signed-slice cargo test -p iroha_data_model executable_instructions_decode_from_slice_roundtrips -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-signed-slice cargo test -p iroha_data_model transaction::signed::tests:: -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-frame-hash cargo test -p iroha_core --lib accepted_transaction_caches_hashes_and_encoded_length -- --nocapture`
+
+## 2026-05-06 Accepted Transaction Signed-Frame Hash Reuse
+
+- `AcceptedTransaction::from_external_with_cached_bytes` now builds the cached
+  signed-transaction frame from the same canonical signed payload used for the
+  external entrypoint hash. The normal hot-cache path avoids the previous second
+  signed-transaction serialization while preserving canonical Norito bytes and
+  transaction hashes.
+- Added a signed-frame hash helper that validates Norito headers/schema/checksum
+  before hashing the already-framed signed payload for caller-provided cached
+  bytes, with fallback to the canonical re-encode path when validation fails.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-frame-hash cargo test -p iroha_core --lib entrypoint_hash -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-frame-hash cargo test -p iroha_core --lib accepted_transaction_caches_hashes_and_encoded_length -- --nocapture`
+
+## 2026-05-06 ConstVec Planned Slice Decode Fast Path
+
+- `ConstVec<T>::DecodeFromSlice` now tries Norito's scalar sequence planner
+  directly for non-`u8` elements before falling back to the previous canonical
+  `Vec<T>` field decode. This keeps `ConstVec<u8>` and legacy recovery behavior
+  unchanged while avoiding the top-level archive/canonical-length pass on hot
+  `ConstVec<InstructionBox>` admission slices.
+- Added a hidden Norito helper for scalar planned `Vec<T>` slice decoding and
+  prefix-consumption coverage in both Norito and `iroha_primitives`.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-constvec-fast cargo test -p norito decode_vec_from_slice_serial_reports_prefix_used -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-constvec-fast cargo test -p iroha_primitives decode_from_slice_reports_prefix_used_for_non_byte_items -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-constvec-fast cargo test -p iroha_data_model execution_step_decode_from_slice -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-constvec-parallel cargo test -p norito --lib sequence_parallel_decode_threshold --features parallel-decode -- --nocapture`
+
+## 2026-05-06 ExecutionStep Slice Decode Fast Path
+
+- `ExecutionStep::DecodeFromSlice` now parses its single Norito field directly
+  and delegates the inner instruction list to `ConstVec<InstructionBox>`'s
+  planned slice decoder. This keeps the `ExecutionStep` wire layout unchanged
+  while avoiding the generic cursor-based decode path for the hot
+  transaction-admission instruction vector.
+- The decoder still rejects trailing bytes, records full payload access for
+  parent canonical-length checks, and preserves the existing exact-consumption
+  contract used by signed transaction decoding.
+- Added positive exact-decode coverage for a two-instruction `ExecutionStep`.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-executionstep-slice cargo test -p iroha_data_model execution_step_decode_from_slice -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-executionstep-slice cargo test -p iroha_data_model signed_transaction_decode_from_slice -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-executionstep-slice cargo test -p iroha_data_model transaction::signed::tests:: -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-executionstep-check cargo check -p iroha_data_model --bench chain_wire`
+
+## 2026-05-05 InstructionBox Slice Decode Fast Path
+
+- `InstructionBox::DecodeFromSlice` now decodes the canonical borrowed
+  `(wire_id, framed_payload)` tuple directly instead of first realigning the
+  whole outer instruction payload as an archived `InstructionBox`. This keeps
+  the wire bytes and registry semantics unchanged while avoiding an avoidable
+  allocation/copy on misaligned direct/gossip admission slices.
+- Successful direct slice decodes now record full payload consumption for
+  parent Norito canonical-length checks, and malformed slices still return the
+  bounded canonical-framing error used by the existing rejection path.
+- Added regression coverage for a deliberately misaligned borrowed
+  `InstructionBox` tuple, and restored the normal trait-object Norito roundtrip
+  test now that the borrowed nested decode path is green.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-instruction-slice cargo test -p iroha_data_model instruction_box_decode_from_slice_accepts_misaligned_borrowed_pair -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-instruction-slice cargo test -p iroha_data_model norito_roundtrip_trait_object_deserialize -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-instruction-slice cargo test -p iroha_data_model instruction_box -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-instruction-slice cargo check -p iroha_data_model --bench decode_registry`
+  - `git diff --check`
+
+## 2026-05-05 Norito Parallel Sequence Decode Wiring
+
+- The hidden `parallel-decode` feature now routes large planned `Vec<T>`
+  decodes through `decode_planned_sequence_parallel` when `T: Send`, preserving
+  original element order and lowest-index error reporting while keeping small
+  sequences on the serial path.
+- `Vec<T>` deserialization that cannot prove `T: Send` remains serial, so the
+  feature does not force generic stream/schema helpers to add a public `Send`
+  bound. No Norito wire bytes, canonical hashes, runtime configuration, or
+  dependencies changed.
+- Added focused coverage for the large-plan threshold and for a large
+  `Vec<u64>` decode under `parallel-decode`.
+- Removed the stale `struct_index_random_x86` unused-parentheses warning that
+  surfaced in the Norito all-target feature check.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-parallel-decode cargo test -p norito --test sequence_plan --features parallel-decode -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-parallel-decode cargo test -p norito --lib sequence_parallel_decode_threshold --features parallel-decode -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-parallel-decode cargo check -p norito --all-targets --features parallel-decode`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-parallel-decode-default cargo test -p norito --test sequence_plan -- --nocapture`
+
+## 2026-05-05 IVM staging and CUDA closure
+
+- The `ivm_contract_deploy` staged test programs now write the real `LTLB`
+  post-padding length and zero padding bytes before appending code. This fixes
+  the staged copy/register runtime-host tests that were loading generated
+  programs as `InvalidMetadata`.
+- The JSON Stage-1 CUDA helper now exposes the same backend-error return code
+  expected by the Rust FFI. Norito also has require-mode loader tests for the
+  CUDA sequence planner and CUDA CRC64 helper so `JSONSTAGE1_CUDA_REQUIRE=1`
+  and `NORITO_CRC64_CUDA_REQUIRE=1` fail if the helper cannot load or pass its
+  self-test.
+- CUDA runtime validation passed on WSL2 with an NVIDIA GeForce RTX 3080 Laptop
+  GPU (`cc8.6`, driver `527.56`, CUDA `12.0`). FastPQ CUDA parity passed, and
+  the release CUDA benchmark was recorded at
+  `dist/fastpq_cuda_bench_20260505.json`: Poseidon column hashing measured
+  `97.972x` faster on CUDA, BN254 Poseidon words measured `11.72x` faster, and
+  the smaller transfer-heavy FFT/IFFT/LDE operations remained faster on CPU in
+  that benchmark shape.
+- The nightly CUDA workflow now keeps the Norito CUDA sequence-plan and CRC64
+  loader assertions in the hardware lane.
+- CUDA validation used `CARGO_TARGET_DIR=/tmp/iroha-codex-cuda-20260505`,
+  `RUST_TEST_THREADS=1`, `JSONSTAGE1_CUDA_ARCH=-arch=sm_86`, and
+  `GPUZSTD_CUDA_ARCH=-arch=sm_86`; the IVM CUDA slice used
+  `IVM_CUDA_GENCODE=arch=compute_86,code=sm_86`.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_cli --bin ivm_contract_deploy staged -- --nocapture`
+  - `cargo test -p ivm --lib cuda_ --features cuda -- --nocapture`
+  - `JSONSTAGE1_CUDA_REQUIRE=1 cargo test -p jsonstage1_cuda --features cuda-kernel binary_sequence_plan -- --nocapture`
+  - `JSONSTAGE1_CUDA_REQUIRE=1 cargo test -p norito sequence_plan --features codec-gpu-cuda -- --nocapture`
+  - `GPUZSTD_CUDA_REQUIRE=1 cargo test -p gpuzstd_cuda --features cuda-kernel -- --nocapture`
+  - `GPUZSTD_CUDA_REQUIRE=1 cargo test -p norito gpu_zstd --features gpu-compression -- --nocapture`
+  - `JSONSTAGE1_CUDA_REQUIRE=1 cargo test -p jsonstage1_cuda --features cuda-kernel crc64 -- --nocapture`
+  - `NORITO_CRC64_CUDA_REQUIRE=1 cargo test -p norito crc64 --features cuda-crc64 -- --nocapture`
+  - `cargo test -p fastpq_prover --lib --features fastpq-gpu cuda -- --nocapture`
+  - `cargo run -p fastpq_prover --bin fastpq_cuda_bench --release --features fastpq-gpu -- --rows 20000 --iterations 3 --warmups 1 --column-count 16 --require-gpu --device "NVIDIA GeForce RTX 3080 Laptop GPU cc8.6 driver 527.56" --output dist/fastpq_cuda_bench_20260505.json --notes "CUDA roadmap closure on WSL2"`
+  - `git diff --check`
 ## 2026-05-07 Izanami 20k Metal sampled profile
 
 - A 90s `/usr/bin/sample` profile of one peer during the same prebuilt 20k

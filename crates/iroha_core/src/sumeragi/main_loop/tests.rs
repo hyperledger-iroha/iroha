@@ -115,6 +115,26 @@ fn wire(msg: BlockMessage) -> BlockMessageWire {
     BlockMessageWire::new(msg)
 }
 
+fn record_test_worker_slot_ingress(
+    kind: super::status::WorkerQueueKind,
+    _height: u64,
+    _view: u64,
+    _message_kind: super::status::ConsensusMessageKind,
+    _block_hash: Option<HashOf<BlockHeader>>,
+) {
+    super::status::record_worker_queue_enqueue(kind);
+}
+
+fn drain_test_worker_slot_ingress(
+    kind: super::status::WorkerQueueKind,
+    _height: u64,
+    _view: u64,
+    _message_kind: super::status::ConsensusMessageKind,
+    _block_hash: Option<HashOf<BlockHeader>>,
+) {
+    super::status::record_worker_queue_drain(kind, 1);
+}
+
 #[test]
 fn tick_heartbeat_log_due_respects_interval() {
     let start = Instant::now();

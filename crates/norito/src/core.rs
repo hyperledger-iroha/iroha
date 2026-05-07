@@ -1505,6 +1505,10 @@ impl BinarySequenceLayout {
 const SEQUENCE_GPU_MIN_BYTES: usize = 1 << 20;
 #[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
 const SEQUENCE_GPU_MIN_ELEMENTS: usize = 4096;
+#[cfg(feature = "parallel-decode")]
+const PARALLEL_DECODE_MIN_BYTES: usize = 256 * 1024;
+#[cfg(feature = "parallel-decode")]
+const PARALLEL_DECODE_MIN_ELEMENTS: usize = 4096;
 
 /// Plan element byte spans for a Norito binary sequence without materializing
 /// values.
@@ -1574,6 +1578,14 @@ where
         out.push(value?);
     }
     Ok(out)
+}
+
+#[cfg(feature = "parallel-decode")]
+#[inline]
+fn should_decode_sequence_parallel(plan: &SequencePlan) -> bool {
+    !sequential_override_active()
+        && plan.used >= PARALLEL_DECODE_MIN_BYTES
+        && plan.spans.len() >= PARALLEL_DECODE_MIN_ELEMENTS
 }
 
 #[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
@@ -2034,7 +2046,7 @@ mod sequence_gpu {
     mod tests {
         use super::{
             AbiSpan, BinarySequenceLayout, HelperOutcome, RC_NO_SPACE, RC_UNAVAILABLE, call_helper,
-            sequence_plan_helper_self_test,
+            load_sequence_plan_library, sequence_plan_helper_self_test,
         };
 
         unsafe extern "C" fn mismatched_helper(
@@ -2089,6 +2101,21 @@ mod sequence_gpu {
         #[test]
         fn sequence_plan_helper_self_test_rejects_mismatched_helper() {
             assert!(!sequence_plan_helper_self_test(mismatched_helper));
+        }
+
+        #[test]
+        fn sequence_plan_loads_required_cuda_helper_when_requested() {
+            let lib = unsafe { load_sequence_plan_library() };
+            if std::env::var_os("JSONSTAGE1_CUDA_REQUIRE").is_some() {
+                assert!(
+                    lib.is_some(),
+                    "JSONSTAGE1_CUDA_REQUIRE requires the CUDA sequence-plan helper to load and pass self-test"
+                );
+            } else if lib.is_none() {
+                eprintln!(
+                    "sequence-plan CUDA helper unavailable; skipping required-helper assertion"
+                );
+            }
         }
 
         #[test]
@@ -2976,63 +3003,111 @@ impl<'a> DecodeFromSlice<'a> for char {
     }
 }
 
+fn decode_sequence_plan_serial<'a, T>(bytes: &'a [u8], plan: &SequencePlan) -> Result<Vec<T>, Error>
+where
+    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+{
+    let mut out = Vec::new();
+    out.try_reserve(plan.spans.len())
+        .map_err(|_| Error::LengthMismatch)?;
+    for span in &plan.spans {
+        let element_slice = span.get(bytes)?;
+        record_slice_access(element_slice, span.len());
+        let (value, used) = decode_field_canonical::<T>(element_slice)?;
+        if used != span.len() {
+            return Err(Error::LengthMismatch);
+        }
+        out.push(value);
+    }
+    Ok(out)
+}
+
+fn decode_vec_from_slice_with<'a, T, F>(
+    bytes: &'a [u8],
+    decode_planned: F,
+) -> Result<(Vec<T>, usize), Error>
+where
+    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    F: FnOnce(&'a [u8], u8, &SequencePlan) -> Result<Option<Vec<T>>, Error>,
+{
+    let (len, offset) = read_seq_len_slice(bytes)?;
+    // `Vec<u8>` is encoded as `len(u64)` + raw bytes for efficiency.
+    if core::any::type_name::<T>() == "u8"
+        && let Some(end) = offset.checked_add(len)
+        && end == bytes.len()
+    {
+        // SAFETY: we verified `T == u8` via `type_name`.
+        let out = unsafe {
+            let slice = bytes.get(offset..end).ok_or(Error::LengthMismatch)?;
+            let vec = slice.to_vec();
+            std::mem::transmute::<Vec<u8>, Vec<T>>(vec)
+        };
+        return Ok((out, end));
+    }
+    if core::any::type_name::<T>() == "u8" {
+        return Err(Error::LengthMismatch);
+    }
+    if crate::debug_trace_enabled() {
+        eprintln!(
+            "Vec::<{}>::decode len={} packed_seq={}",
+            core::any::type_name::<T>(),
+            len,
+            use_packed_seq()
+        );
+    }
+    let flags = effective_decode_flags().unwrap_or_else(default_encode_flags);
+    let layout = if use_packed_seq() {
+        BinarySequenceLayout::FixedOffsets
+    } else {
+        BinarySequenceLayout::LengthPrefixed
+    };
+    let plan = plan_binary_sequence(bytes, flags, layout)?;
+    if layout == BinarySequenceLayout::LengthPrefixed
+        && core::mem::size_of::<T>() != 0
+        && plan.spans.iter().any(SequenceSpan::is_empty)
+    {
+        return decode_length_prefixed_sequence_legacy::<T>(bytes, len, offset);
+    }
+
+    if let Some(out) = decode_planned(bytes, flags, &plan)? {
+        return Ok((out, plan.used));
+    }
+
+    let out = decode_sequence_plan_serial::<T>(bytes, &plan)?;
+    Ok((out, plan.used))
+}
+
+/// Decode a binary sequence from a slice using the scalar sequence planner.
+#[doc(hidden)]
+pub fn decode_vec_from_slice_serial<'a, T>(bytes: &'a [u8]) -> Result<(Vec<T>, usize), Error>
+where
+    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+{
+    decode_vec_from_slice_with::<T, _>(bytes, |_, _, _| Ok(None))
+}
+
+#[cfg(not(feature = "parallel-decode"))]
 impl<'a, T> DecodeFromSlice<'a> for Vec<T>
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let (len, offset) = read_seq_len_slice(bytes)?;
-        // `Vec<u8>` is encoded as `len(u64)` + raw bytes for efficiency.
-        if core::any::type_name::<T>() == "u8"
-            && let Some(end) = offset.checked_add(len)
-            && end == bytes.len()
-        {
-            // SAFETY: we verified `T == u8` via `type_name`.
-            let out = unsafe {
-                let slice = bytes.get(offset..end).ok_or(Error::LengthMismatch)?;
-                let vec = slice.to_vec();
-                std::mem::transmute::<Vec<u8>, Vec<T>>(vec)
-            };
-            return Ok((out, end));
-        }
-        if core::any::type_name::<T>() == "u8" {
-            return Err(Error::LengthMismatch);
-        }
-        if crate::debug_trace_enabled() {
-            eprintln!(
-                "Vec::<{}>::decode len={} packed_seq={}",
-                core::any::type_name::<T>(),
-                len,
-                use_packed_seq()
-            );
-        }
-        let flags = effective_decode_flags().unwrap_or_else(default_encode_flags);
-        let layout = if use_packed_seq() {
-            BinarySequenceLayout::FixedOffsets
-        } else {
-            BinarySequenceLayout::LengthPrefixed
-        };
-        let plan = plan_binary_sequence(bytes, flags, layout)?;
-        if layout == BinarySequenceLayout::LengthPrefixed
-            && core::mem::size_of::<T>() != 0
-            && plan.spans.iter().any(SequenceSpan::is_empty)
-        {
-            return decode_length_prefixed_sequence_legacy::<T>(bytes, len, offset);
-        }
+        decode_vec_from_slice_serial::<T>(bytes)
+    }
+}
 
-        let mut out = Vec::new();
-        out.try_reserve(plan.spans.len())
-            .map_err(|_| Error::LengthMismatch)?;
-        for span in &plan.spans {
-            let element_slice = span.get(bytes)?;
-            record_slice_access(element_slice, span.len());
-            let (value, used) = decode_field_canonical::<T>(element_slice)?;
-            if used != span.len() {
-                return Err(Error::LengthMismatch);
+#[cfg(feature = "parallel-decode")]
+impl<'a, T> DecodeFromSlice<'a> for Vec<T>
+where
+    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Send,
+{
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
+        decode_vec_from_slice_with::<T, _>(bytes, |bytes, flags, plan| {
+            if should_decode_sequence_parallel(plan) {
+                return decode_planned_sequence_parallel::<T>(bytes, flags, plan).map(Some);
             }
-            out.push(value);
-        }
-        Ok((out, plan.used))
+            Ok(None)
+        })
     }
 }
 
@@ -6555,7 +6630,7 @@ where
         }
         let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
         let bytes = &payload[offset..];
-        let (vec, _used) = <Vec<T> as DecodeFromSlice>::decode_from_slice(bytes)?;
+        let (vec, _used) = decode_vec_from_slice_with::<T, _>(bytes, |_, _, _| Ok(None))?;
         Ok(vec)
     }
 }
@@ -8162,6 +8237,45 @@ mod tests {
         let (value, used) = decode_field_canonical::<u32>(&buf).expect("scalar decode");
         assert_eq!(value, 0xDEADBEEF);
         assert_eq!(used, buf.len());
+    }
+
+    #[test]
+    fn decode_vec_from_slice_serial_reports_prefix_used() {
+        reset_decode_state();
+        let value = vec![3_u16, 5, 8, 13];
+        let bytes = encode_adaptive(&value);
+        let mut with_tail = bytes.clone();
+        with_tail.extend_from_slice(&[0xAA, 0xBB]);
+
+        let (decoded, used) =
+            decode_vec_from_slice_serial::<u16>(&with_tail).expect("decode sequence prefix");
+
+        assert_eq!(decoded, value);
+        assert_eq!(used, bytes.len());
+        reset_decode_state();
+    }
+
+    #[cfg(feature = "parallel-decode")]
+    #[test]
+    fn sequence_parallel_decode_threshold_requires_large_plans() {
+        reset_decode_state();
+        let large_plan = SequencePlan {
+            spans: vec![SequenceSpan { start: 0, end: 8 }; PARALLEL_DECODE_MIN_ELEMENTS],
+            used: PARALLEL_DECODE_MIN_BYTES,
+        };
+        assert!(should_decode_sequence_parallel(&large_plan));
+
+        let small_bytes = SequencePlan {
+            used: PARALLEL_DECODE_MIN_BYTES - 1,
+            ..large_plan.clone()
+        };
+        assert!(!should_decode_sequence_parallel(&small_bytes));
+
+        let small_count = SequencePlan {
+            spans: vec![SequenceSpan { start: 0, end: 8 }; PARALLEL_DECODE_MIN_ELEMENTS - 1],
+            used: PARALLEL_DECODE_MIN_BYTES,
+        };
+        assert!(!should_decode_sequence_parallel(&small_count));
     }
 
     #[test]

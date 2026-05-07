@@ -4,12 +4,6 @@ use iroha_data_model::{instruction_registry, isi::set_instruction_registry, prel
 
 #[test]
 fn set_instruction_registry_overrides_existing() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!(
-            "Skipping: hybrid packed-struct decode pending macro alignment. Set IROHA_RUN_IGNORED=1 to run."
-        );
-        return;
-    }
     // Start with registry containing only `Log`
     set_instruction_registry(instruction_registry![Log]);
     let log: InstructionBox = Log::new(Level::INFO, "hello".to_owned()).into();
@@ -20,9 +14,7 @@ fn set_instruction_registry_overrides_existing() {
 
     // Replace registry with one that doesn't include `Log`
     set_instruction_registry(instruction_registry![SetParameter]);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        norito::decode_from_bytes::<InstructionBox>(&bytes).unwrap();
-    }));
+    let result = norito::decode_from_bytes::<InstructionBox>(&bytes);
     assert!(result.is_err(), "registry should have been replaced");
 
     // Restore the default registry so other tests aren't affected

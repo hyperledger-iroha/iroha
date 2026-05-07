@@ -4,7 +4,7 @@ use std::{fmt, iter::IntoIterator, sync::LazyLock, vec::Vec};
 
 use ::base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_data_model_derive::model;
-use iroha_primitives::json::Json;
+use iroha_primitives::{const_vec::ConstVec, json::Json};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -99,6 +99,63 @@ mod model {
         /// Optional Norito JSON payload forwarded to the contract.
         #[norito(default)]
         pub payload: Option<Json>,
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for Executable {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        const INSTRUCTIONS_TAG: u32 = 0;
+
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            let _guard = norito::core::PayloadCtxGuard::enter(bytes);
+            let mut cursor = std::io::Cursor::new(bytes);
+            let decoded = <Self as norito::codec::Decode>::decode(&mut cursor)?;
+            let used = usize::try_from(cursor.position())
+                .map_err(|_| norito::core::Error::LengthMismatch)?;
+            return Ok((decoded, used));
+        }
+
+        let tag_bytes = bytes
+            .get(..core::mem::size_of::<u32>())
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        let tag = u32::from_le_bytes(
+            tag_bytes
+                .try_into()
+                .expect("slice length checked for executable tag"),
+        );
+        if tag != INSTRUCTIONS_TAG {
+            let _guard = norito::core::PayloadCtxGuard::enter(bytes);
+            let mut cursor = std::io::Cursor::new(bytes);
+            let decoded = <Self as norito::codec::Decode>::decode(&mut cursor)?;
+            let used = usize::try_from(cursor.position())
+                .map_err(|_| norito::core::Error::LengthMismatch)?;
+            return Ok((decoded, used));
+        }
+
+        let mut offset = core::mem::size_of::<u32>();
+        let remaining = bytes
+            .get(offset..)
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        let (field_len, hdr) = norito::core::read_len_from_slice_with_flags(remaining, flags)?;
+        let field_start = offset
+            .checked_add(hdr)
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        let field_end = field_start
+            .checked_add(field_len)
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        let field = bytes
+            .get(field_start..field_end)
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        let (instructions, used) =
+            norito::core::decode_field_canonical_from_slice::<ConstVec<InstructionBox>>(field)?;
+        if used != field.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        offset = field_end;
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self::Instructions(instructions), offset))
     }
 }
 
@@ -578,7 +635,6 @@ mod tests {
     }
 
     #[test]
-
     fn executable_from_iter_should_preserve_order() {
         let executable = Executable::from_iter(vec![
             DummyInstruction(1),
@@ -603,6 +659,22 @@ mod tests {
 
         assert_eq!(ids, vec![1, 2, 3]);
     }
+
+    #[test]
+    fn executable_instructions_decode_from_slice_roundtrips() {
+        let instruction: InstructionBox =
+            crate::isi::Log::new(crate::Level::INFO, "slice executable".into()).into();
+        let executable = Executable::from_iter([instruction]);
+        let bytes = norito::codec::encode_adaptive(&executable);
+
+        let (decoded, used) =
+            <Executable as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
+                .expect("decode executable instructions");
+
+        assert_eq!(used, bytes.len());
+        assert_eq!(decoded, executable);
+    }
+
     #[cfg(feature = "json")]
     #[test]
     fn ivm_bytecode_should_serialize_and_deserialize() {

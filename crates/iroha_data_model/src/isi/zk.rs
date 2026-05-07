@@ -442,3 +442,313 @@ isi! {
 }
 
 impl crate::seal::Instruction for FinalizeElection {}
+
+fn zk_decode_flags() -> u8 {
+    norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
+}
+
+macro_rules! impl_zk_decode_from_slice {
+    ($ty:ty { $($field:ident : $field_ty:ty),+ $(,)? }) => {
+        impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+                let flags = zk_decode_flags();
+                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+                    return super::decode_packed_instruction_payload::<Self>(bytes);
+                }
+
+                let mut offset = 0usize;
+                $(
+                    let $field = super::decode_aos_canonical_field::<$field_ty>(
+                        super::read_aos_field(bytes, &mut offset, flags)?,
+                        flags,
+                    )?;
+                )+
+                if offset != bytes.len() {
+                    return Err(norito::core::Error::LengthMismatch);
+                }
+                norito::core::note_payload_access(bytes, offset);
+                Ok((Self { $($field),+ }, offset))
+            }
+        }
+    };
+}
+
+impl_zk_decode_from_slice!(VerifyProof {
+    attachment: crate::proof::ProofAttachment,
+});
+
+impl_zk_decode_from_slice!(PruneProofs {
+    backend: Option<String>,
+});
+
+impl_zk_decode_from_slice!(RegisterZkAsset {
+    asset: AssetDefinitionId,
+    mode: ZkAssetMode,
+    allow_shield: bool,
+    allow_unshield: bool,
+    vk_transfer: Option<crate::proof::VerifyingKeyId>,
+    vk_unshield: Option<crate::proof::VerifyingKeyId>,
+    vk_shield: Option<crate::proof::VerifyingKeyId>,
+});
+
+impl_zk_decode_from_slice!(ScheduleConfidentialPolicyTransition {
+    asset: AssetDefinitionId,
+    new_mode: ConfidentialPolicyMode,
+    effective_height: u64,
+    transition_id: Hash,
+    conversion_window: Option<u64>,
+});
+
+impl_zk_decode_from_slice!(CancelConfidentialPolicyTransition {
+    asset: AssetDefinitionId,
+    transition_id: Hash,
+});
+
+impl_zk_decode_from_slice!(Shield {
+    asset: AssetDefinitionId,
+    from: AccountId,
+    amount: u128,
+    note_commitment: [u8; 32],
+    enc_payload: ConfidentialEncryptedPayload,
+});
+
+impl_zk_decode_from_slice!(ZkTransfer {
+    asset: AssetDefinitionId,
+    inputs: Vec<[u8; 32]>,
+    outputs: Vec<[u8; 32]>,
+    proof: crate::proof::ProofAttachment,
+    root_hint: Option<[u8; 32]>,
+});
+
+impl_zk_decode_from_slice!(Unshield {
+    asset: AssetDefinitionId,
+    to: AccountId,
+    public_amount: u128,
+    inputs: Vec<[u8; 32]>,
+    outputs: Vec<[u8; 32]>,
+    proof: crate::proof::ProofAttachment,
+    root_hint: Option<[u8; 32]>,
+});
+
+impl_zk_decode_from_slice!(CreateElection {
+    election_id: String,
+    options: u32,
+    eligible_root: [u8; 32],
+    start_ts: u64,
+    end_ts: u64,
+    vk_ballot: crate::proof::VerifyingKeyId,
+    vk_tally: crate::proof::VerifyingKeyId,
+    domain_tag: String,
+});
+
+impl_zk_decode_from_slice!(SubmitBallot {
+    election_id: String,
+    ciphertext: Vec<u8>,
+    ballot_proof: crate::proof::ProofAttachment,
+    nullifier: [u8; 32],
+});
+
+impl_zk_decode_from_slice!(FinalizeElection {
+    election_id: String,
+    tally: Vec<u64>,
+    tally_proof: crate::proof::ProofAttachment,
+});
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr as _;
+
+    use iroha_crypto::{Algorithm, KeyPair};
+    use norito::core::DecodeFromSlice;
+
+    use super::*;
+    use crate::{
+        domain::DomainId,
+        name::Name,
+        proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId},
+    };
+
+    fn account(seed: u8) -> AccountId {
+        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    fn asset_definition_id() -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            Name::from_str("xor").expect("asset name"),
+        )
+    }
+
+    fn backend() -> iroha_schema::Ident {
+        "halo2/ipa/poly-open".into()
+    }
+
+    fn verifying_key(name: &str) -> VerifyingKeyId {
+        VerifyingKeyId::new(backend(), name)
+    }
+
+    fn proof_attachment() -> ProofAttachment {
+        let backend = backend();
+        ProofAttachment::new_inline(
+            backend.clone(),
+            ProofBox::new(backend.clone(), vec![1, 2, 3, 4]),
+            VerifyingKeyBox::new(backend, vec![5, 6, 7]),
+        )
+    }
+
+    fn encrypted_payload() -> ConfidentialEncryptedPayload {
+        ConfidentialEncryptedPayload::new([0xA1; 32], [0xB2; 24], vec![0xC3, 0xC4])
+    }
+
+    fn assert_slice_roundtrip<T>(value: T)
+    where
+        T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
+        for<'a> T: DecodeFromSlice<'a>,
+    {
+        let bytes = value.encode();
+        let (decoded, used) = T::decode_from_slice(&bytes).expect("decode from slice");
+        assert_eq!(used, bytes.len());
+        assert_eq!(decoded, value);
+    }
+
+    fn assert_registry_decodes<T>(
+        registry: &crate::isi::InstructionRegistry,
+        wire_id: &str,
+        value: T,
+    ) where
+        T: crate::isi::Instruction
+            + norito::codec::Encode
+            + 'static
+            + norito::core::NoritoSerialize,
+        for<'de> T: norito::core::NoritoDeserialize<'de>,
+    {
+        let (payload, flags) = norito::codec::encode_with_header_flags(&value);
+        let framed =
+            norito::core::frame_bare_with_header_flags::<T>(&payload, flags).expect("frame");
+        let decoded = crate::isi::InstructionRegistry::decode(registry, wire_id, &framed)
+            .expect("registered")
+            .expect("decode");
+        assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn zk_decode_from_slice_roundtrips() {
+        let asset = asset_definition_id();
+        let proof = proof_attachment();
+
+        assert_slice_roundtrip(VerifyProof::new(proof.clone()));
+        assert_slice_roundtrip(PruneProofs::new(Some("halo2/ipa".to_owned())));
+        assert_slice_roundtrip(RegisterZkAsset::new(
+            asset.clone(),
+            ZkAssetMode::Hybrid,
+            true,
+            true,
+            Some(verifying_key("transfer")),
+            Some(verifying_key("unshield")),
+            Some(verifying_key("shield")),
+        ));
+        assert_slice_roundtrip(ScheduleConfidentialPolicyTransition::new(
+            asset.clone(),
+            ConfidentialPolicyMode::Convertible,
+            42,
+            Hash::new("policy-transition"),
+            Some(7),
+        ));
+        assert_slice_roundtrip(CancelConfidentialPolicyTransition::new(
+            asset.clone(),
+            Hash::new("policy-transition"),
+        ));
+        assert_slice_roundtrip(Shield::new(
+            asset.clone(),
+            account(1),
+            1_000,
+            [0x11; 32],
+            encrypted_payload(),
+        ));
+        assert_slice_roundtrip(ZkTransfer::new(
+            asset.clone(),
+            vec![[0x12; 32]],
+            vec![[0x13; 32]],
+            proof.clone(),
+            Some([0x14; 32]),
+        ));
+        assert_slice_roundtrip(Unshield::new_with_outputs(
+            asset,
+            account(2),
+            500,
+            vec![[0x15; 32]],
+            vec![[0x16; 32]],
+            proof.clone(),
+            Some([0x17; 32]),
+        ));
+        assert_slice_roundtrip(CreateElection {
+            election_id: "election-1".to_owned(),
+            options: 3,
+            eligible_root: [0x21; 32],
+            start_ts: 1_700_000_000,
+            end_ts: 1_700_086_400,
+            vk_ballot: verifying_key("ballot"),
+            vk_tally: verifying_key("tally"),
+            domain_tag: "iroha-election-v1".to_owned(),
+        });
+        assert_slice_roundtrip(SubmitBallot {
+            election_id: "election-1".to_owned(),
+            ciphertext: vec![0x31, 0x32],
+            ballot_proof: proof.clone(),
+            nullifier: [0x33; 32],
+        });
+        assert_slice_roundtrip(FinalizeElection {
+            election_id: "election-1".to_owned(),
+            tally: vec![1, 2, 3],
+            tally_proof: proof,
+        });
+    }
+
+    #[test]
+    fn zk_default_registry_decodes_type_names_and_stable_ids() {
+        let registry = crate::isi::registry::default();
+        let asset = asset_definition_id();
+
+        assert_registry_decodes(
+            &registry,
+            std::any::type_name::<VerifyProof>(),
+            VerifyProof::new(proof_attachment()),
+        );
+        assert_registry_decodes(
+            &registry,
+            std::any::type_name::<PruneProofs>(),
+            PruneProofs::new(None),
+        );
+        assert_registry_decodes(
+            &registry,
+            std::any::type_name::<RegisterZkAsset>(),
+            RegisterZkAsset::new(
+                asset.clone(),
+                ZkAssetMode::ZkNative,
+                false,
+                false,
+                Some(verifying_key("transfer")),
+                None,
+                None,
+            ),
+        );
+        assert_registry_decodes(
+            &registry,
+            "zk::ScheduleConfidentialPolicyTransition",
+            ScheduleConfidentialPolicyTransition::new(
+                asset.clone(),
+                ConfidentialPolicyMode::ShieldedOnly,
+                99,
+                Hash::new("policy-transition-stable"),
+                None,
+            ),
+        );
+        assert_registry_decodes(
+            &registry,
+            "zk::CancelConfidentialPolicyTransition",
+            CancelConfidentialPolicyTransition::new(asset, Hash::new("policy-transition-stable")),
+        );
+    }
+}

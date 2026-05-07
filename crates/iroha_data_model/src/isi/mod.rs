@@ -1722,16 +1722,16 @@ impl<'a> norito::core::DecodeFromSlice<'a> for InstructionBox {
             )
         }
 
-        let archived = norito::core::archived_from_slice::<InstructionBox>(bytes)
-            .map_err(|_| canonical_framing_error())?;
-        let _guard = norito::core::PayloadCtxGuard::enter(archived.bytes());
-        let inst = norito::core::NoritoDeserialize::try_deserialize(archived.archived()).map_err(
-            |err| match err {
+        let (inst, used) =
+            decode_instruction_from_borrowed_pair(bytes).map_err(|err| match err {
                 norito::core::Error::Message(_) => err,
                 _ => canonical_framing_error(),
-            },
-        )?;
-        Ok((inst, archived.bytes().len()))
+            })?;
+        if used != bytes.len() {
+            return Err(canonical_framing_error());
+        }
+        norito::core::note_payload_access(bytes, used);
+        Ok((inst, used))
     }
 }
 
@@ -2094,19 +2094,13 @@ impl InstructionRegistry {
     #[must_use]
     pub fn register<T>(mut self) -> Self
     where
-        T: Instruction
-            + Decode
-            + 'static
-            + norito::NoritoSerialize
-            + for<'a> norito::NoritoDeserialize<'a>,
+        T: Instruction + Decode + 'static + norito::NoritoSerialize,
+        for<'a> T: norito::NoritoDeserialize<'a>,
     {
         fn ctor<T>(header_flags: u8, input: &[u8]) -> Result<InstructionBox, norito::Error>
         where
-            T: Instruction
-                + Decode
-                + 'static
-                + norito::NoritoSerialize
-                + for<'a> norito::NoritoDeserialize<'a>,
+            T: Instruction + Decode + 'static + norito::NoritoSerialize,
+            for<'a> T: norito::NoritoDeserialize<'a>,
         {
             decode_instruction_payload::<T>(input, header_flags)
         }
@@ -2166,13 +2160,17 @@ impl InstructionRegistry {
     #[must_use]
     pub fn register_with_id<T>(mut self, wire_id: &'static str) -> Self
     where
-        T: Instruction
-            + Decode
-            + 'static
-            + norito::NoritoSerialize
-            + for<'a> norito::NoritoDeserialize<'a>,
+        T: Instruction + Decode + 'static + norito::NoritoSerialize,
+        for<'a> T: norito::NoritoDeserialize<'a>,
     {
         fn ctor<T>(header_flags: u8, input: &[u8]) -> Result<InstructionBox, norito::Error>
+        where
+            T: Instruction + Decode + 'static + norito::NoritoSerialize,
+            for<'a> T: norito::NoritoDeserialize<'a>,
+        {
+            decode_instruction_payload::<T>(input, header_flags)
+        }
+        fn frame<T>(payload: &[u8], header_flags: u8) -> Result<Vec<u8>, norito::core::Error>
         where
             T: Instruction
                 + Decode
@@ -2180,7 +2178,136 @@ impl InstructionRegistry {
                 + norito::NoritoSerialize
                 + for<'a> norito::NoritoDeserialize<'a>,
         {
-            decode_instruction_payload::<T>(input, header_flags)
+            norito::core::frame_bare_with_header_flags::<T>(payload, header_flags)
+        }
+        fn frame_write<T>(
+            writer: &mut dyn std::io::Write,
+            payload: &[u8],
+            header_flags: u8,
+        ) -> Result<(), norito::core::Error>
+        where
+            T: Instruction
+                + Decode
+                + 'static
+                + norito::NoritoSerialize
+                + for<'a> norito::NoritoDeserialize<'a>,
+        {
+            norito::core::write_bare_frame_with_header_flags::<T, _>(writer, payload, header_flags)
+        }
+        fn frame_len<T>(payload_len: usize) -> Option<usize>
+        where
+            T: Instruction
+                + Decode
+                + 'static
+                + norito::NoritoSerialize
+                + for<'a> norito::NoritoDeserialize<'a>,
+        {
+            framed_instruction_payload_len_for::<T>(payload_len)
+        }
+        let name = std::any::type_name::<T>();
+        let entry = RegistryEntry {
+            ctor: ctor::<T>,
+            wire_id,
+            frame: frame::<T>,
+            frame_write: frame_write::<T>,
+            frame_len: frame_len::<T>,
+        };
+        if let Some(previous) = self.entries.insert(name, entry)
+            && previous.wire_id != entry.wire_id
+        {
+            self.lookup.remove(previous.wire_id);
+        }
+        self.lookup.insert(name, entry);
+        self.lookup.insert(wire_id, entry);
+        self
+    }
+
+    /// Register a new [`crate::isi::Instruction`] type using the direct slice decoder.
+    ///
+    /// This is intentionally opt-in because not every built-in instruction has a
+    /// slice-safe decoder for all of its nested fields yet.
+    #[must_use]
+    pub(crate) fn register_slice<T>(mut self) -> Self
+    where
+        T: Instruction + Decode + 'static + norito::NoritoSerialize,
+        for<'a> T: norito::NoritoDeserialize<'a> + norito::core::DecodeFromSlice<'a>,
+    {
+        fn ctor<T>(header_flags: u8, input: &[u8]) -> Result<InstructionBox, norito::Error>
+        where
+            T: Instruction + Decode + 'static + norito::NoritoSerialize,
+            for<'a> T: norito::NoritoDeserialize<'a> + norito::core::DecodeFromSlice<'a>,
+        {
+            decode_instruction_payload_from_slice::<T>(input, header_flags)
+        }
+        fn frame<T>(payload: &[u8], header_flags: u8) -> Result<Vec<u8>, norito::core::Error>
+        where
+            T: Instruction
+                + Decode
+                + 'static
+                + norito::NoritoSerialize
+                + for<'a> norito::NoritoDeserialize<'a>,
+        {
+            norito::core::frame_bare_with_header_flags::<T>(payload, header_flags)
+        }
+        fn frame_write<T>(
+            writer: &mut dyn std::io::Write,
+            payload: &[u8],
+            header_flags: u8,
+        ) -> Result<(), norito::core::Error>
+        where
+            T: Instruction
+                + Decode
+                + 'static
+                + norito::NoritoSerialize
+                + for<'a> norito::NoritoDeserialize<'a>,
+        {
+            norito::core::write_bare_frame_with_header_flags::<T, _>(writer, payload, header_flags)
+        }
+        fn frame_len<T>(payload_len: usize) -> Option<usize>
+        where
+            T: Instruction
+                + Decode
+                + 'static
+                + norito::NoritoSerialize
+                + for<'a> norito::NoritoDeserialize<'a>,
+        {
+            framed_instruction_payload_len_for::<T>(payload_len)
+        }
+        let name = std::any::type_name::<T>();
+        let entry = RegistryEntry {
+            ctor: ctor::<T>,
+            wire_id: name,
+            frame: frame::<T>,
+            frame_write: frame_write::<T>,
+            frame_len: frame_len::<T>,
+        };
+        if let Some(previous) = self.entries.insert(name, entry)
+            && previous.wire_id != entry.wire_id
+        {
+            self.lookup.remove(previous.wire_id);
+        }
+        self.lookup.insert(name, entry);
+        self.lookup.insert(entry.wire_id, entry);
+        self
+    }
+
+    /// Register a new [`crate::isi::Instruction`] type using a stable wire identifier
+    /// and the direct slice decoder.
+    ///
+    /// This is intentionally opt-in because not every built-in instruction has a
+    /// slice-safe decoder for all of its nested fields yet.
+    #[must_use]
+    pub(crate) fn register_with_id_slice<T>(mut self, wire_id: &'static str) -> Self
+    where
+        T: Instruction + Decode + 'static + norito::NoritoSerialize,
+        for<'a> T: norito::NoritoDeserialize<'a> + norito::core::DecodeFromSlice<'a>,
+    {
+        fn ctor<T>(header_flags: u8, input: &[u8]) -> Result<InstructionBox, norito::Error>
+        where
+            T: Instruction + Decode + 'static + norito::NoritoSerialize,
+            for<'a> T: norito::NoritoDeserialize<'a> + norito::core::DecodeFromSlice<'a>,
+        {
+            decode_instruction_payload_from_slice::<T>(input, header_flags)
         }
         fn frame<T>(payload: &[u8], header_flags: u8) -> Result<Vec<u8>, norito::core::Error>
         where
@@ -2308,6 +2435,86 @@ where
     let _ = header_flags;
     let instruction = norito::decode_from_bytes::<T>(input)?;
     Ok(InstructionBox(Box::new(instruction)))
+}
+
+fn decode_instruction_payload_from_slice<T>(
+    input: &[u8],
+    header_flags: u8,
+) -> Result<InstructionBox, norito::Error>
+where
+    T: Instruction + Decode + 'static + norito::NoritoSerialize,
+    for<'a> T: norito::NoritoDeserialize<'a> + norito::core::DecodeFromSlice<'a>,
+{
+    let _ = header_flags;
+    let instruction = norito::core::decode_from_bytes::<T>(input)?;
+    Ok(InstructionBox(Box::new(instruction)))
+}
+
+pub(crate) fn read_aos_field<'a>(
+    bytes: &'a [u8],
+    offset: &mut usize,
+    flags: u8,
+) -> Result<&'a [u8], norito::core::Error> {
+    let remaining = bytes
+        .get(*offset..)
+        .ok_or(norito::core::Error::LengthMismatch)?;
+    let (field_len, hdr) = norito::core::read_len_from_slice_with_flags(remaining, flags)?;
+    let field_start = (*offset)
+        .checked_add(hdr)
+        .ok_or(norito::core::Error::LengthMismatch)?;
+    let field_end = field_start
+        .checked_add(field_len)
+        .ok_or(norito::core::Error::LengthMismatch)?;
+    let field = bytes
+        .get(field_start..field_end)
+        .ok_or(norito::core::Error::LengthMismatch)?;
+    *offset = field_end;
+    Ok(field)
+}
+
+pub(crate) fn decode_aos_canonical_field<T>(
+    field: &[u8],
+    flags: u8,
+) -> Result<T, norito::core::Error>
+where
+    T: for<'de> norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    let _guard = norito::core::DecodeFlagsGuard::enter(flags);
+    let (value, used) = norito::core::decode_field_canonical::<T>(field)?;
+    if used != field.len() {
+        return Err(norito::core::Error::LengthMismatch);
+    }
+    Ok(value)
+}
+
+pub(crate) fn decode_aos_slice_field<T>(field: &[u8], flags: u8) -> Result<T, norito::core::Error>
+where
+    T: for<'de> norito::core::NoritoDeserialize<'de> + for<'de> norito::core::DecodeFromSlice<'de>,
+{
+    let _guard = norito::core::DecodeFlagsGuard::enter(flags);
+    let (value, used) = norito::core::decode_field_canonical_from_slice::<T>(field)?;
+    if used != field.len() {
+        return Err(norito::core::Error::LengthMismatch);
+    }
+    Ok(value)
+}
+
+pub(crate) fn decode_packed_instruction_payload<T>(
+    bytes: &[u8],
+) -> Result<(T, usize), norito::core::Error>
+where
+    T: norito::codec::Decode,
+{
+    let _guard = norito::core::PayloadCtxGuard::enter(bytes);
+    let mut cursor = std::io::Cursor::new(bytes);
+    let decoded = <T as norito::codec::Decode>::decode(&mut cursor)?;
+    let used =
+        usize::try_from(cursor.position()).map_err(|_| norito::core::Error::LengthMismatch)?;
+    if used != bytes.len() {
+        return Err(norito::core::Error::LengthMismatch);
+    }
+    norito::core::note_payload_access(bytes, used);
+    Ok((decoded, used))
 }
 
 /// Build an [`InstructionRegistry`] populated with the provided instruction types.
@@ -3484,10 +3691,6 @@ mod tests {
 
     use super::*;
     use crate::prelude::*;
-    fn run_or_skip() -> bool {
-        std::env::var("IROHA_RUN_IGNORED").ok().as_deref() == Some("1")
-    }
-
     macro_rules! check_enum {
         ($name:ident { $($variant:ident),+ $(,)? }) => {
             $(assert_eq!($name::try_from($name::$variant as u8).unwrap(), $name::$variant);)+
@@ -3518,13 +3721,7 @@ mod tests {
 
     #[test]
     fn register_and_decode_instruction() {
-        if !run_or_skip() {
-            eprintln!(
-                "Skipping: registry decode uses bare-codec; Norito alignment pending. Set IROHA_RUN_IGNORED=1 to run."
-            );
-            return;
-        }
-        let registry = InstructionRegistry::new().register::<Log>();
+        let registry = InstructionRegistry::new().register_slice::<Log>();
         // Sanity: decode map contains type name and entries are populated
         assert!(
             !registry.is_empty(),
@@ -3536,14 +3733,16 @@ mod tests {
             level: Level::INFO,
             msg: "test".into(),
         };
-        let bytes = instruction.encode();
+        let (payload, flags) = norito::codec::encode_with_header_flags(&instruction);
+        let bytes = norito::core::frame_bare_with_header_flags::<Log>(&payload, flags)
+            .expect("frame instruction payload");
         // Use the decode API directly to ensure local registry wiring works
         let decoded = InstructionRegistry::decode(&registry, name, &bytes)
             .expect("constructor not found in decode map")
             .expect("failed to decode");
         // Verify type id and payload equivalence without relying on downcast
         assert_eq!(Instruction::id(&*decoded), name);
-        assert_eq!(Instruction::dyn_encode(&*decoded), bytes);
+        assert_eq!(Instruction::dyn_encode(&*decoded), payload);
     }
 
     #[test]
@@ -3554,7 +3753,7 @@ mod tests {
 
     #[test]
     fn record_sccp_message_registry_roundtrip_preserves_payload_bytes() {
-        let registry = InstructionRegistry::new().register::<RecordSccpMessage>();
+        let registry = InstructionRegistry::new().register_slice::<RecordSccpMessage>();
         let _guard = RegistryGuard::set(registry);
         let instruction = RecordSccpMessage::new(vec![0xAA, 0xBB, 0xCC]);
         let (bytes, expected_flags) = norito::codec::encode_with_header_flags(&instruction);
@@ -3573,8 +3772,46 @@ mod tests {
     }
 
     #[test]
+    fn registry_decode_accepts_misaligned_framed_payload() {
+        let registry = InstructionRegistry::new().register_slice::<Log>();
+        let name = std::any::type_name::<Log>();
+        let instruction = Log::new(Level::INFO, "misaligned framed payload".to_owned());
+        let payload = instruction.encode();
+        let framed = frame_instruction_payload(name, &payload).expect("frame instruction payload");
+        let mut misaligned = Vec::with_capacity(framed.len() + 1);
+        misaligned.push(0xAA);
+        misaligned.extend_from_slice(&framed);
+
+        let decoded = InstructionRegistry::decode(&registry, name, &misaligned[1..])
+            .expect("constructor not found in decode map")
+            .expect("decode misaligned framed payload");
+
+        assert_eq!(Instruction::id(&*decoded), name);
+        assert_eq!(Instruction::dyn_encode(&*decoded), payload);
+    }
+
+    #[test]
+    fn record_sccp_registry_decode_accepts_misaligned_framed_payload() {
+        let registry = InstructionRegistry::new().register_slice::<RecordSccpMessage>();
+        let name = std::any::type_name::<RecordSccpMessage>();
+        let instruction = RecordSccpMessage::new(vec![0xAA, 0xBB, 0xCC, 0xDD]);
+        let payload = instruction.encode();
+        let framed = frame_instruction_payload(name, &payload).expect("frame instruction payload");
+        let mut misaligned = Vec::with_capacity(framed.len() + 1);
+        misaligned.push(0xAA);
+        misaligned.extend_from_slice(&framed);
+
+        let decoded = InstructionRegistry::decode(&registry, name, &misaligned[1..])
+            .expect("constructor not found in decode map")
+            .expect("decode misaligned framed payload");
+
+        assert_eq!(Instruction::id(&*decoded), name);
+        assert_eq!(Instruction::dyn_encode(&*decoded), payload);
+    }
+
+    #[test]
     fn instruction_box_embeds_instruction_payload_with_recorded_flags() {
-        let registry = InstructionRegistry::new().register::<RecordSccpMessage>();
+        let registry = InstructionRegistry::new().register_slice::<RecordSccpMessage>();
         let _guard = RegistryGuard::set(registry);
         let instruction = RecordSccpMessage::new(vec![0xAA, 0xBB, 0xCC]);
         let (_, expected_flags) = norito::codec::encode_with_header_flags(&instruction);
@@ -3805,12 +4042,6 @@ mod tests {
 
     #[test]
     fn norito_roundtrip_trait_object_deserialize() {
-        if !run_or_skip() {
-            eprintln!(
-                "Skipping: InstructionBox Norito nested decode pending fix. Set IROHA_RUN_IGNORED=1 to run."
-            );
-            return;
-        }
         let log = Log {
             level: Level::INFO,
             msg: "deserialize".to_string(),
@@ -3852,6 +4083,27 @@ mod tests {
             super::decode_instruction_from_borrowed_pair(&bytes).expect("borrowed pair decode");
 
         assert_eq!(used, bytes.len());
+        assert_eq!(Instruction::id(&*decoded), Instruction::id(&*expected));
+        assert_eq!(
+            Instruction::dyn_encode(&*decoded),
+            Instruction::dyn_encode(&*expected)
+        );
+    }
+
+    #[test]
+    fn instruction_box_decode_from_slice_accepts_misaligned_borrowed_pair() {
+        use norito::core::DecodeFromSlice;
+
+        let _guard = RegistryGuard::set(instruction_registry![Log]);
+        let expected = InstructionBox::from(Log::new(Level::INFO, "misaligned pair".to_owned()));
+        let mut bytes = vec![0xAA];
+        norito::core::NoritoSerialize::serialize(&expected, &mut bytes)
+            .expect("serialize instruction box tuple");
+
+        let (decoded, used) =
+            InstructionBox::decode_from_slice(&bytes[1..]).expect("decode misaligned pair");
+
+        assert_eq!(used, bytes.len() - 1);
         assert_eq!(Instruction::id(&*decoded), Instruction::id(&*expected));
         assert_eq!(
             Instruction::dyn_encode(&*decoded),
@@ -4039,12 +4291,6 @@ mod tests {
 
     #[test]
     fn default_registry_roundtrip_selected_instructions() {
-        if !run_or_skip() {
-            eprintln!(
-                "Skipping: registry decode of header-extracted payload pending Norito fix. Set IROHA_RUN_IGNORED=1 to run."
-            );
-            return;
-        }
         // Install default registry covering built-ins and keep a local handle
         let _guard = RegistryGuard::set(crate::instruction_registry::default());
         let local_registry = crate::instruction_registry::default();
@@ -4183,12 +4429,6 @@ mod tests {
 
     #[test]
     fn ordering_is_preserved_across_roundtrip() {
-        if !run_or_skip() {
-            eprintln!(
-                "Skipping: header-framed nested InstructionBox decode pending fix. Set IROHA_RUN_IGNORED=1 to run."
-            );
-            return;
-        }
         // Ensure the total ordering of InstructionBox is stable after Norito roundtrip.
         let _guard = RegistryGuard::set(crate::instruction_registry::default());
 
@@ -4232,12 +4472,6 @@ mod tests {
 
     #[test]
     fn default_registry_roundtrip_more_instructions() {
-        if !run_or_skip() {
-            eprintln!(
-                "Skipping: registry decode + nested Norito decoders pending fix. Set IROHA_RUN_IGNORED=1 to run."
-            );
-            return;
-        }
         // Expand coverage across instruction families and variants
         let _guard = RegistryGuard::set(crate::instruction_registry::default());
         let local_registry = crate::instruction_registry::default();

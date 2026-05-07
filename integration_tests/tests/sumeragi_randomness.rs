@@ -31,10 +31,10 @@ use reqwest::Client as HttpClient;
 use sha2::{Digest as _, Sha256};
 use tokio::time::sleep;
 
-const EPOCH_LENGTH_BLOCKS: u64 = 10;
+const EPOCH_LENGTH_BLOCKS: u64 = 16;
 const VRF_COMMIT_WINDOW_BLOCKS: u64 = 4;
 const VRF_REVEAL_WINDOW_BLOCKS: u64 = 0;
-const VRF_LATE_REVEAL_SAFETY_BLOCKS: u64 = 1;
+const VRF_LATE_REVEAL_SAFETY_BLOCKS: u64 = 3;
 const BLOCK_TIME_MS: u64 = 600;
 const VRF_INPUT_DOMAIN: &[u8] = b"iroha:npos:vrf:input:v1";
 const TELEMETRY_RETRY_INTERVAL: Duration = Duration::from_millis(200);
@@ -440,6 +440,7 @@ fn randomness_network_builder_with_params(params: SumeragiNposParameters) -> Net
     NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
+        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond())
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
@@ -666,8 +667,8 @@ async fn submit_late_reveal_until_recorded(
 ) -> Result<Value> {
     const RETRY_INTERVAL: Duration = Duration::from_millis(200);
     const PROCESSING_POLL_INTERVAL: Duration = Duration::from_millis(50);
-    const PROCESSING_POLLS: usize = 6;
-    const RETRIES: usize = 300;
+    const PROCESSING_POLLS: usize = 40;
+    const RETRIES: usize = 60;
     const SEAL_GRACE_BLOCKS: u64 = 3;
 
     let mut last_snapshot = None;

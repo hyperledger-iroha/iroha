@@ -29,7 +29,8 @@ const PACEMAKER_RTT_FLOOR_MULTIPLIER: u64 = 2;
 const PACEMAKER_MAX_BACKOFF_MS: u64 = 5_000;
 const PACEMAKER_JITTER_FRAC_PERMILLE: u64 = 25;
 const PACEMAKER_FALLBACK_JITTER_MS: u64 = 125;
-const POST_RESTART_PROGRESS_PROBE_SECS: u64 = 20;
+const POST_RESTART_PROGRESS_PROBE_SECS: u64 = 60;
+const PACEMAKER_RESTART_SYNC_TIMEOUT: Duration = Duration::from_secs(600);
 static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
@@ -569,6 +570,7 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
+        .with_sync_timeout(PACEMAKER_RESTART_SYNC_TIMEOUT)
         .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond())
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),

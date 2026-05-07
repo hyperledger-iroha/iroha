@@ -29,6 +29,7 @@ const REDUNDANT_SEND_R: u8 = 2;
 const PHASE_EMA_BUDGET_MS: f64 = COMMIT_QUORUM_TIMEOUT_MS as f64;
 const METRIC_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const METRIC_POLL_TIMEOUT: Duration = Duration::from_secs(20);
+const LATENCY_SYNC_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::cast_precision_loss)]
@@ -45,6 +46,7 @@ async fn npos_pacemaker_targets_one_second_under_250ms_links() -> Result<()> {
         .with_peers(4)
         .with_base_seed("npos-pacemaker-rtt250ms")
         .with_auto_populated_trusted_peers()
+        .with_sync_timeout(LATENCY_SYNC_TIMEOUT)
         .with_block_sync_gossip_period(Duration::from_millis(BLOCK_SYNC_GOSSIP_PERIOD_MS))
         .with_config_layer(|layer| {
             layer
@@ -97,6 +99,10 @@ async fn npos_pacemaker_targets_one_second_under_250ms_links() -> Result<()> {
                 Log::new(Level::INFO, format!("pacemaker latency tick {idx}")).into(),
             )
             .wrap_err_with(|| format!("submit pacemaker latency tick {idx}"))?;
+        network
+            .ensure_blocks(start_status.blocks + idx + 1)
+            .await
+            .wrap_err_with(|| format!("wait for pacemaker latency tick {idx}"))?;
     }
     network.ensure_blocks(target_height).await?;
     let elapsed_ms = start.elapsed().as_secs_f64() * 1_000.0;

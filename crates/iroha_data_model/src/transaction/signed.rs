@@ -289,14 +289,164 @@ mod model {
 
 // Keep explicit slice decoders for hot ingress paths. The generic derived
 // decoders regressed on versioned payloads carrying adaptive Norito bodies.
+fn decode_signed_transaction_with_cursor(
+    bytes: &[u8],
+) -> Result<(model::SignedTransaction, usize), norito::core::Error> {
+    let _guard = norito::core::PayloadCtxGuard::enter(bytes);
+    let mut cursor = std::io::Cursor::new(bytes);
+    let decoded = <model::SignedTransaction as norito::codec::Decode>::decode(&mut cursor)?;
+    let used =
+        usize::try_from(cursor.position()).map_err(|_| norito::core::Error::LengthMismatch)?;
+    Ok((decoded, used))
+}
+
+fn decode_transaction_payload_with_cursor(
+    bytes: &[u8],
+) -> Result<(model::TransactionPayload, usize), norito::core::Error> {
+    let _guard = norito::core::PayloadCtxGuard::enter(bytes);
+    let mut cursor = std::io::Cursor::new(bytes);
+    let decoded = <model::TransactionPayload as norito::codec::Decode>::decode(&mut cursor)?;
+    let used =
+        usize::try_from(cursor.position()).map_err(|_| norito::core::Error::LengthMismatch)?;
+    Ok((decoded, used))
+}
+
+fn read_aos_field<'a>(
+    bytes: &'a [u8],
+    offset: &mut usize,
+    flags: u8,
+) -> Result<&'a [u8], norito::core::Error> {
+    let remaining = bytes
+        .get(*offset..)
+        .ok_or(norito::core::Error::LengthMismatch)?;
+    let (field_len, hdr) = norito::core::read_len_from_slice_with_flags(remaining, flags)?;
+    let field_start = (*offset)
+        .checked_add(hdr)
+        .ok_or(norito::core::Error::LengthMismatch)?;
+    let field_end = field_start
+        .checked_add(field_len)
+        .ok_or(norito::core::Error::LengthMismatch)?;
+    let field = bytes
+        .get(field_start..field_end)
+        .ok_or(norito::core::Error::LengthMismatch)?;
+    *offset = field_end;
+    Ok(field)
+}
+
+fn decode_slice_field<T>(field: &[u8], flags: u8) -> Result<T, norito::core::Error>
+where
+    T: for<'de> norito::core::NoritoDeserialize<'de> + for<'de> norito::core::DecodeFromSlice<'de>,
+{
+    let _guard = norito::core::DecodeFlagsGuard::enter(flags);
+    let (value, used) = norito::core::decode_field_canonical_from_slice::<T>(field)?;
+    if used != field.len() {
+        return Err(norito::core::Error::LengthMismatch);
+    }
+    Ok(value)
+}
+
+fn decode_canonical_field<T>(field: &[u8], flags: u8) -> Result<T, norito::core::Error>
+where
+    T: for<'de> norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    let _guard = norito::core::DecodeFlagsGuard::enter(flags);
+    let (value, used) = norito::core::decode_field_canonical::<T>(field)?;
+    if used != field.len() {
+        return Err(norito::core::Error::LengthMismatch);
+    }
+    Ok(value)
+}
+
+fn decode_codec_field<T>(field: &[u8]) -> Result<T, norito::core::Error>
+where
+    T: norito::codec::Decode,
+{
+    let mut cursor = std::io::Cursor::new(field);
+    <T as norito::codec::Decode>::decode(&mut cursor)
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionPayload {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return decode_transaction_payload_with_cursor(bytes);
+        }
+
+        let mut offset = 0usize;
+        let chain =
+            decode_canonical_field::<ChainId>(read_aos_field(bytes, &mut offset, flags)?, flags)?;
+        let authority =
+            decode_slice_field::<AccountId>(read_aos_field(bytes, &mut offset, flags)?, flags)?;
+        let creation_time_ms =
+            decode_slice_field::<u64>(read_aos_field(bytes, &mut offset, flags)?, flags)?;
+        let instructions =
+            decode_slice_field::<Executable>(read_aos_field(bytes, &mut offset, flags)?, flags)?;
+        let time_to_live_ms = decode_slice_field::<Option<NonZeroU64>>(
+            read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let nonce = decode_slice_field::<Option<NonZeroU32>>(
+            read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let metadata =
+            decode_canonical_field::<Metadata>(read_aos_field(bytes, &mut offset, flags)?, flags)?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((
+            Self {
+                chain,
+                authority,
+                creation_time_ms,
+                instructions,
+                time_to_live_ms,
+                nonce,
+                metadata,
+            },
+            offset,
+        ))
+    }
+}
+
 impl<'a> norito::core::DecodeFromSlice<'a> for model::SignedTransaction {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let _guard = norito::core::PayloadCtxGuard::enter(bytes);
-        let mut cursor = std::io::Cursor::new(bytes);
-        let decoded: Self = <Self as norito::codec::Decode>::decode(&mut cursor)?;
-        let used =
-            usize::try_from(cursor.position()).map_err(|_| norito::core::Error::LengthMismatch)?;
-        Ok((decoded, used))
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return decode_signed_transaction_with_cursor(bytes);
+        }
+
+        let mut offset = 0usize;
+        let signature =
+            decode_codec_field::<TransactionSignature>(read_aos_field(bytes, &mut offset, flags)?)?;
+        let payload = decode_slice_field::<TransactionPayload>(
+            read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let attachments = decode_slice_field::<Option<crate::proof::ProofAttachmentList>>(
+            read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let multisig_signatures = decode_slice_field::<Option<MultisigSignatures>>(
+            read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((
+            Self {
+                signature,
+                payload,
+                attachments,
+                multisig_signatures,
+            },
+            offset,
+        ))
     }
 }
 
@@ -313,12 +463,26 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionEntrypoint {
 
 impl<'a> norito::core::DecodeFromSlice<'a> for model::ExecutionStep {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let _guard = norito::core::PayloadCtxGuard::enter(bytes);
-        let mut cursor = std::io::Cursor::new(bytes);
-        let decoded: Self = <Self as norito::codec::Decode>::decode(&mut cursor)?;
-        let used =
-            usize::try_from(cursor.position()).map_err(|_| norito::core::Error::LengthMismatch)?;
-        Ok((decoded, used))
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        let (field_len, field_hdr) = norito::core::read_len_from_slice_with_flags(bytes, flags)?;
+        let field_start = field_hdr;
+        let field_end = field_start
+            .checked_add(field_len)
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        if field_end != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        let field = bytes
+            .get(field_start..field_end)
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        let (instructions, used) =
+            <ConstVec<InstructionBox> as norito::core::DecodeFromSlice>::decode_from_slice(field)?;
+        if used != field.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, field_end);
+        Ok((Self(instructions), field_end))
     }
 }
 
@@ -1368,6 +1532,21 @@ mod tests {
     }
 
     #[test]
+    fn execution_step_decode_from_slice_roundtrips_instruction_vector() {
+        let step = ExecutionStep(ConstVec::from(vec![
+            InstructionBox::from(Log::new(Level::INFO, "first execution step".into())),
+            InstructionBox::from(Log::new(Level::WARN, "second execution step".into())),
+        ]));
+        let bytes = norito::codec::encode_adaptive(&step);
+
+        let (decoded, used) =
+            ExecutionStep::decode_from_slice(&bytes).expect("decode exact execution step");
+
+        assert_eq!(used, bytes.len());
+        assert_eq!(decoded, step);
+    }
+
+    #[test]
     fn signed_transaction_versioned_decode_rejects_trailing_bytes() {
         let signed_tx = sample_signed_transaction();
         let mut bytes = signed_tx.encode_versioned();
@@ -2172,12 +2351,6 @@ mod attachments_tests {
 
     #[test]
     fn signed_tx_with_attachments_roundtrip() {
-        if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-            eprintln!(
-                "Skipping: SignedTransaction Norito decode mismatch pending fix. Set IROHA_RUN_IGNORED=1 to run."
-            );
-            return;
-        }
         let chain: ChainId = "test-chain".parse().unwrap();
         let authority =
             AccountId::parse_encoded("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")

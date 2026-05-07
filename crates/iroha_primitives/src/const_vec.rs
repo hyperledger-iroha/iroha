@@ -456,6 +456,11 @@ where
     T: norito::core::DecodeFromSlice<'a>,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        if core::any::type_name::<T>() != "u8"
+            && let Ok((vec, used)) = norito::core::decode_vec_from_slice_serial::<T>(bytes)
+        {
+            return Ok((Self::from(vec), used));
+        }
         let (vec, used) = norito::core::decode_field_canonical::<Vec<T>>(bytes)?;
         Ok((Self::from(vec), used))
     }
@@ -1419,6 +1424,21 @@ mod tests {
         let (decoded, used) =
             <ConstVec<Vec<u8>> as ncore::DecodeFromSlice>::decode_from_slice(&bytes)
                 .expect("decode const vec from slice");
+
+        assert_eq!(decoded.into_vec(), items);
+        assert_eq!(used, bytes.len());
+    }
+
+    #[test]
+    fn decode_from_slice_reports_prefix_used_for_non_byte_items() {
+        let items = vec![3_u16, 5, 8, 13];
+        let bytes = ConstVec::from(items.clone()).encode();
+        let mut with_tail = bytes.clone();
+        with_tail.extend_from_slice(&[0xAA, 0xBB]);
+
+        let (decoded, used) =
+            <ConstVec<u16> as ncore::DecodeFromSlice>::decode_from_slice(&with_tail)
+                .expect("decode const vec prefix from slice");
 
         assert_eq!(decoded.into_vec(), items);
         assert_eq!(used, bytes.len());

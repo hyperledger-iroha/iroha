@@ -178,10 +178,106 @@ impl_into_box! {
 
 impl crate::seal::Instruction for RepoInstructionBox {}
 
+fn repo_decode_flags() -> u8 {
+    norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
+}
+
+macro_rules! impl_repo_decode_from_slice {
+    ($ty:ty { $($field:ident : $field_ty:ty),+ $(,)? }) => {
+        impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+                let flags = repo_decode_flags();
+                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+                    return super::decode_packed_instruction_payload::<Self>(bytes);
+                }
+
+                let mut offset = 0usize;
+                $(
+                    let $field = super::decode_aos_canonical_field::<$field_ty>(
+                        super::read_aos_field(bytes, &mut offset, flags)?,
+                        flags,
+                    )?;
+                )+
+                if offset != bytes.len() {
+                    return Err(norito::core::Error::LengthMismatch);
+                }
+                norito::core::note_payload_access(bytes, offset);
+                Ok((Self { $($field),+ }, offset))
+            }
+        }
+    };
+}
+
+impl_repo_decode_from_slice!(RepoIsi {
+    agreement_id: RepoAgreementId,
+    initiator: AccountId,
+    counterparty: AccountId,
+    custodian: Option<AccountId>,
+    cash_leg: RepoCashLeg,
+    collateral_leg: RepoCollateralLeg,
+    rate_bps: u16,
+    maturity_timestamp_ms: u64,
+    governance: RepoGovernance,
+});
+
+impl_repo_decode_from_slice!(ReverseRepoIsi {
+    agreement_id: RepoAgreementId,
+    initiator: AccountId,
+    counterparty: AccountId,
+    cash_leg: RepoCashLeg,
+    collateral_leg: RepoCollateralLeg,
+    settlement_timestamp_ms: u64,
+});
+
+impl_repo_decode_from_slice!(RepoMarginCallIsi {
+    agreement_id: RepoAgreementId,
+});
+
+impl<'a> norito::core::DecodeFromSlice<'a> for RepoInstructionBox {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = repo_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+        let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
+        let tag = u32::from_le_bytes(
+            tag_bytes
+                .try_into()
+                .map_err(|_| norito::core::Error::LengthMismatch)?,
+        );
+        let mut offset = 4usize;
+        let value = match tag {
+            0 => Self::Initiate(super::decode_aos_slice_field::<RepoIsi>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            1 => Self::Reverse(super::decode_aos_slice_field::<ReverseRepoIsi>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            2 => Self::MarginCall(super::decode_aos_slice_field::<RepoMarginCallIsi>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            _ => {
+                return Err(norito::core::Error::Message(format!(
+                    "invalid RepoInstructionBox tag {tag}"
+                )));
+            }
+        };
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((value, offset))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
+    use norito::core::DecodeFromSlice;
 
     use crate::repo::RepoGovernance;
 
@@ -196,6 +292,86 @@ mod tests {
     fn seeded_account(seed: u8) -> AccountId {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         AccountId::new(keypair.public_key().clone())
+    }
+
+    fn agreement_id() -> RepoAgreementId {
+        "daily_repo".parse().expect("id")
+    }
+
+    fn cash_leg() -> RepoCashLeg {
+        RepoCashLeg {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "usd".parse().unwrap(),
+            ),
+            quantity: 1_000u32.into(),
+        }
+    }
+
+    fn collateral_leg() -> RepoCollateralLeg {
+        RepoCollateralLeg::new(
+            iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "bond".parse().unwrap(),
+            ),
+            1_100u32.into(),
+        )
+    }
+
+    fn repo_instruction() -> RepoIsi {
+        RepoIsi::new(
+            agreement_id(),
+            parse_account(INITIATOR),
+            parse_account(COUNTERPARTY),
+            Some(seeded_account(0xCD)),
+            cash_leg(),
+            collateral_leg(),
+            250,
+            1_704_000_000_000,
+            RepoGovernance::with_defaults(1_500, 86_400),
+        )
+    }
+
+    fn reverse_repo_instruction() -> ReverseRepoIsi {
+        ReverseRepoIsi::new(
+            agreement_id(),
+            parse_account(INITIATOR),
+            parse_account(COUNTERPARTY),
+            cash_leg(),
+            collateral_leg(),
+            1_704_000_123_000,
+        )
+    }
+
+    fn assert_slice_roundtrip<T>(value: T)
+    where
+        T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
+        for<'a> T: DecodeFromSlice<'a>,
+    {
+        let bytes = value.encode();
+        let (decoded, used) = T::decode_from_slice(&bytes).expect("decode from slice");
+        assert_eq!(used, bytes.len());
+        assert_eq!(decoded, value);
+    }
+
+    fn assert_registry_decodes<T>(
+        registry: &crate::isi::InstructionRegistry,
+        wire_id: &str,
+        value: T,
+    ) where
+        T: crate::isi::Instruction
+            + norito::codec::Encode
+            + 'static
+            + norito::core::NoritoSerialize,
+        for<'de> T: norito::core::NoritoDeserialize<'de>,
+    {
+        let (payload, flags) = norito::codec::encode_with_header_flags(&value);
+        let framed =
+            norito::core::frame_bare_with_header_flags::<T>(&payload, flags).expect("frame");
+        let decoded = crate::isi::InstructionRegistry::decode(registry, wire_id, &framed)
+            .expect("registered")
+            .expect("decode");
+        assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
 
     #[test]
@@ -356,5 +532,47 @@ mod tests {
         let formatted = format!("{instruction}");
         assert!(formatted.contains("REPO_REVERSE"));
         assert!(formatted.contains("1704000123000"));
+    }
+
+    #[test]
+    fn repo_decode_from_slice_roundtrips() {
+        assert_slice_roundtrip(repo_instruction());
+        assert_slice_roundtrip(reverse_repo_instruction());
+        assert_slice_roundtrip(RepoMarginCallIsi::new(agreement_id()));
+    }
+
+    #[test]
+    fn repo_instruction_box_decode_from_slice_roundtrips() {
+        assert_slice_roundtrip(RepoInstructionBox::Initiate(repo_instruction()));
+        assert_slice_roundtrip(RepoInstructionBox::Reverse(reverse_repo_instruction()));
+        assert_slice_roundtrip(RepoInstructionBox::MarginCall(RepoMarginCallIsi::new(
+            agreement_id(),
+        )));
+    }
+
+    #[test]
+    fn repo_registry_decodes_type_names_and_stable_ids() {
+        let registry = crate::isi::registry::default();
+        assert_registry_decodes(
+            &registry,
+            std::any::type_name::<RepoInstructionBox>(),
+            RepoInstructionBox::Initiate(repo_instruction()),
+        );
+        assert_registry_decodes(
+            &registry,
+            std::any::type_name::<RepoIsi>(),
+            repo_instruction(),
+        );
+        assert_registry_decodes(&registry, RepoIsi::WIRE_ID, repo_instruction());
+        assert_registry_decodes(
+            &registry,
+            std::any::type_name::<ReverseRepoIsi>(),
+            reverse_repo_instruction(),
+        );
+        assert_registry_decodes(
+            &registry,
+            ReverseRepoIsi::WIRE_ID,
+            reverse_repo_instruction(),
+        );
     }
 }

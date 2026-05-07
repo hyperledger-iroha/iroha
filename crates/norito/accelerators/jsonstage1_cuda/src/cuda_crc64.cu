@@ -13,7 +13,8 @@ enum {
     RC_INVALID = 1,
     RC_NO_SPACE = 2,
     RC_GPU_UNAVAILABLE = 3,
-    RC_CUDA = 4,
+    RC_BACKEND_ERROR = 4,
+    RC_CUDA = RC_BACKEND_ERROR,
 };
 
 // CRC64-XZ polynomial (reflected ECMA) and helper constants.

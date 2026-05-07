@@ -1,7 +1,5 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 
-#[cfg(all(feature = "simd-accel", target_arch = "x86_64"))]
-use core::arch::x86_64::{_mm_clmulepi64_si128, _mm_cvtsi128_si64, _mm_set_epi64x, _mm_srli_si128};
 #[allow(unused_imports)]
 use core::ffi::{c_char, c_int, c_void};
 #[allow(unused_imports)]
@@ -783,11 +781,9 @@ mod simd {
             #[inline]
             #[target_feature(enable = "sse2", enable = "pclmulqdq")]
             unsafe fn fold_16(self, coeff: Self) -> Self {
-                unsafe {
-                    let h = Self(_mm_clmulepi64_si128(self.0, coeff.0, 0x11));
-                    let l = Self(_mm_clmulepi64_si128(self.0, coeff.0, 0x00));
-                    h ^ l
-                }
+                let h = Self(_mm_clmulepi64_si128(self.0, coeff.0, 0x11));
+                let l = Self(_mm_clmulepi64_si128(self.0, coeff.0, 0x00));
+                h ^ l
             }
 
             #[inline]
@@ -1125,30 +1121,6 @@ pub fn crc64_neon(data: &[u8]) -> u64 {
 
 #[cfg(all(feature = "simd-accel", target_arch = "x86_64"))]
 #[target_feature(enable = "pclmulqdq")]
-#[inline]
-unsafe fn clmul_u64_x86(a: u64, b: u64) -> (u64, u64) {
-    unsafe {
-        let va = _mm_set_epi64x(0, a as i64);
-        let vb = _mm_set_epi64x(0, b as i64);
-        let p = _mm_clmulepi64_si128(va, vb, 0x00);
-        let lo = _mm_cvtsi128_si64(p) as u64;
-        let hi = _mm_cvtsi128_si64(_mm_srli_si128(p, 8)) as u64;
-        (hi, lo)
-    }
-}
-
-#[cfg(all(feature = "simd-accel", target_arch = "x86_64"))]
-#[target_feature(enable = "pclmulqdq")]
-#[inline]
-unsafe fn reduce128_barrett_x86(_t_hi: u64, _t_lo: u64) -> u64 {
-    unsafe {
-        // Deprecated in v1; not used by the current path.
-        0
-    }
-}
-
-#[cfg(all(feature = "simd-accel", target_arch = "x86_64"))]
-#[target_feature(enable = "pclmulqdq")]
 /// CRC64 implementation using x86 CLMUL intrinsics.
 ///
 /// # Safety
@@ -1267,6 +1239,26 @@ mod tests {
         if let Some(gpu) = try_gpu_crc64(&payload) {
             assert_eq!(gpu, expected);
         }
+    }
+
+    #[cfg(feature = "cuda-crc64")]
+    #[test]
+    fn cuda_crc64_loads_required_helper_when_requested() {
+        if std::env::var_os("NORITO_CRC64_CUDA_REQUIRE").is_none() {
+            return;
+        }
+        let _guard = GPU_TEST_LOCK.lock().expect("crc64 gpu test lock poisoned");
+        reset_gpu_backend_for_tests();
+        let previous_min_len = GPU_MIN_LEN.swap(1, Ordering::Relaxed);
+
+        let payload = b"required norito cuda crc64 helper";
+        let gpu = try_gpu_crc64(payload).expect(
+            "NORITO_CRC64_CUDA_REQUIRE requires the CUDA CRC64 helper to load and pass self-test",
+        );
+        assert_eq!(gpu, crc64_fallback(payload));
+
+        GPU_MIN_LEN.store(previous_min_len, Ordering::Relaxed);
+        reset_gpu_backend_for_tests();
     }
 
     #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]

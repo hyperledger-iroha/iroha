@@ -846,13 +846,6 @@ mod tests {
             }
             s
         }
-        if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-            eprintln!(
-                "Skipping: packed-struct diagnostic remains flaky. Set IROHA_RUN_IGNORED=1 to run."
-            );
-            return;
-        }
-
         let keypair = KeyPair::random();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let signature = SignatureOf::from_hash(keypair.private_key(), header.hash());
@@ -1070,6 +1063,7 @@ mod tests {
             da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
             da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
             prev_roster_evidence_hash: Option<HashOf<PreviousRosterEvidence>>,
+            npos_effects_hash: Option<HashOf<NposConsensusEffects>>,
             sccp_commitment_root: Option<[u8; 32]>,
             creation_time_ms: u64,
             view_change_index: u64,
@@ -1085,6 +1079,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            npos_effects_hash: None,
             sccp_commitment_root: Some([0x42; 32]),
             creation_time_ms: 123,
             view_change_index: 2,
