@@ -3983,6 +3983,7 @@ impl Actor {
         let payload_materialized_locally = payload_materialized_by_override
             || self.frontier_block_materialized_locally(block_hash);
         let mut request_stalled = false;
+        let mut commit_qc_body_fallback = false;
         if height == self.committed_height_snapshot().saturating_add(1) {
             let stall_window = self.frontier_slot_lag_window();
             let dwell_window = stall_window.checked_mul(2).unwrap_or(stall_window);
@@ -4017,9 +4018,9 @@ impl Actor {
             {
                 catchup_advance = FrontierRecoveryAdvance::CatchUp;
             }
-            if (!payload_materialized_locally
-                && self.frontier_slot_allows_deep_catchup(height, "frontier_stall_reset"))
-                || matches!(catchup_advance, FrontierRecoveryAdvance::CatchUp)
+            if !payload_materialized_locally
+                && (self.frontier_slot_allows_deep_catchup(height, "frontier_stall_reset")
+                    || matches!(catchup_advance, FrontierRecoveryAdvance::CatchUp))
             {
                 info!(
                     height,
@@ -4032,6 +4033,7 @@ impl Actor {
                 );
                 return true;
             }
+            commit_qc_body_fallback = payload_materialized_locally && request_stalled;
         }
         if height == self.committed_height_snapshot().saturating_add(1)
             && payload_materialized_locally
@@ -4132,22 +4134,37 @@ impl Actor {
                     );
                     return true;
                 }
-                super::send_missing_block_request(
-                    &self.network,
-                    &self.common_config.peer.id,
-                    block_hash,
-                    height,
-                    view,
-                    super::MissingBlockPriority::Consensus,
-                    requester_roster_proof_known,
-                    &targets,
-                );
+                if payload_materialized_locally && !commit_qc_body_fallback {
+                    super::send_missing_commit_qc_request(
+                        &self.network,
+                        &self.common_config.peer.id,
+                        block_hash,
+                        height,
+                        view,
+                        super::MissingBlockPriority::Consensus,
+                        requester_roster_proof_known,
+                        &targets,
+                    );
+                } else {
+                    super::send_missing_block_request(
+                        &self.network,
+                        &self.common_config.peer.id,
+                        block_hash,
+                        height,
+                        view,
+                        super::MissingBlockPriority::Consensus,
+                        requester_roster_proof_known,
+                        &targets,
+                    );
+                }
                 info!(
                     height,
                     view,
                     block = %block_hash,
                     targets = ?targets,
                     target_kind = target_kind.label(),
+                    commit_qc_only = payload_materialized_locally && !commit_qc_body_fallback,
+                    commit_qc_body_fallback,
                     trigger,
                     retry_window_ms = retry_window.as_millis(),
                     dwell_ms,
@@ -4572,7 +4589,7 @@ impl Actor {
         let conflicting_vote = self.local_conflicting_slot_vote(height, epoch, block_hash);
         if let Some(conflict) = conflicting_vote {
             let new_view_qc_supersedes = self
-                .proposal_highest_qc_for_slot(height, view)
+                .proposal_or_new_view_highest_qc_for_slot(height, view)
                 .is_some_and(|highest_qc| {
                     self.new_view_qc_supersedes_same_height_vote_conflict(
                         height,
@@ -4753,16 +4770,21 @@ impl Actor {
         self.restore_initial_precommit_collector_state();
         let local_peer_id = self.common_config.peer.id().clone();
         let min_votes_for_commit = topology.min_votes_for_commit().max(1);
-        let mut vote_targets = self.quorum_retransmit_targets_for_missing_votes(
-            block_hash,
-            height,
-            view,
-            topology.as_ref(),
-            min_votes_for_commit,
-            1,
-        );
+        let permissioned_full_fanout = matches!(consensus_mode, ConsensusMode::Permissioned);
+        let mut vote_targets = if permissioned_full_fanout {
+            signature_topology.as_ref().to_vec()
+        } else {
+            self.quorum_retransmit_targets_for_missing_votes(
+                block_hash,
+                height,
+                view,
+                topology.as_ref(),
+                min_votes_for_commit,
+                1,
+            )
+        };
         let mut fallback_to_collector_seed = false;
-        if vote_targets.is_empty() {
+        if !permissioned_full_fanout && vote_targets.is_empty() {
             fallback_to_collector_seed = true;
             vote_targets = self
                 .subsystems
@@ -4773,7 +4795,7 @@ impl Actor {
                 .collect();
         }
         vote_targets.retain(|peer| peer != &local_peer_id);
-        if vote_targets.is_empty() {
+        if !permissioned_full_fanout && vote_targets.is_empty() {
             fallback_to_collector_seed = true;
             vote_targets = signature_topology.as_ref().to_vec();
             vote_targets.retain(|peer| peer != &local_peer_id);
@@ -5625,7 +5647,7 @@ impl Actor {
         rbc_payload_matches(sessions, handle, block_hash, height, view, payload_hash)
     }
 
-    fn local_payload_matches_hash(block: &SignedBlock, payload_hash: &Hash) -> bool {
+    pub(super) fn local_payload_matches_hash(block: &SignedBlock, payload_hash: &Hash) -> bool {
         let payload_bytes = super::proposals::block_payload_bytes(block);
         Hash::new(&payload_bytes) == *payload_hash
     }

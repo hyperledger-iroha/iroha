@@ -3401,6 +3401,26 @@ fn build_fetch_pending_block_request(
     priority: MissingBlockPriority,
     requester_roster_proof_known: bool,
 ) -> super::message::FetchPendingBlock {
+    build_fetch_pending_block_request_with_mode(
+        requester,
+        block_hash,
+        height,
+        view,
+        priority,
+        requester_roster_proof_known,
+        false,
+    )
+}
+
+fn build_fetch_pending_block_request_with_mode(
+    requester: PeerId,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    priority: MissingBlockPriority,
+    requester_roster_proof_known: bool,
+    commit_qc_only: bool,
+) -> super::message::FetchPendingBlock {
     let priority = match priority {
         MissingBlockPriority::Consensus => {
             Some(super::message::FetchPendingBlockPriority::Consensus)
@@ -3414,6 +3434,7 @@ fn build_fetch_pending_block_request(
         view,
         priority,
         requester_roster_proof_known: requester_roster_proof_known.then_some(true),
+        commit_qc_only: commit_qc_only.then_some(true),
     }
 }
 
@@ -3457,6 +3478,75 @@ fn send_missing_block_request(
         view,
         priority,
         requester_roster_proof_known,
+    );
+    let message = Arc::new(BlockMessage::FetchPendingBlock(request));
+    let encoded = Arc::new(BlockMessageWire::encode_message(message.as_ref()));
+    let post = crate::NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::with_encoded(
+        Arc::clone(&message),
+        Arc::clone(&encoded),
+    )));
+    for peer in targets {
+        network.post(Post {
+            data: post.clone(),
+            peer_id: peer,
+            priority: Priority::High,
+        });
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send_missing_commit_qc_request(
+    network: &IrohaNetwork,
+    peer_id: &PeerId,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    priority: MissingBlockPriority,
+    requester_roster_proof_known: bool,
+    targets: &[PeerId],
+) {
+    send_missing_block_request_with_mode(
+        network,
+        peer_id,
+        block_hash,
+        height,
+        view,
+        priority,
+        requester_roster_proof_known,
+        true,
+        targets,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send_missing_block_request_with_mode(
+    network: &IrohaNetwork,
+    peer_id: &PeerId,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    priority: MissingBlockPriority,
+    requester_roster_proof_known: bool,
+    commit_qc_only: bool,
+    targets: &[PeerId],
+) {
+    if targets.is_empty() {
+        return;
+    }
+
+    let targets = missing_block_request_targets_without_local(peer_id, targets);
+    if targets.is_empty() {
+        return;
+    }
+
+    let request = build_fetch_pending_block_request_with_mode(
+        peer_id.clone(),
+        block_hash,
+        height,
+        view,
+        priority,
+        requester_roster_proof_known,
+        commit_qc_only,
     );
     let message = Arc::new(BlockMessage::FetchPendingBlock(request));
     let encoded = Arc::new(BlockMessageWire::encode_message(message.as_ref()));
@@ -5122,6 +5212,21 @@ impl Actor {
                         && qc.epoch == expected_epoch
                 })
         })
+        .or_else(|| {
+            let expected_mode_tag = match self.consensus_context_for_height(height).0 {
+                ConsensusMode::Permissioned => PERMISSIONED_TAG,
+                ConsensusMode::Npos => NPOS_TAG,
+            };
+            super::status::commit_qc_history().into_iter().find(|qc| {
+                qc.phase == crate::sumeragi::consensus::Phase::Commit
+                    && qc.subject_block_hash == block_hash
+                    && qc.height == height
+                    && qc.view == view
+                    && qc.epoch == expected_epoch
+                    && qc.mode_tag == expected_mode_tag
+                    && !qc.aggregate.bls_aggregate_signature.is_empty()
+            })
+        })
     }
 
     fn pending_block_has_commit_qc(
@@ -5171,6 +5276,39 @@ impl Actor {
                     .get_hint(height, view)
                     .map(|hint| hint.highest_qc)
             })
+    }
+
+    fn cached_new_view_qc_highest_for_slot(
+        &self,
+        height: u64,
+        view: u64,
+    ) -> Option<crate::sumeragi::consensus::QcHeaderRef> {
+        let expected_epoch = self.epoch_for_height(height);
+        let committed_qc = self.latest_committed_qc()?;
+        self.qc_cache.values().find_map(|qc| {
+            if qc.phase != crate::sumeragi::consensus::Phase::NewView
+                || qc.height != height
+                || qc.view != view
+                || qc.epoch != expected_epoch
+            {
+                return None;
+            }
+            let highest = qc.highest_qc?;
+            (highest == committed_qc
+                && highest.phase == crate::sumeragi::consensus::Phase::Commit
+                && highest.height.saturating_add(1) == height
+                && qc.subject_block_hash == highest.subject_block_hash)
+                .then_some(highest)
+        })
+    }
+
+    fn proposal_or_new_view_highest_qc_for_slot(
+        &self,
+        height: u64,
+        view: u64,
+    ) -> Option<crate::sumeragi::consensus::QcHeaderRef> {
+        self.cached_new_view_qc_highest_for_slot(height, view)
+            .or_else(|| self.proposal_highest_qc_for_slot(height, view))
     }
 
     fn same_height_block_has_recoverable_qc(
@@ -11410,6 +11548,7 @@ impl MergeCommitteeState {
 struct PendingFetchRequestMeta {
     priority: super::message::FetchPendingBlockPriority,
     requester_roster_proof_known: bool,
+    commit_qc_only: bool,
 }
 
 #[derive(Debug)]
@@ -21600,7 +21739,14 @@ impl Actor {
         block: &SignedBlock,
         key: super::rbc_store::SessionKey,
     ) -> Option<RbcInit> {
-        let roster = self.rbc_roster_for_session(key);
+        let mut roster = self.rbc_roster_for_session(key);
+        if roster.is_empty()
+            && self
+                .rbc_session_roster_source(key)
+                .is_some_and(RbcRosterSource::is_authoritative)
+        {
+            roster = self.rbc_session_roster(key);
+        }
         if roster.is_empty() {
             return None;
         }
@@ -22621,9 +22767,15 @@ impl Actor {
         let payload_due = self.rbc_targeted_payload_rescue_due(&key, now, payload_cooldown);
         let roster = self.ensure_rbc_session_roster(key);
         let mut payload_session = session.clone();
+        let body_repair_block = self
+            .local_signed_block_for_body_repair(key.0)
+            .filter(|block| {
+                let header = block.header();
+                header.height().get() == key.1 && header.view_change_index() == key.2
+            });
 
         // Peers can still be missing INIT/chunks after the local session reaches DELIVER, so
-        // keep targeted payload rescue enabled under the existing cooldown until READY catches up.
+        // keep targeted body rescue enabled under the existing cooldown until READY catches up.
         if payload_due && !roster.is_empty() {
             if payload_session.total_chunks() != 0
                 && payload_session.received_chunks() < payload_session.total_chunks()
@@ -22645,7 +22797,45 @@ impl Actor {
                 );
             }
             if !payload_session.is_invalid() {
-                if let Some((init, chunks)) =
+                if let Some(block) = body_repair_block.as_ref() {
+                    let init = self.rebuild_rbc_init_from_block(block.as_ref(), key);
+                    if let Some(init) = init {
+                        let init_message = Arc::new(BlockMessage::RbcInit(init));
+                        let init_encoded =
+                            Arc::new(BlockMessageWire::encode_message(init_message.as_ref()));
+                        for peer in &targets {
+                            self.schedule_background(BackgroundRequest::Post {
+                                peer: peer.clone(),
+                                msg: BlockMessageWire::with_encoded(
+                                    Arc::clone(&init_message),
+                                    Arc::clone(&init_encoded),
+                                ),
+                            });
+                        }
+                    } else {
+                        debug!(
+                            height = key.1,
+                            view = key.2,
+                            block = %key.0,
+                            ready = ready_count,
+                            targets = ?targets,
+                            "targeted exact body rescue could not rebuild RBC INIT companion"
+                        );
+                    }
+                    info!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        ready = ready_count,
+                        targets = ?targets,
+                        payload_cooldown_ms = payload_cooldown.as_millis(),
+                        "sending targeted RBC INIT and BlockBodyResponse companion to peers missing READY"
+                    );
+                    for peer in &targets {
+                        self.send_block_body_response(peer.clone(), block.as_ref());
+                    }
+                    sent = true;
+                } else if let Some((init, chunks)) =
                     Self::rbc_payload_bundle(key, &payload_session, &roster)
                 {
                     if chunks.is_empty() {
@@ -22703,27 +22893,6 @@ impl Actor {
                         }
                         sent = true;
                     }
-                }
-                if let Some(block) =
-                    self.local_signed_block_for_body_repair(key.0)
-                        .filter(|block| {
-                            let header = block.header();
-                            header.height().get() == key.1 && header.view_change_index() == key.2
-                        })
-                {
-                    info!(
-                        height = key.1,
-                        view = key.2,
-                        block = %key.0,
-                        ready = ready_count,
-                        targets = ?targets,
-                        payload_cooldown_ms = payload_cooldown.as_millis(),
-                        "sending targeted BlockBodyResponse companion to peers missing READY"
-                    );
-                    for peer in &targets {
-                        self.send_block_body_response(peer.clone(), block.as_ref());
-                    }
-                    sent = true;
                 }
                 if sent {
                     self.subsystems
@@ -28051,7 +28220,14 @@ impl Actor {
             && frontier_height == self.committed_height_snapshot().saturating_add(1)
             && (all_peers
                 || Self::reason_is_canonical_frontier_reanchor(reason)
-                || matches!(reason, "missing_qc" | "missing_payload" | "quorum_timeout"))
+                || matches!(
+                    reason,
+                    "missing_qc"
+                        | "missing_payload"
+                        | "quorum_timeout"
+                        | "frontier_stall_reset"
+                        | "frontier_stall_reset_fallback"
+                ))
         {
             Priority::High
         } else {
@@ -32362,7 +32538,9 @@ impl Actor {
             let suppress_same_slot_reassembly =
                 same_slot_reassembly_active && !same_slot_ingress_hard_cap_elapsed;
             let suppress_same_slot_missing_commit_qc_repair =
-                same_slot_missing_commit_qc_repair_active && !same_slot_ingress_hard_cap_elapsed;
+                same_slot_missing_commit_qc_repair_active
+                    && reason != "quorum_timeout"
+                    && !same_slot_ingress_hard_cap_elapsed;
             let suppress_same_slot_vote_backed_recovery =
                 same_slot_vote_backed_recovery_active && !same_slot_ingress_hard_cap_elapsed;
             if same_height_dependency_backlog_active

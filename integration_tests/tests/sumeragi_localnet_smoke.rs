@@ -6,13 +6,20 @@ use std::{
     fs,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::OnceLock,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicU64, Ordering as AtomicOrdering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use blake3::Hasher as Blake3Hasher;
 use eyre::{Result, WrapErr, bail, ensure, eyre};
-use futures_util::{StreamExt, TryStreamExt, future::try_join_all, stream};
+use futures_util::{
+    StreamExt, TryStreamExt,
+    future::try_join_all,
+    stream::{self, FuturesUnordered},
+};
 use integration_tests::sandbox;
 use iroha::{
     crypto::{Algorithm, KeyPair},
@@ -24,7 +31,7 @@ use iroha::{
         da::commitment::DaProofPolicyBundle,
         domain::{Domain, DomainId},
         isi::{
-            InstructionBox, Log, Mint, Register, SetParameter,
+            InstructionBox, Log, Mint, Register, SetParameter, Transfer,
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
         metadata::Metadata,
@@ -32,7 +39,7 @@ use iroha::{
         nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneVisibility},
         parameter::{BlockParameter, Parameter, SumeragiParameter, system::SumeragiNposParameters},
         peer::PeerId,
-        prelude::Numeric,
+        prelude::{FindAssetById, Numeric},
     },
 };
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
@@ -72,6 +79,8 @@ const THROUGHPUT_PIPELINE_TIME: Duration = Duration::from_secs(2);
 const THROUGHPUT_BLOCK_TIME_MS: u64 = 1_000;
 const THROUGHPUT_COMMIT_TIME_MS: u64 = 1_000;
 const THROUGHPUT_BLOCK_MAX_TXS: u64 = 10_000;
+const THROUGHPUT_LANE_TEU_FLOOR: i64 = 1;
+const THROUGHPUT_LANE_TEU_CAPACITY: i64 = 1_000_000_000;
 const THROUGHPUT_SUBMIT_BATCH: u64 = 512;
 const THROUGHPUT_SUBMIT_PARALLELISM: u64 = 128;
 const THROUGHPUT_QUEUE_SOFT_LIMIT: u64 = 20_000;
@@ -96,6 +105,20 @@ const THROUGHPUT_NPOS_SLO_VIEW_CHANGE_RATE_MAX: f64 = 0.2;
 const THROUGHPUT_NPOS_SLO_BACKPRESSURE_RATE_MAX: f64 = 3.0;
 const THROUGHPUT_NPOS_SLO_QUEUE_SAT_FRAC_MAX: f64 = 0.3;
 const THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_ENV: &str = "IROHA_THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_SECS";
+const REALISTIC_30TPS_PEERS: usize = 4;
+const REALISTIC_30TPS_DURATION_SECS: u64 = 300;
+const REALISTIC_30TPS_TARGET_BLOCKS: u64 = 150;
+const REALISTIC_30TPS_TARGET_TPS: u64 = 30;
+const REALISTIC_30TPS_BLOCK_TIME_MS: u64 = 500;
+const REALISTIC_30TPS_COMMIT_TIME_MS: u64 = 500;
+const REALISTIC_30TPS_BLOCK_MAX_TXS: u64 = 30;
+const REALISTIC_30TPS_SUBMIT_PARALLELISM: usize = 16;
+const REALISTIC_30TPS_QUEUE_SOFT_LIMIT: u64 = 3_000;
+const REALISTIC_30TPS_STALL_THRESHOLD: Duration = Duration::from_secs(20);
+const REALISTIC_30TPS_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
+const REALISTIC_30TPS_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
+const REALISTIC_30TPS_TRANSFER_ACCOUNTS: usize = 64;
+const REALISTIC_30TPS_TRANSFER_MAX_AMOUNT: u64 = 5;
 const FAIL_ON_SANDBOX_SKIP_ENV: &str = "IROHA_FAIL_ON_SANDBOX_SKIP";
 // Grouped localnet runs can take longer to publish authoritative Nexus bindings
 // than the earlier exact-test-only timeout budget.
@@ -379,6 +402,754 @@ async fn submit_logs(
         wait_for_queue_depth(network, queue_soft_limit, SOAK_STATUS_POLL_TIMEOUT).await?;
     }
     Ok(submit_start.elapsed())
+}
+
+#[derive(Clone)]
+struct TransferLoadAccount {
+    id: AccountId,
+    key_pair: KeyPair,
+}
+
+#[derive(Clone)]
+struct TransferSubmitAccount {
+    id: AccountId,
+    client: iroha::client::Client,
+}
+
+fn realistic_transfer_domain_id() -> DomainId {
+    DomainId::try_new("realistic", "universal").expect("realistic transfer domain")
+}
+
+fn realistic_transfer_asset_definition_id() -> AssetDefinitionId {
+    AssetDefinitionId::new(
+        realistic_transfer_domain_id(),
+        "transfer_coin".parse().expect("transfer asset name"),
+    )
+}
+
+fn realistic_transfer_accounts(account_count: usize, rng_seed: u64) -> Vec<TransferLoadAccount> {
+    (0..account_count)
+        .map(|index| {
+            let key_pair = KeyPair::from_seed(
+                format!("integration_tests::realistic-transfer::{rng_seed}::{index}").into_bytes(),
+                Algorithm::Ed25519,
+            );
+            let id = AccountId::new(key_pair.public_key().clone());
+            TransferLoadAccount { id, key_pair }
+        })
+        .collect()
+}
+
+fn realistic_transfer_route(
+    index: u64,
+    account_count: usize,
+    max_amount: u64,
+    rng_seed: u64,
+) -> (usize, usize, u64) {
+    debug_assert!(account_count >= 2);
+    let mut rng = ChaCha8Rng::seed_from_u64(
+        rng_seed ^ index.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x5452_414e_5346_4552,
+    );
+    let source = usize::try_from(rng.next_u64() % account_count as u64).unwrap_or_default();
+    let mut destination = usize::try_from(rng.next_u64() % account_count.saturating_sub(1) as u64)
+        .unwrap_or_default();
+    if destination >= source {
+        destination = destination.saturating_add(1);
+    }
+    let amount = 1 + rng.next_u64() % max_amount.max(1);
+    (source, destination, amount)
+}
+
+fn expected_realistic_transfer_balances(
+    account_count: usize,
+    tx_count: u64,
+    initial_balance: u64,
+    max_amount: u64,
+    rng_seed: u64,
+) -> Vec<u64> {
+    let mut balances = vec![i128::from(initial_balance); account_count];
+    for index in 0..tx_count {
+        let (source, destination, amount) =
+            realistic_transfer_route(index, account_count, max_amount, rng_seed);
+        let amount = i128::from(amount);
+        balances[source] -= amount;
+        balances[destination] += amount;
+    }
+    balances
+        .into_iter()
+        .map(|balance| u64::try_from(balance).expect("transfer load balance should stay positive"))
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn submit_transfers_paced(
+    tx_count: u64,
+    target_tps: u64,
+    submit_accounts: Vec<TransferSubmitAccount>,
+    asset_definition_id: AssetDefinitionId,
+    transfer_max_amount: u64,
+    rng_seed: u64,
+    submit_parallelism: usize,
+    submitted_counter: Arc<AtomicU64>,
+) -> Result<Duration> {
+    ensure!(
+        submit_accounts.len() >= 2,
+        "submit_transfers_paced requires at least two funded accounts"
+    );
+    let submit_accounts = Arc::new(submit_accounts);
+    let account_count = submit_accounts.len();
+    let submit_parallelism = submit_parallelism.max(1);
+    let nanos_per_tx = 1_000_000_000_u64 / target_tps.max(1);
+    let submit_start = Instant::now();
+    let mut pending: FuturesUnordered<task::JoinHandle<Result<()>>> = FuturesUnordered::new();
+
+    for index in 0..tx_count {
+        let target_elapsed = Duration::from_nanos(nanos_per_tx.saturating_mul(index));
+        if let Some(target_instant) = submit_start.checked_add(target_elapsed) {
+            let now = Instant::now();
+            if target_instant > now {
+                sleep(target_instant.duration_since(now)).await;
+            }
+        }
+
+        let (source, destination, amount) =
+            realistic_transfer_route(index, account_count, transfer_max_amount, rng_seed);
+        let source_account = submit_accounts[source].clone();
+        let destination_id = submit_accounts[destination].id.clone();
+        let asset_definition_id = asset_definition_id.clone();
+        let submitted_counter = Arc::clone(&submitted_counter);
+        pending.push(task::spawn_blocking(move || {
+            let source_asset_id = AssetId::new(asset_definition_id, source_account.id.clone());
+            source_account
+                .client
+                .submit::<InstructionBox>(
+                    Transfer::asset_numeric(source_asset_id, Numeric::from(amount), destination_id)
+                        .into(),
+                )
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to submit paced transfer instruction {index} from account index {source} to {destination}"
+                    )
+                })?;
+            submitted_counter.fetch_add(1, AtomicOrdering::Relaxed);
+            Ok(())
+        }));
+
+        if pending.len() >= submit_parallelism {
+            let result = pending
+                .next()
+                .await
+                .ok_or_else(|| eyre!("paced transfer worker set unexpectedly empty"))?;
+            result.wrap_err("paced transfer task join failed")??;
+        }
+    }
+
+    while let Some(result) = pending.next().await {
+        result.wrap_err("paced transfer task join failed")??;
+    }
+    Ok(submit_start.elapsed())
+}
+
+fn verify_realistic_transfer_balances(
+    client: &iroha::client::Client,
+    asset_definition_id: &AssetDefinitionId,
+    accounts: &[TransferLoadAccount],
+    tx_count: u64,
+    initial_balance: u64,
+    max_amount: u64,
+    rng_seed: u64,
+) -> Result<()> {
+    let expected = expected_realistic_transfer_balances(
+        accounts.len(),
+        tx_count,
+        initial_balance,
+        max_amount,
+        rng_seed,
+    );
+    for (account, expected_balance) in accounts.iter().zip(expected) {
+        let asset = client.query_single(FindAssetById::new(AssetId::new(
+            asset_definition_id.clone(),
+            account.id.clone(),
+        )))?;
+        ensure!(
+            *asset.value() == Numeric::from(expected_balance),
+            "unexpected final transfer balance for {}: expected {}, got {:?}",
+            account.id,
+            expected_balance,
+            asset.value()
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "long-running 4-peer localnet regression (30 TPS for 5 minutes)"]
+#[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
+async fn permissioned_localnet_realistic_30tps_5min() -> Result<()> {
+    init_instruction_registry();
+    let _guard = LOCALNET_SMOKE_GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .await;
+
+    let duration_secs = env_or_default(
+        "IROHA_REALISTIC_30TPS_DURATION_SECS",
+        REALISTIC_30TPS_DURATION_SECS,
+    );
+    let target_tps = env_or_default(
+        "IROHA_REALISTIC_30TPS_TARGET_TPS",
+        REALISTIC_30TPS_TARGET_TPS,
+    );
+    let target_blocks = env_or_default(
+        "IROHA_REALISTIC_30TPS_TARGET_BLOCKS",
+        REALISTIC_30TPS_TARGET_BLOCKS,
+    );
+    let block_time_ms = env_or_default(
+        "IROHA_REALISTIC_30TPS_BLOCK_TIME_MS",
+        REALISTIC_30TPS_BLOCK_TIME_MS,
+    )
+    .max(1);
+    let commit_time_ms = env_or_default(
+        "IROHA_REALISTIC_30TPS_COMMIT_TIME_MS",
+        REALISTIC_30TPS_COMMIT_TIME_MS,
+    )
+    .max(block_time_ms);
+    let stall_secs = env_or_default(
+        "IROHA_REALISTIC_30TPS_STALL_SECS",
+        REALISTIC_30TPS_STALL_THRESHOLD.as_secs(),
+    );
+    let stall_threshold = Duration::from_secs(stall_secs.max(1));
+    let submit_parallelism = env_or_default_usize(
+        "IROHA_REALISTIC_30TPS_PARALLELISM",
+        REALISTIC_30TPS_SUBMIT_PARALLELISM,
+    )
+    .max(1);
+    let queue_soft_limit = env_or_default(
+        "IROHA_REALISTIC_30TPS_QUEUE_SOFT_LIMIT",
+        REALISTIC_30TPS_QUEUE_SOFT_LIMIT,
+    );
+    let transfer_accounts = env_or_default_usize(
+        "IROHA_REALISTIC_30TPS_TRANSFER_ACCOUNTS",
+        REALISTIC_30TPS_TRANSFER_ACCOUNTS,
+    )
+    .max(2);
+    let transfer_max_amount = env_or_default(
+        "IROHA_REALISTIC_30TPS_TRANSFER_MAX_AMOUNT",
+        REALISTIC_30TPS_TRANSFER_MAX_AMOUNT,
+    )
+    .max(1);
+    let block_max_txs = env_or_default(
+        "IROHA_REALISTIC_30TPS_BLOCK_MAX_TXS",
+        REALISTIC_30TPS_BLOCK_MAX_TXS,
+    );
+    let rng_seed = env_or_default("IROHA_REALISTIC_30TPS_RNG_SEED", THROUGHPUT_RNG_SEED);
+    let total_txs = duration_secs.saturating_mul(target_tps);
+    let minimum_initial_balance = total_txs
+        .saturating_mul(transfer_max_amount)
+        .saturating_add(1);
+    let transfer_initial_balance = env_or_default(
+        "IROHA_REALISTIC_30TPS_TRANSFER_INITIAL_BALANCE",
+        minimum_initial_balance,
+    )
+    .max(minimum_initial_balance);
+    ensure!(
+        total_txs > 0 && block_max_txs > 0,
+        "realistic 30 TPS run requires a positive duration and TPS"
+    );
+    let transfer_asset_definition_id = realistic_transfer_asset_definition_id();
+    let transfer_load_accounts = realistic_transfer_accounts(transfer_accounts, rng_seed);
+
+    let previous_ttl = std::env::var_os("IROHA_TEST_CLIENT_TTL_MS");
+    let client_ttl = Duration::from_secs(duration_secs.saturating_add(120));
+    set_env_var(
+        "IROHA_TEST_CLIENT_TTL_MS",
+        client_ttl.as_millis().to_string(),
+    );
+
+    let mut builder = NetworkBuilder::new()
+        .with_peers(REALISTIC_30TPS_PEERS)
+        .with_auto_populated_trusted_peers()
+        .with_real_genesis_keypair()
+        .with_pipeline_time(THROUGHPUT_PIPELINE_TIME)
+        .with_genesis_instruction(Register::domain(
+            Domain::new(realistic_transfer_domain_id()),
+        ))
+        .with_genesis_instruction(Register::asset_definition(
+            AssetDefinition::numeric(transfer_asset_definition_id.clone())
+                .with_name("Realistic Transfer Coin".to_owned()),
+        ))
+        .with_genesis_instruction(SetParameter::new(Parameter::Block(
+            BlockParameter::MaxTransactions(
+                std::num::NonZeroU64::new(block_max_txs).expect("checked non-zero"),
+            ),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::BlockTimeMs(block_time_ms),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CommitTimeMs(commit_time_ms),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CollectorsK(2),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::RedundantSendR(2),
+        )))
+        .with_config_layer(|layer| {
+            let _ = layer
+                .write(["sumeragi", "consensus_mode"], "permissioned")
+                .write(["network", "transaction_gossip_period_ms"], 200_i64)
+                .write(["network", "transaction_gossip_public_target_cap"], 3_i64)
+                .write(
+                    ["network", "transaction_gossip_restricted_target_cap"],
+                    3_i64,
+                )
+                .write(
+                    ["network", "transaction_gossip_restricted_fallback"],
+                    "public_overlay",
+                )
+                .write(
+                    ["network", "transaction_gossip_restricted_public_payload"],
+                    "forward",
+                )
+                .write(["network", "p2p_post_queue_cap"], 8192_i64)
+                .write(["network", "p2p_queue_cap_high"], 16384_i64)
+                .write(["network", "p2p_queue_cap_low"], 65536_i64)
+                .write(["network", "disconnect_on_post_overflow"], false)
+                .write(
+                    ["sumeragi", "block", "fast_finality_max_transactions"],
+                    i64::try_from(block_max_txs).expect("realistic block max txs fits i64"),
+                )
+                .write(
+                    ["sumeragi", "advanced", "pacing_governor", "min_factor_bps"],
+                    10_000_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "pacing_governor", "max_factor_bps"],
+                    10_000_i64,
+                )
+                .write(["nexus", "fusion", "floor_teu"], THROUGHPUT_LANE_TEU_FLOOR)
+                .write(
+                    ["nexus", "fusion", "exit_teu"],
+                    THROUGHPUT_LANE_TEU_CAPACITY,
+                )
+                .write(
+                    ["torii", "preauth_allow_cidrs"],
+                    TomlValue::Array(vec![
+                        TomlValue::String("127.0.0.0/8".into()),
+                        TomlValue::String("::1/128".into()),
+                    ]),
+                )
+                .write(
+                    ["torii", "api_allow_cidrs"],
+                    TomlValue::Array(vec![
+                        TomlValue::String("127.0.0.0/8".into()),
+                        TomlValue::String("::1/128".into()),
+                    ]),
+                )
+                .write(["torii", "preauth_rate_per_ip_per_sec"], 1_000_000_i64)
+                .write(["torii", "preauth_burst_per_ip"], 2_000_000_i64)
+                .write(["torii", "query_rate_per_authority_per_sec"], 0_i64)
+                .write(["torii", "query_burst_per_authority"], 0_i64)
+                .write(["torii", "tx_rate_per_authority_per_sec"], 0_i64)
+                .write(["torii", "tx_burst_per_authority"], 0_i64)
+                .write(["torii", "api_high_load_tx_threshold"], 262_144_i64);
+        });
+    for account in &transfer_load_accounts {
+        builder = builder
+            .with_genesis_instruction(Register::account(Account::new(account.id.clone())))
+            .with_genesis_instruction(Mint::asset_numeric(
+                Numeric::from(transfer_initial_balance),
+                AssetId::new(transfer_asset_definition_id.clone(), account.id.clone()),
+            ));
+    }
+
+    let result: Result<()> = async {
+        let Some(network) = sandbox::start_network_async_or_skip(
+            builder,
+            stringify!(permissioned_localnet_realistic_30tps_5min),
+        )
+        .await?
+        else {
+            return Ok(());
+        };
+
+        let network_dir = network.env_dir().to_path_buf();
+        let http = HttpClient::new();
+        let mut artifacts = ThroughputArtifacts::default();
+
+        let run_result: Result<()> = async {
+            wait_for_status_responses(&network, Duration::from_secs(30)).await?;
+            let baseline_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
+            let baseline_non_empty = baseline_statuses
+                .iter()
+                .map(|status| status.blocks_non_empty)
+                .min()
+                .unwrap_or_default();
+            let baseline_approved = baseline_statuses
+                .iter()
+                .map(|status| status.txs_approved)
+                .min()
+                .unwrap_or_default();
+            let target_non_empty = baseline_non_empty.saturating_add(target_blocks);
+            let target_approved = baseline_approved.saturating_add(total_txs);
+            artifacts.recipe = Some(ThroughputArtifactRecipe {
+                peers: network.peers().len() as u64,
+                block_time_ms,
+                commit_time_ms,
+                block_max_txs,
+                warmup_blocks: 0,
+                steady_blocks: target_blocks,
+                total_blocks: target_blocks,
+                warmup_txs: 0,
+                steady_txs: total_txs,
+                total_txs,
+                submit_batch: target_tps,
+                submit_parallelism: submit_parallelism as u64,
+                queue_soft_limit,
+                payload_bytes: 0,
+                load_kind: "transfer".to_owned(),
+                transfer_accounts: transfer_accounts as u64,
+                transfer_initial_balance,
+                transfer_max_amount,
+                rng_seed,
+                rbc_encoding: "plain".to_owned(),
+                rbc_data_shards: 0,
+                rbc_parity_shards: 0,
+            });
+
+            let submit_accounts: Vec<_> = transfer_load_accounts
+                .iter()
+                .enumerate()
+                .map(|(index, account)| {
+                    let peer = &network.peers()[index % network.peers().len()];
+                    TransferSubmitAccount {
+                        id: account.id.clone(),
+                        client: peer.client_for(&account.id, account.key_pair.private_key().clone()),
+                    }
+                })
+                .collect();
+            let submitted_counter = Arc::new(AtomicU64::new(0));
+            let submitted_for_task = Arc::clone(&submitted_counter);
+            let submit_handle = tokio::spawn(submit_transfers_paced(
+                total_txs,
+                target_tps,
+                submit_accounts,
+                transfer_asset_definition_id.clone(),
+                transfer_max_amount,
+                rng_seed,
+                submit_parallelism,
+                submitted_for_task,
+            ));
+
+            eprintln!(
+                "realistic localnet recipe: peers={}, target_tps={}, duration_secs={}, total_txs={}, target_non_empty_delta={}, block_time_ms={}, commit_time_ms={}, block_max_txs={}, load_kind=transfer, transfer_accounts={}, transfer_initial_balance={}, transfer_max_amount={}, submit_parallelism={}, queue_soft_limit={}, baseline_non_empty={}, baseline_approved={}",
+                network.peers().len(),
+                target_tps,
+                duration_secs,
+                total_txs,
+                target_blocks,
+                block_time_ms,
+                commit_time_ms,
+                block_max_txs,
+                transfer_accounts,
+                transfer_initial_balance,
+                transfer_max_amount,
+                submit_parallelism,
+                queue_soft_limit,
+                baseline_non_empty,
+                baseline_approved,
+            );
+
+            let mut samples = Vec::new();
+            let mut last_progress = Instant::now();
+            let mut last_min_non_empty = baseline_non_empty;
+            let mut last_min_approved = baseline_approved;
+            let mut last_snapshot: Vec<StatusSnapshot> = Vec::new();
+            let mut last_log = Instant::now()
+                .checked_sub(REALISTIC_30TPS_PROGRESS_LOG_INTERVAL)
+                .unwrap_or_else(Instant::now);
+            let run_start = Instant::now();
+
+            loop {
+                match collect_statuses(&network, STATUS_POLL_TIMEOUT).await {
+                    Ok(statuses) => {
+                        let min_non_empty = statuses
+                            .iter()
+                            .map(|status| status.blocks_non_empty)
+                            .min()
+                            .unwrap_or_default();
+                        let max_non_empty = statuses
+                            .iter()
+                            .map(|status| status.blocks_non_empty)
+                            .max()
+                            .unwrap_or_default();
+                        let min_approved = statuses
+                            .iter()
+                            .map(|status| status.txs_approved)
+                            .min()
+                            .unwrap_or_default();
+                        let max_queue = statuses
+                            .iter()
+                            .map(|status| status.queue_size)
+                            .max()
+                            .unwrap_or_default();
+                        if min_non_empty > last_min_non_empty || min_approved > last_min_approved {
+                            last_min_non_empty = min_non_empty;
+                            last_min_approved = min_approved;
+                            last_progress = Instant::now();
+                        }
+                        let status_snapshots: Vec<StatusSnapshot> =
+                            statuses.iter().map(StatusSnapshot::from_status).collect();
+                        let sumeragi_snapshots = match collect_sumeragi_statuses(
+                            &network,
+                            STATUS_POLL_TIMEOUT,
+                        )
+                        .await
+                        {
+                            Ok(sumeragi) => sumeragi
+                                .iter()
+                                .map(SumeragiStatusSnapshot::from_status)
+                                .collect(),
+                            Err(err) => {
+                                eprintln!("sumeragi status sample failed: {err:?}");
+                                Vec::new()
+                            }
+                        };
+                        let timestamp_ms = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis();
+                        samples.push(ThroughputSample {
+                            timestamp_ms: u64::try_from(timestamp_ms).unwrap_or(u64::MAX),
+                            statuses: status_snapshots.clone(),
+                            sumeragi: sumeragi_snapshots,
+                        });
+                        last_snapshot = status_snapshots;
+
+                        if last_log.elapsed() >= REALISTIC_30TPS_PROGRESS_LOG_INTERVAL {
+                            eprintln!(
+                                "realistic localnet progress elapsed={:?} submitted={} target_non_empty={} min_non_empty={} max_non_empty={} min_approved={} target_approved={} max_queue={}: {:?}",
+                                run_start.elapsed(),
+                                submitted_counter.load(AtomicOrdering::Relaxed),
+                                target_non_empty,
+                                min_non_empty,
+                                max_non_empty,
+                                min_approved,
+                                target_approved,
+                                max_queue,
+                                last_snapshot,
+                            );
+                            last_log = Instant::now();
+                        }
+                    }
+                    Err(err) => {
+                        if last_log.elapsed() >= REALISTIC_30TPS_PROGRESS_LOG_INTERVAL {
+                            eprintln!("realistic localnet status poll failed: {err:?}");
+                            last_log = Instant::now();
+                        }
+                    }
+                }
+
+                if submit_handle.is_finished() {
+                    break;
+                }
+                if last_progress.elapsed() >= stall_threshold {
+                    submit_handle.abort();
+                    let _ = submit_handle.await;
+                    return Err(eyre!(
+                        "realistic localnet stalled for {:?}: elapsed={:?}, submitted={}, last_min_non_empty={}, last_min_approved={}, last_snapshot={last_snapshot:?}",
+                        stall_threshold,
+                        run_start.elapsed(),
+                        submitted_counter.load(AtomicOrdering::Relaxed),
+                        last_min_non_empty,
+                        last_min_approved,
+                    ));
+                }
+                sleep(REALISTIC_30TPS_SAMPLE_INTERVAL).await;
+            }
+
+            let submit_elapsed = submit_handle
+                .await
+                .wrap_err("paced submit task join failed")??;
+            let load_end_elapsed = run_start.elapsed();
+            let load_end_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
+            let load_end_min_non_empty = load_end_statuses
+                .iter()
+                .map(|status| status.blocks_non_empty)
+                .min()
+                .unwrap_or_default();
+            let load_end_produced_blocks =
+                load_end_min_non_empty.saturating_sub(baseline_non_empty);
+            let mut after_statuses = load_end_statuses;
+            let mut drain_last_progress = Instant::now();
+            let mut drain_last_min_approved = after_statuses
+                .iter()
+                .map(|status| status.txs_approved)
+                .min()
+                .unwrap_or_default();
+            let mut drain_last_max_queue = after_statuses
+                .iter()
+                .map(|status| status.queue_size)
+                .max()
+                .unwrap_or_default();
+            while drain_last_min_approved < target_approved {
+                if drain_last_progress.elapsed() >= stall_threshold {
+                    return Err(eyre!(
+                        "realistic localnet stalled while draining after load for {:?}: load_elapsed={:?}, submitted={}, min_approved={}, target_approved={}, max_queue={}, last_statuses={after_statuses:?}",
+                        stall_threshold,
+                        load_end_elapsed,
+                        submitted_counter.load(AtomicOrdering::Relaxed),
+                        drain_last_min_approved,
+                        target_approved,
+                        drain_last_max_queue,
+                    ));
+                }
+                sleep(REALISTIC_30TPS_SAMPLE_INTERVAL).await;
+                after_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
+                let min_approved = after_statuses
+                    .iter()
+                    .map(|status| status.txs_approved)
+                    .min()
+                    .unwrap_or_default();
+                let max_queue = after_statuses
+                    .iter()
+                    .map(|status| status.queue_size)
+                    .max()
+                    .unwrap_or_default();
+                if min_approved > drain_last_min_approved || max_queue < drain_last_max_queue {
+                    drain_last_min_approved = min_approved;
+                    drain_last_max_queue = max_queue;
+                    drain_last_progress = Instant::now();
+                }
+            }
+            let min_non_empty = after_statuses
+                .iter()
+                .map(|status| status.blocks_non_empty)
+                .min()
+                .unwrap_or_default();
+            let min_approved = after_statuses
+                .iter()
+                .map(|status| status.txs_approved)
+                .min()
+                .unwrap_or_default();
+            let max_rejected = after_statuses
+                .iter()
+                .map(|status| status.txs_rejected)
+                .max()
+                .unwrap_or_default();
+            let produced_blocks = min_non_empty.saturating_sub(baseline_non_empty);
+            let load_avg_secs_per_block = if load_end_produced_blocks == 0 {
+                f64::INFINITY
+            } else {
+                load_end_elapsed.as_secs_f64() / load_end_produced_blocks as f64
+            };
+            let avg_secs_per_block = if produced_blocks == 0 {
+                f64::INFINITY
+            } else {
+                run_start.elapsed().as_secs_f64() / produced_blocks as f64
+            };
+
+            if let Ok(after_metrics) =
+                collect_metrics_snapshots(&network, &http, THROUGHPUT_METRICS_TIMEOUT).await
+            {
+                artifacts.after_metrics = after_metrics;
+            }
+            artifacts.samples = samples;
+
+            eprintln!(
+                "realistic localnet summary: load_elapsed={:?}, elapsed={:?}, submit_elapsed={:?}, submitted={}, load_end_produced_blocks={}, produced_blocks={}, min_non_empty={}, target_non_empty={}, final_min_non_empty={}, min_approved={}, target_approved={}, max_rejected={}, load_avg_secs_per_block={load_avg_secs_per_block:.3}, avg_secs_per_block={avg_secs_per_block:.3}",
+                load_end_elapsed,
+                run_start.elapsed(),
+                submit_elapsed,
+                submitted_counter.load(AtomicOrdering::Relaxed),
+                load_end_produced_blocks,
+                produced_blocks,
+                load_end_min_non_empty,
+                target_non_empty,
+                min_non_empty,
+                min_approved,
+                target_approved,
+                max_rejected,
+            );
+            ensure!(
+                load_end_min_non_empty >= target_non_empty,
+                "expected at least {target_blocks} non-empty blocks during {duration_secs}s at {target_tps} TPS before drain; produced {load_end_produced_blocks} (baseline={baseline_non_empty}, load_end_min_non_empty={load_end_min_non_empty}, final_min_non_empty={min_non_empty})"
+            );
+            ensure!(
+                load_avg_secs_per_block <= 3.0,
+                "average block interval during load exceeded 3s: load_avg_secs_per_block={load_avg_secs_per_block:.3}, load_end_produced_blocks={load_end_produced_blocks}, load_elapsed={load_end_elapsed:?}"
+            );
+            ensure!(
+                min_approved >= target_approved,
+                "not all submitted transactions were approved: min_approved={min_approved}, target_approved={target_approved}, submitted={}",
+                submitted_counter.load(AtomicOrdering::Relaxed)
+            );
+            ensure!(
+                max_rejected == 0,
+                "transactions were rejected during realistic localnet run: max_rejected={max_rejected}"
+            );
+            verify_realistic_transfer_balances(
+                &network.client(),
+                &transfer_asset_definition_id,
+                &transfer_load_accounts,
+                total_txs,
+                transfer_initial_balance,
+                transfer_max_amount,
+                rng_seed,
+            )
+            .wrap_err("realistic transfer balances did not match submitted random graph")?;
+            Ok(())
+        }
+        .await;
+
+        if let Err(err) = &run_result {
+            artifacts.error = Some(err.to_string());
+        }
+        if let Some(artifact_root) = std::env::var_os("IROHA_THROUGHPUT_ARTIFACT_DIR") {
+            let root = PathBuf::from(artifact_root);
+            let peer_logs: Vec<PeerLogInfo> = network
+                .peers()
+                .iter()
+                .enumerate()
+                .map(|(index, peer)| PeerLogInfo {
+                    index: index as u64,
+                    mnemonic: peer.mnemonic().to_string(),
+                    stdout_log: peer
+                        .latest_stdout_log_path()
+                        .map(|path| path.to_string_lossy().to_string()),
+                    stderr_log: peer
+                        .latest_stderr_log_path()
+                        .map(|path| path.to_string_lossy().to_string()),
+                })
+                .collect();
+            if let Err(err) =
+                write_throughput_artifacts(&root, &network_dir, &peer_logs, &artifacts)
+            {
+                eprintln!("throughput artifact write failed: {err:?}");
+            }
+        }
+
+        network.shutdown().await;
+        run_result
+    }
+    .await;
+
+    if let Some(previous_ttl) = previous_ttl {
+        set_env_var("IROHA_TEST_CLIENT_TTL_MS", previous_ttl);
+    } else {
+        remove_env_var("IROHA_TEST_CLIENT_TTL_MS");
+    }
+
+    if sandbox::handle_result(
+        result,
+        stringify!(permissioned_localnet_realistic_30tps_5min),
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1522,6 +2293,14 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                 .write(["network", "p2p_queue_cap_high"], 16384_i64)
                 .write(["network", "p2p_queue_cap_low"], 65536_i64)
                 .write(["network", "disconnect_on_post_overflow"], false)
+                // Keep the generated-load run focused on consensus/network stability. The
+                // default Nexus lane TEU cap is sized for live economic scheduling, not
+                // synthetic 10k-log blocks.
+                .write(["nexus", "fusion", "floor_teu"], THROUGHPUT_LANE_TEU_FLOOR)
+                .write(
+                    ["nexus", "fusion", "exit_teu"],
+                    THROUGHPUT_LANE_TEU_CAPACITY,
+                )
                 // Tighten local timeouts to keep proposal/view-change cadence bounded.
                 .write(
                     ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
@@ -1682,6 +2461,10 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             submit_parallelism: submit_parallelism as u64,
             queue_soft_limit,
             payload_bytes: payload_bytes as u64,
+            load_kind: "log".to_owned(),
+            transfer_accounts: 0,
+            transfer_initial_balance: 0,
+            transfer_max_amount: 0,
             rng_seed,
             rbc_encoding: throughput_rbc_encoding.clone(),
             rbc_data_shards: throughput_rbc_data_shards,
@@ -2200,6 +2983,14 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                 .write(["network", "p2p_queue_cap_high"], 16384_i64)
                 .write(["network", "p2p_queue_cap_low"], 65536_i64)
                 .write(["network", "disconnect_on_post_overflow"], false)
+                // Keep the generated-load run focused on consensus/network stability. The
+                // default Nexus lane TEU cap is sized for live economic scheduling, not
+                // synthetic 10k-log blocks.
+                .write(["nexus", "fusion", "floor_teu"], THROUGHPUT_LANE_TEU_FLOOR)
+                .write(
+                    ["nexus", "fusion", "exit_teu"],
+                    THROUGHPUT_LANE_TEU_CAPACITY,
+                )
                 // Give DA quorum extra breathing room under sustained load.
                 .write(
                     ["sumeragi", "advanced", "da", "quorum_timeout_multiplier"],
@@ -2325,6 +3116,10 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             submit_parallelism: submit_parallelism as u64,
             queue_soft_limit,
             payload_bytes: payload_bytes as u64,
+            load_kind: "log".to_owned(),
+            transfer_accounts: 0,
+            transfer_initial_balance: 0,
+            transfer_max_amount: 0,
             rng_seed,
             rbc_encoding: "plain".to_owned(),
             rbc_data_shards: 4,
@@ -3553,6 +4348,10 @@ struct ThroughputArtifactRecipe {
     submit_parallelism: u64,
     queue_soft_limit: u64,
     payload_bytes: u64,
+    load_kind: String,
+    transfer_accounts: u64,
+    transfer_initial_balance: u64,
+    transfer_max_amount: u64,
     rng_seed: u64,
     rbc_encoding: String,
     rbc_data_shards: u64,
@@ -3730,6 +4529,22 @@ fn write_throughput_artifacts(
         recipe_map.insert(
             "payload_bytes".to_string(),
             Value::from(recipe.payload_bytes),
+        );
+        recipe_map.insert(
+            "load_kind".to_string(),
+            Value::from(recipe.load_kind.clone()),
+        );
+        recipe_map.insert(
+            "transfer_accounts".to_string(),
+            Value::from(recipe.transfer_accounts),
+        );
+        recipe_map.insert(
+            "transfer_initial_balance".to_string(),
+            Value::from(recipe.transfer_initial_balance),
+        );
+        recipe_map.insert(
+            "transfer_max_amount".to_string(),
+            Value::from(recipe.transfer_max_amount),
         );
         recipe_map.insert("rng_seed".to_string(), Value::from(recipe.rng_seed));
         recipe_map.insert(

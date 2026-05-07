@@ -711,6 +711,57 @@ fn payload_ctx_state_mut<R>(f: impl FnOnce(&mut PayloadCtxState) -> R) -> Option
     })
 }
 
+struct DecodeStateSnapshot {
+    flags: u8,
+    flags_hint: u8,
+    flags_active: bool,
+    payload_ctx: Option<PayloadCtxState>,
+    root_span: Option<(usize, usize)>,
+}
+
+impl DecodeStateSnapshot {
+    fn capture() -> Self {
+        Self {
+            flags: get_decode_flags(),
+            flags_hint: decode_flags_hint(),
+            flags_active: decode_flags_active(),
+            payload_ctx: payload_ctx_state(),
+            root_span: payload_root_span(),
+        }
+    }
+
+    fn restore(self) {
+        set_decode_flags_raw(self.flags);
+        set_decode_flags_hint(self.flags_hint);
+        set_decode_flags_active(self.flags_active);
+        DECODE_PAYLOAD_CTX.with(|slot| *slot.borrow_mut() = self.payload_ctx);
+        DECODE_ROOT_SPAN.with(|slot| *slot.borrow_mut() = self.root_span);
+    }
+}
+
+struct IsolatedDecodeGuard {
+    snapshot: Option<DecodeStateSnapshot>,
+}
+
+impl IsolatedDecodeGuard {
+    fn enter() -> Self {
+        let snapshot = DecodeStateSnapshot::capture();
+        reset_decode_state();
+        clear_decode_root();
+        Self {
+            snapshot: Some(snapshot),
+        }
+    }
+}
+
+impl Drop for IsolatedDecodeGuard {
+    fn drop(&mut self) {
+        if let Some(snapshot) = self.snapshot.take() {
+            snapshot.restore();
+        }
+    }
+}
+
 fn record_payload_access(ptr: *const u8, len: usize) {
     if len == 0 {
         return;
@@ -6196,6 +6247,7 @@ pub fn decode_from_bytes<'a, T>(bytes: &'a [u8]) -> Result<T, Error>
 where
     T: crate::NoritoDeserialize<'a> + DecodeFromSlice<'a> + 'a,
 {
+    let _state_guard = IsolatedDecodeGuard::enter();
     let view = from_bytes_view(bytes)?;
     if view.schema() != T::schema_hash() {
         return Err(Error::SchemaMismatch);

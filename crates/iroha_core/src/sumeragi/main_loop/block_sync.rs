@@ -771,6 +771,24 @@ impl Actor {
         }
     }
 
+    fn direct_commit_qc_for_block(
+        &self,
+        block: &SignedBlock,
+    ) -> Option<crate::sumeragi::consensus::Qc> {
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        self.cached_commit_qc_for_block(block_hash, height, view)
+            .or_else(|| {
+                let world = self.state.world_view();
+                crate::block_sync::BlockSynchronizer::block_sync_qc_for_world(
+                    &world,
+                    self.config.consensus_mode,
+                    block,
+                )
+            })
+    }
+
     fn direct_commit_qc_from_block_sync_update(
         &self,
         block_hash: HashOf<BlockHeader>,
@@ -795,22 +813,34 @@ impl Actor {
         &self,
         response: &super::message::BlockBodyResponse,
     ) -> Option<crate::sumeragi::consensus::Qc> {
-        let super::message::BlockBodyData::BlockSyncUpdate(update) = &response.body else {
-            return None;
-        };
-        let header = update.block.header();
-        if update.block.hash() != response.block_hash
-            || header.height().get() != response.height
-            || header.view_change_index() != response.view
-        {
-            return None;
+        match &response.body {
+            super::message::BlockBodyData::BlockSyncUpdate(update) => {
+                let header = update.block.header();
+                if update.block.hash() != response.block_hash
+                    || header.height().get() != response.height
+                    || header.view_change_index() != response.view
+                {
+                    return None;
+                }
+                self.direct_commit_qc_from_block_sync_update(
+                    response.block_hash,
+                    response.height,
+                    response.view,
+                    update,
+                )
+                .or_else(|| self.direct_commit_qc_for_block(&update.block))
+            }
+            super::message::BlockBodyData::BlockCreated(created) => {
+                let header = created.block.header();
+                if created.block.hash() != response.block_hash
+                    || header.height().get() != response.height
+                    || header.view_change_index() != response.view
+                {
+                    return None;
+                }
+                self.direct_commit_qc_for_block(&created.block)
+            }
         }
-        self.direct_commit_qc_from_block_sync_update(
-            response.block_hash,
-            response.height,
-            response.view,
-            update,
-        )
     }
 
     fn dispatch_direct_commit_qc_companion(
@@ -835,6 +865,36 @@ impl Actor {
             BlockMessage::Qc(qc),
             /*bypass_queue*/ true,
         );
+    }
+
+    fn dispatch_commit_qc_only_fetch_response(
+        &mut self,
+        peer: PeerId,
+        block: &SignedBlock,
+    ) -> bool {
+        let block_hash = block.hash();
+        let header = block.header();
+        let height = header.height().get();
+        let view = header.view_change_index();
+        let Some(qc) = self.direct_commit_qc_for_block(block) else {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                peer = %peer,
+                "deferring commit-QC-only fetch response: commit QC unavailable"
+            );
+            return false;
+        };
+        self.dispatch_direct_commit_qc_companion(
+            peer,
+            qc,
+            block_hash,
+            height,
+            view,
+            "fetch_pending_block_commit_qc_only",
+        );
+        true
     }
 
     pub(super) fn send_block_body_response(&mut self, peer: PeerId, block: &SignedBlock) {
@@ -987,6 +1047,7 @@ impl Actor {
             );
             direct_commit_qc = self
                 .direct_commit_qc_from_block_sync_update(block_hash, height, view, update)
+                .or_else(|| self.direct_commit_qc_for_block(&update.block))
                 .map(|qc| (qc, block_hash, height, view));
             if !self.trim_block_sync_update_for_frame_cap(update) {
                 let fallback = BlockMessage::BlockCreated(super::message::BlockCreated {
@@ -1004,6 +1065,16 @@ impl Actor {
                         fallback_len,
                         "dropping oversized block sync response; BlockCreated still exceeds cap"
                     );
+                    if let Some((qc, block_hash, height, view)) = direct_commit_qc.take() {
+                        self.dispatch_direct_commit_qc_companion(
+                            peer,
+                            qc,
+                            block_hash,
+                            height,
+                            view,
+                            "fetch_pending_block_response_oversized",
+                        );
+                    }
                     return;
                 }
                 warn!(
@@ -1014,10 +1085,9 @@ impl Actor {
                     fallback_len,
                     "block sync response exceeds frame cap; sending BlockCreated instead"
                 );
-                self.dispatch_fetch_pending_block_response(peer.clone(), fallback, bypass_queue);
-                if let Some((qc, block_hash, height, view)) = direct_commit_qc {
+                if let Some((qc, block_hash, height, view)) = direct_commit_qc.take() {
                     self.dispatch_direct_commit_qc_companion(
-                        peer,
+                        peer.clone(),
                         qc,
                         block_hash,
                         height,
@@ -1025,13 +1095,22 @@ impl Actor {
                         "fetch_pending_block_response_fallback",
                     );
                 }
+                self.dispatch_fetch_pending_block_response(peer, fallback, bypass_queue);
                 return;
             }
         }
-        self.dispatch_fetch_pending_block_response(peer.clone(), msg, bypass_queue);
-        if let Some((qc, block_hash, height, view)) = direct_commit_qc {
+        if let BlockMessage::BlockCreated(created) = &msg {
+            let header = created.block.header();
+            let block_hash = created.block.hash();
+            let height = header.height().get();
+            let view = header.view_change_index();
+            direct_commit_qc = self
+                .direct_commit_qc_for_block(&created.block)
+                .map(|qc| (qc, block_hash, height, view));
+        }
+        if let Some((qc, block_hash, height, view)) = direct_commit_qc.take() {
             self.dispatch_direct_commit_qc_companion(
-                peer,
+                peer.clone(),
                 qc,
                 block_hash,
                 height,
@@ -1039,6 +1118,7 @@ impl Actor {
                 "fetch_pending_block_response",
             );
         }
+        self.dispatch_fetch_pending_block_response(peer, msg, bypass_queue);
     }
 
     pub(super) fn build_fetch_pending_block_payload(&self, block: &SignedBlock) -> BlockMessage {
@@ -1252,10 +1332,12 @@ impl Actor {
         peer: PeerId,
         priority: FetchPendingBlockPriority,
         requester_roster_proof_known: bool,
+        commit_qc_only: bool,
     ) {
         let meta = super::PendingFetchRequestMeta {
             priority,
             requester_roster_proof_known,
+            commit_qc_only,
         };
         let entry = self
             .pending
@@ -1267,6 +1349,7 @@ impl Actor {
             .and_modify(|stored| {
                 stored.priority = stored.priority.max(meta.priority);
                 stored.requester_roster_proof_known |= meta.requester_roster_proof_known;
+                stored.commit_qc_only |= meta.commit_qc_only;
             })
             .or_insert(meta);
     }
@@ -1279,6 +1362,26 @@ impl Actor {
             .insert(peer);
     }
 
+    fn should_stash_pending_block_body_request(&self, height: u64) -> bool {
+        let committed_height = self.committed_height_snapshot();
+        let max_forward = self.recovery_missing_request_stale_height_margin().max(1);
+        height >= committed_height.saturating_add(1)
+            && height <= committed_height.saturating_add(max_forward)
+    }
+
+    fn remove_pending_block_body_requester(
+        &mut self,
+        block_hash: &HashOf<BlockHeader>,
+        peer: &PeerId,
+    ) {
+        if let Some(requesters) = self.pending.pending_block_body_requests.get_mut(block_hash) {
+            requesters.remove(peer);
+            if requesters.is_empty() {
+                self.pending.pending_block_body_requests.remove(block_hash);
+            }
+        }
+    }
+
     fn send_fetch_pending_block_responses(
         &mut self,
         peers: BTreeMap<PeerId, super::PendingFetchRequestMeta>,
@@ -1287,6 +1390,27 @@ impl Actor {
         allow_highest_qc_bypass: bool,
         allow_hintless_block_sync_bypass: bool,
     ) {
+        if peers.is_empty() {
+            return;
+        }
+        let block_hash = block.hash();
+        let mut payload_peers = BTreeMap::new();
+        for (peer, meta) in peers {
+            if meta.commit_qc_only {
+                if !self.dispatch_commit_qc_only_fetch_response(peer.clone(), block) {
+                    self.stash_pending_fetch_request(
+                        block_hash,
+                        peer,
+                        meta.priority,
+                        meta.requester_roster_proof_known,
+                        true,
+                    );
+                }
+            } else {
+                payload_peers.insert(peer, meta);
+            }
+        }
+        let peers = payload_peers;
         if peers.is_empty() {
             return;
         }
@@ -4394,9 +4518,11 @@ impl Actor {
             priority: request_priority,
         };
         let requester_roster_proof_known = request.requester_roster_proof_known.unwrap_or(false);
+        let commit_qc_only = request.commit_qc_only.unwrap_or(false);
         let request_meta = super::PendingFetchRequestMeta {
             priority: request_priority,
             requester_roster_proof_known,
+            commit_qc_only,
         };
         let force_bypass_queue = false;
         let mut invalid_payload = false;
@@ -4432,6 +4558,7 @@ impl Actor {
                     stored.priority = stored.priority.max(request_meta.priority);
                     stored.requester_roster_proof_known |=
                         request_meta.requester_roster_proof_known;
+                    stored.commit_qc_only |= request_meta.commit_qc_only;
                 })
                 .or_insert(request_meta);
             self.send_fetch_pending_block_responses(
@@ -4467,6 +4594,7 @@ impl Actor {
                     stored.priority = stored.priority.max(request_meta.priority);
                     stored.requester_roster_proof_known |=
                         request_meta.requester_roster_proof_known;
+                    stored.commit_qc_only |= request_meta.commit_qc_only;
                 })
                 .or_insert(request_meta);
             self.send_fetch_pending_block_responses(
@@ -4495,6 +4623,7 @@ impl Actor {
                     stored.priority = stored.priority.max(request_meta.priority);
                     stored.requester_roster_proof_known |=
                         request_meta.requester_roster_proof_known;
+                    stored.commit_qc_only |= request_meta.commit_qc_only;
                 })
                 .or_insert(request_meta);
             self.send_fetch_pending_block_responses(
@@ -4518,6 +4647,7 @@ impl Actor {
                         stored.priority = stored.priority.max(request_meta.priority);
                         stored.requester_roster_proof_known |=
                             request_meta.requester_roster_proof_known;
+                        stored.commit_qc_only |= request_meta.commit_qc_only;
                     })
                     .or_insert(request_meta);
                 let response = self.build_fetch_pending_block_payload(block);
@@ -4558,6 +4688,7 @@ impl Actor {
                 peer,
                 request_priority,
                 requester_roster_proof_known,
+                commit_qc_only,
             );
         }
 
@@ -4611,6 +4742,7 @@ impl Actor {
                     request.view,
                     payload,
                 );
+                self.remove_pending_block_body_requester(&block_hash, &peer);
                 self.dispatch_block_body_response_with_plain_fallback(
                     peer,
                     block.as_ref(),
@@ -4620,13 +4752,26 @@ impl Actor {
                 return Ok(());
             }
         }
+        let mut stashed_on_frontier_slot = false;
         if let Some(slot) = self.frontier_slot.as_mut()
             && slot.block_hash == block_hash
             && slot.height == request.height
             && slot.view == request.view
         {
-            slot.repair_state.pending_requesters.insert(peer);
+            slot.repair_state.pending_requesters.insert(peer.clone());
             slot.sync_compat_fields();
+            stashed_on_frontier_slot = true;
+        }
+        if !stashed_on_frontier_slot && self.should_stash_pending_block_body_request(request.height)
+        {
+            debug!(
+                height = request.height,
+                view = request.view,
+                block = %block_hash,
+                peer = %peer,
+                "stashing exact body requester until local payload becomes available"
+            );
+            self.stash_pending_block_body_request(block_hash, peer);
         }
         self.release_block_payload_dedup(&dedup_key);
         self.record_consensus_message_handling(
@@ -4724,7 +4869,7 @@ impl Actor {
             block_hash: response.block_hash,
             evidence_hash: super::block_body_response_evidence_hash(&response),
         };
-        let detached_commit_qc = self.direct_commit_qc_from_block_body_response(&response);
+        let mut detached_commit_qc = self.direct_commit_qc_from_block_body_response(&response);
         if !self.frontier_slot_is_exact_height(response.height) {
             self.handle_detached_block_body_commit_qc(
                 detached_commit_qc,
@@ -4830,6 +4975,25 @@ impl Actor {
                 && slot.height == response.height
                 && slot.view == response.view
         });
+        let missing_commit_qc_repair_pending = self.missing_commit_qc_request_pending_for_round(
+            response.block_hash,
+            response.height,
+            response.view,
+        );
+        if body_materialized
+            && missing_commit_qc_repair_pending
+            && self
+                .cached_commit_qc_for_block(response.block_hash, response.height, response.view)
+                .is_none()
+        {
+            self.handle_detached_block_body_commit_qc(
+                detached_commit_qc.take(),
+                response.block_hash,
+                response.height,
+                response.view,
+                "materialized_body",
+            );
+        }
         if body_materialized {
             let queue_depths = super::status::worker_queue_depth_snapshot();
             info!(
@@ -4858,13 +5022,7 @@ impl Actor {
             // Plain exact-body fallbacks share the dedup key with their
             // QC-bearing companion. While commit-QC repair is pending, release
             // the key so the certificate response is still admitted.
-            if plain_body_response
-                && self.missing_commit_qc_request_pending_for_round(
-                    response.block_hash,
-                    response.height,
-                    response.view,
-                )
-            {
+            if plain_body_response && missing_commit_qc_repair_pending {
                 self.release_block_payload_dedup(&dedup_key);
             }
         } else {
@@ -4949,6 +5107,7 @@ impl Actor {
         self.deferred_block_sync_updates
             .remove(&(block_height, block_view, block_hash));
         self.flush_frontier_body_requesters(block);
+        self.flush_pending_block_body_requests_if_ready(block);
         self.flush_pending_fetch_requests(block);
         self.clear_missing_block_request(&block_hash, MissingBlockClearReason::PayloadAvailable);
         self.clear_missing_block_view_change(&block_hash);

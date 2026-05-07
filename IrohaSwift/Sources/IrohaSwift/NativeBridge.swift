@@ -4897,7 +4897,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             return
         }
         guard let setAccelerationConfigFn else {
-            preconditionFailure("Required native symbol missing: connect_norito_set_acceleration_config")
+            return
         }
 
         func encodeOptional(_ value: Int?) -> (UInt64, UInt8) {
@@ -4944,7 +4944,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             return nil
         }
         guard let getAccelerationConfigFn else {
-            preconditionFailure("Required native symbol missing: connect_norito_get_acceleration_config")
+            return nil
         }
 
         var native = ConnectNoritoAccelerationConfig(
@@ -4981,7 +4981,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             return nil
         }
         guard let getAccelerationStateFn else {
-            preconditionFailure("Required native symbol missing: connect_norito_get_acceleration_state")
+            return nil
         }
 
         var native = ConnectNoritoAccelerationState(

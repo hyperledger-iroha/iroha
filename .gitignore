@@ -184,6 +184,8 @@ test_*
 !ci/tests/test_check_tests_guard.py
 
 integration_tests/integration_tests/.tmp-tests*
+/integration_tests/artifacts/
+/integration_tests/integration_tests/artifacts/
 target-codex/*
 target-codex-*/
 target-codex-run*/

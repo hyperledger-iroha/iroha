@@ -141,6 +141,33 @@ pub(super) fn spawn_validation_workers(
 
 impl Actor {
     const SUPERSEDED_VALIDATION_RESULT_CAP: usize = 4_096;
+    const FAST_FINALITY_INLINE_VALIDATION_TX_CAP: usize = 16;
+
+    fn fast_finality_inline_validation_tx_count(
+        &self,
+        hash: HashOf<BlockHeader>,
+        pending: &PendingBlock,
+        local_height: u64,
+        validation_priority_reason: Option<&'static str>,
+    ) -> Option<usize> {
+        if !self.runtime_da_enabled() || validation_priority_reason.is_some() {
+            return None;
+        }
+        if pending.height != local_height.saturating_add(1) {
+            return None;
+        }
+        if !self.slot_has_proposal_evidence(pending.height, pending.view) {
+            return None;
+        }
+        if self.subsystems.validation.inflight.contains_key(&hash) {
+            return None;
+        }
+        if !Self::local_payload_matches_hash(&pending.block, &pending.payload_hash) {
+            return None;
+        }
+        let tx_count = pending.block.external_entrypoints_cloned().count();
+        (tx_count <= Self::FAST_FINALITY_INLINE_VALIDATION_TX_CAP).then_some(tx_count)
+    }
 
     fn replay_cached_precommit_qc_for_valid_block(
         &mut self,
@@ -402,12 +429,25 @@ impl Actor {
                 .pending_block_commit_votes_count(hash, pending.height, pending.view)
                 .saturating_add(1)
                 >= topology.min_votes_for_commit().max(1);
+        let inline_tx_count = matches!(dispatch, ValidationDispatch::TryWorker)
+            .then(|| {
+                self.fast_finality_inline_validation_tx_count(
+                    hash,
+                    &pending,
+                    local_height,
+                    validation_priority_reason,
+                )
+            })
+            .flatten();
         let dispatch = if matches!(dispatch, ValidationDispatch::TryWorker)
             && (matches!(validation_priority_reason, Some("commit_qc" | "cached_qc"))
-                || near_quorum_commit_votes)
+                || near_quorum_commit_votes
+                || inline_tx_count.is_some())
         {
             let reason = if near_quorum_commit_votes {
                 Some("commit_votes_near_quorum")
+            } else if inline_tx_count.is_some() {
+                Some("small_fast_finality_block")
             } else {
                 validation_priority_reason
             };
@@ -416,6 +456,7 @@ impl Actor {
                 view = pending.view,
                 block = %hash,
                 reason,
+                tx_count = inline_tx_count,
                 "forcing inline validation for pending block with fast-finality evidence"
             );
             ValidationDispatch::Inline

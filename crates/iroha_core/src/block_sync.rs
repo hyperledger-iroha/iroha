@@ -4259,6 +4259,18 @@ pub mod message {
         }
     }
 
+    fn get_blocks_after_response_priority(
+        prev_hash: &Option<HashOf<BlockHeader>>,
+        latest_hash: &Option<HashOf<BlockHeader>>,
+        seen_blocks: &BTreeSet<HashOf<BlockHeader>>,
+    ) -> iroha_p2p::Priority {
+        if prev_hash.is_some() && latest_hash.is_some() && seen_blocks.is_empty() {
+            iroha_p2p::Priority::High
+        } else {
+            iroha_p2p::Priority::Low
+        }
+    }
+
     fn roster_metadata_has_hints(metadata: &RosterMetadata) -> bool {
         metadata.commit_qc.is_some() || metadata.validator_checkpoint.is_some()
     }
@@ -5617,6 +5629,8 @@ pub mod message {
                         let mut blocks = blocks;
                         let mut qcs = qcs;
                         let mut rosters = rosters;
+                        let response_priority =
+                            get_blocks_after_response_priority(prev_hash, latest_hash, seen_blocks);
                         if !Self::trim_share_blocks_to_frame_cap(
                             block_sync.peer.id(),
                             peer_id,
@@ -5634,7 +5648,11 @@ pub mod message {
                             qcs,
                             rosters,
                         ))
-                        .send_to(&block_sync.network, peer_id.clone())
+                        .send_to_with_priority(
+                            &block_sync.network,
+                            peer_id.clone(),
+                            response_priority,
+                        )
                         .await;
                     }
                 }
@@ -5831,11 +5849,24 @@ pub mod message {
         #[iroha_futures::telemetry_future]
         #[log("TRACE")]
         pub(super) async fn send_to(self, network: &IrohaNetwork, peer: PeerId) {
+            self.send_to_with_priority(network, peer, iroha_p2p::Priority::Low)
+                .await;
+        }
+
+        /// Send this message over the network to the specified `peer` with an explicit priority.
+        #[iroha_futures::telemetry_future]
+        #[log("TRACE")]
+        pub(super) async fn send_to_with_priority(
+            self,
+            network: &IrohaNetwork,
+            peer: PeerId,
+            priority: iroha_p2p::Priority,
+        ) {
             let data = NetworkMessage::BlockSync(Box::new(self));
             network.post(iroha_p2p::Post {
                 data,
                 peer_id: peer.clone(),
-                priority: iroha_p2p::Priority::Low,
+                priority,
             });
         }
     }
@@ -6464,6 +6495,36 @@ pub mod message {
                 assert_eq!(update.commit_qc, Some(commit_qc));
                 assert_eq!(update.validator_checkpoint, Some(checkpoint));
             });
+        }
+
+        #[test]
+        fn anchored_empty_seen_get_blocks_after_response_is_high_priority() {
+            let prev_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xA1; Hash::LENGTH]));
+            let latest_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xA2; Hash::LENGTH]));
+            assert_eq!(
+                get_blocks_after_response_priority(
+                    &Some(prev_hash),
+                    &Some(latest_hash),
+                    &BTreeSet::new(),
+                ),
+                iroha_p2p::Priority::High,
+                "directed recovery pulls must not put committed catch-up responses on the low lane"
+            );
+
+            assert_eq!(
+                get_blocks_after_response_priority(
+                    &Some(prev_hash),
+                    &Some(latest_hash),
+                    &BTreeSet::from([latest_hash]),
+                ),
+                iroha_p2p::Priority::Low,
+                "normal latest-block gossip carries seen hashes and should stay low priority"
+            );
+            assert_eq!(
+                get_blocks_after_response_priority(&None, &Some(latest_hash), &BTreeSet::new()),
+                iroha_p2p::Priority::Low,
+                "unanchored probes should not be promoted"
+            );
         }
 
         #[test]

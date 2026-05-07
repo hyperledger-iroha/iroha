@@ -1183,6 +1183,8 @@ fn minimal_config_snapshot() {
                 },
                 block: SumeragiBlock {
                     max_transactions: None,
+                    fast_finality_max_transactions:
+                        defaults::sumeragi::FAST_FINALITY_MAX_TRANSACTIONS,
                     fast_gas_limit_per_block: None,
                     max_payload_bytes: None,
                     proposal_queue_scan_multiplier: 4,
@@ -3777,6 +3779,42 @@ fn fraud_monitoring_config_overrides_and_defaults() {
     assert_eq!(fraud.request_timeout, Duration::from_millis(1_800));
     assert_eq!(fraud.missing_assessment_grace, Duration::from_secs(5),);
     assert_eq!(fraud.required_minimum_band, Some(FraudRiskBand::Medium));
+}
+
+#[test]
+fn sumeragi_fast_finality_max_transactions_env_parses() {
+    let default_cfg = ConfigReader::new()
+        .with_env(MockEnv::new())
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<UserConfig>()
+        .expect("read user config")
+        .parse()
+        .expect("parse actual config");
+    assert_eq!(
+        default_cfg
+            .sumeragi
+            .block
+            .fast_finality_max_transactions
+            .map(|cap| cap.get()),
+        None
+    );
+
+    let cfg = ConfigReader::new()
+        .with_env(MockEnv::new().set("SUMERAGI_BLOCK_FAST_FINALITY_MAX_TRANSACTIONS", "256"))
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<UserConfig>()
+        .expect("read user config")
+        .parse()
+        .expect("parse actual config with env");
+    assert_eq!(
+        cfg.sumeragi
+            .block
+            .fast_finality_max_transactions
+            .map(|cap| cap.get()),
+        Some(256)
+    );
 }
 
 #[test]

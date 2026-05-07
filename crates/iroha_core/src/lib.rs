@@ -306,12 +306,10 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
         use iroha_p2p::network::message::Topic as T;
         match self {
             NetworkMessage::SumeragiBlock(msg) => match msg.as_ref().as_ref() {
-                BlockMessage::BlockCreated(_)
-                | BlockMessage::FetchBlockBody(_)
+                BlockMessage::FetchBlockBody(_)
                 | BlockMessage::FetchPendingBlock(_)
                 | BlockMessage::RbcInitRequest(_)
                 | BlockMessage::RbcChunkRequest(_)
-                | BlockMessage::RbcInit(_)
                 | BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_)
                 | BlockMessage::ConsensusParams(_)
@@ -323,9 +321,10 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 | BlockMessage::QcVote(_)
                 | BlockMessage::VrfCommit(_)
                 | BlockMessage::VrfReveal(_) => T::Consensus,
-                BlockMessage::BlockSyncUpdate(_) | BlockMessage::BlockBodyResponse(_) => {
-                    T::ConsensusPayload
-                }
+                BlockMessage::BlockCreated(_)
+                | BlockMessage::BlockSyncUpdate(_)
+                | BlockMessage::BlockBodyResponse(_)
+                | BlockMessage::RbcInit(_) => T::ConsensusPayload,
                 BlockMessage::RbcChunk(_) | BlockMessage::RbcChunkCompact(_) => T::ConsensusChunk,
             },
             NetworkMessage::SumeragiControlFlow(_)
@@ -747,7 +746,7 @@ mod tests {
                 frontier: None,
             }),
         )));
-        assert_eq!(created.topic(), NetworkTopic::Consensus);
+        assert_eq!(created.topic(), NetworkTopic::ConsensusPayload);
 
         let fetch = FetchPendingBlock {
             requester: PeerId::from(KeyPair::random().public_key().clone()),
@@ -756,6 +755,7 @@ mod tests {
             view: 0,
             priority: None,
             requester_roster_proof_known: None,
+            commit_qc_only: None,
         };
         let fetch_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
             BlockMessage::FetchPendingBlock(fetch),
@@ -792,7 +792,7 @@ mod tests {
         let init_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
             BlockMessage::RbcInit(init),
         )));
-        assert_eq!(init_msg.topic(), NetworkTopic::Consensus);
+        assert_eq!(init_msg.topic(), NetworkTopic::ConsensusPayload);
 
         let chunk = RbcChunk {
             block_hash,
