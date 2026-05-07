@@ -319,6 +319,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 | BlockMessage::Proposal(_)
                 | BlockMessage::Qc(_)
                 | BlockMessage::QcVote(_)
+                | BlockMessage::VNext(_)
                 | BlockMessage::VrfCommit(_)
                 | BlockMessage::VrfReveal(_) => T::Consensus,
                 BlockMessage::BlockSyncUpdate(_) | BlockMessage::BlockBodyResponse(_) => {

@@ -48,6 +48,9 @@ const DIGEST_FINALIZE_PARALLEL_THRESHOLD: usize = 32;
 const DIGEST_FINALIZE_GPU_THRESHOLD: usize = 64;
 const POSEIDON_DIGEST_WORDS_PER_TRANSCRIPT_HINT: usize = 24;
 static DIGEST_ACCELERATION_ENABLED: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static DIGEST_ACCELERATION_TEST_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
 
 /// Base fields for FASTPQ public inputs shared across batches in a block.
 #[derive(Debug, Clone, Copy)]
@@ -1996,12 +1999,17 @@ mod tests {
 
     struct DigestAccelerationGuard {
         previous: bool,
+        _lock: std::sync::MutexGuard<'static, ()>,
     }
 
     impl DigestAccelerationGuard {
         fn new() -> Self {
+            let lock = super::DIGEST_ACCELERATION_TEST_LOCK
+                .lock()
+                .expect("digest acceleration test lock poisoned");
             Self {
                 previous: poseidon_digest_acceleration_enabled(),
+                _lock: lock,
             }
         }
     }

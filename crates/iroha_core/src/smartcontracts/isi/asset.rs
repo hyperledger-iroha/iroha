@@ -85,13 +85,19 @@ pub mod isi {
         ) -> Result<(), Error> {
             let resolved_id = self.resolve_asset_id_for_current_scope(id)?;
             ensure_non_negative(amount)?;
-            let dst = self.asset_or_insert(&resolved_id, Numeric::zero())?;
-            let q: &mut Numeric = &mut *dst;
-            ensure_non_negative(q)?;
-            *q = q
-                .clone()
-                .checked_add(amount.clone())
-                .ok_or(MathError::Overflow)?;
+            let is_nonzero = {
+                let dst = self.asset_or_insert(&resolved_id, Numeric::zero())?;
+                let q: &mut Numeric = &mut *dst;
+                ensure_non_negative(q)?;
+                *q = q
+                    .clone()
+                    .checked_add(amount.clone())
+                    .ok_or(MathError::Overflow)?;
+                !q.is_zero()
+            };
+            if is_nonzero {
+                self.track_nonzero_asset_holder(&resolved_id);
+            }
             Ok(())
         }
     }
@@ -1003,6 +1009,11 @@ pub mod isi {
                 .ok_or(MathError::Overflow)?;
             ensure_non_negative(&to_balance_after)?;
             **dst = to_balance_after.clone();
+        }
+        if !to_balance_after.is_zero() {
+            state_transaction
+                .world
+                .track_nonzero_asset_holder(destination_id);
         }
 
         Ok(TransferDeltaTranscript {

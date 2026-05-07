@@ -1267,6 +1267,13 @@ fn minimal_config_snapshot() {
                     max_parallel_topology_fanout: 8,
                     status_query_reserved_capacity: 1024,
                 },
+                vnext: SumeragiVNext {
+                    performance_window_samples: 128,
+                    suspicion_timeout: 750ms,
+                    performance_threshold_bps: 1100,
+                    max_tainted_per_view: 2,
+                    rechain_cooldown: 250ms,
+                },
                 da: SumeragiDa {
                     enabled: true,
                     quorum_timeout_multiplier: 2,
@@ -4096,6 +4103,57 @@ fn da_timeout_multiplier_validation_propagates() {
     assert_contains!(
         message,
         "sumeragi.advanced.da.availability_timeout_multiplier must be greater than zero"
+    );
+}
+
+#[test]
+fn sumeragi_vnext_env_overrides_parse() {
+    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
+    use iroha_config_base::{env::MockEnv, read::ConfigReader};
+
+    let env = MockEnv::new()
+        .set("SUMERAGI_VNEXT_PERFORMANCE_WINDOW_SAMPLES", "17")
+        .set("SUMERAGI_VNEXT_SUSPICION_TIMEOUT_MS", "321")
+        .set("SUMERAGI_VNEXT_PERFORMANCE_THRESHOLD_BPS", "1200")
+        .set("SUMERAGI_VNEXT_MAX_TAINTED_PER_VIEW", "3")
+        .set("SUMERAGI_VNEXT_RECHAIN_COOLDOWN_MS", "77");
+    let cfg: Actual = ConfigReader::new()
+        .with_env(env)
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<User>()
+        .expect("read user config with env")
+        .parse()
+        .expect("actual config with vNext env");
+
+    assert_eq!(cfg.sumeragi.vnext.performance_window_samples, 17);
+    assert_eq!(
+        cfg.sumeragi.vnext.suspicion_timeout,
+        Duration::from_millis(321)
+    );
+    assert_eq!(cfg.sumeragi.vnext.performance_threshold_bps, 1200);
+    assert_eq!(cfg.sumeragi.vnext.max_tainted_per_view, 3);
+    assert_eq!(
+        cfg.sumeragi.vnext.rechain_cooldown,
+        Duration::from_millis(77)
+    );
+}
+
+#[test]
+fn sumeragi_vnext_validation_propagates() {
+    let env = MockEnv::new().set("SUMERAGI_VNEXT_SUSPICION_TIMEOUT_MS", "0");
+    let report = ConfigReader::new()
+        .with_env(env)
+        .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+        .expect("user config should load")
+        .read_and_complete::<UserConfig>()
+        .expect("user config view")
+        .parse()
+        .expect_err("parse should fail for invalid vNext timeout");
+    let message = format!("{report:?}");
+    assert_contains!(
+        message,
+        "sumeragi.advanced.vnext.suspicion_timeout_ms must be greater than zero"
     );
 }
 

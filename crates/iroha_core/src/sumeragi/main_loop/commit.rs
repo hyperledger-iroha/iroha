@@ -3035,20 +3035,50 @@ impl Actor {
                     .map(|pending| (pending.height, pending.view, pending.age()))
                 {
                     let mut should_inline_validation = false;
-                    if let Some(inflight_elapsed) = self.validation_inflight_elapsed(hash) {
-                        if inflight_elapsed >= inline_fallback_timeout {
+                    if self.validation_inflight_elapsed(hash).is_some() {
+                        if let Some(reason) =
+                            self.validation_inflight_inline_reason(hash, pending_height_snapshot)
+                        {
                             if self.supersede_validation_inflight(hash).is_some() {
-                                warn!(
-                                    height = pending_height_snapshot,
-                                    view = pending_view_snapshot,
-                                    block = %hash,
-                                    inflight_elapsed_ms = inflight_elapsed.as_millis(),
-                                    inline_fallback_timeout_ms =
-                                        inline_fallback_timeout.as_millis(),
-                                    "validation inflight exceeded inline fallback timeout; forcing inline pre-vote validation"
-                                );
+                                match reason {
+                                    super::validation::ValidationInflightInlineReason::WorkerDisconnected => {
+                                        warn!(
+                                            height = pending_height_snapshot,
+                                            view = pending_view_snapshot,
+                                            block = %hash,
+                                            "validation worker channel disconnected; forcing inline pre-vote validation"
+                                        );
+                                    }
+                                    super::validation::ValidationInflightInlineReason::StaleFrontier {
+                                        frontier_generation,
+                                    } => {
+                                        warn!(
+                                            height = pending_height_snapshot,
+                                            view = pending_view_snapshot,
+                                            block = %hash,
+                                            frontier_generation,
+                                            "validation inflight frontier generation is stale; forcing inline pre-vote validation"
+                                        );
+                                    }
+                                    super::validation::ValidationInflightInlineReason::Stalled {
+                                        elapsed,
+                                        stall_timeout,
+                                    } => {
+                                        warn!(
+                                            height = pending_height_snapshot,
+                                            view = pending_view_snapshot,
+                                            block = %hash,
+                                            inflight_elapsed_ms = elapsed.as_millis(),
+                                            worker_stall_timeout_ms = stall_timeout.as_millis(),
+                                            validation_duration_ema_ms = self
+                                                .validation_duration_ema()
+                                                .map(|duration| duration.as_millis()),
+                                            "validation inflight exceeded worker stall timeout; forcing inline pre-vote validation"
+                                        );
+                                    }
+                                }
+                                should_inline_validation = true;
                             }
-                            should_inline_validation = true;
                         }
                     } else if pending_age >= inline_fallback_timeout {
                         // No worker accepted the validation task (typically queue-full); avoid
@@ -3496,6 +3526,44 @@ impl Actor {
                         rbc_invalid = rbc_log.as_ref().map(|entry| entry.6),
                         trigger = ?trigger,
                         "precommit gating past fast timeout"
+                    );
+                }
+            }
+
+            if enable_qc_pipeline
+                && pending.local_commit_vote_emitted()
+                && !pending.commit_qc_observed()
+                && !missing_local_data
+                && pending.validation_status == ValidationStatus::Valid
+                && pending_age >= fast_timeout
+                && pending_extends_tip(
+                    pending_height,
+                    pending.block.header().prev_block_hash(),
+                    self.state.committed_height(),
+                    self.state.latest_block_hash_fast(),
+                )
+            {
+                let recovery_targets = self.known_block_commit_qc_recovery_targets(
+                    hash,
+                    pending_height,
+                    pending_view,
+                    &commit_topology,
+                );
+                if self.maybe_request_known_block_commit_qc_recovery(
+                    hash,
+                    pending_height,
+                    pending_view,
+                    &recovery_targets,
+                    Some(&pending),
+                    "commit_pipeline_local_vote_missing_commit_qc",
+                ) {
+                    debug!(
+                        height = pending_height,
+                        view = pending_view,
+                        block = %hash,
+                        pending_age_ms,
+                        fast_timeout_ms = fast_timeout.as_millis(),
+                        "arming known-block commit-QC recovery for locally voted pending block"
                     );
                 }
             }

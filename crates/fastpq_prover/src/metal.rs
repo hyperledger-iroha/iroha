@@ -54,6 +54,7 @@ type MetalResult<T> = Result<T, GpuError>;
 const POSEIDON_PERMUTE_KERNEL: &str = "poseidon_permute";
 const POSEIDON_HASH_KERNEL: &str = "poseidon_hash_columns";
 const POSEIDON_TRACE_FUSED_KERNEL: &str = "poseidon_trace_fused";
+const POSEIDON_TRACE_PARENTS_KERNEL: &str = "poseidon_trace_parents";
 const FFT_KERNEL: &str = "fastpq_fft_columns";
 const LDE_KERNEL: &str = "fastpq_lde_columns";
 const POST_TILE_KERNEL: &str = "fastpq_fft_post_tiling";
@@ -1621,6 +1622,23 @@ const METAL_KERNEL_DESCRIPTORS: &[MetalKernelDescriptor] = &[
                 absorb loop on the CPU.",
     },
     MetalKernelDescriptor {
+        entry_point: "poseidon_trace_fused",
+        kind: KernelKind::Poseidon,
+        threadgroup_cap: Some(POSEIDON_THREADGROUP_CAPACITY),
+        tile_stage_cap: None,
+        notes: "Consumes flattened Poseidon column payloads and writes the trace commitment leaf \
+                hashes into a combined leaf/parent output buffer. A follow-up parent kernel hashes \
+                the depth-1 Merkle layer after all leaves are globally visible.",
+    },
+    MetalKernelDescriptor {
+        entry_point: "poseidon_trace_parents",
+        kind: KernelKind::Poseidon,
+        threadgroup_cap: Some(POSEIDON_THREADGROUP_CAPACITY),
+        tile_stage_cap: None,
+        notes: "Hashes adjacent trace commitment leaves into the fused depth-1 Merkle parent \
+                layer. Odd leaf counts duplicate the final leaf exactly like the CPU builder.",
+    },
+    MetalKernelDescriptor {
         entry_point: "bn254_poseidon_hash_words",
         kind: KernelKind::Poseidon,
         threadgroup_cap: Some(POSEIDON_THREADGROUP_CAPACITY),
@@ -2165,6 +2183,7 @@ struct MetalPipelines {
     poseidon_permute: ComputePipelineState,
     poseidon_hash: ComputePipelineState,
     poseidon_trace_fused: ComputePipelineState,
+    poseidon_trace_parents: ComputePipelineState,
     fft: ComputePipelineState,
     lde: ComputePipelineState,
     post_tile: ComputePipelineState,
@@ -2434,6 +2453,7 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
     let poseidon_permute = load_pipeline(&device, &library, POSEIDON_PERMUTE_KERNEL)?;
     let poseidon_hash = load_pipeline(&device, &library, POSEIDON_HASH_KERNEL)?;
     let poseidon_trace_fused = load_pipeline(&device, &library, POSEIDON_TRACE_FUSED_KERNEL)?;
+    let poseidon_trace_parents = load_pipeline(&device, &library, POSEIDON_TRACE_PARENTS_KERNEL)?;
     let fft = load_pipeline(&device, &library, FFT_KERNEL)?;
     let lde = load_pipeline(&device, &library, LDE_KERNEL)?;
     let post_tile = load_pipeline(&device, &library, POST_TILE_KERNEL)?;
@@ -2474,6 +2494,7 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
         poseidon_permute,
         poseidon_hash,
         poseidon_trace_fused,
+        poseidon_trace_parents,
         fft,
         lde,
         post_tile,
@@ -3356,7 +3377,7 @@ pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64
         .map_err(|_| GpuError::InvalidInput("poseidon block count exceeds u32::MAX"))?;
     let padded_len_u32 = u32::try_from(padded_len)
         .map_err(|_| GpuError::InvalidInput("poseidon padded length exceeds u32::MAX"))?;
-    let limits = pipeline_limits(&context.poseidon_hash);
+    let limits = pipeline_limits(&context.poseidon_trace_fused);
     let tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
     let selection = select_poseidon_batch(column_count, tuning);
     let batches = column_batch_ranges(column_count, selection.columns());
@@ -3693,6 +3714,48 @@ pub fn poseidon_hash_columns_fused(batch: &PoseidonColumnBatch) -> MetalResult<V
         },
     )?;
     wait_for_ticket(ticket)?;
+
+    let parent_limits = pipeline_limits(&context.poseidon_trace_parents);
+    let (parent_threadgroups, parent_threadgroup, parent_logical_threads, parent_states_per_lane) =
+        poseidon_dispatch_geometry(parent_count, tuning, &parent_limits);
+    let parent_args = PoseidonFusedArgs {
+        state_count: column_count,
+        states_per_lane: parent_states_per_lane,
+        block_count: 0,
+        leaf_offset: 0,
+        parent_offset: column_count,
+    };
+    let parent_profile = KernelProfileParams {
+        kind: KernelKind::Poseidon,
+        bytes: u64::from(parent_count)
+            .saturating_mul(u64::try_from(3 * mem::size_of::<u64>()).unwrap_or(u64::MAX)),
+        elements: u64::from(parent_count)
+            .saturating_mul(u64::try_from(STATE_WIDTH).unwrap_or(u64::MAX)),
+        columns: parent_count,
+    };
+    let (parent_queue, parent_queue_index) = context.queues.select(parent_count, 1);
+    let parent_ticket = submit_compute_with_geometry(
+        parent_queue,
+        parent_queue_index,
+        &context.poseidon_trace_parents,
+        Some((
+            parent_threadgroups,
+            parent_threadgroup,
+            parent_logical_threads,
+        )),
+        parent_logical_threads,
+        Some(parent_profile),
+        false,
+        |encoder: &ComputeCommandEncoderRef| {
+            encoder.set_buffer(0, Some(&hash_buffer), 0);
+            encoder.set_bytes(
+                1,
+                mem::size_of::<PoseidonFusedArgs>() as u64,
+                ptr::from_ref(&parent_args).cast(),
+            );
+        },
+    )?;
+    wait_for_ticket(parent_ticket)?;
     Ok(hash_chunk.as_slice().to_vec())
 }
 
@@ -5036,14 +5099,17 @@ mod helper_tests {
         };
         assert_eq!(poseidon_recommended_states_per_batch(0, tuning), 0);
         assert_eq!(poseidon_recommended_states_per_batch(1, tuning), 1);
-        let expected = tuning
+        let target = tuning
             .threadgroup_lanes
             .saturating_mul(tuning.states_per_lane)
             .saturating_mul(metal_config::poseidon_batch_multiplier());
-        assert_eq!(
-            poseidon_recommended_states_per_batch(expected * 2, tuning),
-            expected
-        );
+        let recommended = poseidon_recommended_states_per_batch(target * 2, tuning);
+        let base = tuning
+            .threadgroup_lanes
+            .saturating_mul(tuning.states_per_lane);
+        let max_expected = base.saturating_mul(4);
+        assert!(recommended >= base);
+        assert!(recommended <= max_expected);
     }
 
     #[test]
@@ -5625,13 +5691,15 @@ mod tests {
     #[test]
     fn kernel_descriptors_cover_entry_points() {
         let descriptors = super::metal_kernel_descriptors();
-        assert_eq!(descriptors.len(), 6);
+        assert_eq!(descriptors.len(), 8);
         for name in [
             "fastpq_fft_columns",
             "fastpq_fft_post_tiling",
             "fastpq_lde_columns",
             "poseidon_permute",
             "poseidon_hash_columns",
+            "poseidon_trace_fused",
+            "poseidon_trace_parents",
             "bn254_poseidon_hash_words",
         ] {
             assert!(

@@ -420,9 +420,6 @@ kernel void poseidon_trace_fused(device const ulong *payloads [[ buffer(0) ]],
     uint state_offset = grid_pos.x * states_per_lane;
     thread ulong3 chunk[STATE_CHUNK];
     uint processed = 0;
-    ulong pending_leaf = 0;
-    uint pending_index = 0;
-    bool has_pending_leaf = false;
 
     while (processed < states_per_lane) {
         uint start_state = state_offset + processed;
@@ -457,34 +454,87 @@ kernel void poseidon_trace_fused(device const ulong *payloads [[ buffer(0) ]],
             uint column = start_state + i;
             ulong leaf = chunk[i].x;
             out_hashes[args.leaf_offset + column] = leaf;
-            if ((column & 1u) == 0u) {
-                pending_leaf = leaf;
-                pending_index = column >> 1;
-                has_pending_leaf = true;
-                if (column + 1u >= args.state_count) {
-                    thread ulong3 parent_chunk[1];
-                    parent_chunk[0].x = TRACE_NODE_DOMAIN_SEED;
-                    parent_chunk[0].y = leaf;
-                    parent_chunk[0].z = 0;
-                    permute_chunk(parent_chunk, 1, shared_rounds, local_mds);
-                    parent_chunk[0].x = add_mod(parent_chunk[0].x, leaf);
-                    parent_chunk[0].y = add_mod(parent_chunk[0].y, 1ul);
-                    permute_chunk(parent_chunk, 1, shared_rounds, local_mds);
-                    out_hashes[args.parent_offset + pending_index] = parent_chunk[0].x;
-                    has_pending_leaf = false;
-                }
-            } else if (has_pending_leaf) {
-                thread ulong3 parent_chunk[1];
-                parent_chunk[0].x = TRACE_NODE_DOMAIN_SEED;
-                parent_chunk[0].y = pending_leaf;
-                parent_chunk[0].z = 0;
-                permute_chunk(parent_chunk, 1, shared_rounds, local_mds);
-                parent_chunk[0].x = add_mod(parent_chunk[0].x, leaf);
-                parent_chunk[0].y = add_mod(parent_chunk[0].y, 1ul);
-                permute_chunk(parent_chunk, 1, shared_rounds, local_mds);
-                out_hashes[args.parent_offset + (column >> 1)] = parent_chunk[0].x;
-                has_pending_leaf = false;
+        }
+        processed += loaded;
+    }
+}
+
+kernel void poseidon_trace_parents(device ulong *out_hashes [[ buffer(0) ]],
+                                   constant PoseidonFusedArgs &args [[ buffer(1) ]],
+                                   uint3 grid_pos [[ thread_position_in_grid ]],
+                                   uint3 tg_pos [[ thread_position_in_threadgroup ]],
+                                   uint3 tg_size [[ threads_per_threadgroup ]]) {
+    uint parent_count = (args.state_count + 1u) >> 1;
+    if (parent_count == 0) {
+        return;
+    }
+    uint lane = tg_pos.x;
+    threadgroup ulong3 shared_rounds[TOTAL_ROUNDS];
+    threadgroup ulong3 shared_mds[STATE_WIDTH];
+
+    uint lane_stride = tg_size.x == 0 ? 1 : tg_size.x;
+    for (uint round = lane; round < TOTAL_ROUNDS; round += lane_stride) {
+        shared_rounds[round] = make_ulong3(
+            ROUND_CONSTANTS[round][0],
+            ROUND_CONSTANTS[round][1],
+            ROUND_CONSTANTS[round][2]);
+    }
+    for (uint row = lane; row < STATE_WIDTH; row += lane_stride) {
+        shared_mds[row] = make_ulong3(MDS[row][0], MDS[row][1], MDS[row][2]);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    thread ulong3 local_mds[STATE_WIDTH];
+    for (uint row = 0; row < STATE_WIDTH; ++row) {
+        local_mds[row] = shared_mds[row];
+    }
+
+    uint states_per_lane = max(args.states_per_lane, 1u);
+    uint parent_offset = grid_pos.x * states_per_lane;
+    thread ulong3 chunk[STATE_CHUNK];
+    uint parent_indices[STATE_CHUNK];
+    uint processed = 0;
+
+    while (processed < states_per_lane) {
+        uint start_parent = parent_offset + processed;
+        if (start_parent >= parent_count) {
+            break;
+        }
+        uint remaining = states_per_lane - processed;
+        uint desired = remaining < STATE_CHUNK ? remaining : STATE_CHUNK;
+        ushort capacity = (ushort)desired;
+        ushort loaded = 0;
+        for (; loaded < capacity; ++loaded) {
+            uint parent_index = start_parent + loaded;
+            if (parent_index >= parent_count) {
+                break;
             }
+            uint left_index = parent_index << 1;
+            uint right_index = left_index + 1u;
+            if (right_index >= args.state_count) {
+                right_index = left_index;
+            }
+            ulong left = out_hashes[args.leaf_offset + left_index];
+            parent_indices[loaded] = parent_index;
+            chunk[loaded] = make_ulong3(TRACE_NODE_DOMAIN_SEED, left, 0);
+        }
+        if (loaded == 0) {
+            break;
+        }
+        permute_chunk(chunk, loaded, shared_rounds, local_mds);
+        for (ushort i = 0; i < loaded; ++i) {
+            uint parent_index = parent_indices[i];
+            uint right_index = (parent_index << 1) + 1u;
+            if (right_index >= args.state_count) {
+                right_index = parent_index << 1;
+            }
+            ulong right = out_hashes[args.leaf_offset + right_index];
+            chunk[i].x = add_mod(chunk[i].x, right);
+            chunk[i].y = add_mod(chunk[i].y, 1ul);
+        }
+        permute_chunk(chunk, loaded, shared_rounds, local_mds);
+        for (ushort i = 0; i < loaded; ++i) {
+            out_hashes[args.parent_offset + parent_indices[i]] = chunk[i].x;
         }
         processed += loaded;
     }

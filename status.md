@@ -12,6 +12,74 @@ Last updated: 2026-05-07
   - `cargo test -p iroha_config --test fixtures`
   - `cargo test -p iroha_config`
 
+## 2026-05-07 Sumeragi vNext foundation
+
+- Added experimental `sumeragi::vnext` protocol state with explicit slot and
+  validation ownership states, BChain-style successor-scoped suspicion,
+  re-chain proposals/certificates, view-change certificates, and count/stake
+  quorum checks that refuse quarantine when it would weaken commit safety.
+- Added a nonblocking vNext reactor event/effect layer that dispatches
+  validation once, rejects stale worker starts/results, enters recovery on
+  validation timeout or queue saturation without inline fallback, broadcasts
+  successor-scoped suspicion, and installs or escalates re-chain outcomes.
+- Added the `BlockMessage::VNext` consensus-wire variant. The current legacy
+  Sumeragi main loop classifies vNext frames as consensus traffic and ignores
+  them until the replacement reactor is wired in.
+- Threaded vNext performance-fault parameters through `iroha_config` defaults,
+  user/env parsing, actual config, documentation, and conversion into
+  `PerformanceFaultConfig`; zero-valued vNext knobs now fail config parsing.
+- Added canonical chain-id/mode-tag separated signing preimages for vNext
+  suspicion, re-chain proposal, re-chain certificate, and view-change
+  certificate messages. Suspicion/head signatures now verify against embedded
+  peer keys, certificate aggregate verification is PoP-aware for BLS-normal
+  signers, signer bitmaps reject malformed/out-of-range bits, and the reactor
+  escalates to view change when a re-chain would exceed the configured tainted
+  validator budget.
+- Focused validation passed with
+  `cargo test -p iroha_config sumeragi_vnext --test fixtures -- --nocapture`
+  (`2` passed) and
+  `cargo test -p iroha_core --lib vnext -- --nocapture` (`23` passed).
+  Repository-wide formatting was checked with `cargo fmt --all --check`.
+
+## 2026-05-07 RWA query WSV secondary indexes
+
+- Added non-serialized WSV read-side indexes for RWA status and frozen state.
+  They are rebuilt from canonical `rwas` storage on world construction/decode,
+  carried through world block/transaction/view layers, and maintained on RWA
+  insert plus freeze/unfreeze transitions.
+- `FindRwas` now intersects indexed candidate sets across id, owner, domain,
+  status, and frozen-state predicates before applying the full predicate. The
+  status/frozen predicate matcher also handles the `frozen` alias directly, so
+  indexed filters do not devolve into a full scan for common lifecycle queries.
+- Focused validation passed with
+  `cargo test -p iroha_core find_rwas --lib` and
+  `cargo test -p iroha_core rwas_status_and_frozen_iters_use_secondary_indexes --lib -- --nocapture`.
+
+## 2026-05-07 Account query WSV holder fast path
+
+- Added a non-serialized WSV read-side index from asset definition id to
+  accounts that currently hold at least one non-zero balance partition. The
+  index is rebuilt from canonical `assets` storage on world construction/decode,
+  carried through world block/transaction/view layers, and maintained when
+  numeric assets are created, deposited, transferred into, or removed.
+- `FindAccountsWithAsset` now starts from that non-zero holder index instead of
+  scanning concrete asset ids for the definition on every query. `FindAccountIds`
+  also reuses the parsed id-candidate set for id predicates that are not the
+  trivial one-clause direct lookup, avoiding full account scans for mixed `IN`
+  lists plus
+  `exists("id")`.
+- Added focused account-query coverage for the non-zero asset holder path and
+  the extended account-id candidate path. Focused validation passed with
+  `cargo test -p iroha_core find_accounts_with_asset_uses_nonzero_definition_asset_index --lib -- --nocapture`
+  and
+  `cargo test -p iroha_core find_account_ids_uses_candidate_lookup_for_id_predicates_with_exists --lib -- --nocapture`;
+  asset-index lifecycle coverage passed with
+  `cargo test -p iroha_core asset_definition_holder_index_tracks_asset_lifecycle --lib -- --nocapture`
+  and
+  `cargo test -p iroha_core asset_definition_holder_index_waits_for_last_partition_removal --lib -- --nocapture`.
+- Library validation passed with `cargo check -p iroha_core --lib`; the
+  serialization guard `scripts/check_no_scale.sh` also passed.
+
 ## 2026-05-07 IVM Staging and Sumeragi Targeted Recovery
 
 - The staged `ivm_contract_deploy` fixtures were retested against the contract

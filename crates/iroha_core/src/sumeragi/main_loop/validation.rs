@@ -29,6 +29,7 @@ pub(super) struct ValidationResult {
     pub(super) view: u64,
     pub(super) frontier_generation: Option<u64>,
     pub(super) commit_topology: Vec<PeerId>,
+    pub(super) duration: Duration,
     pub(super) outcome: Result<Option<StateRoots>, BlockValidationError>,
 }
 
@@ -43,6 +44,18 @@ pub(super) struct ValidationWorkerHandle {
 enum ValidationDispatch {
     TryWorker,
     Inline,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(super) enum ValidationInflightInlineReason {
+    WorkerDisconnected,
+    StaleFrontier {
+        frontier_generation: u64,
+    },
+    Stalled {
+        elapsed: Duration,
+        stall_timeout: Duration,
+    },
 }
 
 pub(super) fn spawn_validation_workers(
@@ -101,6 +114,7 @@ pub(super) fn spawn_validation_workers(
                         commit_topology,
                     } = work;
                     let mut voting_block = None;
+                    let validation_start = Instant::now();
                     let outcome = validate_block_for_voting(
                         block,
                         &mut topology,
@@ -109,6 +123,7 @@ pub(super) fn spawn_validation_workers(
                         state.as_ref(),
                         &mut voting_block,
                     );
+                    let duration = validation_start.elapsed();
                     if result_tx
                         .send(ValidationResult {
                             id,
@@ -117,6 +132,7 @@ pub(super) fn spawn_validation_workers(
                             view,
                             frontier_generation,
                             commit_topology,
+                            duration,
                             outcome,
                         })
                         .is_err()
@@ -308,6 +324,50 @@ impl Actor {
             .map(|inflight| Instant::now().saturating_duration_since(inflight.started_at))
     }
 
+    pub(super) fn validation_worker_stall_timeout(&self) -> Duration {
+        const STALL_TIMEOUT_CAP: Duration = Duration::from_secs(15);
+
+        let inline_floor =
+            super::saturating_mul_duration(self.commit_validation_inline_fallback_timeout(), 6);
+        let ema_floor = self
+            .subsystems
+            .validation
+            .duration_ema
+            .map(|ema| super::saturating_mul_duration(ema, 3))
+            .unwrap_or(Duration::ZERO);
+        inline_floor.max(ema_floor).min(STALL_TIMEOUT_CAP)
+    }
+
+    pub(super) fn validation_duration_ema(&self) -> Option<Duration> {
+        self.subsystems.validation.duration_ema
+    }
+
+    pub(super) fn validation_inflight_inline_reason(
+        &self,
+        hash: HashOf<BlockHeader>,
+        height: u64,
+    ) -> Option<ValidationInflightInlineReason> {
+        let inflight = self.subsystems.validation.inflight.get(&hash)?;
+        if self.subsystems.validation.result_rx.is_none()
+            || self.subsystems.validation.work_txs.is_empty()
+        {
+            return Some(ValidationInflightInlineReason::WorkerDisconnected);
+        }
+        if let Some(frontier_generation) = inflight.frontier_generation
+            && !self.frontier_owner_generation_matches(height, hash, frontier_generation)
+        {
+            return Some(ValidationInflightInlineReason::StaleFrontier {
+                frontier_generation,
+            });
+        }
+        let elapsed = Instant::now().saturating_duration_since(inflight.started_at);
+        let stall_timeout = self.validation_worker_stall_timeout();
+        (elapsed >= stall_timeout).then_some(ValidationInflightInlineReason::Stalled {
+            elapsed,
+            stall_timeout,
+        })
+    }
+
     fn validation_queue_full_inline_cutover(&self) -> Duration {
         let inline_fallback_timeout = self.commit_validation_inline_fallback_timeout();
         let divisor = self
@@ -441,26 +501,24 @@ impl Actor {
                 .pending_block_commit_votes_count(hash, pending.height, pending.view)
                 .saturating_add(1)
                 >= topology.min_votes_for_commit().max(1);
-        let dispatch = if matches!(dispatch, ValidationDispatch::TryWorker)
-            && (matches!(validation_priority_reason, Some("commit_qc" | "cached_qc"))
-                || near_quorum_commit_votes)
-        {
-            let reason = if near_quorum_commit_votes {
-                Some("commit_votes_near_quorum")
+        let dispatch =
+            if matches!(dispatch, ValidationDispatch::TryWorker) && near_quorum_commit_votes {
+                let reason = if near_quorum_commit_votes {
+                    Some("commit_votes_near_quorum")
+                } else {
+                    validation_priority_reason
+                };
+                debug!(
+                    height = pending.height,
+                    view = pending.view,
+                    block = %hash,
+                    reason,
+                    "forcing inline validation for pending block with fast-finality evidence"
+                );
+                ValidationDispatch::Inline
             } else {
-                validation_priority_reason
+                dispatch
             };
-            debug!(
-                height = pending.height,
-                view = pending.view,
-                block = %hash,
-                reason,
-                "forcing inline validation for pending block with fast-finality evidence"
-            );
-            ValidationDispatch::Inline
-        } else {
-            dispatch
-        };
 
         let superseded_by_newer_view = self.pending.pending_blocks.values().any(|other| {
             other.height == pending.height
@@ -650,6 +708,7 @@ impl Actor {
         let _ = self.supersede_validation_inflight(hash);
 
         let mut voting_block = self.voting_block.take();
+        let validation_start = Instant::now();
         let result = validate_block_for_voting(
             pending.block.clone(),
             &mut topology,
@@ -658,6 +717,9 @@ impl Actor {
             self.state.as_ref(),
             &mut voting_block,
         );
+        self.subsystems
+            .validation
+            .record_duration(validation_start.elapsed());
         // Avoid holding onto a voting block from the pre-vote validation path.
         self.voting_block = None;
 
@@ -764,8 +826,10 @@ impl Actor {
                         view,
                         frontier_generation,
                         commit_topology,
+                        duration,
                         outcome,
                     } = result;
+                    self.subsystems.validation.record_duration(duration);
                     let inflight_frontier_generation = match self
                         .subsystems
                         .validation

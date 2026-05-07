@@ -53,7 +53,7 @@ use core::fmt;
 use std::sync::LazyLock;
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     hint::black_box,
     str::FromStr,
     time::Duration,
@@ -5755,9 +5755,10 @@ pub(crate) mod valid {
             if signed_txs.len() != prepared_txs.len() {
                 return Err(BlockValidationError::MerkleRootMismatch);
             }
-            let mut seen_hashes: std::collections::BTreeSet<HashOf<SignedTransaction>> =
-                std::collections::BTreeSet::new();
-            let mut seen_sealed_commitments = std::collections::BTreeSet::new();
+            let mut seen_hashes: HashSet<HashOf<SignedTransaction>> =
+                HashSet::with_capacity(signed_txs.len());
+            let mut seen_sealed_commitments =
+                HashSet::with_capacity(block.external_entrypoint_count());
 
             for ((tx, prepared), committed_height) in signed_txs
                 .iter()
@@ -6068,12 +6069,8 @@ pub(crate) mod valid {
                 }
             }
 
-            let mut merkle_tree: MerkleTree<TransactionEntrypoint> =
-                core::iter::empty::<HashOf<TransactionEntrypoint>>().collect();
-            for hash in entrypoint_hashes {
-                merkle_tree.add(hash);
-            }
-
+            let merkle_tree: MerkleTree<TransactionEntrypoint> =
+                MerkleTree::from_typed_leaves_parallel(entrypoint_hashes);
             let expected_merkle_root = merkle_tree.root();
             let actual_merkle_root = block.header().merkle_root();
 
@@ -12099,6 +12096,92 @@ pub(crate) mod valid {
         }
 
         #[test]
+        fn validate_static_snapshot_rejects_duplicate_signed_transaction_hashes() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let key_pairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+            let topology = test_topology_with_keys(&key_pairs);
+            let leader = &key_pairs[0];
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "leader",
+                leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
+
+            let (authority, signer) = gen_account_in("duplicate-check");
+            let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+            let tx = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                authority,
+                &time_source,
+            )
+            .with_instructions([Log::new(Level::INFO, "duplicate".to_owned())])
+            .sign(signer.private_key());
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+
+            time_handle.advance(Duration::from_millis(1));
+            let new_block = BlockBuilder::new_with_time_source(
+                vec![accepted.clone(), accepted],
+                time_source.clone(),
+            )
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(leader.private_key())
+            .unpack(|_| {});
+            let signed: SignedBlock = new_block.into();
+
+            let static_data = {
+                let view = state.query_view();
+                ValidBlock::validate_static_state_dependent(
+                    &signed,
+                    &topology,
+                    &state.chain_id,
+                    &ALICE_ID,
+                    &view,
+                    false,
+                    &time_source,
+                    false,
+                    false,
+                )
+                .expect("static state-dependent validation should succeed")
+            };
+            let prepared_txs = ValidBlock::prepare_external_transactions(&signed);
+            let committed_heights = {
+                let transactions_view = state.transactions.view();
+                ValidBlock::committed_heights_for_prepared_transactions(
+                    &prepared_txs,
+                    &transactions_view,
+                )
+            };
+            #[cfg(feature = "telemetry")]
+            let metrics = Some(&state.telemetry);
+            #[cfg(not(feature = "telemetry"))]
+            let metrics = ();
+
+            let err = ValidBlock::validate_static_with_snapshot(
+                &signed,
+                &state.chain_id,
+                &ALICE_ID,
+                &static_data,
+                &committed_heights,
+                &prepared_txs,
+                None,
+                false,
+                metrics,
+            )
+            .expect_err("duplicate signed transaction hash should be rejected");
+            assert!(matches!(err, BlockValidationError::DuplicateTransactions));
+        }
+
+        #[test]
         fn validate_static_state_dependent_rejects_missing_execution_context() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
@@ -16562,6 +16645,7 @@ mod tests {
     use core::time::Duration;
     use std::{borrow::Cow, num::NonZeroU64};
 
+    use iroha_crypto::Hash;
     use iroha_data_model::{
         errors::AmxStage,
         prelude::*,
@@ -16762,6 +16846,44 @@ mod tests {
         }
 
         assert_eq!(tree.root(), block.header().merkle_root());
+    }
+
+    #[test]
+    fn entrypoint_merkle_bottom_up_matches_incremental_root_shapes() {
+        fn sample_leaf(idx: u8) -> HashOf<TransactionEntrypoint> {
+            let mut bytes = [0_u8; Hash::LENGTH];
+            bytes[0] = idx;
+            bytes[Hash::LENGTH - 1] = idx.wrapping_mul(17);
+            HashOf::from_untyped_unchecked(Hash::prehashed(bytes))
+        }
+
+        fn incremental_root(
+            leaves: &[HashOf<TransactionEntrypoint>],
+        ) -> Option<HashOf<MerkleTree<TransactionEntrypoint>>> {
+            let mut tree = MerkleTree::default();
+            for leaf in leaves {
+                tree.add(*leaf);
+            }
+            tree.root()
+        }
+
+        fn bottom_up_root(
+            leaves: Vec<HashOf<TransactionEntrypoint>>,
+        ) -> Option<HashOf<MerkleTree<TransactionEntrypoint>>> {
+            let tree = MerkleTree::from_typed_leaves_parallel(leaves);
+            tree.root()
+        }
+
+        for count in [1_usize, 2, 3, 4, 5, 8] {
+            let leaves = (0..count)
+                .map(|idx| sample_leaf(u8::try_from(idx + 1).expect("small test index")))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                bottom_up_root(leaves.clone()),
+                incremental_root(&leaves),
+                "bottom-up Merkle root must match incremental insertion for {count} leaves"
+            );
+        }
     }
 
     #[test]

@@ -4,6 +4,21 @@ Last updated: 2026-05-07
 
 Completed history lives in `status.md`. This file should only track unfinished work.
 
+## Sumeragi vNext consensus replacement
+
+- Wire the experimental `sumeragi::vnext::Reactor` into the live Sumeragi
+  runtime shell, replacing the legacy cooperative tick/commit sweep and its
+  inline validation fallback with typed DA/RBC, validation-worker,
+  commit-persistence, and block-sync events/effects.
+- Feed parsed vNext performance-fault parameters from live Sumeragi config into
+  the runtime reactor once the replacement shell owns consensus execution.
+- Wire vNext signature/quorum verification into the live runtime ingress path
+  and bind the selected chain-order hash into any remaining QC vote/certificate
+  preimages used by the replacement shell.
+- Add model and integration coverage for slow validation, queue saturation,
+  malicious accusers, head failure during re-chain, NPoS stake-quorum
+  quarantine edges, and DA/RBC loss during re-chain.
+
 ## Offline Note V2 wallet SDK completion
 
 - Finish wallet reconciliation behind the one-call `OfflineNoteV2Wallet`

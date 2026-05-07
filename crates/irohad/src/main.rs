@@ -969,6 +969,7 @@ impl ConsensusIngressLimiter {
                 | BlockMessage::FetchPendingBlock(_)
                 | BlockMessage::ProposalHint(_)
                 | BlockMessage::Proposal(_)
+                | BlockMessage::VNext(_)
                 | BlockMessage::BlockCreated(_) => IngressPolicy::critical(),
                 BlockMessage::RbcInit(_)
                 | BlockMessage::RbcInitRequest(_)
@@ -2153,6 +2154,30 @@ impl NetworkRelayShared {
                 Some(proposal.header.view),
             ),
             KuraReplicaAdvert(advert) => ("KuraReplicaAdvert", Some(advert.height), None),
+            VNext(message) => match message {
+                iroha_core::sumeragi::vnext::ConsensusMessage::Suspect(suspect) => (
+                    "VNextSuspect",
+                    Some(suspect.slot.height),
+                    Some(suspect.slot.view),
+                ),
+                iroha_core::sumeragi::vnext::ConsensusMessage::RechainProposal(proposal) => (
+                    "VNextRechainProposal",
+                    Some(proposal.slot.height),
+                    Some(proposal.slot.view),
+                ),
+                iroha_core::sumeragi::vnext::ConsensusMessage::RechainCertificate(certificate) => (
+                    "VNextRechainCertificate",
+                    Some(certificate.slot.height),
+                    Some(certificate.slot.view),
+                ),
+                iroha_core::sumeragi::vnext::ConsensusMessage::ViewChangeCertificate(
+                    certificate,
+                ) => (
+                    "VNextViewChangeCertificate",
+                    certificate.highest_slot.map(|slot| slot.height),
+                    certificate.highest_slot.map(|slot| slot.view),
+                ),
+            },
         }
     }
 

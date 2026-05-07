@@ -5550,6 +5550,9 @@ pub struct SumeragiAdvanced {
     /// Volatile Sumeragi resilience tuning limits.
     #[config(nested)]
     pub resilience: SumeragiResilience,
+    /// Experimental vNext performance-fault tuning.
+    #[config(nested)]
+    pub vnext: SumeragiVNext,
     /// DA timeout multipliers/floor overrides.
     #[config(nested)]
     pub da: SumeragiDaAdvanced,
@@ -5668,6 +5671,41 @@ pub struct SumeragiWorker {
         default = "defaults::sumeragi::WORKER_MAX_URGENT_BEFORE_DA_CRITICAL"
     )]
     pub max_urgent_before_da_critical: u32,
+}
+
+/// User-level configuration container for experimental Sumeragi vNext.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SumeragiVNext {
+    /// Number of samples in the EWMA performance window.
+    #[config(
+        env = "SUMERAGI_VNEXT_PERFORMANCE_WINDOW_SAMPLES",
+        default = "defaults::sumeragi::VNEXT_PERFORMANCE_WINDOW_SAMPLES"
+    )]
+    pub performance_window_samples: u16,
+    /// Hard timeout before asynchronous validation is treated as overdue.
+    #[config(
+        env = "SUMERAGI_VNEXT_SUSPICION_TIMEOUT_MS",
+        default = "defaults::sumeragi::VNEXT_SUSPICION_TIMEOUT_MS"
+    )]
+    pub suspicion_timeout_ms: u64,
+    /// Performance threshold over the EWMA baseline, in basis points.
+    #[config(
+        env = "SUMERAGI_VNEXT_PERFORMANCE_THRESHOLD_BPS",
+        default = "defaults::sumeragi::VNEXT_PERFORMANCE_THRESHOLD_BPS"
+    )]
+    pub performance_threshold_bps: u16,
+    /// Maximum validators tainted in one view before view change is required.
+    #[config(
+        env = "SUMERAGI_VNEXT_MAX_TAINTED_PER_VIEW",
+        default = "defaults::sumeragi::VNEXT_MAX_TAINTED_PER_VIEW"
+    )]
+    pub max_tainted_per_view: u16,
+    /// Minimum delay between accepted re-chainings.
+    #[config(
+        env = "SUMERAGI_VNEXT_RECHAIN_COOLDOWN_MS",
+        default = "defaults::sumeragi::VNEXT_RECHAIN_COOLDOWN_MS"
+    )]
+    pub rechain_cooldown_ms: u64,
 }
 
 /// User-level configuration container for `SumeragiPacemaker`.
@@ -6916,6 +6954,7 @@ impl Sumeragi {
             pacemaker,
             pacing_governor,
             resilience,
+            vnext,
             da: da_advanced,
             rbc,
             npos: npos_advanced,
@@ -7344,6 +7383,35 @@ impl Sumeragi {
             } else {
                 true
             };
+        let vnext_ok =
+            if vnext.performance_window_samples == 0 {
+                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.advanced.vnext.performance_window_samples must be greater than zero",
+                ));
+                false
+            } else if vnext.suspicion_timeout_ms == 0 {
+                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.advanced.vnext.suspicion_timeout_ms must be greater than zero",
+                ));
+                false
+            } else if vnext.performance_threshold_bps == 0 {
+                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.advanced.vnext.performance_threshold_bps must be greater than zero",
+                ));
+                false
+            } else if vnext.max_tainted_per_view == 0 {
+                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.advanced.vnext.max_tainted_per_view must be greater than zero",
+                ));
+                false
+            } else if vnext.rechain_cooldown_ms == 0 {
+                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.advanced.vnext.rechain_cooldown_ms must be greater than zero",
+                ));
+                false
+            } else {
+                true
+            };
 
         let adaptive_observability = adaptive_observability.parse(emitter)?;
         let pacing_governor = pacing_governor.parse(emitter)?;
@@ -7395,7 +7463,8 @@ impl Sumeragi {
             && pending_caps_ok
             && rbc_erasure_ok
             && rbc_rebroadcast_budget_ok
-            && rbc_payload_budget_ok)
+            && rbc_payload_budget_ok
+            && vnext_ok)
         {
             return None;
         }
@@ -7534,6 +7603,13 @@ impl Sumeragi {
             },
             pacing_governor,
             resilience,
+            vnext: actual::SumeragiVNext {
+                performance_window_samples: vnext.performance_window_samples,
+                suspicion_timeout: std::time::Duration::from_millis(vnext.suspicion_timeout_ms),
+                performance_threshold_bps: vnext.performance_threshold_bps,
+                max_tainted_per_view: vnext.max_tainted_per_view,
+                rechain_cooldown: std::time::Duration::from_millis(vnext.rechain_cooldown_ms),
+            },
             da: actual::SumeragiDa {
                 enabled: da.enabled,
                 quorum_timeout_multiplier: da_advanced.quorum_timeout_multiplier,

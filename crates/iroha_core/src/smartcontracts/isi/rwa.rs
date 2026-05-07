@@ -580,7 +580,8 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let rwa = load_rwa(&state_transaction.world, &self.rwa)?;
+            let rwa_id = self.rwa;
+            let rwa = load_rwa(&state_transaction.world, &rwa_id)?;
             ensure_controller_enabled(
                 &state_transaction.world,
                 authority,
@@ -588,12 +589,22 @@ pub mod isi {
                 rwa.controls().freeze_enabled,
                 "freeze",
             )?;
-            let rwa_mut = state_transaction.world.rwa_mut(&self.rwa)?;
-            if !rwa_mut.is_frozen {
-                rwa_mut.is_frozen = true;
+            let changed = {
+                let rwa_mut = state_transaction.world.rwa_mut(&rwa_id)?;
+                if rwa_mut.is_frozen {
+                    false
+                } else {
+                    rwa_mut.is_frozen = true;
+                    true
+                }
+            };
+            if changed {
                 state_transaction
                     .world
-                    .emit_events(Some(DomainEvent::Rwa(RwaEvent::Frozen(self.rwa))));
+                    .replace_rwa_frozen_index(&rwa_id, false, true);
+                state_transaction
+                    .world
+                    .emit_events(Some(DomainEvent::Rwa(RwaEvent::Frozen(rwa_id))));
             }
             Ok(())
         }
@@ -606,7 +617,8 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let rwa = load_rwa(&state_transaction.world, &self.rwa)?;
+            let rwa_id = self.rwa;
+            let rwa = load_rwa(&state_transaction.world, &rwa_id)?;
             ensure_controller_enabled(
                 &state_transaction.world,
                 authority,
@@ -614,12 +626,22 @@ pub mod isi {
                 rwa.controls().freeze_enabled,
                 "unfreeze",
             )?;
-            let rwa_mut = state_transaction.world.rwa_mut(&self.rwa)?;
-            if rwa_mut.is_frozen {
-                rwa_mut.is_frozen = false;
+            let changed = {
+                let rwa_mut = state_transaction.world.rwa_mut(&rwa_id)?;
+                if rwa_mut.is_frozen {
+                    rwa_mut.is_frozen = false;
+                    true
+                } else {
+                    false
+                }
+            };
+            if changed {
                 state_transaction
                     .world
-                    .emit_events(Some(DomainEvent::Rwa(RwaEvent::Unfrozen(self.rwa))));
+                    .replace_rwa_frozen_index(&rwa_id, true, false);
+                state_transaction
+                    .world
+                    .emit_events(Some(DomainEvent::Rwa(RwaEvent::Unfrozen(rwa_id))));
             }
             Ok(())
         }
@@ -1490,13 +1512,18 @@ pub mod query {
     use norito::json::Value;
 
     use super::*;
-    use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
+    use crate::{
+        smartcontracts::ValidQuery,
+        state::{StateReadOnly, WorldReadOnly},
+    };
 
     #[derive(Debug, Default, Clone)]
     struct RwaPredicateView {
         ids: BTreeSet<RwaId>,
         owners: BTreeSet<AccountId>,
         domains: BTreeSet<DomainId>,
+        statuses: BTreeSet<Option<Name>>,
+        frozen: BTreeSet<bool>,
     }
 
     impl RwaPredicateView {
@@ -1527,6 +1554,16 @@ pub mod query {
                                     .equals
                                     .push(EqualsCondition::new(field, Value::String(raw)));
                             }
+                            Value::Bool(raw) => {
+                                predicate
+                                    .equals
+                                    .push(EqualsCondition::new(field, Value::Bool(raw)));
+                            }
+                            Value::Null => {
+                                predicate
+                                    .equals
+                                    .push(EqualsCondition::new(field, Value::Null));
+                            }
                             Value::Array(values) if !values.is_empty() => {
                                 predicate.r#in.push(InCondition::new(field, values));
                             }
@@ -1552,6 +1589,15 @@ pub mod query {
         }
 
         fn push_field_value(&mut self, field: &str, value: &Value) {
+            if matches!(field, "frozen" | "is_frozen")
+                && let Some(is_frozen) = Self::value_as_bool(value)
+            {
+                self.frozen.insert(is_frozen);
+            }
+            if field == "status" && value.is_null() {
+                self.statuses.insert(None);
+            }
+
             let Some(raw) = Self::value_as_str(value) else {
                 return;
             };
@@ -1575,6 +1621,11 @@ pub mod query {
                         self.domains.insert(domain_id);
                     }
                 }
+                "status" => {
+                    if let Ok(status) = raw.parse::<Name>() {
+                        self.statuses.insert(Some(status));
+                    }
+                }
                 _ => {}
             }
         }
@@ -1587,44 +1638,74 @@ pub mod query {
             }
         }
 
-        fn plan(&self) -> RwaQueryPlan {
-            let mut ids: Vec<_> = self.ids.iter().cloned().collect();
-            ids.sort();
-
-            let mut owners: Vec<_> = self.owners.iter().cloned().collect();
-            owners.sort();
-
-            let mut domains: Vec<_> = self.domains.iter().cloned().collect();
-            domains.sort();
-
-            if !ids.is_empty() {
-                return RwaQueryPlan::Ids(ids);
+        fn value_as_bool(value: &Value) -> Option<bool> {
+            if let Value::Bool(value) = value {
+                Some(*value)
+            } else {
+                None
             }
-
-            if !owners.is_empty() {
-                return RwaQueryPlan::Owners {
-                    owners,
-                    domains: (!domains.is_empty()).then_some(domains),
-                };
-            }
-
-            if !domains.is_empty() {
-                return RwaQueryPlan::Domains(domains);
-            }
-
-            RwaQueryPlan::Full
         }
-    }
 
-    #[derive(Debug)]
-    enum RwaQueryPlan {
-        Ids(Vec<RwaId>),
-        Owners {
-            owners: Vec<AccountId>,
-            domains: Option<Vec<DomainId>>,
-        },
-        Domains(Vec<DomainId>),
-        Full,
+        fn intersect_candidate_ids(
+            best: &mut Option<BTreeSet<RwaId>>,
+            candidates: BTreeSet<RwaId>,
+        ) {
+            if let Some(selected) = best {
+                selected.retain(|rwa_id| candidates.contains(rwa_id));
+            } else {
+                *best = Some(candidates);
+            }
+        }
+
+        fn indexed_candidate_ids(&self, world: &impl WorldReadOnly) -> Option<BTreeSet<RwaId>> {
+            let mut selected = None;
+
+            if !self.ids.is_empty() {
+                Self::intersect_candidate_ids(&mut selected, self.ids.iter().cloned().collect());
+            }
+
+            if !self.owners.is_empty() {
+                let candidates = self
+                    .owners
+                    .iter()
+                    .flat_map(|owner| world.rwas_in_account_iter(owner))
+                    .map(|entry| entry.id().clone())
+                    .collect();
+                Self::intersect_candidate_ids(&mut selected, candidates);
+            }
+
+            if !self.domains.is_empty() {
+                let candidates = self
+                    .domains
+                    .iter()
+                    .flat_map(|domain| world.rwas_in_domain_iter(domain))
+                    .map(|entry| entry.id().clone())
+                    .collect();
+                Self::intersect_candidate_ids(&mut selected, candidates);
+            }
+
+            if !self.statuses.is_empty() {
+                let candidates = self
+                    .statuses
+                    .iter()
+                    .flat_map(|status| world.rwas_by_status_iter(status))
+                    .map(|entry| entry.id().clone())
+                    .collect();
+                Self::intersect_candidate_ids(&mut selected, candidates);
+            }
+
+            if !self.frozen.is_empty() {
+                let candidates = self
+                    .frozen
+                    .iter()
+                    .flat_map(|is_frozen| world.rwas_by_frozen_iter(*is_frozen))
+                    .map(|entry| entry.id().clone())
+                    .collect();
+                Self::intersect_candidate_ids(&mut selected, candidates);
+            }
+
+            selected
+        }
     }
 
     fn parse_domain_predicate_value(raw: &str) -> Option<DomainId> {
@@ -1680,6 +1761,22 @@ pub mod query {
             .any(|value| matches!(value, Value::String(raw) if raw == expected))
     }
 
+    fn predicate_value_matches_bool(value: &Value, expected: bool) -> bool {
+        match value {
+            Value::Bool(raw) => *raw == expected,
+            Value::String(raw) => raw == &expected.to_string(),
+            _ => false,
+        }
+    }
+
+    fn predicate_value_matches_status(value: &Value, expected: &Option<Name>) -> bool {
+        match (value, expected) {
+            (Value::Null, None) => true,
+            (Value::String(raw), Some(status)) => raw == &status.to_string(),
+            _ => false,
+        }
+    }
+
     fn rwa_json_value<'a>(cache: &'a mut Option<Value>, rwa: &Rwa) -> Option<&'a Value> {
         if cache.is_none() {
             *cache = norito::json::to_value(rwa).ok();
@@ -1691,6 +1788,19 @@ pub mod query {
         let mut rwa_json = None;
 
         for cond in &predicate.equals {
+            if matches!(cond.field.as_str(), "frozen" | "is_frozen") {
+                if predicate_value_matches_bool(&cond.value, rwa.is_frozen) {
+                    continue;
+                }
+                return false;
+            }
+            if cond.field == "status" {
+                if predicate_value_matches_status(&cond.value, &rwa.status) {
+                    continue;
+                }
+                return false;
+            }
+
             let aliases = rwa_alias_values(rwa, &cond.field);
             if !aliases.is_empty() {
                 if !aliases
@@ -1713,6 +1823,27 @@ pub mod query {
         }
 
         for cond in &predicate.r#in {
+            if matches!(cond.field.as_str(), "frozen" | "is_frozen") {
+                if cond
+                    .values
+                    .iter()
+                    .any(|value| predicate_value_matches_bool(value, rwa.is_frozen))
+                {
+                    continue;
+                }
+                return false;
+            }
+            if cond.field == "status" {
+                if cond
+                    .values
+                    .iter()
+                    .any(|value| predicate_value_matches_status(value, &rwa.status))
+                {
+                    continue;
+                }
+                return false;
+            }
+
             let aliases = rwa_alias_values(rwa, &cond.field);
             if !aliases.is_empty() {
                 if !aliases
@@ -1735,6 +1866,13 @@ pub mod query {
         }
 
         for field in &predicate.exists {
+            if matches!(field.as_str(), "frozen" | "is_frozen") {
+                continue;
+            }
+            if field == "status" && rwa.status.is_some() {
+                continue;
+            }
+
             if !rwa_alias_values(rwa, field).is_empty() {
                 continue;
             }
@@ -1783,37 +1921,16 @@ pub mod query {
                 .and_then(|raw| norito::json::from_str(raw).ok())
                 .and_then(RwaPredicateView::parse_predicate_value);
 
-            let iter: Box<dyn Iterator<Item = Rwa> + '_> = match predicate_view.plan() {
-                RwaQueryPlan::Ids(ids) => Box::new(
-                    ids.into_iter()
-                        .filter_map(move |id| world.rwa(&id).ok().map(entry_to_rwa)),
-                ),
-                RwaQueryPlan::Owners { owners, domains } => {
-                    let domains =
-                        domains.map(|domains| domains.into_iter().collect::<BTreeSet<_>>());
-                    Box::new(owners.into_iter().flat_map(move |owner| {
-                        let domains = domains.clone();
-                        world
-                            .rwas_in_account_iter(&owner)
-                            .filter(move |entry| {
-                                domains
-                                    .as_ref()
-                                    .is_none_or(|domains| domains.contains(entry.id().domain()))
-                            })
-                            .map(entry_to_rwa)
-                            .collect::<Vec<_>>()
-                    }))
-                }
-                RwaQueryPlan::Domains(domains) => {
-                    Box::new(domains.into_iter().flat_map(move |domain| {
-                        world
-                            .rwas_in_domain_iter(&domain)
-                            .map(entry_to_rwa)
-                            .collect::<Vec<_>>()
-                    }))
-                }
-                RwaQueryPlan::Full => Box::new(world.rwas_iter().map(entry_to_rwa)),
-            };
+            let iter: Box<dyn Iterator<Item = Rwa> + '_> =
+                if let Some(candidate_ids) = predicate_view.indexed_candidate_ids(world) {
+                    Box::new(
+                        candidate_ids
+                            .into_iter()
+                            .filter_map(move |id| world.rwa(&id).ok().map(entry_to_rwa)),
+                    )
+                } else {
+                    Box::new(world.rwas_iter().map(entry_to_rwa))
+                };
 
             Ok(iter.filter(move |rwa| {
                 if let Some(predicate) = predicate_json.as_ref() {
@@ -2019,6 +2136,133 @@ pub mod query {
                 .map(|rwa| rwa.id)
                 .collect();
             assert_eq!(results, vec![recipient_rwa_id]);
+        }
+
+        #[test]
+        fn find_rwas_intersects_status_and_frozen_wsv_indexes() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
+                [0xE5; iroha_crypto::Hash::LENGTH],
+            ));
+
+            let domain_id: DomainId = DomainId::try_new("vault", "universal").unwrap();
+            seed_domain_name_lease(&mut stx.world, &ALICE_ID, &domain_id);
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let vaulted = "vaulted".parse::<Name>().unwrap();
+            let pending = "pending".parse::<Name>().unwrap();
+            let freezing_controls = RwaControlPolicy {
+                controller_accounts: vec![ALICE_ID.clone()],
+                freeze_enabled: true,
+                ..RwaControlPolicy::default()
+            };
+            for (reference, status, controls) in [
+                (
+                    "https://example.test/rwa/status-frozen-target",
+                    vaulted.clone(),
+                    freezing_controls.clone(),
+                ),
+                (
+                    "https://example.test/rwa/status-only",
+                    vaulted.clone(),
+                    RwaControlPolicy::default(),
+                ),
+                (
+                    "https://example.test/rwa/frozen-only",
+                    pending,
+                    freezing_controls,
+                ),
+            ] {
+                RegisterRwa {
+                    rwa: NewRwa::new(
+                        domain_id.clone(),
+                        "2".parse().unwrap(),
+                        NumericSpec::integer(),
+                        reference.to_owned(),
+                        Some(status),
+                        Metadata::default(),
+                        Vec::new(),
+                        controls,
+                    ),
+                }
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            }
+
+            let target_id = stx
+                .world
+                .rwas
+                .iter()
+                .find(|(_, value)| {
+                    value.primary_reference == "https://example.test/rwa/status-frozen-target"
+                })
+                .map(|(id, _)| id.clone())
+                .expect("target RWA id");
+            FreezeRwa {
+                rwa: target_id.clone(),
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            let frozen_only_id = stx
+                .world
+                .rwas
+                .iter()
+                .find(|(_, value)| {
+                    value.primary_reference == "https://example.test/rwa/frozen-only"
+                })
+                .map(|(id, _)| id.clone())
+                .expect("frozen-only RWA id");
+            FreezeRwa {
+                rwa: frozen_only_id,
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            assert!(
+                stx.world
+                    .rwas_by_status
+                    .get(&Some(vaulted.clone()))
+                    .is_some_and(|ids| ids.contains(&target_id)),
+                "target lot should be present in the status index before commit",
+            );
+            assert!(
+                stx.world
+                    .rwas_by_frozen
+                    .get(&true)
+                    .is_some_and(|ids| ids.contains(&target_id)),
+                "target lot should be present in the frozen-state index before commit",
+            );
+
+            let predicate = CompoundPredicate::<Rwa>::build(|p| {
+                p.equals("status", "vaulted".to_owned())
+                    .equals("frozen", true)
+            });
+            let predicate_view = RwaPredicateView::from_predicate(&predicate);
+            let candidate_ids = predicate_view
+                .indexed_candidate_ids(&stx.world)
+                .expect("indexed RWA candidates");
+            assert_eq!(candidate_ids, BTreeSet::from([target_id.clone()]));
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let results: Vec<_> = FindRwas
+                .execute(predicate, &view)
+                .unwrap()
+                .map(|rwa| rwa.id)
+                .collect();
+            assert_eq!(results, vec![target_id]);
         }
     }
 }

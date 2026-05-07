@@ -702,7 +702,7 @@ mod tests {
         SumeragiFinality, SumeragiGating, SumeragiKeys, SumeragiModeFlip, SumeragiNpos,
         SumeragiNposElection, SumeragiNposReconfig, SumeragiNposTimeoutOverrides, SumeragiNposVrf,
         SumeragiPacemaker, SumeragiPacingGovernor, SumeragiPersistence, SumeragiQueues,
-        SumeragiRbc, SumeragiRecovery, SumeragiResilience, SumeragiWorker,
+        SumeragiRbc, SumeragiRecovery, SumeragiResilience, SumeragiVNext, SumeragiWorker,
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -976,6 +976,7 @@ mod tests {
                 use_stake_snapshot_roster: false,
             },
             resilience: SumeragiResilience::default(),
+            vnext: SumeragiVNext::default(),
             adaptive_observability: AdaptiveObservability::default(),
             debug: SumeragiDebug {
                 force_soft_fork: false,
