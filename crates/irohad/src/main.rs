@@ -118,6 +118,8 @@ use tokio::{
     task,
 };
 
+const NODE_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+
 fn startup_trace_enabled() -> bool {
     env::var_os("IROHA_STARTUP_TRACE").is_some()
 }
@@ -3845,6 +3847,9 @@ impl Iroha {
         state.chain_id = config.common.chain.clone();
         // Apply crypto config before replay/genesis validation so allowed_signing is respected.
         state.set_crypto(config.crypto.clone());
+        // Apply pipeline config before replay so config-backed execution policy such as
+        // pipeline.gas is identical to the live path that originally committed the block.
+        state.set_pipeline(config.pipeline.clone());
         state
             .set_nexus(config.nexus.clone())
             .map_err(|err| Report::new(err).change_context(StartError::InitKura))
@@ -5949,7 +5954,7 @@ pub fn read_config_and_genesis(
         );
     }
     #[cfg(feature = "fastpq-gpu")]
-    preflight_fastpq_bn254_poseidon_words();
+    preflight_fastpq_bn254_poseidon_words(&config.zk.fastpq);
 
     let stack_budget_bytes = ivm_stack_budget_bytes(&config);
     apply_concurrency_config(&config.concurrency, stack_budget_bytes);
@@ -7827,7 +7832,15 @@ fn install_fastpq_execution_mode_probe(labels: &FastpqDeviceLabels) {
 }
 
 #[cfg(feature = "fastpq-gpu")]
-fn preflight_fastpq_bn254_poseidon_words() {
+fn preflight_fastpq_bn254_poseidon_words(config: &iroha_config::parameters::actual::Fastpq) {
+    if !fastpq_poseidon_word_preflight_enabled(config) {
+        iroha_logger::debug!(
+            target: "fastpq",
+            "BN254 Poseidon word-batch GPU preflight skipped by FASTPQ config"
+        );
+        return;
+    }
+
     if fastpq_prover::preflight_bn254_poseidon_word_batches() {
         iroha_logger::info!(
             target: "fastpq",
@@ -7838,6 +7851,17 @@ fn preflight_fastpq_bn254_poseidon_words() {
             target: "fastpq",
             "BN254 Poseidon word-batch GPU preflight unavailable; scalar fallback remains active"
         );
+    }
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn fastpq_poseidon_word_preflight_enabled(
+    config: &iroha_config::parameters::actual::Fastpq,
+) -> bool {
+    match config.poseidon_mode {
+        FastpqPoseidonMode::Cpu => false,
+        FastpqPoseidonMode::Gpu => true,
+        FastpqPoseidonMode::Auto => !matches!(config.execution_mode, FastpqExecutionMode::Cpu),
     }
 }
 
@@ -8001,7 +8025,9 @@ fn run_main(build_line: BuildLine) -> ReportResult<(), MainError> {
         .map_err(Report::from)
         .change_context(MainError::IrohaStart)?;
 
-    rt.block_on(run_node(config, genesis))
+    let result = rt.block_on(run_node(config, genesis));
+    rt.shutdown_timeout(NODE_RUNTIME_SHUTDOWN_TIMEOUT);
+    result
 }
 
 fn enforce_build_line(build_line: BuildLine, config: &mut Config) -> ReportResult<(), MainError> {
@@ -8843,8 +8869,16 @@ async fn run_node(config: Config, genesis: Option<GenesisBlock>) -> ReportResult
     let default_hook = std::panic::take_hook();
     let signal_clone = shutdown_on_panic.clone();
     std::panic::set_hook(Box::new(move |info| {
-        if panic_hook::is_suppressed() || norito::decode_panic_suppressed() {
+        let suppressed_by_panic_hook = panic_hook::is_suppressed();
+        let suppressed_by_norito_decode = norito::decode_panic_suppressed();
+        if suppressed_by_panic_hook || suppressed_by_norito_decode {
+            let panic_file = info.location().map(|location| location.file());
+            let panic_line = info.location().map(|location| location.line());
             iroha_logger::warn!(
+                suppressed_by_panic_hook,
+                suppressed_by_norito_decode,
+                ?panic_file,
+                ?panic_line,
                 "Panic occurred with shutdown suppression active; skipping shutdown signal"
             );
         } else {
@@ -8942,6 +8976,33 @@ mod tests {
             assert!(overrides.dispatch_trace);
             assert!(overrides.debug_enum);
             assert!(!overrides.debug_fused);
+        }
+
+        #[cfg(feature = "fastpq-gpu")]
+        #[test]
+        fn poseidon_word_preflight_respects_fastpq_config() {
+            let mut cfg = Fastpq {
+                execution_mode: FastpqExecutionMode::Auto,
+                poseidon_mode: FastpqPoseidonMode::Auto,
+                device_class: None,
+                chip_family: None,
+                gpu_kind: None,
+                metal_queue_fanout: None,
+                metal_queue_column_threshold: None,
+                metal_max_in_flight: None,
+                metal_threadgroup_width: None,
+                metal_trace: false,
+                metal_debug_enum: false,
+                metal_debug_fused: false,
+            };
+
+            assert!(fastpq_poseidon_word_preflight_enabled(&cfg));
+            cfg.execution_mode = FastpqExecutionMode::Cpu;
+            assert!(!fastpq_poseidon_word_preflight_enabled(&cfg));
+            cfg.poseidon_mode = FastpqPoseidonMode::Gpu;
+            assert!(fastpq_poseidon_word_preflight_enabled(&cfg));
+            cfg.poseidon_mode = FastpqPoseidonMode::Cpu;
+            assert!(!fastpq_poseidon_word_preflight_enabled(&cfg));
         }
     }
 

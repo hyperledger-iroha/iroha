@@ -574,12 +574,49 @@ impl Actor {
         Some(NonZeroU64::new(capped).expect("non-zero by construction"))
     }
 
+    pub(super) fn is_ivm_heavy_transaction(
+        tx: &AcceptedTransaction<'_>,
+        replay_ivm_proved: bool,
+    ) -> bool {
+        fn is_heavy_executable(
+            executable: &iroha_data_model::transaction::Executable,
+            replay_ivm_proved: bool,
+        ) -> bool {
+            matches!(
+                executable,
+                iroha_data_model::transaction::Executable::ContractCall(_)
+                    | iroha_data_model::transaction::Executable::Ivm(_)
+            ) || (replay_ivm_proved
+                && matches!(
+                    executable,
+                    iroha_data_model::transaction::Executable::IvmProved(_)
+                ))
+        }
+
+        match tx.entrypoint() {
+            iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
+                is_heavy_executable(signed.instructions(), replay_ivm_proved)
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
+                is_heavy_executable(
+                    reveal.signed_transaction().instructions(),
+                    replay_ivm_proved,
+                )
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_)
+            | iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(_)
+            | iroha_data_model::transaction::TransactionEntrypoint::Time(_) => false,
+        }
+    }
+
     pub(super) fn pull_transactions_for_proposal(
         &self,
         state: &State,
         max_in_block: NonZeroUsize,
         scan_budget: usize,
         gas_limit_per_block: Option<NonZeroU64>,
+        max_ivm_transactions: Option<NonZeroUsize>,
+        replay_ivm_proved: bool,
         tx_guards: &mut Vec<crate::queue::TransactionGuard>,
         height: u64,
         view: u64,
@@ -590,6 +627,9 @@ impl Actor {
         let mut fetched_total = 0usize;
         let mut gas_used_in_block = 0u64;
         let gas_limit_per_block = gas_limit_per_block.map(NonZeroU64::get);
+        let max_ivm_transactions = max_ivm_transactions.map(NonZeroUsize::get);
+        let mut ivm_transactions_included = 0usize;
+        let mut ivm_transactions_deferred = 0usize;
         let scan_budget = scan_budget.max(1);
 
         loop {
@@ -637,20 +677,39 @@ impl Actor {
                 deferred_accumulator.extend(deferred);
             }
 
-            if let Some(limit) = gas_limit_per_block {
-                let mut accepted = Vec::with_capacity(fetched.len());
-                for guard in fetched {
-                    let gas_cost = guard.gas_cost();
-                    let remaining_gas = limit.saturating_sub(gas_used_in_block);
-                    let would_exceed = gas_cost > remaining_gas && gas_cost > 0;
-                    let allow_oversized = gas_used_in_block == 0 && accepted.is_empty();
-
-                    if would_exceed && !allow_oversized {
+            let mut accepted = Vec::with_capacity(fetched.len());
+            for guard in fetched {
+                let release_lane_consumption =
+                    |guard: &crate::queue::TransactionGuard,
+                     lane_consumption: &mut BTreeMap<LaneId, u64>| {
                         let lane_id = guard.routing().lane_id;
                         let teu = guard.teu_weight();
                         if let Some(used) = lane_consumption.get_mut(&lane_id) {
                             *used = used.saturating_sub(teu);
                         }
+                    };
+
+                let is_ivm_heavy =
+                    Self::is_ivm_heavy_transaction(guard.as_accepted(), replay_ivm_proved);
+                if let Some(limit) = max_ivm_transactions
+                    && is_ivm_heavy
+                    && ivm_transactions_included >= limit
+                {
+                    release_lane_consumption(&guard, &mut lane_consumption);
+                    ivm_transactions_deferred = ivm_transactions_deferred.saturating_add(1);
+                    deferred_accumulator.push((guard.clone_accepted(), guard.routing()));
+                    continue;
+                }
+
+                if let Some(limit) = gas_limit_per_block {
+                    let gas_cost = guard.gas_cost();
+                    let remaining_gas = limit.saturating_sub(gas_used_in_block);
+                    let would_exceed = gas_cost > remaining_gas && gas_cost > 0;
+                    let allow_oversized =
+                        gas_used_in_block == 0 && tx_guards.is_empty() && accepted.is_empty();
+
+                    if would_exceed && !allow_oversized {
+                        release_lane_consumption(&guard, &mut lane_consumption);
                         deferred_accumulator.push((guard.clone_accepted(), guard.routing()));
                         continue;
                     }
@@ -665,18 +724,31 @@ impl Actor {
                         );
                     }
                     gas_used_in_block = gas_used_in_block.saturating_add(gas_cost);
-                    accepted.push(guard);
                 }
-                tx_guards.extend(accepted);
-            } else {
-                tx_guards.extend(fetched);
+
+                if is_ivm_heavy {
+                    ivm_transactions_included = ivm_transactions_included.saturating_add(1);
+                }
+                accepted.push(guard);
             }
+            tx_guards.extend(accepted);
 
             if let Some(limit) = gas_limit_per_block {
                 if gas_used_in_block >= limit {
                     break;
                 }
             }
+        }
+
+        if ivm_transactions_deferred > 0 {
+            debug!(
+                height,
+                view,
+                max_ivm_transactions,
+                ivm_transactions_included,
+                ivm_transactions_deferred,
+                "proposal IVM-heavy transaction budget reached"
+            );
         }
 
         deferred_accumulator
@@ -769,6 +841,10 @@ impl Actor {
             return Some((0, 0, 0, 0));
         }
 
+        if self.active_commit_inflight_blocks_stale_owner_clear(pending_hash, height, view, true) {
+            return None;
+        }
+
         let (tx_count, requeued, failures, duplicate_failures) =
             super::drop_pending_block_and_requeue(
                 &mut self.pending.pending_blocks,
@@ -791,7 +867,8 @@ impl Actor {
             .proposal_cache
             .pop_proposal(height, view);
         // Keep proposals_seen so we don't re-propose in the same view after dropping a stale block.
-        let _ = self.clear_stale_commit_inflight_for_block(pending_hash, height, view, false);
+        let _ =
+            self.active_commit_inflight_blocks_stale_owner_clear(pending_hash, height, view, false);
 
         Some((tx_count, requeued, failures, duplicate_failures))
     }
@@ -832,86 +909,34 @@ impl Actor {
             || self.pending_block_has_qc(pending_hash, pending.height, pending.view)
     }
 
-    fn clear_stale_commit_inflight_for_block(
-        &mut self,
+    fn active_commit_inflight_blocks_stale_owner_clear(
+        &self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
         view: u64,
         requeue_transactions: bool,
-    ) -> Option<(usize, usize, usize, usize)> {
-        let matches_inflight = self
-            .subsystems
-            .commit
-            .inflight
-            .as_ref()
-            .is_some_and(|inflight| {
-                inflight.block_hash == block_hash
-                    && inflight.pending.height == height
-                    && inflight.pending.view == view
-            });
-        if !matches_inflight {
-            return None;
-        }
-
-        let inflight = self
-            .subsystems
-            .commit
-            .inflight
-            .take()
-            .expect("matching inflight present");
-        let txs: Vec<_> = inflight
-            .pending
-            .block
-            .external_entrypoints_cloned()
-            .collect();
-        let tx_count = txs.len();
-        let (requeued, failures, duplicate_failures, _) = if requeue_transactions {
-            super::requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), txs)
-        } else {
-            (0, 0, 0, Vec::new())
+    ) -> bool {
+        let Some(inflight) = self.subsystems.commit.inflight.as_ref().filter(|inflight| {
+            inflight.block_hash == block_hash
+                && inflight.pending.height == height
+                && inflight.pending.view == view
+        }) else {
+            return false;
         };
-        self.clean_rbc_sessions_for_block(block_hash, height);
-        self.qc_cache
-            .retain(|(_, hash, _, _, _), _| hash != &block_hash);
-        self.qc_signer_tally
-            .retain(|(_, hash, _, _, _), _| hash != &block_hash);
-        self.subsystems
-            .propose
-            .proposal_cache
-            .pop_hint(height, view);
-        self.subsystems
-            .propose
-            .proposal_cache
-            .pop_proposal(height, view);
-        let session_key = Self::session_key(&block_hash, height, view);
-        self.subsystems
-            .da_rbc
-            .rbc
-            .payload_rebroadcast_last_sent
-            .remove(&session_key);
-        self.subsystems
-            .da_rbc
-            .rbc
-            .ready_rebroadcast_last_sent
-            .remove(&session_key);
-        self.subsystems
-            .da_rbc
-            .rbc
-            .deliver_deferral
-            .remove(&session_key);
-        super::status::record_commit_inflight_finish(inflight.id);
+        let tx_count = inflight.pending.block.external_entrypoints_cloned().count();
         warn!(
             height,
             view,
             block = %block_hash,
+            commit_id = inflight.id,
             requeue_transactions,
             tx_count,
-            requeued,
-            failures,
-            duplicate_failures,
-            "cleared stale commit-inflight owner for fresh resilience proposal"
+            elapsed_ms = Instant::now()
+                .saturating_duration_since(inflight.enqueue_time)
+                .as_millis(),
+            "stale commit-inflight owner is still running; waiting for commit worker result"
         );
-        Some((tx_count, requeued, failures, duplicate_failures))
+        true
     }
 
     fn request_frontier_owner_body_repair(
@@ -1202,13 +1227,14 @@ impl Actor {
             return false;
         }
 
+        if self
+            .active_commit_inflight_blocks_stale_owner_clear(owner_hash, height, owner_view, true)
+        {
+            return false;
+        }
+
         let dropped =
             self.drop_stale_pending_block_for_fresh_proposal(owner_hash, height, owner_view);
-        let cleared_inflight = if dropped.is_none() {
-            self.clear_stale_commit_inflight_for_block(owner_hash, height, owner_view, true)
-        } else {
-            None
-        };
         if self.frontier_slot.as_ref().is_some_and(|slot| {
             slot.height == height && slot.view == owner_view && slot.block_hash == owner_hash
         }) {
@@ -1239,7 +1265,7 @@ impl Actor {
                 owner_age_ms = owner_age.as_millis(),
                 recovery_age_ms = recovery_age.map(|age| age.as_millis()),
                 min_yield_age_ms = min_yield_age.as_millis(),
-                cleared_inflight = cleared_inflight.is_some(),
+                cleared_inflight = false,
                 queue_len = pending_queue_len,
                 "cleared stale frontier owner for fresh resilience proposal"
             );
@@ -1261,7 +1287,7 @@ impl Actor {
             )
     }
 
-    fn same_height_block_has_observed_qc(
+    pub(super) fn same_height_block_has_observed_qc(
         &self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
@@ -1294,7 +1320,7 @@ impl Actor {
                 })
     }
 
-    fn stale_same_height_recovery_age(
+    pub(super) fn stale_same_height_recovery_age(
         &self,
         proposal_height: u64,
         subject_view: u64,
@@ -1312,7 +1338,7 @@ impl Actor {
             .map(|state| now.saturating_duration_since(state.entered_at))
     }
 
-    fn same_height_vote_recovery_view_gap_exhausted(
+    pub(super) fn same_height_vote_recovery_view_gap_exhausted(
         &self,
         subject_view: u64,
         proposal_view: u64,
@@ -1323,6 +1349,38 @@ impl Actor {
             .unwrap_or(u64::MAX)
             .max(8);
         view_gap >= min_view_gap
+    }
+
+    fn local_same_height_vote_has_live_proposal_material(
+        &self,
+        proposal_height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> bool {
+        self.pending
+            .pending_blocks
+            .get(&block_hash)
+            .is_some_and(|pending| pending.height == proposal_height && !pending.is_retry_aborted())
+            || self
+                .subsystems
+                .commit
+                .inflight
+                .as_ref()
+                .is_some_and(|inflight| {
+                    inflight.block_hash == block_hash
+                        && inflight.pending.height == proposal_height
+                        && !inflight.pending.aborted
+                })
+            || self
+                .pending
+                .pending_processing
+                .get()
+                .is_some_and(|pending| pending == block_hash)
+            || self
+                .kura
+                .get_block_height_by_hash(block_hash)
+                .is_some_and(|height| {
+                    u64::try_from(height.get()).is_ok_and(|height| height == proposal_height)
+                })
     }
 
     pub(super) fn local_same_height_vote_blocks_fresh_proposal(
@@ -1338,7 +1396,10 @@ impl Actor {
         }
         if existing_vote.view == proposal_view {
             return self.local_same_height_vote_has_hard_lock(proposal_height, existing_vote)
-                || self.block_known_locally(existing_vote.block_hash);
+                || self.local_same_height_vote_has_live_proposal_material(
+                    proposal_height,
+                    existing_vote.block_hash,
+                );
         }
         if !self.config.resilience.enabled {
             return true;
@@ -1398,7 +1459,9 @@ impl Actor {
                 && slot.view == existing_vote.view
                 && slot.block_hash == existing_vote.block_hash
                 && (slot.quorum_progress.commit_qc_observed
-                    || self.frontier_slot_competing_quorum_locked_for_view(slot, proposal_view))
+                    || (!recovery_exhausted
+                        && self
+                            .frontier_slot_competing_quorum_locked_for_view(slot, proposal_view)))
         }) {
             return true;
         }
@@ -1740,6 +1803,12 @@ impl Actor {
             );
             let fast_gas_capped = proposal_gas_limit != base_gas_limit;
             let scan_budget = self.proposal_scan_budget(max_in_block);
+            let max_ivm_transactions = self.config.block.max_ivm_transactions;
+            let replay_ivm_proved = {
+                let state_view = self.state.view();
+                let pipeline = state_view.pipeline();
+                pipeline.ivm_proved.enabled && !pipeline.ivm_proved.skip_replay
+            };
             debug!(
                 height,
                 view,
@@ -1747,6 +1816,7 @@ impl Actor {
                 max_tx_param = block_max_param.get(),
                 max_tx_target,
                 max_in_block = max_in_block.get(),
+                max_ivm_transactions = max_ivm_transactions.map(NonZeroUsize::get),
                 scan_budget,
                 scan_multiplier = self.config.block.proposal_queue_scan_multiplier.get(),
                 effective_commit_time_ms,
@@ -1762,6 +1832,8 @@ impl Actor {
                 max_in_block,
                 scan_budget,
                 proposal_gas_limit,
+                max_ivm_transactions,
+                replay_ivm_proved,
                 &mut tx_guards,
                 height,
                 view,
@@ -2379,10 +2451,12 @@ impl Actor {
                     .proposal_cache
                     .insert_hint(proposal_hint);
                 let block_created = if let Some(block_created) = self
-                    .frontier_block_created_for_local_proposal_wire(
+                    .frontier_block_created_for_local_proposal_wire_with_payload(
                         &signed_block,
                         &proposal,
                         topology.as_ref(),
+                        &payload_bytes,
+                        payload_hash,
                     ) {
                     block_created
                 } else {
@@ -3004,7 +3078,7 @@ impl Actor {
             return;
         };
 
-        let (pending_block, block_hash) = {
+        let (pending_block, block_hash, pending_payload_bytes, pending_payload_hash) = {
             let Some(pending) = self.pending.pending_blocks.values().find(|pending| {
                 !pending.aborted
                     && pending.height == height
@@ -3019,7 +3093,12 @@ impl Actor {
                 );
                 return;
             };
-            (pending.block.clone(), pending.block.hash())
+            (
+                pending.block.clone(),
+                pending.block.hash(),
+                pending.payload_bytes().to_vec(),
+                pending.payload_hash,
+            )
         };
 
         let (consensus_mode, _, _) = self.consensus_context_for_height(height);
@@ -3084,10 +3163,12 @@ impl Actor {
         }
 
         let local_peer_id = self.common_config.peer.id().clone();
-        let Some(block_created) = self.frontier_block_created_for_local_proposal_wire(
+        let Some(block_created) = self.frontier_block_created_for_local_proposal_wire_with_payload(
             &pending_block,
             &proposal,
             &proposal_roster,
+            &pending_payload_bytes,
+            pending_payload_hash,
         ) else {
             warn!(
                 height,

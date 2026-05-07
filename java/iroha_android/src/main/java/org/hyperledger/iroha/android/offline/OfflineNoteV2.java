@@ -19,6 +19,7 @@ import org.hyperledger.iroha.android.address.AccountAddress.SingleKeyPayload;
 import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
+import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
@@ -34,6 +35,12 @@ public final class OfflineNoteV2 {
       "iroha:offline-note-v2:redeem-public-inputs:v1";
   public static final String AUDIT_PUBLIC_INPUTS_DOMAIN =
       "iroha:offline-note-v2:audit-public-inputs:v1";
+  public static final String NOTE_COMMITMENT_DOMAIN =
+      "iroha:offline-note-v2:note-commitment:v1";
+  public static final String INPUT_NULLIFIER_DOMAIN =
+      "iroha:offline-note-v2:input-nullifier:v1";
+  public static final String PAYMENT_TOKEN_ID_DOMAIN =
+      "iroha:offline-note-v2:payment-token-id:v1";
   public static final String RECURSIVE_BACKEND = "halo2/ipa";
   public static final String RECURSIVE_VERIFIER_NAME = "offline-note-v2-recursive-v1";
   public static final String RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1 =
@@ -65,6 +72,18 @@ public final class OfflineNoteV2 {
       "iroha_data_model::offline::model::OfflineNoteAuditBundleV2";
   private static final String AUDIT_PUBLIC_INPUTS_SCHEMA =
       "iroha_data_model::offline::model::OfflineNoteAuditPublicInputsV2";
+  private static final String NOTE_COMMITMENT_PREIMAGE_SCHEMA =
+      "iroha_data_model::offline::model::OfflineNoteCommitmentPreimageV2";
+  private static final String INPUT_NULLIFIER_PREIMAGE_SCHEMA =
+      "iroha_data_model::offline::model::OfflineNoteInputNullifierPreimageV2";
+  private static final String PAYMENT_TOKEN_ID_PREIMAGE_SCHEMA =
+      "iroha_data_model::offline::model::OfflineNotePaymentTokenIdPreimageV2";
+  public static final String ISSUE_INSTRUCTION_SCHEMA =
+      "iroha_data_model::isi::offline::IssueOfflineNoteV2";
+  public static final String REDEEM_INSTRUCTION_SCHEMA =
+      "iroha_data_model::isi::offline::RedeemOfflineNoteV2";
+  public static final String AUDIT_INSTRUCTION_SCHEMA =
+      "iroha_data_model::isi::offline::AuditOfflineNoteV2";
 
   private OfflineNoteV2() {}
 
@@ -100,6 +119,53 @@ public final class OfflineNoteV2 {
     return encodeWithHeader(value, AUDIT_PUBLIC_INPUTS_SCHEMA, AUDIT_PUBLIC_INPUTS_ADAPTER);
   }
 
+  public static byte[] encodeNoteCommitmentPreimage(final NoteCommitmentPreimageV2 value) {
+    return encodeWithHeader(
+        value, NOTE_COMMITMENT_PREIMAGE_SCHEMA, NOTE_COMMITMENT_PREIMAGE_ADAPTER);
+  }
+
+  public static byte[] encodeInputNullifierPreimage(final InputNullifierPreimageV2 value) {
+    return encodeWithHeader(
+        value, INPUT_NULLIFIER_PREIMAGE_SCHEMA, INPUT_NULLIFIER_PREIMAGE_ADAPTER);
+  }
+
+  public static byte[] encodePaymentTokenIdPreimage(final PaymentTokenIdPreimageV2 value) {
+    return encodeWithHeader(
+        value, PAYMENT_TOKEN_ID_PREIMAGE_SCHEMA, PAYMENT_TOKEN_ID_PREIMAGE_ADAPTER);
+  }
+
+  public static InstructionBox issueInstruction(final IssueV2 value) {
+    return InstructionBox.fromWirePayload(
+        ISSUE_INSTRUCTION_SCHEMA,
+        encodeInstructionWrapper(ISSUE_INSTRUCTION_SCHEMA, encodeIssue(value)));
+  }
+
+  public static InstructionBox redeemInstruction(final RedeemV2 value) {
+    value.validateProofBinding();
+    return InstructionBox.fromWirePayload(
+        REDEEM_INSTRUCTION_SCHEMA,
+        encodeInstructionWrapper(REDEEM_INSTRUCTION_SCHEMA, encodeRedeem(value)));
+  }
+
+  public static InstructionBox auditInstruction(final AuditBundleV2 value) {
+    value.validateProofBinding();
+    return InstructionBox.fromWirePayload(
+        AUDIT_INSTRUCTION_SCHEMA,
+        encodeInstructionWrapper(AUDIT_INSTRUCTION_SCHEMA, encodeAudit(value)));
+  }
+
+  public static byte[] deriveNoteCommitment(final NoteCommitmentPreimageV2 value) {
+    return hash(encodeNoteCommitmentPreimage(value));
+  }
+
+  public static byte[] deriveInputNullifier(final InputNullifierPreimageV2 value) {
+    return hash(encodeInputNullifierPreimage(value));
+  }
+
+  public static byte[] derivePaymentTokenId(final PaymentTokenIdPreimageV2 value) {
+    return hash(encodePaymentTokenIdPreimage(value));
+  }
+
   public static byte[] hash(final byte[] bytes) {
     return IrohaHash.prehash(bytes);
   }
@@ -117,6 +183,10 @@ public final class OfflineNoteV2 {
   private static <T> byte[] encodeWithHeader(
       final T value, final String schema, final TypeAdapter<T> adapter) {
     return NoritoCodec.encode(value, schema, adapter, NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] encodeInstructionWrapper(final String schema, final byte[] modelPayload) {
+    return NoritoCodec.encode(modelPayload, schema, INSTRUCTION_WRAPPER_ADAPTER, 0);
   }
 
   public static final class VerifyingKeyIdReference {
@@ -446,6 +516,303 @@ public final class OfflineNoteV2 {
 
     public byte[] noritoEncoded() {
       return encodeCertificate(this);
+    }
+  }
+
+  public abstract static class CommitmentOriginV2 {
+    private CommitmentOriginV2() {}
+
+    public static final class IssuerLoad extends CommitmentOriginV2 {
+      private final String operationId;
+      private final String lineageId;
+      private final long localRevision;
+
+      public IssuerLoad(
+          final String operationId, final String lineageId, final long localRevision) {
+        this.operationId = requireNonBlank(operationId, "operation_id");
+        this.lineageId = requireNonBlank(lineageId, "lineage_id");
+        if (localRevision < 0) {
+          throw new IllegalArgumentException("local_revision must be non-negative");
+        }
+        this.localRevision = localRevision;
+      }
+
+      public String operationId() {
+        return operationId;
+      }
+
+      public String lineageId() {
+        return lineageId;
+      }
+
+      public long localRevision() {
+        return localRevision;
+      }
+    }
+
+    public static final class P2pOutput extends CommitmentOriginV2 {
+      private final String paymentRequestId;
+      private final int outputIndex;
+
+      public P2pOutput(final String paymentRequestId, final int outputIndex) {
+        this.paymentRequestId = requireNonBlank(paymentRequestId, "payment_request_id");
+        if (outputIndex < 0) {
+          throw new IllegalArgumentException("output_index must be non-negative");
+        }
+        this.outputIndex = outputIndex;
+      }
+
+      public String paymentRequestId() {
+        return paymentRequestId;
+      }
+
+      public int outputIndex() {
+        return outputIndex;
+      }
+    }
+  }
+
+  public static final class NoteCommitmentPreimageV2 {
+    private final String domain;
+    private final String chainId;
+    private final byte[] ownerKeyCertificatePayloadHash;
+    private final String assetId;
+    private final String amount;
+    private final String canonicalAmount;
+    private final byte[] noteSecret;
+    private final CommitmentOriginV2 origin;
+
+    public NoteCommitmentPreimageV2(
+        final String chainId,
+        final byte[] ownerKeyCertificatePayloadHash,
+        final String assetId,
+        final String amount,
+        final byte[] noteSecret,
+        final CommitmentOriginV2 origin) {
+      this(
+          NOTE_COMMITMENT_DOMAIN,
+          chainId,
+          ownerKeyCertificatePayloadHash,
+          assetId,
+          amount,
+          noteSecret,
+          origin);
+    }
+
+    public NoteCommitmentPreimageV2(
+        final String domain,
+        final String chainId,
+        final byte[] ownerKeyCertificatePayloadHash,
+        final String assetId,
+        final String amount,
+        final byte[] noteSecret,
+        final CommitmentOriginV2 origin) {
+      if (!NOTE_COMMITMENT_DOMAIN.equals(domain)) {
+        throw new IllegalArgumentException("unsupported note commitment domain");
+      }
+      this.domain = domain;
+      this.chainId = requireNonBlank(chainId, "chain_id");
+      this.ownerKeyCertificatePayloadHash =
+          copy(ownerKeyCertificatePayloadHash, "ownerKeyCertificatePayloadHash");
+      requireHash(this.ownerKeyCertificatePayloadHash, "owner_key_certificate_payload_hash");
+      this.assetId = Objects.requireNonNull(assetId, "assetId");
+      parseAssetId(assetId);
+      this.amount = Objects.requireNonNull(amount, "amount");
+      this.canonicalAmount = parseNumeric(amount).canonicalString;
+      this.noteSecret = copy(noteSecret, "noteSecret");
+      requireRandomBytes(this.noteSecret, "note_secret");
+      this.origin = Objects.requireNonNull(origin, "origin");
+    }
+
+    public String domain() {
+      return domain;
+    }
+
+    public String chainId() {
+      return chainId;
+    }
+
+    public byte[] ownerKeyCertificatePayloadHash() {
+      return Arrays.copyOf(
+          ownerKeyCertificatePayloadHash, ownerKeyCertificatePayloadHash.length);
+    }
+
+    public String assetId() {
+      return assetId;
+    }
+
+    public String amount() {
+      return amount;
+    }
+
+    public String canonicalAmount() {
+      return canonicalAmount;
+    }
+
+    public byte[] noteSecret() {
+      return Arrays.copyOf(noteSecret, noteSecret.length);
+    }
+
+    public CommitmentOriginV2 origin() {
+      return origin;
+    }
+
+    public byte[] noritoEncoded() {
+      return encodeNoteCommitmentPreimage(this);
+    }
+
+    public byte[] deriveNoteCommitment() {
+      return OfflineNoteV2.deriveNoteCommitment(this);
+    }
+  }
+
+  public static final class InputNullifierPreimageV2 {
+    private final String domain;
+    private final String chainId;
+    private final byte[] sourceNoteCommitment;
+    private final byte[] ownerKeyCertificatePayloadHash;
+    private final byte[] noteSecret;
+
+    public InputNullifierPreimageV2(
+        final String chainId,
+        final byte[] sourceNoteCommitment,
+        final byte[] ownerKeyCertificatePayloadHash,
+        final byte[] noteSecret) {
+      this(
+          INPUT_NULLIFIER_DOMAIN,
+          chainId,
+          sourceNoteCommitment,
+          ownerKeyCertificatePayloadHash,
+          noteSecret);
+    }
+
+    public InputNullifierPreimageV2(
+        final String domain,
+        final String chainId,
+        final byte[] sourceNoteCommitment,
+        final byte[] ownerKeyCertificatePayloadHash,
+        final byte[] noteSecret) {
+      if (!INPUT_NULLIFIER_DOMAIN.equals(domain)) {
+        throw new IllegalArgumentException("unsupported input nullifier domain");
+      }
+      this.domain = domain;
+      this.chainId = requireNonBlank(chainId, "chain_id");
+      this.sourceNoteCommitment = copy(sourceNoteCommitment, "sourceNoteCommitment");
+      this.ownerKeyCertificatePayloadHash =
+          copy(ownerKeyCertificatePayloadHash, "ownerKeyCertificatePayloadHash");
+      this.noteSecret = copy(noteSecret, "noteSecret");
+      requireHash(this.sourceNoteCommitment, "source_note_commitment");
+      requireHash(this.ownerKeyCertificatePayloadHash, "owner_key_certificate_payload_hash");
+      requireRandomBytes(this.noteSecret, "note_secret");
+    }
+
+    public String domain() {
+      return domain;
+    }
+
+    public String chainId() {
+      return chainId;
+    }
+
+    public byte[] sourceNoteCommitment() {
+      return Arrays.copyOf(sourceNoteCommitment, sourceNoteCommitment.length);
+    }
+
+    public byte[] ownerKeyCertificatePayloadHash() {
+      return Arrays.copyOf(
+          ownerKeyCertificatePayloadHash, ownerKeyCertificatePayloadHash.length);
+    }
+
+    public byte[] noteSecret() {
+      return Arrays.copyOf(noteSecret, noteSecret.length);
+    }
+
+    public byte[] noritoEncoded() {
+      return encodeInputNullifierPreimage(this);
+    }
+
+    public byte[] deriveInputNullifier() {
+      return OfflineNoteV2.deriveInputNullifier(this);
+    }
+  }
+
+  public static final class PaymentTokenIdPreimageV2 {
+    private final String domain;
+    private final String chainId;
+    private final byte[] tokenNonce;
+    private final byte[] senderKeyCertificatePayloadHash;
+    private final List<byte[]> inputNullifiers;
+    private final List<byte[]> outputCommitments;
+
+    public PaymentTokenIdPreimageV2(
+        final String chainId,
+        final byte[] tokenNonce,
+        final byte[] senderKeyCertificatePayloadHash,
+        final List<byte[]> inputNullifiers,
+        final List<byte[]> outputCommitments) {
+      this(
+          PAYMENT_TOKEN_ID_DOMAIN,
+          chainId,
+          tokenNonce,
+          senderKeyCertificatePayloadHash,
+          inputNullifiers,
+          outputCommitments);
+    }
+
+    public PaymentTokenIdPreimageV2(
+        final String domain,
+        final String chainId,
+        final byte[] tokenNonce,
+        final byte[] senderKeyCertificatePayloadHash,
+        final List<byte[]> inputNullifiers,
+        final List<byte[]> outputCommitments) {
+      if (!PAYMENT_TOKEN_ID_DOMAIN.equals(domain)) {
+        throw new IllegalArgumentException("unsupported payment token id domain");
+      }
+      this.domain = domain;
+      this.chainId = requireNonBlank(chainId, "chain_id");
+      this.tokenNonce = copy(tokenNonce, "tokenNonce");
+      this.senderKeyCertificatePayloadHash =
+          copy(senderKeyCertificatePayloadHash, "senderKeyCertificatePayloadHash");
+      this.inputNullifiers = copyByteList(inputNullifiers, "inputNullifiers");
+      this.outputCommitments = copyByteList(outputCommitments, "outputCommitments");
+      requireRandomBytes(this.tokenNonce, "token_nonce");
+      requireHash(this.senderKeyCertificatePayloadHash, "sender_key_certificate_payload_hash");
+      requireHashes(this.inputNullifiers, "input_nullifiers");
+      requireHashes(this.outputCommitments, "output_commitments");
+    }
+
+    public String domain() {
+      return domain;
+    }
+
+    public String chainId() {
+      return chainId;
+    }
+
+    public byte[] tokenNonce() {
+      return Arrays.copyOf(tokenNonce, tokenNonce.length);
+    }
+
+    public byte[] senderKeyCertificatePayloadHash() {
+      return Arrays.copyOf(
+          senderKeyCertificatePayloadHash, senderKeyCertificatePayloadHash.length);
+    }
+
+    public List<byte[]> inputNullifiers() {
+      return copyByteList(inputNullifiers, "inputNullifiers");
+    }
+
+    public List<byte[]> outputCommitments() {
+      return copyByteList(outputCommitments, "outputCommitments");
+    }
+
+    public byte[] noritoEncoded() {
+      return encodePaymentTokenIdPreimage(this);
+    }
+
+    public byte[] derivePaymentTokenId() {
+      return OfflineNoteV2.derivePaymentTokenId(this);
     }
   }
 
@@ -1170,6 +1537,20 @@ public final class OfflineNoteV2 {
     }
   }
 
+  private static final TypeAdapter<byte[]> INSTRUCTION_WRAPPER_ADAPTER =
+      new TypeAdapter<>() {
+        @Override
+        public void encode(final NoritoEncoder encoder, final byte[] value) {
+          writeField(encoder, child -> child.writeBytes(value));
+        }
+
+        @Override
+        public byte[] decode(final NoritoDecoder decoder) {
+          throw new UnsupportedOperationException(
+              "Offline Note V2 instruction decoding is not supported yet");
+        }
+      };
+
   private static final TypeAdapter<KeyCertificatePayloadV2> KEY_CERTIFICATE_PAYLOAD_ADAPTER =
       new TypeAdapter<>() {
         @Override
@@ -1365,6 +1746,64 @@ public final class OfflineNoteV2 {
         }
       };
 
+  private static final TypeAdapter<NoteCommitmentPreimageV2> NOTE_COMMITMENT_PREIMAGE_ADAPTER =
+      new TypeAdapter<>() {
+        @Override
+        public void encode(final NoritoEncoder encoder, final NoteCommitmentPreimageV2 value) {
+          writeField(encoder, child -> writeString(child, value.domain()));
+          writeField(encoder, child -> writeChainId(child, value.chainId()));
+          writeField(encoder, child -> child.writeBytes(value.ownerKeyCertificatePayloadHash()));
+          writeField(encoder, child -> writeAssetId(child, value.assetId()));
+          writeField(encoder, child -> writeNumeric(child, value.canonicalAmount()));
+          writeField(encoder, child -> writeBytesVec(child, value.noteSecret()));
+          writeField(encoder, child -> writeCommitmentOrigin(child, value.origin()));
+        }
+
+        @Override
+        public NoteCommitmentPreimageV2 decode(final NoritoDecoder decoder) {
+          throw new UnsupportedOperationException("Offline Note V2 decoding is not supported yet");
+        }
+      };
+
+  private static final TypeAdapter<InputNullifierPreimageV2> INPUT_NULLIFIER_PREIMAGE_ADAPTER =
+      new TypeAdapter<>() {
+        @Override
+        public void encode(final NoritoEncoder encoder, final InputNullifierPreimageV2 value) {
+          writeField(encoder, child -> writeString(child, value.domain()));
+          writeField(encoder, child -> writeChainId(child, value.chainId()));
+          writeField(encoder, child -> child.writeBytes(value.sourceNoteCommitment()));
+          writeField(encoder, child -> child.writeBytes(value.ownerKeyCertificatePayloadHash()));
+          writeField(encoder, child -> writeBytesVec(child, value.noteSecret()));
+        }
+
+        @Override
+        public InputNullifierPreimageV2 decode(final NoritoDecoder decoder) {
+          throw new UnsupportedOperationException("Offline Note V2 decoding is not supported yet");
+        }
+      };
+
+  private static final TypeAdapter<PaymentTokenIdPreimageV2> PAYMENT_TOKEN_ID_PREIMAGE_ADAPTER =
+      new TypeAdapter<>() {
+        @Override
+        public void encode(final NoritoEncoder encoder, final PaymentTokenIdPreimageV2 value) {
+          writeField(encoder, child -> writeString(child, value.domain()));
+          writeField(encoder, child -> writeChainId(child, value.chainId()));
+          writeField(encoder, child -> writeBytesVec(child, value.tokenNonce()));
+          writeField(encoder, child -> child.writeBytes(value.senderKeyCertificatePayloadHash()));
+          writeField(
+              encoder,
+              child -> writeVec(child, value.inputNullifiers(), NoritoEncoder::writeBytes));
+          writeField(
+              encoder,
+              child -> writeVec(child, value.outputCommitments(), NoritoEncoder::writeBytes));
+        }
+
+        @Override
+        public PaymentTokenIdPreimageV2 decode(final NoritoDecoder decoder) {
+          throw new UnsupportedOperationException("Offline Note V2 decoding is not supported yet");
+        }
+      };
+
   @FunctionalInterface
   private interface FieldWriter {
     void write(NoritoEncoder encoder);
@@ -1430,8 +1869,40 @@ public final class OfflineNoteV2 {
     writeField(encoder, child -> writeBytesVec(child, value.bytes()));
   }
 
+  private static void writeCommitmentOrigin(
+      final NoritoEncoder encoder, final CommitmentOriginV2 origin) {
+    if (origin instanceof CommitmentOriginV2.IssuerLoad) {
+      final CommitmentOriginV2.IssuerLoad issuerLoad = (CommitmentOriginV2.IssuerLoad) origin;
+      encoder.writeUInt(0, 32);
+      writeField(
+          encoder,
+          payload -> {
+            writeField(payload, child -> writeString(child, issuerLoad.operationId()));
+            writeField(payload, child -> writeString(child, issuerLoad.lineageId()));
+            writeField(payload, child -> child.writeUInt(issuerLoad.localRevision(), 64));
+          });
+      return;
+    }
+    if (origin instanceof CommitmentOriginV2.P2pOutput) {
+      final CommitmentOriginV2.P2pOutput output = (CommitmentOriginV2.P2pOutput) origin;
+      encoder.writeUInt(1, 32);
+      writeField(
+          encoder,
+          payload -> {
+            writeField(payload, child -> writeString(child, output.paymentRequestId()));
+            writeField(payload, child -> child.writeUInt(output.outputIndex(), 32));
+          });
+      return;
+    }
+    throw new IllegalArgumentException("unsupported commitment origin");
+  }
+
   private static void writeAccountId(final NoritoEncoder encoder, final String accountId) {
     encoder.writeBytes(encodeAccountIdPayload(accountId));
+  }
+
+  private static void writeChainId(final NoritoEncoder encoder, final String chainId) {
+    writeField(encoder, child -> writeString(child, chainId));
   }
 
   private static byte[] encodeAccountIdPayload(final String accountId) {
@@ -1447,13 +1918,7 @@ public final class OfflineNoteV2 {
         final SingleKeyPayload payload = single.get();
         final NoritoEncoder encoder = new NoritoEncoder(NoritoHeader.COMPACT_LEN);
         encoder.writeUInt(0, 32);
-        writeField(
-            encoder,
-            child ->
-                writeString(
-                    child,
-                    PublicKeyCodec.encodePublicKeyMultihash(
-                        payload.curveId(), payload.publicKey())));
+        writeField(encoder, child -> writePublicKey(child, payload.curveId(), payload.publicKey()));
         return encoder.toByteArray();
       }
       final Optional<MultisigPolicyPayload> multisig =
@@ -1500,16 +1965,60 @@ public final class OfflineNoteV2 {
       writeField(
           encoder,
           memberEncoder -> {
-            writeField(
-                memberEncoder,
-                child ->
-                    writeString(
-                        child,
-                        PublicKeyCodec.encodePublicKeyMultihash(
-                            member.curveId(), member.publicKey())));
+            writeField(memberEncoder, child -> writePublicKey(child, member.curveId(), member.publicKey()));
             writeField(memberEncoder, child -> child.writeUInt(member.weight(), 16));
           });
     }
+  }
+
+  private static void writePublicKey(
+      final NoritoEncoder encoder, final int curveId, final byte[] publicKey) {
+    writeConstVec(encoder, publicKeyCompactPayload(curveId, publicKey));
+  }
+
+  private static byte[] publicKeyCompactPayload(final int curveId, final byte[] publicKey) {
+    final int tag;
+    switch (curveId) {
+      case 0x01:
+        tag = 0;
+        break;
+      case 0x04:
+        tag = 1;
+        break;
+      case 0x03:
+        tag = 2;
+        break;
+      case 0x05:
+        tag = 3;
+        break;
+      case 0x02:
+        tag = 4;
+        break;
+      case 0x0A:
+        tag = 5;
+        break;
+      case 0x0B:
+        tag = 6;
+        break;
+      case 0x0C:
+        tag = 7;
+        break;
+      case 0x0D:
+        tag = 8;
+        break;
+      case 0x0E:
+        tag = 9;
+        break;
+      case 0x0F:
+        tag = 10;
+        break;
+      default:
+        throw new IllegalArgumentException("Unsupported curve id: " + curveId);
+    }
+    final byte[] bytes = new byte[1 + publicKey.length];
+    bytes[0] = (byte) tag;
+    System.arraycopy(publicKey, 0, bytes, 1, publicKey.length);
+    return bytes;
   }
 
   private static void writeAssetId(final NoritoEncoder encoder, final String assetId) {
@@ -1776,6 +2285,12 @@ public final class OfflineNoteV2 {
     }
     for (int i = 0; i < values.size(); i++) {
       requireHash(values.get(i), field + "[" + i + "]");
+    }
+  }
+
+  private static void requireRandomBytes(final byte[] value, final String field) {
+    if (value.length != 32) {
+      throw new IllegalArgumentException(field + " must be exactly 32 bytes");
     }
   }
 

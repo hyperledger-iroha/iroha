@@ -159,24 +159,10 @@ fn insert_gas_asset_id(metadata: &mut Metadata, gas_asset_id: Option<&str>) -> R
     Ok(())
 }
 
-fn ivm_transaction_metadata(
-    gas_asset_id: Option<&str>,
-    gas_limit: u64,
-    contract_address: &iroha::data_model::smart_contract::ContractAddress,
-) -> Result<Metadata> {
+fn ivm_transaction_metadata(gas_asset_id: Option<&str>, gas_limit: u64) -> Result<Metadata> {
     let mut metadata = Metadata::default();
     insert_gas_asset_id(&mut metadata, gas_asset_id)?;
     iroha::data_model::transaction::insert_transaction_gas_limit(&mut metadata, gas_limit);
-    insert_string_metadata(
-        &mut metadata,
-        "gov_contract_address",
-        contract_address.to_string(),
-    )?;
-    insert_string_metadata(
-        &mut metadata,
-        "contract_address",
-        contract_address.to_string(),
-    )?;
     Ok(metadata)
 }
 
@@ -748,11 +734,7 @@ fn main() -> Result<()> {
         .map_err(|err| eyre!("verify contract artifact: {err}"))?;
     let manifest = verified.manifest.signed(&key_pair);
     let code_hash = verified.code_hash;
-    let tx_metadata = ivm_transaction_metadata(
-        args.gas_asset_id.as_deref(),
-        args.gas_limit,
-        &contract_address,
-    )?;
+    let tx_metadata = ivm_transaction_metadata(args.gas_asset_id.as_deref(), args.gas_limit)?;
     let register_request = RegisterSmartContractBytes {
         code_hash,
         code: code.clone(),

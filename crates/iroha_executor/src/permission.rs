@@ -375,7 +375,7 @@ mod nexus {
     }
 
     fn ensure_publish_manifest_grant_authority(
-        permission: &CanPublishSpaceDirectoryManifest,
+        permission: CanPublishSpaceDirectoryManifest,
         authority: &AccountId,
         host: &Iroha,
     ) -> Result {
@@ -383,7 +383,7 @@ mod nexus {
         {
             let override_permissions = test_override::permissions();
             if !override_permissions.is_empty() {
-                if has_permission_in_account(&override_permissions, permission)
+                if has_permission_in_account(&override_permissions, &permission)
                     || override_permissions
                         .iter()
                         .any(is_legacy_space_directory_manifest_wildcard)
@@ -415,7 +415,7 @@ mod nexus {
                 return Ok(());
             }
 
-            ensure_publish_manifest_grant_authority(self, authority, host)
+            ensure_publish_manifest_grant_authority(*self, authority, host)
         }
 
         fn validate_revoke(
@@ -428,7 +428,7 @@ mod nexus {
                 return Ok(());
             }
 
-            ensure_publish_manifest_grant_authority(self, authority, host)
+            ensure_publish_manifest_grant_authority(*self, authority, host)
         }
     }
 
@@ -1802,8 +1802,7 @@ mod tests {
         let token = CanPublishSpaceDirectoryManifest {
             dataspace: DataSpaceId::new(10),
         };
-        let previous =
-            test_override::replace_permissions(vec![PermissionObject::from(token.clone())]);
+        let previous = test_override::replace_permissions(vec![PermissionObject::from(token)]);
 
         let result = token.validate_grant(&authority, &context, &Iroha);
 

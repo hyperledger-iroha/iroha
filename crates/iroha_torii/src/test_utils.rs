@@ -773,6 +773,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             },
             block: A::SumeragiBlock {
                 max_transactions: defaults::sumeragi::BLOCK_MAX_TRANSACTIONS,
+                max_ivm_transactions: defaults::sumeragi::BLOCK_MAX_IVM_TRANSACTIONS,
                 fast_gas_limit_per_block: defaults::sumeragi::FAST_FINALITY_GAS_LIMIT_PER_BLOCK,
                 max_payload_bytes: defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES,
                 proposal_queue_scan_multiplier: defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER,
@@ -889,6 +890,12 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 pending_proposal_cap: defaults::sumeragi::RECOVERY_PENDING_PROPOSAL_CAP,
                 missing_fetch_aggressive_after_attempts:
                     defaults::sumeragi::RECOVERY_MISSING_FETCH_AGGRESSIVE_AFTER_ATTEMPTS,
+                authoritative_body_ingress_fetch_grace: Duration::from_millis(
+                    defaults::sumeragi::RECOVERY_AUTHORITATIVE_BODY_INGRESS_FETCH_GRACE_MS,
+                ),
+                exact_body_fetch_retry_floor: Duration::from_millis(
+                    defaults::sumeragi::RECOVERY_EXACT_BODY_FETCH_RETRY_FLOOR_MS,
+                ),
             },
             fanout: A::SumeragiFanout {
                 large_set_threshold: defaults::sumeragi::FANOUT_LARGE_SET_THRESHOLD,

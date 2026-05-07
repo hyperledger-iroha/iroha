@@ -9378,9 +9378,16 @@ fn decode_and_validate_evidence(
 ) -> Result<ConsensusEvidence, Error> {
     let evidence = decode_evidence_hex(value)?;
     let world = state.world_view();
-    let topology_peers = state.commit_topology_snapshot();
     let (subject_height, _) = iroha_core::sumeragi::evidence_subject_height_view(&evidence);
     let current_height = u64::try_from(state.committed_height()).unwrap_or(0);
+    let horizon = world
+        .sumeragi_npos_parameters()
+        .map(|params| params.evidence_horizon_blocks());
+    if !evidence_within_horizon(current_height, horizon, subject_height) {
+        return Ok(evidence);
+    }
+
+    let topology_peers = state.commit_topology_snapshot();
     let height = subject_height.unwrap_or(current_height);
     let (mode_tag, _, _, _) = iroha_core::sumeragi::status::mode_tags();
     let fallback_mode = match mode_tag.as_str() {
@@ -9460,6 +9467,18 @@ fn decode_and_validate_evidence(
             "invalid consensus evidence: {detail}"
         )),
     )))
+}
+
+fn evidence_within_horizon(
+    current_height: u64,
+    horizon: Option<u64>,
+    subject_height: Option<u64>,
+) -> bool {
+    let Some(horizon) = horizon else { return true };
+    if horizon == 0 {
+        return true;
+    }
+    subject_height.unwrap_or(current_height) >= current_height.saturating_sub(horizon)
 }
 
 #[cfg(test)]
@@ -9599,6 +9618,15 @@ mod evidence_submit_tests {
 
         let decoded = decode_evidence_hex(&spaced).expect("decode spaced hex");
         assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
+    }
+
+    #[test]
+    fn evidence_horizon_filter_rejects_stale_subject_heights() {
+        assert!(evidence_within_horizon(10, None, Some(1)));
+        assert!(evidence_within_horizon(10, Some(0), Some(1)));
+        assert!(evidence_within_horizon(10, Some(3), Some(7)));
+        assert!(!evidence_within_horizon(10, Some(3), Some(6)));
+        assert!(evidence_within_horizon(10, Some(3), None));
     }
 
     #[test]
@@ -14196,13 +14224,13 @@ fn execute_contract_view(
     let query_view = state.query_view();
     let mut vm = query_view.ivm.clone();
     let mut host = if let Some(args) = payload {
-        iroha_core::smartcontracts::ivm::host::CoreHost::with_accounts_and_args(
+        iroha_core::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
             authority.clone(),
             query_view.accounts_snapshot(),
             args,
         )
     } else {
-        iroha_core::smartcontracts::ivm::host::CoreHost::with_accounts(
+        iroha_core::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
             authority.clone(),
             query_view.accounts_snapshot(),
         )
@@ -14211,9 +14239,9 @@ fn execute_contract_view(
     host.set_halo2_config(&query_view.zk.halo2);
     host.set_chain_id(&query_view.chain_id);
     host.set_axt_timing(query_view.nexus.axt);
-    host.set_durable_state_snapshot_from_world(&query_view.world);
     host.set_public_inputs_from_parameters(query_view.world.parameters());
     host.set_vrf_epoch_seeds_from_world(&query_view.world);
+    host.set_query_state(&query_view);
     host.bind_contract_runtime_context(
         contract_address.clone(),
         contract_alias.cloned(),
@@ -14293,13 +14321,13 @@ fn execute_contract_call_simulation(
     let query_view = state.query_view();
     let mut vm = query_view.ivm.clone();
     let mut host = if let Some(args) = payload {
-        iroha_core::smartcontracts::ivm::host::CoreHost::with_accounts_and_args(
+        iroha_core::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
             authority.clone(),
             query_view.accounts_snapshot(),
             args,
         )
     } else {
-        iroha_core::smartcontracts::ivm::host::CoreHost::with_accounts(
+        iroha_core::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
             authority.clone(),
             query_view.accounts_snapshot(),
         )
@@ -14308,9 +14336,9 @@ fn execute_contract_call_simulation(
     host.set_halo2_config(&query_view.zk.halo2);
     host.set_chain_id(&query_view.chain_id);
     host.set_axt_timing(query_view.nexus.axt);
-    host.set_durable_state_snapshot_from_world(&query_view.world);
     host.set_public_inputs_from_parameters(query_view.world.parameters());
     host.set_vrf_epoch_seeds_from_world(&query_view.world);
+    host.set_query_state(&query_view);
 
     vm.load_program(code_bytes)
         .map_err(|err| ContractCallSimulationError {
@@ -48082,7 +48110,9 @@ pub fn handle_post_sumeragi_vrf_commit(
         signer: request.signer,
         bls_sig,
     };
-    sumeragi.incoming_block_message(BlockMessage::VrfCommit(commit));
+    if !sumeragi.incoming_block_message(BlockMessage::VrfCommit(commit)) {
+        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
+    }
     Ok(StatusCode::ACCEPTED.into_response())
 }
 
@@ -48098,7 +48128,9 @@ pub fn handle_post_sumeragi_vrf_reveal(
         signer: request.signer,
         bls_sig,
     };
-    sumeragi.incoming_block_message(BlockMessage::VrfReveal(msg));
+    if !sumeragi.incoming_block_message(BlockMessage::VrfReveal(msg)) {
+        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
+    }
     Ok(StatusCode::ACCEPTED.into_response())
 }
 

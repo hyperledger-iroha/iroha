@@ -214,7 +214,9 @@ pub fn fft_columns_async<'a>(
     match backend {
         GpuBackend::Cuda => fft_cuda_async(columns, log_size, root),
         #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
-        GpuBackend::Metal => metal::fft_columns_async(columns, log_size).map(ColumnDispatch::metal),
+        GpuBackend::Metal => {
+            metal::fft_columns_async(columns, log_size, root).map(ColumnDispatch::metal)
+        }
         other => Err(GpuError::Unsupported(other)),
     }
 }
@@ -256,7 +258,7 @@ pub fn ifft_columns_async<'a>(
         GpuBackend::Cuda => ifft_cuda_async(columns, log_size, root),
         #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
         GpuBackend::Metal => {
-            metal::ifft_columns_async(columns, log_size).map(ColumnDispatch::metal)
+            metal::ifft_columns_async(columns, log_size, root).map(ColumnDispatch::metal)
         }
         other => Err(GpuError::Unsupported(other)),
     }
@@ -307,7 +309,8 @@ pub fn lde_columns_async(
         GpuBackend::Cuda => lde_cuda_async(coeffs, trace_log, blowup_log, lde_root, coset),
         #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
         GpuBackend::Metal => {
-            metal::lde_columns_async(coeffs, trace_log, blowup_log, coset).map(LdeDispatch::metal)
+            metal::lde_columns_async(coeffs, trace_log, blowup_log, lde_root, coset)
+                .map(LdeDispatch::metal)
         }
         other => Err(GpuError::Unsupported(other)),
     }

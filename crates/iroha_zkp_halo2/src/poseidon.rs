@@ -349,18 +349,19 @@ fn hash_words_internal(words: &[Fr]) -> Fr {
 
 fn hash_u64_words_internal(words: &[u64]) -> Fr {
     let mut state = [Fr::ZERO; 3];
-    let mut index = 0;
-    while index + 1 < words.len() {
-        state[0] += Fr::from(words[index]);
-        state[1] += Fr::from(words[index + 1]);
+    let mut pairs = words.chunks_exact(2);
+    for pair in &mut pairs {
+        state[0] += Fr::from(pair[0]);
+        state[1] += Fr::from(pair[1]);
         poseidon3_permute(&mut state);
-        index += 2;
     }
-    if index == words.len() {
-        state[0] += Fr::ONE;
-    } else {
-        state[0] += Fr::from(words[index]);
-        state[1] += Fr::ONE;
+    match pairs.remainder() {
+        [] => state[0] += Fr::ONE,
+        [word] => {
+            state[0] += Fr::from(*word);
+            state[1] += Fr::ONE;
+        }
+        _ => unreachable!("u64 pair chunks can leave at most one trailing word"),
     }
     poseidon3_permute(&mut state);
     state[0]
@@ -466,10 +467,15 @@ impl PoseidonByteHasher {
     #[inline(always)]
     pub fn finalize(mut self) -> [u8; 32] {
         if self.pending_len > 0 {
-            self.absorb_word(Fr::from(partial_u64_from_le_bytes(
+            self.state[self.rate_len] += Fr::from(partial_u64_from_le_bytes(
                 &self.pending_bytes,
                 self.pending_len,
-            )));
+            ));
+            self.rate_len += 1;
+            if self.rate_len == 2 {
+                poseidon3_permute(&mut self.state);
+                self.rate_len = 0;
+            }
         }
         match self.rate_len {
             0 => self.state[0] += Fr::ONE,
@@ -482,13 +488,11 @@ impl PoseidonByteHasher {
 }
 
 impl Write for PoseidonByteHasher {
-    #[inline(always)]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.update(buf);
         Ok(buf.len())
     }
 
-    #[inline(always)]
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }

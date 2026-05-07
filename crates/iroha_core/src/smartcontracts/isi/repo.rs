@@ -703,16 +703,15 @@ pub mod query {
         })
     }
 
-    fn maybe_replace_best(
+    fn intersect_candidate_ids(
         best: &mut Option<BTreeSet<RepoAgreementId>>,
         candidates: BTreeSet<RepoAgreementId>,
     ) {
-        if best
-            .as_ref()
-            .map_or(true, |current| candidates.len() < current.len())
-        {
+        let Some(current) = best.take() else {
             *best = Some(candidates);
-        }
+            return;
+        };
+        *best = Some(current.intersection(&candidates).cloned().collect());
     }
 
     fn ids_for_accounts(
@@ -740,7 +739,7 @@ pub mod query {
         ids
     }
 
-    fn repo_agreement_candidate_ids(
+    pub(super) fn repo_agreement_candidate_ids(
         predicate: &PredicateJson,
         world: &impl WorldReadOnly,
     ) -> Option<BTreeSet<RepoAgreementId>> {
@@ -748,7 +747,7 @@ pub mod query {
 
         for cond in &predicate.equals {
             if repo_agreement_id_field(&cond.field) {
-                maybe_replace_best(
+                intersect_candidate_ids(
                     &mut best,
                     repo_agreement_id_from_value(&cond.value)
                         .into_iter()
@@ -758,7 +757,7 @@ pub mod query {
             }
 
             if let Some(index) = repo_agreement_account_index(&cond.field) {
-                maybe_replace_best(
+                intersect_candidate_ids(
                     &mut best,
                     ids_for_accounts(world, index, account_id_from_value(&cond.value)),
                 );
@@ -767,7 +766,7 @@ pub mod query {
 
         for cond in &predicate.r#in {
             if repo_agreement_id_field(&cond.field) {
-                maybe_replace_best(
+                intersect_candidate_ids(
                     &mut best,
                     cond.values
                         .iter()
@@ -778,7 +777,7 @@ pub mod query {
             }
 
             if let Some(index) = repo_agreement_account_index(&cond.field) {
-                maybe_replace_best(
+                intersect_candidate_ids(
                     &mut best,
                     ids_for_accounts(
                         world,
@@ -1313,6 +1312,60 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    #[test]
+    fn repo_agreement_candidates_intersect_participant_indexes() {
+        let (state, target_id, cash_def_id, collateral_def_id, custodian_id) =
+            setup_state_with_custodian();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+
+        let make_agreement =
+            |id: RepoAgreementId, initiator: AccountId, counterparty: AccountId| {
+                RepoAgreement::new(
+                    id,
+                    initiator,
+                    counterparty,
+                    RepoCashLeg {
+                        asset_definition_id: cash_def_id.clone(),
+                        quantity: Numeric::from(1_000u32),
+                    },
+                    RepoCollateralLeg::new(collateral_def_id.clone(), Numeric::from(1_100u32)),
+                    250,
+                    1_704_000_000_000,
+                    0,
+                    RepoGovernance::with_defaults(1_500, 86_400),
+                    None,
+                )
+            };
+
+        let same_initiator_id: RepoAgreementId = "same_initiator".parse().unwrap();
+        let same_counterparty_id: RepoAgreementId = "same_counterparty".parse().unwrap();
+        for agreement in [
+            make_agreement(target_id.clone(), ALICE_ID.clone(), BOB_ID.clone()),
+            make_agreement(same_initiator_id, ALICE_ID.clone(), custodian_id.clone()),
+            make_agreement(same_counterparty_id, custodian_id, BOB_ID.clone()),
+        ] {
+            stx.world.insert_repo_agreement_entry(agreement);
+        }
+
+        let predicate = CompoundPredicate::<RepoAgreement>::build(|predicate| {
+            predicate
+                .equals("initiator", ALICE_ID.to_string())
+                .equals("counterparty", BOB_ID.to_string())
+        });
+        let predicate_json = predicate
+            .json_payload()
+            .and_then(|raw| {
+                norito::json::from_str::<iroha_data_model::query::json::PredicateJson>(raw).ok()
+            })
+            .expect("predicate JSON");
+        let candidate_ids = query::repo_agreement_candidate_ids(&predicate_json, &stx.world)
+            .expect("indexed candidates");
+
+        assert_eq!(candidate_ids, std::collections::BTreeSet::from([target_id]));
     }
 
     #[test]

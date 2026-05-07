@@ -982,6 +982,10 @@ fn derive_from_isi_batch_with_state<R>(batch: &[InstructionBox], state_ro: Optio
 where
     R: StateReadOnly + QueryStateSource,
 {
+    if let Some(set) = derive_simple_asset_transfer_batch(batch) {
+        return set;
+    }
+
     let mut set = AccessSet::new();
     let max_depth = state_ro
         .map(|view| view.world().parameters().smart_contract().execution_depth())
@@ -997,6 +1001,24 @@ where
         ));
     }
     set
+}
+
+fn derive_simple_asset_transfer_batch(batch: &[InstructionBox]) -> Option<AccessSet> {
+    let mut set = AccessSet::new();
+    for instr in batch {
+        let transfer = instr.as_any().downcast_ref::<TransferBox>()?;
+        let TransferBox::Asset(transfer) = transfer else {
+            return None;
+        };
+        let source_id = transfer.source.clone();
+        let destination_id = AssetId::of(
+            transfer.source.definition.clone(),
+            transfer.destination.clone(),
+        );
+        add_asset_rw(&mut set, &source_id);
+        add_asset_rw(&mut set, &destination_id);
+    }
+    Some(set)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1582,7 +1604,6 @@ where
     host.set_telemetry(state_ro.metrics().clone());
     host.set_crypto_config(state_ro.crypto());
     host.set_halo2_config(&state_ro.zk().halo2);
-    host.set_durable_state_snapshot_from_world(state_ro.world());
     host.set_public_inputs_from_parameters(state_ro.world().parameters());
     host.set_vrf_epoch_seeds_from_world(state_ro.world());
     host.set_query_state(state_ro);
@@ -1796,6 +1817,43 @@ mod tests {
         assert!(set.read_keys.contains(&k_asset_def));
         assert!(set.write_keys.contains(&k_asset_def));
         assert!(set.read_keys.contains(&k_domain));
+    }
+
+    #[test]
+    fn simple_asset_transfer_batch_fast_path_matches_generic_walker() {
+        let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
+        let (bob, _) = iroha_test_samples::gen_account_in("wonderland");
+        let (carol, _) = iroha_test_samples::gen_account_in("wonderland");
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "coin".parse().unwrap(),
+        );
+        let alice_asset = AssetId::of(asset_definition.clone(), alice.clone());
+        let bob_asset = AssetId::of(asset_definition, bob.clone());
+        let batch: Vec<InstructionBox> = vec![
+            Transfer::asset_numeric(alice_asset, 5_u32, bob).into(),
+            Transfer::asset_numeric(bob_asset, 2_u32, carol).into(),
+        ];
+
+        let fast = derive_simple_asset_transfer_batch(&batch)
+            .expect("simple asset transfers should use the fast path");
+        let mut generic = AccessSet::new();
+        let mut visited_triggers = BTreeSet::new();
+        for instruction in &batch {
+            generic.union_with(derive_from_instruction(
+                instruction,
+                None::<&crate::state::StateView<'_>>,
+                &mut visited_triggers,
+                0,
+                0,
+            ));
+        }
+
+        assert_eq!(fast, generic);
+        assert!(
+            derive_simple_asset_transfer_batch(&[Log::new(Level::INFO, "noop".into()).into()])
+                .is_none()
+        );
     }
 
     #[test]

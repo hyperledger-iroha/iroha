@@ -13,7 +13,9 @@ use fastpq_prover::{
     gadgets::transfer::attach_transfer_smt_witnesses, try_hash_bn254_poseidon_word_batches,
     try_submit_bn254_poseidon_word_batches,
 };
-use iroha_config::parameters::actual::{Fastpq, FastpqExecutionMode, FastpqPoseidonMode};
+#[cfg(test)]
+use iroha_config::parameters::actual::FastpqExecutionMode;
+use iroha_config::parameters::actual::{Fastpq, FastpqPoseidonMode};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     DataSpaceId,
@@ -88,17 +90,37 @@ impl FastpqPublicInputsTemplate {
     }
 }
 
-pub(crate) fn configure_poseidon_digest_acceleration(_cfg: &Fastpq) {
-    DIGEST_ACCELERATION_ENABLED.store(false, Ordering::Release);
+pub(crate) fn configure_poseidon_digest_acceleration(cfg: &Fastpq) {
+    configure_poseidon_digest_acceleration_with_preflight(cfg, || {
+        #[cfg(feature = "fastpq-gpu")]
+        {
+            fastpq_prover::preflight_bn254_poseidon_word_batches()
+        }
+        #[cfg(not(feature = "fastpq-gpu"))]
+        {
+            false
+        }
+    });
 }
 
 pub(crate) fn poseidon_digest_acceleration_configured(cfg: &Fastpq) -> bool {
-    !matches!(cfg.execution_mode, FastpqExecutionMode::Cpu)
-        && !matches!(cfg.poseidon_mode, FastpqPoseidonMode::Cpu)
+    match cfg.poseidon_mode {
+        FastpqPoseidonMode::Cpu => false,
+        FastpqPoseidonMode::Auto | FastpqPoseidonMode::Gpu => true,
+    }
 }
 
 pub(crate) fn set_poseidon_digest_acceleration_enabled(enabled: bool) {
     DIGEST_ACCELERATION_ENABLED.store(enabled, Ordering::Release);
+}
+
+fn configure_poseidon_digest_acceleration_with_preflight(
+    cfg: &Fastpq,
+    preflight: impl FnOnce() -> bool,
+) -> bool {
+    let enabled = poseidon_digest_acceleration_configured(cfg) && preflight();
+    DIGEST_ACCELERATION_ENABLED.store(enabled, Ordering::Release);
+    enabled
 }
 
 #[inline]
@@ -146,13 +168,30 @@ pub fn authority_digest(authority: &AccountId) -> Hash {
 #[inline(always)]
 #[must_use]
 pub fn poseidon_preimage_digest(delta: &TransferDeltaTranscript, batch_hash: &Hash) -> Hash {
-    let mut hasher = halo2_poseidon::PoseidonByteHasher::new();
-    append_encoded_words(&mut hasher, &delta.from_account);
-    append_encoded_words(&mut hasher, &delta.to_account);
-    append_encoded_words(&mut hasher, &delta.asset_definition);
-    append_encoded_words(&mut hasher, &delta.amount);
-    hasher.update(batch_hash.as_ref());
-    Hash::prehashed(hasher.finalize())
+    let mut scratch = PoseidonDigestScratch::default();
+    poseidon_preimage_digest_with_scratch(delta, batch_hash, &mut scratch)
+}
+
+/// Reusable scratch space for canonical single-transfer Poseidon digests.
+#[derive(Debug, Default)]
+pub(crate) struct PoseidonDigestScratch {
+    words: Vec<u64>,
+}
+
+/// Compute the canonical Poseidon digest using caller-owned scratch storage.
+#[inline(always)]
+#[must_use]
+pub(crate) fn poseidon_preimage_digest_with_scratch(
+    delta: &TransferDeltaTranscript,
+    batch_hash: &Hash,
+    scratch: &mut PoseidonDigestScratch,
+) -> Hash {
+    scratch.words.clear();
+    scratch
+        .words
+        .reserve(POSEIDON_DIGEST_WORDS_PER_TRANSCRIPT_HINT);
+    append_transfer_digest_words(&mut scratch.words, delta, batch_hash);
+    Hash::prehashed(halo2_poseidon::hash_u64_words_bytes(&scratch.words))
 }
 
 #[inline(always)]
@@ -215,14 +254,15 @@ impl<'a> PoseidonWordPacker<'a> {
             }
         }
 
-        while bytes.len() >= 8 {
-            self.words.push(u64_from_le_bytes(&bytes[..8]));
-            bytes = &bytes[8..];
+        let mut chunks = bytes.chunks_exact(8);
+        for chunk in &mut chunks {
+            self.words.push(u64_from_le_bytes(chunk));
         }
 
-        if !bytes.is_empty() {
-            self.pending_bytes[..bytes.len()].copy_from_slice(bytes);
-            self.pending_len = bytes.len();
+        let remainder = chunks.remainder();
+        if !remainder.is_empty() {
+            self.pending_bytes[..remainder.len()].copy_from_slice(remainder);
+            self.pending_len = remainder.len();
         }
     }
 
@@ -238,13 +278,11 @@ impl<'a> PoseidonWordPacker<'a> {
 }
 
 impl Write for PoseidonWordPacker<'_> {
-    #[inline(always)]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.update(buf);
         Ok(buf.len())
     }
 
-    #[inline(always)]
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
@@ -302,8 +340,13 @@ impl PoseidonDigestBatch {
         {
             return None;
         }
-        try_hash_bn254_poseidon_word_batches(&self.words, &self.slices)
-            .map(|digests| digests.into_iter().map(Hash::prehashed).collect::<Vec<_>>())
+        match try_hash_bn254_poseidon_word_batches(&self.words, &self.slices) {
+            Some(digests) => Some(digests.into_iter().map(Hash::prehashed).collect::<Vec<_>>()),
+            None => {
+                set_poseidon_digest_acceleration_enabled(false);
+                None
+            }
+        }
     }
 
     fn hash_cpu_or_gpu(&self) -> Vec<Hash> {
@@ -316,10 +359,31 @@ impl PoseidonDigestBatch {
         {
             return None;
         }
-        try_submit_bn254_poseidon_word_batches(&self.words, &self.slices)
+        match try_submit_bn254_poseidon_word_batches(&self.words, &self.slices) {
+            Some(pending) => Some(pending),
+            None => {
+                set_poseidon_digest_acceleration_enabled(false);
+                None
+            }
+        }
     }
 
     fn hash_cpu(&self) -> Vec<Hash> {
+        if self.slices.len() >= DIGEST_FINALIZE_PARALLEL_THRESHOLD {
+            use rayon::prelude::*;
+
+            return self
+                .slices
+                .par_iter()
+                .map(|slice| {
+                    let offset = slice.offset();
+                    let end = offset + slice.len();
+                    Hash::prehashed(halo2_poseidon::hash_u64_words_bytes(
+                        &self.words[offset..end],
+                    ))
+                })
+                .collect();
+        }
         self.slices
             .iter()
             .map(|slice| {
@@ -343,10 +407,13 @@ pub(crate) struct PendingTransferTranscriptDigests {
 impl PendingTransferTranscriptDigests {
     fn into_digests(self) -> Vec<Hash> {
         let Self { batch, pending, .. } = self;
-        pending
-            .wait()
-            .map(|digests| digests.into_iter().map(Hash::prehashed).collect::<Vec<_>>())
-            .unwrap_or_else(|| batch.hash_cpu())
+        match pending.wait() {
+            Some(digests) => digests.into_iter().map(Hash::prehashed).collect::<Vec<_>>(),
+            None => {
+                set_poseidon_digest_acceleration_enabled(false);
+                batch.hash_cpu()
+            }
+        }
     }
 }
 
@@ -363,6 +430,10 @@ pub(crate) fn finalize_transfer_transcript_digests_in_map_with_pending(
     transcripts: &mut BTreeMap<Hash, Vec<TransferTranscript>>,
     pending: Option<PendingTransferTranscriptDigests>,
 ) {
+    #[cfg(debug_assertions)]
+    for entries in transcripts.values() {
+        debug_assert_precomputed_transfer_transcript_digests(entries);
+    }
     let digest_count = transcripts
         .values()
         .map(|entries| missing_single_delta_transcript_count(entries))
@@ -438,6 +509,10 @@ pub(crate) fn try_submit_transfer_transcript_digests_in_map(
 pub(crate) fn finalize_transfer_transcript_bundle_digests_in_place(
     bundles: &mut [TransferTranscriptBundle],
 ) {
+    #[cfg(debug_assertions)]
+    for bundle in bundles.iter() {
+        debug_assert_precomputed_transfer_transcript_digests(&bundle.transcripts);
+    }
     let digest_count = bundles
         .iter()
         .map(|bundle| missing_single_delta_transcript_count(&bundle.transcripts))
@@ -550,12 +625,16 @@ fn apply_transfer_transcript_digests(
 }
 
 fn finalize_transfer_transcripts_serial(transcripts: &mut [TransferTranscript]) {
+    let mut scratch = PoseidonDigestScratch::default();
     for transcript in transcripts {
-        finalize_transfer_transcript_digest(transcript);
+        finalize_transfer_transcript_digest_with_scratch(transcript, &mut scratch);
     }
 }
 
-fn finalize_transfer_transcript_digest(transcript: &mut TransferTranscript) {
+fn finalize_transfer_transcript_digest_with_scratch(
+    transcript: &mut TransferTranscript,
+    scratch: &mut PoseidonDigestScratch,
+) {
     let [delta] = transcript.deltas.as_slice() else {
         return;
     };
@@ -567,13 +646,13 @@ fn finalize_transfer_transcript_digest(transcript: &mut TransferTranscript) {
                 .expect("digest presence checked above");
             debug_assert_eq!(
                 existing,
-                poseidon_preimage_digest(delta, &transcript.batch_hash),
+                poseidon_preimage_digest_with_scratch(delta, &transcript.batch_hash, scratch),
                 "precomputed FASTPQ transfer transcript digest must match canonical digest",
             );
         }
         return;
     }
-    let digest = poseidon_preimage_digest(delta, &transcript.batch_hash);
+    let digest = poseidon_preimage_digest_with_scratch(delta, &transcript.batch_hash, scratch);
     set_transfer_transcript_digest(transcript, digest);
 }
 
@@ -585,6 +664,24 @@ fn set_transfer_transcript_digest(transcript: &mut TransferTranscript, digest: H
         );
     } else {
         transcript.poseidon_preimage_digest = Some(digest);
+    }
+}
+
+#[cfg(debug_assertions)]
+fn debug_assert_precomputed_transfer_transcript_digests(transcripts: &[TransferTranscript]) {
+    let mut scratch = PoseidonDigestScratch::default();
+    for transcript in transcripts {
+        let Some(existing) = transcript.poseidon_preimage_digest else {
+            continue;
+        };
+        let [delta] = transcript.deltas.as_slice() else {
+            continue;
+        };
+        debug_assert_eq!(
+            existing,
+            poseidon_preimage_digest_with_scratch(delta, &transcript.batch_hash, &mut scratch),
+            "precomputed FASTPQ transfer transcript digest must match canonical digest",
+        );
     }
 }
 
@@ -1108,6 +1205,38 @@ mod tests {
     }
 
     #[test]
+    fn poseidon_digest_scratch_matches_canonical_oracle() {
+        let asset = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let delta = TransferDeltaTranscript {
+            from_account: (*ALICE_ID).clone(),
+            to_account: (*BOB_ID).clone(),
+            asset_definition: asset,
+            amount: Numeric::from(42u32),
+            from_balance_before: Numeric::from(200u32),
+            from_balance_after: Numeric::from(158u32),
+            to_balance_before: Numeric::from(1u32),
+            to_balance_after: Numeric::from(43u32),
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+        };
+        let mut scratch = PoseidonDigestScratch::default();
+        let first_hash = Hash::prehashed([0x11; 32]);
+        let second_hash = Hash::prehashed([0x22; 32]);
+
+        assert_eq!(
+            poseidon_preimage_digest_with_scratch(&delta, &first_hash, &mut scratch),
+            poseidon_preimage_digest(&delta, &first_hash)
+        );
+        assert_eq!(
+            poseidon_preimage_digest_with_scratch(&delta, &second_hash, &mut scratch),
+            poseidon_preimage_digest(&delta, &second_hash)
+        );
+    }
+
+    #[test]
     fn poseidon_word_packer_matches_little_endian_chunks() {
         for len in [0usize, 1, 7, 8, 9, 15, 16, 17, 63, 64, 65] {
             let input = (0..len)
@@ -1167,25 +1296,119 @@ mod tests {
     }
 
     #[test]
-    fn digest_acceleration_stays_disabled_until_preflight_enables_it() {
+    fn poseidon_digest_batch_parallel_cpu_preserves_input_order() {
+        let mut batch = PoseidonDigestBatch::with_capacity(DIGEST_FINALIZE_PARALLEL_THRESHOLD);
+        let mut expected = Vec::with_capacity(DIGEST_FINALIZE_PARALLEL_THRESHOLD);
+
+        for idx in 0..DIGEST_FINALIZE_PARALLEL_THRESHOLD {
+            let mut transcript = sample_transcript();
+            transcript.batch_hash = Hash::prehashed([idx as u8; Hash::LENGTH]);
+            let delta = &transcript.deltas[0];
+            expected.push(poseidon_preimage_digest(delta, &transcript.batch_hash));
+            batch.push(delta, &transcript.batch_hash);
+        }
+
+        assert_eq!(batch.hash_cpu(), expected);
+    }
+
+    #[test]
+    fn poseidon_digest_batch_cpu_or_gpu_matches_ordered_cpu_output() {
+        let _guard = DigestAccelerationGuard::new();
+        set_poseidon_digest_acceleration_enabled(true);
+        let mut batch = PoseidonDigestBatch::with_capacity(DIGEST_FINALIZE_GPU_THRESHOLD);
+
+        for idx in 0..DIGEST_FINALIZE_GPU_THRESHOLD {
+            let mut transcript = sample_transcript();
+            transcript.batch_hash = Hash::prehashed([idx as u8; Hash::LENGTH]);
+            batch.push(&transcript.deltas[0], &transcript.batch_hash);
+        }
+
+        assert_eq!(batch.hash_cpu_or_gpu(), batch.hash_cpu());
+    }
+
+    #[test]
+    #[cfg(not(feature = "fastpq-gpu"))]
+    fn poseidon_digest_batch_failed_gpu_submission_disables_acceleration() {
+        let _guard = DigestAccelerationGuard::new();
+        set_poseidon_digest_acceleration_enabled(true);
+        let mut batch = PoseidonDigestBatch::with_capacity(DIGEST_FINALIZE_GPU_THRESHOLD);
+
+        for idx in 0..DIGEST_FINALIZE_GPU_THRESHOLD {
+            let mut transcript = sample_transcript();
+            transcript.batch_hash = Hash::prehashed([idx as u8; Hash::LENGTH]);
+            batch.push(&transcript.deltas[0], &transcript.batch_hash);
+        }
+
+        assert_eq!(batch.hash_cpu_or_gpu(), batch.hash_cpu());
+        assert!(
+            !poseidon_digest_acceleration_enabled(),
+            "failed GPU submission should latch the core digest gate off"
+        );
+    }
+
+    #[test]
+    fn digest_acceleration_respects_configured_modes() {
         let _guard = DigestAccelerationGuard::new();
         let auto = fastpq_cfg(FastpqExecutionMode::Auto, FastpqPoseidonMode::Auto);
         assert!(poseidon_digest_acceleration_configured(&auto));
-
-        set_poseidon_digest_acceleration_enabled(true);
-        configure_poseidon_digest_acceleration(&auto);
-        assert!(!poseidon_digest_acceleration_enabled());
-
-        set_poseidon_digest_acceleration_enabled(true);
+        assert!(configure_poseidon_digest_acceleration_with_preflight(
+            &auto,
+            || true
+        ));
         assert!(poseidon_digest_acceleration_enabled());
 
-        let cpu = fastpq_cfg(FastpqExecutionMode::Cpu, FastpqPoseidonMode::Auto);
-        assert!(!poseidon_digest_acceleration_configured(&cpu));
-        configure_poseidon_digest_acceleration(&cpu);
+        set_poseidon_digest_acceleration_enabled(true);
+        assert!(!configure_poseidon_digest_acceleration_with_preflight(
+            &auto,
+            || false
+        ));
+        assert!(!poseidon_digest_acceleration_enabled());
+
+        let explicit_gpu = fastpq_cfg(FastpqExecutionMode::Cpu, FastpqPoseidonMode::Gpu);
+        assert!(poseidon_digest_acceleration_configured(&explicit_gpu));
+        assert!(configure_poseidon_digest_acceleration_with_preflight(
+            &explicit_gpu,
+            || true
+        ));
+        assert!(poseidon_digest_acceleration_enabled());
+
+        let auto_cpu_lane = fastpq_cfg(FastpqExecutionMode::Cpu, FastpqPoseidonMode::Auto);
+        assert!(poseidon_digest_acceleration_configured(&auto_cpu_lane));
+        assert!(configure_poseidon_digest_acceleration_with_preflight(
+            &auto_cpu_lane,
+            || true
+        ));
+        assert!(poseidon_digest_acceleration_enabled());
+
+        set_poseidon_digest_acceleration_enabled(true);
+        assert!(!configure_poseidon_digest_acceleration_with_preflight(
+            &auto_cpu_lane,
+            || false
+        ));
         assert!(!poseidon_digest_acceleration_enabled());
 
         let poseidon_cpu = fastpq_cfg(FastpqExecutionMode::Gpu, FastpqPoseidonMode::Cpu);
         assert!(!poseidon_digest_acceleration_configured(&poseidon_cpu));
+        assert!(!configure_poseidon_digest_acceleration_with_preflight(
+            &poseidon_cpu,
+            || true
+        ));
+        assert!(!poseidon_digest_acceleration_enabled());
+    }
+
+    #[test]
+    fn configure_digest_acceleration_uses_deterministic_cpu_fallback_without_backend() {
+        let _guard = DigestAccelerationGuard::new();
+        let auto = fastpq_cfg(FastpqExecutionMode::Auto, FastpqPoseidonMode::Auto);
+
+        configure_poseidon_digest_acceleration(&auto);
+
+        #[cfg(feature = "fastpq-gpu")]
+        let expected = fastpq_prover::preflight_bn254_poseidon_word_batches();
+        #[cfg(not(feature = "fastpq-gpu"))]
+        let expected = false;
+
+        assert_eq!(poseidon_digest_acceleration_enabled(), expected);
     }
 
     #[test]
@@ -1216,6 +1439,19 @@ mod tests {
             bundles[0].transcripts[0].poseidon_preimage_digest,
             Some(expected)
         );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(
+        expected = "precomputed FASTPQ transfer transcript digest must match canonical digest"
+    )]
+    fn finalize_transfer_transcripts_debug_asserts_precomputed_mismatch() {
+        let mut single = sample_transcript();
+        single.poseidon_preimage_digest = Some(Hash::prehashed([0xEE; Hash::LENGTH]));
+        let mut map = BTreeMap::from([(Hash::prehashed([0x7A; Hash::LENGTH]), vec![single])]);
+
+        finalize_transfer_transcript_digests_in_map(&mut map);
     }
 
     #[test]
@@ -1464,6 +1700,39 @@ mod tests {
         assert_eq!(delta.to_smt_witness.siblings.len(), 32);
         assert_ne!(batch.public_inputs.old_root, [0; 32]);
         assert_ne!(batch.public_inputs.new_root, [0; 32]);
+        fastpq_prover::gadgets::transfer::verify_transcripts(&batch.transitions, &decoded)
+            .expect("transfer transcript rows verify");
+        fastpq_prover::gadgets::transfer::transcripts_to_witnesses(
+            &decoded,
+            &batch.public_inputs.old_root,
+            &batch.public_inputs.new_root,
+        )
+        .expect("transfer SMT witnesses verify");
+    }
+
+    #[test]
+    fn batch_from_transcripts_chains_repeated_balance_keys() {
+        let first = sample_transcript();
+        let second = sample_transcript();
+        let batch = batch_from_transcripts(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_public_inputs(),
+            [&first, &second],
+        )
+        .expect("batch");
+
+        let encoded = batch
+            .metadata
+            .get(TRANSFER_TRANSCRIPTS_METADATA_KEY)
+            .expect("transfer metadata");
+        let decoded: Vec<TransferTranscript> =
+            decode_from_bytes(encoded).expect("decode transcripts");
+        let second_delta = &decoded[1].deltas[0];
+        assert_eq!(second_delta.from_balance_before, Numeric::from(158u32));
+        assert_eq!(second_delta.from_balance_after, Numeric::from(116u32));
+        assert_eq!(second_delta.to_balance_before, Numeric::from(43u32));
+        assert_eq!(second_delta.to_balance_after, Numeric::from(85u32));
+
         fastpq_prover::gadgets::transfer::verify_transcripts(&batch.transitions, &decoded)
             .expect("transfer transcript rows verify");
         fastpq_prover::gadgets::transfer::transcripts_to_witnesses(

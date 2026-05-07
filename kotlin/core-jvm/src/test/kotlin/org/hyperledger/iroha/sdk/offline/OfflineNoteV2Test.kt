@@ -1,14 +1,26 @@
 package org.hyperledger.iroha.sdk.offline
 
+import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Paths
+import java.nio.charset.StandardCharsets
+import java.security.KeyPairGenerator
 import java.util.Base64
 import java.util.Locale
+import java.util.concurrent.CompletableFuture
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import org.hyperledger.iroha.sdk.client.ClientResponse
+import org.hyperledger.iroha.sdk.client.HttpTransportExecutor
+import org.hyperledger.iroha.sdk.client.JsonEncoder
 import org.hyperledger.iroha.sdk.client.JsonParser
+import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
+import org.hyperledger.iroha.sdk.client.transport.TransportRequest
+import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 
 class OfflineNoteV2Test {
     @Test
@@ -29,6 +41,99 @@ class OfflineNoteV2Test {
         assertEquals(string(obj(chain, "issue"), "norito_base64"), base64(issue(fixture).noritoEncoded()))
         assertEquals(string(obj(chain, "audit"), "norito_base64"), base64(audit(fixture).noritoEncoded()))
         assertEquals(string(obj(chain, "redeem"), "norito_base64"), base64(redeem(fixture).noritoEncoded()))
+    }
+
+    @Test
+    fun walletDerivationsMatchRustVectors() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val issueVector = obj(chain, "issue")
+        val payment = obj(fixture, "payment_token")
+        val outputClaims = list(payment, "output_claims").map { it as Map<String, Any?> }
+        val recipientOutput = outputClaims[0]
+        val changeOutput = outputClaims[1]
+        val chainId = string(derivation, "chain_id")
+
+        val sourcePreimage = OfflineNoteV2.NoteCommitmentPreimageV2(
+            chainId = chainId,
+            ownerKeyCertificatePayloadHash = hexBytes(string(derivation, "sender_key_certificate_payload_hash")),
+            assetId = string(issueVector, "asset_id"),
+            amount = string(issueVector, "amount"),
+            noteSecret = hexBytes(string(derivation, "source_note_secret_hex")),
+            origin = OfflineNoteV2.CommitmentOriginV2.IssuerLoad(
+                operationId = string(derivation, "issuer_load_operation_id"),
+                lineageId = string(derivation, "issuer_load_lineage_id"),
+                localRevision = long(derivation, "issuer_load_local_revision"),
+            ),
+        )
+        assertEquals(
+            string(derivation, "source_note_commitment_preimage_hex"),
+            hex(OfflineNoteV2.encodeNoteCommitmentPreimage(sourcePreimage)),
+        )
+        val sourceCommitment = OfflineNoteV2.deriveNoteCommitment(sourcePreimage)
+        assertEquals(string(derivation, "source_note_commitment"), hex(sourceCommitment))
+
+        val inputNullifier = OfflineNoteV2.deriveInputNullifier(
+            OfflineNoteV2.InputNullifierPreimageV2(
+                chainId = chainId,
+                sourceNoteCommitment = sourceCommitment,
+                ownerKeyCertificatePayloadHash = hexBytes(string(derivation, "sender_key_certificate_payload_hash")),
+                noteSecret = hexBytes(string(derivation, "source_note_secret_hex")),
+            )
+        )
+        assertEquals(string(derivation, "input_nullifier"), hex(inputNullifier))
+
+        val recipientCommitment = OfflineNoteV2.deriveNoteCommitment(
+            OfflineNoteV2.NoteCommitmentPreimageV2(
+                chainId = chainId,
+                ownerKeyCertificatePayloadHash = hexBytes(string(derivation, "recipient_key_certificate_payload_hash")),
+                assetId = "${string(recipientOutput, "asset_definition_id")}#${string(recipientOutput, "account_id")}",
+                amount = string(recipientOutput, "amount"),
+                noteSecret = hexBytes(string(derivation, "recipient_note_secret_hex")),
+                origin = OfflineNoteV2.CommitmentOriginV2.P2pOutput(
+                    paymentRequestId = string(derivation, "payment_request_id"),
+                    outputIndex = 0,
+                ),
+            )
+        )
+        assertEquals(string(derivation, "recipient_output_commitment"), hex(recipientCommitment))
+
+        val changeCommitment = OfflineNoteV2.deriveNoteCommitment(
+            OfflineNoteV2.NoteCommitmentPreimageV2(
+                chainId = chainId,
+                ownerKeyCertificatePayloadHash = hexBytes(string(derivation, "sender_key_certificate_payload_hash")),
+                assetId = "${string(changeOutput, "asset_definition_id")}#${string(changeOutput, "account_id")}",
+                amount = string(changeOutput, "amount"),
+                noteSecret = hexBytes(string(derivation, "change_note_secret_hex")),
+                origin = OfflineNoteV2.CommitmentOriginV2.P2pOutput(
+                    paymentRequestId = string(derivation, "payment_request_id"),
+                    outputIndex = 1,
+                ),
+            )
+        )
+        assertEquals(string(derivation, "change_output_commitment"), hex(changeCommitment))
+
+        val tokenId = OfflineNoteV2.derivePaymentTokenId(
+            OfflineNoteV2.PaymentTokenIdPreimageV2(
+                chainId = chainId,
+                tokenNonce = hexBytes(string(derivation, "token_nonce_hex")),
+                senderKeyCertificatePayloadHash = hexBytes(string(derivation, "sender_key_certificate_payload_hash")),
+                inputNullifiers = listOf(inputNullifier),
+                outputCommitments = listOf(recipientCommitment, changeCommitment),
+            )
+        )
+        assertEquals(string(derivation, "payment_token_id"), hex(tokenId))
+
+        val redeemNullifier = OfflineNoteV2.deriveInputNullifier(
+            OfflineNoteV2.InputNullifierPreimageV2(
+                chainId = chainId,
+                sourceNoteCommitment = recipientCommitment,
+                ownerKeyCertificatePayloadHash = hexBytes(string(derivation, "recipient_key_certificate_payload_hash")),
+                noteSecret = hexBytes(string(derivation, "recipient_note_secret_hex")),
+            )
+        )
+        assertEquals(string(derivation, "redeem_nullifier"), hex(redeemNullifier))
     }
 
     @Test
@@ -159,6 +264,194 @@ class OfflineNoteV2Test {
         assertEquals("iroha:qr1:", string(fountain, "frame_prefix"))
     }
 
+    @Test
+    fun walletLoadDerivesCommitmentBeforeIssuerSubmission() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val issue = obj(chain, "issue")
+        val senderCertificate = certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
+        val loadContext = OfflineNoteV2LoadContext(
+            operationId = string(derivation, "issuer_load_operation_id"),
+            lineageId = string(derivation, "issuer_load_lineage_id"),
+            localRevision = long(derivation, "issuer_load_local_revision"),
+            keyCertificate = senderCertificate,
+        )
+        val issuerClient = RecordingIssuerClient(loadContext)
+        val wallet = OfflineNoteV2Wallet(
+            chainId = string(derivation, "chain_id"),
+            accountId = accountFromAssetId(string(issue, "asset_id")),
+            attestationProvider = StaticAttestationProvider(senderCertificate),
+            issuerClient = issuerClient,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            randomSource = QueueRandomSource(listOf(hexBytes(string(derivation, "source_note_secret_hex")))),
+            idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
+            clock = { 1_700_000_001_000L },
+        )
+
+        val note = wallet.load(assetDefinitionFromAssetId(string(issue, "asset_id")), string(issue, "amount")).get()
+
+        assertEquals(string(derivation, "source_note_commitment"), note.noteCommitmentHex())
+        assertEquals(
+            string(derivation, "source_note_commitment"),
+            issuerClient.lastIssueRequest?.noteCommitmentHex(),
+        )
+        assertEquals(OfflineNoteV2WalletNoteState.SPENDABLE, note.state)
+    }
+
+    @Test
+    fun toriiIssuerClientBodySignsRefillAndIssuesWalletCommitment() {
+        val fixture = loadFixture()
+        val certificateJson = obj(obj(fixture, "payment_token"), "sender_key_certificate")
+        val accountId = string(certificateJson, "account_id")
+        val assetDefinitionId = assetDefinitionFromAssetId(string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id"))
+        val offlinePublicKey = "a5".repeat(32)
+        val deviceBinding = OfflineNoteV2IssuerDeviceBinding(
+            deviceId = "device-1",
+            offlinePublicKey = offlinePublicKey,
+            deviceBinding = linkedMapOf(
+                "device_id" to "device-1",
+                "offline_public_key" to offlinePublicKey,
+                "signature_base64" to "nested-device-signature-is-not-body-auth",
+            ),
+        )
+        val executor = OfflineIssuerExecutor(certificateJson)
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val client = ToriiOfflineNoteV2IssuerClient(
+            canonicalAuth = ToriiCanonicalRequestAuth(accountId, keyPair.private),
+            deviceBindingProvider = object : OfflineNoteV2IssuerDeviceBindingProvider {
+                override fun currentDeviceBinding(
+                    chainId: String,
+                    accountId: String,
+                    assetDefinitionId: String,
+                ): OfflineNoteV2IssuerDeviceBinding = deviceBinding
+            },
+            executor = executor,
+            baseUri = URI.create("https://torii.example"),
+            clock = java.util.function.LongSupplier { 1_700_000_000_000L },
+            nonceGenerator = SequenceIdGenerator(
+                "operation-refill-1",
+                "auth-refill-1",
+                "auth-issue-1",
+            ),
+        )
+
+        val context = client.prepareLoad("chain-1", accountId, assetDefinitionId, "5").join()
+        assertEquals("operation-refill-1", context.operationId)
+        assertEquals("lineage-1", context.lineageId)
+        assertEquals(1L, context.localRevision)
+
+        val commitment = ByteArray(32) { (it + 1).toByte() }
+        val response = client.issueNote(
+            OfflineNoteV2IssueRequest(
+                chainId = "chain-1",
+                accountId = accountId,
+                assetDefinitionId = assetDefinitionId,
+                assetId = "$assetDefinitionId#$accountId",
+                amount = "5",
+                loadContext = context,
+                noteCommitment = commitment,
+            )
+        ).join()
+
+        assertEquals(hex(commitment), hex(response.noteCommitment()))
+        assertEquals("settlement-entry-hash", response.settlementEntryHashHex)
+        assertEquals(2, executor.requests.size)
+        assertEquals("/v1/offline/v2/keys/refill", executor.requests[0].uri.path)
+        assertEquals("/v1/offline/v2/notes/issue", executor.requests[1].uri.path)
+        for (request in executor.requests) {
+            assertFalse(request.headers.keys.any { it.startsWith("X-Iroha-", ignoreCase = true) })
+        }
+
+        val refillBody = executor.requestBody(0)
+        assertEquals(accountId, string(refillBody, "account_id"))
+        assertEquals("operation-refill-1", string(refillBody, "operation_id"))
+        assertEquals("auth-refill-1", string(refillBody, "nonce"))
+        assertTrue(string(refillBody, "signature_base64").isNotBlank())
+        assertEquals(
+            "nested-device-signature-is-not-body-auth",
+            string(obj(refillBody, "device_binding"), "signature_base64"),
+        )
+
+        val issueBody = executor.requestBody(1)
+        assertEquals(hex(commitment), string(issueBody, "note_commitment"))
+        assertEquals(0L, long(issueBody, "local_revision"))
+        assertEquals("0", string(issueBody, "local_balance"))
+        assertEquals("auth-issue-1", string(issueBody, "nonce"))
+        assertNotNull(obj(issueBody, "lineage_state"))
+    }
+
+    @Test
+    fun walletLifecycleBuildsAuditAcceptAndRedeemTransactions() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val chainIssue = obj(chain, "issue")
+        val chainAudit = obj(chain, "audit")
+        val chainRedeem = obj(chain, "redeem")
+        val payment = obj(fixture, "payment_token")
+        val senderCertificate = certificate(obj(payment, "sender_key_certificate"))
+        val recipientCertificate = certificate(obj(payment, "recipient_key_certificate"))
+        val sourceNote = sourceWalletNote(fixture, senderCertificate)
+        val senderStore = InMemoryOfflineNoteV2Store()
+        senderStore.upsert(sourceNote)
+        val senderWallet = OfflineNoteV2Wallet(
+            chainId = string(derivation, "chain_id"),
+            accountId = accountFromAssetId(string(chainIssue, "asset_id")),
+            attestationProvider = StaticAttestationProvider(senderCertificate),
+            store = senderStore,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            randomSource = QueueRandomSource(
+                listOf(
+                    hexBytes(string(derivation, "token_nonce_hex")),
+                    hexBytes(string(derivation, "change_note_secret_hex")),
+                )
+            ),
+            clock = { 1_700_000_001_100L },
+        )
+        val recipientSubmitter = RecordingTransactionSubmitter()
+        val recipientWallet = OfflineNoteV2Wallet(
+            chainId = string(derivation, "chain_id"),
+            accountId = string(payment, "recipient_account_id"),
+            attestationProvider = StaticAttestationProvider(recipientCertificate),
+            transactionSubmitter = recipientSubmitter,
+            proofProvider = BindingProofProvider,
+            randomSource = QueueRandomSource(listOf(hexBytes(string(derivation, "recipient_note_secret_hex")))),
+            idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
+            clock = { 1_700_000_001_200L },
+        )
+
+        val receiveRequest = recipientWallet.prepareReceive(
+            assetDefinitionId = assetDefinitionFromAssetId(string(chainIssue, "asset_id")),
+            amount = string(chainRedeem, "amount"),
+        )
+        assertEquals(string(derivation, "recipient_output_commitment"), receiveRequest.outputCommitmentHex())
+
+        val token = senderWallet.pay(receiveRequest)
+
+        assertEquals(string(derivation, "payment_token_id"), token.tokenIdHex())
+        assertEquals(string(chainAudit, "public_inputs_hash"), hex(token.audit.publicInputsHash()))
+        assertEquals(
+            OfflineNoteV2WalletNoteState.SPEND_PENDING,
+            senderStore.findNote(hexBytes(string(derivation, "source_note_commitment")))?.state,
+        )
+        assertEquals(
+            OfflineNoteV2WalletNoteState.CHANGE_PENDING,
+            senderStore.findNote(hexBytes(string(derivation, "change_output_commitment")))?.state,
+        )
+
+        val accepted = recipientWallet.accept(token).get()
+
+        assertEquals(OfflineNoteV2WalletNoteState.SPENDABLE, accepted.state)
+        assertEquals(1, recipientSubmitter.audits.size)
+        val redeeming = recipientWallet.redeem(accepted).get()
+        assertEquals(OfflineNoteV2WalletNoteState.REDEEM_PENDING, redeeming.state)
+        assertEquals(1, recipientSubmitter.redemptions.size)
+        assertEquals(string(chainRedeem, "public_inputs_hash"), hex(recipientSubmitter.redemptions[0].publicInputsHash()))
+    }
+
     private fun issue(fixture: Map<String, Any?>): OfflineNoteV2.IssueV2 {
         val chainIssue = obj(obj(fixture, "chain_vectors"), "issue")
         return OfflineNoteV2.IssueV2(
@@ -242,6 +535,193 @@ class OfflineNoteV2Test {
             amount = string(json, "amount"),
         )
 
+    private fun sourceWalletNote(
+        fixture: Map<String, Any?>,
+        certificate: OfflineNoteV2.KeyCertificateV2,
+    ): OfflineNoteV2WalletNote {
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val issue = obj(chain, "issue")
+        return OfflineNoteV2WalletNote(
+            chainId = string(derivation, "chain_id"),
+            accountId = accountFromAssetId(string(issue, "asset_id")),
+            assetId = string(issue, "asset_id"),
+            amount = string(issue, "amount"),
+            keyCertificate = certificate,
+            noteCommitment = hexBytes(string(derivation, "source_note_commitment")),
+            noteSecret = hexBytes(string(derivation, "source_note_secret_hex")),
+            origin = OfflineNoteV2.CommitmentOriginV2.IssuerLoad(
+                operationId = string(derivation, "issuer_load_operation_id"),
+                lineageId = string(derivation, "issuer_load_lineage_id"),
+                localRevision = long(derivation, "issuer_load_local_revision"),
+            ),
+            state = OfflineNoteV2WalletNoteState.SPENDABLE,
+            createdAtMs = 1_700_000_000_000L,
+            updatedAtMs = 1_700_000_000_000L,
+        )
+    }
+
+    private class StaticAttestationProvider(
+        private val certificate: OfflineNoteV2.KeyCertificateV2,
+    ) : OfflineNoteV2AttestationProvider {
+        override fun currentKeyCertificate(): OfflineNoteV2.KeyCertificateV2 = certificate
+    }
+
+    private class QueueRandomSource(
+        private val values: List<ByteArray>,
+    ) : OfflineNoteV2RandomSource {
+        private var index = 0
+
+        override fun nextBytes(length: Int): ByteArray {
+            require(index < values.size) { "test random source exhausted" }
+            val value = values[index++]
+            require(value.size == length) { "test random source returned ${value.size} bytes" }
+            return value.copyOf()
+        }
+    }
+
+    private class FixedIdGenerator(
+        private val id: String,
+    ) : OfflineNoteV2IdGenerator {
+        override fun nextId(prefix: String): String = id
+    }
+
+    private class SequenceIdGenerator(
+        private vararg val ids: String,
+    ) : OfflineNoteV2IdGenerator {
+        private var index = 0
+
+        override fun nextId(prefix: String): String {
+            require(index < ids.size) { "test id generator exhausted" }
+            return ids[index++]
+        }
+    }
+
+    private inner class OfflineIssuerExecutor(
+        private val certificateJson: Map<String, Any?>,
+    ) : HttpTransportExecutor {
+        val requests = ArrayList<TransportRequest>()
+
+        override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+            requests.add(request)
+            val body = requestBody(request)
+            val response = when (request.uri.path) {
+                "/v1/offline/v2/keys/refill" -> linkedMapOf<String, Any?>(
+                    "operation_id" to string(body, "operation_id"),
+                    "lineage_state" to lineageState(0, "0"),
+                    "key_certificate" to certificateWithExpiry(),
+                    "key_certificates" to listOf(certificateWithExpiry()),
+                )
+                "/v1/offline/v2/notes/issue" -> linkedMapOf<String, Any?>(
+                    "operation_id" to string(body, "operation_id"),
+                    "settlement" to linkedMapOf("entry_hash" to "settlement-entry-hash"),
+                    "lineage_state" to lineageState(1, "5"),
+                    "local_balance" to "5",
+                    "locked_balance" to "0",
+                    "local_revision" to 1L,
+                    "local_state_hash" to "lineage-state-hash",
+                    "issued_note_commitment" to string(body, "note_commitment"),
+                    "key_certificate" to certificateWithExpiry(),
+                    "key_certificates" to listOf(certificateWithExpiry()),
+                )
+                else -> throw IllegalStateException("unexpected path ${request.uri.path}")
+            }
+            return CompletableFuture.completedFuture(
+                TransportResponse.builder()
+                    .setStatusCode(200)
+                    .setBody(JsonEncoder.encode(response).toByteArray(StandardCharsets.UTF_8))
+                    .build()
+            )
+        }
+
+        fun requestBody(index: Int): Map<String, Any?> = requestBody(requests[index])
+
+        private fun requestBody(request: TransportRequest): Map<String, Any?> {
+            @Suppress("UNCHECKED_CAST")
+            return JsonParser.parse(String(request.body, StandardCharsets.UTF_8)) as Map<String, Any?>
+        }
+
+        private fun certificateWithExpiry(): Map<String, Any?> {
+            val copy = LinkedHashMap(certificateJson)
+            copy["expires_at_ms"] = 1_700_000_060_000L
+            return copy
+        }
+
+        private fun lineageState(revision: Long, balance: String): Map<String, Any?> =
+            linkedMapOf(
+                "lineage_id" to "lineage-1",
+                "server_revision" to revision,
+                "pending_local_revision" to revision,
+                "balance" to balance,
+                "locked_balance" to "0",
+                "authorization" to linkedMapOf(
+                    "expires_at_ms" to 1_700_000_060_000L,
+                ),
+            )
+    }
+
+    private object BindingProofProvider : OfflineNoteV2ProofProvider {
+        override fun proveAudit(audit: OfflineNoteV2.AuditBundleV2): OfflineNoteV2.RecursiveProofV2 =
+            OfflineNoteV2.RecursiveProofV2(
+                publicInputsHash = audit.publicInputsHash(),
+                proof = OfflineNoteV2.ProofBox(
+                    OfflineNoteV2.RECURSIVE_BACKEND,
+                    "wallet-audit-proof".toByteArray(),
+                ),
+            )
+
+        override fun proveRedeem(redemption: OfflineNoteV2.RedeemV2): OfflineNoteV2.RecursiveProofV2 =
+            OfflineNoteV2.RecursiveProofV2(
+                publicInputsHash = redemption.publicInputsHash(),
+                proof = OfflineNoteV2.ProofBox(
+                    OfflineNoteV2.RECURSIVE_BACKEND,
+                    "wallet-redeem-proof".toByteArray(),
+                ),
+            )
+    }
+
+    private class RecordingIssuerClient(
+        private val loadContext: OfflineNoteV2LoadContext,
+    ) : OfflineNoteV2IssuerClient {
+        var lastIssueRequest: OfflineNoteV2IssueRequest? = null
+
+        override fun prepareLoad(
+            chainId: String,
+            accountId: String,
+            assetDefinitionId: String,
+            amount: String,
+        ): CompletableFuture<OfflineNoteV2LoadContext> = CompletableFuture.completedFuture(loadContext)
+
+        override fun issueNote(request: OfflineNoteV2IssueRequest): CompletableFuture<OfflineNoteV2IssueResponse> {
+            lastIssueRequest = request
+            return CompletableFuture.completedFuture(
+                OfflineNoteV2IssueResponse(
+                    noteCommitment = request.noteCommitment(),
+                    operationId = request.loadContext.operationId,
+                    lineageId = request.loadContext.lineageId,
+                    localRevision = request.loadContext.localRevision,
+                    keyCertificate = request.loadContext.keyCertificate,
+                    settlementEntryHashHex = "settlement-entry-hash",
+                )
+            )
+        }
+    }
+
+    private class RecordingTransactionSubmitter : OfflineNoteV2TransactionSubmitter {
+        val audits = ArrayList<OfflineNoteV2.AuditBundleV2>()
+        val redemptions = ArrayList<OfflineNoteV2.RedeemV2>()
+
+        override fun submitAudit(audit: OfflineNoteV2.AuditBundleV2): CompletableFuture<ClientResponse> {
+            audits.add(audit)
+            return CompletableFuture.completedFuture(ClientResponse(202, byteArrayOf(), "accepted"))
+        }
+
+        override fun submitRedeem(redemption: OfflineNoteV2.RedeemV2): CompletableFuture<ClientResponse> {
+            redemptions.add(redemption)
+            return CompletableFuture.completedFuture(ClientResponse(202, byteArrayOf(), "accepted"))
+        }
+    }
+
     private fun loadFixture(): Map<String, Any?> {
         val path = Paths.get("..", "..", "fixtures", "offline", "interop_contract_v2.json")
         val parsed = JsonParser.parse(String(Files.readAllBytes(path), Charsets.UTF_8))
@@ -262,6 +742,7 @@ class OfflineNoteV2Test {
     private fun string(map: Map<String, Any?>, key: String): String = map[key] as String
     private fun bool(map: Map<String, Any?>, key: String): Boolean = map[key] as Boolean
     private fun int(map: Map<String, Any?>, key: String): Int = (map[key] as Number).toInt()
+    private fun long(map: Map<String, Any?>, key: String): Long = (map[key] as Number).toLong()
     private fun nullableInt(map: Map<String, Any?>, key: String): Int? = (map[key] as Number?)?.toInt()
 
     private fun base64(bytes: ByteArray): String = Base64.getEncoder().encodeToString(bytes)
@@ -269,6 +750,11 @@ class OfflineNoteV2Test {
 
     private fun hex(bytes: ByteArray): String =
         bytes.joinToString(separator = "") { "%02x".format(it.toInt() and 0xFF) }
+
+    private fun assetDefinitionFromAssetId(assetId: String): String = assetId.substringBefore('#')
+
+    private fun accountFromAssetId(assetId: String): String =
+        assetId.substringAfter('#').substringBefore("#dataspace:")
 
     private fun hashFromPublicValues(values: LongArray): ByteArray {
         val out = ByteArray(32)

@@ -68,7 +68,7 @@ mod model {
         #[norito(default)]
         #[norito(skip_serializing_if = "Option::is_none")]
         pub previous_roster_evidence: Option<PreviousRosterEvidence>,
-        /// Deterministic NPoS effects embedded in this block.
+        /// Deterministic `NPoS` effects embedded in this block.
         #[norito(default)]
         #[norito(skip_serializing_if = "Option::is_none")]
         pub npos_consensus_effects: Option<NposConsensusEffects>,
@@ -356,13 +356,13 @@ impl SignedBlock {
         self.payload.header.set_prev_roster_evidence_hash(hash);
     }
 
-    /// Deterministic NPoS effects embedded in this block.
+    /// Deterministic `NPoS` effects embedded in this block.
     #[inline]
     pub fn npos_consensus_effects(&self) -> Option<&NposConsensusEffects> {
         self.payload.npos_consensus_effects.as_ref()
     }
 
-    /// Set or clear deterministic NPoS effects and update the header hash accordingly.
+    /// Set or clear deterministic `NPoS` effects and update the header hash accordingly.
     pub fn set_npos_consensus_effects(&mut self, effects: Option<NposConsensusEffects>) {
         let effects = effects.filter(|bundle| !bundle.is_empty());
         let hash = effects.as_ref().map(HashOf::new);

@@ -3467,7 +3467,7 @@ mod tests {
         kura::Kura,
         query::store::LiveQueryStore,
         smartcontracts::{Execute, ValidQuery},
-        state::{State, World},
+        state::{State, StateReadOnly, World, WorldReadOnly},
         sumeragi::network_topology::Topology,
         tx::AcceptedTransaction,
     };
@@ -5551,6 +5551,62 @@ mod tests {
     }
 
     #[test]
+    async fn find_blocks_and_headers_by_height() -> Result<()> {
+        let state = state_with_test_blocks_and_transactions(10, 1, 1)?;
+        let state_view = state.view();
+
+        let blocks = ValidQuery::execute(
+            FindBlocks,
+            CompoundPredicate::<iroha_data_model::block::SignedBlock>::build(|p| {
+                p.equals("height", 4_u64)
+            }),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].header().height().get(), 4);
+        let target_hash = blocks[0].hash();
+
+        let header_by_hash = ValidQuery::execute(
+            FindBlockHeaders,
+            CompoundPredicate::<iroha_data_model::block::BlockHeader>::build(|p| {
+                p.equals("hash", target_hash)
+            }),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+
+        assert_eq!(header_by_hash.len(), 1);
+        assert_eq!(header_by_hash[0].height().get(), 4);
+
+        let headers = ValidQuery::execute(
+            FindBlockHeaders,
+            CompoundPredicate::<iroha_data_model::block::BlockHeader>::build(|p| {
+                p.in_values("height", [2_u64, 7_u64, 3_u64])
+            }),
+            &state_view,
+        )?
+        .map(|header| header.height().get())
+        .collect::<Vec<_>>();
+
+        assert_eq!(headers, vec![7, 3, 2]);
+
+        let missing = ValidQuery::execute(
+            FindBlockHeaders,
+            CompoundPredicate::<iroha_data_model::block::BlockHeader>::build(|p| {
+                p.equals("height", 42_u64)
+            }),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+
+        assert!(missing.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
     async fn find_block_header_by_hash() -> Result<()> {
         let state = state_with_test_blocks_and_transactions(1, 1, 1)?;
         let state_view = state.view();
@@ -6070,6 +6126,453 @@ mod tests {
             txs.iter().filter(|txn| txn.result().is_err()).count() as u64,
             num_blocks
         );
+
+        Ok(())
+    }
+
+    #[test]
+    async fn find_transactions_by_block_hash_uses_block_index() -> Result<()> {
+        let state = state_with_test_blocks_and_transactions(8, 1, 1)?;
+        let state_view = state.view();
+        let block = state_view
+            .kura()
+            .get_block(nonzero!(4_usize))
+            .expect("block available");
+        let block_hash = block.hash();
+
+        let txs = ValidQuery::execute(
+            FindTransactions,
+            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+                p.equals("block_hash", block_hash)
+            }),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+
+        assert_eq!(txs.len(), 2);
+        assert!(txs.iter().all(|tx| tx.block_hash == block_hash));
+        assert_eq!(
+            txs.iter().map(|tx| tx.entrypoint_hash).collect::<Vec<_>>(),
+            block.entrypoint_hashes().rev().collect::<Vec<_>>()
+        );
+
+        let unknown_hash =
+            iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::new("missing block"),
+            );
+        let missing = ValidQuery::execute(
+            FindTransactions,
+            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+                p.equals("block_hash", unknown_hash)
+            }),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+
+        assert!(missing.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    async fn find_transactions_by_entrypoint_hash_uses_kura_index() -> Result<()> {
+        let num_blocks = 8;
+        let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1)?;
+        let state_view = state.view();
+        let block = state_view
+            .kura()
+            .get_block(nonzero!(4_usize))
+            .expect("block available");
+        let entrypoint_hash = block
+            .entrypoint_hashes()
+            .next()
+            .expect("test block has transactions");
+        let indexed_heights = state_view
+            .kura()
+            .get_block_heights_by_entrypoint_hash(entrypoint_hash)
+            .expect("test Kura transaction index is complete");
+
+        assert_eq!(
+            indexed_heights,
+            (1..=num_blocks)
+                .filter_map(|height| std::num::NonZeroUsize::new(height as usize))
+                .collect()
+        );
+
+        let txs = ValidQuery::execute(
+            FindTransactions,
+            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+                p.equals("entrypoint_hash", entrypoint_hash)
+            }),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+
+        assert_eq!(txs.len() as u64, num_blocks);
+        assert!(txs.iter().all(|tx| tx.entrypoint_hash == entrypoint_hash));
+        assert_eq!(
+            txs.iter().map(|tx| tx.block_hash).collect::<Vec<_>>(),
+            (1..=num_blocks)
+                .rev()
+                .map(|height| {
+                    state_view
+                        .kura()
+                        .get_block(std::num::NonZeroUsize::new(height as usize).unwrap())
+                        .expect("block available")
+                        .hash()
+                })
+                .collect::<Vec<_>>()
+        );
+
+        let unknown_hash = iroha_crypto::HashOf::<
+            iroha_data_model::transaction::signed::TransactionEntrypoint,
+        >::from_untyped_unchecked(Hash::new(
+            "missing transaction entrypoint",
+        ));
+        let missing = ValidQuery::execute(
+            FindTransactions,
+            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+                p.equals("entrypoint_hash", unknown_hash)
+            }),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+
+        assert!(missing.is_empty());
+
+        state_view
+            .kura()
+            .prune_to_height(4)
+            .expect("prune test blocks");
+        assert_eq!(
+            state_view
+                .kura()
+                .get_block_heights_by_entrypoint_hash(entrypoint_hash)
+                .expect("test Kura transaction index is complete"),
+            (1..=4)
+                .filter_map(|height| std::num::NonZeroUsize::new(height as usize))
+                .collect()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    async fn find_transactions_by_authority_timestamp_and_result_use_kura_indexes() -> Result<()> {
+        let num_blocks = 8;
+        let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1)?;
+        let state_view = state.view();
+        let all_txs = ValidQuery::execute(FindTransactions, CompoundPredicate::PASS, &state_view)?
+            .collect::<Vec<_>>();
+        let first_tx = all_txs.first().expect("test state has transactions");
+        let authority = first_tx
+            .entrypoint
+            .authority_opt()
+            .expect("test transaction has authority")
+            .clone();
+        let timestamp_ms = first_tx
+            .entrypoint
+            .creation_time_ms()
+            .expect("test transaction has timestamp");
+
+        assert_eq!(
+            state_view
+                .kura()
+                .get_block_heights_by_transaction_authority(&authority)
+                .expect("test Kura transaction index is complete")
+                .len() as u64,
+            num_blocks
+        );
+        assert_eq!(
+            state_view
+                .kura()
+                .get_block_heights_by_transaction_timestamp_ms(timestamp_ms)
+                .expect("test Kura transaction index is complete")
+                .len() as u64,
+            num_blocks
+        );
+        assert_eq!(
+            state_view
+                .kura()
+                .get_block_heights_by_transaction_result_status(false)
+                .expect("test Kura transaction index is complete")
+                .len() as u64,
+            num_blocks
+        );
+
+        let by_authority = ValidQuery::execute(
+            FindTransactions,
+            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+                p.equals("authority", authority.to_string())
+            }),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+        let expected_by_authority = all_txs
+            .iter()
+            .filter(|tx| tx.entrypoint.authority_opt() == Some(&authority))
+            .count();
+        assert_eq!(by_authority.len(), expected_by_authority);
+        assert!(
+            by_authority
+                .iter()
+                .all(|tx| tx.entrypoint.authority_opt() == Some(&authority))
+        );
+
+        let by_timestamp = ValidQuery::execute(
+            FindTransactions,
+            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+                p.equals("timestamp_ms", timestamp_ms)
+            }),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+        let expected_by_timestamp = all_txs
+            .iter()
+            .filter(|tx| tx.entrypoint.creation_time_ms() == Some(timestamp_ms))
+            .count();
+        assert_eq!(by_timestamp.len(), expected_by_timestamp);
+        assert!(
+            by_timestamp
+                .iter()
+                .all(|tx| tx.entrypoint.creation_time_ms() == Some(timestamp_ms))
+        );
+
+        let failed = ValidQuery::execute(
+            FindTransactions,
+            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+                p.equals("result_ok", false)
+            }),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+        assert_eq!(failed.len() as u64, num_blocks);
+        assert!(failed.iter().all(|tx| tx.result.as_ref().is_err()));
+
+        let missing_authority = ValidQuery::execute(
+            FindTransactions,
+            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+                p.equals("authority", BOB_ID.to_string())
+            }),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+        assert!(missing_authority.is_empty());
+
+        let contradictory_authority = ValidQuery::execute(
+            FindTransactions,
+            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+                p.equals("authority", authority.to_string())
+                    .equals("authority", BOB_ID.to_string())
+            }),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+        assert!(contradictory_authority.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    async fn find_transactions_by_filter_timestamp_range_uses_kura_index() -> Result<()> {
+        let num_blocks = 8;
+        let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1)?;
+        let state_view = state.view();
+        let all_txs = ValidQuery::execute(FindTransactions, CompoundPredicate::PASS, &state_view)?
+            .collect::<Vec<_>>();
+        let first_tx = all_txs.first().expect("test state has transactions");
+        let timestamp_ms = first_tx
+            .entrypoint
+            .creation_time_ms()
+            .expect("test transaction has timestamp");
+        let result_ok = first_tx.result.as_ref().is_ok();
+
+        let expected_heights = all_txs
+            .iter()
+            .filter(|tx| tx.entrypoint.creation_time_ms() == Some(timestamp_ms))
+            .filter_map(|tx| state_view.kura().get_block_height_by_hash(tx.block_hash))
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            state_view
+                .kura()
+                .get_block_heights_by_transaction_timestamp_range(
+                    Some(timestamp_ms),
+                    Some(timestamp_ms)
+                )
+                .expect("test Kura transaction index is complete"),
+            expected_heights
+        );
+
+        let by_timestamp_range = ValidQuery::execute(
+            FindTransactions,
+            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::from_filters(
+                iroha_data_model::query::CommittedTxFilters {
+                    ts_ge: Some(timestamp_ms),
+                    ts_le: Some(timestamp_ms),
+                    ..Default::default()
+                },
+            ),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+        let expected_by_range = all_txs
+            .iter()
+            .filter(|tx| tx.entrypoint.creation_time_ms() == Some(timestamp_ms))
+            .count();
+        assert_eq!(by_timestamp_range.len(), expected_by_range);
+        assert!(
+            by_timestamp_range
+                .iter()
+                .all(|tx| tx.entrypoint.creation_time_ms() == Some(timestamp_ms))
+        );
+
+        let by_timestamp_and_result = ValidQuery::execute(
+            FindTransactions,
+            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::from_filters(
+                iroha_data_model::query::CommittedTxFilters {
+                    ts_ge: Some(timestamp_ms),
+                    ts_le: Some(timestamp_ms),
+                    result_ok: Some(result_ok),
+                    ..Default::default()
+                },
+            ),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+        let expected_by_timestamp_and_result = all_txs
+            .iter()
+            .filter(|tx| {
+                tx.entrypoint.creation_time_ms() == Some(timestamp_ms)
+                    && tx.result.as_ref().is_ok() == result_ok
+            })
+            .count();
+        assert_eq!(
+            by_timestamp_and_result.len(),
+            expected_by_timestamp_and_result
+        );
+        assert!(by_timestamp_and_result.iter().all(|tx| {
+            tx.entrypoint.creation_time_ms() == Some(timestamp_ms)
+                && tx.result.as_ref().is_ok() == result_ok
+        }));
+
+        let impossible_lower_bound = timestamp_ms + 1;
+        assert!(
+            state_view
+                .kura()
+                .get_block_heights_by_transaction_timestamp_range(
+                    Some(impossible_lower_bound),
+                    Some(timestamp_ms)
+                )
+                .expect("test Kura transaction index is complete")
+                .is_empty()
+        );
+        let impossible_range = ValidQuery::execute(
+            FindTransactions,
+            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::from_filters(
+                iroha_data_model::query::CommittedTxFilters {
+                    ts_ge: Some(impossible_lower_bound),
+                    ts_le: Some(timestamp_ms),
+                    ..Default::default()
+                },
+            ),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+        assert!(impossible_range.is_empty());
+
+        assert_eq!(expected_heights.len() as u64, num_blocks);
+
+        Ok(())
+    }
+
+    #[test]
+    async fn find_proof_records_intersects_backend_and_status_indexes() -> Result<()> {
+        fn proof_record(
+            backend: &str,
+            proof_byte: u8,
+            status: iroha_data_model::proof::ProofStatus,
+        ) -> iroha_data_model::proof::ProofRecord {
+            iroha_data_model::proof::ProofRecord {
+                id: iroha_data_model::proof::ProofId {
+                    backend: backend.into(),
+                    proof_hash: [proof_byte; 32],
+                },
+                vk_ref: None,
+                vk_commitment: None,
+                status,
+                verified_at_height: Some(1),
+                bridge: None,
+            }
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        let target = proof_record(
+            "halo2/test",
+            1,
+            iroha_data_model::proof::ProofStatus::Verified,
+        );
+        let same_backend_wrong_status = proof_record(
+            "halo2/test",
+            2,
+            iroha_data_model::proof::ProofStatus::Rejected,
+        );
+        let wrong_backend_same_status = proof_record(
+            "stark/test",
+            3,
+            iroha_data_model::proof::ProofStatus::Verified,
+        );
+        let mut proof_status_index = std::collections::BTreeMap::<
+            iroha_data_model::proof::ProofStatus,
+            std::collections::BTreeSet<iroha_data_model::proof::ProofId>,
+        >::new();
+        for record in [
+            target.clone(),
+            same_backend_wrong_status,
+            wrong_backend_same_status,
+        ] {
+            state.world.proofs.insert(record.id.clone(), record.clone());
+            proof_status_index
+                .entry(record.status)
+                .or_default()
+                .insert(record.id);
+        }
+        for (status, proof_ids) in proof_status_index {
+            state.world.proofs_by_status.insert(status, proof_ids);
+        }
+
+        let state_view = state.view();
+        assert_eq!(
+            state_view
+                .world()
+                .proofs_by_backend_iter("halo2/test")
+                .count(),
+            2,
+            "fixture should populate the backend range used by the query planner",
+        );
+
+        let matching = ValidQuery::execute(
+            iroha_data_model::query::proof::prelude::FindProofRecords,
+            CompoundPredicate::<iroha_data_model::proof::ProofRecord>::build(|p| {
+                p.equals("backend", "halo2/test")
+                    .equals("status", iroha_data_model::proof::ProofStatus::Verified)
+            }),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+        assert_eq!(matching, vec![target]);
+
+        let contradictory_backend = ValidQuery::execute(
+            iroha_data_model::query::proof::prelude::FindProofRecords,
+            CompoundPredicate::<iroha_data_model::proof::ProofRecord>::build(|p| {
+                p.equals("backend", "halo2/test")
+                    .equals("backend", "stark/test")
+            }),
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+        assert!(contradictory_backend.is_empty());
 
         Ok(())
     }

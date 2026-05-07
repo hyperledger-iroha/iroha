@@ -180,10 +180,11 @@ impl LoopBuilder {
         }: Child,
     ) {
         let exit_tx = self.exit.0.clone();
+        let task_abort_handle = task.abort_handle();
 
         let exit_signal = NotifyOnce::new();
         let exit_signal_task = exit_signal.clone();
-        let abort_handle = self.set.spawn(
+        let monitor_abort_handle = self.set.spawn(
             async move {
                 iroha_logger::debug!("Start monitoring a child");
                 let result = match task.await {
@@ -222,13 +223,15 @@ impl LoopBuilder {
                    match on_shutdown {
                         OnShutdown::Abort => {
                             iroha_logger::debug!("Shutdown signal received, aborting...");
-                            abort_handle.abort();
+                            task_abort_handle.abort();
+                            monitor_abort_handle.abort();
                         }
                         OnShutdown::Wait(duration) => {
                             iroha_logger::debug!(?duration, "Shutdown signal received, waiting for child shutdown...");
                             if timeout(duration, exit_wait2.notified()).await.is_err() {
                                 iroha_logger::debug!(expected = ?duration, "Child shutdown took longer than expected, aborting...");
-                                abort_handle.abort();
+                                task_abort_handle.abort();
+                                monitor_abort_handle.abort();
                             }
                         }
                     }
@@ -702,6 +705,8 @@ mod tests {
             .expect("should finish within this time")
             .expect("supervisor should not panic")
             .expect("shutdown took too long, but it is not an error");
+        assert!(!graceful.load(Ordering::Relaxed));
+        sleep(ACTUAL_SHUTDOWN + TICK_TIMEOUT).await;
         assert!(!graceful.load(Ordering::Relaxed));
     }
 

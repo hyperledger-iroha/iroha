@@ -473,6 +473,398 @@ Last updated: 2026-05-07
   - `cargo test -p fastpq_prover --lib --features fastpq-gpu cuda -- --nocapture`
   - `cargo run -p fastpq_prover --bin fastpq_cuda_bench --release --features fastpq-gpu -- --rows 20000 --iterations 3 --warmups 1 --column-count 16 --require-gpu --device "NVIDIA GeForce RTX 3080 Laptop GPU cc8.6 driver 527.56" --output dist/fastpq_cuda_bench_20260505.json --notes "CUDA roadmap closure on WSL2"`
   - `git diff --check`
+## 2026-05-07 Izanami 20k Metal sampled profile
+
+- A 90s `/usr/bin/sample` profile of one peer during the same prebuilt 20k
+  workload completed at
+  `dist/izanami-profile-20k-fastpq-gpu-metal-return-sampled-90s-20260507-080927`;
+  both Izanami and the sampler exited `0`.
+- The sampled run still offered, accepted, and succeeded all `2,400,000`
+  submissions with `0` failures, validation rejects, confirmation failures, or
+  queue drops. Sampling reduced progress versus the clean gate: final
+  quorum/strict height was `16/16`, final strict approved was `57,581`, submit
+  latency was `p50=3ms`, `p95=21ms`, `p99=82ms`, `max=251ms`, and final queue
+  depth was `871,355 / 2,400,000`.
+- The sampled peer reported a `3.4G` physical footprint. The top active
+  application leaf frames moved away from scalar BN254 Poseidon digest hashing:
+  SHA256 (`3,810` top-of-stack samples), Curve25519 field operations
+  (`3,606` and `3,543`), Blake2 compression (`2,867`), CRC64 (`1,306`), and
+  Norito length/write helpers (`841`, plus lower Norito encode/decode frames)
+  now lead the sample. Lower `ark_ff` field operations remain visible, but
+  scalar `iroha_zkp_halo2::poseidon::hash_u64_words_internal` is no longer the
+  dominant CPU frame seen in the previous CPU-fallback profile.
+- All peers again logged BN254 Poseidon digest GPU preflight `ok=true`, and the
+  profile diagnostics did not log BN254 Metal batch command-buffer fallback.
+  General FASTPQ Poseidon prover preflight still failed on Metal/CPU parity and
+  used the CPU prover backend.
+- The main remaining bottleneck is commit validation cadence and queue drain:
+  diagnostics logged `60` slow commit-pipeline blocks with validation time
+  `min=1053ms`, `avg=1946ms`, `max=3152ms`, plus `57` inline validation
+  fallbacks after the `750ms` inflight timeout. Queue saturation persisted, with
+  `113` pacemaker backpressure deferrals, while RBC store pressure, view
+  changes, missing-block fetches, and validation rejects stayed at `0`.
+
+## 2026-05-07 Bounded node shutdown
+
+- `iroha_futures::Supervisor` now sends cancellation to the supervised child
+  task before detaching the monitor on shutdown timeout, so slow graceful exits
+  no longer leave the underlying Tokio task running until runtime teardown.
+- `irohad` now shuts down the Tokio runtime with a bounded timeout after the
+  node future completes, preventing non-preemptible blocking work from keeping
+  the process alive indefinitely.
+- Validation passed with `cargo test -p iroha_futures -- --nocapture` and
+  `cargo check -p irohad`.
+
+## 2026-05-07 Izanami 20k Metal return gate
+
+- A fresh release build with the restored Metal toolchain completed for
+  `iroha3d` and `izanami` using
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-20k-metal-return-20260507-075339 cargo
+  build --release -p irohad --bin iroha3d -p izanami --bin izanami --features
+  irohad/fastpq-gpu`.
+- The fresh 4-peer no-fault prebuilt `20k TPS` / `120s` `fastpq-gpu` Metal
+  return gate at
+  `dist/izanami-prebuilt-20k-fastpq-gpu-metal-return-120s-20260507-080246`
+  exited `0`. It offered, accepted, and succeeded all `2,400,000`
+  submissions, used all `2,400,000` prebuilt transactions, and reported `0`
+  submit failures, validation rejects, confirmation failures, confirmation
+  queue drops, prebuild fallbacks, prebuild skips, prebuild build failures,
+  ingress failovers, or unhealthy endpoints.
+- Final quorum/strict height was `18/18`; final quorum/strict approved
+  transactions were `65,652/65,652`. Submit latency was `p50=3ms`,
+  `p95=17ms`, `p99=79ms`, and `max=186ms`. Final queue depth was
+  `823,854 / 2,400,000`, with `156` pacemaker backpressure deferrals and
+  commit-pipeline EMA `27ms`. This clears the 20k return thresholds
+  (`>53,461` strict-approved and `<850,745` queue depth).
+- Metal state is improved but not yet fully clean: every peer logged BN254
+  Poseidon digest GPU preflight `ok=true`, while general FASTPQ Poseidon prover
+  preflight still fell back to CPU with a Metal/CPU parity mismatch. At least
+  two BN254 digest batches later hit a Metal command-buffer error and fell back
+  deterministically to scalar hashing, so this is successful 20k return-gate
+  evidence with Metal digest preflight restored, not evidence of a fully
+  sustained GPU-backed proof/digest run.
+
+## 2026-05-07 Metal toolchain preflight restored
+
+- The host Metal compiler component is installed and active. `xcodebuild
+  -downloadComponent MetalToolchain` downloaded Metal Toolchain `17E188`, and
+  `xcrun --find metal` / `xcrun --find metallib` now resolve through the
+  mounted MobileAsset Metal toolchain instead of the inactive Xcode stub.
+  `xcrun metal -v` exits `0`.
+- Focused FASTPQ BN254 Metal validation passed with
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-metal-preflight-20260507-073454 cargo test
+  -p fastpq_prover
+  metal_bn254_poseidon_word_batch_matches_cpu_self_test_cases --features
+  fastpq-gpu -- --nocapture`. The build produced
+  `/tmp/iroha-codex-metal-preflight-20260507-073454/debug/build/fastpq_prover-48ecd44d01176b1e/out/fastpq.metallib`
+  and the test passed `1` case.
+- At the time of the focused preflight, follow-up `iroha_core` digest-gate
+  validation was blocked before execution by an existing unmerged conflict in
+  `crates/iroha_core/src/sumeragi/main_loop/propose.rs` at line `913`.
+
+## 2026-05-06 Izanami 20k return gate
+
+- The fresh 4-peer no-fault prebuilt `20k TPS` / `120s` `fastpq-gpu`
+  return gate at
+  `dist/izanami-prebuilt-20k-fastpq-gpu-return-120s-20260506-195652`
+  completed the Izanami workload successfully. It offered, accepted, and
+  succeeded all `2,400,000` submissions, used all `2,400,000` prebuilt
+  transactions, and reported `0` submit failures, validation rejects,
+  confirmation failures, confirmation queue drops, prebuild fallbacks, prebuild
+  skips, prebuild build failures, ingress failovers, or unhealthy endpoints.
+  The shell wrapper exited `1` after completion because zsh treats `status` as
+  read-only; `izanami_status.txt` records the workload status as `0`.
+- Final quorum/strict height was `19/19`; final quorum/strict approved
+  transactions were `69,806/69,806`. Submit latency was `p50=3ms`, `p95=7ms`,
+  `p99=18ms`, and `max=202ms`. Final queue depth was
+  `835,396 / 2,400,000`, with `120` pacemaker backpressure deferrals and
+  commit-pipeline EMA `1ms`. The host did not provide a hardware-backed FASTPQ
+  path: the release build reported a missing Metal toolchain, and peer logs
+  show BN254 Poseidon digest and Poseidon GPU preflights both `ok=false`, so the
+  run is valid CPU-fallback evidence rather than GPU-backed BN254 evidence.
+
+## 2026-05-06 Izanami 20k sampled profile
+
+- A 90s `/usr/bin/sample` profile of one peer during the same 20k prebuilt
+  workload completed at
+  `dist/izanami-profile-20k-fastpq-gpu-return-sampled-90s-20260506-200245`.
+  The sampled Izanami run still accepted and succeeded all `2,400,000`
+  submissions with `0` failures, rejects, or queue drops, but sampling
+  materially reduced progress: final strict approved fell to `53,346`, queue
+  depth rose to `877,159 / 2,400,000`, and submit latency widened to
+  `p50=3ms`, `p95=18ms`, `p99=76ms`, `max=418ms`.
+- The sampled peer reported a `5.2G` physical footprint. Its top active
+  application frame was scalar BN254 Poseidon:
+  `iroha_zkp_halo2::poseidon::hash_u64_words_internal` accounted for `33,013`
+  collapsed top-of-stack samples. SHA256 (`9,355`), Curve25519 field
+  multiplication (`6,113`), Blake2 compression (`5,227`), CRC/Norito helpers,
+  and queue admission were visible but lower. All sampled peer logs again show
+  BN254 digest and prover Poseidon GPU preflights `ok=false`; this profile
+  therefore identifies the deterministic CPU fallback as the current primary
+  validation bottleneck, with queue drain/backpressure still the main end-to-end
+  throughput limit.
+
+## 2026-05-06 Izanami 20k current gate
+
+- The fresh 4-peer no-fault prebuilt `20k TPS` / `120s` `fastpq-gpu`
+  return-current gate at
+  `dist/izanami-prebuilt-20k-fastpq-gpu-return-current-120s-20260506-124641`
+  exited `0`. It offered, accepted, and succeeded all `2,400,000`
+  submissions, used all `2,400,000` prebuilt transactions, and reported `0`
+  submit failures, validation rejects, confirmation failures, confirmation
+  queue drops, prebuild fallbacks, prebuild skips, prebuild build failures,
+  ingress failovers, or unhealthy endpoints.
+- Final quorum/strict height was `14/14`; final quorum/strict approved
+  transactions were `49,428/49,428`. Submit latency was `p50=3ms`,
+  `p95=12ms`, `p99=70ms`, and `max=184ms`. The queue remained saturated at
+  `873,062 / 2,400,000`, with `117` pacemaker backpressure deferrals and
+  commit-pipeline EMA `12ms`. This returns the current 20k ingress/strict
+  progress path to the `49,428` gate target while committed 20k TPS remains a
+  queue-drain and validation/serialization follow-up.
+
+## 2026-05-06 Dataspace default fee sponsorship
+
+- `nexus.dataspace_catalog` now accepts `fee_sponsor_account_id` for a
+  dataspace-wide default fee sponsor. Explicit transaction `fee_sponsor`
+  metadata still wins, while transactions without that metadata inherit the
+  sponsor for their routed dataspace.
+- Nexus fee admission and execution authorization now accept the routed
+  dataspace default sponsor without requiring every caller account to hold a
+  direct `CanUseFeeSponsor` grant. Existing explicit grants remain supported,
+  and configured dataspace sponsors still require `nexus.fees.sponsorship_enabled`.
+
+## 2026-05-06 BPNG fee-sponsor routing drift fix
+
+- Queue proposal selection and outbound gossip now refresh cached
+  lane/dataspace routing from the committed state immediately before exposing a
+  queued transaction, update the routing decision cache and ledger with the
+  refreshed route, and explicitly reject queued transactions that can no longer
+  be routed.
+- State-backed account-permission query routing now uses the same account-scope
+  fallback as block validation, so `CanUseFeeSponsor` grants for BPNG-scoped
+  holders derive the BPNG lane/dataspace consistently while no-state routing
+  still defers when committed state is required.
+- Focused validation passed with `cargo test -p iroha_core queue::router`,
+  `cargo test -p iroha_core queue::`, and
+  `cargo test -p iroha_core validate_static_state_dependent`.
+
+## 2026-05-05 Sumeragi VRF late-reveal ingress hardening
+
+- Torii consensus evidence submission now checks the configured stale-evidence
+  horizon immediately after decode. Payloads older than the NPoS horizon are
+  accepted as stale inputs without running signature/topology validation, so
+  stale evidence is not persisted and does not fail for the wrong reason.
+- Sumeragi now routes `VrfCommit` and `VrfReveal` metadata through the vote
+  worker queue. The actor also handles VRF metadata before polling newly
+  committed blocks for epoch catch-up, then polls committed blocks immediately
+  afterward. This preserves queued late reveals that arrive while the local WSV
+  height has already advanced to the epoch boundary.
+- VRF reveal processing now hydrates the in-memory epoch manager from the
+  committed VRF epoch record before validating a reveal, so late external
+  reveals can be matched against commitments that were persisted by an earlier
+  block even if the local manager missed the original commit. Accepted
+  Torii-submitted VRF commits/reveals are also gossiped to the active validator
+  topology while network-originated copies are not rebroadcast.
+- The late-reveal integration harness now avoids blocking progress-log
+  submissions, signs external VRF metadata with the active mode tag, retries
+  reveal submission while the epoch is still open for late reveals, keeps
+  polling for the persisted seal after Sumeragi status reports acceptance, and
+  reports compact status diagnostics on failure.
+- Focused validation passed for stale evidence submission and the NPoS
+  performance metrics baseline:
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo test -p integration_tests --test consensus_and_da sumeragi_negative_paths::posting_stale_evidence_is_not_persisted -- --nocapture`
+  and
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo test -p integration_tests --test consensus_and_da sumeragi_npos_performance::npos_baseline_1s_k3_captures_metrics -- --nocapture`.
+  Focused core validation also passed for
+  `incoming_block_message_routes_vrf_metadata_via_vote_queue`,
+  `external_vrf_reveal_broadcasts_after_acceptance`,
+  `merge_record_observations_hydrates_commit_for_late_reveal`,
+  `committed_vrf_record_does_not_cover_newer_pending_late_reveal`,
+  `on_block_message_handles_vrf_reveal_before_commit_catchup_finalizes_epoch`,
+  and the permissioned-mode VRF commit/reveal handler regressions.
+- Validation caveat: the focused late-reveal integration now reaches
+  Sumeragi acceptance (`vrf_late_reveals_total = 1`) but still fails to observe
+  the persisted epoch seal because the four-peer NPoS/DA network repeatedly
+  stalls at height 4 with pending RBC sessions waiting on missing INIT/chunk
+  data. Treat that as a separate DA/RBC liveness issue before using this
+  integration as the final VRF persistence gate. Formatting and whitespace were
+  rerun after these edits.
+
+## 2026-05-05 Offline Note V2 wallet-derived commitments
+
+- Offline Note V2 commitment derivation now starts in the wallet instead of
+  Torii settlement metadata. `iroha_data_model::offline` exposes canonical
+  Norito preimages and domain tags for note commitments, input nullifiers, and
+  payment token ids, with 32-byte `note_secret` and `token_nonce` material
+  enforced by the derivation helpers.
+- Torii `/v1/offline/v2/notes/issue` now requires a wallet-supplied bare
+  64-character hex `note_commitment`, issues that exact commitment, and keeps
+  `settlement.entry_hash` as lineage/settlement metadata rather than deriving
+  the note commitment from it.
+- Kotlin/JVM, Java Android, and Swift Offline Note V2 model helpers now match
+  the Rust derivation vectors for source notes, P2P output notes, input
+  nullifiers, payment token ids, and redeem nullifiers. The shared Offline V2
+  fixture was regenerated with the derivation preimages, and transaction
+  fixtures were refreshed after aligning SDK account-controller encoding on
+  compact public-key payload bytes.
+- Kotlin/JVM, Java Android, and Swift now expose `OfflineNoteV2Wallet` facades
+  for `load`, `prepareReceive`, `pay`, `accept`, `redeem`, and `sync`, with
+  structured in-memory stores, injectable attestation/random/proof/issuer
+  boundaries, direct audit/redeem transaction submitters, and mock lifecycle
+  tests covering load, P2P pay, accept/audit, redeem, and spent/change-pending
+  state transitions.
+- Kotlin/JVM, Java Android, and Swift now include Torii-backed
+  `OfflineNoteV2IssuerClient` adapters for `/v1/offline/v2/keys/refill` and
+  `/v1/offline/v2/notes/issue`. The adapters body-sign issuer JSON with the
+  canonical request signer, cache signed lineage state between refill and
+  issue, derive wallet commitments against the post-issue revision, and submit
+  the wallet-supplied `note_commitment` unchanged.
+- Validation passed with the focused Rust Offline V2 data-model, Torii issuer,
+  and core tests; full Kotlin `:core-jvm:test`; Java Android core harness; and
+  Swift `OfflineNoteV2Tests`. The 2026-05-06 rerun of
+  `cd IrohaSwift && swift test --filter OfflineNoteV2Tests` is green
+  (`19` tests, `0` failures). Earlier derivation work in this slice also had
+  focused Java fixture/Norito parity coverage and full `swift test` in
+  `IrohaSwift` green. Formatting and whitespace checks are green with
+  `cargo fmt --all --check` and `git diff --check`. Non-no-op wallet sync
+  reconciliation, structured secure note stores, and public Norito decoders
+  remain tracked as release work in `roadmap.md`.
+
+## 2026-05-06 Torii query API WSV fast paths
+
+- Generic Torii query execution now routes more common JSON predicates through
+  in-memory WSV/Kura indexes instead of falling back to full scans. The covered
+  surfaces include repo agreements, public and anonymous asset escrows, proof
+  records, triggers, active trigger IDs, roles, blocks, block headers, and
+  committed transactions constrained by block hash, entrypoint hash, authority,
+  timestamp, timestamp range, or result status. Committed-transaction typed
+  filters now expose their parsed filter set to the planner, so `ts_ge`/`ts_le`
+  ranges and typed authority/entrypoint/result filters use the same Kura indexes
+  as JSON equality predicates. Multiple positive transaction constraints are
+  intersected at the block-height candidate stage instead of only choosing the
+  smallest candidate set. NFT queries now also plan domain predicates through
+  the existing `nfts_in_domain_iter` range instead of scanning the whole NFT
+  store. Proof-record JSON predicates now intersect id/backend/status candidate
+  sets from the proof-id key order and status index. Asset queries now preserve
+  exact asset-id predicates in the general planner, so `id == ...` combined
+  with additional JSON conditions still uses direct WSV lookup instead of
+  widening to account/definition/domain scans. Repo agreement, public escrow,
+  anonymous escrow, block/header, trigger, and role planners now intersect
+  repeated positive index-derived candidate sets instead of retaining only the
+  smallest set, keeping conjunctive predicates narrow before final filtering.
+- Kura now maintains block-hash-to-height and committed-transaction indexes
+  alongside the in-memory block log, keeping hash/transaction lookups fast
+  across replay, durable block append, lazy block-body loading, top-block
+  replacement, and pruning. Reopened stores with only hash metadata keep the
+  transaction index marked partial until loaded block bodies make it complete,
+  so query planners fall back to full scans instead of returning incomplete
+  results.
+- Focused validation passed with the repo agreement, escrow, proof record,
+  trigger, role, block/header, committed-transaction block-hash, transaction
+  entrypoint, transaction authority/timestamp/result-status, typed transaction
+  timestamp-range, NFT owner/domain range, proof backend/status intersection,
+  Kura pruning, lazy transaction-index completion, asset exact-id
+  general-planner, repo participant-candidate intersection, escrow
+  status/buyer-candidate intersection, block candidate-height intersection,
+  trigger candidate-id intersection, and role candidate-id intersection unit
+  tests. Formatting is green; crate-level
+  `cargo check -p iroha_core --lib` is green; `cargo check -p iroha_data_model
+  --features fast_dsl` is green; `git diff --check` and
+  `scripts/check_no_scale.sh` are green. The 2026-05-06 rerun also covered
+  `find_transactions_by_authority_timestamp_and_result_use_kura_indexes`,
+  `find_transactions_by_filter_timestamp_range_uses_kura_index`,
+  `transaction_index_completes_after_lazy_loading_reopened_blocks`, and
+  `find_proof_records_intersects_backend_and_status_indexes` under
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-query-fastpaths`, plus
+  `asset_predicate_view_extracts_alias_fields_for_planner` and
+  `find_assets_filters_by_exact_id_with_extra_predicate`,
+  `repo_agreement_candidates_intersect_participant_indexes`,
+  `asset_escrow_candidates_intersect_status_and_buyer_indexes`,
+  `block_candidate_heights_are_intersected`,
+  `trigger_candidate_ids_are_intersected`, and
+  `role_candidate_ids_are_intersected` in the default target.
+
+## 2026-05-05 Offline V2 issuer body auth
+
+- Offline V2 issuer POSTs now reject legacy `X-Iroha-*` app-auth headers and
+  verify `account_id`, `timestamp_ms`, `nonce`, plus exactly one of
+  `signature_base64` or `witness_base64` from the JSON body. The signed body
+  hash uses Norito JSON canonical bytes with only top-level proof fields
+  removed, preserving nested receipt and lineage signatures.
+- Kotlin and Java `CanonicalRequestSigner` helpers now build body-auth signing
+  messages and single-signature body fields, with witness helper support for a
+  prebuilt `witness_base64`.
+- Focused Torii validation passed with
+  `CARGO_TARGET_DIR=target/codex-offline-body-auth cargo test -p iroha_torii body_auth --lib`.
+  The broader Offline V2 issuer filter also passed with
+  `CARGO_TARGET_DIR=target/codex-offline-body-auth cargo test -p iroha_torii offline_v2`
+  (the lib slice reported `13` passed and `1749` filtered out, plus the package
+  filter covered `offline_v2_readiness_is_mounted_and_legacy_routes_are_absent`).
+  `rustfmt --edition 2024 --check crates/iroha_torii/src/app_auth.rs crates/iroha_torii/src/offline_v2_issuer.rs`
+  and full `cargo fmt --all -- --check` are green.
+- The focused strict lint gate
+  `CARGO_TARGET_DIR=target/codex-offline-body-auth cargo clippy -p iroha_torii --lib -- -D warnings`
+  is green after clearing current-tree blockers in `iroha_p2p` decrypted-frame
+  parsing and exposing the proof-record indexed insert helper to production
+  builds. The p2p cleanup is covered by
+  `CARGO_TARGET_DIR=target/codex-offline-body-auth cargo test -p iroha_p2p`
+  (`161` unit tests and `15` integration tests passed).
+- Full Rust workspace build is green with `cargo build --workspace` in the
+  normal repository target directory (`20m10s`). A first duplicate-target
+  attempt failed with `No space left on device`; removing the generated
+  `target/codex-offline-body-auth` tree freed enough space for the successful
+  normal-target build.
+- The full workspace all-target clippy gate is green with
+  `cargo clippy --workspace --all-targets -- -D warnings` after clearing
+  current-tree blockers in `fastpq_prover`, `iroha_executor`, the SoraFS pin
+  client helper, Kagami genesis/localnet code, scheduler telemetry tests, and
+  IVM host syscall coverage tests.
+- Follow-up focused tests for the nontrivial clippy fixes also passed:
+  `cargo test -p fastpq_prover metal_config --lib` (`17` passed,
+  `275` filtered out) and
+  `cargo test -p iroha build_register_manifest_payload_contains_expected_fields --lib`
+  (`1` passed, `283` filtered out).
+- Kotlin/Java validation is green when Gradle is pointed at the local Homebrew
+  OpenJDK 21 install:
+  `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --console=plain`
+  and
+  `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew test --console=plain`
+  from `java/iroha_android`.
+- Swift SDK validation also passed with `swift test` from `IrohaSwift`
+  (`783` executed, `101` skipped, `0` failures).
+
+## 2026-05-05 Soracloud and local acceleration validation
+
+- The full `irohad` Soracloud binary filter is green with
+  `env -u LOG_FORMAT CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-full cargo test -p irohad --features embedded-soracloud-runtime --bin irohad soracloud -- --nocapture`
+  (`97` passed, `1` ignored, `139` filtered out). The expected
+  `manager_config_rejects_unsafe_direct_actual_production_posture` panic is
+  covered by a `#[should_panic]` test.
+- Local Apple Metal is available on this macOS arm64 host:
+  `xcrun -sdk macosx metal -v` reports Apple Metal `32023.864`. `nvcc` is not
+  on `PATH`, so CUDA hardware parity was not run here.
+- Local IVM acceleration gates are green:
+  `RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-accel-metal cargo test -p ivm --features metal --test metal_sha256 --test gpu_determinism --test metal_disable_on_mismatch --test vector_ops -- --nocapture`
+  and
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-accel-simd cargo test -p ivm --test acceleration_simd --test simd_tail_misalignment --test poseidon_simd --test vector_detect -- --nocapture`.
+- Norito Metal/SIMD gates are green with
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-metal cargo test -p jsonstage1_metal -p gpuzstd_metal -- --nocapture`
+  and
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-metal cargo test -p norito --features "json simd-accel parallel-stage1 stage1-validate codec-gpu-metal" stage1 -- --nocapture`.
+  `gpuzstd_metal` reported the runtime GPU backend unavailable and skipped its
+  GPU-only assertions, while the helper and Stage-1 suites passed.
+- FASTPQ Metal hardware parity is green on the available Apple Metal backend:
+  `FASTPQ_GPU=gpu RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-metal cargo test -p fastpq_prover --features fastpq-gpu --lib metal -- --nocapture`
+  passed (`67` passed, `285` filtered out). The fix covers deterministic
+  test device hints, BN254 fixture/kernel coverage, Goldilocks reduction,
+  domain-rooted FFT twiddles, coefficient-wise LDE coset scaling, tile
+  writeback, BN254 LDE scaling, and Metal-safe Poseidon partial-round
+  compilation.
+- The full Soracloud production-readiness profile was not run because this
+  workspace has no operator mixed-host inventory or observability evidence
+  inputs. That remains a rollout blocker rather than a local code failure.
+- Hygiene checks passed with `cargo fmt --all -- --check`, `git diff --check`,
+  and `scripts/check_no_scale.sh`.
 
 ## 2026-05-05 UAID replay/checkpoint hardening
 
@@ -6859,8 +7251,8 @@ Last updated: 2026-05-07
   `153%`, and `batch_from_transcripts/missing_digests/64` by about `26%`
   against the no-zeroing run under the same load window.
 - The final partial-word helper now masks stale high bytes instead of copying
-  into a temporary zeroed buffer, and `PoseidonWordPacker` uses a manual 8-byte
-  loop for full words. Filtered Criterion kept this follow-up after measuring
+  into a temporary zeroed buffer, and `PoseidonWordPacker` uses an 8-byte
+  full-word path. Filtered Criterion kept this follow-up after measuring
   `byte_hasher_streaming/32` at about `59.5 us`,
   `poseidon_preimage_digest` at about `328.5 us`, and
   `batch_from_transcripts/missing_digests/64` at about `21.6 ms`, all reported
@@ -6886,9 +7278,55 @@ Last updated: 2026-05-07
   `176.7 us`; the final helper rerun measured about `58.6 us` for 33 bytes and
   `175.8 us` for 129 bytes, both within the noise threshold against the
   immediately preceding baseline.
+- Kept cross-crate `#[inline(always)]` on `PoseidonByteHasher`'s public update
+  and finalize methods plus FASTPQ's tiny digest/encode helpers after reverting
+  them to plain `#[inline]` regressed filtered `byte_hasher_streaming/32`,
+  `byte_hasher_streaming/128`, and `poseidon_preimage_digest` by about `4.4%`,
+  `6.8%`, and `7.2%` respectively. The `Write` trait method inlining
+  experiment was rejected: it kept `poseidon_preimage_digest` within noise but
+  regressed the precomputed 64-transcript batch filter by about `1.9%`.
+- The `crypto_hotpaths` 64-transcript FASTPQ benchmark fixture now generates a
+  valid chained balance sequence so current SMT witness attachment can run
+  before measuring missing/precomputed Poseidon digest paths.
+- Rejected three follow-up hot-path experiments after filtered Criterion A/B:
+  direct slot-1 absorption in `PoseidonByteHasher::update` regressed small
+  streaming inputs, a fixed 32-byte `batch_hash` update path regressed
+  `poseidon_preimage_digest` by about `9.7%`, and forcing
+  `PoseidonWordPacker::{new, update, finish}` to `#[inline(always)]` regressed
+  both 64-transcript batch filters by about `5-7%`.
+- Rejected output-wrapper inlining too: adding `#[inline]` to
+  `hash_u64_words_bytes` regressed the packed u64-word filters heavily, and
+  reverse A/B showed ordinary `#[inline]` on `field_to_{bytes,u64}` plus
+  fixed-width public wrappers had no meaningful benefit.
+- Rejected `#[inline]` on `PoseidonByteHasher::new` after direct reverse A/B
+  kept `byte_hasher_streaming/{32,128}` and `poseidon_preimage_digest` within
+  the noise threshold without the annotation.
+- Kept `chunks_exact(2)` iteration in `hash_u64_words_internal` after direct
+  A/B improved the 24-word packed filter by about `3.0%`. Reverse A/B restoring
+  the old index loop regressed `hash_u64_words_bytes/{2,24,64}` by about
+  `5.4%`, `4.0%`, and `4.2%`.
+- Kept `chunks_exact(8)` in `PoseidonWordPacker::update` after isolated reverse
+  A/B restoring the manual loop regressed
+  `batch_from_transcripts/missing_digests/64` by about `1.7%`; the precomputed
+  64-transcript filter stayed within the noise threshold. Hybrid stack-first
+  single-digest packers with 24- and 32-word inline buffers were rejected after
+  `poseidon_preimage_digest` stayed within-noise slower than the Vec-backed
+  packed-word path.
+- Rejected the Rayon CPU hash fallback for packed digest batches after the
+  64-transcript missing-digest fixture stayed within noise without it, and a
+  temporary 256-transcript fixture measured about `98.1 ms` serial versus
+  `100.2 ms` through the parallel fallback.
+- Kept a `PoseidonByteHasher::finalize` pending-word specialization after the
+  direct streaming A/B improved the 32-byte filter by about `2.3%`; 33, 128,
+  129, 512, and 4096-byte filters stayed within noise, and reverse A/B restoring
+  the old `absorb_word` path moved the 32-byte filter back about `0.9%` slower.
 - Updated FASTPQ digest construction in `crates/iroha_core/src/fastpq/mod.rs`
-  to stream Norito encodings into the Poseidon byte hasher and to pack GPU
-  digest batches into a shared word buffer with preallocated slice/word
+  to pack the single-digest CPU path through the same u64 word preimage builder
+  used by batched Poseidon digests. Direct reverse A/B kept the packed-word
+  `poseidon_preimage_digest` path after the streaming byte hasher measured
+  about `334 us`, and the restored packed implementation confirmed at about
+  `317 us`, roughly `5.2%` faster than the temporary streaming baseline.
+  GPU digest batches still use a shared word buffer with preallocated slice/word
   capacity. GPU finalization now exits before packing when Poseidon acceleration
   is disabled or the single-delta digest count is below the GPU threshold, and
   the packed-word path now avoids a non-specializing shape-dispatch branch.

@@ -21330,6 +21330,38 @@ fn resolve_local_hosted_http_replica_listener(
 }
 
 #[cfg(feature = "app_api")]
+fn local_healthy_hosted_http_placement(
+    app: &SharedAppState,
+    service_name: &str,
+    service_version: &str,
+    placements: &[iroha_data_model::soracloud::SoraInrouReplicaPlacementV1],
+) -> Result<
+    Option<iroha_data_model::soracloud::SoraInrouReplicaPlacementV1>,
+    SoracloudRuntimeExecutionError,
+> {
+    let Some(local_peer_id) = app.local_peer_id.as_ref() else {
+        return Ok(None);
+    };
+    let local_peer_id = local_peer_id.to_string();
+    for placement in placements {
+        if placement.peer_id != local_peer_id {
+            continue;
+        }
+        if resolve_local_hosted_http_replica_listener(
+            app,
+            service_name,
+            service_version,
+            placement.replica_slot,
+        )?
+        .is_some()
+        {
+            return Ok(Some(placement.clone()));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(feature = "app_api")]
 fn resolve_hosted_http_runtime_target(
     app: &SharedAppState,
     route_match: &soracloud::HostedHttpRouteMatch,
@@ -21360,15 +21392,25 @@ fn resolve_hosted_http_runtime_target(
         else {
             continue;
         };
-        let Some((placement, _runtime_state)) = select_authoritative_hosted_http_replica(
-            world,
+        let placement = if let Some((placement, _runtime_state)) =
+            select_authoritative_hosted_http_replica(
+                world,
+                &service_name,
+                service_version,
+                &placement_record.placements,
+                remote_ip,
+                method,
+                uri,
+            ) {
+            placement
+        } else if let Some(placement) = local_healthy_hosted_http_placement(
+            app,
             &service_name,
             service_version,
             &placement_record.placements,
-            remote_ip,
-            method,
-            uri,
-        ) else {
+        )? {
+            placement
+        } else {
             continue;
         };
         healthy_targets.push(HealthyTarget {
@@ -21540,29 +21582,34 @@ fn resolve_exact_hosted_http_runtime_target(
             ),
         ));
     }
-    let Some(runtime_state) = world.soracloud_inrou_replica_runtime().get(&(
+    let runtime_state = world.soracloud_inrou_replica_runtime().get(&(
         service_name.to_owned(),
         service_version.to_owned(),
         replica_slot.to_string(),
-    )) else {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!(
-                "authoritative hosted Soracloud runtime state is unavailable for service `{service_name}` revision `{service_version}` replica {}",
-                replica_slot
-            ),
-        ));
-    };
-    if runtime_state.health_status
-        != iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy
-    {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!(
-                "hosted Soracloud replica {} for service `{service_name}` revision `{service_version}` is {:?}",
-                replica_slot, runtime_state.health_status
-            ),
-        ));
+    ));
+    if !runtime_state.is_some_and(|runtime_state| {
+        runtime_state.validator_account_id == placement.validator_account_id
+            && runtime_state.peer_id == placement.peer_id
+            && runtime_state.selected_backend == placement.selected_backend
+            && runtime_state.selected_guest_isa == placement.selected_guest_isa
+            && runtime_state.health_status
+                == iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy
+    }) {
+        let local_listener = resolve_local_hosted_http_replica_listener(
+            app,
+            service_name,
+            service_version,
+            replica_slot,
+        )?;
+        if local_listener.is_none() {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                format!(
+                    "hosted Soracloud replica {} for service `{service_name}` revision `{service_version}` is not healthy in authoritative state or local runtime snapshot",
+                    replica_slot
+                ),
+            ));
+        }
     }
     drop(state_view);
     let local_listen_base_url = resolve_local_hosted_http_replica_listener(
@@ -28991,6 +29038,29 @@ struct TransactionBatchPrecheck {
     precheck_rejection: Option<AcceptTransactionFail>,
 }
 
+const ED25519_PRECHECK_SIGNATURE_LENGTH: usize = 64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct Ed25519PrecheckKey {
+    message: [u8; Hash::LENGTH],
+    signature: [u8; ED25519_PRECHECK_SIGNATURE_LENGTH],
+    public_key: [u8; 32],
+}
+
+impl Ed25519PrecheckKey {
+    fn new(
+        message: &[u8],
+        signature: &[u8],
+        public_key: iroha_crypto::Ed25519ParsedPublicKey,
+    ) -> Option<Self> {
+        Some(Self {
+            message: message.try_into().ok()?,
+            signature: signature.try_into().ok()?,
+            public_key: *public_key.as_bytes(),
+        })
+    }
+}
+
 fn precheck_transaction_batch_ed25519(
     transactions: &[DecodedVersionedSignedTransaction],
     batch_cap: usize,
@@ -29034,6 +29104,8 @@ fn precheck_transaction_batch_ed25519(
     let mut scratch = iroha_crypto::Ed25519BatchScratch::default();
     let scratch_cap = batch_cap.min(transactions.len());
     let mut indices = Vec::with_capacity(scratch_cap);
+    let mut duplicate_groups: Vec<Vec<usize>> = Vec::with_capacity(scratch_cap);
+    let mut unique_positions = std::collections::HashMap::<Ed25519PrecheckKey, usize>::new();
     let mut messages = Vec::with_capacity(scratch_cap);
     let mut signatures = Vec::with_capacity(scratch_cap);
     let mut public_keys = Vec::with_capacity(scratch_cap);
@@ -29042,6 +29114,7 @@ fn precheck_transaction_batch_ed25519(
         transactions: &[DecodedVersionedSignedTransaction],
         prechecks: &mut [TransactionBatchPrecheck],
         indices: &[usize],
+        duplicate_groups: &[Vec<usize>],
         messages: &[&'a [u8]],
         signatures: &[&'a [u8]],
         public_keys: &[iroha_crypto::Ed25519ParsedPublicKey],
@@ -29065,14 +29138,25 @@ fn precheck_transaction_batch_ed25519(
 
         match batch_result {
             Ok(()) => {
-                for &idx in indices {
+                for (&idx, duplicates) in indices.iter().zip(duplicate_groups.iter()) {
                     prechecks[idx].single_ed25519_prechecked = true;
+                    for &duplicate_idx in duplicates {
+                        prechecks[duplicate_idx].single_ed25519_prechecked = true;
+                    }
                 }
             }
             Err((relative_idx, detail)) => {
                 if let Some(&idx) = indices.get(relative_idx) {
                     prechecks[idx].precheck_rejection =
-                        Some(signature_error(&transactions[idx], detail));
+                        Some(signature_error(&transactions[idx], detail.clone()));
+                    if let Some(duplicates) = duplicate_groups.get(relative_idx) {
+                        for &duplicate_idx in duplicates {
+                            prechecks[duplicate_idx].precheck_rejection = Some(signature_error(
+                                &transactions[duplicate_idx],
+                                detail.clone(),
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -29082,7 +29166,18 @@ fn precheck_transaction_batch_ed25519(
         let Some((message, signature, public_key)) = tx.single_ed25519_precheck_parts() else {
             continue;
         };
+        let Some(key) = Ed25519PrecheckKey::new(message, signature, public_key) else {
+            continue;
+        };
+        if let Some(&unique_pos) = unique_positions.get(&key) {
+            if let Some(duplicates) = duplicate_groups.get_mut(unique_pos) {
+                duplicates.push(idx);
+            }
+            continue;
+        }
+        unique_positions.insert(key, indices.len());
         indices.push(idx);
+        duplicate_groups.push(Vec::new());
         messages.push(message);
         signatures.push(signature);
         public_keys.push(public_key);
@@ -29092,12 +29187,15 @@ fn precheck_transaction_batch_ed25519(
                 transactions,
                 &mut prechecks,
                 &indices,
+                &duplicate_groups,
                 &messages,
                 &signatures,
                 &public_keys,
                 &mut scratch,
             );
             indices.clear();
+            duplicate_groups.clear();
+            unique_positions.clear();
             messages.clear();
             signatures.clear();
             public_keys.clear();
@@ -29107,6 +29205,7 @@ fn precheck_transaction_batch_ed25519(
         transactions,
         &mut prechecks,
         &indices,
+        &duplicate_groups,
         &messages,
         &signatures,
         &public_keys,
@@ -29212,6 +29311,40 @@ mod transaction_ingress_decode_tests {
         assert_eq!(prechecks.len(), 2);
         assert!(prechecks.iter().all(|precheck| {
             precheck.single_ed25519_prechecked && precheck.precheck_rejection.is_none()
+        }));
+    }
+
+    #[test]
+    fn transaction_batch_ed25519_precheck_reuses_exact_duplicate_key() {
+        let tx = signed_transaction_for_test_with_message("ed25519-precheck-duplicate");
+        let decoded = decode_transaction_batch_payloads(vec![
+            versioned_signed_transaction(&tx),
+            versioned_signed_transaction(&tx),
+        ])
+        .expect("valid duplicate batch decodes");
+
+        let prechecks = precheck_transaction_batch_ed25519(&decoded, 64);
+
+        assert_eq!(prechecks.len(), 2);
+        assert!(prechecks.iter().all(|precheck| {
+            precheck.single_ed25519_prechecked && precheck.precheck_rejection.is_none()
+        }));
+    }
+
+    #[test]
+    fn transaction_batch_ed25519_precheck_rejects_exact_duplicate_invalid_signature() {
+        let tx = transaction_with_invalid_signature("ed25519-precheck-duplicate-invalid");
+        let decoded = decode_transaction_batch_payloads(vec![
+            versioned_signed_transaction(&tx),
+            versioned_signed_transaction(&tx),
+        ])
+        .expect("well-formed duplicate invalid-signature batch decodes");
+
+        let prechecks = precheck_transaction_batch_ed25519(&decoded, 64);
+
+        assert_eq!(prechecks.len(), 2);
+        assert!(prechecks.iter().all(|precheck| {
+            !precheck.single_ed25519_prechecked && precheck.precheck_rejection.is_some()
         }));
     }
 
@@ -29493,10 +29626,8 @@ async fn handler_post_transactions_batch(
                 app.state.clone(),
                 accepted,
             )?;
-            for accepted_tx in stateless_cache_warm {
-                app.state
-                    .warm_stateless_validation_cache_for_torii_prechecked(&accepted_tx);
-            }
+            app.state
+                .warm_stateless_validation_cache_for_torii_prechecked_batch(&stateless_cache_warm);
             Ok::<usize, Error>(accepted_count)
         })
         .await
@@ -50013,7 +50144,8 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn resolve_hosted_http_runtime_target_fails_closed_without_authoritative_runtime_state() {
+    async fn resolve_hosted_http_runtime_target_uses_local_snapshot_when_authoritative_runtime_state_lags()
+     {
         let temp = tempfile::tempdir().expect("tempdir");
         let mut app = seed_public_hosted_http_rollout_app(
             &temp,
@@ -50060,21 +50192,18 @@ pub(crate) mod tests_runtime_handlers {
         let baseline_ip =
             hosted_http_rollout_test_ip("web_portal", &method, &uri, |bucket| bucket >= 20);
 
-        let error = super::resolve_hosted_http_runtime_target(
+        let target = super::resolve_hosted_http_runtime_target(
             &app,
             &route_match,
             Some(baseline_ip),
             &method,
             &uri,
         )
-        .expect_err("authoritative runtime state is required for hosted-http routing");
-        assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
-        assert!(
-            error
-                .message
-                .contains("no healthy hosted Soracloud revision"),
-            "unexpected error: {}",
-            error.message
+        .expect("healthy assigned local runtime snapshot should bridge authoritative lag");
+        assert_eq!(target.route_match.service_version, "2026.02.0");
+        assert_eq!(
+            target.local_listen_base_url.as_deref(),
+            Some("http://127.0.0.1:18080")
         );
     }
 

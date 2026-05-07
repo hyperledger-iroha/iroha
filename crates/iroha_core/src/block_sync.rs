@@ -2825,11 +2825,30 @@ fn select_block_sync_targets(
     (targets, stray_targets)
 }
 
+fn share_blocks_exact_contiguous_frontier_response(
+    blocks: &[SignedBlock],
+    local_tip_height: usize,
+    local_tip_hash: Option<HashOf<BlockHeader>>,
+) -> bool {
+    let Some(local_tip_hash) = local_tip_hash else {
+        return false;
+    };
+    let Some(first) = blocks.first() else {
+        return false;
+    };
+    let local_tip_height = u64::try_from(local_tip_height).unwrap_or(u64::MAX);
+    first.header().height().get() == local_tip_height.saturating_add(1)
+        && first.header().prev_block_hash() == Some(local_tip_hash)
+}
+
 #[cfg(test)]
 mod sample_targets_tests {
+    use std::num::NonZeroU64;
+
     use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
+    use crate::block::ValidBlock;
 
     #[test]
     fn samples_at_most_gossip_size() {
@@ -2862,6 +2881,34 @@ mod sample_targets_tests {
         for peer in peers {
             assert!(sample.contains(&peer));
         }
+    }
+
+    #[test]
+    fn exact_frontier_share_blocks_response_extends_local_tip() {
+        let keypair = iroha_crypto::KeyPair::random();
+        let parent_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]));
+        let block: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
+                header.set_height(NonZeroU64::new(6).expect("non-zero height"));
+                header.set_prev_block_hash(Some(parent_hash));
+            })
+            .into();
+
+        assert!(share_blocks_exact_contiguous_frontier_response(
+            std::slice::from_ref(&block),
+            5,
+            Some(parent_hash),
+        ));
+        assert!(!share_blocks_exact_contiguous_frontier_response(
+            std::slice::from_ref(&block),
+            5,
+            None,
+        ));
+        assert!(!share_blocks_exact_contiguous_frontier_response(
+            std::slice::from_ref(&block),
+            4,
+            Some(parent_hash),
+        ));
     }
 }
 
@@ -5193,9 +5240,13 @@ pub mod message {
                     filtered.push((block, qc));
                     continue;
                 };
-                let stake_snapshot = rosters
-                    .get(&block_hash)
-                    .and_then(|meta| meta.stake_snapshot.as_ref());
+                let roster_metadata = rosters.get(&block_hash);
+                let stake_snapshot = roster_metadata.and_then(|meta| meta.stake_snapshot.as_ref());
+                let qc_candidate = qc.or_else(|| {
+                    roster_metadata
+                        .and_then(|meta| meta.commit_qc.as_ref())
+                        .cloned()
+                });
                 let (context, signature_check, sanitized_qc) = {
                     let world_view = state.world_view();
                     let mode_tag = mode_tag_for_block_sync_from_world(
@@ -5225,7 +5276,7 @@ pub mod message {
                         state.chain_id_ref(),
                         fallback_consensus_mode,
                         &block,
-                        qc,
+                        qc_candidate,
                         &context,
                         &topology,
                         &block_signers,
@@ -5649,7 +5700,16 @@ pub mod message {
                         && block_sync
                             .sumeragi
                             .allow_direct_block_sync_response(peer_id, now);
-                    if !solicited_by_gossip && !solicited_by_recovery {
+                    let exact_contiguous_frontier_response =
+                        share_blocks_exact_contiguous_frontier_response(
+                            blocks,
+                            block_sync.state.committed_height(),
+                            block_sync.state.latest_block_hash_fast(),
+                        );
+                    if !solicited_by_gossip
+                        && !solicited_by_recovery
+                        && !exact_contiguous_frontier_response
+                    {
                         debug!(
                             peer = %peer_id,
                             total = blocks.len(),
@@ -5660,6 +5720,16 @@ pub mod message {
                             telemetry.note_block_sync_unsolicited_share_blocks_drop();
                         }
                         return;
+                    }
+                    if exact_contiguous_frontier_response
+                        && !solicited_by_gossip
+                        && !solicited_by_recovery
+                    {
+                        info!(
+                            peer = %peer_id,
+                            total = blocks.len(),
+                            "accepting exact contiguous frontier block sync batch without response permit"
+                        );
                     }
 
                     let total = blocks.len();
@@ -8140,6 +8210,63 @@ pub mod message {
             assert_eq!(filtered.len(), 1);
             assert_eq!(filtered[0].0.hash(), block.hash());
             assert!(filtered[0].1.is_some());
+        }
+
+        #[test]
+        fn filter_blocks_accepts_roster_metadata_qc_without_block_signature_quorum() {
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_validator.public_key().clone()),
+            ]);
+            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
+            let state_view = state.view();
+            let (chain_id, mode_tag) = test_chain_config();
+
+            let mut block: SignedBlock = unique_dummy_block(kp_leader.private_key(), |header| {
+                header.set_height(nonzero_ext::nonzero!(2_u64));
+            })
+            .into();
+            let signature_topology =
+                signature_topology_for_block(&block, &topology, &state_view, &mode_tag);
+            let leader_candidates = [&kp_leader, &kp_validator];
+            let leader = leader_keypair(&signature_topology, &leader_candidates);
+            block = sign_block_for_topology(block, &signature_topology, &[leader]);
+
+            let qc = qc_from_signers_with_aggregate(
+                &chain_id,
+                &mode_tag,
+                block.hash(),
+                block.header().height().get(),
+                block.header().view_change_index(),
+                0,
+                signer_indices_for_topology(&signature_topology, &[&kp_leader, &kp_validator]),
+                &signature_topology,
+                &topology,
+                &[kp_leader.clone(), kp_validator.clone()],
+            );
+            let rosters = BTreeMap::from([(
+                block.hash(),
+                RosterMetadata {
+                    commit_qc: Some(qc.clone()),
+                    validator_checkpoint: None,
+                    stake_snapshot: None,
+                },
+            )]);
+
+            let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
+                vec![(block.clone(), None)],
+                &rosters,
+                Some(&topology),
+                &state,
+                ConsensusMode::Permissioned,
+            );
+
+            assert_eq!(dropped, 0);
+            assert_eq!(filtered.len(), 1);
+            assert_eq!(filtered[0].0.hash(), block.hash());
+            assert_eq!(filtered[0].1, Some(qc));
         }
 
         #[test]

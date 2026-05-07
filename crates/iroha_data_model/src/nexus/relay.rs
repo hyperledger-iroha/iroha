@@ -214,12 +214,12 @@ pub fn lane_relay_fastpq_claim_digest(
         lane_id: envelope.lane_id,
         dataspace_id: envelope.dataspace_id,
         block_height: envelope.block_height,
-        block_header: envelope.block_header.clone(),
+        block_header: envelope.block_header,
         qc: envelope.qc.clone(),
-        da_commitment_hash: envelope.da_commitment_hash.clone(),
+        da_commitment_hash: envelope.da_commitment_hash,
         manifest_root,
         settlement_commitment: envelope.settlement_commitment.clone(),
-        settlement_hash: envelope.settlement_hash.clone(),
+        settlement_hash: envelope.settlement_hash,
     };
     let bytes = norito::to_bytes(&claim)?;
     Ok(Hash::new(bytes))
@@ -579,6 +579,10 @@ impl VerifiedLaneRelayRecord {
 impl VerifiedNexusFeeBudgetRecord {
     /// Construct a verified fee-budget cache record from canonical verified inputs.
     #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the constructor mirrors the canonical verified record fields"
+    )]
     pub fn new(
         sponsor_account_id: AccountId,
         fee_asset_id: String,

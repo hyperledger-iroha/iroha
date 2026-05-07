@@ -597,6 +597,7 @@ pub mod query {
     struct NftPredicateView {
         ids: BTreeSet<NftId>,
         owners: BTreeSet<AccountId>,
+        domains: BTreeSet<DomainId>,
     }
 
     impl NftPredicateView {
@@ -639,6 +640,14 @@ pub mod query {
                         self.owners.insert(account_id.subject_id());
                     }
                 }
+                "domain" | "id.domain" | "nft.domain" => {
+                    if let Some(domain_id) = DomainId::parse_fully_qualified(raw)
+                        .ok()
+                        .or_else(|| DomainId::try_new(raw, "universal").ok())
+                    {
+                        self.domains.insert(domain_id);
+                    }
+                }
                 _ => {}
             }
         }
@@ -648,12 +657,17 @@ pub mod query {
             ids.sort();
             let mut owners = self.owners.iter().cloned().collect::<Vec<_>>();
             owners.sort();
+            let mut domains = self.domains.iter().cloned().collect::<Vec<_>>();
+            domains.sort();
 
             if !ids.is_empty() {
                 return NftQueryPlan::Ids(ids);
             }
             if !owners.is_empty() {
                 return NftQueryPlan::Owners(owners);
+            }
+            if !domains.is_empty() {
+                return NftQueryPlan::Domains(domains);
             }
             NftQueryPlan::Full
         }
@@ -663,6 +677,7 @@ pub mod query {
     enum NftQueryPlan {
         Ids(Vec<NftId>),
         Owners(Vec<AccountId>),
+        Domains(Vec<DomainId>),
         Full,
     }
 
@@ -705,6 +720,7 @@ pub mod query {
     fn nft_alias_values(nft: &Nft, field: &str) -> Vec<String> {
         match field {
             "id" | "nft" | "nft_id" => vec![nft.id().to_string()],
+            "domain" | "id.domain" | "nft.domain" => vec![nft.id().domain().to_string()],
             "owner" | "owned_by" | "account" | "account_id" => vec![nft.owned_by().to_string()],
             _ => Vec::new(),
         }
@@ -804,6 +820,14 @@ pub mod query {
                     Box::new(owners.into_iter().flat_map(move |owner| {
                         world
                             .nfts_in_account_iter(&owner)
+                            .map(nft_from_entry)
+                            .collect::<Vec<_>>()
+                    }))
+                }
+                NftQueryPlan::Domains(domains) => {
+                    Box::new(domains.into_iter().flat_map(move |domain| {
+                        world
+                            .nfts_in_domain_iter(&domain)
                             .map(nft_from_entry)
                             .collect::<Vec<_>>()
                     }))
@@ -997,6 +1021,65 @@ pub mod query {
                 .collect();
 
             assert_eq!(results, vec![nft1_id]);
+        }
+
+        #[test]
+        fn find_nfts_filters_domain_with_domain_range() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+            let tickets_domain = DomainId::try_new("tickets", "universal").expect("domain id");
+            let badges_domain = DomainId::try_new("badges", "universal").expect("domain id");
+            for domain_id in [tickets_domain.clone(), badges_domain.clone()] {
+                state.world.domains.insert(
+                    domain_id.clone(),
+                    Domain {
+                        id: domain_id,
+                        logo: None,
+                        metadata: Metadata::default(),
+                        owned_by: ALICE_ID.clone(),
+                    },
+                );
+            }
+
+            let ticket_id: NftId = "concert$tickets.universal".parse().expect("nft id");
+            let badge_id: NftId = "vip$badges.universal".parse().expect("nft id");
+            for nft in [
+                Nft {
+                    id: ticket_id.clone(),
+                    content: Metadata::default(),
+                    owned_by: ALICE_ID.clone(),
+                },
+                Nft {
+                    id: badge_id,
+                    content: Metadata::default(),
+                    owned_by: ALICE_ID.clone(),
+                },
+            ] {
+                let (id, value) = nft.into_key_value();
+                state.world.nfts.insert(id, value);
+            }
+
+            let view = state.view();
+            assert_eq!(
+                view.world()
+                    .nfts_in_domain_iter(&tickets_domain)
+                    .map(|entry| entry.id().clone())
+                    .collect::<Vec<_>>(),
+                vec![ticket_id.clone()],
+                "fixture should populate the NFT id ordering used by the domain range",
+            );
+
+            let predicate =
+                CompoundPredicate::<Nft>::build(|p| p.equals("domain", "tickets.universal"));
+            let results: Vec<_> = FindNfts
+                .execute(predicate, &view)
+                .expect("query execution succeeds")
+                .map(|nft| nft.id)
+                .collect();
+
+            assert_eq!(results, vec![ticket_id]);
         }
 
         #[test]

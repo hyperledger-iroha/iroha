@@ -3006,6 +3006,8 @@ pub struct Nexus {
     pub lane_config: LaneConfig,
     /// Validated data-space catalog.
     pub dataspace_catalog: DataSpaceCatalog,
+    /// Default fee sponsor account literal for each data space.
+    pub dataspace_fee_sponsors: BTreeMap<DataSpaceId, String>,
     /// Lane routing policy.
     pub routing_policy: LaneRoutingPolicy,
     /// Lane manifest registry configuration.
@@ -3041,6 +3043,7 @@ impl Default for Nexus {
             lane_catalog: LaneCatalog::default(),
             lane_config: LaneConfig::default(),
             dataspace_catalog: DataSpaceCatalog::default(),
+            dataspace_fee_sponsors: BTreeMap::new(),
             routing_policy: LaneRoutingPolicy::default(),
             registry: LaneRegistry::default(),
             governance: GovernanceCatalog::default(),
@@ -3076,6 +3079,7 @@ impl Nexus {
     pub fn has_lane_overrides(&self) -> bool {
         self.lane_catalog != LaneCatalog::default()
             || self.dataspace_catalog != DataSpaceCatalog::default()
+            || !self.dataspace_fee_sponsors.is_empty()
             || self.routing_policy != LaneRoutingPolicy::default()
     }
 }
@@ -4580,6 +4584,8 @@ pub struct SumeragiCollectors {
 pub struct SumeragiBlock {
     /// Optional cap on transactions included in a single block (None = unlimited).
     pub max_transactions: Option<NonZeroUsize>,
+    /// Optional cap on IVM-heavy transactions included in a single block (None = unlimited).
+    pub max_ivm_transactions: Option<NonZeroUsize>,
     /// Optional cap on block gas limit when commit time is fast (None = disabled).
     pub fast_gas_limit_per_block: Option<NonZeroU64>,
     /// Optional cap on block payload bytes when RBC is disabled (None = unlimited).
@@ -4736,6 +4742,10 @@ pub struct SumeragiRecovery {
     pub pending_proposal_cap: usize,
     /// Missing-block fetch attempts before switching to aggressive topology fanout.
     pub missing_fetch_aggressive_after_attempts: u32,
+    /// Grace window before exact-frontier body repair actively fetches payloads.
+    pub authoritative_body_ingress_fetch_grace: Duration,
+    /// Minimum retry window for exact-frontier body fetches.
+    pub exact_body_fetch_retry_floor: Duration,
 }
 
 /// Deterministic transport fanout configuration for large validator sets.

@@ -288,6 +288,13 @@ public final class AccountAddressTests {
         Objects.requireNonNull(PublicKeyCodec.decodePublicKeyLiteral(encoded));
     assert decoded.curveId() == 0x04;
     assert Arrays.equals(secpKey, decoded.keyBytes());
+
+    final byte[] compact = PublicKeyCodec.compactPublicKeyPayload(0x04, secpKey);
+    assert compact[0] == 1;
+    final PublicKeyCodec.PublicKeyPayload decodedCompact =
+        Objects.requireNonNull(PublicKeyCodec.decodeCompactPublicKeyPayload(compact));
+    assert decodedCompact.curveId() == 0x04;
+    assert Arrays.equals(secpKey, decodedCompact.keyBytes());
   }
 
   private static void longGostLabelsAcceptedWhenEnabled() throws Exception {

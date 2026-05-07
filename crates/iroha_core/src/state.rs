@@ -550,7 +550,7 @@ macro_rules! build_world_block {
             vrf_epochs: $state.vrf_epochs.$method(),
             merge_hint_roots: $state.merge_hint_roots.$method(),
             merge_global_state_root: $state.merge_global_state_root.$method(),
-            external_event_buf: $state.external_event_buf.$method(),
+            external_event_buf: Vec::new(),
         }
     };
 }
@@ -767,7 +767,8 @@ macro_rules! build_world_transaction {
             axt_lane_config: $axt_lane_config,
             axt_current_slot: $axt_current_slot,
             current_dataspace_id: None,
-            external_event_buf: $state.external_event_buf.transaction(),
+            external_event_sink: &mut $state.external_event_buf,
+            external_event_buf: Vec::new(),
             #[cfg(feature = "telemetry")]
             telemetry: $telemetry,
             internal_event_buf: Vec::new(),
@@ -1018,6 +1019,39 @@ pub(crate) fn permission_allows_fee_sponsor(
 ) -> bool {
     fee_sponsor_from_permission(world, dataspace_catalog, permission)
         .is_some_and(|allowed| allowed.subject_id() == sponsor.subject_id())
+}
+
+pub(crate) fn dataspace_fee_sponsor_from_config(
+    world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    dataspace_fee_sponsors: &BTreeMap<DataSpaceId, String>,
+    dataspace: DataSpaceId,
+) -> Result<Option<AccountId>, iroha_data_model::ValidationFail> {
+    let Some(literal) = dataspace_fee_sponsors.get(&dataspace) else {
+        return Ok(None);
+    };
+
+    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal)
+        .map(Some)
+        .ok_or_else(|| {
+            iroha_data_model::ValidationFail::InternalError(format!(
+                "invalid nexus dataspace fee_sponsor_account_id for dataspace {}: expected canonical I105 account id or on-chain alias",
+                dataspace.as_u64()
+            ))
+        })
+}
+
+pub(crate) fn dataspace_fee_sponsor_matches(
+    world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    dataspace_fee_sponsors: &BTreeMap<DataSpaceId, String>,
+    dataspace: DataSpaceId,
+    sponsor: &AccountId,
+) -> bool {
+    dataspace_fee_sponsor_from_config(world, dataspace_catalog, dataspace_fee_sponsors, dataspace)
+        .is_ok_and(|configured| {
+            configured.is_some_and(|allowed| allowed.subject_id() == sponsor.subject_id())
+        })
 }
 
 impl AccountPermissionSummary {
@@ -2445,15 +2479,15 @@ pub struct WorldBlock<'world> {
     pub(crate) merge_hint_roots: CellBlock<'world, Vec<Hash>>,
     /// Latest reduced global state root observed via the merge ledger during this block.
     pub(crate) merge_global_state_root: CellBlock<'world, Option<Hash>>,
-    /// Buffer of events pending publication to external subscribers.
-    external_event_buf: CellBlock<'world, Vec<EventBox>>,
+    /// Block-local buffer of events pending publication to external subscribers.
+    external_event_buf: Vec<EventBox>,
 }
 
 impl<'world> WorldBlock<'world> {
     /// Drain and return any events that were emitted into the external buffer during
     /// the current block application. Intended for tests and block-assembly paths.
     pub fn take_external_events(&mut self) -> Vec<EventBox> {
-        core::mem::take(&mut *self.external_event_buf)
+        core::mem::take(&mut self.external_event_buf)
     }
 
     /// Emit a pipeline warning event into the external buffer.
@@ -3098,7 +3132,10 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) merge_hint_roots: CellTransaction<'block, 'world, Vec<Hash>>,
     /// Latest reduced global state root observed in this transaction scope.
     pub(crate) merge_global_state_root: CellTransaction<'block, 'world, Option<Hash>>,
-    pub(crate) external_event_buf: CellTransaction<'block, 'world, Vec<EventBox>>,
+    /// Parent block buffer that receives transaction-local external events on apply.
+    pub(crate) external_event_sink: &'block mut Vec<EventBox>,
+    /// Transaction-local buffer of external events. Dropping a transaction drops its events.
+    pub(crate) external_event_buf: Vec<EventBox>,
     /// Lane catalog snapshot used when deriving AXT policy caches.
     pub(crate) axt_lane_config: LaneConfig,
     /// Current slot snapshot used when deriving AXT policy caches.
@@ -6268,13 +6305,49 @@ impl StatelessValidationContext {
 }
 
 #[derive(Debug)]
+struct StatelessValidationCacheEntry {
+    order: u64,
+    expires_at_ms: Option<u128>,
+    not_before_ms: u128,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StatelessValidationCacheWarmEntry {
+    signed_hash: HashOf<SignedTransaction>,
+    expires_at_ms: Option<u128>,
+    not_before_ms: u128,
+}
+
+fn stateless_validation_cache_warm_entry(
+    tx: &crate::tx::AcceptedTransaction<'_>,
+    max_clock_drift_ms: u128,
+) -> Option<StatelessValidationCacheWarmEntry> {
+    let prepared = tx.stateless_cache_metadata()?;
+    prepared.single_ed25519_key?;
+    let expires_at_ms = tx
+        .time_to_live()
+        .and_then(|ttl| tx.creation_time().checked_add(ttl))
+        .map(|expires_at| expires_at.as_millis());
+    let not_before_ms = tx
+        .creation_time()
+        .as_millis()
+        .saturating_sub(max_clock_drift_ms);
+
+    Some(StatelessValidationCacheWarmEntry {
+        signed_hash: prepared.signed_hash,
+        expires_at_ms,
+        not_before_ms,
+    })
+}
+
+#[derive(Debug)]
 pub(crate) struct StatelessValidationCache {
     cap: usize,
     next_order: u64,
     context: Option<StatelessValidationContext>,
-    entries: std::collections::BTreeMap<
+    entries: std::collections::HashMap<
         iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
-        u64,
+        StatelessValidationCacheEntry,
     >,
     lru: std::collections::BTreeSet<(
         u64,
@@ -6288,7 +6361,7 @@ impl StatelessValidationCache {
             cap,
             next_order: 0,
             context: None,
-            entries: std::collections::BTreeMap::new(),
+            entries: std::collections::HashMap::new(),
             lru: std::collections::BTreeSet::new(),
         }
     }
@@ -6316,9 +6389,14 @@ impl StatelessValidationCache {
     pub(crate) fn get_ok(
         &self,
         key: &iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
-        _now_ms: u128,
+        now_ms: u128,
     ) -> bool {
-        self.entries.contains_key(key)
+        self.entries.get(key).is_some_and(|entry| {
+            now_ms >= entry.not_before_ms
+                && entry
+                    .expires_at_ms
+                    .is_none_or(|expires_at| now_ms < expires_at)
+        })
     }
 
     #[cfg(test)]
@@ -6326,24 +6404,31 @@ impl StatelessValidationCache {
         &self,
         key: &iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
     ) -> bool {
-        self.get_ok(key, 0)
+        self.entries.contains_key(key)
     }
 
     pub(crate) fn insert_ok(
         &mut self,
         key: iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
-        _expires_at_ms: Option<u128>,
-        _not_before_ms: u128,
+        expires_at_ms: Option<u128>,
+        not_before_ms: u128,
     ) {
         if self.cap == 0 {
             return;
         }
-        if let Some(order) = self.entries.remove(&key) {
-            self.lru.remove(&(order, key.clone()));
+        if let Some(entry) = self.entries.remove(&key) {
+            self.lru.remove(&(entry.order, key.clone()));
         }
         self.evict_capacity();
         let order = self.next_order();
-        self.entries.insert(key.clone(), order);
+        self.entries.insert(
+            key.clone(),
+            StatelessValidationCacheEntry {
+                order,
+                expires_at_ms,
+                not_before_ms,
+            },
+        );
         self.lru.insert((order, key));
     }
 
@@ -6372,9 +6457,11 @@ impl StatelessValidationCache {
 
 #[cfg(test)]
 mod stateless_validation_cache_tests {
-    use super::StatelessValidationCache;
-    use iroha_crypto::{Hash, HashOf};
-    use iroha_data_model::transaction::SignedTransaction;
+    use super::{StatelessValidationCache, StatelessValidationContext};
+    use iroha_crypto::{Algorithm, Hash, HashOf};
+    use iroha_data_model::{
+        ChainId, parameter::TransactionParameters, transaction::SignedTransaction,
+    };
 
     fn dummy_hash(seed: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::new([seed]))
@@ -6387,11 +6474,56 @@ mod stateless_validation_cache_tests {
         let other_key = dummy_hash(8);
 
         cache.insert_ok(key, Some(200), 50);
+        assert!(!cache.get_ok(&key, 49));
         assert!(cache.get_ok(&key, 100));
+        assert!(!cache.get_ok(&key, 200));
 
         cache.insert_ok(other_key, None, 0);
         assert!(!cache.get_ok(&key, 100));
         assert!(cache.get_ok(&other_key, 100));
+    }
+
+    #[test]
+    fn cache_refresh_updates_lru_order() {
+        let mut cache = StatelessValidationCache::new(2);
+        let first = dummy_hash(1);
+        let second = dummy_hash(2);
+        let third = dummy_hash(3);
+
+        cache.insert_ok(first, None, 0);
+        cache.insert_ok(second, None, 0);
+        cache.insert_ok(first, None, 0);
+        cache.insert_ok(third, None, 0);
+
+        assert!(cache.get_ok(&first, 100));
+        assert!(!cache.get_ok(&second, 100));
+        assert!(cache.get_ok(&third, 100));
+    }
+
+    #[test]
+    fn cache_context_change_invalidates_entries() {
+        let mut cache = StatelessValidationCache::new(4);
+        let key = dummy_hash(9);
+
+        cache.ensure_context(context("cache-a"));
+        cache.insert_ok(key, None, 0);
+        assert!(cache.get_ok(&key, 100));
+
+        cache.ensure_context(context("cache-a"));
+        assert!(cache.get_ok(&key, 100));
+
+        cache.ensure_context(context("cache-b"));
+        assert!(!cache.get_ok(&key, 100));
+        assert!(!cache.contains_key(&key));
+    }
+
+    fn context(chain_id: &str) -> StatelessValidationContext {
+        StatelessValidationContext::new(
+            chain_id.parse::<ChainId>().expect("valid chain id"),
+            0,
+            TransactionParameters::default(),
+            vec![Algorithm::Ed25519],
+        )
     }
 }
 
@@ -15955,7 +16087,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     /// Drain and return any events that were emitted into the external buffer during
     /// this transaction. Intended for tests and step-scoped event inspection.
     pub fn take_external_events(&mut self) -> Vec<EventBox> {
-        core::mem::take(&mut *self.external_event_buf)
+        core::mem::take(&mut self.external_event_buf)
     }
 
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -16324,7 +16456,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             parliament_bodies,
             vrf_epochs,
             consensus_evidence,
-            external_event_buf,
+            external_event_sink,
+            mut external_event_buf,
             merge_hint_roots,
             merge_global_state_root,
             #[cfg(feature = "telemetry")]
@@ -16332,7 +16465,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             internal_event_buf: _,
             ..
         } = self;
-        external_event_buf.apply();
+        if !external_event_buf.is_empty() {
+            external_event_sink.append(&mut external_event_buf);
+        }
         executor_data_model.apply();
         executor.apply();
         triggers.apply();
@@ -17433,21 +17568,30 @@ impl State {
     }
 
     fn upsert_commit_qc_in_world(&self, commit_qc: &Qc) {
-        let mut commit_qcs = self.world.commit_qcs.block();
-        let should_update = commit_qcs
-            .get(&commit_qc.subject_block_hash)
-            .is_none_or(|existing| {
-                if existing.height != commit_qc.height {
-                    warn!(
-                        height = commit_qc.height,
-                        block = %commit_qc.subject_block_hash,
-                        existing_height = existing.height,
-                        "overwriting commit QC with mismatched height in world storage"
-                    );
-                }
-                existing.view <= commit_qc.view
-            });
+        let should_update = {
+            let commit_qcs = self.world.commit_qcs.view();
+            commit_qcs
+                .get(&commit_qc.subject_block_hash)
+                .is_none_or(|existing| {
+                    if existing.height != commit_qc.height {
+                        warn!(
+                            height = commit_qc.height,
+                            block = %commit_qc.subject_block_hash,
+                            existing_height = existing.height,
+                            "overwriting commit QC with mismatched height in world storage"
+                        );
+                    }
+                    existing.view < commit_qc.view
+                })
+        };
         if !should_update {
+            return;
+        }
+        let mut commit_qcs = self.world.commit_qcs.block();
+        if commit_qcs
+            .get(&commit_qc.subject_block_hash)
+            .is_some_and(|existing| existing.view >= commit_qc.view)
+        {
             return;
         }
         commit_qcs.insert(commit_qc.subject_block_hash, commit_qc.clone());
@@ -17542,6 +17686,23 @@ impl State {
                 .as_ref()
                 .and_then(|snapshot| snapshot.stake_snapshot.clone())
         });
+        if existing_snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot.commit_qc == *commit_qc
+                && snapshot.validator_checkpoint == *checkpoint
+                && snapshot.stake_snapshot == stake_snapshot
+        }) {
+            if update_status {
+                status::record_commit_qc(commit_qc.clone());
+                status::record_validator_checkpoint(checkpoint.clone());
+            }
+            debug!(
+                height = commit_qc.height,
+                view = commit_qc.view,
+                block = %commit_qc.subject_block_hash,
+                "skipping duplicate commit roster persistence"
+            );
+            return true;
+        }
         if update_world {
             self.upsert_commit_qc_in_world(commit_qc);
         }
@@ -17573,7 +17734,7 @@ impl State {
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) -> bool {
-        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, true, true, false)
+        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, true, true, true)
     }
 
     pub(crate) fn record_commit_roster_with_sidecar(
@@ -20022,19 +20183,40 @@ impl State {
         &self,
         tx: &crate::tx::AcceptedTransaction<'_>,
     ) {
+        self.warm_stateless_validation_cache_for_torii_prechecked_entries(core::iter::once(tx));
+    }
+
+    /// Warm the block stateless-validation cache for a Torii batch with one cache lock.
+    #[doc(hidden)]
+    #[track_caller]
+    pub fn warm_stateless_validation_cache_for_torii_prechecked_batch<'iter, 'tx, I>(&self, txs: I)
+    where
+        'tx: 'iter,
+        I: IntoIterator<Item = &'iter crate::tx::AcceptedTransaction<'tx>>,
+    {
+        self.warm_stateless_validation_cache_for_torii_prechecked_entries(txs);
+    }
+
+    fn warm_stateless_validation_cache_for_torii_prechecked_entries<'iter, 'tx, I>(&self, txs: I)
+    where
+        'tx: 'iter,
+        I: IntoIterator<Item = &'iter crate::tx::AcceptedTransaction<'tx>>,
+    {
         let cache_cap = self.pipeline.stateless_cache_cap;
         if cache_cap == 0 {
-            return;
-        }
-        let Some(prepared) = tx.stateless_cache_metadata() else {
-            return;
-        };
-        if prepared.single_ed25519_key.is_none() {
             return;
         }
 
         let (max_clock_drift, tx_params) = self.transaction_admission_limits();
         let max_clock_drift_ms = max_clock_drift.as_millis();
+        let entries = txs
+            .into_iter()
+            .filter_map(|tx| stateless_validation_cache_warm_entry(tx, max_clock_drift_ms))
+            .collect::<Vec<_>>();
+        if entries.is_empty() {
+            return;
+        }
+
         let allowed_signing = self.crypto.read().allowed_signing.clone();
         let context = StatelessValidationContext::new(
             self.chain_id.clone(),
@@ -20042,19 +20224,13 @@ impl State {
             tx_params,
             allowed_signing,
         );
-        let expires_at_ms = tx
-            .time_to_live()
-            .and_then(|ttl| tx.creation_time().checked_add(ttl))
-            .map(|expires_at| expires_at.as_millis());
-        let not_before_ms = tx
-            .creation_time()
-            .as_millis()
-            .saturating_sub(max_clock_drift_ms);
 
         let mut cache = self.stateless_validation_cache.lock();
         cache.set_cap(cache_cap);
         cache.ensure_context(context);
-        cache.insert_ok(prepared.signed_hash, expires_at_ms, not_before_ms);
+        for entry in entries {
+            cache.insert_ok(entry.signed_hash, entry.expires_at_ms, entry.not_before_ms);
+        }
     }
 
     /// Effective block time from current Sumeragi parameters.
@@ -24453,19 +24629,17 @@ impl<'state> StateBlock<'state> {
         self.maybe_apply_nexus_autoscale(block);
         let pacing_event = self.apply_pacing_governor(block);
 
-        self.world.external_event_buf.mutate_vec(|events| {
-            if let Some(event) = pacing_event {
-                events.push(event);
+        if let Some(event) = pacing_event {
+            self.world.external_event_buf.push(event);
+        }
+        self.world.external_event_buf.push(
+            BlockEvent {
+                header: block.as_ref().header(),
+                status: BlockStatus::Applied,
             }
-            events.push(
-                BlockEvent {
-                    header: block.as_ref().header(),
-                    status: BlockStatus::Applied,
-                }
-                .into(),
-            );
-        });
-        self.world.external_event_buf.take_vec()
+            .into(),
+        );
+        self.world.take_external_events()
     }
 
     fn maybe_apply_nexus_autoscale(&mut self, block: &CommittedBlock) {
@@ -24908,9 +25082,7 @@ impl<'state> StateBlock<'state> {
         Vec<TransactionResultInner>,
     ) {
         let time_event = self.create_time_event(block_header);
-        self.world
-            .external_event_buf
-            .mutate_vec(|events| events.push(time_event.into()));
+        self.world.external_event_buf.push(time_event.into());
 
         // Time-trigger phase maintenance: unbind aliases whose grace window elapsed.
         {
@@ -25113,9 +25285,7 @@ impl<'state> StateBlock<'state> {
             0,
             TriggerCompletedOutcome::Failure(reason.to_string()),
         );
-        self.world
-            .external_event_buf
-            .mutate_vec(|events| events.push(event.into()));
+        self.world.external_event_buf.push(event.into());
 
         let Some(retry_policy) = action.retry_policy else {
             return false;
@@ -25203,7 +25373,21 @@ impl<'state> StateBlock<'state> {
                 // Execute each transaction in its own transactional state
                 let mut transaction = self.transaction();
                 Self::seed_committed_transaction_context(&mut transaction, tx, idx);
-                transaction.apply_executable(tx.instructions(), tx.authority());
+                if matches!(tx.instructions(), Executable::ContractCall(_)) {
+                    let executor = transaction.world.executor.clone();
+                    let ivm_cache = transaction.ivm_cache;
+                    let mut ivm_cache = ivm_cache.lock();
+                    executor
+                        .execute_transaction(
+                            &mut transaction,
+                            tx.authority(),
+                            tx.clone(),
+                            &mut ivm_cache,
+                        )
+                        .expect("committed contract call should replay without errors");
+                } else {
+                    transaction.apply_executable(tx.instructions(), tx.authority());
+                }
                 transaction
                     .execute_data_triggers_dfs(tx.authority())
                     .expect("should be no errors");
@@ -25597,6 +25781,12 @@ mod transfer_transcript_tests {
         let expected_poseidon = crate::fastpq::poseidon_preimage_digest(&delta, &call_hash);
         tx.record_transfer_transcript(&ALICE_ID, delta)
             .expect("record transcript");
+        assert!(
+            tx.pending_transfer_transcripts[0]
+                .poseidon_preimage_digest
+                .is_none(),
+            "single-delta transfer transcript digest should be deferred until block drain"
+        );
         tx.apply();
         let transcripts = block.drain_transfer_transcripts();
         let entry = transcripts
@@ -26695,16 +26885,22 @@ pub fn replay_blocks_from_kura_range(
                         "replayed WSV checkpoint components after mismatch"
                     );
                 }
-                let checkpoint_err = eyre!(
-                    "replayed block #{height} WSV checkpoint mismatch: committed={:?} replayed={actual:?}",
-                    checkpoint.state_hash()
-                );
                 if let Some(mismatch) = replay_result_mismatch.as_deref() {
-                    return Err(checkpoint_err.wrap_err(format!(
-                        "committed execution results were preserved after replay mismatch: {mismatch}"
-                    )));
+                    iroha_logger::warn!(
+                        height,
+                        committed = ?checkpoint.state_hash(),
+                        replayed = ?actual,
+                        result_mismatch = %mismatch,
+                        "WSV checkpoint differed after preserving committed execution results; continuing with replayed state"
+                    );
+                } else {
+                    iroha_logger::warn!(
+                        height,
+                        committed = ?checkpoint.state_hash(),
+                        replayed = ?actual,
+                        "WSV checkpoint differed from replayed state; continuing with replayed state"
+                    );
                 }
-                return Err(checkpoint_err);
             }
         }
     }
@@ -27667,7 +27863,7 @@ mod replay_validation_tests {
     }
 
     #[test]
-    fn replay_preserves_committed_result_mismatch_until_wsv_checkpoint() {
+    fn replay_preserves_committed_result_mismatch_despite_wsv_checkpoint_mismatch() {
         use std::borrow::Cow;
 
         use iroha_crypto::{Algorithm, Hash, KeyPair};
@@ -27767,19 +27963,14 @@ mod replay_validation_tests {
             params_block.commit();
         }
 
-        let result = replay_blocks_from_kura(
+        replay_blocks_from_kura(
             &kura,
             &mut replay_state,
             &topology,
             2,
             ConsensusMode::Permissioned,
-        );
-        let err = result.expect_err("checkpoint mismatch must stop replay");
-        let err_text = format!("{err:?}");
-        assert!(
-            err_text.contains("result") && err_text.contains("WSV checkpoint"),
-            "replay error should report the preserved result mismatch and WSV mismatch: {err:?}"
-        );
+        )
+        .expect("WSV checkpoint mismatch must not stop committed-result replay recovery");
         assert_eq!(
             replay_state.view().height(),
             2,
@@ -28306,6 +28497,33 @@ mod permission_cache_tests {
         assert!(
             !stx.can_use_fee_sponsor(&caller, &sponsor),
             "revoking permission should invalidate cache and deny sponsorship"
+        );
+    }
+
+    #[test]
+    fn fee_sponsor_permission_accepts_dataspace_default_sponsor() {
+        let (sponsor, _) = gen_account_in("wonderland");
+        let (caller, _) = gen_account_in("wonderland");
+
+        let domain: Domain = Domain::new(wonderland_domain_id()).build(&sponsor);
+        let sponsor_account = new_wonderland_account(&sponsor).build(&sponsor);
+        let caller_account = new_wonderland_account(&caller).build(&sponsor);
+        let world = World::with([domain], [sponsor_account, caller_account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        stx.nexus
+            .dataspace_fee_sponsors
+            .insert(DataSpaceId::UNIVERSAL, sponsor.to_string());
+
+        assert!(
+            stx.can_use_fee_sponsor(&caller, &sponsor),
+            "dataspace default sponsor should not require an account grant"
         );
     }
 
@@ -29449,15 +29667,11 @@ impl StateTransaction<'_, '_> {
             )
         })?;
         let authority_digest = crate::fastpq::authority_digest(authority);
-        let poseidon_preimage_digest = match deltas.as_slice() {
-            [delta] => Some(crate::fastpq::poseidon_preimage_digest(delta, &batch_hash)),
-            _ => None,
-        };
         let transcript = TransferTranscript {
             batch_hash,
             deltas: core::mem::take(&mut deltas),
             authority_digest,
-            poseidon_preimage_digest,
+            poseidon_preimage_digest: None,
         };
         crate::sumeragi::witness::record_fastpq_transcript(&transcript);
         self.pending_transfer_transcripts.push(transcript);
@@ -29657,7 +29871,7 @@ impl StateTransaction<'_, '_> {
                         crate::sumeragi::status::NexusFeePayer::Payer => "payer",
                         crate::sumeragi::status::NexusFeePayer::Sponsor => "sponsor",
                     };
-                    info!(
+                    debug!(
                         target: "economics",
                         payer_kind = payer_kind_label,
                         payer = %payer_id,
@@ -29847,9 +30061,7 @@ impl StateTransaction<'_, '_> {
             (action.executable().clone(), action.authority().clone())
         };
         // Emit the execute-trigger event so external subscribers can observe it.
-        self.world
-            .external_event_buf
-            .mutate_vec(|events| events.push(event.clone().into()));
+        self.world.external_event_buf.push(event.clone().into());
 
         // Execute the trigger entrypoint and collect its step.
         let step = self.execute_trigger(
@@ -30237,7 +30449,6 @@ impl StateTransaction<'_, '_> {
                 host.set_crypto_config(self.crypto());
                 host.set_halo2_config(&self.zk.halo2);
                 host.set_chain_id(self.chain_id());
-                host.set_durable_state_snapshot_from_world(&self.world);
                 host.set_public_inputs_from_parameters(self.world.parameters.get());
                 host.set_vrf_epoch_seeds_from_world(&self.world);
                 host.set_query_state(self);
@@ -30370,7 +30581,6 @@ impl StateTransaction<'_, '_> {
                     host.set_crypto_config(self.crypto());
                     host.set_halo2_config(&self.zk.halo2);
                     host.set_chain_id(self.chain_id());
-                    host.set_durable_state_snapshot_from_world(&self.world);
                     host.set_public_inputs_from_parameters(self.world.parameters.get());
                     host.set_vrf_epoch_seeds_from_world(&self.world);
                     host.set_query_state(self);
@@ -30444,9 +30654,7 @@ impl StateTransaction<'_, '_> {
             )
         });
         let event = TriggerCompletedEvent::new(id.clone(), entrypoint_hash, 0, outcome);
-        self.world
-            .external_event_buf
-            .mutate_vec(|events| events.push(event.into()));
+        self.world.external_event_buf.push(event.into());
 
         res.map_err(Into::into)
     }
@@ -30578,9 +30786,24 @@ impl StateTransaction<'_, '_> {
 
     /// Fast check: does `caller` have `CanUseFeeSponsor{sponsor}` for `sponsor`?
     pub fn can_use_fee_sponsor(&mut self, caller: &AccountId, sponsor: &AccountId) -> bool {
-        let set = self.cached_fee_sponsors(caller);
-        set.iter()
-            .any(|allowed| allowed.subject_id() == sponsor.subject_id())
+        let permitted_by_grant = {
+            let set = self.cached_fee_sponsors(caller);
+            set.iter()
+                .any(|allowed| allowed.subject_id() == sponsor.subject_id())
+        };
+        if permitted_by_grant {
+            return true;
+        }
+
+        self.current_dataspace_id.is_some_and(|dataspace_id| {
+            dataspace_fee_sponsor_matches(
+                &self.world,
+                &self.nexus.dataspace_catalog,
+                &self.nexus.dataspace_fee_sponsors,
+                dataspace_id,
+                sponsor,
+            )
+        })
     }
 
     fn seed_trigger_call_hash(&mut self, event: &ExecuteTriggerEvent) {
@@ -32381,7 +32604,10 @@ mod tests {
         prelude::*,
         proof::{ProofId, ProofRecord, ProofStatus},
         query::{
-            dsl::CompoundPredicate, error::FindError, proof::prelude::FindProofRecordsByStatus,
+            dsl::CompoundPredicate,
+            error::FindError,
+            escrow::prelude::{FindAnonymousAssetEscrowsByStatus, FindAssetEscrowsByStatus},
+            proof::prelude::{FindProofRecords, FindProofRecordsByStatus},
         },
         sorafs::pin_registry::ManifestDigest,
         transaction::ExecutionStep,
@@ -32996,6 +33222,25 @@ mod tests {
                 .expect("anonymous escrow"),
             &anonymous_record
         );
+
+        let state_view = restored.view();
+        let restored_public_ids = FindAssetEscrowsByStatus {
+            status: iroha_data_model::escrow::AssetEscrowStatus::PaymentSent,
+        }
+        .execute(CompoundPredicate::PASS, &state_view)
+        .expect("query restored public escrow status index")
+        .map(|record| record.id)
+        .collect::<Vec<_>>();
+        assert_eq!(restored_public_ids, vec![public_id]);
+
+        let restored_anonymous_ids = FindAnonymousAssetEscrowsByStatus {
+            status: iroha_data_model::escrow::AssetEscrowStatus::Accepted,
+        }
+        .execute(CompoundPredicate::PASS, &state_view)
+        .expect("query restored anonymous escrow status index")
+        .map(|record| record.id)
+        .collect::<Vec<_>>();
+        assert_eq!(restored_anonymous_ids, vec![anonymous_id]);
     }
 
     #[test]
@@ -33562,7 +33807,7 @@ mod tests {
         .expect("query verified proof records")
         .map(|record| record.id)
         .collect::<Vec<_>>();
-        assert_eq!(verified_ids, vec![verified_id, updated_id]);
+        assert_eq!(verified_ids, vec![verified_id.clone(), updated_id.clone()]);
 
         let submitted_ids = FindProofRecordsByStatus {
             status: ProofStatus::Submitted,
@@ -33575,6 +33820,47 @@ mod tests {
             submitted_ids.is_empty(),
             "replacement should remove stale status-index entries",
         );
+
+        let generic_by_id = FindProofRecords
+            .execute(
+                CompoundPredicate::<ProofRecord>::build(|predicate| {
+                    predicate.equals("id", updated_id.clone())
+                }),
+                &stx,
+            )
+            .expect("query proof records by generic id predicate")
+            .map(|record| record.id)
+            .collect::<Vec<_>>();
+        assert_eq!(generic_by_id, vec![updated_id.clone()]);
+
+        let generic_by_backend = FindProofRecords
+            .execute(
+                CompoundPredicate::<ProofRecord>::build(|predicate| {
+                    predicate.equals("backend", backend)
+                }),
+                &stx,
+            )
+            .expect("query proof records by generic backend predicate")
+            .map(|record| record.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            generic_by_backend,
+            vec![verified_id.clone(), rejected_id.clone(), updated_id.clone()]
+        );
+
+        let generic_by_backend_and_status = FindProofRecords
+            .execute(
+                CompoundPredicate::<ProofRecord>::build(|predicate| {
+                    predicate
+                        .equals("backend", backend)
+                        .equals("status", ProofStatus::Rejected)
+                }),
+                &stx,
+            )
+            .expect("query proof records by generic backend and status predicate")
+            .map(|record| record.id)
+            .collect::<Vec<_>>();
+        assert_eq!(generic_by_backend_and_status, vec![rejected_id]);
     }
 
     #[test]
@@ -40378,7 +40664,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_roster_record_does_not_persist_sidecar_to_kura() {
+    fn commit_roster_record_persists_sidecar_to_kura() {
         let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -40454,10 +40740,12 @@ mod tests {
 
         state.record_commit_roster(&commit_cert, &checkpoint, None);
 
-        assert!(
-            kura.read_roster_metadata(commit_cert.height).is_none(),
-            "commit-roster recording should not persist sidecars"
-        );
+        let sidecar = kura
+            .read_roster_metadata(commit_cert.height)
+            .expect("commit-roster recording should persist a sidecar");
+        assert_eq!(sidecar.block_hash, commit_cert.subject_block_hash);
+        assert_eq!(sidecar.commit_qc, Some(commit_cert.clone()));
+        assert_eq!(sidecar.validator_checkpoint, Some(checkpoint));
         let view = state.view();
         let stored = view
             .world()

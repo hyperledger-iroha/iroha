@@ -1210,6 +1210,7 @@ fn minimal_config_snapshot() {
                 },
                 block: SumeragiBlock {
                     max_transactions: None,
+                    max_ivm_transactions: None,
                     fast_gas_limit_per_block: None,
                     max_payload_bytes: None,
                     proposal_queue_scan_multiplier: 4,
@@ -3253,6 +3254,7 @@ fn routing_policy_dataspace_resolution() {
             manifest_hash: None,
             description: None,
             fault_tolerance: None,
+            fee_sponsor_account_id: None,
         }],
         routing_policy: RoutingPolicy {
             default_lane: Some(1),
@@ -3303,6 +3305,7 @@ fn routing_policy_lane_dataspace_mismatch_rejected() {
             manifest_hash: None,
             description: None,
             fault_tolerance: None,
+            fee_sponsor_account_id: None,
         }],
         routing_policy: RoutingPolicy {
             default_lane: Some(0),
@@ -3349,6 +3352,7 @@ fn dataspace_fault_tolerance_zero_rejected() {
             manifest_hash: None,
             description: None,
             fault_tolerance: Some(0),
+            fee_sponsor_account_id: None,
         }],
         ..Nexus::default()
     };
@@ -3358,6 +3362,129 @@ fn dataspace_fault_tolerance_zero_rejected() {
     let err = emitter.into_result().expect_err("parse error expected");
     let debug = strip_ansi_codes(&format!("{err:?}"));
     assert_contains!(debug, "fault_tolerance must be >= 1");
+}
+
+#[test]
+fn dataspace_fee_sponsor_account_id_parses_when_sponsorship_enabled() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{
+        DataSpaceDescriptor, LaneDescriptor, Nexus, NexusFees, RoutingPolicy,
+    };
+    use iroha_config_base::util::Emitter;
+    use iroha_data_model::nexus::DataSpaceId;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        enabled: true,
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("primary".into()),
+            dataspace: Some("alpha".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        dataspace_catalog: vec![DataSpaceDescriptor {
+            alias: Some("alpha".into()),
+            id: Some(1),
+            manifest_hash: None,
+            description: None,
+            fault_tolerance: None,
+            fee_sponsor_account_id: Some("sponsor@alpha".into()),
+        }],
+        fees: NexusFees {
+            sponsorship_enabled: true,
+            ..NexusFees::default()
+        },
+        routing_policy: RoutingPolicy {
+            default_lane: Some(0),
+            default_dataspace: Some("alpha".into()),
+            ..RoutingPolicy::default()
+        },
+        ..Nexus::default()
+    };
+
+    let parsed = nexus
+        .parse(&mut emitter)
+        .expect("dataspace fee sponsor should parse");
+    assert!(emitter.into_result().is_ok());
+    assert_eq!(
+        parsed.dataspace_fee_sponsors.get(&DataSpaceId::new(1)),
+        Some(&"sponsor@alpha".to_owned())
+    );
+}
+
+#[test]
+fn dataspace_fee_sponsor_account_id_requires_sponsorship_enabled() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{
+        DataSpaceDescriptor, LaneDescriptor, Nexus, RoutingPolicy,
+    };
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        enabled: true,
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("primary".into()),
+            dataspace: Some("alpha".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        dataspace_catalog: vec![DataSpaceDescriptor {
+            alias: Some("alpha".into()),
+            id: Some(1),
+            manifest_hash: None,
+            description: None,
+            fault_tolerance: None,
+            fee_sponsor_account_id: Some("sponsor@alpha".into()),
+        }],
+        routing_policy: RoutingPolicy {
+            default_lane: Some(0),
+            default_dataspace: Some("alpha".into()),
+            ..RoutingPolicy::default()
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let err = emitter.into_result().expect_err("parse error expected");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(debug, "sponsorship_enabled");
+}
+
+#[test]
+fn dataspace_fee_sponsor_account_id_requires_nexus_enabled() {
+    use iroha_config::parameters::user::{DataSpaceDescriptor, Nexus, NexusFees};
+    use iroha_config_base::util::Emitter;
+    use iroha_data_model::nexus::DataSpaceId;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        enabled: false,
+        dataspace_catalog: vec![DataSpaceDescriptor {
+            alias: Some("universal".into()),
+            id: Some(DataSpaceId::UNIVERSAL.as_u64()),
+            manifest_hash: None,
+            description: None,
+            fault_tolerance: None,
+            fee_sponsor_account_id: Some("sponsor@universal".into()),
+        }],
+        fees: NexusFees {
+            sponsorship_enabled: true,
+            ..NexusFees::default()
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let err = emitter.into_result().expect_err("parse error expected");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(debug, "nexus.enabled");
 }
 
 #[test]
@@ -3745,6 +3872,34 @@ fn taira_config_enables_untrusted_cid_hosting() {
     let raw = fs::read_to_string(&config_path).expect("Taira config should exist");
     let doc: TomlValue = toml::from_str(&raw).expect("Taira config should be valid TOML");
 
+    let block = doc
+        .get("sumeragi")
+        .and_then(TomlValue::as_table)
+        .and_then(|sumeragi| sumeragi.get("block"))
+        .and_then(TomlValue::as_table)
+        .expect("sumeragi.block should be configured");
+    assert_eq!(
+        block
+            .get("max_transactions")
+            .and_then(TomlValue::as_integer),
+        Some(96),
+        "Taira profile should cap total proposal size"
+    );
+    assert_eq!(
+        block
+            .get("max_ivm_transactions")
+            .and_then(TomlValue::as_integer),
+        Some(32),
+        "Taira profile should cap IVM-heavy proposal size"
+    );
+    assert_eq!(
+        block
+            .get("proposal_queue_scan_multiplier")
+            .and_then(TomlValue::as_integer),
+        Some(4),
+        "Taira profile should keep enough scan budget for cheap txs"
+    );
+
     let untrusted = doc
         .get("sorafs")
         .and_then(TomlValue::as_table)
@@ -3980,6 +4135,30 @@ fn pipeline_workers_env_parses() {
         .parse()
         .expect("parse actual config with env");
     assert_eq!(cfg2.pipeline.workers, 7);
+}
+
+#[test]
+fn sumeragi_block_max_ivm_transactions_env_parses() {
+    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
+    use iroha_config_base::{env::MockEnv, read::ConfigReader};
+
+    let env = MockEnv::new().set("SUMERAGI_BLOCK_MAX_IVM_TRANSACTIONS", "32");
+    let cfg: Actual = ConfigReader::new()
+        .with_env(env)
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<User>()
+        .expect("read user config with env")
+        .parse()
+        .expect("actual config with IVM block cap env");
+
+    assert_eq!(
+        cfg.sumeragi
+            .block
+            .max_ivm_transactions
+            .map(std::num::NonZeroUsize::get),
+        Some(32)
+    );
 }
 
 #[test]

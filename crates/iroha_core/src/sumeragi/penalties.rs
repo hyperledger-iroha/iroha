@@ -753,6 +753,8 @@ mod tests {
             },
             block: SumeragiBlock {
                 max_transactions: None,
+                max_ivm_transactions:
+                    iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_IVM_TRANSACTIONS,
                 fast_gas_limit_per_block:
                     iroha_config::parameters::defaults::sumeragi::FAST_FINALITY_GAS_LIMIT_PER_BLOCK,
                 max_payload_bytes: None,
@@ -897,6 +899,14 @@ mod tests {
                 missing_fetch_aggressive_after_attempts:
                     iroha_config::parameters::defaults::sumeragi::
                         RECOVERY_MISSING_FETCH_AGGRESSIVE_AFTER_ATTEMPTS,
+                authoritative_body_ingress_fetch_grace: Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::
+                        RECOVERY_AUTHORITATIVE_BODY_INGRESS_FETCH_GRACE_MS,
+                ),
+                exact_body_fetch_retry_floor: Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::
+                        RECOVERY_EXACT_BODY_FETCH_RETRY_FLOOR_MS,
+                ),
             },
             fanout: iroha_config::parameters::actual::SumeragiFanout {
                 large_set_threshold:

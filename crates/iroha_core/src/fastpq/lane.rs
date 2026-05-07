@@ -191,20 +191,35 @@ fn preflight_prover_modes(
     mode: ProverExecutionMode,
     poseidon_mode: ProverPoseidonMode,
 ) -> (ProverExecutionMode, ProverPoseidonMode) {
+    preflight_prover_modes_with_preflights(
+        cfg,
+        mode,
+        poseidon_mode,
+        fastpq_prover::preflight_poseidon_gpu_backend,
+        fastpq_prover::preflight_bn254_poseidon_word_batches,
+    )
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn preflight_prover_modes_with_preflights(
+    cfg: &Fastpq,
+    mode: ProverExecutionMode,
+    poseidon_mode: ProverPoseidonMode,
+    prover_preflight: impl FnOnce() -> bool,
+    digest_preflight: impl FnOnce() -> bool,
+) -> (ProverExecutionMode, ProverPoseidonMode) {
+    preflight_digest_acceleration(cfg, digest_preflight);
     if !should_preflight_poseidon(mode, poseidon_mode) {
         return (mode, poseidon_mode);
     }
     let started_at = Instant::now();
-    let poseidon_ok = fastpq_prover::preflight_poseidon_gpu_backend();
+    let poseidon_ok = prover_preflight();
     info!(
         ok = poseidon_ok,
         elapsed_ms = started_at.elapsed().as_millis(),
         "fastpq lane: Poseidon GPU preflight completed"
     );
-    if poseidon_ok {
-        preflight_digest_acceleration(cfg);
-    } else {
-        crate::fastpq::set_poseidon_digest_acceleration_enabled(false);
+    if !poseidon_ok {
         warn!("fastpq lane: using CPU prover backend after Poseidon GPU preflight failed");
         return (ProverExecutionMode::Cpu, ProverPoseidonMode::Cpu);
     }
@@ -212,13 +227,13 @@ fn preflight_prover_modes(
 }
 
 #[cfg(feature = "fastpq-gpu")]
-fn preflight_digest_acceleration(cfg: &Fastpq) {
+fn preflight_digest_acceleration(cfg: &Fastpq, preflight: impl FnOnce() -> bool) {
     if !crate::fastpq::poseidon_digest_acceleration_configured(cfg) {
         crate::fastpq::set_poseidon_digest_acceleration_enabled(false);
         return;
     }
     let started_at = Instant::now();
-    let ok = fastpq_prover::preflight_bn254_poseidon_word_batches();
+    let ok = preflight();
     crate::fastpq::set_poseidon_digest_acceleration_enabled(ok);
     info!(
         ok,
@@ -544,6 +559,43 @@ mod tests {
         assert_eq!(batches[0].public_inputs.dsid, dsid);
         assert_eq!(batches[0].public_inputs.tx_set_hash, tx_set_hash);
         assert_eq!(batches[0].public_inputs.perm_root, template.perm_root);
+    }
+
+    #[test]
+    #[cfg(feature = "fastpq-gpu")]
+    fn prover_poseidon_preflight_failure_preserves_digest_acceleration() {
+        let previous = crate::fastpq::poseidon_digest_acceleration_enabled();
+        crate::fastpq::set_poseidon_digest_acceleration_enabled(false);
+        let cfg = Fastpq {
+            execution_mode: FastpqExecutionMode::Auto,
+            poseidon_mode: FastpqPoseidonMode::Auto,
+            device_class: None,
+            chip_family: None,
+            gpu_kind: None,
+            metal_queue_fanout: None,
+            metal_queue_column_threshold: None,
+            metal_max_in_flight: None,
+            metal_threadgroup_width: None,
+            metal_trace: iroha_config::parameters::defaults::zk::fastpq::METAL_TRACE,
+            metal_debug_enum: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_ENUM,
+            metal_debug_fused: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
+        };
+
+        let (mode, poseidon_mode) = preflight_prover_modes_with_preflights(
+            &cfg,
+            ProverExecutionMode::Auto,
+            ProverPoseidonMode::Auto,
+            || false,
+            || true,
+        );
+
+        assert!(matches!(mode, ProverExecutionMode::Cpu));
+        assert!(matches!(poseidon_mode, ProverPoseidonMode::Cpu));
+        assert!(
+            crate::fastpq::poseidon_digest_acceleration_enabled(),
+            "BN254 digest acceleration must stay enabled after the prover lane falls back to CPU"
+        );
+        crate::fastpq::set_poseidon_digest_acceleration_enabled(previous);
     }
 
     #[derive(Clone)]

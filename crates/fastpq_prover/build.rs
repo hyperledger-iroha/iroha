@@ -22,6 +22,7 @@ fn main() {
     println!("cargo:rerun-if-changed=metal/kernels/field.metal");
     println!("cargo:rerun-if-changed=metal/kernels/ntt_stage.metal");
     println!("cargo:rerun-if-changed=metal/kernels/poseidon2.metal");
+    println!("cargo:rerun-if-changed=metal/kernels/bn254.metal");
 
     let cuda_feature = env::var_os("CARGO_FEATURE_CUDA").is_some();
     let fastpq_gpu_feature = env::var_os("CARGO_FEATURE_FASTPQ_GPU").is_some();

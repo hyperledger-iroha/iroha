@@ -6,15 +6,16 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.PrivateKey;
+import java.security.SecureRandom;
 import java.security.Signature;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.security.SecureRandom;
 
 /**
  * Builds canonical request signatures for Torii app endpoints.
@@ -25,6 +26,11 @@ public final class CanonicalRequestSigner {
   public static final String HEADER_SIGNATURE = "X-Iroha-Signature";
   public static final String HEADER_TIMESTAMP_MS = "X-Iroha-Timestamp-Ms";
   public static final String HEADER_NONCE = "X-Iroha-Nonce";
+  public static final String BODY_ACCOUNT_ID = "account_id";
+  public static final String BODY_TIMESTAMP_MS = "timestamp_ms";
+  public static final String BODY_NONCE = "nonce";
+  public static final String BODY_SIGNATURE_BASE64 = "signature_base64";
+  public static final String BODY_WITNESS_BASE64 = "witness_base64";
   private static final SecureRandom NONCE_RANDOM = new SecureRandom();
 
   private CanonicalRequestSigner() {}
@@ -99,7 +105,7 @@ public final class CanonicalRequestSigner {
       final byte[] body,
       final long timestampMs,
       final String nonce) {
-    if (nonce == null || nonce.isBlank()) {
+    if (nonce == null || nonce.trim().isEmpty()) {
       throw new IllegalArgumentException("nonce is required");
     }
     final String rendered =
@@ -109,6 +115,108 @@ public final class CanonicalRequestSigner {
             + "\n"
             + nonce;
     return rendered.getBytes(StandardCharsets.UTF_8);
+  }
+
+  /**
+   * Build unsigned canonical JSON bytes for body-auth endpoints.
+   */
+  public static byte[] unsignedBodyAuthJson(final Map<String, Object> bodyFields) {
+    final Map<String, Object> unsigned = new LinkedHashMap<>(bodyFields);
+    unsigned.remove(BODY_SIGNATURE_BASE64);
+    unsigned.remove(BODY_WITNESS_BASE64);
+    return JsonEncoder.encode(unsigned).getBytes(StandardCharsets.UTF_8);
+  }
+
+  /**
+   * Build body-auth canonical request bytes plus freshness metadata.
+   */
+  public static byte[] canonicalBodyAuthSignatureMessage(
+      final String method,
+      final URI uri,
+      final Map<String, Object> bodyFields,
+      final long timestampMs,
+      final String nonce) {
+    return canonicalRequestSignatureMessage(
+        method, uri, unsignedBodyAuthJson(bodyFields), timestampMs, nonce);
+  }
+
+  /**
+   * Build the top-level fields required for single-signature body auth.
+   */
+  public static Map<String, Object> buildBodySignatureFields(
+      final String method,
+      final URI uri,
+      final Map<String, Object> bodyFields,
+      final String accountId,
+      final PrivateKey privateKey) {
+    return buildBodySignatureFields(
+        method,
+        uri,
+        bodyFields,
+        accountId,
+        privateKey,
+        System.currentTimeMillis(),
+        randomNonce());
+  }
+
+  /**
+   * Build the top-level fields required for single-signature body auth with explicit freshness.
+   */
+  public static Map<String, Object> buildBodySignatureFields(
+      final String method,
+      final URI uri,
+      final Map<String, Object> bodyFields,
+      final String accountId,
+      final PrivateKey privateKey,
+      final long timestampMs,
+      final String nonce) {
+    final Map<String, Object> unsigned =
+        bodyWithBodyAuthFreshness(bodyFields, accountId, timestampMs, nonce);
+    final byte[] message =
+        canonicalBodyAuthSignatureMessage(method, uri, unsigned, timestampMs, nonce);
+    final byte[] signatureBytes = signEd25519(privateKey, message);
+    final Map<String, Object> fields = new LinkedHashMap<>();
+    fields.put(BODY_ACCOUNT_ID, accountId);
+    fields.put(BODY_TIMESTAMP_MS, timestampMs);
+    fields.put(BODY_NONCE, nonce);
+    fields.put(BODY_SIGNATURE_BASE64, Base64.getEncoder().encodeToString(signatureBytes));
+    return fields;
+  }
+
+  /**
+   * Return a copy of {@code bodyFields} carrying single-signature body auth.
+   */
+  public static Map<String, Object> withBodySignature(
+      final String method,
+      final URI uri,
+      final Map<String, Object> bodyFields,
+      final String accountId,
+      final PrivateKey privateKey,
+      final long timestampMs,
+      final String nonce) {
+    final Map<String, Object> body = new LinkedHashMap<>(bodyFields);
+    body.remove(BODY_WITNESS_BASE64);
+    body.putAll(
+        buildBodySignatureFields(method, uri, body, accountId, privateKey, timestampMs, nonce));
+    return body;
+  }
+
+  /**
+   * Return a copy of {@code bodyFields} carrying a prebuilt multisig witness body auth proof.
+   */
+  public static Map<String, Object> withBodyWitness(
+      final Map<String, Object> bodyFields,
+      final String accountId,
+      final long timestampMs,
+      final String nonce,
+      final String witnessBase64) {
+    if (witnessBase64 == null || witnessBase64.trim().isEmpty()) {
+      throw new IllegalArgumentException("witnessBase64 is required");
+    }
+    final Map<String, Object> body =
+        bodyWithBodyAuthFreshness(bodyFields, accountId, timestampMs, nonce);
+    body.put(BODY_WITNESS_BASE64, witnessBase64);
+    return body;
   }
 
   /**
@@ -141,32 +249,55 @@ public final class CanonicalRequestSigner {
       final PrivateKey privateKey,
       final long timestampMs,
       final String nonce) {
-    if (accountId == null || accountId.isBlank()) {
+    if (accountId == null || accountId.trim().isEmpty()) {
       throw new IllegalArgumentException("accountId is required");
     }
     if (privateKey == null) {
       throw new IllegalArgumentException("privateKey is required");
     }
-    if (nonce == null || nonce.isBlank()) {
+    if (nonce == null || nonce.trim().isEmpty()) {
       throw new IllegalArgumentException("nonce is required");
     }
     final byte[] message =
         canonicalRequestSignatureMessage(method, uri, body, timestampMs, nonce);
-    final byte[] signatureBytes;
-    try {
-      final Signature signer = Signature.getInstance("Ed25519");
-      signer.initSign(privateKey);
-      signer.update(message);
-      signatureBytes = signer.sign();
-    } catch (Exception ex) {
-      throw new IllegalStateException("failed to sign canonical request", ex);
-    }
+    final byte[] signatureBytes = signEd25519(privateKey, message);
     final Map<String, String> headers = new HashMap<>();
     headers.put(HEADER_ACCOUNT, accountId);
     headers.put(HEADER_SIGNATURE, Base64.getEncoder().encodeToString(signatureBytes));
     headers.put(HEADER_TIMESTAMP_MS, Long.toString(timestampMs));
     headers.put(HEADER_NONCE, nonce);
     return headers;
+  }
+
+  private static Map<String, Object> bodyWithBodyAuthFreshness(
+      final Map<String, Object> bodyFields,
+      final String accountId,
+      final long timestampMs,
+      final String nonce) {
+    if (accountId == null || accountId.trim().isEmpty()) {
+      throw new IllegalArgumentException("accountId is required");
+    }
+    if (nonce == null || nonce.trim().isEmpty()) {
+      throw new IllegalArgumentException("nonce is required");
+    }
+    final Map<String, Object> body = new LinkedHashMap<>(bodyFields);
+    body.put(BODY_ACCOUNT_ID, accountId);
+    body.put(BODY_TIMESTAMP_MS, timestampMs);
+    body.put(BODY_NONCE, nonce);
+    body.remove(BODY_SIGNATURE_BASE64);
+    body.remove(BODY_WITNESS_BASE64);
+    return body;
+  }
+
+  private static byte[] signEd25519(final PrivateKey privateKey, final byte[] message) {
+    try {
+      final Signature signer = Signature.getInstance("Ed25519");
+      signer.initSign(privateKey);
+      signer.update(message);
+      return signer.sign();
+    } catch (Exception ex) {
+      throw new IllegalStateException("failed to sign canonical request", ex);
+    }
   }
 
   private static String randomNonce() {

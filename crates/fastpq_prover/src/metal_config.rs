@@ -39,7 +39,15 @@ static POSEIDON_LANE_OVERRIDE: OnceLock<Option<u32>> = OnceLock::new();
 static POSEIDON_BATCH_OVERRIDE: OnceLock<Option<u32>> = OnceLock::new();
 static DEVICE_HINTS: OnceLock<DeviceHints> = OnceLock::new();
 #[cfg(test)]
-static TEST_DEVICE_HINTS: OnceLock<std::sync::Mutex<Option<DeviceHints>>> = OnceLock::new();
+static TEST_DEVICE_HINTS: OnceLock<std::sync::Mutex<TestDeviceHints>> = OnceLock::new();
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+enum TestDeviceHints {
+    Inherit,
+    Default,
+    Override(DeviceHints),
+}
 
 /// Tunable FFT parameters consumed by the Metal kernels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -333,12 +341,12 @@ fn parse_poseidon_batch_override(raw: &str) -> Result<u32, &'static str> {
 
 fn device_hints() -> DeviceHints {
     #[cfg(test)]
-    if let Some(hints) = TEST_DEVICE_HINTS
-        .get()
-        .and_then(|store| store.lock().ok())
-        .and_then(|guard| *guard)
-    {
-        return hints;
+    if let Some(test_hints) = TEST_DEVICE_HINTS.get().and_then(|store| store.lock().ok()) {
+        match *test_hints {
+            TestDeviceHints::Inherit => {}
+            TestDeviceHints::Default => return DeviceHints::default(),
+            TestDeviceHints::Override(hints) => return hints,
+        }
     }
     DEVICE_HINTS.get().copied().unwrap_or_default()
 }
@@ -418,9 +426,9 @@ fn working_set_gib(hints: DeviceHints) -> f64 {
 
 #[cfg(test)]
 pub fn set_device_hints_for_tests(hints: Option<DeviceHints>) {
-    let store = TEST_DEVICE_HINTS.get_or_init(|| std::sync::Mutex::new(None));
+    let store = TEST_DEVICE_HINTS.get_or_init(|| std::sync::Mutex::new(TestDeviceHints::Inherit));
     if let Ok(mut guard) = store.lock() {
-        *guard = hints;
+        *guard = hints.map_or(TestDeviceHints::Default, TestDeviceHints::Override);
     }
 }
 

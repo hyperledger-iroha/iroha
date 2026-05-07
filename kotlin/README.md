@@ -30,6 +30,18 @@ implementation("org.hyperledger.iroha.sdk:client-android:0.1-SNAPSHOT")
 implementation("org.hyperledger.iroha.sdk:offline-wallet-android:0.1-SNAPSHOT")
 ```
 
+### Offline Note V2 wallet flow
+
+`core-jvm` exposes `OfflineNoteV2Wallet` for the one-call Offline Note V2 app
+actions: load, prepare receive, pay, accept/audit, redeem, and sync. Wallets
+derive note commitments, input nullifiers, and payment token ids locally, then
+delegate Torii issuance, device attestation, proof generation, persistence, and
+direct audit/redeem transaction submission through injectable interfaces. The
+JVM core includes an in-memory store, `IrohaOfflineNoteV2TransactionSubmitter`,
+and `ToriiOfflineNoteV2IssuerClient` for Torii key-refill plus note-issue
+loads. Apps provide canonical auth and a device-binding provider; Android
+secure storage remains in the platform wallet layer.
+
 ---
 
 ## Build Instructions

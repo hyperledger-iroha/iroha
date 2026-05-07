@@ -425,9 +425,11 @@ impl Actor {
         phase: crate::sumeragi::consensus::Phase,
         block_hash: HashOf<BlockHeader>,
         height: u64,
+        view: u64,
         epoch: u64,
         signers: &BTreeSet<ValidatorIndex>,
         topology: &super::network_topology::Topology,
+        highest_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
     ) -> Option<(PeerId, crate::sumeragi::consensus::Vote)> {
         if !matches!(
             phase,
@@ -445,6 +447,31 @@ impl Actor {
                 return None;
             }
             let signer_peer = self.vote_signer_peer(vote)?;
+            let new_view_qc_supersedes = highest_qc
+                .or_else(|| self.proposal_highest_qc_for_slot(height, view))
+                .is_some_and(|highest_qc| {
+                    self.new_view_qc_supersedes_same_height_vote_conflict(
+                        height,
+                        view,
+                        highest_qc,
+                        vote.block_hash,
+                        vote.view,
+                    )
+                });
+            if new_view_qc_supersedes {
+                info!(
+                    phase = ?phase,
+                    height,
+                    view,
+                    epoch,
+                    block = %block_hash,
+                    conflicting_view = vote.view,
+                    conflicting_block = %vote.block_hash,
+                    signer_peer = ?signer_peer,
+                    "allowing QC aggregation: NEW_VIEW QC supersedes raw same-height signer history"
+                );
+                return None;
+            }
             signer_peers
                 .contains(&signer_peer)
                 .then_some((signer_peer, vote.clone()))
@@ -3794,9 +3821,11 @@ impl Actor {
             phase,
             block_hash,
             height,
+            view,
             epoch,
             &snapshot.signers,
             &signature_topology,
+            self.proposal_highest_qc_for_slot(height, view),
         ) {
             warn!(
                 phase = ?phase,
@@ -4278,6 +4307,84 @@ impl Actor {
                     exact_retry_emitted,
                     "routing vote-backed contiguous frontier payload miss through exact body repair"
                 );
+                let quorum_saturated_commit_gap =
+                    matches!(phase, crate::sumeragi::consensus::Phase::Commit)
+                        && exact_owner_routed
+                        && signature_topology
+                            .as_ref()
+                            .len()
+                            .saturating_sub(signers.len())
+                            < 2;
+                if quorum_saturated_commit_gap {
+                    let mut targets = rebroadcast_targets_for_qc(
+                        self.common_config.peer.id(),
+                        signers,
+                        signature_topology,
+                    )
+                    .into_iter()
+                    .collect::<BTreeSet<_>>();
+                    targets.extend(
+                        signature_topology
+                            .as_ref()
+                            .iter()
+                            .filter(|peer| *peer != self.common_config.peer.id())
+                            .cloned(),
+                    );
+                    let targets = targets.into_iter().collect::<Vec<_>>();
+                    let mut missing_block_requested = false;
+                    if !targets.is_empty() {
+                        let retry_window = self
+                            .config
+                            .recovery
+                            .exact_body_fetch_retry_floor
+                            .max(Duration::from_millis(1));
+                        let view_change_window =
+                            Some(self.quorum_timeout(self.runtime_da_enabled()));
+                        let _ = super::touch_missing_block_request(
+                            &mut self.pending.missing_block_requests,
+                            block_hash,
+                            height,
+                            view,
+                            phase,
+                            super::MissingBlockPriority::Consensus,
+                            now,
+                            retry_window,
+                            view_change_window,
+                        );
+                        let requester_roster_proof_known =
+                            self.requester_has_local_roster_proof(block_hash, height, view);
+                        send_missing_block_request(
+                            &self.network,
+                            &self.common_config.peer.id,
+                            block_hash,
+                            height,
+                            view,
+                            super::MissingBlockPriority::Consensus,
+                            requester_roster_proof_known,
+                            &targets,
+                        );
+                        missing_block_requested = true;
+                        self.note_missing_block_height_attempt(
+                            block_hash,
+                            height,
+                            view,
+                            super::MissingBlockRecoveryStage::HashFetch,
+                            None,
+                            now,
+                        );
+                    }
+                    info!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = %block_hash,
+                        topology_len = signature_topology.as_ref().len(),
+                        signers = signers.len(),
+                        targets = targets.len(),
+                        missing_block_requested,
+                        "paired exact frontier body repair with quorum-saturated missing-block fetch"
+                    );
+                }
                 let resilience_generic_fallback = self.config.resilience.enabled
                     && signature_topology
                         .as_ref()
@@ -5321,29 +5428,55 @@ impl Actor {
     ) -> bool {
         self.record_phase_sample(PipelinePhase::CollectCommit, qc.height, qc.view);
         let qc_ref = Self::qc_to_header_ref(qc);
+        let mut same_height_realign = false;
         if let Some(lock) = self.locked_qc
             && !self.block_known_for_lock(lock.subject_block_hash)
             && qc.view <= lock.view
             && (qc.height != lock.height || qc.subject_block_hash != lock.subject_block_hash)
         {
-            // Keep lock/highest stable while local lock payload is missing; apply once recovered.
-            self.drop_missing_lock_if_unknown(qc);
-            info!(
-                height = qc.height,
-                view = qc.view,
-                incoming_hash = %qc.subject_block_hash,
-                locked_height = lock.height,
-                locked_hash = %lock.subject_block_hash,
-                "deferring precommit QC lock/highest update until locked payload is available"
-            );
-            return true;
+            let same_height_conflict =
+                qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash;
+            if allow_nonextending && same_height_conflict {
+                info!(
+                    height = qc.height,
+                    view = qc.view,
+                    locked_height = lock.height,
+                    locked_view = lock.view,
+                    locked_hash = %lock.subject_block_hash,
+                    incoming_hash = %qc.subject_block_hash,
+                    "accepting same-height commit QC from block sync to realign missing local lock payload"
+                );
+                same_height_realign = true;
+            } else {
+                // Keep lock/highest stable while local lock payload is missing; apply once recovered.
+                self.drop_missing_lock_if_unknown(qc);
+                info!(
+                    height = qc.height,
+                    view = qc.view,
+                    incoming_hash = %qc.subject_block_hash,
+                    locked_height = lock.height,
+                    locked_hash = %lock.subject_block_hash,
+                    "deferring precommit QC lock/highest update until locked payload is available"
+                );
+                return true;
+            }
         }
         if let Some(lock) = self.locked_qc {
-            if self.block_known_for_lock(lock.subject_block_hash) {
-                let same_height_conflict =
-                    qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash;
-                let conflicts_locked = qc.height < lock.height && qc.view <= lock.view;
-                if same_height_conflict {
+            let same_height_conflict =
+                qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash;
+            if same_height_conflict {
+                if allow_nonextending {
+                    info!(
+                        height = qc.height,
+                        view = qc.view,
+                        locked_height = lock.height,
+                        locked_view = lock.view,
+                        locked_hash = %lock.subject_block_hash,
+                        incoming_hash = %qc.subject_block_hash,
+                        "accepting same-height commit QC from block sync to realign locked chain"
+                    );
+                    same_height_realign = true;
+                } else {
                     info!(
                         height = qc.height,
                         view = qc.view,
@@ -5360,6 +5493,9 @@ impl Actor {
                     );
                     return false;
                 }
+            }
+            if self.block_known_for_lock(lock.subject_block_hash) {
+                let conflicts_locked = qc.height < lock.height && qc.view <= lock.view;
                 if conflicts_locked {
                     info!(
                         height = qc.height,
@@ -5417,13 +5553,14 @@ impl Actor {
                     "accepting non-extending precommit QC from block sync to realign locked chain"
                 );
             }
-            let should_update = self.highest_qc.is_none_or(|current| {
-                let incoming = (qc_ref.height, qc_ref.view);
-                let existing = (current.height, current.view);
-                incoming > existing
-                    || (incoming == existing
-                        && current.phase != crate::sumeragi::consensus::Phase::Commit)
-            });
+            let should_update = same_height_realign
+                || self.highest_qc.is_none_or(|current| {
+                    let incoming = (qc_ref.height, qc_ref.view);
+                    let existing = (current.height, current.view);
+                    incoming > existing
+                        || (incoming == existing
+                            && current.phase != crate::sumeragi::consensus::Phase::Commit)
+                });
             if should_update {
                 super::status::set_highest_qc(qc.height, qc.view);
                 super::status::set_highest_qc_hash(qc.subject_block_hash);
@@ -5437,9 +5574,10 @@ impl Actor {
                     "skipping highest QC update for stale precommit QC"
                 );
             }
-            let should_update = self
-                .locked_qc
-                .is_none_or(|lock| (qc.height, qc.view) > (lock.height, lock.view));
+            let should_update = same_height_realign
+                || self
+                    .locked_qc
+                    .is_none_or(|lock| (qc.height, qc.view) > (lock.height, lock.view));
             if should_update {
                 super::status::set_locked_qc(qc.height, qc.view, Some(qc.subject_block_hash));
                 self.locked_qc = Some(qc_ref);
@@ -6048,9 +6186,12 @@ impl Actor {
             qc.phase,
             qc.subject_block_hash,
             qc.height,
+            qc.view,
             qc.epoch,
             &signer_set,
             &topology,
+            qc.highest_qc
+                .or_else(|| self.proposal_highest_qc_for_slot(qc.height, qc.view)),
         ) {
             let allow_conflicting_frontier_commit_qc =
                 matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)

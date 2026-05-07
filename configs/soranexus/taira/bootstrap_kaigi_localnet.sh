@@ -20,6 +20,7 @@ DPN_DATASPACE_ID="${IROHA_TAIRA_DPN_DATASPACE_ID:-10}"
 DPN_ACCOUNT_DOMAIN="${IROHA_TAIRA_DPN_ACCOUNT_DOMAIN:-wonderland.is}"
 DPN_SPONSOR_ACCOUNT_ID="${IROHA_TAIRA_DPN_SPONSOR_ACCOUNT_ID:-}"
 DPN_SPONSOR_FUND_AMOUNT="${IROHA_TAIRA_DPN_SPONSOR_FUND_AMOUNT:-1000}"
+TAIRA_AUTHORITY_FUND_AMOUNT="${IROHA_TAIRA_AUTHORITY_FUND_AMOUNT:-1000000000}"
 
 need_file() {
   if [[ ! -f "$1" ]]; then
@@ -200,14 +201,14 @@ authority = "{authority}"
 private_key = "{private_key}"
 asset_definition_id = "{fee_asset_id}"
 amount = "25000"
-pow_difficulty_bits = 8
+pow_difficulty_bits = 4
 pow_scrypt_log_n = 13
 pow_scrypt_r = 8
 pow_scrypt_p = 1
-pow_max_anchor_age_blocks = 6
+pow_max_anchor_age_blocks = 256
 pow_adaptive_lookback_blocks = 64
-pow_adaptive_claims_per_extra_bit = 4
-pow_adaptive_max_extra_bits = 2
+pow_adaptive_claims_per_extra_bit = 0
+pow_adaptive_max_extra_bits = 0
 pow_vrf_seed_enabled = false
 """
 
@@ -262,6 +263,7 @@ ensure_private_dataspace_onboarding_permissions() {
   GENESIS_JSON="$GENESIS_JSON" \
   TAIRA_AUTHORITY="$TAIRA_AUTHORITY" \
   DPN_DATASPACE_ID="$DPN_DATASPACE_ID" \
+  UNIVERSAL_DATASPACE_ID=0 \
   python3 <<'PY'
 from pathlib import Path
 import json
@@ -270,14 +272,19 @@ import os
 path = Path(os.environ["GENESIS_JSON"])
 authority = os.environ["TAIRA_AUTHORITY"]
 dataspace_id = int(os.environ["DPN_DATASPACE_ID"])
+universal_dataspace_id = int(os.environ["UNIVERSAL_DATASPACE_ID"])
 
 payload_alias = {"scope": {"scope": "dataspace", "value": dataspace_id}}
+payload_universal_alias = {
+    "scope": {"scope": "dataspace", "value": universal_dataspace_id}
+}
 payload_manifest = {"dataspace": dataspace_id}
 
 with path.open(encoding="utf-8") as fh:
     genesis = json.load(fh)
 
 has_alias_permission = False
+has_universal_alias_permission = False
 has_manifest_permission = False
 for tx in genesis.get("transactions", []):
     for instruction in tx.get("instructions", []):
@@ -294,6 +301,11 @@ for tx in genesis.get("transactions", []):
         if obj.get("name") == "CanManageAccountAlias" and obj.get("payload") == payload_alias:
             has_alias_permission = True
         if (
+            obj.get("name") == "CanManageAccountAlias"
+            and obj.get("payload") == payload_universal_alias
+        ):
+            has_universal_alias_permission = True
+        if (
             obj.get("name") == "CanPublishSpaceDirectoryManifest"
             and obj.get("payload") == payload_manifest
         ):
@@ -309,6 +321,20 @@ if not has_alias_permission:
                     "object": {
                         "name": "CanManageAccountAlias",
                         "payload": payload_alias,
+                    },
+                }
+            }
+        }
+    )
+if not has_universal_alias_permission:
+    instructions.append(
+        {
+            "Grant": {
+                "Permission": {
+                    "destination": authority,
+                    "object": {
+                        "name": "CanManageAccountAlias",
+                        "payload": payload_universal_alias,
                     },
                 }
             }
@@ -341,7 +367,7 @@ else:
     )
     path.write_text(json.dumps(genesis, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(
-        f"seeded private dataspace onboarding permissions for dataspace {dataspace_id}"
+        f"seeded onboarding permissions for dataspaces {universal_dataspace_id} and {dataspace_id}"
     )
 PY
 }
@@ -595,15 +621,17 @@ ensure_private_dataspace_onboarding_permissions
 ensure_dpn_genesis_seed_state "$FEE_ASSET_ID"
 
 bootstrap_authority_seed_state="$(
-  python3 - "$GENESIS_JSON" "$TAIRA_AUTHORITY" "$FEE_ASSET_ID" <<'PY'
+  python3 - "$GENESIS_JSON" "$TAIRA_AUTHORITY" "$FEE_ASSET_ID" "$TAIRA_AUTHORITY_FUND_AMOUNT" <<'PY'
 import json
 import sys
+from decimal import Decimal, InvalidOperation
 
-path, authority, fee_asset_id = sys.argv[1:]
+path, authority, fee_asset_id, required_funding_raw = sys.argv[1:]
 target_balance = f"{fee_asset_id}#{authority}"
+required_funding = Decimal(required_funding_raw)
+funding = Decimal(0)
 flags = {
     "account": False,
-    "funding": False,
     "CanManageSoracloud": False,
     "CanManageAccountAlias": False,
     "CanPublishSpaceDirectoryManifest": False,
@@ -622,7 +650,10 @@ for tx in genesis.get("transactions", []):
 
         mint = instruction.get("Mint")
         if mint and mint.get("Asset", {}).get("destination") == target_balance:
-            flags["funding"] = True
+            try:
+                funding += Decimal(str(mint["Asset"].get("object", "0")))
+            except InvalidOperation:
+                pass
 
         permission_grant = instruction.get("Grant", {}).get("Permission")
         if permission_grant and permission_grant.get("destination") == authority:
@@ -632,7 +663,7 @@ for tx in genesis.get("transactions", []):
 
 required = (
     flags["account"]
-    and flags["funding"]
+    and funding >= required_funding
     and flags["CanManageSoracloud"]
     and flags["CanManageAccountAlias"]
     and flags["CanPublishSpaceDirectoryManifest"]
@@ -666,6 +697,7 @@ else
     --bootstrap-authority-account "$TAIRA_AUTHORITY"
     --bootstrap-authority-domain "$BOOTSTRAP_AUTHORITY_DOMAIN"
     --bootstrap-authority-fee-asset-id "$FEE_ASSET_ID"
+    --bootstrap-authority-fee-amount "$TAIRA_AUTHORITY_FUND_AMOUNT"
   )
 fi
 if [[ -n "$GENESIS_PRIVATE_KEY" ]]; then

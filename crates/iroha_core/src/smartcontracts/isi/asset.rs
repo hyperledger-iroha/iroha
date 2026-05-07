@@ -1520,6 +1520,7 @@ pub mod query {
 
     #[derive(Debug, Default, Clone)]
     struct AssetPredicateView {
+        ids: BTreeSet<AssetId>,
         subjects: BTreeSet<AccountId>,
         definitions: BTreeSet<AssetDefinitionId>,
         domains: BTreeSet<DomainId>,
@@ -1611,6 +1612,7 @@ pub mod query {
                         if let Some(domain_id) = asset_id.definition().try_domain() {
                             self.domains.insert(domain_id.clone());
                         }
+                        self.ids.insert(asset_id);
                     }
                 }
                 _ => {}
@@ -1626,6 +1628,9 @@ pub mod query {
         }
 
         fn plan(&self) -> AssetQueryPlan {
+            let mut ids: Vec<_> = self.ids.iter().cloned().collect();
+            ids.sort();
+
             let mut subjects: Vec<_> = self.subjects.iter().cloned().collect();
             subjects.sort();
 
@@ -1634,6 +1639,10 @@ pub mod query {
 
             let mut domains: Vec<_> = self.domains.iter().cloned().collect();
             domains.sort();
+
+            if !ids.is_empty() {
+                return AssetQueryPlan::Ids(ids);
+            }
 
             if !self.subjects.is_empty() {
                 return AssetQueryPlan::Subjects {
@@ -1665,6 +1674,9 @@ pub mod query {
         }
 
         fn matches(&self, asset: &Asset) -> bool {
+            if !self.ids.is_empty() && !self.ids.contains(asset.id()) {
+                return false;
+            }
             if !self.subjects.is_empty()
                 && !self.subjects.contains(&asset.id().account().subject_id())
             {
@@ -1822,6 +1834,7 @@ pub mod query {
 
     fn asset_alias_values(asset: &Asset, field: &str) -> Vec<String> {
         match field {
+            "id" => vec![asset.id().to_string()],
             "account" | "account_id" | "owner" | "id.account" => {
                 vec![asset.id().account().to_string()]
             }
@@ -2163,6 +2176,7 @@ pub mod query {
 
     #[derive(Debug)]
     enum AssetQueryPlan {
+        Ids(Vec<AssetId>),
         Subjects {
             subjects: Vec<AccountId>,
             domains: Option<Vec<DomainId>>,
@@ -2284,6 +2298,17 @@ pub mod query {
             }
 
             let iter: Box<dyn Iterator<Item = Asset> + '_> = match plan {
+                AssetQueryPlan::Ids(asset_ids) => {
+                    Box::new(asset_ids.into_iter().filter_map(move |asset_id| {
+                        world
+                            .assets()
+                            .get_key_value(&asset_id)
+                            .map(|(asset_id, value)| Asset {
+                                id: asset_id.clone(),
+                                value: value.clone().into_inner(),
+                            })
+                    }))
+                }
                 AssetQueryPlan::Subjects {
                     subjects,
                     domains,
@@ -2824,8 +2849,9 @@ pub mod query {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
-            let definition_filter =
-                CompoundPredicate::<Asset>::build(|p| p.equals("id.definition", definition_id));
+            let definition_filter = CompoundPredicate::<Asset>::build(|p| {
+                p.equals("id.definition", definition_id.clone())
+            });
             let definition_view = AssetPredicateView::from_predicate(&definition_filter);
             assert!(
                 matches!(definition_view.plan(), AssetQueryPlan::Definitions(_)),
@@ -2848,6 +2874,17 @@ pub mod query {
                 matches!(id_domain_view.plan(), AssetQueryPlan::Domains { .. }),
                 "id.definition.domain should seed domain plan"
             );
+
+            let asset_id = AssetId::new(definition_id.clone(), ALICE_ID.clone());
+            let id_filter = CompoundPredicate::<Asset>::build(|p| {
+                p.equals("id", asset_id.to_string())
+                    .equals("id.definition.domain", "wonderland")
+            });
+            let id_view = AssetPredicateView::from_predicate(&id_filter);
+            let AssetQueryPlan::Ids(ids) = id_view.plan() else {
+                panic!("exact asset id should seed direct id plan");
+            };
+            assert_eq!(ids, vec![asset_id]);
         }
 
         #[test]
@@ -2887,6 +2924,54 @@ pub mod query {
 
             let predicate =
                 CompoundPredicate::<Asset>::build(|p| p.equals("id.account", ALICE_ID.to_string()));
+            let assets: Vec<_> = ValidQuery::execute(FindAssets, predicate, &view)
+                .expect("query execution succeeds")
+                .collect();
+
+            assert_eq!(assets.len(), 1);
+            assert_eq!(assets[0].id(), &alice_asset_id);
+            assert_eq!(*assets[0].value(), Numeric::new(13, 0));
+        }
+
+        #[test]
+        fn find_assets_filters_by_exact_id_with_extra_predicate() {
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
+            let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
+            let bob_account = build_account_in_domain(&bob_id, &domain_id);
+            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                domain_id.clone(),
+                "rose".parse().unwrap(),
+            );
+            let asset_def = {
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&ALICE_ID);
+            let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
+            let bob_asset_id = AssetId::new(asset_def_id, bob_id.clone());
+            let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(13, 0));
+            let bob_asset = Asset::new(bob_asset_id, Numeric::new(7, 0));
+
+            let world = World::with_assets(
+                [domain],
+                [alice_account, bob_account],
+                [asset_def],
+                [alice_asset, bob_asset],
+                [],
+            );
+            let kura = Kura::blank_kura_for_testing();
+            let query_store = LiveQueryStore::start_test();
+            let state = State::new(world, kura, query_store);
+            let view = state.view();
+
+            let predicate = CompoundPredicate::<Asset>::build(|p| {
+                p.equals("id", alice_asset_id.to_string())
+                    .equals("id.definition.domain", domain_id.to_string())
+            });
             let assets: Vec<_> = ValidQuery::execute(FindAssets, predicate, &view)
                 .expect("query execution succeeds")
                 .collect();

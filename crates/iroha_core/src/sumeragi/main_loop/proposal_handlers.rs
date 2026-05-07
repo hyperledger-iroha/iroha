@@ -1237,6 +1237,7 @@ impl Actor {
             self.pending.pending_fetch_requests.remove(&hash);
             self.pending.pending_block_body_requests.remove(&hash);
             self.clear_missing_block_request(&hash, MissingBlockClearReason::Obsolete);
+            self.clear_missing_commit_qc_request(&hash, MissingBlockClearReason::Obsolete);
             self.clear_missing_block_view_change(&hash);
             if retain_payload && let Some(mut pending) = pending {
                 if !pending.is_retired_same_height() {
@@ -1386,18 +1387,42 @@ impl Actor {
         block: &SignedBlock,
         proposal: &crate::sumeragi::consensus::Proposal,
     ) -> Option<super::message::BlockCreated> {
-        self.frontier_block_created_from_proposal_with_roster_hint(block, proposal, None)
+        self.frontier_block_created_from_proposal_with_roster_hint_and_payload(
+            block, proposal, None, None,
+        )
     }
 
+    #[cfg(test)]
     fn frontier_block_created_from_proposal_with_roster_hint(
         &self,
         block: &SignedBlock,
         proposal: &crate::sumeragi::consensus::Proposal,
         roster_hint: Option<&[PeerId]>,
     ) -> Option<super::message::BlockCreated> {
+        self.frontier_block_created_from_proposal_with_roster_hint_and_payload(
+            block,
+            proposal,
+            roster_hint,
+            None,
+        )
+    }
+
+    fn frontier_block_created_from_proposal_with_roster_hint_and_payload(
+        &self,
+        block: &SignedBlock,
+        proposal: &crate::sumeragi::consensus::Proposal,
+        roster_hint: Option<&[PeerId]>,
+        payload_hint: Option<(&[u8], Hash)>,
+    ) -> Option<super::message::BlockCreated> {
         let header = block.header();
-        let payload_bytes = super::proposals::block_payload_bytes(block);
-        let payload_hash = Hash::new(&payload_bytes);
+        let owned_payload_bytes;
+        let (payload_bytes, payload_hash) = if let Some((bytes, hash)) = payload_hint {
+            (bytes, hash)
+        } else {
+            owned_payload_bytes = super::proposals::block_payload_bytes(block);
+            let hash = Hash::new(&owned_payload_bytes);
+            (owned_payload_bytes.as_slice(), hash)
+        };
         if payload_hash != proposal.payload_hash {
             debug!(
                 height = header.height().get(),
@@ -1415,52 +1440,56 @@ impl Actor {
             header.height().get(),
             header.view_change_index(),
         );
-        let rebuilt_init = match self.rebuild_rbc_init_from_block(block, key).or_else(|| {
-            let roster_hint = roster_hint?;
-            let height = header.height().get();
-            let (consensus_mode, _, _) = self.consensus_context_for_height(height);
-            let roster =
-                super::roster::canonicalize_roster_for_mode(roster_hint.to_vec(), consensus_mode);
-            if roster.is_empty() {
-                return None;
-            }
-            let epoch = proposal.header.epoch;
-            let session = Self::build_rbc_session_from_payload_with_chunking(
-                &payload_bytes,
-                payload_hash,
-                self::rbc::RbcChunkingSpec::from_config(&self.config.rbc),
-                epoch,
-            )
-            .ok()?;
-            let chunk_digests = session.expected_chunk_digests.clone()?;
-            let chunk_root = session
-                .expected_chunk_root
-                .or_else(|| session.chunk_root())?;
-            let leader_signature = block
-                .signatures()
-                .find(|signature| signature.index() == u64::from(proposal.header.proposer))
-                .cloned()
-                .or_else(|| block.signatures().next().cloned())?;
-            Some(RbcInit {
-                block_hash: key.0,
-                height: key.1,
-                view: key.2,
-                epoch,
-                roster: roster.clone(),
-                roster_hash: self::rbc::rbc_roster_hash(&roster),
-                total_chunks: session.total_chunks(),
-                encoding: session.layout().encoding,
-                chunk_size_bytes: session.layout().chunk_size_bytes,
-                payload_size_bytes: session.layout().payload_size_bytes,
-                data_shards: session.layout().data_shards,
-                parity_shards: session.layout().parity_shards,
-                chunk_digests,
-                payload_hash,
-                chunk_root,
-                block_header: block.header(),
-                leader_signature,
-            })
-        }) {
+        let rebuilt_init = match self
+            .rebuild_rbc_init_from_payload_bytes(block, key, payload_bytes, payload_hash)
+            .or_else(|| {
+                let roster_hint = roster_hint?;
+                let height = header.height().get();
+                let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+                let roster = super::roster::canonicalize_roster_for_mode(
+                    roster_hint.to_vec(),
+                    consensus_mode,
+                );
+                if roster.is_empty() {
+                    return None;
+                }
+                let epoch = proposal.header.epoch;
+                let session = Self::build_rbc_session_from_payload_with_chunking(
+                    payload_bytes,
+                    payload_hash,
+                    self::rbc::RbcChunkingSpec::from_config(&self.config.rbc),
+                    epoch,
+                )
+                .ok()?;
+                let chunk_digests = session.expected_chunk_digests.clone()?;
+                let chunk_root = session
+                    .expected_chunk_root
+                    .or_else(|| session.chunk_root())?;
+                let leader_signature = block
+                    .signatures()
+                    .find(|signature| signature.index() == u64::from(proposal.header.proposer))
+                    .cloned()
+                    .or_else(|| block.signatures().next().cloned())?;
+                Some(RbcInit {
+                    block_hash: key.0,
+                    height: key.1,
+                    view: key.2,
+                    epoch,
+                    roster: roster.clone(),
+                    roster_hash: self::rbc::rbc_roster_hash(&roster),
+                    total_chunks: session.total_chunks(),
+                    encoding: session.layout().encoding,
+                    chunk_size_bytes: session.layout().chunk_size_bytes,
+                    payload_size_bytes: session.layout().payload_size_bytes,
+                    data_shards: session.layout().data_shards,
+                    parity_shards: session.layout().parity_shards,
+                    chunk_digests,
+                    payload_hash,
+                    chunk_root,
+                    block_header: block.header(),
+                    leader_signature,
+                })
+            }) {
             Some(init) => init,
             None => {
                 debug!(
@@ -1551,6 +1580,7 @@ impl Actor {
             })
     }
 
+    #[cfg(test)]
     pub(super) fn frontier_block_created_for_local_proposal_wire(
         &self,
         block: &SignedBlock,
@@ -1561,6 +1591,23 @@ impl Actor {
             block,
             proposal,
             Some(proposal_roster),
+        )
+        .or_else(|| self.frontier_block_created_for_proposal_wire(block, proposal))
+    }
+
+    pub(super) fn frontier_block_created_for_local_proposal_wire_with_payload(
+        &self,
+        block: &SignedBlock,
+        proposal: &crate::sumeragi::consensus::Proposal,
+        proposal_roster: &[PeerId],
+        payload_bytes: &[u8],
+        payload_hash: Hash,
+    ) -> Option<super::message::BlockCreated> {
+        self.frontier_block_created_from_proposal_with_roster_hint_and_payload(
+            block,
+            proposal,
+            Some(proposal_roster),
+            Some((payload_bytes, payload_hash)),
         )
         .or_else(|| self.frontier_block_created_for_proposal_wire(block, proposal))
     }
@@ -1980,6 +2027,7 @@ impl Actor {
             return Ok(());
         }
         let da_enabled = self.runtime_da_enabled();
+        let now = Instant::now();
         let stale_view = self.stale_view(height, view);
         let stale_retired_match =
             self.pending
@@ -2008,9 +2056,15 @@ impl Actor {
                     )
                 })
             });
+        let local_conflicting_vote_can_rotate = local_conflicting_same_height_vote
+            .as_ref()
+            .is_some_and(|vote| {
+                !self.local_same_height_vote_blocks_fresh_proposal(height, view, vote, now, true)
+            });
         let passive_conflicting_same_height_vote = !authoritative_frontier_owner_supersede
             && local_conflicting_same_height_vote.is_some()
-            && !new_view_qc_supersedes_local_vote;
+            && !new_view_qc_supersedes_local_vote
+            && !local_conflicting_vote_can_rotate;
         let conflicting_same_height_owner =
             self.frontier_slot_conflicts_with_live_local_owner(height, view, block_hash);
         let new_view_qc_supersedes_local_owner = conflicting_same_height_owner
@@ -2026,9 +2080,29 @@ impl Actor {
                     )
                 })
             });
+        let stale_owner_can_rotate =
+            conflicting_same_height_owner
+                .as_ref()
+                .is_some_and(|(owner_hash, owner_view)| {
+                    let min_stale_age = self
+                        .quorum_timeout(self.runtime_da_enabled())
+                        .max(self.frontier_slot_lag_window())
+                        .max(Duration::from_millis(1));
+                    let hard_stale_age = min_stale_age.saturating_mul(3);
+                    !self.same_height_block_has_observed_qc(*owner_hash, height, *owner_view)
+                        && (self
+                            .stale_same_height_recovery_age(height, *owner_view, now)
+                            .is_some_and(|age| age >= hard_stale_age)
+                            || self.same_height_vote_recovery_view_gap_exhausted(
+                                *owner_view,
+                                view,
+                                self.effective_commit_topology().len(),
+                            ))
+                });
         let passive_conflicting_same_height_owner = !authoritative_frontier_owner_supersede
             && conflicting_same_height_owner.is_some()
-            && !new_view_qc_supersedes_local_owner;
+            && !new_view_qc_supersedes_local_owner
+            && !stale_owner_can_rotate;
         let same_height_vote_lock =
             self.same_height_vote_lock_blocking_candidate(height, view, Some(block_hash));
         let new_view_qc_supersedes_vote_lock = same_height_vote_lock.as_ref().is_some_and(|lock| {
@@ -2036,10 +2110,27 @@ impl Actor {
                 self.new_view_qc_supersedes_same_height_vote_lock(height, view, highest_qc, lock)
             })
         });
+        let stale_vote_lock_can_rotate = same_height_vote_lock.as_ref().is_some_and(|lock| {
+            let min_stale_age = self
+                .quorum_timeout(self.runtime_da_enabled())
+                .max(self.frontier_slot_lag_window())
+                .max(Duration::from_millis(1));
+            let hard_stale_age = min_stale_age.saturating_mul(3);
+            !self.same_height_block_has_observed_qc(lock.block_hash, height, lock.view)
+                && (self
+                    .stale_same_height_recovery_age(height, lock.view, now)
+                    .is_some_and(|age| age >= hard_stale_age)
+                    || self.same_height_vote_recovery_view_gap_exhausted(
+                        lock.view,
+                        view,
+                        lock.total_validators,
+                    ))
+        });
         let quorum_locked_same_height_conflict = !authoritative_frontier_owner_supersede
             && observed_commit_qc_epoch.is_none()
             && same_height_vote_lock.is_some()
-            && !new_view_qc_supersedes_vote_lock;
+            && !new_view_qc_supersedes_vote_lock
+            && !stale_vote_lock_can_rotate;
         let passive_conflicting_same_height = passive_conflicting_same_height_vote
             || passive_conflicting_same_height_owner
             || quorum_locked_same_height_conflict;
@@ -3749,21 +3840,44 @@ impl Actor {
                 if revive_aborted {
                     let commit_qc_epoch = occ.get().commit_qc_epoch.or(observed_commit_qc_epoch);
                     let pending = occ.get_mut();
-                    pending.revive_after_abort(block, payload_hash, height, view);
+                    pending.revive_after_abort_with_payload_bytes(
+                        block,
+                        payload_hash,
+                        height,
+                        view,
+                        payload_bytes.clone(),
+                    );
                     if let Some(epoch) = commit_qc_epoch {
                         pending.note_commit_qc_observed(epoch);
                     }
                 } else if stale_payload_only {
                     let pending = occ.get_mut();
                     if pending.is_retired_same_height() {
-                        pending.refresh_retired_payload(block, payload_hash, height, view);
+                        pending.refresh_retired_payload_with_payload_bytes(
+                            block,
+                            payload_hash,
+                            height,
+                            view,
+                            payload_bytes.clone(),
+                        );
                     } else {
-                        pending.replace_block(block, payload_hash, height, view);
+                        pending.replace_block_with_payload_bytes(
+                            block,
+                            payload_hash,
+                            height,
+                            view,
+                            payload_bytes.clone(),
+                        );
                         pending.retire_same_height();
                     }
                 } else {
-                    occ.get_mut()
-                        .replace_block(block, payload_hash, height, view);
+                    occ.get_mut().replace_block_with_payload_bytes(
+                        block,
+                        payload_hash,
+                        height,
+                        view,
+                        payload_bytes.clone(),
+                    );
                 }
             }
             Entry::Vacant(vac) => {

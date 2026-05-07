@@ -56,10 +56,10 @@ public final class TransferWirePayloadEncoder {
   private static final int TRANSFER_BOX_ASSET_DISCRIMINANT = 2;
   private static final int MULTISIG_POLICY_VERSION_V1 = 1;
 
-  private static final TypeAdapter<String> STRING_ADAPTER = NoritoAdapters.stringAdapter();
   private static final TypeAdapter<Long> UINT8_ADAPTER = NoritoAdapters.uint(8);
   private static final TypeAdapter<Long> UINT16_ADAPTER = NoritoAdapters.uint(16);
   private static final TypeAdapter<Long> UINT32_ADAPTER = NoritoAdapters.uint(32);
+  private static final TypeAdapter<byte[]> BYTE_VECTOR_ADAPTER = NoritoAdapters.byteVecAdapter();
 
   private TransferWirePayloadEncoder() {}
 
@@ -212,14 +212,14 @@ public final class TransferWirePayloadEncoder {
   /**
    * Rust: AccountController enum { Single(PublicKey), Multisig(MultisigPolicy) }
    * Single = discriminant 0, Multisig = discriminant 1.
-   * PublicKey serializes as a normalized multihash hex string.
+   * PublicKey serializes as the compact Norito payload.
    */
   private static final class AccountController {
-    private final String publicKeyMultihash;
+    private final byte[] publicKeyPayload;
     private final AccountAddress.MultisigPolicyPayload multisigPolicy;
 
-    static AccountController single(String publicKeyMultihash) {
-      return new AccountController(Objects.requireNonNull(publicKeyMultihash), null);
+    static AccountController single(byte[] publicKeyPayload) {
+      return new AccountController(Objects.requireNonNull(publicKeyPayload), null);
     }
 
     static AccountController multisig(AccountAddress.MultisigPolicyPayload policy) {
@@ -227,17 +227,18 @@ public final class TransferWirePayloadEncoder {
     }
 
     private AccountController(
-        String publicKeyMultihash, AccountAddress.MultisigPolicyPayload multisigPolicy) {
-      this.publicKeyMultihash = publicKeyMultihash;
+        byte[] publicKeyPayload, AccountAddress.MultisigPolicyPayload multisigPolicy) {
+      this.publicKeyPayload =
+          publicKeyPayload == null ? null : Arrays.copyOf(publicKeyPayload, publicKeyPayload.length);
       this.multisigPolicy = multisigPolicy;
     }
 
     boolean isSingle() {
-      return publicKeyMultihash != null;
+      return publicKeyPayload != null;
     }
 
-    String publicKeyMultihash() {
-      return publicKeyMultihash;
+    byte[] publicKeyPayload() {
+      return Arrays.copyOf(publicKeyPayload, publicKeyPayload.length);
     }
 
     AccountAddress.MultisigPolicyPayload multisigPolicy() {
@@ -275,9 +276,9 @@ public final class TransferWirePayloadEncoder {
             address.singleKeyPayloadIgnoringCurveSupport();
         if (singleKey.isPresent()) {
           AccountAddress.SingleKeyPayload key = singleKey.get();
-          String multihash =
-              PublicKeyCodec.encodePublicKeyMultihash(key.curveId(), key.publicKey());
-          return new AccountId(AccountController.single(multihash));
+          byte[] publicKeyPayload =
+              PublicKeyCodec.compactPublicKeyPayload(key.curveId(), key.publicKey());
+          return new AccountId(AccountController.single(publicKeyPayload));
         }
 
         Optional<AccountAddress.MultisigPolicyPayload> multisig =
@@ -509,16 +510,16 @@ public final class TransferWirePayloadEncoder {
     @Override
     public void encode(NoritoEncoder encoder, AccountController value) {
       if (value.isSingle()) {
-        encodeSingle(encoder, value.publicKeyMultihash());
+        encodeSingle(encoder, value.publicKeyPayload());
       } else {
         encodeMultisig(encoder, value.multisigPolicy());
       }
     }
 
-    private void encodeSingle(NoritoEncoder encoder, String publicKeyMultihash) {
+    private void encodeSingle(NoritoEncoder encoder, byte[] publicKeyPayload) {
       UINT32_ADAPTER.encode(encoder, (long) SINGLE_DISCRIMINANT);
       NoritoEncoder child = encoder.childEncoder();
-      STRING_ADAPTER.encode(child, publicKeyMultihash);
+      BYTE_VECTOR_ADAPTER.encode(child, publicKeyPayload);
       byte[] payload = child.toByteArray();
       writePayloadLength(encoder, payload.length);
       encoder.writeBytes(payload);
@@ -557,9 +558,9 @@ public final class TransferWirePayloadEncoder {
       vecEncoder.writeUInt(sorted.size(), 64);
       for (AccountAddress.MultisigMemberPayload member : sorted) {
         NoritoEncoder memberEncoder = vecEncoder.childEncoder();
-        String memberMultihash =
-            PublicKeyCodec.encodePublicKeyMultihash(member.curveId(), member.publicKey());
-        encodeSizedField(memberEncoder, STRING_ADAPTER, memberMultihash);
+        byte[] publicKeyPayload =
+            PublicKeyCodec.compactPublicKeyPayload(member.curveId(), member.publicKey());
+        encodeSizedField(memberEncoder, BYTE_VECTOR_ADAPTER, publicKeyPayload);
         encodeSizedField(memberEncoder, UINT16_ADAPTER, (long) member.weight());
         byte[] memberPayload = memberEncoder.toByteArray();
         writePayloadLength(vecEncoder, memberPayload.length);

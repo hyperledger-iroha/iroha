@@ -1438,6 +1438,17 @@ impl<'tx> AcceptedTransaction<'tx> {
         )
     }
 
+    fn external_entrypoint_bytes_from_signed_frame(signed_frame: &[u8]) -> Option<Arc<Vec<u8>>> {
+        let view = norito::core::from_bytes_view(signed_frame).ok()?;
+        if view.schema() != <SignedTransaction as norito::core::NoritoSerialize>::schema_hash() {
+            return None;
+        }
+        Some(Self::external_entrypoint_bytes_from_signed_payload(
+            view.as_bytes(),
+            view.flags(),
+        ))
+    }
+
     fn framed_padding_for<T>() -> usize {
         let align = core::mem::align_of::<norito::core::Archived<T>>();
         if align <= 1 {
@@ -1551,12 +1562,10 @@ impl<'tx> AcceptedTransaction<'tx> {
                 .ok()
             })
             .map(Arc::new);
-        let entrypoint_bytes = signed_bytes.as_ref().map(|_| {
-            Self::external_entrypoint_bytes_from_signed_payload(
-                signed_payload.as_slice(),
-                signed_payload_flags,
-            )
-        });
+        let entrypoint_bytes = Some(Self::external_entrypoint_bytes_from_signed_payload(
+            signed_payload.as_slice(),
+            signed_payload_flags,
+        ));
         let encoded_len = signed_bytes
             .as_ref()
             .map_or(encoded_len, |bytes| bytes.len());
@@ -1634,16 +1643,17 @@ impl<'tx> AcceptedTransaction<'tx> {
     pub(crate) fn prepare_gossip_signed_metadata(
         tx: &SignedTransaction,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
-        entrypoint_bytes: &[u8],
+        entrypoint_bytes: Arc<Vec<u8>>,
     ) -> PreparedTransactionMetadata {
-        let encoded_len = Self::signed_encoded_len_from_external_entrypoint_frame(entrypoint_bytes)
-            .unwrap_or_else(|_| Self::signed_encoded_len(tx));
+        let encoded_len =
+            Self::signed_encoded_len_from_external_entrypoint_frame(entrypoint_bytes.as_slice())
+                .unwrap_or_else(|_| Self::signed_encoded_len(tx));
         Self::prepare_signed_metadata_with_entrypoint_hash_encoded_len_and_caches(
             tx,
             entrypoint_hash,
             encoded_len,
             None,
-            None,
+            Some(entrypoint_bytes),
         )
     }
 
@@ -1967,10 +1977,14 @@ impl<'tx> AcceptedTransaction<'tx> {
                 },
             ));
         }
-        if tx.fee_spend.asset_definition_id.to_string() != "xor#universal" {
+        if tx.fee_spend.asset_definition_id.to_string()
+            != iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+        {
             return Err(AcceptTransactionFail::TransactionLimit(
                 TransactionLimitError {
-                    reason: "private Kaigi fee spend asset must be xor#universal".into(),
+                    reason:
+                        "private Kaigi fee spend asset must be the canonical xor#universal asset"
+                            .into(),
                 },
             ));
         }
@@ -2091,7 +2105,8 @@ impl<'tx> AcceptedTransaction<'tx> {
         if binding.asset_definition_id != tx.fee_spend.asset_definition_id.to_string() {
             return Err(TransactionRejectionReason::Validation(
                 ValidationFail::NotPermitted(
-                    "private Kaigi fee spend proof is not bound to xor#universal".into(),
+                    "private Kaigi fee spend proof is not bound to the canonical xor#universal asset"
+                        .into(),
                 ),
             ));
         }
@@ -2143,20 +2158,10 @@ impl<'tx> AcceptedTransaction<'tx> {
             Some(tx.fee_spend.anchor_root.into()),
         );
 
-        let fee_payer = crate::smartcontracts::isi::kaigi::private_instruction_box(tx)
-            .ok()
-            .and_then(|_| {
-                let digest = iroha_crypto::Hash::new(tx.action_hash().as_ref());
-                PublicKey::from_bytes(Algorithm::Ed25519, digest.as_ref())
-                    .ok()
-                    .map(AccountId::new)
-            })
-            .unwrap_or_else(|| {
-                let digest = iroha_crypto::Hash::new(tx.action_hash().as_ref());
-                let public_key = PublicKey::from_bytes(Algorithm::Ed25519, digest.as_ref())
-                    .expect("32-byte digest must form an Ed25519 public key");
-                AccountId::new(public_key)
-            });
+        let fee_payer_seed = iroha_crypto::Hash::new(tx.action_hash().as_ref());
+        let fee_payer_keypair =
+            iroha_crypto::KeyPair::from_seed(fee_payer_seed.as_ref().to_vec(), Algorithm::Ed25519);
+        let fee_payer = AccountId::new(fee_payer_keypair.public_key().clone());
 
         transfer
             .execute(&fee_payer, state_transaction)
@@ -3004,6 +3009,13 @@ impl<'tx> AcceptedTransaction<'tx> {
     #[must_use]
     pub(crate) fn entrypoint_bytes(&self) -> Arc<Vec<u8>> {
         Arc::clone(self.entrypoint_bytes.get_or_init(|| {
+            if matches!(self.entrypoint(), TransactionEntrypoint::External(_))
+                && let Some(Some(signed_bytes)) = self.signed_bytes.get()
+                && let Some(entrypoint_bytes) =
+                    Self::external_entrypoint_bytes_from_signed_frame(signed_bytes.as_slice())
+            {
+                return entrypoint_bytes;
+            }
             Arc::new(norito::to_bytes(self.entrypoint()).expect("encode transaction entrypoint"))
         }))
     }
@@ -3582,6 +3594,9 @@ impl StateBlock<'_> {
                 })?
             }
         };
+        state_transaction.current_lane_id = Some(routing_decision.lane_id);
+        state_transaction.current_dataspace_id = Some(routing_decision.dataspace_id);
+        state_transaction.world.current_dataspace_id = Some(routing_decision.dataspace_id);
         let lane_assignment = LaneAssignment {
             lane_id: routing_decision.lane_id,
             dataspace_id: routing_decision.dataspace_id,
@@ -3620,30 +3635,33 @@ impl StateBlock<'_> {
         tx: AcceptedTransaction<'_>,
         ivm_cache: &mut IvmCache,
     ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
-        self.validate_transaction_at_entrypoint_index(tx, ivm_cache, None)
+        self.validate_transaction_at_entrypoint_index_and_routing(tx, ivm_cache, None, None)
     }
 
-    /// Validate and apply the transaction with the original block entrypoint index available.
+    /// Validate and apply a transaction with both its original block entrypoint index and routing context.
     ///
     /// Returns the hash and the result of the transaction.
-    pub(crate) fn validate_transaction_with_entrypoint_index(
+    pub(crate) fn validate_transaction_with_entrypoint_index_and_routing_context(
         &mut self,
         tx: AcceptedTransaction<'_>,
         ivm_cache: &mut IvmCache,
         entrypoint_index: usize,
+        routing: crate::queue::RoutingDecision,
     ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
-        self.validate_transaction_at_entrypoint_index(
+        self.validate_transaction_at_entrypoint_index_and_routing(
             tx,
             ivm_cache,
             Some(u64::try_from(entrypoint_index).unwrap_or(u64::MAX)),
+            Some(routing),
         )
     }
 
-    fn validate_transaction_at_entrypoint_index(
+    fn validate_transaction_at_entrypoint_index_and_routing(
         &mut self,
         tx: AcceptedTransaction<'_>,
         ivm_cache: &mut IvmCache,
         entrypoint_index: Option<u64>,
+        routing_decision: Option<crate::queue::RoutingDecision>,
     ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
         // Capture gas accounting inputs up front to avoid borrowing conflicts
         let gas_total_before = self.gas_used_in_block;
@@ -3654,8 +3672,18 @@ impl StateBlock<'_> {
         let conf_gas_before = self.confidential_gas_used_in_block;
         let mut state_transaction = self.transaction();
         state_transaction.current_entrypoint_index = entrypoint_index;
+        if let Some(routing) = routing_decision {
+            state_transaction.current_lane_id = Some(routing.lane_id);
+            state_transaction.current_dataspace_id = Some(routing.dataspace_id);
+            state_transaction.world.current_dataspace_id = Some(routing.dataspace_id);
+        }
         let hash = tx.hash_as_entrypoint();
-        let result = Self::validate_transaction_internal(tx, &mut state_transaction, ivm_cache);
+        let result = Self::validate_transaction_internal(
+            tx,
+            &mut state_transaction,
+            ivm_cache,
+            routing_decision,
+        );
         if result.is_ok() {
             // Enforce block gas limit if configured; accumulate gas used by last tx (IVM path)
             let used = state_transaction.last_tx_gas_used;
@@ -3709,6 +3737,7 @@ impl StateBlock<'_> {
         tx: AcceptedTransaction<'_>,
         state_transaction: &mut StateTransaction<'_, '_>,
         ivm_cache: &mut IvmCache,
+        routing_decision: Option<crate::queue::RoutingDecision>,
     ) -> TransactionResultInner {
         if let TransactionEntrypoint::PrivateKaigi(private_tx) = tx.entrypoint() {
             return Self::validate_private_kaigi_transaction(private_tx, state_transaction);
@@ -3727,7 +3756,8 @@ impl StateBlock<'_> {
             ));
         }
 
-        let admission = Self::validate_stateful_admission(tx.as_ref(), state_transaction, None)?;
+        let admission =
+            Self::validate_stateful_admission(tx.as_ref(), state_transaction, routing_decision)?;
         let authority = admission.authority;
         let is_heartbeat = admission.is_heartbeat;
         let allow_unregistered_authority = admission.allow_unregistered_authority;
@@ -3972,7 +4002,7 @@ impl StateBlock<'_> {
 
         state_transaction.world.smart_contract_state.remove(key);
         let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(signed));
-        Self::validate_transaction_internal(accepted, state_transaction, ivm_cache)
+        Self::validate_transaction_internal(accepted, state_transaction, ivm_cache, None)
     }
 
     #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
@@ -7242,6 +7272,9 @@ pub mod tests {
             .with_instructions([Log::new(Level::INFO, "canonical-cache".into())])
             .sign(keypair.private_key());
         let signed_bytes = Arc::new(norito::to_bytes(&signed).expect("signed transaction encodes"));
+        let expected_entrypoint_bytes =
+            norito::to_bytes(&TransactionEntrypoint::External(signed.clone()))
+                .expect("entrypoint transaction encodes");
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
 
@@ -7257,6 +7290,10 @@ pub mod tests {
 
         let cached = accepted.signed_bytes().expect("canonical bytes cached");
         assert!(Arc::ptr_eq(&cached, &signed_bytes));
+        assert_eq!(
+            accepted.entrypoint_bytes().as_slice(),
+            expected_entrypoint_bytes.as_slice()
+        );
     }
 
     #[test]
@@ -7577,7 +7614,7 @@ pub mod tests {
         let actual = AcceptedTransaction::prepare_gossip_signed_metadata(
             &signed,
             entrypoint.hash(),
-            entrypoint_bytes.as_slice(),
+            Arc::new(entrypoint_bytes.clone()),
         );
 
         assert_eq!(actual.signed_hash, expected.signed_hash);
@@ -7585,7 +7622,14 @@ pub mod tests {
         assert_eq!(actual.payload_hash, expected.payload_hash);
         assert_eq!(actual.encoded_len, expected.encoded_len);
         assert!(actual.signed_bytes.is_none());
-        assert!(actual.entrypoint_bytes.is_none());
+        assert_eq!(
+            actual
+                .entrypoint_bytes
+                .as_ref()
+                .expect("gossip metadata keeps canonical entrypoint bytes")
+                .as_slice(),
+            entrypoint_bytes.as_slice()
+        );
         assert_eq!(
             actual.single_ed25519_key.is_some(),
             expected.single_ed25519_key.is_some()

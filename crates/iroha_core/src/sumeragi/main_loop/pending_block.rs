@@ -177,6 +177,17 @@ impl PendingBlock {
         self.payload_bytes = OnceLock::new();
     }
 
+    pub(super) fn set_block_with_payload_bytes(
+        &mut self,
+        block: SignedBlock,
+        payload_bytes: Vec<u8>,
+    ) {
+        self.block = block;
+        self.payload_bytes = OnceLock::new();
+        let _ = self.payload_bytes.set(payload_bytes);
+    }
+
+    #[cfg(test)]
     pub(super) fn replace_block(
         &mut self,
         block: SignedBlock,
@@ -211,6 +222,41 @@ impl PendingBlock {
         }
     }
 
+    pub(super) fn replace_block_with_payload_bytes(
+        &mut self,
+        block: SignedBlock,
+        payload_hash: Hash,
+        height: u64,
+        view: u64,
+        payload_bytes: Vec<u8>,
+    ) {
+        let replacing_same_subject =
+            self.payload_hash == payload_hash && self.height == height && self.view == view;
+        self.set_block_with_payload_bytes(block, payload_bytes);
+        self.payload_hash = payload_hash;
+        self.height = height;
+        self.view = view;
+        if !replacing_same_subject {
+            self.inserted_at = Instant::now();
+            self.last_progress = self.inserted_at;
+            self.reset_commit_stage();
+            self.last_gate = None;
+            self.last_gate_satisfied = None;
+            self.reset_kura_retry();
+            self.kura_persisted = false;
+            self.validation_status = ValidationStatus::Pending;
+            self.validated_commit_artifact = None;
+            self.last_precommit_rebroadcast = None;
+            self.last_quorum_reschedule = None;
+            self.last_quorum_reschedule_vote_count = 0;
+            self.aborted = false;
+            self.retired_same_height = false;
+            self.parent_state_root = None;
+            self.post_state_root = None;
+            self.last_commit_evidence_replay = None;
+        }
+    }
+
     pub(super) fn revive_after_abort(
         &mut self,
         block: SignedBlock,
@@ -219,6 +265,36 @@ impl PendingBlock {
         view: u64,
     ) {
         self.set_block(block);
+        self.payload_hash = payload_hash;
+        self.height = height;
+        self.view = view;
+        self.aborted = false;
+        self.retired_same_height = false;
+        self.inserted_at = Instant::now();
+        self.last_progress = self.inserted_at;
+        self.validation_status = ValidationStatus::Pending;
+        self.validated_commit_artifact = None;
+        self.reset_commit_stage();
+        self.last_gate = None;
+        self.last_gate_satisfied = None;
+        self.reset_kura_retry();
+        self.last_precommit_rebroadcast = None;
+        self.last_quorum_reschedule = None;
+        self.last_quorum_reschedule_vote_count = 0;
+        self.parent_state_root = None;
+        self.post_state_root = None;
+        self.last_commit_evidence_replay = None;
+    }
+
+    pub(super) fn revive_after_abort_with_payload_bytes(
+        &mut self,
+        block: SignedBlock,
+        payload_hash: Hash,
+        height: u64,
+        view: u64,
+        payload_bytes: Vec<u8>,
+    ) {
+        self.set_block_with_payload_bytes(block, payload_bytes);
         self.payload_hash = payload_hash;
         self.height = height;
         self.view = view;
@@ -382,14 +458,15 @@ impl PendingBlock {
         self.last_commit_evidence_replay = None;
     }
 
-    pub(super) fn refresh_retired_payload(
+    pub(super) fn refresh_retired_payload_with_payload_bytes(
         &mut self,
         block: SignedBlock,
         payload_hash: Hash,
         height: u64,
         view: u64,
+        payload_bytes: Vec<u8>,
     ) {
-        self.set_block(block);
+        self.set_block_with_payload_bytes(block, payload_bytes);
         self.payload_hash = payload_hash;
         self.height = height;
         self.view = view;
@@ -422,6 +499,7 @@ impl PendingBlock {
         view: u64,
         commit_votes: usize,
         has_commit_qc: bool,
+        allow_stalled_retry: bool,
     ) -> bool {
         let candidate = CommitEvidenceReplayState {
             view,
@@ -435,10 +513,12 @@ impl PendingBlock {
         let progressed = commit_votes > previous.commit_votes
             || (has_commit_qc && !previous.has_commit_qc)
             || view != previous.view;
-        if progressed {
+        let retry_stalled_evidence = allow_stalled_retry && (commit_votes > 0 || has_commit_qc);
+        let should_replay = progressed || retry_stalled_evidence;
+        if should_replay {
             self.last_commit_evidence_replay = Some(candidate);
         }
-        progressed
+        should_replay
     }
 
     pub(super) fn note_kura_failure(
@@ -688,6 +768,35 @@ mod tests {
     }
 
     #[test]
+    fn pending_block_payload_bytes_can_be_seeded_on_replace() {
+        let first_block = sample_block(1);
+        let first_bytes = block_payload_bytes(&first_block);
+        let first_hash = Hash::new(&first_bytes);
+        let mut pending = PendingBlock::new_with_payload_bytes(
+            first_block,
+            first_hash,
+            1,
+            0,
+            first_bytes.clone(),
+        );
+
+        let second_block = sample_block(2);
+        let second_bytes = block_payload_bytes(&second_block);
+        let second_hash = Hash::new(&second_bytes);
+        pending.replace_block_with_payload_bytes(
+            second_block,
+            second_hash,
+            2,
+            0,
+            second_bytes.clone(),
+        );
+
+        assert_eq!(pending.payload_bytes(), second_bytes.as_slice());
+        assert_eq!(Hash::new(pending.payload_bytes()), second_hash);
+        assert_ne!(pending.payload_bytes(), first_bytes.as_slice());
+    }
+
+    #[test]
     fn revive_after_abort_resets_tracking_and_validation() {
         let mut pending =
             PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
@@ -742,11 +851,12 @@ mod tests {
     fn commit_evidence_replay_advances_on_progress() {
         let mut pending =
             PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
-        assert!(pending.should_replay_commit_evidence(0, 1, false));
-        assert!(!pending.should_replay_commit_evidence(0, 1, false));
-        assert!(pending.should_replay_commit_evidence(0, 2, false));
-        assert!(pending.should_replay_commit_evidence(0, 2, true));
-        assert!(pending.should_replay_commit_evidence(1, 2, true));
+        assert!(pending.should_replay_commit_evidence(0, 1, false, false));
+        assert!(!pending.should_replay_commit_evidence(0, 1, false, false));
+        assert!(pending.should_replay_commit_evidence(0, 1, false, true));
+        assert!(pending.should_replay_commit_evidence(0, 2, false, false));
+        assert!(pending.should_replay_commit_evidence(0, 2, true, false));
+        assert!(pending.should_replay_commit_evidence(1, 2, true, false));
     }
 
     #[test]
