@@ -6991,6 +6991,8 @@ mod tests {
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: vec![1],

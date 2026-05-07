@@ -38,6 +38,8 @@ fn sample_commit_qc(header: &iroha_data_model::block::BlockHeader) -> Qc {
         height: header.height().get(),
         view: 1,
         epoch: 0,
+        chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),

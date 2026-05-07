@@ -4554,6 +4554,8 @@ mod tests {
             height: u64::from(seed),
             view: u64::from(seed),
             epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
             highest_qc: None,
             validator_set_hash: HashOf::new(&validator_set),

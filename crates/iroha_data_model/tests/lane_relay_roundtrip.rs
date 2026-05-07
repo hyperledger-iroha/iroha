@@ -43,6 +43,8 @@ fn sample_qc(block_hash: HashOf<BlockHeader>) -> Qc {
         height: 5,
         view: 3,
         epoch: 1,
+        chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),

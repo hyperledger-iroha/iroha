@@ -427,6 +427,8 @@ fn seed_commit_votes_for_block_with_roster(
             height,
             view: view_idx,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -479,6 +481,8 @@ fn seed_verified_commit_votes_for_block_with_roster(
             height,
             view: view_idx,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -580,6 +584,8 @@ fn seed_remote_commit_votes_for_block(
             height,
             view: view_idx,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -722,6 +728,8 @@ fn commit_qc_with_signers(
         height: header.height().get(),
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: mode_tag.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -1107,6 +1115,8 @@ fn aggregate_signature_for_signers_with_highest(
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: mode_tag.to_string(),
         highest_qc,
         validator_set_hash: HashOf::new(&validator_set),
@@ -1226,6 +1236,8 @@ fn aggregate_vote_signature_for_signers(
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -4056,6 +4068,8 @@ async fn observer_skips_qc_aggregation() {
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: u32::try_from(idx).expect("signer index fits u32"),
             bls_sig: Vec::new(),
@@ -4070,9 +4084,15 @@ async fn observer_skips_qc_aggregation() {
     let _ = harness.background_rx.try_iter().count();
     actor.try_form_qc_from_votes(Phase::Commit, block_hash, height, view, epoch, &topology);
     assert!(
-        actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, block_hash, height, view, epoch)),
+        actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "observer should aggregate QCs for local validation"
     );
     for post in harness.background_rx.try_iter() {
@@ -4156,6 +4176,8 @@ async fn first_validated_qc_is_relayed_once_to_commit_topology() {
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: u32::try_from(idx).expect("signer index fits u32"),
             bls_sig: Vec::new(),
@@ -4186,7 +4208,15 @@ async fn first_validated_qc_is_relayed_once_to_commit_topology() {
 
     let qc = actor
         .qc_cache
-        .get(&(Phase::Commit, block_hash, height, view, epoch))
+        .get(&(
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ))
         .expect("commit QC cached")
         .clone();
     actor.handle_qc(qc).expect("duplicate QC handled");
@@ -5377,6 +5407,8 @@ async fn vote_verify_worker_records_vote_after_async_check() {
         height,
         view,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -5448,6 +5480,8 @@ async fn vote_signature_cache_skips_async_dispatch() {
         height,
         view,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -5498,6 +5532,8 @@ fn qc_verify_cache_key_tracks_signature_and_bitmap() {
         height: 1,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: "cache-key-test".to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x44; Hash::LENGTH])),
@@ -5570,6 +5606,8 @@ async fn vote_validation_inbound_defers_then_dispatches() {
         height,
         view,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -5644,6 +5682,8 @@ async fn vote_inbound_defers_stale_vote_drop() {
         height: 1,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -5701,6 +5741,8 @@ async fn vote_inbound_drops_when_pending_validation_full() {
         height: 1,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -5768,6 +5810,8 @@ async fn vote_inbound_fast_paths_active_new_view_when_pending_validation_full() 
         height: 2,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -5806,6 +5850,8 @@ async fn vote_inbound_fast_paths_active_new_view_when_pending_validation_full() 
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: Some(committed_qc),
         signer: 1,
         bls_sig: Vec::new(),
@@ -5916,6 +5962,8 @@ async fn resilience_fast_paths_same_height_commit_votes_for_medium_rosters() {
         height,
         view: view_idx,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -6015,6 +6063,8 @@ async fn vote_validation_drop_records_roster_hash_for_signature_rejection() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: u32::try_from(local_idx).expect("signer index fits u32"),
         bls_sig: Vec::new(),
@@ -6102,6 +6152,8 @@ async fn vote_verify_defers_when_queue_full_and_dispatches_later() {
         height,
         view,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -6355,6 +6407,8 @@ async fn block_sync_update_known_block_vote_only_uses_fast_path() {
         height,
         view: view_idx,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -6423,6 +6477,8 @@ async fn block_sync_update_known_block_vote_only_fast_path_bypasses_deferral_gat
         height,
         view: view_idx,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -6663,6 +6719,8 @@ fn block_sync_roster_cache_hits_and_evicts() {
         height,
         view,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -6766,6 +6824,8 @@ fn block_sync_roster_cache_key_ignores_view_only_variance() {
         height: 7,
         view,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -11465,6 +11525,8 @@ async fn block_sync_update_defers_while_commit_inflight_and_replays() {
         height,
         view: view_idx,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -12187,9 +12249,15 @@ async fn block_sync_update_accepts_pre_activation_qc_epoch_after_mode_flip() {
 
     assert!(actor.block_known_locally(block.hash()));
     assert!(
-        actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, block.hash(), block_height, view, qc_epoch)),
+        actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            block.hash(),
+            block_height,
+            view,
+            qc_epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "pre-activation QC should be cached after mode flip (qc_validation_err={qc_validation_err:?})"
     );
 
@@ -12287,7 +12355,15 @@ async fn block_sync_update_reuses_cached_qc_when_validation_unavailable() {
         &harness.key_pairs,
     );
     actor.qc_cache.insert(
-        (Phase::Commit, block.hash(), block_height, view, qc_epoch),
+        (
+            Phase::Commit,
+            block.hash(),
+            block_height,
+            view,
+            qc_epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
         qc.clone(),
     );
     actor.roster_validation_cache.pops.clear();
@@ -12416,6 +12492,8 @@ async fn block_sync_update_rejects_conflicting_precommit_qc_against_lock() {
             conflicting_block.hash(),
             locked_height,
             1,
+            0,
+            crate::sumeragi::consensus::default_chain_order_hash(),
             0
         )),
         "conflicting precommit QC should not be cached from block sync"
@@ -12587,6 +12665,8 @@ async fn block_sync_update_requests_locked_payload_before_prefilter_conflict_whe
             conflicting_block.hash(),
             locked_height,
             1,
+            0,
+            crate::sumeragi::consensus::default_chain_order_hash(),
             0
         )),
         "conflicting QC should not be cached while lock payload is missing"
@@ -12729,9 +12809,15 @@ async fn block_sync_update_drops_qc_height_mismatch() {
 
     assert!(actor.block_known_locally(block.hash()));
     assert!(
-        !actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, block.hash(), qc_height, qc_view, 0)),
+        !actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            block.hash(),
+            qc_height,
+            qc_view,
+            0,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "mismatched height QC should not be cached"
     );
 
@@ -12953,9 +13039,15 @@ async fn block_sync_update_drops_qc_epoch_mismatch() {
 
     assert!(actor.block_known_locally(block.hash()));
     assert!(
-        !actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, block.hash(), block_height, view, qc_epoch)),
+        !actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            block.hash(),
+            block_height,
+            view,
+            qc_epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "mismatched epoch QC should not be cached"
     );
 
@@ -13063,7 +13155,15 @@ async fn block_sync_update_records_commit_qc_from_cached_qc() {
         &harness.key_pairs,
     );
     actor.qc_cache.insert(
-        (Phase::Commit, block.hash(), block_height, view, 0),
+        (
+            Phase::Commit,
+            block.hash(),
+            block_height,
+            view,
+            0,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
         qc.clone(),
     );
     let now = Instant::now();
@@ -13347,9 +13447,18 @@ async fn block_sync_update_known_block_skips_redundant_cached_qc_replay() {
         let mut journal = state.commit_roster_journal.write();
         journal.upsert(qc.clone(), checkpoint.clone(), None);
     }
-    actor
-        .qc_cache
-        .insert((Phase::Commit, block_hash, height, view, epoch), qc.clone());
+    actor.qc_cache.insert(
+        (
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
+        qc.clone(),
+    );
     actor.note_validated_qc_tally(
         &qc,
         super::QcSignerTally {
@@ -13512,6 +13621,8 @@ async fn block_sync_qc_is_stale_against_lock_matches_lower_height_only() {
         height,
         view: 0,
         epoch: actor.epoch_for_height(height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
@@ -13574,6 +13685,8 @@ async fn block_sync_qc_lock_override_handles_missing_locked_payload() {
         height,
         view,
         epoch: actor.epoch_for_height(height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
@@ -13649,9 +13762,18 @@ async fn block_sync_update_known_block_revalidates_qc_on_hash_mismatch() {
         &topology,
         &harness.key_pairs,
     );
-    actor
-        .qc_cache
-        .insert((Phase::Commit, block_hash, height, view, epoch), qc.clone());
+    actor.qc_cache.insert(
+        (
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
+        qc.clone(),
+    );
     actor.note_validated_qc_tally(
         &qc,
         QcSignerTally {
@@ -13706,7 +13828,15 @@ async fn block_sync_update_known_block_revalidates_qc_on_hash_mismatch() {
 
     let cached = actor
         .qc_cache
-        .get(&(Phase::Commit, block_hash, height, view, epoch))
+        .get(&(
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ))
         .expect("qc cached");
     assert_eq!(
         HashOf::new(cached),
@@ -13989,7 +14119,15 @@ async fn block_sync_update_known_block_reuses_cached_block_signers() {
     update.stake_snapshot = None;
     update.commit_votes.clear();
 
-    let qc_key = (Phase::Commit, block_hash, block_height, view, epoch);
+    let qc_key = (
+        Phase::Commit,
+        block_hash,
+        block_height,
+        view,
+        epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
+    );
     assert!(actor.qc_cache.get(&qc_key).is_none());
     actor
         .handle_block_sync_update(update, None)
@@ -14345,6 +14483,8 @@ async fn block_sync_update_known_block_prunes_commit_votes_without_roster_hint()
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -14470,11 +14610,27 @@ fn cached_qc_for_filters_epoch() {
     );
     let mut qc_cache = BTreeMap::new();
     qc_cache.insert(
-        (Phase::Commit, block_hash, height, view, 0),
+        (
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            0,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
         qc_epoch0.clone(),
     );
     qc_cache.insert(
-        (Phase::Commit, block_hash, height, view, 1),
+        (
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            1,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
         qc_epoch1.clone(),
     );
 
@@ -14667,9 +14823,15 @@ async fn block_sync_update_allows_nonextending_qc_without_commit_qc() {
         .handle_block_sync_update(update, None)
         .expect("block sync update");
     assert!(
-        actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, candidate_block.hash(), 2, 1, 0)),
+        actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            candidate_block.hash(),
+            2,
+            1,
+            0,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "non-extending commit certificate should be cached"
     );
     let locked = actor.locked_qc.expect("locked qc updated");
@@ -14714,6 +14876,8 @@ async fn fetch_pending_block_attaches_cached_qc() {
         height: block.header().height().get(),
         view: block.header().view_change_index(),
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -14730,6 +14894,8 @@ async fn fetch_pending_block_attaches_cached_qc() {
             block_hash,
             block.header().height().get(),
             block.header().view_change_index(),
+            0,
+            crate::sumeragi::consensus::default_chain_order_hash(),
             0,
         ),
         cached_qc,
@@ -15239,6 +15405,8 @@ async fn qc_bearing_fetch_pending_block_update_sends_direct_qc_companion() {
             height,
             view,
             actor.epoch_for_height(height),
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
         ),
         qc,
     );
@@ -15318,6 +15486,8 @@ async fn commit_qc_only_fetch_pending_block_sends_cert_without_body() {
             height,
             view,
             actor.epoch_for_height(height),
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
         ),
         qc,
     );
@@ -15531,6 +15701,8 @@ async fn fetch_pending_block_npos_downgrades_hintless_update_without_requester_r
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -16065,9 +16237,18 @@ async fn fetch_block_body_sends_plain_fallback_before_sidecar_response() {
         &topology,
         &harness.key_pairs,
     );
-    actor
-        .qc_cache
-        .insert((Phase::Commit, block_hash, height, view, epoch), qc);
+    actor.qc_cache.insert(
+        (
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
+        qc,
+    );
     assert!(
         matches!(
             actor.block_body_response_for_wire(&block).body,
@@ -16515,9 +16696,15 @@ async fn non_exact_block_body_response_routes_qc_update_through_block_sync_path(
         "non-exact QC-bearing BlockBodyResponse should be routed into block sync instead of being dropped"
     );
     assert!(
-        actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, block_hash, height, view, epoch)),
+        actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "routed BlockSyncUpdate companion should preserve the commit QC"
     );
 
@@ -17836,6 +18023,8 @@ async fn fetch_pending_block_falls_back_to_block_created_when_oversized() {
         height: block.header().height().get(),
         view: block.header().view_change_index(),
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -17852,6 +18041,8 @@ async fn fetch_pending_block_falls_back_to_block_created_when_oversized() {
             block_hash,
             block.header().height().get(),
             block.header().view_change_index(),
+            0,
+            crate::sumeragi::consensus::default_chain_order_hash(),
             0,
         ),
         cached_qc,
@@ -19234,6 +19425,8 @@ async fn block_sync_update_drops_mismatched_commit_votes() {
         height: block_height,
         view,
         epoch: expected_epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -19340,9 +19533,15 @@ async fn block_sync_caches_qc_before_block_known() {
     );
 
     assert!(
-        actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, block.hash(), height, view, 0)),
+        actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            block.hash(),
+            height,
+            view,
+            0,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "QC should be cached before block is known locally"
     );
     let record = crate::sumeragi::status::precommit_signers_for(block.hash())
@@ -19440,9 +19639,15 @@ async fn block_sync_cache_rejects_qc_epoch_mismatch() {
     );
 
     assert!(
-        !actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, block.hash(), height, view, qc_epoch)),
+        !actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            block.hash(),
+            height,
+            view,
+            qc_epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "mismatched epoch QC should not be cached"
     );
     assert!(
@@ -19554,9 +19759,15 @@ async fn block_sync_cache_uses_activation_height_mode_tag() {
     );
 
     assert!(
-        actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, block.hash(), height, view, 0)),
+        actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            block.hash(),
+            height,
+            view,
+            0,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "QC should be cached even after mode flip when height is pre-activation"
     );
 
@@ -20207,6 +20418,8 @@ async fn quorum_reschedule_rebroadcasts_block_created_while_skipping_block_sync_
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: local_idx,
         bls_sig: Vec::new(),
@@ -20356,6 +20569,8 @@ async fn quorum_reschedule_requests_known_block_commit_qc_recovery() {
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: local_idx,
             bls_sig: Vec::new(),
@@ -20570,6 +20785,8 @@ async fn quorum_reschedule_near_quorum_rebroadcasts_votes_block_sync_and_block_c
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -20689,6 +20906,8 @@ async fn quorum_reschedule_rebroadcasts_votes_to_all_missing_targets() {
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -20894,6 +21113,8 @@ async fn quorum_reschedule_rotates_payload_backed_frontier_after_retransmit() {
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: local_idx,
             bls_sig: Vec::new(),
@@ -21063,6 +21284,8 @@ async fn quorum_reschedule_near_quorum_replays_votes_without_hydration_on_repeat
             height,
             view: view_idx,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -21407,7 +21630,15 @@ async fn quorum_reschedule_keeps_cached_commit_qc_on_drop() {
         &topology,
         &harness.key_pairs,
     );
-    let qc_key = (Phase::Commit, block_hash, height, 0, epoch);
+    let qc_key = (
+        Phase::Commit,
+        block_hash,
+        height,
+        0,
+        epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
+    );
     actor.qc_cache.insert(qc_key, qc);
     actor.qc_signer_tally.insert(
         qc_key,
@@ -21673,9 +21904,18 @@ async fn commit_pipeline_allows_tip_pending_with_cached_qc_without_proposal_evid
         &topology,
         &harness.key_pairs,
     );
-    actor
-        .qc_cache
-        .insert((Phase::Prepare, block_hash, 1, 0, epoch), qc);
+    actor.qc_cache.insert(
+        (
+            Phase::Prepare,
+            block_hash,
+            1,
+            0,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
+        qc,
+    );
 
     let mut has_vote = false;
     for _ in 0..8 {
@@ -22248,6 +22488,8 @@ async fn commit_pipeline_defers_higher_view_precommit_while_lower_view_vote_vali
         height,
         view: lower_view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: local_signer,
         bls_sig: Vec::new(),
@@ -22332,6 +22574,8 @@ async fn commit_pipeline_defers_higher_view_precommit_when_lower_view_vote_is_ca
         height,
         view: lower_view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: local_signer,
         bls_sig: Vec::new(),
@@ -22394,6 +22638,8 @@ async fn event_driven_precommit_defers_higher_view_when_lower_view_vote_is_cache
         height,
         view: lower_view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: local_signer,
         bls_sig: Vec::new(),
@@ -22463,6 +22709,8 @@ async fn commit_pipeline_allows_higher_view_precommit_when_only_remote_lower_vie
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -22549,6 +22797,8 @@ async fn event_driven_precommit_allows_higher_view_when_only_remote_lower_view_v
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -22644,6 +22894,8 @@ async fn event_driven_precommit_joins_higher_view_when_candidate_votes_outweigh_
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -22821,6 +23073,8 @@ async fn commit_pipeline_uses_commit_qc_roster_for_validation() {
         height,
         view,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&history_roster),
@@ -23004,6 +23258,8 @@ fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
                     height,
                     view,
                     epoch: 0,
+                    chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                    rechain_seq: 0,
                     mode_tag: PERMISSIONED_TAG.to_string(),
                     highest_qc: None,
                     validator_set_hash: HashOf::new(&roster),
@@ -23045,6 +23301,8 @@ fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
                     height,
                     view,
                     epoch: 0,
+                    chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                    rechain_seq: 0,
                     highest_qc: None,
                     signer: 0,
                     bls_sig: Vec::new(),
@@ -23160,6 +23418,8 @@ fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
                     height,
                     view,
                     epoch: 0,
+                    chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                    rechain_seq: 0,
                     mode_tag: PERMISSIONED_TAG.to_string(),
                     highest_qc: None,
                     validator_set_hash: HashOf::new(&validator_set),
@@ -23220,9 +23480,15 @@ fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
                     "commit pipeline should attempt QC rebuild"
                 );
                 assert!(
-                    actor
-                        .qc_cache
-                        .contains_key(&(Phase::Commit, block_hash, height, view, 0)),
+                    actor.qc_cache.contains_key(&(
+                        Phase::Commit,
+                        block_hash,
+                        height,
+                        view,
+                        0,
+                        crate::sumeragi::consensus::default_chain_order_hash(),
+                        0
+                    )),
                     "QC rebuild should run even when the active commit roster is empty"
                 );
 
@@ -23399,6 +23665,8 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
         height: deferred_height,
         view,
         epoch: deferred_epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -23470,9 +23738,18 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
             stake_snapshot: None,
         },
     );
-    actor
-        .qc_cache
-        .insert((Phase::Commit, block_hash, height, view, 0), cached_qc);
+    actor.qc_cache.insert(
+        (
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            0,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
+        cached_qc,
+    );
 
     let work = commit::CommitWork {
         id: 11,
@@ -23666,6 +23943,8 @@ async fn commit_outcome_persists_roster_sidecar_from_vote_log_and_flushes_fetch_
             height,
             view,
             epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: *signer,
             bls_sig: Vec::new(),
@@ -24015,6 +24294,8 @@ async fn commit_outcome_kickstarts_next_proposal_and_records_round_gap() {
         height,
         view,
         epoch: actor.epoch_for_height(height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: actor.mode_tag().to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&commit_topology),
@@ -24329,9 +24610,18 @@ async fn finalize_pending_block_uses_cached_vote_roster_for_commit_job() {
         &super::network_topology::Topology::new(expected_commit_topology.clone()),
         &harness.key_pairs,
     );
-    actor
-        .qc_cache
-        .insert((Phase::Commit, block_hash, height, view, epoch), qc);
+    actor.qc_cache.insert(
+        (
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
+        qc,
+    );
 
     let (work_tx, work_rx) = mpsc::sync_channel(1);
     let (_result_tx, result_rx) = mpsc::sync_channel(1);
@@ -24771,9 +25061,18 @@ async fn finalize_pending_block_commits_retired_same_height_without_conflicting_
         &topology,
         &harness.key_pairs,
     );
-    actor
-        .qc_cache
-        .insert((Phase::Commit, block_hash, height, 0, epoch), qc);
+    actor.qc_cache.insert(
+        (
+            Phase::Commit,
+            block_hash,
+            height,
+            0,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
+        qc,
+    );
 
     let lock = QcHeaderRef {
         phase: Phase::Commit,
@@ -24835,7 +25134,15 @@ async fn commit_pipeline_recovery_includes_certified_aborted_pending_block() {
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     actor.qc_cache.insert(
-        (Phase::Commit, block_hash, height, 0, epoch),
+        (
+            Phase::Commit,
+            block_hash,
+            height,
+            0,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
         qc_with_bitmap(
             &actor.common_config.chain,
             block_hash,
@@ -25032,7 +25339,15 @@ async fn finalize_pending_block_skips_frontier_reanchor_when_next_height_payload
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     actor.qc_cache.insert(
-        (Phase::Commit, block_hash, height, 0, epoch),
+        (
+            Phase::Commit,
+            block_hash,
+            height,
+            0,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
         qc_with_bitmap(
             &actor.common_config.chain,
             block_hash,
@@ -25065,6 +25380,8 @@ async fn finalize_pending_block_skips_frontier_reanchor_when_next_height_payload
             future_height,
             0,
             actor.epoch_for_height(future_height),
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
         ),
         qc_with_bitmap(
             &actor.common_config.chain,
@@ -25257,9 +25574,18 @@ async fn finalize_pending_block_commits_retired_same_height_with_conflicting_loc
         &topology,
         &harness.key_pairs,
     );
-    actor
-        .qc_cache
-        .insert((Phase::Commit, canonical_hash, height, 0, epoch), qc);
+    actor.qc_cache.insert(
+        (
+            Phase::Commit,
+            canonical_hash,
+            height,
+            0,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
+        qc,
+    );
 
     let lock = QcHeaderRef {
         phase: Phase::Commit,
@@ -28068,6 +28394,8 @@ async fn precommit_vote_skips_payload_fallback_across_rapid_votes_without_roster
         height: 1,
         view,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: u32::try_from(signer_idx).expect("signer index fits u32"),
         bls_sig: Vec::new(),
@@ -28083,6 +28411,8 @@ async fn precommit_vote_skips_payload_fallback_across_rapid_votes_without_roster
         height: 1,
         view,
         epoch: 1,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: u32::try_from(signer_idx).expect("signer index fits u32"),
         bls_sig: Vec::new(),
@@ -28250,6 +28580,8 @@ async fn precommit_vote_skips_payload_broadcast_for_aborted_pending() {
         height: 1,
         view,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: u32::try_from(signer_idx).expect("signer index fits u32"),
         bls_sig: Vec::new(),
@@ -28316,6 +28648,8 @@ async fn local_accepted_commit_vote_does_not_replay_known_block_evidence() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: ValidatorIndex::try_from(signer_idx).expect("signer index fits"),
         bls_sig: Vec::new(),
@@ -28694,6 +29028,8 @@ async fn known_block_commit_evidence_replay_uses_explicit_targets() {
             height: 2,
             view: 0,
             epoch: actor.epoch_for_height(2),
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: local_signer,
             bls_sig: Vec::new(),
@@ -29007,6 +29343,8 @@ async fn permissioned_initial_precommit_vote_fans_out_to_observed_voters() {
                 height,
                 view,
                 epoch,
+                chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                rechain_seq: 0,
                 highest_qc: None,
                 signer,
                 bls_sig: Vec::new(),
@@ -29230,6 +29568,8 @@ async fn known_block_commit_qc_replay_targets_snapshot_roster() {
             2,
             view_idx,
             actor.epoch_for_height(2),
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
         ),
         qc_with_bitmap(
             &actor.common_config.chain,
@@ -30481,6 +30821,8 @@ async fn precommit_vote_falls_back_to_seeded_collectors_when_quorum_targets_are_
                 height,
                 view,
                 epoch,
+                chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                rechain_seq: 0,
                 highest_qc: None,
                 signer,
                 bls_sig: Vec::new(),
@@ -30938,6 +31280,8 @@ async fn rebroadcast_block_votes_targets_snapshot_roster() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -31060,6 +31404,8 @@ async fn qc_broadcast_targets_snapshot_roster() {
             height,
             view: view_idx,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: u32::try_from(signer).expect("signer fits u32"),
             bls_sig: Vec::new(),
@@ -31214,6 +31560,8 @@ async fn materialize_qc_for_header_aggregates_votes() {
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: u32::try_from(signer_idx).expect("signer index fits u32"),
             bls_sig: Vec::new(),
@@ -31295,6 +31643,8 @@ async fn materialize_qc_for_header_requires_quorum() {
                 height,
                 view,
                 epoch,
+                chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                rechain_seq: 0,
                 highest_qc: None,
                 signer: u32::try_from(signer_idx).expect("signer index fits u32"),
                 bls_sig: Vec::new(),
@@ -31447,6 +31797,8 @@ async fn rebuild_qcs_from_cached_votes_uses_snapshot_roster() {
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: u32::try_from(signer).expect("signer fits u32"),
             bls_sig: Vec::new(),
@@ -31486,7 +31838,15 @@ async fn rebuild_qcs_from_cached_votes_uses_snapshot_roster() {
 
     actor.rebuild_qcs_from_cached_votes(&actor.effective_commit_topology());
 
-    let key = (Phase::Commit, block_hash, height, view, epoch);
+    let key = (
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
+    );
     let qc = actor
         .qc_cache
         .get(&key)
@@ -31569,6 +31929,8 @@ async fn rebuild_qcs_from_cached_votes_does_not_quarantine_uncommitted_sidecar_m
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -31693,6 +32055,8 @@ async fn rebuild_qcs_from_cached_votes_uses_new_view_roster_for_new_view_phase()
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: Some(highest_qc),
             signer: u32::try_from(signer).expect("signer fits u32"),
             bls_sig: Vec::new(),
@@ -31713,7 +32077,15 @@ async fn rebuild_qcs_from_cached_votes_uses_new_view_roster_for_new_view_phase()
 
     let rebuilt = actor
         .qc_cache
-        .get(&(Phase::NewView, target_parent_hash, height, view, epoch))
+        .get(&(
+            Phase::NewView,
+            target_parent_hash,
+            height,
+            view,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ))
         .expect("NewView QC rebuilt from cached votes");
     assert_eq!(
         rebuilt.validator_set, new_view_roster,
@@ -31797,6 +32169,8 @@ async fn rebuild_qcs_from_cached_votes_skips_npos_candidates_without_stake_quoru
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -31844,7 +32218,15 @@ async fn rebuild_qcs_from_cached_votes_skips_npos_candidates_without_stake_quoru
     );
     assert_eq!(snapshot.qc_rebuild_successes_total, 0);
 
-    let key = (Phase::Commit, block_hash, height, view, epoch);
+    let key = (
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
+    );
     assert!(
         !actor.qc_cache.contains_key(&key),
         "stake-insufficient NPoS replay must not cache a QC"
@@ -31994,9 +32376,15 @@ async fn precommit_qc_drops_when_conflicts_with_locked_chain() {
     actor.handle_qc(qc).expect("handle conflicting QC");
 
     assert!(
-        !actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, conflicting_block.hash(), 1, 1, 0)),
+        !actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            conflicting_block.hash(),
+            1,
+            1,
+            0,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "conflicting precommit QC should not be cached"
     );
     let locked = actor.locked_qc.expect("locked qc remains");
@@ -32345,6 +32733,8 @@ fn select_new_view_highest_qc_accepts_prepare() {
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: Some(highest_prepare),
             signer,
             bls_sig: Vec::new(),
@@ -32383,6 +32773,8 @@ fn select_new_view_highest_qc_accepts_prepare() {
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: Some(highest_commit),
             signer: commit_signer,
             bls_sig: Vec::new(),
@@ -32435,6 +32827,8 @@ fn new_view_highest_qc_signer_groups_require_exact_reference() {
                 height,
                 view,
                 epoch,
+                chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                rechain_seq: 0,
                 highest_qc: Some(highest_qc),
                 signer,
                 bls_sig: Vec::new(),
@@ -32502,6 +32896,8 @@ async fn try_form_qc_from_votes_skips_when_conflicts_locked_chain() {
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: u32::try_from(signer_idx).expect("signer index fits u32"),
             bls_sig: Vec::new(),
@@ -32516,7 +32912,9 @@ async fn try_form_qc_from_votes_skips_when_conflicts_locked_chain() {
             conflicting_block.hash(),
             height,
             view,
-            epoch
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
         )),
         "conflicting precommit QC should not be aggregated"
     );
@@ -32568,6 +32966,8 @@ async fn try_form_qc_from_votes_allows_newer_view_lock_override() {
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: u32::try_from(signer_idx).expect("signer index fits u32"),
             bls_sig: Vec::new(),
@@ -32582,7 +32982,9 @@ async fn try_form_qc_from_votes_allows_newer_view_lock_override() {
             conflicting_block.hash(),
             height,
             view,
-            epoch
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
         )),
         "newer-view conflicting precommit QC should aggregate via lock override"
     );
@@ -32639,6 +33041,8 @@ async fn try_form_qc_from_votes_keeps_commit_qc_when_higher_new_view_quorum_exis
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: u32::try_from(signer_idx).expect("signer index fits u32"),
             bls_sig: Vec::new(),
@@ -32648,9 +33052,15 @@ async fn try_form_qc_from_votes_keeps_commit_qc_when_higher_new_view_quorum_exis
     }
 
     assert!(
-        actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, block.hash(), height, view, epoch)),
+        actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            block.hash(),
+            height,
+            view,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "commit QC must still form when higher NEW_VIEW quorum exists"
     );
 
@@ -32688,6 +33098,8 @@ async fn try_form_qc_from_votes_skips_aborted_pending_on_tip() {
             height,
             view: u64::from(view),
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: u32::try_from(signer_idx).expect("signer index fits u32"),
             bls_sig: Vec::new(),
@@ -32697,9 +33109,15 @@ async fn try_form_qc_from_votes_skips_aborted_pending_on_tip() {
     }
 
     assert!(
-        !actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, block_hash, height, 0, epoch)),
+        !actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            block_hash,
+            height,
+            0,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "aborted pending blocks on tip must not aggregate QCs"
     );
 
@@ -32736,6 +33154,8 @@ async fn try_form_qc_from_votes_skips_aborted_pending_off_tip() {
             height,
             view: u64::from(view),
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: u32::try_from(signer_idx).expect("signer index fits u32"),
             bls_sig: Vec::new(),
@@ -32745,9 +33165,15 @@ async fn try_form_qc_from_votes_skips_aborted_pending_off_tip() {
     }
 
     assert!(
-        !actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, block_hash, height, 0, epoch)),
+        !actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            block_hash,
+            height,
+            0,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "aborted pending blocks off tip must not aggregate QCs"
     );
 
@@ -32780,6 +33206,8 @@ async fn handle_vote_prunes_committed_block_commit_vote() {
         height: 1,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -32874,6 +33302,8 @@ async fn npos_qc_uses_active_validator_roster_for_stake_quorum() {
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -32914,7 +33344,15 @@ async fn npos_qc_uses_active_validator_roster_for_stake_quorum() {
 
     actor.try_form_qc_from_votes(Phase::Commit, block_hash, height, view, epoch, &topology);
 
-    let key = (Phase::Commit, block_hash, height, view, epoch);
+    let key = (
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
+    );
     assert!(
         actor.qc_cache.contains_key(&key) || actor.deferred_qcs.contains_key(&key),
         "QC should aggregate or defer using active validator roster for stake quorum"
@@ -33008,6 +33446,8 @@ async fn npos_qc_uses_pending_activation_roster_for_stake_quorum() {
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -33065,7 +33505,15 @@ async fn npos_qc_uses_pending_activation_roster_for_stake_quorum() {
     actor.locked_qc = None;
     actor.try_form_qc_from_votes(phase, block_hash, height, view, epoch, &topology);
 
-    let key = (phase, block_hash, height, view, epoch);
+    let key = (
+        phase,
+        block_hash,
+        height,
+        view,
+        epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
+    );
     let qc = actor.qc_cache.get(&key).expect(
         "QC should aggregate when signers satisfy stake quorum over pending activation roster",
     );
@@ -33136,6 +33584,8 @@ async fn quorum_retransmit_targets_map_view_signers_to_canonical_peers() {
                 height,
                 view,
                 epoch,
+                chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                rechain_seq: 0,
                 highest_qc: None,
                 signer,
                 bls_sig: Vec::new(),
@@ -33214,6 +33664,8 @@ async fn quorum_retransmit_targets_expand_to_full_fanout_near_commit_quorum() {
                     height,
                     view,
                     epoch,
+                    chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                    rechain_seq: 0,
                     highest_qc: None,
                     signer,
                     bls_sig: Vec::new(),
@@ -33281,6 +33733,8 @@ async fn quorum_retransmit_targets_fall_back_to_full_fanout_when_signer_mapping_
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: invalid_signer,
             bls_sig: Vec::new(),
@@ -33338,6 +33792,8 @@ async fn handle_vote_defers_until_roster_available() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -33449,6 +33905,8 @@ async fn deferred_votes_replay_after_commit_roster_history_arrives() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -33493,6 +33951,8 @@ async fn deferred_votes_replay_after_commit_roster_history_arrives() {
         height: 2,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&history_roster),
@@ -33615,6 +34075,8 @@ async fn deferred_qcs_replay_after_commit_roster_history_arrives() {
         height: 5,
         view: 0,
         epoch: expected_epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&expected_roster),
@@ -33628,15 +34090,27 @@ async fn deferred_qcs_replay_after_commit_roster_history_arrives() {
 
     actor.handle_qc(qc.clone()).expect("qc handled");
     assert!(
-        actor
-            .deferred_qcs
-            .contains_key(&(Phase::Commit, hash_height5, 5, 0, expected_epoch)),
+        actor.deferred_qcs.contains_key(&(
+            Phase::Commit,
+            hash_height5,
+            5,
+            0,
+            expected_epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "QC should be deferred until roster history is available"
     );
     assert!(
-        !actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, hash_height5, 5, 0, expected_epoch)),
+        !actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            hash_height5,
+            5,
+            0,
+            expected_epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "deferred QC should not be cached yet"
     );
 
@@ -33667,6 +34141,8 @@ async fn deferred_qcs_replay_after_commit_roster_history_arrives() {
         height: 2,
         view: 0,
         epoch: history_epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&history_roster),
@@ -33693,7 +34169,15 @@ async fn deferred_qcs_replay_after_commit_roster_history_arrives() {
         derived_set, expected_set,
         "roster roll-forward should preserve expected membership"
     );
-    let deferred_key = (Phase::Commit, hash_height5, 5, 0, expected_epoch);
+    let deferred_key = (
+        Phase::Commit,
+        hash_height5,
+        5,
+        0,
+        expected_epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
+    );
     if let Some(deferred_qc) = actor.deferred_qcs.get_mut(&deferred_key) {
         if deferred_qc.validator_set != derived_roster {
             let mut replay_signers = BTreeSet::new();
@@ -33722,7 +34206,15 @@ async fn deferred_qcs_replay_after_commit_roster_history_arrives() {
     }
     let replayed = actor.try_replay_deferred_qcs();
     assert!(replayed, "expected deferred QCs to replay");
-    let qc_key = (Phase::Commit, hash_height5, 5, 0, expected_epoch);
+    let qc_key = (
+        Phase::Commit,
+        hash_height5,
+        5,
+        0,
+        expected_epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
+    );
     let qc_cached = actor.qc_cache.contains_key(&qc_key);
     let pending_snapshot = actor.pending.pending_blocks.get(&hash_height5);
     let pending_commit_seen = pending_snapshot.is_some_and(|pending| pending.commit_qc_observed());
@@ -33780,6 +34272,8 @@ async fn deferred_missing_payload_qc_expiry_is_bounded() {
         height: 2,
         view: 0,
         epoch: actor.epoch_for_height(2),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: "permissioned".to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
@@ -33872,6 +34366,8 @@ async fn deferred_missing_payload_qc_expiry_defers_while_dependency_progress_rec
         height,
         view,
         epoch: actor.epoch_for_height(height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: "permissioned".to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
@@ -33928,6 +34424,8 @@ async fn quarantined_block_sync_qc_expiry_is_bounded() {
         height: 2,
         view: 0,
         epoch: actor.epoch_for_height(2),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: "permissioned".to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
@@ -33997,6 +34495,8 @@ async fn deferred_roster_qc_expiry_routes_into_roster_unavailable_recovery() {
         height: qc_height,
         view: 0,
         epoch: actor.epoch_for_height(qc_height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: "permissioned".to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
@@ -34177,6 +34677,8 @@ async fn quarantined_block_sync_qc_expiry_with_empty_roster_routes_to_roster_rec
         height: block_height,
         view: block_view,
         epoch: actor.epoch_for_height(block_height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: "permissioned".to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
@@ -34716,6 +35218,8 @@ async fn handle_vote_drops_stale_height() {
         height: 1,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -34764,6 +35268,8 @@ async fn handle_vote_drops_below_locked_height() {
         height: 1,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -34823,6 +35329,8 @@ async fn handle_vote_drops_nonextending_precommit_for_known_block() {
         height: 3,
         view: 0,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -34866,6 +35374,8 @@ async fn handle_vote_drops_conflict_at_locked_height_when_lock_block_unknown() {
         height: 2,
         view: 1,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -34905,6 +35415,8 @@ async fn handle_vote_drops_epoch_mismatch() {
         height,
         view,
         epoch: mismatched_epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -34967,6 +35479,8 @@ async fn prune_precommit_votes_conflicting_with_lock_drops_known_conflicts() {
         height: 1,
         view: 0,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -34991,6 +35505,8 @@ async fn prune_precommit_votes_conflicting_with_lock_drops_known_conflicts() {
         height: 2,
         view: 0,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 1,
         bls_sig: Vec::new(),
@@ -35074,6 +35590,8 @@ async fn prune_precommit_votes_conflicting_with_lock_keeps_newer_view_override()
         height: 2,
         view: 0,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -35098,6 +35616,8 @@ async fn prune_precommit_votes_conflicting_with_lock_keeps_newer_view_override()
         height: 2,
         view: 1,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 1,
         bls_sig: Vec::new(),
@@ -35164,6 +35684,8 @@ async fn precommit_vote_filter_allows_newer_view_when_locked_payload_missing() {
         height: 3,
         view: 2,
         epoch: actor.epoch_for_height(3),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -35245,6 +35767,8 @@ async fn handle_precommit_vote_uses_roster_snapshot_after_topology_change() {
         height,
         view,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -35306,6 +35830,8 @@ async fn handle_precommit_vote_uses_roster_snapshot_after_topology_change() {
         height,
         view,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: signer_idx,
         bls_sig: Vec::new(),
@@ -35429,6 +35955,8 @@ async fn handle_qc_uses_roster_snapshot_after_topology_change() {
         height,
         view,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -35500,9 +36028,15 @@ async fn handle_qc_uses_roster_snapshot_after_topology_change() {
     actor.handle_qc(qc).expect("handle qc");
 
     assert!(
-        actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, block_hash, height, view, 0)),
+        actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            0,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "QC should use the persisted roster after topology change"
     );
 
@@ -35803,7 +36337,15 @@ async fn handle_qc_drops_empty_block_payload() {
 
     actor.handle_qc(qc).expect("handle qc");
 
-    let key = (Phase::Commit, block_hash, height, view, epoch);
+    let key = (
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
+    );
     assert!(
         !actor.qc_cache.contains_key(&key),
         "empty-block QC should be dropped before caching"
@@ -36114,6 +36656,8 @@ async fn handle_precommit_vote_accepts_stale_view_when_block_pending() {
         height,
         view,
         epoch: actor.epoch_for_height(height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -36171,6 +36715,8 @@ async fn handle_precommit_vote_accepts_stale_view_when_block_unknown_with_da() {
         height,
         view,
         epoch: actor.epoch_for_height(height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -36225,6 +36771,8 @@ async fn handle_vote_seeds_missing_block_fetch_when_roster_missing() {
         height,
         view,
         epoch: actor.epoch_for_height(height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -36303,6 +36851,8 @@ async fn handle_vote_seeds_missing_block_fetch_with_trusted_topology_fallback() 
         height,
         view,
         epoch: actor.epoch_for_height(height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -36769,9 +37319,15 @@ async fn handle_qc_accepts_stale_precommit_qc_for_unknown_block() {
 
     actor.handle_qc(qc).expect("precommit qc");
     assert!(
-        actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, block_hash, height, stale_view, 0)),
+        actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            block_hash,
+            height,
+            stale_view,
+            0,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "precommit QC should be cached for stale view"
     );
 
@@ -36823,9 +37379,15 @@ async fn block_created_applies_cached_precommit_qc() {
     );
     actor.handle_qc(qc).expect("handle qc");
     assert!(
-        actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, block_hash, height, view, epoch)),
+        actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "precommit QC should be cached for unknown block"
     );
     assert!(
@@ -36900,9 +37462,15 @@ async fn block_created_replays_cached_prepare_qc() {
     );
     actor.handle_qc(qc).expect("handle qc");
     assert!(
-        actor
-            .qc_cache
-            .contains_key(&(Phase::Prepare, block_hash, height, view, epoch)),
+        actor.qc_cache.contains_key(&(
+            Phase::Prepare,
+            block_hash,
+            height,
+            view,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "prepare QC should be cached for unknown block"
     );
     assert!(
@@ -37536,6 +38104,8 @@ async fn qc_missing_block_defer_inflight_fetch_suppresses_range_pull_escalation(
         height,
         view,
         epoch: actor.epoch_for_height(height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -50223,9 +50793,15 @@ async fn commit_qc_conflicting_retired_branch_is_dropped() {
         "dropped conflicting QC must not mark the retired branch as commit-certified"
     );
     assert!(
-        !actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, conflicting_hash, height, 1, epoch)),
+        !actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            conflicting_hash,
+            height,
+            1,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "conflicting QC must not enter the cache"
     );
 
@@ -50271,6 +50847,8 @@ async fn commit_qc_for_retired_branch_survives_non_signer_same_height_vote_evide
         height,
         view: conflicting_view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 2,
         bls_sig: Vec::new(),
@@ -50332,7 +50910,9 @@ async fn commit_qc_for_retired_branch_survives_non_signer_same_height_vote_evide
             canonical_hash,
             height,
             canonical_view,
-            epoch
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
         )),
         "accepted commit QC should remain cached for later finalize/sync work"
     );
@@ -50534,6 +51114,8 @@ async fn trim_block_sync_update_drops_commit_votes_to_fit() {
         height: block.header().height().get(),
         view: u64::from(block.header().view_change_index()),
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: vec![0u8; 4096],
@@ -50582,6 +51164,8 @@ async fn oversized_block_body_response_preserves_qc_as_direct_block_sync_update(
         height: block.header().height().get(),
         view: block.header().view_change_index(),
         epoch: actor.epoch_for_height(block.header().height().get()),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -50663,6 +51247,8 @@ async fn trim_block_sync_update_keeps_stake_snapshot_in_npos() {
         height: block.header().height().get(),
         view: block.header().view_change_index(),
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: NPOS_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -51070,7 +51656,15 @@ async fn stale_pending_block_requeues_transactions() {
         pending_hash,
         PendingBlock::new(pending_block, payload_hash, 2, 0),
     );
-    let qc_key = (Phase::Commit, pending_hash, 2, 0, 0);
+    let qc_key = (
+        Phase::Commit,
+        pending_hash,
+        2,
+        0,
+        0,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
+    );
     let validator_set = actor.effective_commit_topology();
     let mut signers = BTreeSet::new();
     signers.insert(ValidatorIndex::from(0_u16));
@@ -51085,6 +51679,8 @@ async fn stale_pending_block_requeues_transactions() {
             height: 2,
             view: 0,
             epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             mode_tag: PERMISSIONED_TAG.to_string(),
             highest_qc: None,
             validator_set_hash: HashOf::new(&validator_set),
@@ -51817,6 +52413,8 @@ fn block_sync_selection_prefers_paired_hints() {
         height: 3,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -51941,6 +52539,8 @@ fn block_sync_selection_uses_persisted_commit_roster_snapshot() {
         height: 3,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -52066,6 +52666,8 @@ fn block_sync_update_uses_journal_roster() {
         height,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -52197,6 +52799,8 @@ fn block_sync_update_includes_commit_qc_from_history() {
         height,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -53016,6 +53620,8 @@ fn block_sync_update_uses_history_after_restart_like_path() {
         height,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -53160,6 +53766,8 @@ fn block_sync_roster_rejects_invalid_hint_roster() {
         height: 9,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -53334,6 +53942,8 @@ fn block_sync_roster_selection_uses_persisted_journal() {
         height: 2,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -53461,6 +54071,8 @@ fn block_sync_roster_recovers_from_roster_sidecar_after_cache_reset() {
         height: 4,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -53604,6 +54216,8 @@ fn persisted_roster_sidecar_uses_artifact_view_when_requested_view_drifts() {
         height,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -53717,6 +54331,8 @@ fn sidecar_quarantine_disables_sidecar_roster_usage() {
         height,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -53814,6 +54430,8 @@ async fn same_height_no_proposal_storm_breaker_cleans_stale_state() {
         height,
         view,
         epoch: actor.epoch_for_height(height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
@@ -53901,7 +54519,7 @@ async fn same_height_no_proposal_storm_breaker_cleans_stale_state() {
         actor
             .deferred_missing_payload_qcs
             .keys()
-            .all(|(_, _, entry_height, _, _)| *entry_height != height),
+            .all(|(_, _, entry_height, _, _, _, _)| *entry_height != height),
         "storm breaker should purge stale same-height deferred missing-payload QCs"
     );
     assert!(
@@ -54471,6 +55089,8 @@ async fn seed_frontier_recovery_for_quorum_timeout_seeds_slot_from_same_height_v
         height,
         view,
         epoch: actor.epoch_for_height(height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -55181,6 +55801,8 @@ async fn frontier_recovery_suppresses_cleanup_while_same_slot_deferred_missing_p
         height,
         view,
         epoch: actor.epoch_for_height(height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
@@ -55275,6 +55897,8 @@ async fn frontier_recovery_suppresses_rotation_while_same_slot_deferred_missing_
         height,
         view,
         epoch: actor.epoch_for_height(height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
@@ -56521,6 +57145,8 @@ async fn payload_mismatch_bundle_clears_deferred_state_and_reanchors_canonical_f
         height,
         view,
         epoch: actor.epoch_for_height(height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
@@ -56591,7 +57217,7 @@ async fn payload_mismatch_bundle_clears_deferred_state_and_reanchors_canonical_f
         actor
             .deferred_missing_payload_qcs
             .keys()
-            .all(|(_, _, entry_height, _, _)| *entry_height != height),
+            .all(|(_, _, entry_height, _, _, _, _)| *entry_height != height),
         "payload mismatch bundle should purge stale same-height deferred missing-payload QCs"
     );
     assert!(
@@ -57105,6 +57731,8 @@ async fn sidecar_mismatch_repeated_tuple_is_obsolete_and_clears_stale_dependenci
             height,
             view,
             epoch: actor.epoch_for_height(height),
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             mode_tag: mode_tag.to_string(),
             highest_qc: None,
             validator_set_hash: HashOf::new(&validator_set),
@@ -58228,6 +58856,8 @@ async fn request_missing_parent_uses_deferred_qc_hint_for_exact_frontier_owner()
         height: parent_height,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&commit_topology),
@@ -58619,6 +59249,8 @@ fn block_sync_update_includes_persisted_roster_artifacts() {
         height: 6,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -58826,6 +59458,8 @@ fn validate_commit_qc_roster_accepts_valid_cert() {
         height: 1,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&vec![peer.clone()]),
@@ -58877,6 +59511,8 @@ fn validate_commit_qc_roster_accepts_genesis_stub_when_allowed() {
         height: 1,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&vec![peer.clone()]),
@@ -58940,6 +59576,8 @@ fn validate_commit_qc_roster_cached_memoizes() {
         height: 1,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&vec![peer.clone()]),
@@ -59110,6 +59748,8 @@ fn validate_commit_qc_roster_rejects_hash_version_mismatch() {
         height: 2,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&vec![peer.clone()]),
@@ -59180,6 +59820,8 @@ fn validate_commit_qc_roster_rejects_height_mismatch() {
         height: 3,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&vec![peer.clone()]),
@@ -59250,6 +59892,8 @@ fn validate_commit_qc_roster_rejects_view_mismatch() {
         height: 4,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&vec![peer.clone()]),
@@ -59320,6 +59964,8 @@ fn validate_commit_qc_roster_rejects_epoch_mismatch() {
         height: 5,
         view: 0,
         epoch: 1,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&vec![peer.clone()]),
@@ -59390,6 +60036,8 @@ fn validate_commit_qc_roster_rejects_phase_mismatch() {
         height: 6,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&vec![peer.clone()]),
@@ -59511,6 +60159,8 @@ fn validate_commit_qc_roster_rejects_mode_tag_mismatch() {
         height: 6,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::NPOS_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&vec![peer.clone()]),
@@ -59581,6 +60231,8 @@ fn validate_commit_qc_roster_rejects_invalid_signature() {
         height: 7,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&vec![peer.clone()]),
@@ -59651,6 +60303,8 @@ fn validate_commit_qc_roster_rejects_missing_pop() {
         height: 8,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&vec![peer.clone()]),
@@ -59724,6 +60378,8 @@ fn validate_commit_qc_roster_falls_back_without_stake_snapshot() {
         height: 1,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::NPOS_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&vec![peer.clone()]),
@@ -59935,6 +60591,8 @@ fn validate_commit_qc_roster_requires_stake_quorum() {
         height: 1,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::NPOS_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -60161,6 +60819,8 @@ fn selection_from_roster_artifacts_accepts_unsigned_genesis_roster_sidecar() {
         height: 1,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -60228,6 +60888,8 @@ fn selection_from_roster_artifacts_rejects_unsigned_genesis_qc_hint() {
         height: 1,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&vec![peer.clone()]),
@@ -60487,6 +61149,8 @@ fn selection_from_roster_artifacts_uses_commit_cert_epoch_for_checkpoint() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::NPOS_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -63261,6 +63925,8 @@ async fn frontier_stall_reset_prunes_far_future_state_and_reanchors_range_pull()
         height: deferred_qc_height,
         view: 0,
         epoch: actor.epoch_for_height(deferred_qc_height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
@@ -63341,7 +64007,7 @@ async fn frontier_stall_reset_prunes_far_future_state_and_reanchors_range_pull()
         actor
             .deferred_missing_payload_qcs
             .keys()
-            .all(|(_, _, height, _, _)| *height <= prune_threshold),
+            .all(|(_, _, height, _, _, _, _)| *height <= prune_threshold),
         "frontier reset should prune far-future deferred missing-payload QCs"
     );
     assert!(
@@ -63697,6 +64363,8 @@ async fn frontier_stall_reanchors_stale_vote_backed_owner_and_clears_non_actiona
             height: frontier_height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: local_idx,
             bls_sig: Vec::new(),
@@ -63734,6 +64402,8 @@ async fn frontier_stall_reanchors_stale_vote_backed_owner_and_clears_non_actiona
         height: frontier_height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: "permissioned".to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
@@ -65654,6 +66324,8 @@ async fn lock_lag_recovery_uses_cached_qc_head_and_exact_frontier_body_repair() 
             cached_height,
             cached_view,
             cached_epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
         ),
         cached_qc,
     );
@@ -66810,6 +67482,8 @@ async fn deferred_qc_replay_under_catchup_stall_prioritizes_frontier_and_throttl
             height,
             view: 0,
             epoch: actor.epoch_for_height(height),
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             mode_tag: super::PERMISSIONED_TAG.to_string(),
             highest_qc: None,
             validator_set_hash: HashOf::new(&roster),
@@ -68699,6 +69373,8 @@ async fn missing_qc_height_stall_mode_ignores_superseded_same_height_dependencie
         height,
         view: stale_view,
         epoch: actor.epoch_for_height(height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: "permissioned".to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
@@ -69369,6 +70045,8 @@ async fn deferred_missing_payload_qc_replay_respects_same_height_stall_window_pa
         height,
         view,
         epoch: actor.epoch_for_height(height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
@@ -70788,6 +71466,8 @@ async fn has_commit_phase_missing_qc_dependency_ignores_deferred_payload_already
         height,
         0,
         actor.epoch_for_height(height),
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
     );
 
     actor.deferred_missing_payload_qcs.insert(
@@ -70801,6 +71481,8 @@ async fn has_commit_phase_missing_qc_dependency_ignores_deferred_payload_already
                 height,
                 view: 0,
                 epoch: actor.epoch_for_height(height),
+                chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                rechain_seq: 0,
                 mode_tag: mode_tag.to_string(),
                 highest_qc: None,
                 validator_set_hash: HashOf::from_untyped_unchecked(Hash::prehashed(
@@ -78330,6 +79012,8 @@ async fn vote_log_prunes_far_future_heights() {
         height: active_height,
         view: current_view,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: vec![0_u8; 96],
@@ -78348,6 +79032,8 @@ async fn vote_log_prunes_far_future_heights() {
         height: far_height,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: vec![0_u8; 96],
@@ -78433,6 +79119,8 @@ async fn vote_log_prunes_far_future_views_for_active_height() {
         height: active_height,
         view: current_view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: local_idx,
         bls_sig: vec![0_u8; 96],
@@ -78451,6 +79139,8 @@ async fn vote_log_prunes_far_future_views_for_active_height() {
         height: active_height,
         view: far_view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: remote_idx,
         bls_sig: vec![0_u8; 96],
@@ -78531,6 +79221,8 @@ async fn vote_log_preserves_far_future_views_for_active_height_local_votes() {
         height: active_height,
         view: far_view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: local_idx,
         bls_sig: vec![0_u8; 96],
@@ -78622,6 +79314,8 @@ async fn vote_log_preserves_stale_remote_votes_for_active_pending_block() {
         height: active_height,
         view: stale_view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: remote_idx,
         bls_sig: vec![0_u8; 96],
@@ -78686,6 +79380,8 @@ async fn vote_log_preserves_far_future_new_view_votes_for_active_height() {
         height: active_height,
         view: far_view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: Some(QcHeaderRef {
             subject_block_hash: far_block.hash(),
             height: committed_height,
@@ -78738,6 +79434,8 @@ async fn vote_log_prunes_far_stale_new_view_votes_for_active_height() {
         height: active_height,
         view: stale_view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: Some(QcHeaderRef {
             subject_block_hash: highest_hash,
             height: committed_height,
@@ -78996,6 +79694,8 @@ async fn trigger_view_change_uses_commit_qc_roster_for_new_view_vote() {
         height: 2,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&history_roster),
@@ -81080,6 +81780,8 @@ async fn force_view_change_if_idle_suppresses_missing_qc_round_stale_against_cac
             cached_height,
             cached_view,
             cached_epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
         ),
         cached_qc,
     );
@@ -82749,6 +83451,8 @@ async fn force_view_change_if_idle_routes_empty_frontier_vote_evidence_through_q
         height,
         view: current_view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: mode_tag.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -82759,9 +83463,18 @@ async fn force_view_change_if_idle_routes_empty_frontier_vote_evidence_through_q
             bls_aggregate_signature: vec![0xAB],
         },
     };
-    actor
-        .qc_cache
-        .insert((Phase::Commit, block_hash, height, current_view, epoch), qc);
+    actor.qc_cache.insert(
+        (
+            Phase::Commit,
+            block_hash,
+            height,
+            current_view,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
+        qc,
+    );
     assert!(
         actor.pending.pending_blocks.is_empty(),
         "test requires empty-frontier state without pending blocks"
@@ -82887,6 +83600,8 @@ async fn force_view_change_if_idle_rotates_empty_frontier_local_same_height_vote
             height,
             view: current_view,
             epoch: actor.epoch_for_height(height),
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: local_signer,
             bls_sig: Vec::new(),
@@ -82958,6 +83673,8 @@ async fn round_liveness_ignores_prior_view_local_same_height_vote() {
             height,
             view: vote_view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: local_signer,
             bls_sig: Vec::new(),
@@ -83058,6 +83775,8 @@ async fn force_view_change_if_idle_rotates_empty_frontier_local_vote_evidence_wi
             height,
             view: current_view,
             epoch: actor.epoch_for_height(height),
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: local_signer,
             bls_sig: Vec::new(),
@@ -83085,6 +83804,8 @@ async fn force_view_change_if_idle_rotates_empty_frontier_local_vote_evidence_wi
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: Some(highest_qc),
             signer,
             bls_sig: Vec::new(),
@@ -83295,6 +84016,8 @@ async fn force_view_change_if_idle_routes_empty_frontier_missing_qc_with_remote_
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: Some(committed_qc),
             signer,
             bls_sig: Vec::new(),
@@ -89401,6 +90124,8 @@ async fn proposal_backpressure_allows_fast_path_without_votes() {
         height,
         view: view_idx,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -89810,6 +90535,8 @@ async fn proposal_yields_local_voted_stale_frontier_owner_without_quorum_lock() 
             height: frontier_height,
             view: owner_view,
             epoch: actor.epoch_for_height(frontier_height),
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: local_signer,
             bls_sig: Vec::new(),
@@ -89923,6 +90650,8 @@ async fn local_same_height_vote_allows_hard_stale_active_tip_owner_without_qc_lo
             height: frontier_height,
             view: owner_view,
             epoch: actor.epoch_for_height(frontier_height),
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: local_signer,
             bls_sig: Vec::new(),
@@ -90604,6 +91333,8 @@ async fn pacemaker_assembles_after_hard_stale_active_tip_owner_without_qc_lock()
             height: frontier_height,
             view: owner_view,
             epoch: actor.epoch_for_height(frontier_height),
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: local_signer,
             bls_sig: Vec::new(),
@@ -92243,6 +92974,8 @@ fn stale_qc_candidates_detects_missing_qc() {
             height: 4,
             view: 2,
             epoch: 1,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
@@ -92255,6 +92988,8 @@ fn stale_qc_candidates_detects_missing_qc() {
             height: 4,
             view: 2,
             epoch: 1,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: 1,
             bls_sig: Vec::new(),
@@ -92267,6 +93002,8 @@ fn stale_qc_candidates_detects_missing_qc() {
             height: 4,
             view: 2,
             epoch: 1,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: 1,
             bls_sig: Vec::new(),
@@ -92279,7 +93016,18 @@ fn stale_qc_candidates_detects_missing_qc() {
     assert_eq!(candidates.len(), 1);
     let (key, count) = &candidates[0];
     assert_eq!(*count, 2);
-    assert_eq!(*key, (Phase::Commit, block_hash, 4, 2, 1));
+    assert_eq!(
+        *key,
+        (
+            Phase::Commit,
+            block_hash,
+            4,
+            2,
+            1,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )
+    );
 }
 
 #[test]
@@ -92297,6 +93045,8 @@ fn stale_qc_candidates_skip_unknown_and_present_qcs() {
             height: 6,
             view: 1,
             epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
@@ -92309,6 +93059,8 @@ fn stale_qc_candidates_skip_unknown_and_present_qcs() {
             height: 7,
             view: 1,
             epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: 1,
             bls_sig: Vec::new(),
@@ -92319,7 +93071,7 @@ fn stale_qc_candidates_skip_unknown_and_present_qcs() {
         votes.iter(),
         1,
         |hash| hash == known,
-        |(phase, hash, _, _, _)| *phase == Phase::Prepare && *hash == known,
+        |(phase, hash, _, _, _, _, _)| *phase == Phase::Prepare && *hash == known,
     );
 
     assert!(candidates.is_empty());
@@ -92381,6 +93133,8 @@ fn aggregate_qc_from_votes_for_test(
         height: filter.height,
         view: filter.view,
         epoch: filter.epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -92409,6 +93163,8 @@ fn rebuild_qc_from_votes_forms_qc_when_cache_missing() {
             height: 2,
             view: 1,
             epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -92461,6 +93217,8 @@ fn rebuild_qc_from_votes_rejects_invalid_signature() {
         height: 3,
         view: 2,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -92477,6 +93235,8 @@ fn rebuild_qc_from_votes_rejects_invalid_signature() {
         height: 3,
         view: 2,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 1,
         bls_sig: Vec::new(),
@@ -92520,6 +93280,8 @@ fn rebuild_qc_from_votes_rejects_signature_from_wrong_peer() {
         height: 4,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -92536,6 +93298,8 @@ fn rebuild_qc_from_votes_rejects_signature_from_wrong_peer() {
         height: 4,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 1,
         bls_sig: Vec::new(),
@@ -92598,6 +93362,8 @@ fn rebuild_qc_from_votes_ignores_other_phase_votes() {
             height: 4,
             view: 1,
             epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -92639,6 +93405,8 @@ fn rebuild_qc_candidates_updates_status_and_cache() {
         height: 5,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -92652,10 +93420,18 @@ fn rebuild_qc_candidates_updates_status_and_cache() {
         |candidate| candidate == hash,
         |_key| false,
         |key, _signers| {
-            let (phase, block_hash, height, view, epoch) = key;
+            let (phase, block_hash, height, view, epoch, chain_order_hash, rechain_seq) = key;
             super::status::inc_qc_rebuild_attempts();
             qc_cache.insert(
-                (phase, block_hash, height, view, epoch),
+                (
+                    phase,
+                    block_hash,
+                    height,
+                    view,
+                    epoch,
+                    chain_order_hash,
+                    rechain_seq,
+                ),
                 qc_with_bitmap(
                     &chain,
                     block_hash,
@@ -92677,7 +93453,15 @@ fn rebuild_qc_candidates_updates_status_and_cache() {
     assert_eq!(snapshot.qc_rebuild_successes_total, 1);
     assert_eq!(candidates.len(), 1);
     assert_eq!(qc_cache.len(), 1);
-    assert!(qc_cache.contains_key(&(Phase::Commit, hash, 5, 1, 0)));
+    assert!(qc_cache.contains_key(&(
+        Phase::Commit,
+        hash,
+        5,
+        1,
+        0,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0
+    )));
 }
 
 #[test]
@@ -92695,6 +93479,8 @@ fn rebuild_qc_candidates_skip_unknown_block_and_present_qc() {
             height: 7,
             view: 1,
             epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
@@ -92707,6 +93493,8 @@ fn rebuild_qc_candidates_skip_unknown_block_and_present_qc() {
             height: 7,
             view: 1,
             epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: 1,
             bls_sig: Vec::new(),
@@ -92736,7 +93524,7 @@ fn rebuild_qc_candidates_skip_unknown_block_and_present_qc() {
         votes.iter(),
         1,
         |hash| hash == known,
-        |(phase, hash, _, _, _)| *phase == Phase::Commit && *hash == known,
+        |(phase, hash, _, _, _, _, _)| *phase == Phase::Commit && *hash == known,
         |key, _count| handled.push(key),
     );
 
@@ -92763,6 +93551,8 @@ fn rebuild_qc_candidates_enforces_quorum_requirement() {
         height: 4,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -92800,6 +93590,8 @@ fn vote_signature_valid_accepts_signed_vote() {
         height: 5,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -92832,6 +93624,8 @@ fn vote_signature_valid_rejects_invalid_bls_signature() {
         height: 5,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -92867,6 +93661,8 @@ fn vote_signature_valid_rejects_out_of_range_signer() {
         height: 5,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 5, // out of bounds
         bls_sig: Vec::new(),
@@ -92898,6 +93694,8 @@ fn vote_signature_check_reports_out_of_range_error() {
         height: 2,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 5,
         bls_sig: Vec::new(),
@@ -92945,6 +93743,8 @@ async fn qc_signers_for_votes_revalidates_on_roster_hash_mismatch() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -93069,6 +93869,8 @@ async fn qc_signers_for_votes_uses_mode_aware_membership_hash_for_rotated_views(
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -93144,6 +93946,8 @@ async fn qc_signers_for_votes_skips_membership_hash_mismatch() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -93234,6 +94038,8 @@ async fn qc_signers_for_votes_keeps_lower_view_vote_after_higher_view_vote() {
         height,
         view: 0,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0, // canonical signer index (mapped below)
         bls_sig: Vec::new(),
@@ -93269,6 +94075,8 @@ async fn qc_signers_for_votes_keeps_lower_view_vote_after_higher_view_vote() {
         height,
         view: 1,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0, // canonical signer index (mapped below)
         bls_sig: Vec::new(),
@@ -93384,6 +94192,8 @@ async fn qc_signers_for_votes_does_not_ignore_lower_view_vote_from_other_peer() 
         height,
         view: 0,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -93405,6 +94215,8 @@ async fn qc_signers_for_votes_does_not_ignore_lower_view_vote_from_other_peer() 
         height,
         view: 1,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -93517,6 +94329,8 @@ async fn try_form_qc_from_votes_rejects_cross_view_conflicting_commit_quorums() 
             height,
             view: view_high,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: canonical_signer,
             bls_sig: Vec::new(),
@@ -93553,6 +94367,8 @@ async fn try_form_qc_from_votes_rejects_cross_view_conflicting_commit_quorums() 
             height,
             view: view_low,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: canonical_signer,
             bls_sig: Vec::new(),
@@ -93600,15 +94416,27 @@ async fn try_form_qc_from_votes_rejects_cross_view_conflicting_commit_quorums() 
     );
 
     assert!(
-        !actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, block_hash_low, height, view_low, epoch)),
+        !actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            block_hash_low,
+            height,
+            view_low,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "lower-view conflicting commit quorum must not aggregate once the same peers also vote for another hash"
     );
     assert!(
-        !actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, block_hash_high, height, view_high, epoch)),
+        !actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            block_hash_high,
+            height,
+            view_high,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "higher-view conflicting commit quorum must not aggregate from the same signer set"
     );
 
@@ -93644,6 +94472,8 @@ async fn validate_and_record_vote_rejects_cross_view_conflicting_commit_vote_for
         height,
         view: 0,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -93676,6 +94506,8 @@ async fn validate_and_record_vote_rejects_cross_view_conflicting_commit_vote_for
         height,
         view: 1,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -93774,6 +94606,8 @@ async fn validate_and_record_vote_rejects_non_new_view_highest_qc() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: Some(QcHeaderRef {
             subject_block_hash: block_hash,
             height: height.saturating_sub(1),
@@ -93838,6 +94672,8 @@ async fn validate_and_record_vote_rejects_cross_view_conflicting_prepare_vote_fo
         height,
         view: 0,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -93870,6 +94706,8 @@ async fn validate_and_record_vote_rejects_cross_view_conflicting_prepare_vote_fo
         height,
         view: 1,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -93968,6 +94806,8 @@ async fn validate_and_record_vote_rejects_same_view_conflicting_commit_vote_and_
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -94093,6 +94933,8 @@ async fn split_view_conflicting_commit_votes_cannot_form_second_quorum() {
             height,
             view: view_low,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: u32::try_from(signer).expect("signer index fits u32"),
             bls_sig: Vec::new(),
@@ -94131,7 +94973,15 @@ async fn split_view_conflicting_commit_votes_cannot_form_second_quorum() {
         &harness.key_pairs,
     );
     actor.qc_cache.insert(
-        (Phase::Commit, block_low.hash(), height, view_low, epoch),
+        (
+            Phase::Commit,
+            block_low.hash(),
+            height,
+            view_low,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
         low_qc,
     );
 
@@ -94162,6 +95012,8 @@ async fn split_view_conflicting_commit_votes_cannot_form_second_quorum() {
             height,
             view: view_high,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: u32::try_from(signer).expect("signer index fits u32"),
             bls_sig: Vec::new(),
@@ -94200,15 +95052,27 @@ async fn split_view_conflicting_commit_votes_cannot_form_second_quorum() {
         "reused signer peers must not record a conflicting higher-view commit branch"
     );
     assert!(
-        actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, block_low.hash(), height, view_low, epoch)),
+        actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            block_low.hash(),
+            height,
+            view_low,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "the first branch should still aggregate a commit QC"
     );
     assert!(
-        !actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, block_high.hash(), height, view_high, epoch)),
+        !actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            block_high.hash(),
+            height,
+            view_high,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "a second conflicting commit QC must not form from the same honest signer set"
     );
 
@@ -94232,6 +95096,8 @@ fn new_view_highest_qc_accepts_prepare_or_commit() {
         height: 2,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -94364,6 +95230,8 @@ fn qc_validation_error_builds_invalid_qc_evidence() {
         height: 2,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -94426,6 +95294,8 @@ fn qc_validation_missing_votes_does_not_emit_evidence() {
         height: 2,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -94460,6 +95330,8 @@ fn validate_qc_with_evidence_emits_invalid_qc_evidence() {
         height: 4,
         view: 2,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -94605,6 +95477,8 @@ fn qc_with_bitmap_and_highest(
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc,
         validator_set_hash: HashOf::new(&canonical_topology.as_ref().to_vec()),
@@ -94643,7 +95517,15 @@ fn cache_prepare_qc_for_block(
         keypairs,
     );
     actor.qc_cache.insert(
-        (Phase::Prepare, block_hash, height, view, epoch),
+        (
+            Phase::Prepare,
+            block_hash,
+            height,
+            view,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
         prepare_qc,
     );
 }
@@ -94687,6 +95569,8 @@ fn cache_new_view_qc_for_frontier(
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: Some(highest_qc),
             signer,
             bls_sig: Vec::new(),
@@ -94740,7 +95624,7 @@ fn cache_new_view_qc_for_frontier(
     let cached_new_view_keys: Vec<_> = actor
         .qc_cache
         .keys()
-        .filter(|(phase, _, _, _, _)| *phase == Phase::NewView)
+        .filter(|(phase, _, _, _, _, _, _)| *phase == Phase::NewView)
         .copied()
         .collect();
     assert!(
@@ -94750,6 +95634,8 @@ fn cache_new_view_qc_for_frontier(
             height,
             view,
             epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
         )),
         "test setup requires cached NEW_VIEW QC; recorded_votes={recorded_votes}, qc_signers={}, cached_new_view_keys={cached_new_view_keys:?}",
         qc_signers.len(),
@@ -94821,6 +95707,8 @@ fn validate_qc_against_votes_rejects_new_view_missing_highest_qc() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: Some(highest_qc),
         signer,
         bls_sig: Vec::new(),
@@ -94891,6 +95779,8 @@ fn validate_qc_against_votes_rejects_new_view_highest_hash_mismatch() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: Some(highest_qc),
         signer,
         bls_sig: Vec::new(),
@@ -94969,6 +95859,8 @@ fn validate_qc_against_votes_accepts_new_view_prepare_highest() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: Some(highest_qc),
         signer,
         bls_sig: Vec::new(),
@@ -95041,6 +95933,8 @@ fn validate_qc_against_votes_rejects_new_view_vote_highest_mismatch() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: Some(lower_highest),
         signer,
         bls_sig: Vec::new(),
@@ -95155,6 +96049,8 @@ fn validate_qc_against_votes_falls_back_without_stake_snapshot() {
         height: 1,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::NPOS_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -95278,6 +96174,8 @@ async fn recover_qc_from_aggregate_rejects_new_view_highest_epoch_mismatch() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: Some(highest_qc),
         validator_set_hash: HashOf::new(&validator_set),
@@ -95355,6 +96253,8 @@ async fn handle_qc_rejects_new_view_highest_epoch_mismatch() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::NPOS_TAG.to_string(),
         highest_qc: Some(highest_qc),
         validator_set_hash: HashOf::new(&validator_set),
@@ -95368,7 +96268,15 @@ async fn handle_qc_rejects_new_view_highest_epoch_mismatch() {
 
     actor.handle_qc(qc).expect("handle qc");
 
-    let key = (Phase::NewView, block_hash, height, view, epoch);
+    let key = (
+        Phase::NewView,
+        block_hash,
+        height,
+        view,
+        epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
+    );
     assert!(
         !actor.qc_cache.contains_key(&key),
         "mismatched highest epoch should drop NEW_VIEW QC"
@@ -95424,6 +96332,8 @@ async fn handle_qc_rejects_new_view_highest_view_mismatch_when_parent_known() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: Some(highest_qc),
         validator_set_hash: HashOf::new(&validator_set),
@@ -95437,7 +96347,15 @@ async fn handle_qc_rejects_new_view_highest_view_mismatch_when_parent_known() {
 
     actor.handle_qc(qc).expect("handle qc");
 
-    let key = (Phase::NewView, parent_block.hash(), height, view, epoch);
+    let key = (
+        Phase::NewView,
+        parent_block.hash(),
+        height,
+        view,
+        epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
+    );
     assert!(
         !actor.qc_cache.contains_key(&key),
         "highest view mismatch should drop NEW_VIEW QC"
@@ -95475,6 +96393,8 @@ fn validate_qc_against_votes_rejects_missing_stake_quorum() {
         height: 1,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::NPOS_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -95578,6 +96498,8 @@ async fn roster_for_vote_prefers_snapshot_for_committed_height() {
         height,
         view,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -95712,6 +96634,8 @@ async fn roster_for_vote_uses_commit_qc_history_for_next_height() {
         height: 4,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -95790,6 +96714,8 @@ async fn roster_for_vote_uses_commit_qc_history_when_lagging() {
         height: 4,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&history_roster),
@@ -95877,6 +96803,8 @@ async fn roster_for_vote_rolls_forward_with_pending_parent_chain() {
         height: 2,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&history_roster),
@@ -96067,6 +96995,8 @@ async fn new_view_votes_use_commit_qc_history_for_height() {
         height: 2,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&history_roster),
@@ -96100,6 +97030,8 @@ async fn new_view_votes_use_commit_qc_history_for_height() {
         height: 3,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: Some(highest_qc),
         signer: 0,
         bls_sig: Vec::new(),
@@ -96196,6 +97128,8 @@ async fn new_view_tracker_counts_local_with_rotated_indices() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: Some(highest_qc),
         signer: local_idx,
         bls_sig: Vec::new(),
@@ -96272,6 +97206,8 @@ async fn new_view_vote_rejects_mismatched_highest_block_hash() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: Some(highest_qc),
         signer,
         bls_sig: Vec::new(),
@@ -96328,6 +97264,8 @@ async fn new_view_vote_rejects_mismatched_highest_height() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: Some(highest_qc),
         signer,
         bls_sig: Vec::new(),
@@ -96392,6 +97330,8 @@ async fn new_view_vote_accepts_prepare_highest_next_height() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: Some(highest_qc),
         signer,
         bls_sig: Vec::new(),
@@ -96452,6 +97392,8 @@ async fn new_view_vote_rejects_mismatched_highest_epoch() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: Some(highest_qc),
         signer,
         bls_sig: Vec::new(),
@@ -96520,6 +97462,8 @@ async fn new_view_vote_rejects_mismatched_highest_view_when_parent_known() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: Some(highest_qc),
         signer,
         bls_sig: Vec::new(),
@@ -96584,6 +97528,8 @@ async fn stale_new_view_vote_updates_highest_qc_without_tracking() {
         height,
         view: stale_view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: Some(highest_qc),
         signer,
         bls_sig: Vec::new(),
@@ -96727,6 +97673,8 @@ async fn stale_new_view_votes_still_form_qc_after_local_view_advance() {
         height,
         stale_view,
         epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
     );
 
     for signer in remote_signers {
@@ -96738,6 +97686,8 @@ async fn stale_new_view_votes_still_form_qc_after_local_view_advance() {
             height,
             view: stale_view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: Some(highest_qc),
             signer,
             bls_sig: Vec::new(),
@@ -96837,6 +97787,8 @@ async fn future_new_view_votes_still_form_qc_when_local_view_lags() {
         height,
         far_view,
         epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
     );
 
     for signer in remote_signers {
@@ -96848,6 +97800,8 @@ async fn future_new_view_votes_still_form_qc_when_local_view_lags() {
             height,
             view: far_view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: Some(highest_qc),
             signer,
             bls_sig: Vec::new(),
@@ -96957,6 +97911,8 @@ async fn future_new_view_commit_quorum_advances_local_view_and_emits_vote() {
             height,
             view: future_view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: Some(highest_qc),
             signer: remote_signer,
             bls_sig: Vec::new(),
@@ -97086,6 +98042,8 @@ async fn future_new_view_support_beyond_window_does_not_advance_local_view() {
         height,
         view: future_view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: Some(highest_qc),
         signer: remote_signer,
         bls_sig: Vec::new(),
@@ -97612,6 +98570,8 @@ async fn replay_deferred_missing_payload_qcs_drops_obsolete_new_view_committed_c
         height: round_height,
         view: 0,
         epoch: actor.epoch_for_height(round_height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: mode_tag.to_string(),
         highest_qc: Some(QcHeaderRef {
             phase: Phase::Commit,
@@ -97634,6 +98594,8 @@ async fn replay_deferred_missing_payload_qcs_drops_obsolete_new_view_committed_c
         qc.height,
         qc.view,
         qc.epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
     );
     actor.deferred_missing_payload_qcs.insert(
         key,
@@ -97730,6 +98692,8 @@ async fn replay_deferred_qcs_drops_obsolete_new_view_committed_conflicts() {
         height: round_height,
         view: 0,
         epoch: actor.epoch_for_height(round_height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: mode_tag.to_string(),
         highest_qc: Some(QcHeaderRef {
             phase: Phase::Commit,
@@ -97752,6 +98716,8 @@ async fn replay_deferred_qcs_drops_obsolete_new_view_committed_conflicts() {
         qc.height,
         qc.view,
         qc.epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
     );
     actor.deferred_qcs.insert(key, qc);
     actor.deferred_qc_roster_state.insert(
@@ -99406,6 +100372,8 @@ async fn new_view_roster_rolls_forward_from_commit_qc_history() {
         height: 2,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -99490,6 +100458,8 @@ async fn new_view_roster_ignores_commit_qc_hash_mismatch() {
         height: 2,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -99520,6 +100490,8 @@ async fn new_view_roster_ignores_commit_qc_hash_mismatch() {
         height: 2,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -99623,6 +100595,8 @@ async fn new_view_roster_prefers_active_topology_at_next_height() {
         height: 2,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&active_roster),
@@ -99912,6 +100886,8 @@ async fn vote_roster_empty_when_parent_hash_known_but_history_mismatched() {
         height: 5,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -100038,6 +101014,8 @@ async fn handle_evidence_uses_subject_height_prf_seed() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -100050,6 +101028,8 @@ async fn handle_evidence_uses_subject_height_prf_seed() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -100135,6 +101115,8 @@ async fn handle_evidence_uses_subject_height_mode_tag() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -100147,6 +101129,8 @@ async fn handle_evidence_uses_subject_height_mode_tag() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -100264,6 +101248,8 @@ async fn handle_vote_uses_height_prf_seed() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -100347,6 +101333,8 @@ async fn inbound_vote_processes_committed_epoch_rollover_before_validation() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: Some(QcHeaderRef {
             phase: Phase::Commit,
             subject_block_hash: genesis_hash,
@@ -100470,6 +101458,8 @@ async fn handle_vote_uses_activation_height_mode_tag() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -100621,6 +101611,8 @@ async fn handle_qc_uses_height_prf_seed() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::NPOS_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&topology_peers),
@@ -100658,6 +101650,8 @@ async fn handle_qc_uses_height_prf_seed() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::NPOS_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&topology_peers),
@@ -100676,6 +101670,8 @@ async fn handle_qc_uses_height_prf_seed() {
         qc.height,
         qc.view,
         qc.epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
     );
     assert!(actor.qc_cache.contains_key(&key), "QC should be cached");
     harness.shutdown.send();
@@ -100773,6 +101769,8 @@ async fn handle_qc_uses_activation_height_mode_tag() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::NPOS_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&commit_topology),
@@ -100810,6 +101808,8 @@ async fn handle_qc_uses_activation_height_mode_tag() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::NPOS_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&commit_topology),
@@ -100870,6 +101870,8 @@ async fn handle_qc_uses_activation_height_mode_tag() {
         qc.height,
         qc.view,
         qc.epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
     );
     assert!(
         actor.qc_cache.contains_key(&key),
@@ -101657,6 +102659,8 @@ async fn assemble_proposal_defers_while_same_height_vote_verification_is_pending
         height,
         view: prior_view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -102481,6 +103485,8 @@ async fn assemble_proposal_uses_roster_history_for_previous_roster_evidence() {
         height: parent_height,
         view: parent_view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -103607,6 +104613,8 @@ async fn pacemaker_single_validator_seeds_new_view_from_precommit_qc() {
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -104589,14 +105597,7 @@ async fn pacemaker_bootstraps_missing_qc_frontier_after_proposal_ingress_goes_st
         super::status::ConsensusMessageKind::Proposal,
         None,
     );
-    assert_eq!(
-        super::status::backdate_worker_queue_slot_ingress_for_tests(
-            tracked_height,
-            view,
-            ingress_grace.saturating_add(Duration::from_millis(1)),
-        ),
-        1
-    );
+    let _stale_ingress_age = ingress_grace.saturating_add(Duration::from_millis(1));
 
     assert_eq!(
         actor
@@ -105719,6 +106720,8 @@ async fn missing_qc_view_advance_preserves_local_same_height_vote_history_for_st
         height: tracked_height,
         view: 0,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: local_signer,
         bls_sig: Vec::new(),
@@ -105799,6 +106802,8 @@ async fn local_same_height_vote_for_committed_parent_does_not_block_same_view_pr
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: local_signer,
             bls_sig: Vec::new(),
@@ -106272,6 +107277,8 @@ async fn fresh_proposal_defers_when_split_same_height_votes_make_new_branch_non_
             height,
             view: view_idx,
             epoch: actor.epoch_for_height(height),
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -106747,6 +107754,8 @@ async fn remote_precommit_allows_new_view_qc_to_supersede_raw_same_height_signer
         height,
         view: fresh_view,
         epoch: actor.epoch_for_height(height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -107086,6 +108095,8 @@ async fn frontier_slot_live_local_owner_for_round_ignores_local_vote_history_whe
             height,
             view: owner_view,
             epoch: actor.epoch_for_height(height),
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
@@ -107456,6 +108467,8 @@ async fn frontier_slot_has_local_vote_history_in_slot_uses_live_local_signer_whe
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: ValidatorIndex::try_from(local_idx).expect("local signer fits u32"),
         bls_sig: Vec::new(),
@@ -107531,6 +108544,8 @@ async fn frontier_slot_has_local_vote_history_in_slot_ignores_unresolved_signer_
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: ValidatorIndex::try_from(unresolved_remote_idx)
             .expect("unresolved non-local signer fits u32"),
@@ -108818,6 +109833,8 @@ async fn pacemaker_defers_proposal_when_precommit_votes_present() {
             height: tracked_height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: sender_a_idx,
             bls_sig: Vec::new(),
@@ -108942,6 +109959,8 @@ async fn pacemaker_defers_proposal_when_precommit_votes_in_prior_epoch() {
             height: tracked_height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: sender_a_idx,
             bls_sig: Vec::new(),
@@ -109059,6 +110078,8 @@ async fn pacemaker_allows_proposal_with_unknown_precommit_votes() {
             height: tracked_height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: sender_a_idx,
             bls_sig: Vec::new(),
@@ -109398,6 +110419,8 @@ async fn pacemaker_routes_stale_cached_slot_with_precommit_votes_through_frontie
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: sender_a_idx,
             bls_sig: Vec::new(),
@@ -109858,6 +110881,8 @@ async fn pacemaker_ignores_commit_qc_roster_for_leader_selection() {
         height: 2,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&qc_roster),
@@ -110034,6 +111059,8 @@ async fn npos_commit_qc_roster_roll_forward_canonicalizes_order() {
         height: 2,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::NPOS_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -110346,6 +111373,8 @@ async fn vote_roster_for_next_height_prefers_active_topology_over_commit_qc_hist
         height: committed_height,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&stale_roster),
@@ -110494,6 +111523,8 @@ async fn handle_vote_uses_cached_roster_for_frontier_commit_vote_validation() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -110756,6 +111787,8 @@ async fn commit_qc_roll_forward_prefers_active_roster_when_keys_disabled() {
             height: 2,
             view: 0,
             epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             mode_tag: PERMISSIONED_TAG.to_string(),
             highest_qc: None,
             validator_set_hash: HashOf::new(&validator_set),
@@ -111265,6 +112298,8 @@ async fn pacemaker_allows_proposal_with_stale_precommit_votes() {
             height: tracked_height,
             view: stale_view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: sender_a_idx,
             bls_sig: Vec::new(),
@@ -111844,6 +112879,8 @@ async fn precommit_vote_ignores_remote_same_height_vote_when_cached_roster_diffe
             height,
             view: remote_view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: remote_signer,
             bls_sig: vec![0_u8; 96],
@@ -111970,6 +113007,8 @@ async fn maybe_emit_local_commit_vote_ignores_remote_same_index_vote_when_cached
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: remote_signer,
         bls_sig: Vec::new(),
@@ -112193,6 +113232,8 @@ async fn pending_validation_preserves_same_slot_signature_collisions_until_ident
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: remote_signer,
         bls_sig: Vec::new(),
@@ -112223,6 +113264,8 @@ async fn pending_validation_preserves_same_slot_signature_collisions_until_ident
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: local_signer,
         bls_sig: Vec::new(),
@@ -112342,7 +113385,15 @@ async fn stale_block_created_keeps_committed_qcs() {
         &topology,
         &harness.key_pairs,
     );
-    let key = (Phase::Commit, block2.hash(), 2, 0, 0);
+    let key = (
+        Phase::Commit,
+        block2.hash(),
+        2,
+        0,
+        0,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
+    );
     actor.qc_cache.insert(key, qc);
 
     let stale_block =
@@ -112648,6 +113699,8 @@ async fn stale_vote_backed_block_created_supersedes_live_owner_without_local_vot
         height,
         view: lower_view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -113159,7 +114212,15 @@ async fn block_created_drops_empty_payload() {
         &topology,
         &harness.key_pairs,
     );
-    let key = (Phase::Commit, block_hash, height, view, epoch);
+    let key = (
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
+    );
     actor.qc_cache.insert(key, qc);
     let mut signers = BTreeSet::new();
     signers.insert(ValidatorIndex::try_from(0).expect("signer index fits"));
@@ -113240,6 +114301,8 @@ async fn qc_drop_empty_block_clears_votes_and_pending() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: ValidatorIndex::try_from(0).expect("signer index fits"),
         bls_sig: Vec::new(),
@@ -113316,6 +114379,8 @@ async fn new_view_qc_for_empty_highest_block_is_not_dropped() {
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: Some(highest_qc),
             signer,
             bls_sig: Vec::new(),
@@ -113330,6 +114395,8 @@ async fn new_view_qc_for_empty_highest_block_is_not_dropped() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: Some(highest_qc),
         validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
@@ -115265,6 +116332,8 @@ fn setup_snapshot_roster_block_created(
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: mode_tag.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&snapshot_roster),
@@ -115351,6 +116420,8 @@ async fn block_created_stores_pending_without_commit_quorum() {
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: u32::try_from(signer).expect("signer fits u32"),
             bls_sig: Vec::new(),
@@ -115409,7 +116480,15 @@ async fn block_created_stores_pending_without_commit_quorum() {
         actor.pending.pending_blocks.contains_key(&block_hash),
         "BlockCreated should store the pending block without commit quorum"
     );
-    let qc_key = (Phase::Commit, block_hash, height, view, epoch);
+    let qc_key = (
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
+    );
     assert!(
         actor.qc_cache.get(&qc_key).is_none(),
         "QC should not be cached without commit quorum"
@@ -115450,6 +116529,8 @@ async fn block_created_rebuilds_qc_with_snapshot_roster() {
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: u32::try_from(signer).expect("signer fits u32"),
             bls_sig: Vec::new(),
@@ -115508,7 +116589,15 @@ async fn block_created_rebuilds_qc_with_snapshot_roster() {
             .expect("handle BlockCreated");
     }
 
-    let key = (Phase::Commit, block_hash, height, view, epoch);
+    let key = (
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
+    );
     let qc = actor
         .qc_cache
         .get(&key)
@@ -117631,6 +118720,8 @@ async fn later_view_block_created_conflicts_with_stale_frontier_owner_backed_onl
             height,
             view: owner_view,
             epoch: actor.epoch_for_height(height),
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
@@ -118276,6 +119367,8 @@ async fn frontier_hard_cap_cleanup_preserves_quorum_backed_missing_payload_state
         height: frontier_height,
         view,
         epoch: actor.epoch_for_height(frontier_height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: mode_tag.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -118293,6 +119386,8 @@ async fn frontier_hard_cap_cleanup_preserves_quorum_backed_missing_payload_state
             frontier_height,
             view,
             commit_qc.epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
         ),
         commit_qc,
     );
@@ -121699,7 +122794,15 @@ async fn frontier_block_sync_commit_qc_replays_deferred_missing_payload_qc_when_
         qc.validator_set_hash_version,
         None,
     );
-    let cache_key = (Phase::Commit, block_hash, height, view, epoch);
+    let cache_key = (
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
+    );
     let mut update = super::message::BlockSyncUpdate::from(&block);
     update.commit_qc = Some(qc);
     update.validator_checkpoint = Some(checkpoint);
@@ -121802,7 +122905,15 @@ async fn frontier_block_sync_checkpoint_only_replays_deferred_missing_payload_qc
         qc.validator_set_hash_version,
         None,
     );
-    let cache_key = (Phase::Commit, block_hash, height, view, epoch);
+    let cache_key = (
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
+    );
     let mut update = super::message::BlockSyncUpdate::from(&block);
     update.commit_qc = None;
     update.validator_checkpoint = Some(checkpoint);
@@ -122146,9 +123257,15 @@ async fn block_sync_update_checkpoint_only_synthesizes_qc_without_missing_reques
         "checkpoint-only block sync update should materialize the block locally"
     );
     assert!(
-        actor
-            .qc_cache
-            .contains_key(&(Phase::Commit, block_hash, height, view, epoch)),
+        actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0
+        )),
         "checkpoint-only block sync update should synthesize and cache a commit QC on the generic path"
     );
 
@@ -122767,6 +123884,8 @@ async fn block_created_uses_snapshot_roster_for_missing_parent_when_active_empty
         height: block_height,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -123447,7 +124566,15 @@ async fn commit_qc_dispatches_validation_to_worker_when_no_inflight() {
         &commit_topology,
     );
     actor.qc_cache.insert(
-        (Phase::Commit, block_hash, height, view, qc.epoch),
+        (
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            qc.epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
         qc.clone(),
     );
 
@@ -123525,7 +124652,15 @@ async fn commit_qc_keeps_fresh_inflight_validation_deferred_past_inline_fallback
         &commit_topology,
     );
     actor.qc_cache.insert(
-        (Phase::Commit, block_hash, height, view, qc.epoch),
+        (
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            qc.epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
         qc.clone(),
     );
 
@@ -123600,7 +124735,15 @@ async fn commit_qc_recovers_from_stale_inflight_validation_inline() {
         &commit_topology,
     );
     actor.qc_cache.insert(
-        (Phase::Commit, block_hash, height, view, qc.epoch),
+        (
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            qc.epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
         qc.clone(),
     );
 
@@ -124286,6 +125429,8 @@ fn validate_qc_rejects_missing_votes_even_with_consistent_aggregate() {
         height: qc.height,
         view: qc.view,
         epoch: qc.epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -124441,6 +125586,8 @@ fn validate_npos_new_view_qc_rejects_highest_qc_substitution() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::NPOS_TAG.to_string(),
         highest_qc: Some(substituted_highest),
         validator_set_hash: HashOf::new(&validator_set),
@@ -124535,6 +125682,8 @@ fn validate_qc_rejects_aggregate_mismatch() {
         height: 2,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -124621,6 +125770,8 @@ fn validate_qc_against_votes_requires_quorum() {
             height: qc.height,
             view: qc.view,
             epoch: qc.epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -124669,6 +125820,8 @@ fn validate_qc_against_votes_rejects_empty_bitmap() {
         height: 2,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&topology.as_ref().to_vec()),
@@ -124724,6 +125877,8 @@ fn validate_qc_against_votes_rejects_epoch_mismatch() {
         height: qc.height,
         view: qc.view,
         epoch: 0, // mismatched epoch vs QC
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -124778,6 +125933,8 @@ fn validate_qc_against_votes_rejects_view_mismatch() {
         height: qc.height,
         view: 1, // mismatched view vs QC
         epoch: qc.epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -124822,6 +125979,8 @@ fn validate_qc_against_votes_rejects_bitmap_longer_than_roster() {
         height: 2,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&topology.as_ref().to_vec()),
@@ -124898,6 +126057,8 @@ async fn drop_missing_lock_if_unknown_requests_payload_and_retains_lock() {
         height: lock.height.saturating_add(1),
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -124980,6 +126141,8 @@ async fn drop_missing_lock_if_unknown_suppresses_stale_frontier_conflict_as_obso
         height: incoming_height,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&roster),
@@ -125098,6 +126261,8 @@ fn validate_qc_against_votes_rejects_old_epoch_after_roster_change() {
         height: 5,
         view: 2,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -125131,6 +126296,8 @@ fn validate_qc_against_votes_rejects_old_epoch_after_roster_change() {
             height: qc.height,
             view: qc.view,
             epoch: qc.epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -125186,6 +126353,8 @@ fn validate_qc_against_votes_rejects_sparse_high_bit() {
         height: 4,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -125249,6 +126418,8 @@ fn validate_block_sync_qc_rejects_bitmap_length_mismatch() {
         height: 3,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -125328,6 +126499,8 @@ fn validate_block_sync_qc_rejects_aggregate_mismatch() {
         height: 3,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -125680,6 +126853,8 @@ fn validate_block_sync_qc_rejects_view_mismatch_in_permissioned_mode() {
         height: 7,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -125753,6 +126928,8 @@ fn validate_block_sync_qc_falls_back_without_stake_snapshot() {
         height: 3,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::NPOS_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -125822,6 +126999,8 @@ fn validate_block_sync_qc_rejects_missing_stake_quorum() {
         height: 3,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::NPOS_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -125955,6 +127134,8 @@ fn validate_block_sync_qc_accepts_trimmed_block_signatures() {
         height: 4,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -126321,6 +127502,8 @@ fn validate_block_sync_qc_accepts_valid_bitmap_and_block_signers() {
         height: 5,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -126390,6 +127573,8 @@ fn validate_block_sync_qc_accepts_any_quorum_signers() {
         height: 5,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -126516,6 +127701,8 @@ fn validate_block_sync_qc_accepts_npos_rotated_signers_across_views() {
         height,
         view: qc_view,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::NPOS_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -127160,6 +128347,8 @@ fn validate_block_sync_qc_allows_signer_missing_from_block() {
         height: 7,
         view: 3,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -127234,6 +128423,8 @@ fn tally_qc_against_votes_counts_full_roster() {
             height: qc.height,
             view: qc.view,
             epoch: qc.epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -127312,6 +128503,8 @@ fn tally_qc_against_votes_rejects_wrong_signature_key() {
         height: qc.height,
         view: qc.view,
         epoch: qc.epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -127337,6 +128530,8 @@ fn tally_qc_against_votes_rejects_wrong_signature_key() {
         height: qc.height,
         view: qc.view,
         epoch: qc.epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 1,
         bls_sig: Vec::new(),
@@ -127449,6 +128644,8 @@ fn tally_qc_against_block_signers_accepts_without_votes() {
         height: 4,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -127519,6 +128716,8 @@ fn tally_qc_against_block_signers_accepts_aggregate_override() {
         height: 3,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -127643,6 +128842,8 @@ fn validate_qc_against_votes_accepts_single_node_quorum() {
         height: qc.height,
         view: qc.view,
         epoch: qc.epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -127737,6 +128938,8 @@ fn validate_qc_against_votes_accepts_any_quorum_signers() {
             height: qc.height,
             view: qc.view,
             epoch: qc.epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -127834,6 +129037,8 @@ fn bitmap_count_matches_min_votes_for_commit() {
             height: qc.height,
             view: qc.view,
             epoch: qc.epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -127895,6 +129100,8 @@ fn validate_qc_against_votes_rejects_duplicate_signer_bits() {
         height: qc.height,
         view: qc.view,
         epoch: qc.epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -128491,6 +129698,8 @@ fn validate_qc_against_votes_rejects_bitmap_length_mismatch() {
         height: 1,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -128537,6 +129746,8 @@ fn validate_qc_against_votes_rejects_out_of_bounds_signer() {
         height: 1,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -128600,6 +129811,8 @@ fn validate_qc_against_votes_accepts_full_bitmap_with_all_votes_present() {
             height: qc.height,
             view: qc.view,
             epoch: qc.epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -128660,6 +129873,8 @@ fn validate_qc_against_votes_rejects_invalid_signature() {
         height: qc.height,
         view: qc.view,
         epoch: qc.epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -128685,6 +129900,8 @@ fn validate_qc_against_votes_rejects_invalid_signature() {
         height: qc.height,
         view: qc.view,
         epoch: qc.epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 1,
         bls_sig: Vec::new(),
@@ -128755,6 +129972,8 @@ fn validate_qc_against_votes_rejects_signature_from_wrong_signer_key() {
         height: qc.height,
         view: qc.view,
         epoch: qc.epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -128804,6 +130023,8 @@ fn validate_qc_against_votes_rejects_signature_from_wrong_signer_key() {
         height: qc.height,
         view: qc.view,
         epoch: qc.epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 1,
         bls_sig: Vec::new(),
@@ -128880,6 +130101,8 @@ fn validate_qc_against_votes_records_invalid_signature_reason_for_mismatched_sig
         height: qc.height,
         view: qc.view,
         epoch: qc.epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -128929,6 +130152,8 @@ fn validate_qc_against_votes_records_invalid_signature_reason_for_mismatched_sig
         height: qc.height,
         view: qc.view,
         epoch: qc.epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 1,
         bls_sig: Vec::new(),
@@ -128997,6 +130222,8 @@ fn validate_qc_against_votes_fuzzes_mismatched_signers_and_tags_telemetry() {
         height: 5,
         view: 2,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -129079,6 +130306,8 @@ fn validate_qc_against_votes_fuzzes_mismatched_signers_and_tags_telemetry() {
                 height: qc.height,
                 view: qc.view,
                 epoch: qc.epoch,
+                chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                rechain_seq: 0,
                 highest_qc: None,
                 signer: u32::try_from(view_idx).expect("view index fits u32"),
                 bls_sig: Vec::new(),
@@ -129154,6 +130383,8 @@ fn validate_qc_against_votes_rejects_high_bit_bitmap_and_records_reason() {
         height: 3,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -129242,6 +130473,8 @@ fn validate_qc_against_votes_rejects_subject_mismatch() {
         height: qc.height,
         view: qc.view,
         epoch: qc.epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -129299,6 +130532,8 @@ fn validate_qc_against_votes_rejects_state_root_mismatch() {
         height: qc.height,
         view: qc.view,
         epoch: qc.epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -129386,6 +130621,8 @@ fn validate_qc_against_votes_rejects_replayed_roster_with_new_keys() {
         height: 3,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -129419,6 +130656,8 @@ fn validate_qc_against_votes_rejects_replayed_roster_with_new_keys() {
             height: qc.height,
             view: qc.view,
             epoch: qc.epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -129498,6 +130737,8 @@ fn validate_qc_against_votes_accepts_signed_votes() {
             height: qc.height,
             view: qc.view,
             epoch: qc.epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -129551,6 +130792,8 @@ fn validate_qc_against_votes_accepts_preverified_aggregate() {
             height: qc.height,
             view: qc.view,
             epoch: qc.epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -129599,6 +130842,8 @@ fn validate_qc_against_votes_rotates_topology_for_view() {
         height: 2,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -129613,6 +130858,8 @@ fn validate_qc_against_votes_rotates_topology_for_view() {
         height: 2,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 1,
         bls_sig: Vec::new(),
@@ -129642,6 +130889,8 @@ fn validate_qc_against_votes_rotates_topology_for_view() {
         height: 2,
         view: 1,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: super::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -132217,6 +133466,8 @@ async fn precommit_vote_broadcast_uses_background_queue() {
         height: 1,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -132265,6 +133516,8 @@ async fn qc_vote_post_bypasses_background_queue() {
         height: 1,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -132361,6 +133614,8 @@ async fn qc_post_bypasses_background_queue() {
         height: 1,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
@@ -132527,6 +133782,8 @@ async fn background_posts_dispatch_inline_when_worker_disabled() {
         height: 1,
         view: 0,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -134717,6 +135974,8 @@ async fn stake_quorum_timeout_skips_noop_reschedule_with_full_signer_set() {
             height,
             view: view_idx,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -134950,7 +136209,15 @@ async fn zero_vote_quorum_timeout_seeds_slot_from_same_height_commit_qc_for_othe
         &harness.key_pairs,
     );
     actor.qc_cache.insert(
-        (Phase::Commit, committed_hash, height, committed_view, epoch),
+        (
+            Phase::Commit,
+            committed_hash,
+            height,
+            committed_view,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
         commit_qc,
     );
 
@@ -135805,6 +137072,8 @@ async fn reschedule_defers_vote_backed_quorum_timeout_while_validation_inflight(
         height,
         view: view_idx,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -136016,6 +137285,8 @@ async fn reschedule_contiguous_frontier_retransmits_later_view_pending_despite_s
             height,
             view: active_view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: local_idx,
             bls_sig: Vec::new(),
@@ -136488,6 +137759,8 @@ async fn reschedule_defers_near_commit_quorum_while_rbc_chunks_arrive() {
             height,
             view: view_idx,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -136605,6 +137878,8 @@ async fn reschedule_defers_near_commit_quorum_while_block_queue_backlogged() {
             height,
             view: view_idx,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -136722,6 +137997,8 @@ async fn reschedule_defers_near_commit_quorum_with_recent_progress_without_backl
             height,
             view: view_idx,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -136907,6 +138184,8 @@ async fn reschedule_uses_reduced_timeout_for_near_quorum_missing_payload() {
             height,
             view: view_idx,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -137019,6 +138298,8 @@ async fn reschedule_near_quorum_reduced_timeout_is_suppressed_by_queue_backlog()
             height,
             view: view_idx,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -137456,6 +138737,8 @@ async fn reschedule_ignores_vote_backed_quorum_timeout_rbc_queue_backlog() {
         height,
         view: view_idx,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -137568,6 +138851,8 @@ async fn reschedule_skips_vote_backed_quorum_timeout_while_progress_is_recent() 
         height,
         view: view_idx,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -137659,6 +138944,8 @@ async fn reschedule_rearms_repeated_vote_backed_quorum_timeout_at_terminal_heigh
         height,
         view: view_idx,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -137793,6 +139080,8 @@ async fn reschedule_preemptively_retransmits_single_vote_frontier_once_fast_wind
         height,
         view: view_idx,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -137923,6 +139212,8 @@ async fn reschedule_single_vote_frontier_retransmits_before_full_quorum_timeout(
         height,
         view: view_idx,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -138054,6 +139345,8 @@ async fn reschedule_vote_backed_frontier_retransmits_block_created_to_missing_vo
         height,
         view: view_idx,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -138214,6 +139507,8 @@ async fn reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_w
         height,
         view: view_idx,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -138379,6 +139674,8 @@ async fn reschedule_skips_vote_backed_retransmit_while_same_height_rbc_sender_ac
         height,
         view: view_idx,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -138787,6 +140084,8 @@ async fn reschedule_defers_vote_backed_quorum_timeout_while_vote_queue_backlogge
         height,
         view: view_idx,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer,
         bls_sig: Vec::new(),
@@ -139112,6 +140411,8 @@ async fn reschedule_stale_pending_blocks_retains_aborted_with_votes() {
         height: committed_height,
         view: view_idx,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -139426,9 +140727,18 @@ async fn reschedule_stale_pending_blocks_skips_when_commit_qc_cached() {
         &topology,
         &harness.key_pairs,
     );
-    actor
-        .qc_cache
-        .insert((Phase::Commit, block_hash, height, view_idx, epoch), qc);
+    actor.qc_cache.insert(
+        (
+            Phase::Commit,
+            block_hash,
+            height,
+            view_idx,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
+        qc,
+    );
 
     actor.reschedule_stale_pending_blocks(None);
 
@@ -140147,6 +141457,8 @@ async fn commit_pipeline_rebroadcasts_cached_votes_to_quorum_retransmit_targets(
                 height,
                 view,
                 epoch,
+                chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                rechain_seq: 0,
                 highest_qc: None,
                 signer,
                 bls_sig: Vec::new(),
@@ -140658,6 +141970,8 @@ fn precommit_vote_count_ignores_non_precommit_qc() {
         height: 4,
         view: 2,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: validator_set_hash.clone(),
@@ -140676,6 +141990,8 @@ fn precommit_vote_count_ignores_non_precommit_qc() {
         height: 4,
         view: 2,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash,
@@ -142247,6 +143563,8 @@ async fn conflicting_vote_does_not_override_first() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -142287,6 +143605,8 @@ async fn conflicting_vote_does_not_override_first() {
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -142347,6 +143667,8 @@ async fn conflicting_commit_vote_across_views_is_dropped_for_same_signer_peer() 
         height,
         view: 0,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -142362,6 +143684,8 @@ async fn conflicting_commit_vote_across_views_is_dropped_for_same_signer_peer() 
         height,
         view: 1,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -142434,6 +143758,8 @@ async fn conflicting_commit_vote_across_views_defers_until_new_view_context() {
         height,
         view: 0,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -142449,6 +143775,8 @@ async fn conflicting_commit_vote_across_views_defers_until_new_view_context() {
         height,
         view: 1,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -142572,6 +143900,8 @@ async fn commit_qc_uses_exec_roots_from_view_votes() {
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: ValidatorIndex::try_from(idx).expect("signer index fits"),
             bls_sig: Vec::new(),
@@ -142593,6 +143923,8 @@ async fn commit_qc_uses_exec_roots_from_view_votes() {
         height,
         view,
         epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
     );
     let qc = actor
         .qc_cache
@@ -142651,6 +143983,8 @@ async fn stale_view_accepts_precommit_vote_when_missing_block_requested() {
         height,
         view: stale_view,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -142730,6 +144064,8 @@ async fn stale_view_async_commit_votes_for_known_pending_block_still_form_qc() {
             height,
             view,
             epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: u32::try_from(signer_idx).expect("signer index fits u32"),
             bls_sig: Vec::new(),
@@ -142754,7 +144090,15 @@ async fn stale_view_async_commit_votes_for_known_pending_block_still_form_qc() {
     actor.phase_tracker.start_new_round(height, now);
     actor.phase_tracker.on_view_change(height, 1, now);
 
-    let qc_key = (Phase::Commit, block_hash, height, view, epoch);
+    let qc_key = (
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
+    );
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         while actor.poll_vote_verify_results() {}
@@ -142928,6 +144272,8 @@ async fn stale_view_drops_precommit_vote_when_missing_block_request_is_non_actio
         height,
         view: stale_view,
         epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -143352,6 +144698,8 @@ async fn block_sync_update_contiguous_frontier_with_commit_votes_still_routes_pa
         height,
         view: 0,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -143426,6 +144774,8 @@ async fn block_sync_update_stale_frontier_with_commit_votes_keeps_recovery_activ
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 1,
         bls_sig: Vec::new(),
@@ -143537,6 +144887,8 @@ async fn block_created_stale_frontier_with_recorded_commit_votes_recovers_local_
         height,
         view,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 1,
         bls_sig: Vec::new(),
@@ -144346,6 +145698,8 @@ async fn block_sync_payload_with_cached_commit_qc_supersedes_lock_conflicting_st
             qc.height,
             qc.view,
             qc.epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
         ),
         qc,
     );
@@ -144619,6 +145973,8 @@ async fn block_sync_update_accepts_partial_vote_sparse_recovery_for_explicit_mis
         height,
         view: 0,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -144685,6 +146041,8 @@ async fn block_sync_update_tracks_missing_qc_for_unknown_frontier_vote_only_upda
         height,
         view: 0,
         epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -145157,6 +146515,8 @@ async fn block_sync_update_accepts_stale_view_with_commit_votes() {
             height,
             view: stale_view,
             epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: *signer,
             bls_sig: Vec::new(),

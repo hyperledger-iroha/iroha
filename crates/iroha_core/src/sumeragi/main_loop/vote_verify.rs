@@ -650,6 +650,8 @@ mod tests {
                     height: 1,
                     view: 0,
                     epoch: 0,
+                    chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                    rechain_seq: 0,
                     highest_qc: None,
                     signer: idx as u32,
                     bls_sig: Vec::new(),

@@ -4208,6 +4208,8 @@ mod tests {
             height: 3,
             view: 0,
             epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
@@ -4292,16 +4294,7 @@ mod tests {
         let mut vote_log = BTreeMap::new();
         let vote = sample_vote(block_hash);
         vote_log.insert(vote_key(&vote), vote.clone());
-        let qc_cache: BTreeMap<
-            (
-                crate::sumeragi::consensus::Phase,
-                HashOf<BlockHeader>,
-                u64,
-                u64,
-                u64,
-            ),
-            crate::sumeragi::consensus::Qc,
-        > = BTreeMap::new();
+        let qc_cache: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc> = BTreeMap::new();
 
         let (trusted, me_id) = trusted_self();
         let roster_cache = {
