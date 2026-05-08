@@ -6008,6 +6008,12 @@ impl Actor {
                     super::status::ConsensusMessageOutcome::Dropped,
                     super::status::ConsensusMessageReason::Duplicate,
                 );
+                if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+                    self.clear_missing_commit_qc_request(
+                        &qc.subject_block_hash,
+                        MissingBlockClearReason::Obsolete,
+                    );
+                }
                 return Ok(());
             }
         }
@@ -6472,6 +6478,10 @@ impl Actor {
                     self.state
                         .record_commit_roster(&qc, &checkpoint, stake_snapshot);
                     super::status::record_commit_qc(qc.clone());
+                    self.clear_missing_commit_qc_request(
+                        &qc.subject_block_hash,
+                        MissingBlockClearReason::Obsolete,
+                    );
                 }
                 self.qc_cache.insert(qc_cache_key, qc.clone());
                 if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
@@ -6791,6 +6801,10 @@ impl Actor {
         }
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             super::status::record_commit_qc(qc.clone());
+            self.clear_missing_commit_qc_request(
+                &qc.subject_block_hash,
+                MissingBlockClearReason::Obsolete,
+            );
         }
         self.qc_cache.insert(qc_cache_key, qc.clone());
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {

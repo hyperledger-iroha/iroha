@@ -3172,7 +3172,7 @@ mod tests {
     }
 
     #[test]
-    fn incoming_block_message_routes_block_body_response_via_payload_ingress_queue() {
+    fn incoming_block_message_routes_block_body_response_via_block_ingress_queue() {
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -3216,21 +3216,21 @@ mod tests {
 
         let received = block_payload_rx
             .try_recv()
-            .expect("BlockBodyResponse should be enqueued to the payload ingress channel");
+            .expect_err("BlockBodyResponse should bypass payload ingress");
+        assert!(matches!(received, mpsc::TryRecvError::Empty));
+        let received = block_rx
+            .try_recv()
+            .expect("BlockBodyResponse should be enqueued to the block ingress channel");
         let (queue_kind, _latency_ms) = received
             .queue_latency_ms()
             .expect("BlockBodyResponse should record enqueue metadata");
-        assert_eq!(queue_kind, status::WorkerQueueKind::BlockPayload);
+        assert_eq!(queue_kind, status::WorkerQueueKind::Blocks);
         assert!(matches!(
             received,
             InboundBlockMessage {
                 message: BlockMessage::BlockBodyResponse(_),
                 ..
             }
-        ));
-        assert!(matches!(
-            block_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
         ));
         assert!(matches!(
             rbc_chunk_rx.try_recv(),
@@ -11865,11 +11865,13 @@ impl SumeragiHandle {
                     );
                     return false;
                 }
+                // Exact body repair responses unblock the contiguous frontier. Keep them off the
+                // ordinary payload lane so they can bypass a backlog of historical body traffic.
                 enqueue_with_mode(
-                    &self.block_payload,
+                    &self.block,
                     InboundBlockMessage::new(BlockMessage::BlockBodyResponse(response), sender),
                     "BlockBodyResponse",
-                    status::WorkerQueueKind::BlockPayload,
+                    status::WorkerQueueKind::Blocks,
                     mode,
                 )
             }

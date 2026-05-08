@@ -35,7 +35,10 @@ use iroha_config::parameters::actual::{
     SumeragiRecovery, SumeragiResilience, SumeragiVNext, SumeragiWorker,
 };
 use iroha_crypto::{
-    Algorithm, Hash, HashOf, KeyPair, MerkleTree, PublicKey, Signature, SignatureOf,
+    Algorithm, BfvParameters, Hash, HashOf, KeyPair, MerkleTree, PublicKey, RamLfeBackend,
+    RamLfeVerificationMode, Signature, SignatureOf, bfv_programmed_policy_commitment_with_program,
+    bfv_programmed_public_parameters_with_program, default_bfv_programmed_hidden_program,
+    derive_identifier_key_material_from_seed,
 };
 use iroha_data_model::{
     ChainId, Encode as _, Level, Registrable,
@@ -52,7 +55,8 @@ use iroha_data_model::{
         types::{BlobDigest, StorageTicketId},
     },
     domain::DomainId,
-    isi::{InstructionBox, Log},
+    identifier::IdentifierPolicyId,
+    isi::{Instruction, InstructionBox, Log, ram_lfe::RegisterRamLfeProgramPolicy},
     merge::MergeCommitteeSignature,
     nexus::{
         DataSpaceId, LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, LaneStorageProfile,
@@ -65,6 +69,7 @@ use iroha_data_model::{
         Account, AccountId, Action, Domain, ExecutionTime, Register, Repeats, TimeEventFilter,
         TransactionBuilder, Trigger,
     },
+    ram_lfe::{RamLfeProgramId, RamLfeProgramPolicy},
     sorafs::pin_registry::ManifestDigest,
     transaction::{
         Executable, IvmBytecode, SignedTransaction, TransactionSubmissionReceipt,
@@ -3429,6 +3434,9 @@ async fn actor_next_tick_deadline_schedules_tick_when_mode_flip_due() {
         params.sumeragi.mode_activation_height = Some(0);
         block.commit();
     }
+    let view = actor.state.view();
+    actor.update_effective_timing_status(&view, actor.consensus_mode);
+    drop(view);
 
     assert!(
         actor.next_tick_deadline(now).is_some(),
@@ -15569,7 +15577,7 @@ async fn qc_bearing_fetch_pending_block_update_sends_direct_qc_companion() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn commit_qc_only_fetch_pending_block_sends_cert_with_qc_body_response() {
+async fn commit_qc_only_fetch_pending_block_sends_direct_cert_without_body_response() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let background_log = attach_background_log(actor);
@@ -15646,26 +15654,13 @@ async fn commit_qc_only_fetch_pending_block_sends_cert_with_qc_body_response() {
         "commit-QC-only fetch must send the certificate directly"
     );
     assert!(
-        entries.iter().any(|entry| {
-            matches!(
-                entry,
-                super::BackgroundRequestLogEntry {
-                    kind: super::BackgroundRequestLogKind::Post,
-                    msg_kind: Some("BlockBodyResponse"),
-                    peer: Some(entry_peer),
-                } if entry_peer == &peer
-            )
-        }),
-        "commit-QC-only fetch must also carry the certificate inside a BlockBodyResponse"
-    );
-    assert!(
         entries.iter().all(|entry| {
             !matches!(
                 entry.msg_kind,
-                Some("BlockSyncUpdate") | Some("BlockCreated")
+                Some("BlockBodyResponse") | Some("BlockSyncUpdate") | Some("BlockCreated")
             )
         }),
-        "commit-QC-only fetch should use only the exact response envelope plus direct cert"
+        "commit-QC-only fetch should not send already-known body traffic"
     );
 
     harness.shutdown.send();
@@ -22488,6 +22483,9 @@ async fn commit_pipeline_qc_rebuild_cooldown_uses_chain_block_time() {
         params_block.sumeragi.block_time_ms = 200;
         params_block.commit();
     }
+    let view = actor.state.view();
+    actor.update_effective_timing_status(&view, actor.consensus_mode);
+    drop(view);
 
     let block = sample_block(1, 0, None);
     let block_hash = block.hash();
@@ -28510,6 +28508,7 @@ async fn commit_quorum_timeout_uses_npos_commit_floor() {
     assert_eq!(commit_time, canonical_commit);
     assert!(stage_commit < canonical_commit);
     let da_enabled = view.world.parameters().sumeragi().da_enabled();
+    actor.update_effective_timing_status(&view, actor.consensus_mode);
     drop(view);
 
     let expected = super::commit_quorum_timeout_from_durations(
@@ -28518,6 +28517,41 @@ async fn commit_quorum_timeout_uses_npos_commit_floor() {
         da_enabled,
         actor.config.da.quorum_timeout_multiplier.max(1),
     );
+    assert_eq!(actor.commit_quorum_timeout(), expected);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_quorum_timeout_uses_cached_timing_until_refresh() {
+    let _guard = super::status::qc_status_test_guard();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let original = actor.commit_quorum_timeout();
+
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.sumeragi.block_time_ms = 1_234;
+        params.sumeragi.commit_time_ms = 2_345;
+        block.commit();
+    }
+
+    let view = actor.state.view();
+    let params = view.world.parameters().sumeragi();
+    let expected = super::commit_quorum_timeout_from_durations(
+        params.effective_block_time(),
+        params.effective_commit_time(),
+        params.da_enabled(),
+        actor.config.da.quorum_timeout_multiplier.max(1),
+    );
+    assert_ne!(original, expected);
+    assert_eq!(actor.commit_quorum_timeout(), original);
+
+    actor.update_effective_timing_status(&view, actor.consensus_mode);
     assert_eq!(actor.commit_quorum_timeout(), expected);
 
     harness.shutdown.send();
@@ -28619,6 +28653,9 @@ async fn commit_evidence_replay_cooldown_does_not_fallback_to_payload() {
         params_block.sumeragi.block_time_ms = 200;
         params_block.commit();
     }
+    let view = actor.state.view();
+    actor.update_effective_timing_status(&view, actor.consensus_mode);
+    drop(view);
 
     let block = sample_block(1, 0, None);
     let block_hash = block.hash();
@@ -30164,6 +30201,73 @@ async fn retry_known_block_commit_qc_requests_clears_request_when_commit_roster_
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn duplicate_commit_qc_clears_known_block_recovery_request() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let height = block.header().height().get();
+    let view = block.header().view_change_index();
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers: BTreeSet<ValidatorIndex> = (0..topology.as_ref().len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let epoch = actor.epoch_for_height(height);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    actor
+        .qc_cache
+        .insert((Phase::Commit, block_hash, height, view, epoch), qc.clone());
+
+    let now = Instant::now();
+    actor.pending.missing_commit_qc_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(1),
+            view_change_window: Some(Duration::from_millis(2)),
+            first_seen: now,
+            last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+
+    actor.handle_qc(qc).expect("duplicate commit QC handled");
+    assert!(
+        !actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash),
+        "duplicate cached commit QC should retire the known-block recovery request"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn retry_known_block_commit_qc_requests_waits_for_commit_quorum_new_view_supersession() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -30511,6 +30615,170 @@ async fn known_block_commit_qc_recovery_routes_frontier_fetch_through_exact_bloc
             .iter()
             .any(|entry| entry.msg_kind == Some("FetchBlockBody")),
         "frontier known-block recovery should use FetchBlockBody once ingress grace expires"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn known_block_commit_qc_recovery_uses_reacquire_window_for_committed_tip() {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot();
+    let view = 0_u64;
+    assert_eq!(
+        actor.committed_block_hash_for_height(height),
+        Some(block_hash),
+        "test requires the seeded block to be the canonical committed tip"
+    );
+
+    let targets = actor.effective_commit_topology();
+    assert!(
+        actor.maybe_request_known_block_commit_qc_recovery(
+            block_hash,
+            height,
+            view,
+            &targets,
+            None,
+            "test_committed_tip_missing_commit_qc",
+        ),
+        "committed-tip commit-QC recovery should still emit a bounded cert fetch"
+    );
+    let request = actor
+        .pending
+        .missing_commit_qc_requests
+        .get(&block_hash)
+        .expect("committed-tip missing commit-QC request recorded");
+    assert!(
+        request.retry_window >= actor.recovery_missing_qc_reacquire_window(),
+        "committed-tip QC reacquisition should use the missing-QC recovery window instead of the fast payload cadence"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn known_block_commit_qc_recovery_rotates_after_bounded_retries_without_progress() {
+    let _cause_guard = super::status::view_change_cause_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = insert_validated_pending(actor, block);
+
+    let now = Instant::now();
+    let stale_at = now
+        .checked_sub(
+            actor
+                .frontier_slot_lag_window()
+                .saturating_add(actor.quorum_timeout(actor.runtime_da_enabled()))
+                .saturating_add(Duration::from_millis(10)),
+        )
+        .unwrap_or(now);
+    actor.phase_tracker.start_new_round(height, stale_at);
+    actor.pending.missing_commit_qc_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(1),
+            view_change_window: Some(Duration::from_millis(1)),
+            first_seen: stale_at,
+            last_requested: stale_at,
+            last_dependency_progress: stale_at,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 2,
+        },
+    );
+
+    assert!(
+        actor.retry_known_block_commit_qc_requests(now, None),
+        "stalled known-block commit-QC recovery should rotate after the bounded repair window"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(view.saturating_add(1)),
+        "MissingQc rotation should advance the active frontier view"
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash),
+        "stale known-block commit-QC recovery must not remain active after rotation"
+    );
+    assert_eq!(
+        super::status::snapshot()
+            .view_change_causes
+            .missing_qc_total,
+        1,
+        "rotation should be recorded as MissingQc"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn prune_stale_view_state_clears_known_block_commit_qc_requests() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = insert_validated_pending(actor, block);
+    let now = Instant::now();
+    actor.pending.missing_commit_qc_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(1),
+            view_change_window: Some(Duration::from_millis(1)),
+            first_seen: now,
+            last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+
+    actor.prune_stale_view_state(height, view.saturating_add(1));
+
+    assert!(
+        !actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash),
+        "view changes must retire stale same-height commit-QC recovery requests"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "DA mode should still retain the stale payload as passive repair data"
     );
 
     harness.shutdown.send();
@@ -93123,6 +93391,9 @@ async fn proposal_backpressure_respects_pending_stall_grace() {
         params_block.sumeragi.da_enabled = true;
         params_block.commit();
     }
+    let view = actor.state.view();
+    actor.update_effective_timing_status(&view, actor.consensus_mode);
+    drop(view);
 
     let key = insert_active_pending_block(actor, 0);
     let now = Instant::now();
@@ -104433,35 +104704,32 @@ async fn proposal_scan_budget_tracks_multiplier() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn da_proposal_rejects_single_tx_exceeding_consensus_payload_frame_cap() {
+async fn da_proposal_uses_rbc_for_ram_lfe_tx_exceeding_consensus_payload_frame_cap() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
+    actor.consensus_payload_frame_cap = 64 * 1024;
+    actor.config.rbc.chunk_max_bytes = 16 * 1024;
+    actor.config.rbc.pending_max_bytes = 1024 * 1024;
+    let background_log = attach_background_log(actor);
 
-    let payload_len = actor.consensus_payload_frame_cap.saturating_mul(2);
-    let key_pair = KeyPair::random();
-    let (public_key, private_key) = key_pair.clone().into_parts();
-    let authority = AccountId::new(public_key.clone());
-    let key = "payload".parse().expect("metadata key");
-    let value = iroha_primitives::json::Json::new("X".repeat(payload_len));
-    let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::domain(
-        DomainId::try_new("wonderland", "universal").expect("domain id"),
-        key,
-        value,
-    )
-    .into();
-    let tx = TransactionBuilder::new(actor.common_config.chain.clone(), authority)
-        .with_instructions([instruction])
-        .sign(&private_key);
+    let tx = sample_ram_lfe_policy_transaction(actor.consensus_payload_frame_cap);
+    let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+    let encoded_len = Queue::compute_tx_encoded_len(&accepted);
+    assert!(
+        encoded_len > actor.consensus_payload_frame_cap,
+        "RAM-LFE policy transaction should exceed the single consensus frame cap"
+    );
+    assert!(
+        encoded_len < actor.config.rbc.pending_max_bytes,
+        "RAM-LFE policy transaction should still fit the RBC payload budget"
+    );
     actor
         .queue
-        .push(
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
-            actor.state.view(),
-        )
+        .push(accepted, actor.state.view())
         .expect("push tx");
 
     let height = 1u64;
@@ -104472,20 +104740,52 @@ async fn da_proposal_rejects_single_tx_exceeding_consensus_payload_frame_cap() {
         .local_validator_index(&actor.state.view())
         .expect("local validator index");
 
-    let result = actor.assemble_and_broadcast_proposal(
-        height,
-        view,
-        highest_qc,
-        &mut topology,
-        /*leader_index*/ 0,
-        /*local_validator_index*/ local_idx,
-        None,
-        Instant::now(),
-    );
-    let err = result.expect_err("oversized BlockCreated should be rejected under DA");
+    let assembled = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            /*leader_index*/ 0,
+            /*local_validator_index*/ local_idx,
+            None,
+            Instant::now(),
+        )
+        .expect("oversized BlockCreated should fall back to RBC under DA");
     assert!(
-        err.to_string().contains("proposal frame size"),
-        "expected frame cap error, got: {err}"
+        assembled,
+        "proposal should assemble when the transaction fits RBC"
+    );
+    assert_eq!(
+        actor.queue.queued_len(),
+        0,
+        "accepted RAM-LFE transaction should not be requeued"
+    );
+
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.msg_kind != Some("BlockCreated")),
+        "oversized exact BlockCreated should not be posted"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.msg_kind == Some("Proposal")),
+        "proposal metadata should be posted for RBC transport"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.msg_kind == Some("RbcInit")),
+        "RBC init should be posted for the oversized payload"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.msg_kind == Some("RbcChunk")),
+        "RBC chunks should carry the oversized payload"
     );
 
     harness.shutdown.send();
@@ -144117,6 +144417,66 @@ fn sample_ivm_transaction() -> SignedTransaction {
         .with_metadata(metadata)
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
         .sign(key_pair.private_key())
+}
+
+fn sample_identifier_bfv_parameters() -> BfvParameters {
+    BfvParameters {
+        polynomial_degree: 64,
+        ciphertext_modulus: 1_u64 << 52,
+        plaintext_modulus: 256,
+        decomposition_base_log: 12,
+    }
+}
+
+fn sample_ram_lfe_policy_transaction(note_len: usize) -> SignedTransaction {
+    let chain: ChainId = "test-chain".parse().expect("chain id");
+    let owner = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+    let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let policy_id = "email#retail"
+        .parse::<IdentifierPolicyId>()
+        .expect("valid policy id");
+    let program_id = policy_id
+        .to_string()
+        .replace('#', "_")
+        .parse::<RamLfeProgramId>()
+        .expect("valid program id");
+    let hidden_program = default_bfv_programmed_hidden_program();
+    let (public_parameters, _, _) = derive_identifier_key_material_from_seed(
+        &sample_identifier_bfv_parameters(),
+        63,
+        b"email-secret",
+        &norito::to_bytes(&program_id).expect("encode program id"),
+    )
+    .expect("derive key material");
+    let programmed_public_parameters = bfv_programmed_public_parameters_with_program(
+        public_parameters,
+        &hidden_program,
+        RamLfeVerificationMode::Signed,
+        None,
+    );
+    let encoded_public_parameters =
+        norito::to_bytes(&programmed_public_parameters).expect("encode public parameters");
+    let commitment = bfv_programmed_policy_commitment_with_program(
+        b"email-secret",
+        &encoded_public_parameters,
+        &hidden_program,
+    )
+    .expect("policy commitment");
+    let policy = RamLfeProgramPolicy::new(
+        program_id,
+        owner.clone(),
+        RamLfeBackend::BfvProgrammedSha3_256V1,
+        RamLfeVerificationMode::Signed,
+        commitment,
+        signer.public_key().clone(),
+    )
+    .with_note("x".repeat(note_len));
+    let instruction: InstructionBox =
+        Box::new(RegisterRamLfeProgramPolicy { policy }).into_instruction_box();
+
+    TransactionBuilder::new(chain, owner)
+        .with_instructions([instruction])
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
 }
 
 fn sample_log_transaction_with_message_len(message_len: usize) -> SignedTransaction {

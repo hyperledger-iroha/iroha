@@ -4070,6 +4070,17 @@ impl Actor {
             );
             return false;
         }
+        if self.known_block_commit_qc_recovery_superseded_by_local_view(height, view) {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                trigger,
+                "skipping known-block commit-QC recovery for stale local view"
+            );
+            self.clear_missing_commit_qc_request(&block_hash, MissingBlockClearReason::Obsolete);
+            return false;
+        }
 
         let filtered_targets = super::missing_block_request_targets_without_local(
             self.common_config.peer.id(),
@@ -4121,6 +4132,21 @@ impl Actor {
             {
                 catchup_advance = FrontierRecoveryAdvance::CatchUp;
             }
+            if payload_materialized_locally
+                && request_stalled
+                && matches!(catchup_advance, FrontierRecoveryAdvance::CatchUp)
+            {
+                info!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    request_stalled,
+                    catchup_advance = ?catchup_advance,
+                    trigger,
+                    "routing known-block commit-QC recovery through frontier stall-reset catch-up"
+                );
+                return true;
+            }
             if !payload_materialized_locally
                 && (self.frontier_slot_allows_deep_catchup(height, "frontier_stall_reset")
                     || matches!(catchup_advance, FrontierRecoveryAdvance::CatchUp))
@@ -4139,6 +4165,8 @@ impl Actor {
             commit_qc_body_fallback = payload_materialized_locally && request_stalled;
         }
 
+        let committed_round = height <= self.committed_height_snapshot()
+            && self.committed_block_hash_for_height(height) == Some(block_hash);
         let retry_window = self
             .missing_block_retry_window_with_rbc_progress(
                 block_hash,
@@ -4149,6 +4177,11 @@ impl Actor {
             .max(
                 payload_materialized_locally
                     .then(|| self.targeted_payload_rescue_cooldown())
+                    .unwrap_or(Duration::ZERO),
+            )
+            .max(
+                committed_round
+                    .then(|| self.recovery_missing_qc_reacquire_window())
                     .unwrap_or(Duration::ZERO),
             );
         let view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
@@ -4324,6 +4357,14 @@ impl Actor {
                 progress = true;
                 continue;
             }
+            if self.maybe_rotate_stalled_known_block_commit_qc_recovery(
+                block_hash,
+                &stats_snapshot,
+                now,
+            ) {
+                progress = true;
+                continue;
+            }
 
             let targets = self.known_block_commit_qc_recovery_targets(
                 block_hash,
@@ -4344,6 +4385,66 @@ impl Actor {
         }
 
         progress
+    }
+
+    fn known_block_commit_qc_recovery_superseded_by_local_view(
+        &self,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        height == self.committed_height_snapshot().saturating_add(1)
+            && self
+                .phase_tracker
+                .current_view(height)
+                .is_some_and(|current_view| current_view > view)
+    }
+
+    fn maybe_rotate_stalled_known_block_commit_qc_recovery(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        request: &MissingBlockRequest,
+        now: Instant,
+    ) -> bool {
+        if !matches!(request.phase, crate::sumeragi::consensus::Phase::Commit)
+            || request.height != self.committed_height_snapshot().saturating_add(1)
+            || request.height != self.active_consensus_round_height()
+            || self.known_block_commit_qc_recovery_superseded_by_local_view(
+                request.height,
+                request.view,
+            )
+            || request.attempts < 2
+            || !request.view_change_due(now)
+        {
+            return false;
+        }
+
+        let stall_window = self
+            .frontier_slot_lag_window()
+            .max(request.view_change_window.unwrap_or_default());
+        if now.saturating_duration_since(request.last_dependency_progress) < stall_window {
+            return false;
+        }
+
+        let Some(stored) = self.pending.missing_commit_qc_requests.get_mut(&block_hash) else {
+            return false;
+        };
+        if !stored.mark_view_change_if_due(now) {
+            return false;
+        }
+        let dwell = now.saturating_duration_since(stored.first_seen);
+        warn!(
+            height = stored.height,
+            view = stored.view,
+            block = %block_hash,
+            attempts = stored.attempts,
+            dwell_ms = dwell.as_millis(),
+            "known-block commit-QC recovery exceeded bounded repair window; rotating frontier view"
+        );
+        let height = stored.height;
+        let view = stored.view;
+        self.trigger_view_change_with_cause(height, view, ViewChangeCause::MissingQc);
+        self.clear_missing_commit_qc_request(&block_hash, MissingBlockClearReason::Obsolete);
+        true
     }
 
     pub(super) fn maybe_emit_local_commit_vote_for_pending_event(

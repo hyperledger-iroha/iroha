@@ -25,29 +25,52 @@ use iroha::{
     crypto::{Algorithm, KeyPair},
     data_model::{
         Level,
-        account::{Account, AccountId},
+        account::{Account, AccountId, OpaqueAccountId},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::consensus::SumeragiStatusWire,
         da::commitment::DaProofPolicyBundle,
         domain::{Domain, DomainId},
+        identifier::{
+            IdentifierNormalization, IdentifierPolicy, IdentifierPolicyId,
+            IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload,
+        },
         isi::{
-            InstructionBox, Log, Mint, Register, SetParameter, Transfer,
+            Instruction, InstructionBox, Log, Mint, Register, SetParameter, Transfer,
+            identifier::{ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy},
+            ram_lfe::{ActivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy},
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
         metadata::Metadata,
         name::Name,
-        nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneVisibility},
+        nexus::{
+            DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneVisibility,
+            UniversalAccountId,
+        },
         parameter::{BlockParameter, Parameter, SumeragiParameter, system::SumeragiNposParameters},
         peer::PeerId,
-        prelude::{FindAssetById, Numeric},
+        prelude::{FindAccountById, FindAssetById, Numeric},
+        ram_lfe::{
+            RamLfeExecutionReceiptPayload, RamLfeProgramId, RamLfeProgramPolicy,
+            RamLfeReceiptAttestation,
+        },
     },
 };
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
 use iroha_core::da::proof_policy_bundle;
+use iroha_crypto::{
+    BfvParameters, Hash, RamLfeBackend, RamLfeVerificationMode, Signature, SignatureOf,
+    bfv_programmed_policy_commitment_with_program, bfv_programmed_public_parameters_with_program,
+    decode_bfv_programmed_public_parameters, default_bfv_programmed_hidden_program,
+    derive_identifier_key_material_from_seed, identifier_hashes_from_output_hash,
+    ram_lfe_output_hash,
+};
 use iroha_test_network::{
     Network, NetworkBuilder, genesis_factory_with_post_topology, init_instruction_registry,
 };
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
+use iroha_test_samples::{
+    ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, REAL_GENESIS_ACCOUNT_ID,
+    REAL_GENESIS_ACCOUNT_KEYPAIR,
+};
 use nonzero_ext::nonzero;
 use norito::json::{Map, Value};
 use rand::{RngCore, SeedableRng};
@@ -119,6 +142,8 @@ const REALISTIC_30TPS_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 const REALISTIC_30TPS_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
 const REALISTIC_30TPS_TRANSFER_ACCOUNTS: usize = 640;
 const REALISTIC_30TPS_TRANSFER_MAX_AMOUNT: u64 = 5;
+const REALISTIC_30TPS_RAM_LFE_EMAIL_POLICY_ID: &str = "email#realistic";
+const REALISTIC_30TPS_RAM_LFE_EMAIL_PROGRAM_ID: &str = "email_realistic";
 const FAIL_ON_SANDBOX_SKIP_ENV: &str = "IROHA_FAIL_ON_SANDBOX_SKIP";
 // Grouped localnet runs can take longer to publish authoritative Nexus bindings
 // than the earlier exact-test-only timeout budget.
@@ -416,6 +441,62 @@ struct TransferSubmitAccount {
     client: iroha::client::Client,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Realistic30TpsLoadKind {
+    Transfer,
+    RamLfeEmail,
+}
+
+impl Realistic30TpsLoadKind {
+    fn from_env() -> Result<Self> {
+        let Some(raw) = std::env::var("IROHA_REALISTIC_30TPS_LOAD_KIND")
+            .ok()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(Self::Transfer);
+        };
+        match raw.as_str() {
+            "transfer" | "transfers" => Ok(Self::Transfer),
+            "ram-lfe-email" | "ram_lfe_email" | "ram-lfe-emails" | "ram_lfe_emails" | "email"
+            | "emails" => Ok(Self::RamLfeEmail),
+            _ => bail!(
+                "unsupported IROHA_REALISTIC_30TPS_LOAD_KIND={raw}; expected transfer or ram-lfe-email"
+            ),
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Transfer => "transfer",
+            Self::RamLfeEmail => "ram-lfe-email",
+        }
+    }
+}
+
+#[derive(Clone)]
+struct RamLfeEmailLoadAccount {
+    id: AccountId,
+    uaid: UniversalAccountId,
+}
+
+#[derive(Clone)]
+struct RamLfeEmailSubmitAccount {
+    id: AccountId,
+    client: iroha::client::Client,
+    uaid: UniversalAccountId,
+}
+
+#[derive(Clone)]
+struct RamLfeEmailPolicyContext {
+    policy_id: IdentifierPolicyId,
+    program_id: RamLfeProgramId,
+    program_id_bytes: Vec<u8>,
+    program_digest: Hash,
+    backend: RamLfeBackend,
+    verification_mode: RamLfeVerificationMode,
+}
+
 fn realistic_transfer_domain_id() -> DomainId {
     DomainId::try_new("realistic", "universal").expect("realistic transfer domain")
 }
@@ -436,6 +517,116 @@ fn realistic_transfer_accounts(account_count: usize, rng_seed: u64) -> Vec<Trans
             );
             let id = AccountId::new(key_pair.public_key().clone());
             TransferLoadAccount { id, key_pair }
+        })
+        .collect()
+}
+
+fn realistic_ram_lfe_email_policy_id() -> IdentifierPolicyId {
+    REALISTIC_30TPS_RAM_LFE_EMAIL_POLICY_ID
+        .parse()
+        .expect("realistic RAM-LFE email policy id")
+}
+
+fn realistic_ram_lfe_email_program_id() -> RamLfeProgramId {
+    REALISTIC_30TPS_RAM_LFE_EMAIL_PROGRAM_ID
+        .parse()
+        .expect("realistic RAM-LFE email program id")
+}
+
+fn realistic_ram_lfe_email_bfv_parameters() -> BfvParameters {
+    BfvParameters {
+        polynomial_degree: 64,
+        ciphertext_modulus: 1_u64 << 52,
+        plaintext_modulus: 256,
+        decomposition_base_log: 12,
+    }
+}
+
+fn realistic_ram_lfe_email_policy_bundle(
+    owner: &AccountId,
+    resolver: &KeyPair,
+) -> (IdentifierPolicy, RamLfeProgramPolicy) {
+    let policy_id = realistic_ram_lfe_email_policy_id();
+    let program_id = realistic_ram_lfe_email_program_id();
+    let secret = b"realistic-email-resolver-secret";
+    let hidden_program = default_bfv_programmed_hidden_program();
+    let program_id_bytes = norito::to_bytes(&program_id).expect("encode RAM-LFE program id");
+    let (public_parameters, _, _) = derive_identifier_key_material_from_seed(
+        &realistic_ram_lfe_email_bfv_parameters(),
+        63,
+        secret,
+        &program_id_bytes,
+    )
+    .expect("derive RAM-LFE email public parameters");
+    let programmed_public_parameters = bfv_programmed_public_parameters_with_program(
+        public_parameters,
+        &hidden_program,
+        RamLfeVerificationMode::Signed,
+        None,
+    );
+    let encoded_public_parameters =
+        norito::to_bytes(&programmed_public_parameters).expect("encode public parameters");
+    let commitment = bfv_programmed_policy_commitment_with_program(
+        secret,
+        &encoded_public_parameters,
+        &hidden_program,
+    )
+    .expect("build RAM-LFE email policy commitment");
+    let program_policy = RamLfeProgramPolicy::new(
+        program_id.clone(),
+        owner.clone(),
+        RamLfeBackend::BfvProgrammedSha3_256V1,
+        RamLfeVerificationMode::Signed,
+        commitment,
+        resolver.public_key().clone(),
+    )
+    .with_note("realistic RAM-LFE email identifier resolver");
+    let policy = IdentifierPolicy::new(
+        policy_id,
+        owner.clone(),
+        IdentifierNormalization::EmailAddress,
+        program_id,
+    )
+    .with_note("realistic RAM-LFE email identifier policy");
+    (policy, program_policy)
+}
+
+fn realistic_ram_lfe_email_policy_context(
+    policy_id: IdentifierPolicyId,
+    program_policy: &RamLfeProgramPolicy,
+) -> Result<RamLfeEmailPolicyContext> {
+    let programmed =
+        decode_bfv_programmed_public_parameters(&program_policy.commitment.public_parameters)
+            .wrap_err("decode realistic RAM-LFE email public parameters")?;
+    let program_id_bytes = norito::to_bytes(&program_policy.program_id)
+        .wrap_err("encode realistic RAM-LFE email program id")?;
+    Ok(RamLfeEmailPolicyContext {
+        policy_id,
+        program_id: program_policy.program_id.clone(),
+        program_id_bytes,
+        program_digest: programmed.hidden_program_digest,
+        backend: program_policy.backend,
+        verification_mode: program_policy.verification_mode,
+    })
+}
+
+fn realistic_ram_lfe_email_accounts(
+    account_count: usize,
+    rng_seed: u64,
+) -> Vec<RamLfeEmailLoadAccount> {
+    (0..account_count)
+        .map(|index| {
+            let key_pair = KeyPair::from_seed(
+                format!("integration_tests::realistic-ram-lfe-email::{rng_seed}::{index}")
+                    .into_bytes(),
+                Algorithm::Ed25519,
+            );
+            let id = AccountId::new(key_pair.public_key().clone());
+            let uaid = UniversalAccountId::from_hash(Hash::new(
+                format!("integration_tests::realistic-ram-lfe-email-uaid::{rng_seed}::{index}")
+                    .as_bytes(),
+            ));
+            RamLfeEmailLoadAccount { id, uaid }
         })
         .collect()
 }
@@ -479,6 +670,168 @@ fn expected_realistic_transfer_balances(
         .into_iter()
         .map(|balance| u64::try_from(balance).expect("transfer load balance should stay positive"))
         .collect()
+}
+
+fn realistic_ram_lfe_email_account_index(index: u64, account_count: usize, rng_seed: u64) -> usize {
+    debug_assert!(account_count > 0);
+    let mut rng = ChaCha8Rng::seed_from_u64(
+        rng_seed ^ index.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x454d_4149_4c5f_4c46,
+    );
+    usize::try_from(rng.next_u64() % account_count as u64).unwrap_or_default()
+}
+
+fn realistic_ram_lfe_email_address(index: u64, rng_seed: u64) -> String {
+    const DOMAINS: [&str; 8] = [
+        "retail.example",
+        "payments.example",
+        "wallet.example",
+        "merchant.example",
+        "support.example",
+        "identity.example",
+        "ops.example",
+        "settlement.example",
+    ];
+    let mut rng = ChaCha8Rng::seed_from_u64(
+        rng_seed ^ index.wrapping_mul(0xA076_1D64_78BD_642F) ^ 0x454d_4149_4c5f_4944,
+    );
+    let domain =
+        DOMAINS[usize::try_from(rng.next_u64() % DOMAINS.len() as u64).unwrap_or_default()];
+    format!(
+        "notice.{:08x}.{:08x}+{:08}@{domain}",
+        (index >> 32) as u32,
+        index as u32,
+        rng.next_u64() as u32,
+    )
+}
+
+fn realistic_ram_lfe_email_receipt(
+    context: &RamLfeEmailPolicyContext,
+    resolver: &KeyPair,
+    account_id: &AccountId,
+    uaid: UniversalAccountId,
+    index: u64,
+    rng_seed: u64,
+) -> IdentifierResolutionReceipt {
+    let normalized_email = IdentifierNormalization::EmailAddress
+        .normalize(&realistic_ram_lfe_email_address(index, rng_seed))
+        .expect("generated email address should normalize");
+    let output_hash = ram_lfe_output_hash(normalized_email.as_bytes());
+    let (opaque_id, receipt_hash) =
+        identifier_hashes_from_output_hash(&context.program_id_bytes, &output_hash);
+    let execution = RamLfeExecutionReceiptPayload {
+        program_id: context.program_id.clone(),
+        program_digest: context.program_digest,
+        backend: context.backend,
+        verification_mode: context.verification_mode,
+        output_hash,
+        associated_data_hash: Hash::new(&context.program_id_bytes),
+        executed_at_ms: 0,
+        expires_at_ms: None,
+    };
+    let payload = IdentifierResolutionReceiptPayload {
+        policy_id: context.policy_id.clone(),
+        execution,
+        opaque_id: OpaqueAccountId::from(opaque_id),
+        receipt_hash,
+        uaid,
+        account_id: account_id.clone(),
+    };
+    let signature: Signature = SignatureOf::new(resolver.private_key(), &payload).into();
+    IdentifierResolutionReceipt {
+        payload,
+        attestation: RamLfeReceiptAttestation::Signed(signature),
+    }
+}
+
+fn expected_realistic_ram_lfe_email_claim_counts(
+    account_count: usize,
+    tx_count: u64,
+    rng_seed: u64,
+) -> Vec<usize> {
+    let mut counts = vec![0_usize; account_count];
+    for index in 0..tx_count {
+        let account_index = realistic_ram_lfe_email_account_index(index, account_count, rng_seed);
+        counts[account_index] = counts[account_index].saturating_add(1);
+    }
+    counts
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn submit_ram_lfe_emails_paced(
+    tx_count: u64,
+    target_tps: u64,
+    submit_accounts: Vec<RamLfeEmailSubmitAccount>,
+    policy_context: RamLfeEmailPolicyContext,
+    resolver: KeyPair,
+    rng_seed: u64,
+    submit_parallelism: usize,
+    submitted_counter: Arc<AtomicU64>,
+) -> Result<Duration> {
+    ensure!(
+        !submit_accounts.is_empty(),
+        "submit_ram_lfe_emails_paced requires at least one account"
+    );
+    let submit_accounts = Arc::new(submit_accounts);
+    let account_count = submit_accounts.len();
+    let submit_parallelism = submit_parallelism.max(1);
+    let nanos_per_tx = 1_000_000_000_u64 / target_tps.max(1);
+    let submit_start = Instant::now();
+    let mut pending: FuturesUnordered<task::JoinHandle<Result<()>>> = FuturesUnordered::new();
+
+    for index in 0..tx_count {
+        let target_elapsed = Duration::from_nanos(nanos_per_tx.saturating_mul(index));
+        if let Some(target_instant) = submit_start.checked_add(target_elapsed) {
+            let now = Instant::now();
+            if target_instant > now {
+                sleep(target_instant.duration_since(now)).await;
+            }
+        }
+
+        let account_index = realistic_ram_lfe_email_account_index(index, account_count, rng_seed);
+        let submit_account = submit_accounts[account_index].clone();
+        let policy_context = policy_context.clone();
+        let resolver = resolver.clone();
+        let submitted_counter = Arc::clone(&submitted_counter);
+        pending.push(task::spawn_blocking(move || {
+            let receipt = realistic_ram_lfe_email_receipt(
+                &policy_context,
+                &resolver,
+                &submit_account.id,
+                submit_account.uaid,
+                index,
+                rng_seed,
+            );
+            submit_account
+                .client
+                .submit::<InstructionBox>(
+                    ClaimIdentifier {
+                        account: submit_account.id,
+                        receipt,
+                    }
+                    .into(),
+                )
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to submit paced RAM-LFE email claim instruction {index} from account index {account_index}"
+                    )
+                })?;
+            submitted_counter.fetch_add(1, AtomicOrdering::Relaxed);
+            Ok(())
+        }));
+
+        if pending.len() >= submit_parallelism {
+            let result = pending
+                .next()
+                .await
+                .ok_or_else(|| eyre!("paced RAM-LFE email worker set unexpectedly empty"))?;
+            result.wrap_err("paced RAM-LFE email task join failed")??;
+        }
+    }
+
+    while let Some(result) = pending.next().await {
+        result.wrap_err("paced RAM-LFE email task join failed")??;
+    }
+    Ok(submit_start.elapsed())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -582,6 +935,32 @@ fn verify_realistic_transfer_balances(
     Ok(())
 }
 
+fn verify_realistic_ram_lfe_email_claim_counts(
+    client: &iroha::client::Client,
+    accounts: &[RamLfeEmailLoadAccount],
+    tx_count: u64,
+    rng_seed: u64,
+) -> Result<()> {
+    let expected =
+        expected_realistic_ram_lfe_email_claim_counts(accounts.len(), tx_count, rng_seed);
+    for (account, expected_count) in accounts.iter().zip(expected) {
+        let stored_account = client.query_single(FindAccountById::new(account.id.clone()))?;
+        ensure!(
+            stored_account.uaid() == Some(&account.uaid),
+            "unexpected UAID for RAM-LFE email account {}",
+            account.id
+        );
+        ensure!(
+            stored_account.opaque_ids().len() == expected_count,
+            "unexpected RAM-LFE email claim count for {}: expected {}, got {}",
+            account.id,
+            expected_count,
+            stored_account.opaque_ids().len()
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "long-running 4-peer localnet regression (30 TPS for 20 minutes)"]
 #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
@@ -628,11 +1007,16 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
         "IROHA_REALISTIC_30TPS_QUEUE_SOFT_LIMIT",
         REALISTIC_30TPS_QUEUE_SOFT_LIMIT,
     );
-    let transfer_accounts = env_or_default_usize(
+    let configured_transfer_accounts = env_or_default_usize(
         "IROHA_REALISTIC_30TPS_TRANSFER_ACCOUNTS",
         REALISTIC_30TPS_TRANSFER_ACCOUNTS,
+    );
+    let transfer_accounts = configured_transfer_accounts.max(2);
+    let ram_lfe_email_accounts = env_or_default_usize(
+        "IROHA_REALISTIC_30TPS_RAM_LFE_EMAIL_ACCOUNTS",
+        configured_transfer_accounts,
     )
-    .max(2);
+    .max(1);
     let transfer_max_amount = env_or_default(
         "IROHA_REALISTIC_30TPS_TRANSFER_MAX_AMOUNT",
         REALISTIC_30TPS_TRANSFER_MAX_AMOUNT,
@@ -656,8 +1040,29 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
         total_txs > 0 && block_max_txs > 0,
         "realistic 30 TPS run requires a positive duration and TPS"
     );
+    let load_kind = Realistic30TpsLoadKind::from_env()?;
     let transfer_asset_definition_id = realistic_transfer_asset_definition_id();
-    let transfer_load_accounts = realistic_transfer_accounts(transfer_accounts, rng_seed);
+    let transfer_load_accounts = if load_kind == Realistic30TpsLoadKind::Transfer {
+        realistic_transfer_accounts(transfer_accounts, rng_seed)
+    } else {
+        Vec::new()
+    };
+    let ram_lfe_email_load_accounts = if load_kind == Realistic30TpsLoadKind::RamLfeEmail {
+        realistic_ram_lfe_email_accounts(ram_lfe_email_accounts, rng_seed)
+    } else {
+        Vec::new()
+    };
+    let ram_lfe_email_resolver = KeyPair::from_seed(
+        format!("integration_tests::realistic-ram-lfe-email-resolver::{rng_seed}").into_bytes(),
+        Algorithm::Ed25519,
+    );
+    let ram_lfe_email_owner = (*REAL_GENESIS_ACCOUNT_ID).clone();
+    let (ram_lfe_email_policy, ram_lfe_email_program_policy) =
+        realistic_ram_lfe_email_policy_bundle(&ram_lfe_email_owner, &ram_lfe_email_resolver);
+    let ram_lfe_email_policy_context = realistic_ram_lfe_email_policy_context(
+        ram_lfe_email_policy.id.clone(),
+        &ram_lfe_email_program_policy,
+    )?;
 
     let previous_ttl = std::env::var_os("IROHA_TEST_CLIENT_TTL_MS");
     let client_ttl = Duration::from_secs(duration_secs.saturating_add(120));
@@ -671,13 +1076,6 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
         .with_auto_populated_trusted_peers()
         .with_real_genesis_keypair()
         .with_pipeline_time(THROUGHPUT_PIPELINE_TIME)
-        .with_genesis_instruction(Register::domain(
-            Domain::new(realistic_transfer_domain_id()),
-        ))
-        .with_genesis_instruction(Register::asset_definition(
-            AssetDefinition::numeric(transfer_asset_definition_id.clone())
-                .with_name("Realistic Transfer Coin".to_owned()),
-        ))
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(
                 std::num::NonZeroU64::new(block_max_txs).expect("checked non-zero"),
@@ -721,15 +1119,6 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
                     i64::try_from(block_max_txs).expect("realistic block max txs fits i64"),
                 )
                 .write(
-                    [
-                        "sumeragi",
-                        "advanced",
-                        "worker",
-                        "fast_finality_inline_validation_max_transactions",
-                    ],
-                    i64::try_from(block_max_txs).expect("realistic block max txs fits i64"),
-                )
-                .write(
                     ["sumeragi", "advanced", "pacing_governor", "min_factor_bps"],
                     10_000_i64,
                 )
@@ -764,13 +1153,51 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
                 .write(["torii", "tx_burst_per_authority"], 0_i64)
                 .write(["torii", "api_high_load_tx_threshold"], 262_144_i64);
         });
-    for account in &transfer_load_accounts {
-        builder = builder
-            .with_genesis_instruction(Register::account(Account::new(account.id.clone())))
-            .with_genesis_instruction(Mint::asset_numeric(
-                Numeric::from(transfer_initial_balance),
-                AssetId::new(transfer_asset_definition_id.clone(), account.id.clone()),
-            ));
+    match load_kind {
+        Realistic30TpsLoadKind::Transfer => {
+            builder = builder
+                .with_genesis_instruction(Register::domain(Domain::new(
+                    realistic_transfer_domain_id(),
+                )))
+                .with_genesis_instruction(Register::asset_definition(
+                    AssetDefinition::numeric(transfer_asset_definition_id.clone())
+                        .with_name("Realistic Transfer Coin".to_owned()),
+                ));
+            for account in &transfer_load_accounts {
+                builder = builder
+                    .with_genesis_instruction(Register::account(Account::new(account.id.clone())))
+                    .with_genesis_instruction(Mint::asset_numeric(
+                        Numeric::from(transfer_initial_balance),
+                        AssetId::new(transfer_asset_definition_id.clone(), account.id.clone()),
+                    ));
+            }
+        }
+        Realistic30TpsLoadKind::RamLfeEmail => {
+            builder = builder
+                .with_genesis_instruction(
+                    Box::new(RegisterRamLfeProgramPolicy {
+                        policy: ram_lfe_email_program_policy.clone(),
+                    })
+                    .into_instruction_box(),
+                )
+                .with_genesis_instruction(
+                    Box::new(ActivateRamLfeProgramPolicy {
+                        program_id: ram_lfe_email_program_policy.program_id.clone(),
+                    })
+                    .into_instruction_box(),
+                )
+                .with_genesis_instruction(RegisterIdentifierPolicy {
+                    policy: ram_lfe_email_policy.clone(),
+                })
+                .with_genesis_instruction(ActivateIdentifierPolicy {
+                    policy_id: ram_lfe_email_policy.id.clone(),
+                });
+            for account in &ram_lfe_email_load_accounts {
+                builder = builder.with_genesis_instruction(Register::account(
+                    Account::new(account.id.clone()).with_uaid(Some(account.uaid)),
+                ));
+            }
+        }
     }
 
     let result: Result<()> = async {
@@ -816,43 +1243,113 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
                 submit_batch: target_tps,
                 submit_parallelism: submit_parallelism as u64,
                 queue_soft_limit,
-                payload_bytes: 0,
-                load_kind: "transfer".to_owned(),
-                transfer_accounts: transfer_accounts as u64,
-                transfer_initial_balance,
-                transfer_max_amount,
+                payload_bytes: if load_kind == Realistic30TpsLoadKind::RamLfeEmail {
+                    realistic_ram_lfe_email_address(0, rng_seed).len() as u64
+                } else {
+                    0
+                },
+                load_kind: load_kind.as_str().to_owned(),
+                transfer_accounts: if load_kind == Realistic30TpsLoadKind::Transfer {
+                    transfer_accounts as u64
+                } else {
+                    0
+                },
+                transfer_initial_balance: if load_kind == Realistic30TpsLoadKind::Transfer {
+                    transfer_initial_balance
+                } else {
+                    0
+                },
+                transfer_max_amount: if load_kind == Realistic30TpsLoadKind::Transfer {
+                    transfer_max_amount
+                } else {
+                    0
+                },
+                ram_lfe_email_accounts: if load_kind == Realistic30TpsLoadKind::RamLfeEmail {
+                    ram_lfe_email_accounts as u64
+                } else {
+                    0
+                },
+                ram_lfe_email_policy: if load_kind == Realistic30TpsLoadKind::RamLfeEmail {
+                    ram_lfe_email_policy.id.to_string()
+                } else {
+                    String::new()
+                },
+                ram_lfe_program: if load_kind == Realistic30TpsLoadKind::RamLfeEmail {
+                    ram_lfe_email_program_policy.program_id.to_string()
+                } else {
+                    String::new()
+                },
                 rng_seed,
                 rbc_encoding: "plain".to_owned(),
                 rbc_data_shards: 0,
                 rbc_parity_shards: 0,
             });
 
-            let submit_accounts: Vec<_> = transfer_load_accounts
-                .iter()
-                .enumerate()
-                .map(|(index, account)| {
-                    let peer = &network.peers()[index % network.peers().len()];
-                    TransferSubmitAccount {
-                        id: account.id.clone(),
-                        client: peer.client_for(&account.id, account.key_pair.private_key().clone()),
-                    }
-                })
-                .collect();
             let submitted_counter = Arc::new(AtomicU64::new(0));
             let submitted_for_task = Arc::clone(&submitted_counter);
-            let submit_handle = tokio::spawn(submit_transfers_paced(
-                total_txs,
-                target_tps,
-                submit_accounts,
-                transfer_asset_definition_id.clone(),
-                transfer_max_amount,
-                rng_seed,
-                submit_parallelism,
-                submitted_for_task,
-            ));
+            let submit_handle = match load_kind {
+                Realistic30TpsLoadKind::Transfer => {
+                    let submit_accounts: Vec<_> = transfer_load_accounts
+                        .iter()
+                        .enumerate()
+                        .map(|(index, account)| {
+                            let peer = &network.peers()[index % network.peers().len()];
+                            TransferSubmitAccount {
+                                id: account.id.clone(),
+                                client: peer.client_for(
+                                    &account.id,
+                                    account.key_pair.private_key().clone(),
+                                ),
+                            }
+                        })
+                        .collect();
+                    tokio::spawn(submit_transfers_paced(
+                        total_txs,
+                        target_tps,
+                        submit_accounts,
+                        transfer_asset_definition_id.clone(),
+                        transfer_max_amount,
+                        rng_seed,
+                        submit_parallelism,
+                        submitted_for_task,
+                    ))
+                }
+                Realistic30TpsLoadKind::RamLfeEmail => {
+                    // ClaimIdentifier accepts the policy owner as authority; using it here keeps
+                    // the generated UAID-bearing accounts from needing space-directory lane
+                    // bindings in this local soak harness.
+                    let policy_owner_private_key =
+                        REAL_GENESIS_ACCOUNT_KEYPAIR.private_key().clone();
+                    let submit_accounts: Vec<_> = ram_lfe_email_load_accounts
+                        .iter()
+                        .enumerate()
+                        .map(|(index, account)| {
+                            let peer = &network.peers()[index % network.peers().len()];
+                            RamLfeEmailSubmitAccount {
+                                id: account.id.clone(),
+                                client: peer.client_for(
+                                    &ram_lfe_email_owner,
+                                    policy_owner_private_key.clone(),
+                                ),
+                                uaid: account.uaid,
+                            }
+                        })
+                        .collect();
+                    tokio::spawn(submit_ram_lfe_emails_paced(
+                        total_txs,
+                        target_tps,
+                        submit_accounts,
+                        ram_lfe_email_policy_context.clone(),
+                        ram_lfe_email_resolver.clone(),
+                        rng_seed,
+                        submit_parallelism,
+                        submitted_for_task,
+                    ))
+                }
+            };
 
             eprintln!(
-                "realistic localnet recipe: peers={}, target_tps={}, duration_secs={}, total_txs={}, target_non_empty_delta={}, block_time_ms={}, commit_time_ms={}, block_max_txs={}, load_kind=transfer, transfer_accounts={}, transfer_initial_balance={}, transfer_max_amount={}, submit_parallelism={}, queue_soft_limit={}, baseline_non_empty={}, baseline_approved={}",
+                "realistic localnet recipe: peers={}, target_tps={}, duration_secs={}, total_txs={}, target_non_empty_delta={}, block_time_ms={}, commit_time_ms={}, block_max_txs={}, load_kind={}, transfer_accounts={}, transfer_initial_balance={}, transfer_max_amount={}, ram_lfe_email_accounts={}, ram_lfe_email_policy={}, ram_lfe_program={}, submit_parallelism={}, queue_soft_limit={}, baseline_non_empty={}, baseline_approved={}",
                 network.peers().len(),
                 target_tps,
                 duration_secs,
@@ -861,16 +1358,36 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
                 block_time_ms,
                 commit_time_ms,
                 block_max_txs,
-                transfer_accounts,
-                transfer_initial_balance,
-                transfer_max_amount,
+                load_kind.as_str(),
+                if load_kind == Realistic30TpsLoadKind::Transfer {
+                    transfer_accounts
+                } else {
+                    0
+                },
+                if load_kind == Realistic30TpsLoadKind::Transfer {
+                    transfer_initial_balance
+                } else {
+                    0
+                },
+                if load_kind == Realistic30TpsLoadKind::Transfer {
+                    transfer_max_amount
+                } else {
+                    0
+                },
+                if load_kind == Realistic30TpsLoadKind::RamLfeEmail {
+                    ram_lfe_email_accounts
+                } else {
+                    0
+                },
+                ram_lfe_email_policy.id,
+                ram_lfe_email_program_policy.program_id,
                 submit_parallelism,
                 queue_soft_limit,
                 baseline_non_empty,
                 baseline_approved,
             );
 
-            let mut samples = Vec::new();
+            artifacts.samples.clear();
             let mut last_progress = Instant::now();
             let mut last_min_non_empty = baseline_non_empty;
             let mut last_min_approved = baseline_approved;
@@ -929,7 +1446,8 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
                             .duration_since(UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_millis();
-                        samples.push(ThroughputSample {
+                        artifacts.samples.push(ThroughputSample {
+                            phase: Some("load".to_owned()),
                             timestamp_ms: u64::try_from(timestamp_ms).unwrap_or(u64::MAX),
                             statuses: status_snapshots.clone(),
                             sumeragi: sumeragi_snapshots,
@@ -966,6 +1484,25 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
                 if last_progress.elapsed() >= stall_threshold {
                     submit_handle.abort();
                     let _ = submit_handle.await;
+                    let elapsed = run_start.elapsed();
+                    let submitted = submitted_counter.load(AtomicOrdering::Relaxed);
+                    let produced_blocks = last_min_non_empty.saturating_sub(baseline_non_empty);
+                    let status_summary = ThroughputStatusSummary::from_statuses(&last_snapshot);
+                    artifacts.realistic = Some(realistic_artifact_summary(
+                        baseline_non_empty,
+                        baseline_approved,
+                        target_non_empty,
+                        target_approved,
+                        submitted,
+                        elapsed,
+                        elapsed,
+                        elapsed,
+                        status_summary.clone(),
+                        status_summary,
+                        produced_blocks,
+                        produced_blocks,
+                        &artifacts.samples,
+                    ));
                     return Err(eyre!(
                         "realistic localnet stalled for {:?}: elapsed={:?}, submitted={}, last_min_non_empty={}, last_min_approved={}, last_snapshot={last_snapshot:?}",
                         stall_threshold,
@@ -988,6 +1525,12 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
                 .map(|status| status.blocks_non_empty)
                 .min()
                 .unwrap_or_default();
+            let load_end_snapshots: Vec<StatusSnapshot> = load_end_statuses
+                .iter()
+                .map(StatusSnapshot::from_status)
+                .collect();
+            let load_end_summary =
+                ThroughputStatusSummary::from_statuses(&load_end_snapshots);
             let load_end_produced_blocks =
                 load_end_min_non_empty.saturating_sub(baseline_non_empty);
             let mut after_statuses = load_end_statuses;
@@ -1004,6 +1547,27 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
                 .unwrap_or_default();
             while drain_last_min_approved < target_approved {
                 if drain_last_progress.elapsed() >= stall_threshold {
+                    let final_snapshots: Vec<StatusSnapshot> =
+                        after_statuses.iter().map(StatusSnapshot::from_status).collect();
+                    let final_summary = ThroughputStatusSummary::from_statuses(&final_snapshots);
+                    let produced_blocks = final_summary
+                        .min_blocks_non_empty
+                        .saturating_sub(baseline_non_empty);
+                    artifacts.realistic = Some(realistic_artifact_summary(
+                        baseline_non_empty,
+                        baseline_approved,
+                        target_non_empty,
+                        target_approved,
+                        submitted_counter.load(AtomicOrdering::Relaxed),
+                        submit_elapsed,
+                        load_end_elapsed,
+                        run_start.elapsed(),
+                        load_end_summary.clone(),
+                        final_summary,
+                        load_end_produced_blocks,
+                        produced_blocks,
+                        &artifacts.samples,
+                    ));
                     return Err(eyre!(
                         "realistic localnet stalled while draining after load for {:?}: load_elapsed={:?}, submitted={}, min_approved={}, target_approved={}, max_queue={}, last_statuses={after_statuses:?}",
                         stall_threshold,
@@ -1016,6 +1580,33 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
                 }
                 sleep(REALISTIC_30TPS_SAMPLE_INTERVAL).await;
                 after_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
+                let status_snapshots: Vec<StatusSnapshot> =
+                    after_statuses.iter().map(StatusSnapshot::from_status).collect();
+                let sumeragi_snapshots = match collect_sumeragi_statuses(
+                    &network,
+                    STATUS_POLL_TIMEOUT,
+                )
+                .await
+                {
+                    Ok(sumeragi) => sumeragi
+                        .iter()
+                        .map(SumeragiStatusSnapshot::from_status)
+                        .collect(),
+                    Err(err) => {
+                        eprintln!("sumeragi status drain sample failed: {err:?}");
+                        Vec::new()
+                    }
+                };
+                let timestamp_ms = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+                artifacts.samples.push(ThroughputSample {
+                    phase: Some("drain".to_owned()),
+                    timestamp_ms: u64::try_from(timestamp_ms).unwrap_or(u64::MAX),
+                    statuses: status_snapshots,
+                    sumeragi: sumeragi_snapshots,
+                });
                 let min_approved = after_statuses
                     .iter()
                     .map(|status| status.txs_approved)
@@ -1048,24 +1639,35 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
                 .max()
                 .unwrap_or_default();
             let produced_blocks = min_non_empty.saturating_sub(baseline_non_empty);
-            let load_avg_secs_per_block = if load_end_produced_blocks == 0 {
-                f64::INFINITY
-            } else {
-                load_end_elapsed.as_secs_f64() / load_end_produced_blocks as f64
-            };
-            let avg_secs_per_block = if produced_blocks == 0 {
-                f64::INFINITY
-            } else {
-                run_start.elapsed().as_secs_f64() / produced_blocks as f64
-            };
+            let load_avg_secs_per_block =
+                seconds_per_block(load_end_elapsed, load_end_produced_blocks);
+            let avg_secs_per_block = seconds_per_block(run_start.elapsed(), produced_blocks);
 
             if let Ok(after_metrics) =
                 collect_metrics_snapshots(&network, &http, THROUGHPUT_METRICS_TIMEOUT).await
             {
                 artifacts.after_metrics = after_metrics;
             }
-            artifacts.samples = samples;
-
+            let final_snapshots: Vec<StatusSnapshot> =
+                after_statuses.iter().map(StatusSnapshot::from_status).collect();
+            let final_summary = ThroughputStatusSummary::from_statuses(&final_snapshots);
+            let total_elapsed = run_start.elapsed();
+            let submitted = submitted_counter.load(AtomicOrdering::Relaxed);
+            artifacts.realistic = Some(realistic_artifact_summary(
+                baseline_non_empty,
+                baseline_approved,
+                target_non_empty,
+                target_approved,
+                submitted,
+                submit_elapsed,
+                load_end_elapsed,
+                total_elapsed,
+                load_end_summary.clone(),
+                final_summary.clone(),
+                load_end_produced_blocks,
+                produced_blocks,
+                &artifacts.samples,
+            ));
             eprintln!(
                 "realistic localnet summary: load_elapsed={:?}, elapsed={:?}, submit_elapsed={:?}, submitted={}, load_end_produced_blocks={}, produced_blocks={}, min_non_empty={}, target_non_empty={}, final_min_non_empty={}, min_approved={}, target_approved={}, max_rejected={}, load_avg_secs_per_block={load_avg_secs_per_block:.3}, avg_secs_per_block={avg_secs_per_block:.3}",
                 load_end_elapsed,
@@ -1098,16 +1700,29 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
                 max_rejected == 0,
                 "transactions were rejected during realistic localnet run: max_rejected={max_rejected}"
             );
-            verify_realistic_transfer_balances(
-                &network.client(),
-                &transfer_asset_definition_id,
-                &transfer_load_accounts,
-                total_txs,
-                transfer_initial_balance,
-                transfer_max_amount,
-                rng_seed,
-            )
-            .wrap_err("realistic transfer balances did not match submitted random graph")?;
+            match load_kind {
+                Realistic30TpsLoadKind::Transfer => {
+                    verify_realistic_transfer_balances(
+                        &network.client(),
+                        &transfer_asset_definition_id,
+                        &transfer_load_accounts,
+                        total_txs,
+                        transfer_initial_balance,
+                        transfer_max_amount,
+                        rng_seed,
+                    )
+                    .wrap_err("realistic transfer balances did not match submitted random graph")?;
+                }
+                Realistic30TpsLoadKind::RamLfeEmail => {
+                    verify_realistic_ram_lfe_email_claim_counts(
+                        &network.client(),
+                        &ram_lfe_email_load_accounts,
+                        total_txs,
+                        rng_seed,
+                    )
+                    .wrap_err("realistic RAM-LFE email claim counts did not match submitted route")?;
+                }
+            }
             Ok(())
         }
         .await;
@@ -2474,6 +3089,9 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             transfer_accounts: 0,
             transfer_initial_balance: 0,
             transfer_max_amount: 0,
+            ram_lfe_email_accounts: 0,
+            ram_lfe_email_policy: String::new(),
+            ram_lfe_program: String::new(),
             rng_seed,
             rbc_encoding: throughput_rbc_encoding.clone(),
             rbc_data_shards: throughput_rbc_data_shards,
@@ -2656,6 +3274,7 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                     .unwrap_or_default()
                     .as_millis();
                 samples.push(ThroughputSample {
+                    phase: None,
                     timestamp_ms: u64::try_from(timestamp_ms).unwrap_or(u64::MAX),
                     statuses: status_snapshots.clone(),
                     sumeragi: sumeragi_snapshots,
@@ -3129,6 +3748,9 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             transfer_accounts: 0,
             transfer_initial_balance: 0,
             transfer_max_amount: 0,
+            ram_lfe_email_accounts: 0,
+            ram_lfe_email_policy: String::new(),
+            ram_lfe_program: String::new(),
             rng_seed,
             rbc_encoding: "plain".to_owned(),
             rbc_data_shards: 4,
@@ -3317,6 +3939,7 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                 .unwrap_or_default()
                 .as_millis();
             samples.push(ThroughputSample {
+                phase: None,
                 timestamp_ms: u64::try_from(timestamp_ms).unwrap_or(u64::MAX),
                 statuses: status_snapshots,
                 sumeragi: sumeragi_snapshots,
@@ -3926,6 +4549,73 @@ async fn fail_on_sandbox_skip_defaults_to_false() {
     remove_env_var(FAIL_ON_SANDBOX_SKIP_ENV);
 }
 
+#[tokio::test]
+async fn realistic_30tps_load_kind_parses_email_mode_and_defaults_to_transfer() {
+    let _guard = LOCALNET_SMOKE_GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .await;
+    remove_env_var("IROHA_REALISTIC_30TPS_LOAD_KIND");
+    assert_eq!(
+        Realistic30TpsLoadKind::from_env().expect("default load kind"),
+        Realistic30TpsLoadKind::Transfer
+    );
+    set_env_var("IROHA_REALISTIC_30TPS_LOAD_KIND", "ram-lfe-email");
+    assert_eq!(
+        Realistic30TpsLoadKind::from_env().expect("email load kind"),
+        Realistic30TpsLoadKind::RamLfeEmail
+    );
+    set_env_var("IROHA_REALISTIC_30TPS_LOAD_KIND", "emails");
+    assert_eq!(
+        Realistic30TpsLoadKind::from_env().expect("email alias load kind"),
+        Realistic30TpsLoadKind::RamLfeEmail
+    );
+    set_env_var("IROHA_REALISTIC_30TPS_LOAD_KIND", "unsupported");
+    assert!(Realistic30TpsLoadKind::from_env().is_err());
+    remove_env_var("IROHA_REALISTIC_30TPS_LOAD_KIND");
+}
+
+#[test]
+fn realistic_ram_lfe_email_receipt_is_signed_for_generated_email_claim() {
+    let resolver = KeyPair::from_seed(
+        b"integration_tests::realistic-ram-lfe-email-receipt-test".to_vec(),
+        Algorithm::Ed25519,
+    );
+    let owner = (*ALICE_ID).clone();
+    let (policy, program_policy) = realistic_ram_lfe_email_policy_bundle(&owner, &resolver);
+    let context = realistic_ram_lfe_email_policy_context(policy.id.clone(), &program_policy)
+        .expect("policy context");
+    let account = realistic_ram_lfe_email_accounts(1, 9)
+        .pop()
+        .expect("account");
+
+    let receipt =
+        realistic_ram_lfe_email_receipt(&context, &resolver, &account.id, account.uaid, 7, 9);
+
+    receipt
+        .verify(resolver.public_key())
+        .expect("receipt signature should verify");
+    assert_eq!(receipt.payload.policy_id, policy.id);
+    assert_eq!(receipt.payload.account_id, account.id);
+    assert_eq!(receipt.payload.uaid, account.uaid);
+    assert_eq!(
+        receipt.payload.execution.associated_data_hash,
+        Hash::new(&context.program_id_bytes)
+    );
+}
+
+#[test]
+fn realistic_ram_lfe_email_claim_counts_are_deterministic() {
+    let first = expected_realistic_ram_lfe_email_claim_counts(4, 25, 123);
+    let second = expected_realistic_ram_lfe_email_claim_counts(4, 25, 123);
+    assert_eq!(first, second);
+    assert_eq!(first.iter().sum::<usize>(), 25);
+    assert_ne!(
+        first,
+        expected_realistic_ram_lfe_email_claim_counts(4, 25, 124)
+    );
+}
+
 #[test]
 fn write_throughput_artifacts_writes_error_summary() {
     let dir = tempdir().expect("tempdir");
@@ -3933,6 +4623,12 @@ fn write_throughput_artifacts_writes_error_summary() {
     let network_dir = dir.path().join("network");
     let artifacts = ThroughputArtifacts {
         error: Some("boom".to_string()),
+        samples: vec![ThroughputSample {
+            phase: Some("load".to_string()),
+            timestamp_ms: 7,
+            statuses: Vec::new(),
+            sumeragi: Vec::new(),
+        }],
         ..ThroughputArtifacts::default()
     };
     let peer_logs = vec![PeerLogInfo {
@@ -3952,7 +4648,221 @@ fn write_throughput_artifacts_writes_error_summary() {
         panic!("expected summary object");
     };
     assert_eq!(map.get("error"), Some(&Value::String("boom".to_string())));
-    assert!(run_dir.join("status_samples.json").exists());
+    let samples_json =
+        fs::read_to_string(run_dir.join("status_samples.json")).expect("read samples");
+    let Value::Array(samples) =
+        norito::json::from_json::<Value>(&samples_json).expect("parse samples")
+    else {
+        panic!("expected samples array");
+    };
+    let Some(Value::Object(sample)) = samples.first() else {
+        panic!("expected first sample object");
+    };
+    assert_eq!(
+        sample.get("phase"),
+        Some(&Value::String("load".to_string()))
+    );
+}
+
+#[test]
+fn throughput_status_summary_uses_min_and_max_peer_values() {
+    let statuses = vec![
+        StatusSnapshot {
+            blocks: 10,
+            blocks_non_empty: 9,
+            queue_size: 4,
+            txs_approved: 90,
+            txs_rejected: 0,
+            view_changes: 0,
+            leader_index: None,
+            highest_qc_height: None,
+            locked_qc_height: None,
+            tx_queue_depth: None,
+            tx_queue_saturated: None,
+            block_created_dropped_by_lock_total: None,
+            block_created_hint_mismatch_total: None,
+            block_created_proposal_mismatch_total: None,
+            commit_signatures_present: None,
+            commit_signatures_required: None,
+        },
+        StatusSnapshot {
+            blocks: 12,
+            blocks_non_empty: 11,
+            queue_size: 7,
+            txs_approved: 100,
+            txs_rejected: 2,
+            view_changes: 0,
+            leader_index: None,
+            highest_qc_height: None,
+            locked_qc_height: None,
+            tx_queue_depth: None,
+            tx_queue_saturated: None,
+            block_created_dropped_by_lock_total: None,
+            block_created_hint_mismatch_total: None,
+            block_created_proposal_mismatch_total: None,
+            commit_signatures_present: None,
+            commit_signatures_required: None,
+        },
+    ];
+
+    let summary = ThroughputStatusSummary::from_statuses(&statuses);
+
+    assert_eq!(summary.min_blocks, 10);
+    assert_eq!(summary.max_blocks, 12);
+    assert_eq!(summary.min_blocks_non_empty, 9);
+    assert_eq!(summary.max_blocks_non_empty, 11);
+    assert_eq!(summary.min_txs_approved, 90);
+    assert_eq!(summary.max_txs_rejected, 2);
+    assert_eq!(summary.max_queue_size, 7);
+}
+
+#[test]
+fn realistic_artifact_summary_counts_load_samples_and_keeps_zero_block_rates_finite() {
+    let load_end = ThroughputStatusSummary {
+        min_txs_approved: 10,
+        ..ThroughputStatusSummary::default()
+    };
+    let final_status = ThroughputStatusSummary {
+        min_txs_approved: 25,
+        ..ThroughputStatusSummary::default()
+    };
+    let samples = vec![
+        ThroughputSample {
+            phase: Some("load".to_string()),
+            timestamp_ms: 1,
+            statuses: Vec::new(),
+            sumeragi: Vec::new(),
+        },
+        ThroughputSample {
+            phase: Some("drain".to_string()),
+            timestamp_ms: 2,
+            statuses: Vec::new(),
+            sumeragi: Vec::new(),
+        },
+    ];
+
+    let summary = realistic_artifact_summary(
+        0,
+        10,
+        5,
+        30,
+        15,
+        Duration::from_secs(5),
+        Duration::from_secs(5),
+        Duration::from_secs(8),
+        load_end,
+        final_status,
+        0,
+        0,
+        &samples,
+    );
+
+    assert_eq!(summary.load_sample_count, 1);
+    assert_eq!(summary.drain_elapsed_ms, 3_000);
+    assert_eq!(summary.load_avg_secs_per_block, 0.0);
+    assert_eq!(summary.avg_secs_per_block, 0.0);
+    assert!(summary.final_committed_tps.is_finite());
+}
+
+#[test]
+fn write_throughput_artifacts_writes_realistic_summary_and_sample_phases() {
+    let dir = tempdir().expect("tempdir");
+    let artifact_root = dir.path().join("artifacts");
+    let network_dir = dir.path().join("network");
+    let status = StatusSnapshot {
+        blocks: 5,
+        blocks_non_empty: 4,
+        queue_size: 3,
+        txs_approved: 120,
+        txs_rejected: 0,
+        view_changes: 1,
+        leader_index: Some(0),
+        highest_qc_height: Some(4),
+        locked_qc_height: Some(4),
+        tx_queue_depth: Some(3),
+        tx_queue_saturated: Some(false),
+        block_created_dropped_by_lock_total: Some(0),
+        block_created_hint_mismatch_total: Some(0),
+        block_created_proposal_mismatch_total: Some(0),
+        commit_signatures_present: Some(3),
+        commit_signatures_required: Some(3),
+    };
+    let summary = ThroughputStatusSummary::from_statuses(std::slice::from_ref(&status));
+    let artifacts = ThroughputArtifacts {
+        realistic: Some(ThroughputArtifactRealistic {
+            baseline_non_empty: 1,
+            baseline_approved: 8,
+            target_non_empty: 4,
+            target_approved: 98,
+            submitted: 90,
+            load_sample_count: 1,
+            load_elapsed_ms: 3_000,
+            submit_elapsed_ms: 3_000,
+            drain_elapsed_ms: 1_000,
+            total_elapsed_ms: 4_000,
+            load_end: summary.clone(),
+            final_status: summary,
+            load_end_produced_blocks: 3,
+            produced_blocks: 3,
+            load_submitted_tps: 30.0,
+            load_committed_tps: 28.0,
+            final_committed_tps: 22.5,
+            load_avg_secs_per_block: 1.0,
+            avg_secs_per_block: 1.333,
+        }),
+        samples: vec![ThroughputSample {
+            phase: Some("load".to_string()),
+            timestamp_ms: 42,
+            statuses: vec![status],
+            sumeragi: Vec::new(),
+        }],
+        ..ThroughputArtifacts::default()
+    };
+    let peer_logs = vec![PeerLogInfo {
+        index: 0,
+        mnemonic: "peer0".to_string(),
+        stdout_log: None,
+        stderr_log: None,
+    }];
+
+    let run_dir = write_throughput_artifacts(&artifact_root, &network_dir, &peer_logs, &artifacts)
+        .expect("write artifacts");
+    let summary_json = fs::read_to_string(run_dir.join("summary.json")).expect("read summary");
+    let Value::Object(summary_map) =
+        norito::json::from_json::<Value>(&summary_json).expect("parse summary")
+    else {
+        panic!("expected summary object");
+    };
+    let Some(Value::Object(realistic)) = summary_map.get("realistic") else {
+        panic!("expected realistic summary");
+    };
+    assert_eq!(realistic.get("submitted"), Some(&Value::from(90_u64)));
+    assert_eq!(
+        realistic.get("load_end_produced_blocks"),
+        Some(&Value::from(3_u64))
+    );
+
+    let samples_json =
+        fs::read_to_string(run_dir.join("status_samples.json")).expect("read samples");
+    let Value::Array(samples) =
+        norito::json::from_json::<Value>(&samples_json).expect("parse samples")
+    else {
+        panic!("expected samples array");
+    };
+    let Some(Value::Object(sample)) = samples.first() else {
+        panic!("expected first sample object");
+    };
+    assert_eq!(
+        sample.get("phase"),
+        Some(&Value::String("load".to_string()))
+    );
+    let Some(Value::Array(statuses)) = sample.get("status") else {
+        panic!("expected status array");
+    };
+    let Some(Value::Object(status)) = statuses.first() else {
+        panic!("expected status object");
+    };
+    assert_eq!(status.get("blocks_non_empty"), Some(&Value::from(4_u64)));
 }
 
 #[test]
@@ -4070,6 +4980,7 @@ fn config_fingerprint_changes_on_update() {
 fn status_snapshot_value_handles_options() {
     let snapshot = StatusSnapshot {
         blocks: 1,
+        blocks_non_empty: 1,
         queue_size: 2,
         txs_approved: 3,
         txs_rejected: 4,
@@ -4173,6 +5084,7 @@ fn scale_duration(duration: Duration, factor: u64) -> Duration {
 #[allow(dead_code)]
 struct StatusSnapshot {
     blocks: u64,
+    blocks_non_empty: u64,
     queue_size: u64,
     txs_approved: u64,
     txs_rejected: u64,
@@ -4194,6 +5106,7 @@ impl StatusSnapshot {
         let sumeragi = status.sumeragi.as_ref();
         Self {
             blocks: status.blocks,
+            blocks_non_empty: status.blocks_non_empty,
             queue_size: status.queue_size,
             txs_approved: status.txs_approved,
             txs_rejected: status.txs_rejected,
@@ -4217,9 +5130,72 @@ impl StatusSnapshot {
 
 #[derive(Debug)]
 struct ThroughputSample {
+    phase: Option<String>,
     timestamp_ms: u64,
     statuses: Vec<StatusSnapshot>,
     sumeragi: Vec<SumeragiStatusSnapshot>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ThroughputStatusSummary {
+    min_blocks: u64,
+    max_blocks: u64,
+    min_blocks_non_empty: u64,
+    max_blocks_non_empty: u64,
+    min_txs_approved: u64,
+    max_txs_approved: u64,
+    max_txs_rejected: u64,
+    max_queue_size: u64,
+}
+
+impl ThroughputStatusSummary {
+    fn from_statuses(statuses: &[StatusSnapshot]) -> Self {
+        if statuses.is_empty() {
+            return Self::default();
+        }
+        Self {
+            min_blocks: statuses
+                .iter()
+                .map(|status| status.blocks)
+                .min()
+                .unwrap_or_default(),
+            max_blocks: statuses
+                .iter()
+                .map(|status| status.blocks)
+                .max()
+                .unwrap_or_default(),
+            min_blocks_non_empty: statuses
+                .iter()
+                .map(|status| status.blocks_non_empty)
+                .min()
+                .unwrap_or_default(),
+            max_blocks_non_empty: statuses
+                .iter()
+                .map(|status| status.blocks_non_empty)
+                .max()
+                .unwrap_or_default(),
+            min_txs_approved: statuses
+                .iter()
+                .map(|status| status.txs_approved)
+                .min()
+                .unwrap_or_default(),
+            max_txs_approved: statuses
+                .iter()
+                .map(|status| status.txs_approved)
+                .max()
+                .unwrap_or_default(),
+            max_txs_rejected: statuses
+                .iter()
+                .map(|status| status.txs_rejected)
+                .max()
+                .unwrap_or_default(),
+            max_queue_size: statuses
+                .iter()
+                .map(|status| status.queue_size)
+                .max()
+                .unwrap_or_default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -4251,6 +5227,10 @@ fn status_snapshot_value(snapshot: &StatusSnapshot) -> Value {
     let opt_bool = |value: Option<bool>| value.map_or(Value::Null, Value::from);
 
     map.insert("blocks".to_string(), Value::from(snapshot.blocks));
+    map.insert(
+        "blocks_non_empty".to_string(),
+        Value::from(snapshot.blocks_non_empty),
+    );
     map.insert("queue_size".to_string(), Value::from(snapshot.queue_size));
     map.insert(
         "txs_approved".to_string(),
@@ -4300,6 +5280,37 @@ fn status_snapshot_value(snapshot: &StatusSnapshot) -> Value {
     map.insert(
         "commit_signatures_required".to_string(),
         opt_u64(snapshot.commit_signatures_required),
+    );
+    Value::Object(map)
+}
+
+fn throughput_status_summary_value(summary: &ThroughputStatusSummary) -> Value {
+    let mut map = Map::new();
+    map.insert("min_blocks".to_string(), Value::from(summary.min_blocks));
+    map.insert("max_blocks".to_string(), Value::from(summary.max_blocks));
+    map.insert(
+        "min_blocks_non_empty".to_string(),
+        Value::from(summary.min_blocks_non_empty),
+    );
+    map.insert(
+        "max_blocks_non_empty".to_string(),
+        Value::from(summary.max_blocks_non_empty),
+    );
+    map.insert(
+        "min_txs_approved".to_string(),
+        Value::from(summary.min_txs_approved),
+    );
+    map.insert(
+        "max_txs_approved".to_string(),
+        Value::from(summary.max_txs_approved),
+    );
+    map.insert(
+        "max_txs_rejected".to_string(),
+        Value::from(summary.max_txs_rejected),
+    );
+    map.insert(
+        "max_queue_size".to_string(),
+        Value::from(summary.max_queue_size),
     );
     Value::Object(map)
 }
@@ -4361,6 +5372,9 @@ struct ThroughputArtifactRecipe {
     transfer_accounts: u64,
     transfer_initial_balance: u64,
     transfer_max_amount: u64,
+    ram_lfe_email_accounts: u64,
+    ram_lfe_email_policy: String,
+    ram_lfe_program: String,
     rng_seed: u64,
     rbc_encoding: String,
     rbc_data_shards: u64,
@@ -4397,11 +5411,35 @@ struct ThroughputArtifactMetrics {
     steady_submit_elapsed_ms: u64,
 }
 
+#[derive(Clone, Debug)]
+struct ThroughputArtifactRealistic {
+    baseline_non_empty: u64,
+    baseline_approved: u64,
+    target_non_empty: u64,
+    target_approved: u64,
+    submitted: u64,
+    load_sample_count: u64,
+    load_elapsed_ms: u64,
+    submit_elapsed_ms: u64,
+    drain_elapsed_ms: u64,
+    total_elapsed_ms: u64,
+    load_end: ThroughputStatusSummary,
+    final_status: ThroughputStatusSummary,
+    load_end_produced_blocks: u64,
+    produced_blocks: u64,
+    load_submitted_tps: f64,
+    load_committed_tps: f64,
+    final_committed_tps: f64,
+    load_avg_secs_per_block: f64,
+    avg_secs_per_block: f64,
+}
+
 #[derive(Debug, Default)]
 struct ThroughputArtifacts {
     recipe: Option<ThroughputArtifactRecipe>,
     slo: Option<ThroughputArtifactSlo>,
     metrics: Option<ThroughputArtifactMetrics>,
+    realistic: Option<ThroughputArtifactRealistic>,
     warmup_metrics: Vec<PeerMetricsSnapshot>,
     after_metrics: Vec<PeerMetricsSnapshot>,
     samples: Vec<ThroughputSample>,
@@ -4444,6 +5482,9 @@ fn write_throughput_artifacts(
             .iter()
             .map(|sample| {
                 let mut map = Map::new();
+                if let Some(phase) = sample.phase.as_ref() {
+                    map.insert("phase".to_string(), Value::String(phase.clone()));
+                }
                 map.insert("timestamp_ms".to_string(), Value::from(sample.timestamp_ms));
                 map.insert(
                     "status".to_string(),
@@ -4555,6 +5596,18 @@ fn write_throughput_artifacts(
             "transfer_max_amount".to_string(),
             Value::from(recipe.transfer_max_amount),
         );
+        recipe_map.insert(
+            "ram_lfe_email_accounts".to_string(),
+            Value::from(recipe.ram_lfe_email_accounts),
+        );
+        recipe_map.insert(
+            "ram_lfe_email_policy".to_string(),
+            Value::from(recipe.ram_lfe_email_policy.clone()),
+        );
+        recipe_map.insert(
+            "ram_lfe_program".to_string(),
+            Value::from(recipe.ram_lfe_program.clone()),
+        );
         recipe_map.insert("rng_seed".to_string(), Value::from(recipe.rng_seed));
         recipe_map.insert(
             "rbc_encoding".to_string(),
@@ -4661,6 +5714,84 @@ fn write_throughput_artifacts(
             Value::from(metrics.steady_submit_elapsed_ms),
         );
         summary.insert("metrics".to_string(), Value::Object(metrics_map));
+    }
+
+    if let Some(realistic) = artifacts.realistic.as_ref() {
+        let mut realistic_map = Map::new();
+        realistic_map.insert(
+            "baseline_non_empty".to_string(),
+            Value::from(realistic.baseline_non_empty),
+        );
+        realistic_map.insert(
+            "baseline_approved".to_string(),
+            Value::from(realistic.baseline_approved),
+        );
+        realistic_map.insert(
+            "target_non_empty".to_string(),
+            Value::from(realistic.target_non_empty),
+        );
+        realistic_map.insert(
+            "target_approved".to_string(),
+            Value::from(realistic.target_approved),
+        );
+        realistic_map.insert("submitted".to_string(), Value::from(realistic.submitted));
+        realistic_map.insert(
+            "load_sample_count".to_string(),
+            Value::from(realistic.load_sample_count),
+        );
+        realistic_map.insert(
+            "load_elapsed_ms".to_string(),
+            Value::from(realistic.load_elapsed_ms),
+        );
+        realistic_map.insert(
+            "submit_elapsed_ms".to_string(),
+            Value::from(realistic.submit_elapsed_ms),
+        );
+        realistic_map.insert(
+            "drain_elapsed_ms".to_string(),
+            Value::from(realistic.drain_elapsed_ms),
+        );
+        realistic_map.insert(
+            "total_elapsed_ms".to_string(),
+            Value::from(realistic.total_elapsed_ms),
+        );
+        realistic_map.insert(
+            "load_end".to_string(),
+            throughput_status_summary_value(&realistic.load_end),
+        );
+        realistic_map.insert(
+            "final".to_string(),
+            throughput_status_summary_value(&realistic.final_status),
+        );
+        realistic_map.insert(
+            "load_end_produced_blocks".to_string(),
+            Value::from(realistic.load_end_produced_blocks),
+        );
+        realistic_map.insert(
+            "produced_blocks".to_string(),
+            Value::from(realistic.produced_blocks),
+        );
+        realistic_map.insert(
+            "load_submitted_tps".to_string(),
+            Value::from(realistic.load_submitted_tps),
+        );
+        realistic_map.insert(
+            "load_committed_tps".to_string(),
+            Value::from(realistic.load_committed_tps),
+        );
+        realistic_map.insert(
+            "final_committed_tps".to_string(),
+            Value::from(realistic.final_committed_tps),
+        );
+        realistic_map.insert(
+            "load_avg_secs_per_block".to_string(),
+            Value::from(realistic.load_avg_secs_per_block),
+        );
+        realistic_map.insert(
+            "avg_secs_per_block".to_string(),
+            Value::from(realistic.avg_secs_per_block),
+        );
+        summary.insert("realistic".to_string(), Value::Object(realistic_map));
     }
 
     let peer_logs_value: Vec<Value> = peer_logs
@@ -4932,6 +6063,72 @@ fn rate_summary(start: &[u64], end: &[u64], elapsed: Duration) -> (f64, f64) {
         }
     }
     (sum / count as f64, max_rate)
+}
+
+fn rate_per_second(count: u64, elapsed: Duration) -> f64 {
+    let secs = elapsed.as_secs_f64();
+    if secs <= 0.0 {
+        return 0.0;
+    }
+    count as f64 / secs
+}
+
+fn duration_millis_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+fn seconds_per_block(elapsed: Duration, blocks: u64) -> f64 {
+    if blocks == 0 {
+        return 0.0;
+    }
+    elapsed.as_secs_f64() / blocks as f64
+}
+
+#[allow(clippy::too_many_arguments)]
+fn realistic_artifact_summary(
+    baseline_non_empty: u64,
+    baseline_approved: u64,
+    target_non_empty: u64,
+    target_approved: u64,
+    submitted: u64,
+    submit_elapsed: Duration,
+    load_elapsed: Duration,
+    total_elapsed: Duration,
+    load_end: ThroughputStatusSummary,
+    final_status: ThroughputStatusSummary,
+    load_end_produced_blocks: u64,
+    produced_blocks: u64,
+    samples: &[ThroughputSample],
+) -> ThroughputArtifactRealistic {
+    let drain_elapsed = total_elapsed.saturating_sub(load_elapsed);
+    let load_committed = load_end.min_txs_approved.saturating_sub(baseline_approved);
+    let final_committed = final_status
+        .min_txs_approved
+        .saturating_sub(baseline_approved);
+    ThroughputArtifactRealistic {
+        baseline_non_empty,
+        baseline_approved,
+        target_non_empty,
+        target_approved,
+        submitted,
+        load_sample_count: samples
+            .iter()
+            .filter(|sample| sample.phase.as_deref() == Some("load"))
+            .count() as u64,
+        load_elapsed_ms: duration_millis_u64(load_elapsed),
+        submit_elapsed_ms: duration_millis_u64(submit_elapsed),
+        drain_elapsed_ms: duration_millis_u64(drain_elapsed),
+        total_elapsed_ms: duration_millis_u64(total_elapsed),
+        load_end,
+        final_status,
+        load_end_produced_blocks,
+        produced_blocks,
+        load_submitted_tps: rate_per_second(submitted, submit_elapsed),
+        load_committed_tps: rate_per_second(load_committed, load_elapsed),
+        final_committed_tps: rate_per_second(final_committed, total_elapsed),
+        load_avg_secs_per_block: seconds_per_block(load_elapsed, load_end_produced_blocks),
+        avg_secs_per_block: seconds_per_block(total_elapsed, produced_blocks),
+    }
 }
 
 fn config_fingerprint(root: &Path) -> Result<Option<String>> {

@@ -22,7 +22,7 @@ use std::{
     thread,
 };
 
-use fastpq_isi::StarkParameterSet;
+use fastpq_isi::{StarkParameterSet, poseidon::PoseidonSponge as CpuPoseidonSponge};
 #[cfg(feature = "fastpq-gpu")]
 use fastpq_isi::poseidon::RATE;
 use iroha_crypto::Hash;
@@ -83,6 +83,10 @@ static GPU_POSEIDON_PIPE_DEPTH_OVERRIDE: OnceLock<Option<usize>> = OnceLock::new
 static POSEIDON_PIPELINE_STATS_ENABLED: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "fastpq-gpu")]
 static POSEIDON_PIPELINE_STATS: OnceLock<Mutex<PoseidonPipelineStats>> = OnceLock::new();
+#[cfg(feature = "fastpq-gpu")]
+static POSEIDON_MERKLE_GPU_DISABLED: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "fastpq-gpu")]
+const POSEIDON_MERKLE_GPU_MIN_PAIRS: usize = 512;
 
 type PoseidonPipelineObserver = dyn Fn(PoseidonPipelinePolicy, &'static str, Option<backend::GpuBackend>)
     + Send

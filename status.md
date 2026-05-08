@@ -2,6 +2,148 @@
 
 Last updated: 2026-05-08
 
+## 2026-05-08 Sumeragi idle timing cache
+
+- Sumeragi now caches the active and chain-effective consensus timing derived
+  from WSV snapshots instead of recomputing it from `state.world_view()` on
+  idle/tick housekeeping paths. Runtime DA checks, commit-quorum timeout,
+  rebroadcast cooldowns, idle tick deadlines, and worker-loop budgets now read
+  the cached snapshot.
+- The cache preserves the distinction between locally active consensus mode and
+  chain-effective mode for pending mode flips. It is refreshed during actor
+  initialization and the existing post-commit, mode-reset, and adaptive timing
+  status refresh points.
+- Added a focused regression proving `commit_quorum_timeout()` stays on the
+  cached value until the timing snapshot is refreshed, plus updated direct
+  parameter-mutation tests to refresh the actor timing snapshot explicitly.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo check -p iroha_core --lib`
+  - `cargo test -p iroha_core --lib commit_quorum_timeout_uses_cached_timing_until_refresh -- --nocapture`
+  - `cargo test -p iroha_core --lib commit_quorum_timeout_uses_npos_commit_floor -- --nocapture`
+  - `cargo test -p iroha_core --lib rebroadcast_cooldown_uses_npos_block_time -- --nocapture`
+  - `cargo test -p iroha_core --lib commit_pipeline_qc_rebuild_cooldown_uses_chain_block_time -- --nocapture`
+  - `cargo test -p iroha_core --lib update_effective_timing_status_populates_snapshot -- --nocapture`
+  - `cargo test -p iroha_core --lib actor_next_tick_deadline_schedules_tick_when_mode_flip_due -- --nocapture`
+  - `cargo test -p iroha_core --lib commit_evidence_replay_cooldown_does_not_fallback_to_payload -- --nocapture`
+  - `cargo test -p iroha_core --lib proposal_backpressure_respects_pending_stall_grace -- --nocapture`
+  - `git diff --check`
+
+## 2026-05-08 Sumeragi block-body response repair ingress
+
+- Exact `BlockBodyResponse` repair traffic now enters the fast block/recovery
+  lane instead of the ordinary block-payload lane. The message keeps the
+  existing dedup key and blocking enqueue semantics, but no longer waits behind
+  historical body/proposal backlog when it is needed to materialize the
+  contiguous frontier.
+- The queue-capacity comments for the block lane now describe its current
+  recovery role: fetches, body responses, and consensus params.
+- The full 20-minute realistic transfer soak now passes on the release daemon.
+  It submitted all 36,000 transfers, reached the 36,008 approved target
+  including the 8 baseline approvals, and ended with zero rejects, all peers at
+  722 non-empty blocks, and queue size 0. The run still shows throughput margin
+  pressure: load submitted at 30.00 TPS, committed at 21.61 TPS during load,
+  peaked at 9,973 queued transactions, and needed 722 seconds of drain time.
+  Artifact:
+  `integration_tests/artifacts/realistic-30tps-transfer-20min-640-release-daemon-block-body-response-block-lane/throughput-1778229477740/summary.json`.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib incoming_block_message_routes_block_body_response_via_block_ingress_queue -- --nocapture`
+  - `cargo test -p iroha_core --lib run_parallel_worker_prioritizes_block_ingress_before_vote_cert_burst -- --nocapture`
+  - `cargo build -p irohad --release`
+  - `TEST_NETWORK_BIN_IROHAD=/Users/takemiyamakoto/dev/iroha/target/release/irohad IROHA_TEST_SKIP_BUILD=1 IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_THROUGHPUT_ARTIFACT_DIR=/Users/takemiyamakoto/dev/iroha/integration_tests/artifacts/realistic-30tps-transfer-20min-640-release-daemon-block-body-response-block-lane cargo test -p integration_tests --test consensus_and_da sumeragi_localnet_smoke::permissioned_localnet_realistic_30tps_20min -- --ignored --exact --nocapture --test-threads=1`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+
+## 2026-05-08 Sumeragi known-block commit-QC recovery dampening
+
+- Commit-QC-only `FetchPendingBlock` responses now send the direct commit
+  certificate without also emitting an exact `BlockBodyResponse` body envelope.
+  This keeps known-block QC recovery from generating companion body traffic
+  that receivers immediately ignore as already-known or non-frontier.
+- Known-block missing-QC requests are now retired as soon as a duplicate,
+  record-only, detached, or block-sync supplied commit QC is locally cacheable.
+  Committed-tip QC reacquisition also uses the configured missing-QC recovery
+  window instead of the faster payload-rescue cadence.
+- Same-height known-block commit-QC recovery now treats requests for older
+  local views as obsolete, prunes stale missing-QC requests during view-state
+  pruning, and rotates the active frontier view after bounded retries with no
+  dependency progress. If the stall-reset fallback reanchor fires first, the
+  slot stays in passive catch-up instead of immediately reclaiming exact local
+  body ownership in the same retry tick.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_core --lib commit_qc_only_fetch_pending_block_sends_direct_cert_without_body_response -- --nocapture`
+  - `cargo test -p iroha_core --lib commit_qc_only_fetch_pending_block_defers_without_body_when_cert_missing -- --nocapture`
+  - `cargo test -p iroha_core --lib duplicate_commit_qc_clears_known_block_recovery_request -- --nocapture`
+  - `cargo test -p iroha_core --lib known_block_commit_qc_recovery -- --nocapture`
+  - `cargo test -p iroha_core --lib known_block_commit_qc_stall_uses_fallback_reanchor_when_primary_is_in_cooldown -- --nocapture`
+  - `cargo test -p iroha_core --lib known_block_commit_qc_recovery_uses_reacquire_window_for_committed_tip -- --nocapture`
+  - `cargo test -p iroha_core --lib known_block_commit_qc_recovery_requests_pending_update_when_payload_is_local -- --nocapture`
+  - `cargo test -p iroha_core --lib prune_stale_view_state_clears_known_block_commit_qc_requests -- --nocapture`
+  - `cargo test -p iroha_core --lib retry_known_block_commit_qc_requests -- --nocapture`
+  - `cargo test -p iroha_core --lib block_body_response_retains_same_height_known_block_commit_qc_repair_after_frontier_view_advances -- --nocapture`
+  - `cargo test -p iroha_core --lib da_payload_budget -- --nocapture`
+  - `cargo test -p iroha_core --lib da_proposal_uses_rbc_for_ram_lfe_tx_exceeding_consensus_payload_frame_cap -- --nocapture`
+  - `cargo test -p iroha_core --lib proposal_defers_when_all_txs_exceed_payload_budget -- --nocapture`
+  - `cargo check -p iroha_core --lib`
+  - `git diff --check`
+
+## 2026-05-08 Realistic transfer soak artifact accounting
+
+- The realistic 30 TPS transfer soak artifacts now retain load samples on early
+  failure, tag samples with `load`/`drain` phases, record
+  `blocks_non_empty`, and write a `realistic` summary with baseline, target,
+  submitted, load/drain elapsed time, peer min/max status, committed TPS, and
+  block interval data. Stall paths now write the partial realistic summary
+  before returning the error.
+- The optimized-daemon 2-minute diagnostic passed with 3,600 submitted
+  transfers, 3,600 approved, zero rejects, 74 produced non-empty blocks, and
+  50-transfer proof jobs averaging about 598 ms:
+  `integration_tests/artifacts/realistic-30tps-transfer-2min-640-release-daemon-diagnostic/throughput-1778218485540/summary.json`.
+- The full 20-minute optimized-daemon run on current `i23-features` did not
+  pass. It submitted all 36,000 transfers with zero rejects, but stalled in
+  drain at min approved 26,595 / target 36,008, min non-empty 534 / target
+  601, and max queue 9,413. The failure artifact confirms proof jobs stayed
+  fast (50-transfer proof jobs averaged about 530 ms), so the remaining issue
+  is consensus/RBC/QC drain cadence under backlog rather than prover speed:
+  `integration_tests/artifacts/realistic-30tps-transfer-20min-640-release-daemon-current/throughput-1778220296767/summary.json`.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo test -p integration_tests --test consensus_and_da write_throughput_artifacts -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da throughput_status_summary_uses_min_and_max_peer_values -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da realistic_artifact_summary_counts_load_samples_and_keeps_zero_block_rates_finite -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da status_snapshot_value_handles_options -- --nocapture`
+  - `cargo build -p irohad --release`
+  - `TEST_NETWORK_BIN_IROHAD=/Users/takemiyamakoto/dev/iroha/target/release/irohad IROHA_TEST_SKIP_BUILD=1 IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_REALISTIC_30TPS_DURATION_SECS=120 IROHA_REALISTIC_30TPS_TARGET_BLOCKS=60 IROHA_THROUGHPUT_ARTIFACT_DIR=/Users/takemiyamakoto/dev/iroha/integration_tests/artifacts/realistic-30tps-transfer-2min-640-release-daemon-diagnostic cargo test -p integration_tests --test consensus_and_da sumeragi_localnet_smoke::permissioned_localnet_realistic_30tps_20min -- --ignored --exact --nocapture --test-threads=1`
+  - `TEST_NETWORK_BIN_IROHAD=/Users/takemiyamakoto/dev/iroha/target/release/irohad IROHA_TEST_SKIP_BUILD=1 IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_THROUGHPUT_ARTIFACT_DIR=/Users/takemiyamakoto/dev/iroha/integration_tests/artifacts/realistic-30tps-transfer-20min-640-release-daemon-current cargo test -p integration_tests --test consensus_and_da sumeragi_localnet_smoke::permissioned_localnet_realistic_30tps_20min -- --ignored --exact --nocapture --test-threads=1` (failed in drain; artifact retained)
+  - `git diff --check`
+
+## 2026-05-08 Sumeragi DA/RBC large RAM-LFE proposal fallback
+
+- DA-enabled proposal assembly no longer caps candidate transaction payloads by
+  the single consensus-frame limit. The DA path is now bounded by the configured
+  block payload cap plus RBC total/pending capacity, so large transactions that
+  fit RBC can be proposed instead of being requeued indefinitely.
+- Oversized exact `BlockCreated` companions are now skipped under DA when they
+  exceed the consensus frame cap. The proposer still handles the block locally
+  and carries the payload to peers through `Proposal` + RBC transport.
+- Added a focused RAM-LFE policy transaction regression that lowers the
+  consensus frame cap, proves the transaction exceeds one frame but fits RBC,
+  and verifies Proposal/RBC messages are emitted without requeueing or posting
+  an oversized `BlockCreated`.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_core --lib da_payload_budget -- --nocapture`
+  - `cargo test -p iroha_core --lib da_proposal_uses_rbc_for_ram_lfe_tx_exceeding_consensus_payload_frame_cap -- --nocapture`
+  - `cargo test -p iroha_core --lib proposal_defers_when_all_txs_exceed_payload_budget -- --nocapture`
+  - `cargo check -p iroha_core --lib`
+  - `git diff --check`
+
 ## 2026-05-08 Izanami 20k FASTPQ-GPU gate
 
 - The 120s 20k Izanami FASTPQ-GPU gate is back above the latest clean baseline
