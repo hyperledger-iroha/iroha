@@ -204,6 +204,9 @@ const REBROADCAST_COOLDOWN_CEILING: Duration = Duration::from_millis(200);
 const REBROADCAST_COOLDOWN_DIVISOR: u32 = 8;
 /// Payload rebroadcasts (block payloads/RBC chunks) are heavier, so keep them slower.
 const PAYLOAD_REBROADCAST_COOLDOWN_MULTIPLIER: u32 = 2;
+/// Targeted payload/body rescue sends full payload material to stragglers, so keep it
+/// materially slower than READY/vote repair even on fast 1s localnets.
+const TARGETED_PAYLOAD_RESCUE_COOLDOWN_FLOOR: Duration = Duration::from_millis(500);
 /// Delivered RBC sessions can be retained near the tip for repair, but full DELIVER
 /// broadcasts are heavy enough to self-amplify during frontier recovery.
 const RBC_DELIVER_REBROADCAST_COOLDOWN_FLOOR: Duration = Duration::from_secs(1);
@@ -294,6 +297,12 @@ fn payload_rebroadcast_cooldown_from_block_time(block_time: Duration) -> Duratio
         control_plane_rebroadcast_cooldown_from_block_time(block_time),
         PAYLOAD_REBROADCAST_COOLDOWN_MULTIPLIER,
     )
+}
+
+/// Keep direct payload/body repair from competing with latency-sensitive consensus votes.
+fn targeted_payload_rescue_cooldown_from_block_time(block_time: Duration) -> Duration {
+    payload_rebroadcast_cooldown_from_block_time(block_time)
+        .max(TARGETED_PAYLOAD_RESCUE_COOLDOWN_FLOOR)
 }
 
 /// Derive post-timeout quorum reschedule retry cadence from the observed quorum timeout.
@@ -712,6 +721,8 @@ struct QcVerifyKey {
     height: u64,
     view: u64,
     epoch: u64,
+    chain_order_hash: Hash,
+    rechain_seq: u64,
     block_hash: HashOf<BlockHeader>,
 }
 
@@ -722,6 +733,8 @@ impl QcVerifyKey {
             height: qc.height,
             view: qc.view,
             epoch: qc.epoch,
+            chain_order_hash: qc.chain_order_hash,
+            rechain_seq: qc.rechain_seq,
             block_hash: qc.subject_block_hash.clone(),
         }
     }
@@ -734,6 +747,8 @@ struct VoteVerifyKey {
     view: u64,
     epoch: u64,
     signer: crate::sumeragi::consensus::ValidatorIndex,
+    chain_order_hash: Hash,
+    rechain_seq: u64,
     signer_public_key: Option<PublicKey>,
     signature_hash: Hash,
     block_hash: HashOf<BlockHeader>,
@@ -756,6 +771,8 @@ impl VoteVerifyKey {
             view: vote.view,
             epoch: vote.epoch,
             signer: vote.signer,
+            chain_order_hash: vote.chain_order_hash,
+            rechain_seq: vote.rechain_seq,
             signer_public_key: None,
             signature_hash: Hash::new(&vote.bls_sig),
             block_hash: vote.block_hash,
@@ -1158,16 +1175,7 @@ fn record_qc_validation_error(
 
 #[allow(clippy::too_many_arguments)]
 fn validate_qc_with_evidence(
-    vote_log: &BTreeMap<
-        (
-            crate::sumeragi::consensus::Phase,
-            u64,
-            u64,
-            u64,
-            crate::sumeragi::consensus::ValidatorIndex,
-        ),
-        crate::sumeragi::consensus::Vote,
-    >,
+    vote_log: &BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
     qc: &crate::sumeragi::consensus::Qc,
     topology: &super::network_topology::Topology,
     world: &impl WorldReadOnly,
@@ -2271,16 +2279,7 @@ fn derive_block_sync_qc_from_signers(
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn tally_qc_against_votes(
-    vote_log: &BTreeMap<
-        (
-            crate::sumeragi::consensus::Phase,
-            u64,
-            u64,
-            u64,
-            crate::sumeragi::consensus::ValidatorIndex,
-        ),
-        crate::sumeragi::consensus::Vote,
-    >,
+    vote_log: &BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
     qc: &crate::sumeragi::consensus::Qc,
     topology: &super::network_topology::Topology,
     world: &impl WorldReadOnly,
@@ -2381,16 +2380,7 @@ fn validate_new_view_qc_highest(
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
 fn validate_qc_against_votes(
-    vote_log: &BTreeMap<
-        (
-            crate::sumeragi::consensus::Phase,
-            u64,
-            u64,
-            u64,
-            crate::sumeragi::consensus::ValidatorIndex,
-        ),
-        crate::sumeragi::consensus::Vote,
-    >,
+    vote_log: &BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
     qc: &crate::sumeragi::consensus::Qc,
     topology: &super::network_topology::Topology,
     world: &impl WorldReadOnly,
@@ -2478,7 +2468,15 @@ fn validate_qc_against_votes(
                 topology_len: roster_len,
             });
         };
-        let key = (qc.phase, qc.height, qc.view, qc.epoch, view_signer);
+        let key = (
+            qc.phase,
+            qc.height,
+            qc.view,
+            qc.epoch,
+            view_signer,
+            qc.chain_order_hash,
+            qc.rechain_seq,
+        );
         let Some(vote) = vote_log.get(&key) else {
             missing += 1;
             continue;
@@ -5682,6 +5680,7 @@ impl Actor {
         epoch: u64,
         candidate_hash: HashOf<BlockHeader>,
     ) -> bool {
+        let highest_qc_for_slot = self.proposal_or_new_view_highest_qc_for_slot(height, view);
         let conflicting_qc = |phase: crate::sumeragi::consensus::Phase,
                               vote_height: u64,
                               vote_view: u64,
@@ -5695,6 +5694,17 @@ impl Actor {
                 && vote_view <= view
                 && vote_epoch == epoch
                 && block_hash != candidate_hash
+        };
+        let raw_vote_superseded = |vote: &crate::sumeragi::consensus::Vote| {
+            highest_qc_for_slot.is_some_and(|highest_qc| {
+                self.new_view_qc_supersedes_same_height_vote_conflict(
+                    height,
+                    view,
+                    highest_qc,
+                    vote.block_hash,
+                    vote.view,
+                )
+            })
         };
 
         if self.qc_cache.values().any(|qc| {
@@ -5719,6 +5729,7 @@ impl Actor {
                 && vote.view <= view
                 && vote.epoch == epoch
                 && vote.block_hash != candidate_hash
+                && !raw_vote_superseded(vote)
                 && self.vote_signer_peer(vote).as_ref() == Some(local_peer)
         };
 
@@ -23182,10 +23193,6 @@ impl Actor {
         if session.is_invalid() {
             return false;
         }
-        if missing_ready_peers.is_empty() {
-            return false;
-        }
-
         let local_peer_id = self.common_config.peer.id().clone();
         let mut target_set = BTreeSet::new();
         for peer in missing_ready_peers {
@@ -23193,21 +23200,37 @@ impl Actor {
                 target_set.insert(peer.clone());
             }
         }
-        if target_set.is_empty() {
+        let targets: Vec<_> = target_set.iter().cloned().collect();
+
+        let roster = self.ensure_rbc_session_roster(key);
+        let has_missing_ready = !target_set.is_empty();
+        let mut ready_target_set = target_set;
+        if !roster.is_empty() {
+            let topology = super::network_topology::Topology::new(roster.clone());
+            let required = self.rbc_deliver_quorum(&topology);
+            let quorum_or_delivery_repair =
+                session.delivered || (required != 0 && ready_count >= required);
+            if has_missing_ready && quorum_or_delivery_repair {
+                let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
+                let signature_topology =
+                    topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+                for peer in signature_topology.as_ref() {
+                    if peer != &local_peer_id {
+                        ready_target_set.insert(peer.clone());
+                    }
+                }
+            }
+        }
+        let ready_targets: Vec<_> = ready_target_set.into_iter().collect();
+
+        if targets.is_empty() && ready_targets.is_empty() {
             return false;
         }
-        let targets: Vec<_> = target_set.into_iter().collect();
         let mut sent = false;
 
         let now = Instant::now();
-        let base_payload_cooldown = self.payload_rebroadcast_cooldown();
-        let payload_cooldown = if self.exact_frontier_body_repair_active_at_height(key.1) {
-            base_payload_cooldown.min(self.rebroadcast_cooldown())
-        } else {
-            base_payload_cooldown
-        };
+        let payload_cooldown = self.targeted_payload_rescue_cooldown();
         let payload_due = self.rbc_targeted_payload_rescue_due(&key, now, payload_cooldown);
-        let roster = self.ensure_rbc_session_roster(key);
         let mut payload_session = session.clone();
         let body_repair_block = self
             .local_signed_block_for_body_repair(key.0)
@@ -23218,7 +23241,7 @@ impl Actor {
 
         // Peers can still be missing INIT/chunks after the local session reaches DELIVER, so
         // keep targeted body rescue enabled under the existing cooldown until READY catches up.
-        if payload_due && !roster.is_empty() {
+        if payload_due && !roster.is_empty() && !targets.is_empty() {
             if payload_session.total_chunks() != 0
                 && payload_session.received_chunks() < payload_session.total_chunks()
                 && let Some((height, view, payload_bytes, payload_hash)) = self
@@ -23348,7 +23371,11 @@ impl Actor {
 
         let ready_cooldown = self.rebroadcast_cooldown();
         let ready_due = self.rbc_ready_rebroadcast_due(&key, now, ready_cooldown);
-        if ready_due && !session.ready_signatures.is_empty() && !roster.is_empty() {
+        if ready_due
+            && !session.ready_signatures.is_empty()
+            && !roster.is_empty()
+            && !ready_targets.is_empty()
+        {
             let roster_hash = rbc::rbc_roster_hash(&roster);
             if let Some(readies) = Self::rbc_ready_bundle(key, session, roster_hash) {
                 info!(
@@ -23356,13 +23383,13 @@ impl Actor {
                     view = key.2,
                     block = %key.0,
                     ready = readies.len(),
-                    targets = ?targets,
-                    "sending targeted RBC READY set to peers missing READY"
+                    targets = ?ready_targets,
+                    "sending targeted RBC READY set to ready-repair peers"
                 );
                 for ready in readies {
                     let message = Arc::new(BlockMessage::RbcReady(ready));
                     let encoded = Arc::new(BlockMessageWire::encode_message(message.as_ref()));
-                    for peer in &targets {
+                    for peer in &ready_targets {
                         self.schedule_background(BackgroundRequest::Post {
                             peer: peer.clone(),
                             msg: BlockMessageWire::with_encoded(
@@ -24741,6 +24768,12 @@ impl Actor {
         let world = self.state.world_view();
         let block_time = self.block_time_for_mode_from_world(&world, self.consensus_mode);
         payload_rebroadcast_cooldown_from_block_time(block_time)
+    }
+
+    fn targeted_payload_rescue_cooldown(&self) -> Duration {
+        let world = self.state.world_view();
+        let block_time = self.block_time_for_mode_from_world(&world, self.consensus_mode);
+        targeted_payload_rescue_cooldown_from_block_time(block_time)
     }
 
     fn rbc_deliver_rebroadcast_cooldown(&self) -> Duration {
@@ -37653,16 +37686,7 @@ impl NewViewRebroadcastThrottle {
 }
 
 fn distinct_epochs_for_block_votes(
-    vote_log: &BTreeMap<
-        (
-            crate::sumeragi::consensus::Phase,
-            u64,
-            u64,
-            u64,
-            crate::sumeragi::consensus::ValidatorIndex,
-        ),
-        crate::sumeragi::consensus::Vote,
-    >,
+    vote_log: &BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
     phase: crate::sumeragi::consensus::Phase,
     block_hash: HashOf<BlockHeader>,
     height: u64,

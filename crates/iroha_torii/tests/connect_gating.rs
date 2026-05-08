@@ -484,6 +484,9 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                     iroha_config::parameters::defaults::sumeragi::VALIDATION_RESULT_QUEUE_CAP,
                 validation_queue_full_inline_cutover_divisor: iroha_config::parameters::defaults::
                     sumeragi::VALIDATION_QUEUE_FULL_INLINE_CUTOVER_DIVISOR,
+                fast_finality_inline_validation_max_transactions:
+                    iroha_config::parameters::defaults::sumeragi::
+                        VALIDATION_FAST_FINALITY_INLINE_MAX_TRANSACTIONS,
                 qc_verify_worker_threads:
                     iroha_config::parameters::defaults::sumeragi::QC_VERIFY_WORKER_THREADS,
                 qc_verify_work_queue_cap:

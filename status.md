@@ -2,6 +2,27 @@
 
 Last updated: 2026-05-08
 
+## 2026-05-08 Izanami 20k FASTPQ-GPU gate
+
+- The 120s 20k Izanami FASTPQ-GPU gate is back above the latest clean baseline
+  after suppressing redundant delivered-session RBC READY repair fanout once
+  every READY sender is already locally known.
+- Passing release gate:
+  `TEST_NETWORK_BIN_IROHAD=/tmp/iroha-codex-20k-return-rbcfix-20260508-1158/release/iroha3d TEST_NETWORK_IROHAD_FEATURES=fastpq-gpu IROHA_TEST_SKIP_BUILD=1 /tmp/iroha-codex-20k-return-rbcfix-20260508-1158/release/izanami --allow-net --peers 4 --faulty 0 --duration 120s --pipeline-time 300ms --tps 20000 --max-inflight 300000 --submitters 4096 --prebuild-tx-buffer 2400000 --prebuild-tx-workers 0 --workload-profile stable ...`
+  produced `final_strict_min_txs_approved=69673` and
+  `tx_queue_depth=847734`, beating the prior clean baselines of `61622` and
+  `861515`. The same run had zero submit failures, validation rejects,
+  confirmation failures, queue drops, prebuild fallbacks, and prebuild skips.
+- BN254 digest and prover Poseidon GPU preflight logged `ok=true` on all four
+  peers, and diagnostics had zero `BN254 Poseidon Metal batch failed` /
+  runtime-dispatch failures.
+- Focused validation passed with
+  `CARGO_TARGET_DIR=/tmp/iroha-20k-validate-target cargo test -p iroha_core --lib rescue_rbc_missing_ready_peers -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-20k-validate-target cargo test -p iroha_core --lib targeted_payload_rescue_cooldown_keeps_heavy_repair_off_vote_cadence -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-20k-check-target cargo check -p iroha_core --lib`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-20k-return-rbcfix-20260508-1158 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`,
+  `cargo fmt --all`, and `git diff --check`.
+
 ## 2026-05-08 Torii account push notification bridge
 
 - Torii push registration now persists devices under the configured Torii data
@@ -24,8 +45,13 @@ Last updated: 2026-05-08
   `CARGO_TARGET_DIR=/tmp/iroha-codex-push-target cargo test -p iroha_torii push --lib`,
   `CARGO_TARGET_DIR=/tmp/iroha-codex-push-target cargo test -p iroha_torii account_activity --lib`,
   `CARGO_TARGET_DIR=/tmp/iroha-codex-push-target cargo test -p iroha_config push`,
-  and `swift test` from `IrohaSwift`. Kotlin/JVM validation is pending because
-  this shell has no Java runtime (`/usr/libexec/java_home -V` fails).
+  `swift test` from `IrohaSwift`, and
+  `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --console=plain`
+  from `kotlin`.
+- Broader Torii validation passed with
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-push-target cargo clippy -p iroha_torii -p iroha_config --all-targets -- -D warnings`
+  and `CARGO_TARGET_DIR=/tmp/iroha-codex-push-target cargo test -p iroha_torii --lib`
+  after serializing Torii's process-wide data-dir mutation in tests.
 
 ## 2026-05-08 Sumeragi vNext chain-order sidecar binding
 
@@ -36,11 +62,19 @@ Last updated: 2026-05-08
   the QC they summarize. Checkpoint aggregate verification uses those fields in
   the commit-vote preimage, so checkpoint-derived QCs cannot be replayed across
   a different installed chain order.
+- Raw vote logs, deferred-vote buffers, vote-validation caches, QC validation
+  vote lookups, and vote/QC verifier cache keys now include the selected
+  `chain_order_hash` and `rechain_seq`. A vote accepted under an old installed
+  chain order no longer suppresses or validates a same-slot vote under a later
+  re-chain binding.
 - Focused validation passed with
   `cargo test -p iroha_data_model --lib validator_set_checkpoint_roundtrip_and_hash -- --nocapture`,
   `cargo test -p iroha_core --lib validate_checkpoint_roster_binds_chain_order -- --nocapture`,
-  `cargo test -p iroha_core --lib vnext -- --nocapture`, and
-  `cargo check -p iroha_core --lib`.
+  `cargo test -p iroha_core --lib vote_duplicate_binds_chain_order -- --nocapture`,
+  `cargo test -p iroha_core --lib vnext -- --nocapture`,
+  `cargo check -p iroha_core --lib`, and
+  `cargo fmt --all --check`.
+  Diff hygiene passed with `git diff --check` and `git diff --cached --check`.
 
 ## 2026-05-07 Sumeragi vNext live control path
 

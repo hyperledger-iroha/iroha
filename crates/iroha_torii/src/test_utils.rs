@@ -802,6 +802,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 validation_result_queue_cap: defaults::sumeragi::VALIDATION_RESULT_QUEUE_CAP,
                 validation_queue_full_inline_cutover_divisor:
                     defaults::sumeragi::VALIDATION_QUEUE_FULL_INLINE_CUTOVER_DIVISOR,
+                fast_finality_inline_validation_max_transactions:
+                    defaults::sumeragi::VALIDATION_FAST_FINALITY_INLINE_MAX_TRANSACTIONS,
                 qc_verify_worker_threads: defaults::sumeragi::QC_VERIFY_WORKER_THREADS,
                 qc_verify_work_queue_cap: defaults::sumeragi::QC_VERIFY_WORK_QUEUE_CAP,
                 qc_verify_result_queue_cap: defaults::sumeragi::QC_VERIFY_RESULT_QUEUE_CAP,

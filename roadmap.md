@@ -4,12 +4,6 @@ Last updated: 2026-05-08
 
 Completed history lives in `status.md`. This file should only track unfinished work.
 
-## Account push notifications
-
-- Rerun `./gradlew :core-jvm:test --console=plain` from `kotlin/` in a shell
-  with a JDK installed. The 2026-05-08 push bridge validation could not run the
-  Kotlin/JVM suite because `/usr/libexec/java_home -V` reported no Java runtime.
-
 ## Sumeragi vNext consensus replacement
 
 - Finish moving proposal, DA/RBC availability, validation-worker start/result,
@@ -21,8 +15,8 @@ Completed history lives in `status.md`. This file should only track unfinished w
 - Finish auditing chain-order hash and `rechain_seq` binding in deferred
   vote/QC caches, signer-tally/cache keys, and evidence replay paths used by
   the replacement shell. Vote/QC preimages, precommit signer history,
-  block-sync-derived QCs, and validator-checkpoint sidecars now carry the
-  selected binding.
+  block-sync-derived QCs, validator-checkpoint sidecars, raw/deferred vote
+  caches, and vote/QC verifier cache keys now carry the selected binding.
 - Reconstruct vNext chain order from committed/replayed re-chain and
   view-change certificates during block-sync catch-up. The live actor now keeps
   a bounded in-memory certificate journal; persistence/sidecar replay remains

@@ -4659,6 +4659,8 @@ pub struct SumeragiWorker {
     pub validation_result_queue_cap: usize,
     /// Divisor used to derive queue-full inline-validation cutover from fast-timeout.
     pub validation_queue_full_inline_cutover_divisor: u32,
+    /// Maximum transaction count for inline validation of fast-finality blocks.
+    pub fast_finality_inline_validation_max_transactions: usize,
     /// QC verify worker threads.
     pub qc_verify_worker_threads: usize,
     /// QC verify work queue capacity per worker.

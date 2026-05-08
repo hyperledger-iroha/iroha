@@ -20,6 +20,8 @@ pub(super) type VoteLogKey = (
     u64,
     u64,
     crate::sumeragi::consensus::ValidatorIndex,
+    iroha_crypto::Hash,
+    u64,
 );
 
 pub(super) type VoteIdentityKey = (
@@ -28,14 +30,24 @@ pub(super) type VoteIdentityKey = (
     u64,
     u64,
     crate::sumeragi::consensus::ValidatorIndex,
+    iroha_crypto::Hash,
+    u64,
     PublicKey,
 );
 
-fn vote_key(vote: &crate::sumeragi::consensus::Vote) -> VoteLogKey {
-    (vote.phase, vote.height, vote.view, vote.epoch, vote.signer)
+pub(super) fn vote_key(vote: &crate::sumeragi::consensus::Vote) -> VoteLogKey {
+    (
+        vote.phase,
+        vote.height,
+        vote.view,
+        vote.epoch,
+        vote.signer,
+        vote.chain_order_hash,
+        vote.rechain_seq,
+    )
 }
 
-fn vote_identity_key(
+pub(super) fn vote_identity_key(
     vote: &crate::sumeragi::consensus::Vote,
     signer_public_key: &PublicKey,
 ) -> VoteIdentityKey {
@@ -45,12 +57,14 @@ fn vote_identity_key(
         vote.view,
         vote.epoch,
         vote.signer,
+        vote.chain_order_hash,
+        vote.rechain_seq,
         signer_public_key.clone(),
     )
 }
 
-fn raw_vote_key_from_identity_key(key: &VoteIdentityKey) -> VoteLogKey {
-    (key.0, key.1, key.2, key.3, key.4)
+pub(super) fn raw_vote_key_from_identity_key(key: &VoteIdentityKey) -> VoteLogKey {
+    (key.0, key.1, key.2, key.3, key.4, key.5, key.6)
 }
 
 fn vote_duplicate(
@@ -277,7 +291,7 @@ impl Actor {
             .iter()
             .find_map(|(key, stored)| (stored == vote).then_some(key))
         {
-            return Some(PeerId::from(identity_key.5.clone()));
+            return Some(PeerId::from(identity_key.7.clone()));
         }
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(vote.height);
         let roster = if vote.phase != Phase::NewView {
@@ -1506,7 +1520,7 @@ impl Actor {
         self.quarantined_block_sync_qcs
             .retain(|(_, _, height, view, _, _, _), _| should_keep(*height, *view));
         self.deferred_votes.retain(|_, votes| {
-            votes.retain(|(_, height, view, _, _), vote| {
+            votes.retain(|(_, height, view, _, _, _, _), vote| {
                 should_keep(*height, *view) || preserve_active_pending_vote(vote)
             });
             !votes.is_empty()
@@ -2607,7 +2621,7 @@ impl Actor {
             .is_some_and(|existing| existing.block_hash == vote.block_hash)
             || identity_key.as_ref().is_some_and(|key| {
                 self.vote_log
-                    .get(&(key.0, key.1, key.2, key.3, key.4))
+                    .get(&raw_vote_key_from_identity_key(key))
                     .filter(|existing| {
                         self.vote_identity_key_from_vote(existing).as_ref() == Some(key)
                     })
@@ -2935,13 +2949,7 @@ impl Actor {
             .or_else(|| {
                 identity_key.as_ref().and_then(|identity_key| {
                     self.vote_log
-                        .get(&(
-                            identity_key.0,
-                            identity_key.1,
-                            identity_key.2,
-                            identity_key.3,
-                            identity_key.4,
-                        ))
+                        .get(&raw_vote_key_from_identity_key(identity_key))
                         .filter(|existing| {
                             self.vote_identity_key_from_vote(existing).as_ref()
                                 == Some(identity_key)
@@ -2990,13 +2998,23 @@ impl Actor {
                                 vote.view,
                                 vote.epoch,
                                 vote.signer,
+                                vote.chain_order_hash,
+                                vote.rechain_seq,
                                 signer_public_key.clone(),
                             ))
                             .cloned()
                     })
                     .or_else(|| {
                         self.vote_log
-                            .get(&(phase, vote.height, vote.view, vote.epoch, vote.signer))
+                            .get(&(
+                                phase,
+                                vote.height,
+                                vote.view,
+                                vote.epoch,
+                                vote.signer,
+                                vote.chain_order_hash,
+                                vote.rechain_seq,
+                            ))
                             .filter(|previous| {
                                 signer_public_key.as_ref().is_none_or(|signer_public_key| {
                                     self.vote_identity_key_from_vote(previous).as_ref()
@@ -3006,6 +3024,8 @@ impl Actor {
                                             vote.view,
                                             vote.epoch,
                                             vote.signer,
+                                            vote.chain_order_hash,
+                                            vote.rechain_seq,
                                             signer_public_key.clone(),
                                         ))
                                 })
@@ -3089,13 +3109,23 @@ impl Actor {
                             vote.view,
                             vote.epoch,
                             vote.signer,
+                            vote.chain_order_hash,
+                            vote.rechain_seq,
                             signer_public_key.clone(),
                         ))
                         .cloned()
                 })
                 .or_else(|| {
                     self.vote_log
-                        .get(&(phase, vote.height, vote.view, vote.epoch, vote.signer))
+                        .get(&(
+                            phase,
+                            vote.height,
+                            vote.view,
+                            vote.epoch,
+                            vote.signer,
+                            vote.chain_order_hash,
+                            vote.rechain_seq,
+                        ))
                         .filter(|previous| {
                             signer_public_key.as_ref().is_none_or(|signer_public_key| {
                                 self.vote_identity_key_from_vote(previous).as_ref()
@@ -3105,6 +3135,8 @@ impl Actor {
                                         vote.view,
                                         vote.epoch,
                                         vote.signer,
+                                        vote.chain_order_hash,
+                                        vote.rechain_seq,
                                         signer_public_key.clone(),
                                     ))
                             })
@@ -4278,6 +4310,21 @@ mod tests {
         let other = sample_vote(hash_b);
 
         assert!(!vote_duplicate(&vote_log, &other));
+    }
+
+    #[test]
+    fn vote_duplicate_binds_chain_order() {
+        let hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xBD; Hash::LENGTH]));
+        let vote = sample_vote(hash);
+        let mut vote_log = BTreeMap::new();
+        vote_log.insert(vote_key(&vote), vote.clone());
+
+        let mut rechain_vote = vote.clone();
+        rechain_vote.chain_order_hash = Hash::prehashed([0xCE; Hash::LENGTH]);
+        rechain_vote.rechain_seq = 1;
+
+        assert_ne!(vote_key(&vote), vote_key(&rechain_vote));
+        assert!(!vote_duplicate(&vote_log, &rechain_vote));
     }
 
     #[test]

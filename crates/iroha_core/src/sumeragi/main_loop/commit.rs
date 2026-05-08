@@ -38,6 +38,22 @@ pub(super) struct CommitWork {
     pub(super) events_sender: crate::EventsSender,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct KnownBlockCommitQcRecoveryRequestPlan {
+    pub(super) commit_qc_only: bool,
+    pub(super) body: bool,
+}
+
+pub(super) const fn known_block_commit_qc_recovery_request_plan(
+    payload_materialized_locally: bool,
+    commit_qc_body_fallback: bool,
+) -> KnownBlockCommitQcRecoveryRequestPlan {
+    KnownBlockCommitQcRecoveryRequestPlan {
+        commit_qc_only: payload_materialized_locally,
+        body: !payload_materialized_locally || commit_qc_body_fallback,
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct CommitResult {
     pub(super) id: u64,
@@ -788,16 +804,7 @@ impl Actor {
     pub(super) fn apply_cached_qcs_to_block_sync_update(
         update: &mut super::message::BlockSyncUpdate,
         qc_cache: &BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
-        vote_log: &BTreeMap<
-            (
-                crate::sumeragi::consensus::Phase,
-                u64,
-                u64,
-                u64,
-                crate::sumeragi::consensus::ValidatorIndex,
-            ),
-            crate::sumeragi::consensus::Vote,
-        >,
+        vote_log: &BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
         block_hash: HashOf<BlockHeader>,
         height: u64,
         view: u64,
@@ -2364,7 +2371,7 @@ impl Actor {
             }
             let retention_floor = pending_height.saturating_sub(1);
             self.vote_log
-                .retain(|(_, height, _, _, _), _| *height >= retention_floor);
+                .retain(|(_, height, _, _, _, _, _), _| *height >= retention_floor);
             self.try_replay_deferred_votes();
             let _ = self.maybe_request_frontier_gap_realign_after_commit(Instant::now());
         }
@@ -3680,12 +3687,15 @@ impl Actor {
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
         let local_idx = self.local_validator_index_for_topology(&signature_topology)?;
+        let (chain_order_hash, rechain_seq) = self.vnext_chain_order_binding_for(height, view);
         let key = (
             crate::sumeragi::consensus::Phase::Commit,
             height,
             view,
             epoch,
             local_idx,
+            chain_order_hash,
+            rechain_seq,
         );
         if let Some(vote) = self.vote_log.get(&key) {
             return Some(vote.clone());
@@ -3700,6 +3710,8 @@ impl Actor {
             view,
             epoch,
             fallback_idx,
+            chain_order_hash,
+            rechain_seq,
         );
         if let Some(vote) = self.vote_log.get(&fallback_key) {
             return Some(vote.clone());
@@ -4127,12 +4139,18 @@ impl Actor {
             commit_qc_body_fallback = payload_materialized_locally && request_stalled;
         }
 
-        let retry_window = self.missing_block_retry_window_with_rbc_progress(
-            block_hash,
-            height,
-            view,
-            self.rebroadcast_cooldown(),
-        );
+        let retry_window = self
+            .missing_block_retry_window_with_rbc_progress(
+                block_hash,
+                height,
+                view,
+                self.rebroadcast_cooldown(),
+            )
+            .max(
+                payload_materialized_locally
+                    .then(|| self.targeted_payload_rescue_cooldown())
+                    .unwrap_or(Duration::ZERO),
+            );
         let view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
         let topology = super::network_topology::Topology::new(filtered_targets.clone());
         let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
@@ -4193,7 +4211,11 @@ impl Actor {
                     );
                     return true;
                 }
-                if payload_materialized_locally && !commit_qc_body_fallback {
+                let request_plan = known_block_commit_qc_recovery_request_plan(
+                    payload_materialized_locally,
+                    commit_qc_body_fallback,
+                );
+                if request_plan.commit_qc_only {
                     super::send_missing_commit_qc_request(
                         &self.network,
                         &self.common_config.peer.id,
@@ -4204,7 +4226,8 @@ impl Actor {
                         requester_roster_proof_known,
                         &targets,
                     );
-                } else {
+                }
+                if request_plan.body {
                     super::send_missing_block_request(
                         &self.network,
                         &self.common_config.peer.id,
@@ -4222,8 +4245,9 @@ impl Actor {
                     block = %block_hash,
                     targets = ?targets,
                     target_kind = target_kind.label(),
-                    commit_qc_only = payload_materialized_locally && !commit_qc_body_fallback,
+                    commit_qc_only = request_plan.commit_qc_only,
                     commit_qc_body_fallback,
+                    body_request = request_plan.body,
                     trigger,
                     retry_window_ms = retry_window.as_millis(),
                     dwell_ms,
@@ -4399,6 +4423,59 @@ impl Actor {
         true
     }
 
+    pub(super) fn maybe_retry_local_commit_votes_after_new_view_qc(
+        &mut self,
+        qc: &crate::sumeragi::consensus::Qc,
+        commit_topology: &[PeerId],
+        trigger: &'static str,
+    ) -> bool {
+        if !matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
+            return false;
+        }
+        let Some(highest_qc) = qc.highest_qc else {
+            return false;
+        };
+        if self
+            .cached_new_view_qc_extends_committed_frontier(qc.height, qc.view, highest_qc)
+            .is_none()
+        {
+            return false;
+        }
+
+        let now = Instant::now();
+        let candidates: Vec<_> = self
+            .pending
+            .pending_blocks
+            .iter()
+            .filter_map(|(block_hash, pending)| {
+                (pending.height == qc.height
+                    && pending.view == qc.view
+                    && !pending.aborted
+                    && !pending.local_commit_vote_emitted()
+                    && !pending.commit_qc_observed()
+                    && pending.validation_status == ValidationStatus::Valid
+                    && pending.kura_retry_due(now)
+                    && pending.block.header().prev_block_hash()
+                        == Some(highest_qc.subject_block_hash))
+                .then_some(*block_hash)
+            })
+            .collect();
+
+        let mut emitted = false;
+        for block_hash in candidates {
+            if self.maybe_emit_local_commit_vote_for_pending_event(
+                block_hash,
+                qc.height,
+                qc.view,
+                commit_topology,
+                trigger,
+            ) {
+                emitted = true;
+            }
+        }
+        emitted
+    }
+
     fn local_commit_vote_roster(&self, height: u64, commit_topology: &[PeerId]) -> Vec<PeerId> {
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         if height == committed_height.saturating_add(1) {
@@ -4530,6 +4607,8 @@ impl Actor {
             vote.view,
             vote.epoch,
             vote.signer,
+            vote.chain_order_hash,
+            vote.rechain_seq,
             local_public_key.clone(),
         );
         if self
@@ -4541,7 +4620,7 @@ impl Actor {
         }
         if self
             .vote_log
-            .get(&(vote.phase, vote.height, vote.view, vote.epoch, vote.signer))
+            .get(&votes::vote_key(vote))
             .filter(|existing| {
                 self.vote_identity_key_from_vote(existing).as_ref() == Some(&identity_key)
             })
@@ -6403,8 +6482,7 @@ impl Actor {
         }
         let roots = if qc.phase == crate::sumeragi::consensus::Phase::Commit {
             signers.iter().find_map(|signer| {
-                let key = (qc.phase, qc.height, qc.view, qc.epoch, *signer);
-                self.vote_log.get(&key).and_then(|vote| {
+                accepted_votes.get(signer).and_then(|vote| {
                     if vote.block_hash == qc.subject_block_hash {
                         Some((vote.parent_state_root, vote.post_state_root))
                     } else {
@@ -9226,7 +9304,15 @@ mod tests {
         };
         let mut vote_log = BTreeMap::new();
         vote_log.insert(
-            (crate::sumeragi::consensus::Phase::Commit, 4, 0, 0, 0),
+            (
+                crate::sumeragi::consensus::Phase::Commit,
+                4,
+                0,
+                0,
+                0,
+                crate::sumeragi::consensus::default_chain_order_hash(),
+                0,
+            ),
             vote,
         );
         Actor::apply_cached_qcs_to_block_sync_update(
@@ -9665,16 +9751,8 @@ mod tests {
             LiveQueryStore::start_test(),
         );
 
-        let mut vote_log: BTreeMap<
-            (
-                crate::sumeragi::consensus::Phase,
-                u64,
-                u64,
-                u64,
-                crate::sumeragi::consensus::ValidatorIndex,
-            ),
-            crate::sumeragi::consensus::Vote,
-        > = BTreeMap::new();
+        let mut vote_log: BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote> =
+            BTreeMap::new();
         let vote = crate::sumeragi::consensus::Vote {
             phase: crate::sumeragi::consensus::Phase::Commit,
             block_hash,
@@ -9690,7 +9768,15 @@ mod tests {
             bls_sig: vec![0u8; 96],
         };
         vote_log.insert(
-            (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
+            (
+                vote.phase,
+                vote.height,
+                vote.view,
+                vote.epoch,
+                vote.signer,
+                vote.chain_order_hash,
+                vote.rechain_seq,
+            ),
             vote,
         );
 

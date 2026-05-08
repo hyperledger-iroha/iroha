@@ -1218,8 +1218,7 @@ fn minimal_config_snapshot() {
                 block: SumeragiBlock {
                     max_transactions: None,
                     max_ivm_transactions: None,
-                    fast_finality_max_transactions:
-                        defaults::sumeragi::FAST_FINALITY_MAX_TRANSACTIONS,
+                    fast_finality_max_transactions: None,
                     fast_gas_limit_per_block: None,
                     max_payload_bytes: None,
                     proposal_queue_scan_multiplier: 4,
@@ -1240,12 +1239,13 @@ fn minimal_config_snapshot() {
                     validation_work_queue_cap: 0,
                     validation_result_queue_cap: 0,
                     validation_queue_full_inline_cutover_divisor: 2,
+                    fast_finality_inline_validation_max_transactions: 16,
                     qc_verify_worker_threads: 0,
                     qc_verify_work_queue_cap: 0,
                     qc_verify_result_queue_cap: 0,
                     validation_pending_cap: 8192,
                     vote_burst_cap_with_payload_backlog: 8,
-                    max_urgent_before_da_critical: 8,
+                    max_urgent_before_da_critical: 2,
                 },
                 pacemaker: SumeragiPacemaker {
                     backoff_multiplier: 1,

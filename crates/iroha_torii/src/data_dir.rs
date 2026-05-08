@@ -18,6 +18,11 @@ fn base_dir_slot() -> &'static RwLock<PathBuf> {
     BASE_DIR.get_or_init(|| RwLock::new(defaults::torii::data_dir()))
 }
 
+fn base_dir_mutation_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 struct ExclusiveState {
     owner: Option<OverrideOwner>,
     depth: usize,
@@ -135,6 +140,9 @@ pub fn current_override() -> Option<PathBuf> {
 }
 
 pub fn set_base_dir(path: PathBuf) {
+    let _guard = base_dir_mutation_lock()
+        .lock()
+        .expect("failed to acquire base dir mutation lock");
     *base_dir_slot()
         .write()
         .expect("failed to acquire base dir lock") = path;
@@ -152,14 +160,59 @@ pub fn base_dir() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        path::Path,
-        sync::{Mutex, MutexGuard, OnceLock},
-    };
+    use std::{path::Path, sync::MutexGuard};
 
     use super::*;
 
-    fn clear_override() {
+    struct OverrideExclusiveTestGuard {
+        owner: OverrideOwner,
+    }
+
+    impl OverrideExclusiveTestGuard {
+        fn new() -> Self {
+            let owner = OverrideOwner::current();
+            let (lock, cvar) = exclusive_state();
+            let mut state = lock
+                .lock()
+                .expect("failed to acquire override exclusivity lock");
+            while let Some(current_owner) = state.owner {
+                if current_owner == owner {
+                    break;
+                }
+                state = cvar
+                    .wait(state)
+                    .expect("failed waiting on override exclusivity");
+            }
+            state.acquire(owner);
+            drop(state);
+
+            override_slot()
+                .lock()
+                .expect("failed to acquire data dir override lock")
+                .take();
+
+            Self { owner }
+        }
+    }
+
+    impl Drop for OverrideExclusiveTestGuard {
+        fn drop(&mut self) {
+            override_slot()
+                .lock()
+                .expect("failed to acquire data dir override lock")
+                .take();
+
+            let (lock, cvar) = exclusive_state();
+            let mut state = lock
+                .lock()
+                .expect("failed to reacquire override exclusivity lock");
+            if state.try_release(self.owner) {
+                cvar.notify_one();
+            }
+        }
+    }
+
+    fn clear_override_for_current_test() {
         let owner = OverrideOwner::current();
         let (lock, cvar) = exclusive_state();
         let mut state = lock
@@ -191,7 +244,7 @@ mod tests {
 
     #[test]
     fn override_visible_while_guard_active() {
-        clear_override();
+        let _exclusive = OverrideExclusiveTestGuard::new();
         let dir = tempfile::tempdir().expect("temp dir");
         let expected = dir.path().to_path_buf();
 
@@ -205,7 +258,7 @@ mod tests {
 
     #[test]
     fn override_restores_previous_value() {
-        clear_override();
+        let _exclusive = OverrideExclusiveTestGuard::new();
         let dir_one = tempfile::tempdir().expect("temp dir");
         let dir_two = tempfile::tempdir().expect("temp dir");
 
@@ -224,23 +277,26 @@ mod tests {
 
     struct BaseDirResetGuard {
         _lock: MutexGuard<'static, ()>,
+        _override_lock: OverrideExclusiveTestGuard,
         previous: PathBuf,
-    }
-
-    fn base_dir_test_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
     }
 
     impl BaseDirResetGuard {
         fn new(path: &Path) -> Self {
-            let lock = base_dir_test_lock()
+            let lock = base_dir_mutation_lock()
                 .lock()
-                .expect("failed to acquire base dir test lock");
-            let previous = base_dir();
-            set_base_dir(path.to_path_buf());
+                .expect("failed to acquire base dir mutation lock");
+            let override_lock = OverrideExclusiveTestGuard::new();
+            let previous = base_dir_slot()
+                .read()
+                .expect("failed to acquire base dir lock")
+                .clone();
+            *base_dir_slot()
+                .write()
+                .expect("failed to acquire base dir lock") = path.to_path_buf();
             Self {
                 _lock: lock,
+                _override_lock: override_lock,
                 previous,
             }
         }
@@ -248,15 +304,16 @@ mod tests {
 
     impl Drop for BaseDirResetGuard {
         fn drop(&mut self) {
-            set_base_dir(self.previous.clone());
-            clear_override();
+            *base_dir_slot()
+                .write()
+                .expect("failed to acquire base dir lock") = self.previous.clone();
+            clear_override_for_current_test();
         }
     }
 
     #[test]
     #[allow(unsafe_code)]
     fn base_dir_uses_config_and_ignores_env_override() {
-        clear_override();
         let temp = tempfile::tempdir().expect("temp dir");
         let _guard = BaseDirResetGuard::new(temp.path());
 
@@ -269,7 +326,6 @@ mod tests {
 
     #[test]
     fn override_guard_takes_precedence_over_base_dir() {
-        clear_override();
         let base = tempfile::tempdir().expect("temp dir");
         let override_dir = tempfile::tempdir().expect("temp dir");
         let _guard = BaseDirResetGuard::new(base.path());
