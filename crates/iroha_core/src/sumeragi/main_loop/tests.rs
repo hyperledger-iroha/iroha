@@ -30677,9 +30677,23 @@ async fn known_block_commit_qc_stall_uses_fallback_reanchor_when_primary_is_in_c
     harness.shutdown.send();
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn block_body_response_retains_same_height_known_block_commit_qc_repair_after_frontier_view_advances()
+#[test]
+fn block_body_response_retains_same_height_known_block_commit_qc_repair_after_frontier_view_advances()
  {
+    crate::sumeragi::sumeragi_thread_builder("sumeragi-block-body-response-repair-test")
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build tokio test runtime");
+            runtime.block_on(block_body_response_repair_after_frontier_view_advances_impl());
+        })
+        .expect("spawn block-body response repair test worker")
+        .join()
+        .expect("block-body response repair test worker should not panic");
+}
+
+async fn block_body_response_repair_after_frontier_view_advances_impl() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 

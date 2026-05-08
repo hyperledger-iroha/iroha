@@ -23,6 +23,26 @@ Last updated: 2026-05-08
   `CARGO_TARGET_DIR=/tmp/iroha-codex-20k-return-rbcfix-20260508-1158 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`,
   `cargo fmt --all`, and `git diff --check`.
 
+## 2026-05-08 Sumeragi block-body response repair test harness
+
+- Moved
+  `block_body_response_retains_same_height_known_block_commit_qc_repair_after_frontier_view_advances`
+  onto the existing Sumeragi test-thread builder so the deep block-body
+  response/QC repair path runs with the same explicit stack budget as live
+  Sumeragi worker threads.
+- Focused validation passed with `cargo fmt --all`,
+  `cargo test -p iroha_core sumeragi::main_loop::tests::block_body_response_retains_same_height_known_block_commit_qc_repair_after_frontier_view_advances --lib -- --nocapture`,
+  and
+  `cargo test -p iroha_core sumeragi::main_loop::tests::block_created_clears_missing_request_on_duplicate --lib -- --nocapture`.
+
+## 2026-05-08 Iroha Config Snapshot Defaults
+
+- Refreshed `minimal_config_snapshot` to match the current Sumeragi defaults:
+  fast-finality transaction caps remain disabled by default, and the
+  DA-critical actor-gate yield threshold is `2`.
+- Validation passed with `cargo test -p iroha_config --test fixtures` and
+  `cargo test -p iroha_config`.
+
 ## 2026-05-08 Torii account push notification bridge
 
 - Torii push registration now persists devices under the configured Torii data
