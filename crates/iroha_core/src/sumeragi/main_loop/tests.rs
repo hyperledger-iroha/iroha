@@ -30220,7 +30220,8 @@ async fn duplicate_commit_qc_clears_known_block_recovery_request() {
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
     let epoch = actor.epoch_for_height(height);
-    let qc = qc_with_bitmap(
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view);
+    let mut qc = qc_with_bitmap(
         &actor.common_config.chain,
         block_hash,
         height,
@@ -30231,9 +30232,9 @@ async fn duplicate_commit_qc_clears_known_block_recovery_request() {
         &topology,
         &harness.key_pairs,
     );
-    actor
-        .qc_cache
-        .insert((Phase::Commit, block_hash, height, view, epoch), qc.clone());
+    qc.chain_order_hash = chain_order_hash;
+    qc.rechain_seq = rechain_seq;
+    actor.qc_cache.insert(Actor::qc_tally_key(&qc), qc.clone());
 
     let now = Instant::now();
     actor.pending.missing_commit_qc_requests.insert(
@@ -104718,7 +104719,7 @@ async fn da_proposal_uses_rbc_for_ram_lfe_tx_exceeding_consensus_payload_frame_c
 
     let tx = sample_ram_lfe_policy_transaction(actor.consensus_payload_frame_cap);
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let encoded_len = Queue::compute_tx_encoded_len(&accepted);
+    let encoded_len = accepted.entrypoint_bytes().len();
     assert!(
         encoded_len > actor.consensus_payload_frame_cap,
         "RAM-LFE policy transaction should exceed the single consensus frame cap"
