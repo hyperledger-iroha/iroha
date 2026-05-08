@@ -1095,7 +1095,11 @@ impl Actor {
             .inflight
             .take()
             .expect("inline commit must retain inflight marker");
-        self.apply_commit_outcome(inflight, outcome, timings)
+        let committed = self.apply_commit_outcome(inflight, outcome, timings);
+        if committed {
+            let _ = self.kickstart_pacemaker_after_durable_commit();
+        }
+        committed
     }
 
     pub(super) fn drain_commit_results(&mut self) -> CommitDrainSummary {
@@ -1109,11 +1113,16 @@ impl Actor {
         {
             match recv_result {
                 Ok(result) => {
+                    let CommitResult {
+                        id,
+                        outcome,
+                        timings,
+                    } = result;
                     let inflight = match self.subsystems.commit.inflight.take() {
-                        Some(inflight) if inflight.id == result.id => inflight,
+                        Some(inflight) if inflight.id == id => inflight,
                         Some(inflight) => {
                             warn!(
-                                result_id = result.id,
+                                result_id = id,
                                 inflight_id = inflight.id,
                                 inflight_hash = %inflight.block_hash,
                                 "commit result id mismatch; ignoring"
@@ -1123,15 +1132,18 @@ impl Actor {
                         }
                         None => {
                             warn!(
-                                result_id = result.id,
+                                result_id = id,
                                 "commit result received without inflight; ignoring"
                             );
                             continue;
                         }
                     };
-                    let _ = self.apply_commit_outcome(inflight, result.outcome, result.timings);
-                    summary.record(result.timings);
+                    let committed = self.apply_commit_outcome(inflight, outcome, timings);
+                    summary.record(timings);
                     summary.progress = true;
+                    if committed {
+                        let _ = self.kickstart_pacemaker_after_durable_commit();
+                    }
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -1168,9 +1180,12 @@ impl Actor {
                             &self.genesis_account,
                             work,
                         );
-                        let _ = self.apply_commit_outcome(inflight, outcome, timings);
+                        let committed = self.apply_commit_outcome(inflight, outcome, timings);
                         summary.record(timings);
                         summary.progress = true;
+                        if committed {
+                            let _ = self.kickstart_pacemaker_after_durable_commit();
+                        }
                     }
                     break;
                 }
@@ -2014,12 +2029,6 @@ impl Actor {
                     "refreshed pending progress for proposals activated by the committed tip"
                 );
             }
-            let backpressure = self.proposal_backpressure_at(Instant::now());
-            let _ =
-                kickstart_pacemaker_after_commit(self.queue.queued_len(), backpressure, |now| {
-                    self.on_pacemaker_propose_ready(now)
-                });
-
             if let (
                 Some(committed_block),
                 Some(pending),
@@ -2376,6 +2385,13 @@ impl Actor {
             let _ = self.maybe_request_frontier_gap_realign_after_commit(Instant::now());
         }
         committed
+    }
+
+    fn kickstart_pacemaker_after_durable_commit(&mut self) -> bool {
+        let backpressure = self.proposal_backpressure_at(Instant::now());
+        kickstart_pacemaker_after_commit(self.queue.queued_len(), backpressure, |now| {
+            self.on_pacemaker_propose_ready(now)
+        })
     }
 
     #[allow(clippy::too_many_lines)]
