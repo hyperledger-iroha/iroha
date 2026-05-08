@@ -2,6 +2,14 @@
 
 Last updated: 2026-05-08
 
+## 2026-05-08 Iroha Config Snapshot Defaults
+
+- Refreshed `minimal_config_snapshot` to match the current Sumeragi defaults:
+  fast-finality transaction caps remain disabled by default, and the
+  DA-critical actor-gate yield threshold is `2`.
+- Validation passed with `cargo test -p iroha_config --test fixtures` and
+  `cargo test -p iroha_config`.
+
 ## 2026-05-08 Torii account push notification bridge
 
 - Torii push registration now persists devices under the configured Torii data
