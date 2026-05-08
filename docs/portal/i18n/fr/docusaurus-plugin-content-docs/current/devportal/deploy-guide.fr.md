@@ -717,7 +717,7 @@ agrafffer des preuves frais:
 - **Drill log.** Quand les sondes font partie d'un foret, laissez
   `scripts/telemetry/run_sorafs_gateway_probe.sh` ajouter des entrées à `ops/drill-log.md`
   pour que la même preuve satisfasse l'exigence chaos SNNet-5.
-- **Liens de ticket.** Referencez les IDs de panel Grafana ou les exports PNG attachés dans le
+- **Liens de ticket.** Referencez les IDs de panel Grafana ou les exports image attachés dans le
   ticket de changement, avec le chemin du rapport sonde, pour que les réviseurs puissent
   récupérer les SLO sans accès shell.
 

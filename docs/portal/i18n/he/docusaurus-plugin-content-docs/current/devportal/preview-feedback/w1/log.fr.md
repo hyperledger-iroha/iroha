@@ -46,7 +46,7 @@ Ancrez les heures au תכנון UTC מוגדר בתוכנית W1.
 | 19/04/2025 17:55 | לוחות מחוונים ci-dessus + proxy diff de latence נסה זאת | Docs/DevRel lead | מחסום milieu valide (0 התראות; אחזור נסה את זה p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 26/04/2025 16:25 | לוחות מחוונים ci-dessus + probe de sortie | Docs/DevRel + קשר ממשל | תמונת מצב של מיון, אפס התראות תגובות | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-Les echantillons quotidiens d'office hours (2025-04-13 -> 2025-04-25) sont regropes en ייצוא NDJSON + PNG sous
+Les echantillons quotidiens d'office hours (2025-04-13 -> 2025-04-25) sont regropes en ייצוא NDJSON + image sous
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` עם שמות תקדים
 `docs-preview-integrity-<date>.json` et les לוכדת מתכתבים.
 

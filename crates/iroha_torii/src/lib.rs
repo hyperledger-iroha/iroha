@@ -23310,7 +23310,7 @@ async fn handler_get_contract_state(
 }
 
 #[cfg(feature = "app_api")]
-const DEFAULT_MINT_REQUEST_CONTRACT_ALIAS: &str = "apps_mint_request::bpng";
+const DEFAULT_MINT_REQUEST_CONTRACT_ALIAS: &str = "apps_mint_request::paynet";
 #[cfg(feature = "app_api")]
 const MINT_REQUEST_CONTRACT_STATE_PREFIX: &str = "Requests";
 
@@ -54448,7 +54448,7 @@ mod tests {
             iroha_data_model::nexus::DataSpaceMetadata::default(),
             iroha_data_model::nexus::DataSpaceMetadata {
                 id: DataSpaceId::new(10),
-                alias: "bpng".to_owned(),
+                alias: "paynet".to_owned(),
                 description: None,
                 fault_tolerance: 1,
             },
@@ -54467,10 +54467,10 @@ mod tests {
             let state_view = app_state.state.view();
             app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
         }
-        bind_account_alias_for_test(&app, &authority, "banking@bpng");
+        bind_account_alias_for_test(&app, &authority, "banking@paynet");
 
         let request = routing::AliasResolveRequestDto {
-            alias: "banking@bpng".to_string(),
+            alias: "banking@paynet".to_string(),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
         let response = handler_alias_resolve(
@@ -54491,7 +54491,7 @@ mod tests {
             .to_bytes();
         let dto: routing::AliasResolveResponseDto =
             norito::json::from_slice(&body).expect("json decode");
-        assert_eq!(dto.alias, "banking@bpng");
+        assert_eq!(dto.alias, "banking@paynet");
         assert_eq!(dto.account_id, authority.to_string());
         assert_eq!(dto.source.as_deref(), Some("rekey_record"));
     }

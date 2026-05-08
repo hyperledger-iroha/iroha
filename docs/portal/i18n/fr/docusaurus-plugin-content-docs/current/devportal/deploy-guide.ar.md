@@ -487,7 +487,7 @@ Pour le cutover, les alias et les preuves SoraDNS et les autres preuves sont :
 - **Sondes sondes.** Ajout de `artifacts/sorafs_gateway_probe/<stamp>/` à git-annex et à la version ultérieure.
 - **حزمة الاصدار.** خزّن ملخصات CAR ومجموعات المانيفست وتواقيع Sigstore و`portal.pin.report.json` وسجلات Try-It وتقارير الروابط تحت مجلد واحد بتاريخ.
 - **Perceuses.** Pour les perceuses, utilisez `scripts/telemetry/run_sorafs_gateway_probe.sh` et `ops/drill-log.md` pour SNNet-5.
-- **روابط التذاكر.** اربط معرفات لوحات Grafana او صادرات PNG مع مسار تقرير sonde حتى يتمكن المراجعون من التحقق دون وصول coquille.
+- **روابط التذاكر.** اربط معرفات لوحات Grafana او صادرات image مع مسار تقرير sonde حتى يتمكن المراجعون من التحقق دون وصول coquille.
 
 ## الخطوة 11 - تمرين récupérer le tableau de bord de متعدد المصادر وادلة
 

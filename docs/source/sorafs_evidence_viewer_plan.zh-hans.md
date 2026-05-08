@@ -38,7 +38,7 @@ This specification completes **SFM-4b3 — Secure evidence viewer tooling**.
 
 ## Rendering & Watermarking
 - Video/audio: served as MP4/WebM/HLS segments encrypted with AES-GCM. Decryption via WebAssembly worker using session key.
-- Images/PDF: rendered via `<canvas>`; PDF rasterized server-side (PDFium) to deterministic PNG frames.
+- Images/PDF: rendered via `<canvas>`; PDF rasterized server-side (PDFium) to deterministic image frames.
 - Text: displayed with inline redaction support; watermarked backgrounds.
 - Watermarks:
   - Overlay contains `juror_token`, `case_id`, timestamp, session nonce; rotates position every 5 seconds.

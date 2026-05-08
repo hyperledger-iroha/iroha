@@ -48,7 +48,7 @@ Sidebar_label: سجل W1
 | 2025-04-19 17:55 | وصول لوحات المعلومات + اختلاف زمن وصول الوكيل جربها | مستندات/DevRel الرصاص | Chequeo de mitad de ola ok (0 تنبيهات؛ وقت الاستجابة جربه p95=410 مللي ثانية) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 2025-04-26 16:25 | لوحات العدادات + مسبار الخروج | Docs/DevRel + اتصال الحوكمة | لقطة من الخروج، تنبيهات معلقة | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-ساعات العمل اليومية (2025-04-13 -> 2025-04-25) هي مجموعة تصدير NDJSON + PNG bajo
+ساعات العمل اليومية (2025-04-13 -> 2025-04-25) هي مجموعة تصدير NDJSON + image bajo
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` بأسماء الملفات
 `docs-preview-integrity-<date>.json` ولقطات الشاشة المقابلة.
 

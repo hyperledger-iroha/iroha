@@ -46,7 +46,7 @@ Ancrez les heures au plan UTC 定義とプラン W1。
 | 2025-04-19 17:55 |ダッシュボード ci-dessus + diff de latence proxy 試してみる |ドキュメント/DevRel リード |有効なチェックポイント環境 (アラート 0 件、遅延 試してみる p95=410 ミリ秒) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 2025-04-26 16:25 |ダッシュボード ci-dessus + プローブ デ ソーティ |ドキュメント/DevRel + ガバナンス連携 |出撃時のスナップショット、再警報ゼロ | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-Les echantillons quotidiens d'office hours (2025-04-13 -> 2025-04-25) エクスポートと NDJSON + PNG の再グループ化
+Les echantillons quotidiens d'office hours (2025-04-13 -> 2025-04-25) エクスポートと NDJSON + image の再グループ化
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` フィシエの平均値
 `docs-preview-integrity-<date>.json` et les は通信相手をキャプチャします。
 

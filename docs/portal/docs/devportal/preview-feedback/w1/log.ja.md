@@ -48,7 +48,7 @@ W1 計画で定義された UTC スケジュールに合わせます。
 | 2025-04-19 17:55 | 上記ダッシュボード + Try it proxy レイテンシ差分 | Docs/DevRel lead | ✅ 中間チェック合格 (アラート0; Try it レイテンシ p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 2025-04-26 16:25 | 上記ダッシュボード + exit probe | Docs/DevRel + Governance liaison | ✅ 退出スナップショット、未解決アラート0 | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-日次 office hours サンプル (2025-04-13 -> 2025-04-25) は NDJSON + PNG でまとめ、
+日次 office hours サンプル (2025-04-13 -> 2025-04-25) は NDJSON + image でまとめ、
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` に保存しています。ファイル名は
 `docs-preview-integrity-<date>.json` と対応するスクリーンショットです。
 

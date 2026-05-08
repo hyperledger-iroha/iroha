@@ -1630,7 +1630,7 @@ Last update: 2026-02-07
 - Tests: `cargo test -p iroha_core commit_worker_ -- --nocapture` (ok).
 - Sumeragi tests: make `execute_commit_work_reports_kura_store_failure` inject a Kura store failure instead of relying on storage-budget limits; `cargo test -p iroha_core execute_commit_work_reports_kura_store_failure -- --nocapture` (ok).
 - CLI offline: add top-level `iroha offline` command alias, refresh CLI help, and align QR/petal docs to the alias so preview commands match user expectations.
-- Petal stream: deepen sakura-wind preview (denser petals + subtle data glow) and add a PNG load roundtrip test.
+- Petal stream: deepen sakura-wind preview (denser petals + subtle data glow) and add a image load roundtrip test.
 - Connected peers test: wait for the re-registered peer to observe block 3 before asserting status to avoid stale local-removed metrics.
 - Tests: `cargo test -p integration_tests --test mod connected_peers_with_f_1_0_1 -- --nocapture` (timed out after 20m).
 - DA cursor regression tests: hydrate DA indexes before manual cursor advances so lazy hydration does not reset in-memory updates.
@@ -1783,7 +1783,7 @@ Last update: 2026-02-07
 - JS offline QR stream: allow `OfflineQrStreamScanSession` to ingest text frames (optional encoding), reuse decode helper in `scanQrStreamFrames`, and add unit coverage.
 - Tests: `node --test javascript/iroha_js/test/offlineQrStream.test.js` (ok).
 - OFFLINE-QR-STREAM: implemented `QrStreamEnvelope`/`QrStreamFrame` codec + assembler caps in `iroha_data_model`, added CRC32 + parity recovery tests, and generated deterministic fixtures + generator bin.
-- OFFLINE-QR-STREAM: added `iroha offline qr encode/decode` with SVG/PNG/GIF/APNG export; added Swift/Android/JS QrStream codecs + scan pipelines + playback skins; updated QR stream spec and SDK/offline docs.
+- OFFLINE-QR-STREAM: added `iroha offline qr encode/decode` with SVG/image/GIF/Aimage export; added Swift/Android/JS QrStream codecs + scan pipelines + playback skins; updated QR stream spec and SDK/offline docs.
 - OFFLINE-QR-STREAM: fixed payload-kind tag fallback and CLI QR manifest JSON construction.
 - Tests: `cargo test -p iroha_data_model qr_stream -- --nocapture` (ok); `cargo test -p iroha_cli qr_ -- --nocapture` (ok).
 - Sumeragi config: update core config access paths (recovery/gating/debug/rbc) to match nested config keys; fix compile errors after nesting.

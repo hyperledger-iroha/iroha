@@ -760,7 +760,7 @@ cutover کا اعلان کرنے سے پہلے ثابت کریں کہ نیا ali
 - **Registro de perfuração۔** جب sondas کسی broca کا حصہ ہوں تو
   `scripts/telemetry/run_sorafs_gateway_probe.sh` کو `ops/drill-log.md` میں anexar
   کرنے دیں تاکہ وہی evidência requisito de caos SNNet-5 پوری کرے۔
-- **Links de ingresso۔** alterar ticket میں IDs do painel Grafana یا exportações PNG anexadas کا
+- **Links de ingresso۔** alterar ticket میں IDs do painel Grafana یا exportações image anexadas کا
   حوالہ دیں, ساتھ ہی caminho do relatório do probe بھی شامل کریں, تاکہ acesso ao shell dos revisores
   Verificação cruzada de SLOs
 

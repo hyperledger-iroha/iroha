@@ -47,7 +47,7 @@ translator: machine-google-reviewed
 | 2025-04-19 17:55 |上面的儀表板 + 嘗試代理延遲差異 |文檔/DevRel 領導 | ✅ 中點檢查已通過（0 個警報；嘗試一下延遲 p95=410ms）| `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 2025-04-26 16:25 |上面的儀表板 + 出口探針 |文檔/DevRel + 治理聯絡 | ✅ 退出快照，零未完成警報 | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-每日辦公時間樣本 (2025-04-13 → 2025-04-25) 捆綁為 NDJSON + PNG 導出，位於
+每日辦公時間樣本 (2025-04-13 → 2025-04-25) 捆綁為 NDJSON + image 導出，位於
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` 與文件名
 `docs-preview-integrity-<date>.json` 和相應的屏幕截圖。
 

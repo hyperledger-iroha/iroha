@@ -509,7 +509,7 @@ npm run monitor:publishing -- \
 - **проверенные зонды.** Загрузите `artifacts/sorafs_gateway_probe/<stamp>/` в git-annex и откройте приложение.
 - **حزمة الاصدار.** خزّن ملخصات CAR ومجموعات المانيفست وتواقيع Sigstore و`portal.pin.report.json` — Try-It, который можно использовать для проверки.
 - **Сверла.** Для сверл используются `scripts/telemetry/run_sorafs_gateway_probe.sh` и `ops/drill-log.md` для подключения к SNNet-5.
-- **روابط التذاكر.** Загрузите файл Grafana в PNG с помощью зонда تقرير. Он сказал, что у него есть раковина.
+- **روابط التذاكر.** Загрузите файл Grafana в image с помощью зонда تقرير. Он сказал, что у него есть раковина.
 
 ## الخطوة 11 - تمرين fetch متعدد المصادر وادلة tableboard
 

@@ -46,7 +46,7 @@ Ancore os horarios ללא cronograma UTC definido ללא plano W1.
 | 19/04/2025 17:55 | לוחות מחוונים acima + diff de latencia do proxy נסה את זה | Docs/DevRel lead | Checkpoint de meio aprovado (0 התראות; עכבות נסה את זה p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 26/04/2025 16:25 | לוחות מחוונים acima + probe de saida | Docs/DevRel + קשר ממשל | תמונת מצב, אפס התראות תלויות | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-כפי שידורי שעות העבודה (2025-04-13 -> 2025-04-25) estao agrupadas como מייצאת NDJSON + PNG em
+כפי שידורי שעות העבודה (2025-04-13 -> 2025-04-25) estao agrupadas como מייצאת NDJSON + image em
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` com nomes de arquivo
 `docs-preview-integrity-<date>.json` הכתבים צילומי מסך.
 

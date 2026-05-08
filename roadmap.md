@@ -44,6 +44,11 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - Keep NFT/RWA escrow and court fee/payout generalization as separate follow-ups; the v1 primitive intentionally resolves only between the escrow seller and accepted buyer.
 - Carry the Soracloud production posture hardening through the operator-host rollout corridor.
   - Local focused, portable QEMU, and prior multi-peer load gates are green as of 2026-04-25; the readiness runner now reports missing operator inventory and missing observability evidence as production blockers. Before public rollout, run the mixed-host Inrou smoke with the real operator inventory, attach the real metrics/status/alert/dashboard evidence, and archive a blocker-free readiness report.
+  - The affected live deployment is intentionally running the 2026-05-08
+    no-embedded-runtime `irohad` binary after the Inrou advert incident. Before
+    any future live Soracloud runtime rollout, add an explicit operator config
+    gate for Inrou enablement and prove that zero-backend hosts do not emit host
+    adverts.
 - Carry the new Taira devex CLI through the opt-in live rollout corridor.
   - The local CLI/Torii/mock-script validation for `iroha taira doctor` and `iroha taira write-canary` is green as of 2026-04-25, but no live Taira write was run from this tree.
   - Before publishing a live receipt, run `iroha taira doctor --public-root https://taira.sora.org` and an operator-approved `iroha taira write-canary --public-root https://taira.sora.org`, preserving only the redacted receipt and any stable failure codes.
@@ -80,6 +85,16 @@ Completed history lives in `status.md`. This file should only track unfinished w
     transactions, and needed 722 seconds of drain time. Use
     `integration_tests/artifacts/realistic-30tps-transfer-20min-640-release-daemon-block-body-response-block-lane/throughput-1778229477740/`
     for the next worker/proposal throughput tuning pass.
+  - The matching realistic 30 TPS, 20-minute RAM-LFE email-claim soak also
+    passes as of 2026-05-08. The release-daemon run submitted 36,000
+    `ClaimIdentifier` email transactions, reached the 36,008 approved target
+    with zero rejects, and finished with all peers at 723 non-empty blocks.
+    Margin remains the open item: load committed at 21.27 TPS, final committed
+    TPS was 19.17 including drain, peak queue was 10,377, and drain took 677
+    seconds. Use
+    `integration_tests/artifacts/realistic-30tps-ram-lfe-email-20min-release-daemon/throughput-1778232961671/`
+    alongside the transfer artifact for the next worker/proposal throughput
+    tuning pass.
   - The 2026-05-08 DA/RBC large RAM-LFE proposal fallback is covered by focused
     DA payload-budget tests, a RAM-LFE oversized-frame fallback regression, and
     the adjacent unservable-payload deferral check. Rerun the full

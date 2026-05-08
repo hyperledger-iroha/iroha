@@ -771,7 +771,7 @@ agraffent des proofs frais:
 - **Drill log.** Quand les probes font partie d'un drill, laissez
   `scripts/telemetry/run_sorafs_gateway_probe.sh` ajouter des entrees a `ops/drill-log.md`
   pour que la meme evidence satisfasse le requirement chaos SNNet-5.
-- **Liens de ticket.** Referencez les IDs de panel Grafana ou les exports PNG attaches dans le
+- **Liens de ticket.** Referencez les IDs de panel Grafana ou les exports image attaches dans le
   ticket de changement, avec le chemin du rapport probe, pour que les reviewers puissent
   recouper les SLOs sans acces shell.
 

@@ -529,7 +529,7 @@ OpenAPI/SBOM マニフェストをポータルビルドと同じバンドルに�
 - **probe アーカイブ**: `artifacts/sorafs_gateway_probe/<stamp>/` を保存します。
 - **リリースバンドル**: CAR サマリー、マニフェストバンドル、Sigstore 署名、`portal.pin.report.json`、Try-It プローブログなどを 1 つのフォルダにまとめます。
 - **drill ログ**: `scripts/telemetry/run_sorafs_gateway_probe.sh` が `ops/drill-log.md` を更新します。
-- **チケットリンク**: Grafana のパネル ID や PNG を添付し、SLO を確認できるようにします。
+- **チケットリンク**: Grafana のパネル ID や image を添付し、SLO を確認できるようにします。
 
 ## ステップ 11 - マルチソース fetch drill とスコアボード証跡
 

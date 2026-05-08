@@ -487,7 +487,7 @@ Para obtener una transferencia de corte, use un alias de SoraDNS y pruebas de pr
 - **ارشفة sondas.** احتفظ بـ `artifacts/sorafs_gateway_probe/<stamp>/` ضمن git-annex او مخزن الادلة.
 - **حزمة الاصدار.** خزّن ملخصات CAR, مجموعات مانيفست وتواقيع Sigstore و`portal.pin.report.json` وسجلات Try-It وتقارير الروابط تحت مجلد واحد بتاريخ.
 - **سجل drills.** عند تشغيل drills, يحدث `scripts/telemetry/run_sorafs_gateway_probe.sh` ملف `ops/drill-log.md` لتلبية متطلبات SNNet-5.
-- **روابط التذاكر.** اربط معرفات لوحات Grafana او صادرات PNG مع مسار تقرير sonda حتى يتمكن المراجعون من التحقق دون وصول cáscara.
+- **روابط التذاكر.** اربط معرفات لوحات Grafana او صادرات image مع مسار تقرير sonda حتى يتمكن المراجعون من التحقق دون وصول cáscara.
 
 ## الخطوة 11 - تمرين buscar متعدد المصادر وادلة marcador
 

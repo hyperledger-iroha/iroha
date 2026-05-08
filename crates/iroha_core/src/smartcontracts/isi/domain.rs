@@ -7311,8 +7311,8 @@ mod tests {
     fn register_global_asset_definition_rejects_restricted_dataspace_home() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let bpng = DataSpaceId::new(7);
-        let domain_id: DomainId = DomainId::try_new("digital-kina", "bpng").expect("domain id");
+        let paynet = DataSpaceId::new(7);
+        let domain_id: DomainId = DomainId::try_new("digital-kina", "paynet").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
         let definition_id =
@@ -7336,8 +7336,8 @@ mod tests {
         let dataspace_catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {
-                id: bpng,
-                alias: "bpng".to_owned(),
+                id: paynet,
+                alias: "paynet".to_owned(),
                 description: None,
                 fault_tolerance: 1,
             },
@@ -7351,16 +7351,16 @@ mod tests {
                 LaneConfig::default(),
                 LaneConfig {
                     id: LaneId::new(1),
-                    dataspace_id: bpng,
-                    alias: "bpng".to_owned(),
+                    dataspace_id: paynet,
+                    alias: "paynet".to_owned(),
                     visibility: LaneVisibility::Restricted,
                     ..LaneConfig::default()
                 },
             ],
         )
         .expect("lane catalog");
-        tx.current_dataspace_id = Some(bpng);
-        tx.world.current_dataspace_id = Some(bpng);
+        tx.current_dataspace_id = Some(paynet);
+        tx.world.current_dataspace_id = Some(paynet);
 
         let err = Register::asset_definition(new_definition)
             .execute(&authority, &mut tx)
@@ -7381,8 +7381,8 @@ mod tests {
     fn replay_allows_legacy_global_asset_definition_in_restricted_dataspace() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let bpng = DataSpaceId::new(7);
-        let domain_id: DomainId = DomainId::try_new("digital-kina", "bpng").expect("domain id");
+        let paynet = DataSpaceId::new(7);
+        let domain_id: DomainId = DomainId::try_new("digital-kina", "paynet").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
         let definition_id =
@@ -7403,9 +7403,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        install_dataspace_catalog_with_lane(&mut tx, bpng, "bpng", LaneVisibility::Restricted);
-        tx.current_dataspace_id = Some(bpng);
-        tx.world.current_dataspace_id = Some(bpng);
+        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
+        tx.current_dataspace_id = Some(paynet);
+        tx.world.current_dataspace_id = Some(paynet);
         tx.replay_compatibility = true;
 
         Register::asset_definition(new_definition)
@@ -7417,12 +7417,12 @@ mod tests {
     fn register_global_asset_definition_allows_public_alias_home_on_authoritative_route() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let bpng = DataSpaceId::new(7);
+        let paynet = DataSpaceId::new(7);
         let domain_id: DomainId = DomainId::try_new("digital-kina", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
         let definition_id = AssetDefinitionId::new(domain_id, "kina".parse().expect("name"));
-        let alias: AssetDefinitionAlias = "kina#bpng".parse().expect("alias");
+        let alias: AssetDefinitionAlias = "kina#paynet".parse().expect("alias");
         let new_definition = NewAssetDefinition {
             id: definition_id.clone(),
             name: "kina".to_owned(),
@@ -7439,9 +7439,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        install_dataspace_catalog_with_lane(&mut tx, bpng, "bpng", LaneVisibility::Public);
-        tx.current_dataspace_id = Some(bpng);
-        tx.world.current_dataspace_id = Some(bpng);
+        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Public);
+        tx.current_dataspace_id = Some(paynet);
+        tx.world.current_dataspace_id = Some(paynet);
 
         Register::asset_definition(new_definition)
             .execute(&authority, &mut tx)
@@ -7457,12 +7457,12 @@ mod tests {
     fn register_global_asset_definition_rejects_public_alias_home_on_wrong_route() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let bpng = DataSpaceId::new(7);
+        let paynet = DataSpaceId::new(7);
         let domain_id: DomainId = DomainId::try_new("digital-kina", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
         let definition_id = AssetDefinitionId::new(domain_id, "kina".parse().expect("name"));
-        let alias: AssetDefinitionAlias = "kina#bpng".parse().expect("alias");
+        let alias: AssetDefinitionAlias = "kina#paynet".parse().expect("alias");
         let new_definition = NewAssetDefinition {
             id: definition_id,
             name: "kina".to_owned(),
@@ -7479,7 +7479,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        install_dataspace_catalog_with_lane(&mut tx, bpng, "bpng", LaneVisibility::Public);
+        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Public);
         tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
 
@@ -7497,8 +7497,8 @@ mod tests {
     fn asset_home_extra_coverage_register_global_allows_universal_alias_home() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let bpng = DataSpaceId::new(7);
-        let domain_id: DomainId = DomainId::try_new("digital-kina", "bpng").expect("domain");
+        let paynet = DataSpaceId::new(7);
+        let domain_id: DomainId = DomainId::try_new("digital-kina", "paynet").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
         let definition_id = AssetDefinitionId::new(domain_id, "kina".parse().expect("name"));
@@ -7519,7 +7519,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        install_dataspace_catalog_with_lane(&mut tx, bpng, "bpng", LaneVisibility::Restricted);
+        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
         tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
 
@@ -7537,13 +7537,13 @@ mod tests {
     fn asset_home_more_coverage_register_restricted_policy_allows_restricted_alias_home() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let bpng = DataSpaceId::new(7);
+        let paynet = DataSpaceId::new(7);
         let domain_id: DomainId =
             DomainId::try_new("restricted-kina", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
         let definition_id = AssetDefinitionId::new(domain_id, "kina".parse().expect("name"));
-        let alias: AssetDefinitionAlias = "kina#bpng".parse().expect("alias");
+        let alias: AssetDefinitionAlias = "kina#paynet".parse().expect("alias");
         let new_definition = NewAssetDefinition {
             id: definition_id.clone(),
             name: "kina".to_owned(),
@@ -7560,9 +7560,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        install_dataspace_catalog_with_lane(&mut tx, bpng, "bpng", LaneVisibility::Restricted);
-        tx.current_dataspace_id = Some(bpng);
-        tx.world.current_dataspace_id = Some(bpng);
+        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
+        tx.current_dataspace_id = Some(paynet);
+        tx.world.current_dataspace_id = Some(paynet);
 
         Register::asset_definition(new_definition)
             .execute(&authority, &mut tx)
@@ -7795,13 +7795,13 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        let bpng = DataSpaceId::new(7);
-        install_dataspace_catalog_with_lane(&mut tx, bpng, "bpng", LaneVisibility::Restricted);
+        let paynet = DataSpaceId::new(7);
+        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
         Register::asset_definition(definition)
             .execute(&authority, &mut tx)
             .expect("register global definition");
 
-        let alias: AssetDefinitionAlias = "pgk#bpng".parse().expect("alias");
+        let alias: AssetDefinitionAlias = "pgk#paynet".parse().expect("alias");
         let err = SetAssetDefinitionAlias::bind(definition_id, alias, None)
             .execute(&authority, &mut tx)
             .expect_err("global alias must not move home to restricted dataspace");
@@ -7836,13 +7836,13 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        let bpng = DataSpaceId::new(7);
-        install_dataspace_catalog_with_lane(&mut tx, bpng, "bpng", LaneVisibility::Public);
+        let paynet = DataSpaceId::new(7);
+        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Public);
         Register::asset_definition(definition)
             .execute(&authority, &mut tx)
             .expect("register global definition");
 
-        let alias: AssetDefinitionAlias = "pgk#bpng".parse().expect("alias");
+        let alias: AssetDefinitionAlias = "pgk#paynet".parse().expect("alias");
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
             .expect("public dataspace may home a global asset alias");
@@ -7857,15 +7857,15 @@ mod tests {
     fn asset_home_extra_coverage_set_alias_allows_global_move_to_universal() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId = DomainId::try_new("alias-universal", "bpng").expect("domain");
+        let domain_id: DomainId = DomainId::try_new("alias-universal", "paynet").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
         let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        let bpng = DataSpaceId::new(7);
-        install_dataspace_catalog_with_lane(&mut tx, bpng, "bpng", LaneVisibility::Restricted);
+        let paynet = DataSpaceId::new(7);
+        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
         tx.world.asset_definitions.insert(
             definition_id.clone(),
             AssetDefinition::numeric(definition_id.clone())
@@ -7935,8 +7935,8 @@ mod tests {
     fn set_asset_definition_alias_clear_rejects_restricted_domain_fallback_for_global_asset() {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
-        let bpng = DataSpaceId::new(7);
-        let domain_id: DomainId = DomainId::try_new("cash", "bpng").expect("domain");
+        let paynet = DataSpaceId::new(7);
+        let domain_id: DomainId = DomainId::try_new("cash", "paynet").expect("domain");
         let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
         let definition = AssetDefinition::numeric(definition_id.clone())
             .with_name("pgk".to_owned())
@@ -7946,7 +7946,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        install_dataspace_catalog_with_lane(&mut tx, bpng, "bpng", LaneVisibility::Restricted);
+        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
         tx.world
             .asset_definitions
             .insert(definition_id.clone(), definition);
@@ -7995,13 +7995,13 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        let bpng = DataSpaceId::new(7);
-        install_dataspace_catalog_with_lane(&mut tx, bpng, "bpng", LaneVisibility::Restricted);
+        let paynet = DataSpaceId::new(7);
+        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
         Register::asset_definition(definition)
             .execute(&authority, &mut tx)
             .expect("register restricted definition");
 
-        let alias: AssetDefinitionAlias = "pgk#bpng".parse().expect("alias");
+        let alias: AssetDefinitionAlias = "pgk#paynet".parse().expect("alias");
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
             .expect("restricted asset alias may use restricted dataspace");
@@ -8039,12 +8039,12 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        let bpng = DataSpaceId::new(7);
+        let paynet = DataSpaceId::new(7);
         let dataspace_catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {
-                id: bpng,
-                alias: "bpng".to_owned(),
+                id: paynet,
+                alias: "paynet".to_owned(),
                 description: None,
                 fault_tolerance: 1,
             },
@@ -8073,7 +8073,7 @@ mod tests {
         SetAssetDefinitionBalancePolicy::new(
             definition_id.clone(),
             iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-            Some(bpng),
+            Some(paynet),
         )
         .execute(&authority, &mut tx)
         .expect("migrate balance policy");
@@ -8093,12 +8093,12 @@ mod tests {
         let alice_scoped = AssetId::with_scope(
             definition_id.clone(),
             ALICE_ID.clone(),
-            iroha_data_model::asset::AssetBalanceScope::Dataspace(bpng),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(paynet),
         );
         let bob_scoped = AssetId::with_scope(
             definition_id.clone(),
             BOB_ID.clone(),
-            iroha_data_model::asset::AssetBalanceScope::Dataspace(bpng),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(paynet),
         );
 
         assert!(tx.world.assets.get(&alice_global).is_none());
@@ -8296,8 +8296,8 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        let bpng = DataSpaceId::new(7);
-        install_dataspace_catalog_with_lane(&mut tx, bpng, "bpng", LaneVisibility::Restricted);
+        let paynet = DataSpaceId::new(7);
+        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
         Register::asset_definition(definition)
             .execute(&authority, &mut tx)
             .expect("register empty global definition");
@@ -8305,7 +8305,7 @@ mod tests {
         SetAssetDefinitionBalancePolicy::new(
             definition_id.clone(),
             iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-            Some(bpng),
+            Some(paynet),
         )
         .execute(&authority, &mut tx)
         .expect("empty global definition can migrate policy without balances");

@@ -706,7 +706,7 @@ fresques engrapan pruebas :
 - **Drill log.** Lorsque les sondes font partie d'un foret, déjà que
   `scripts/telemetry/run_sorafs_gateway_probe.sh` agréger les entrées à `ops/drill-log.md`
   pour que la même preuve satisfasse aux exigences du caos SNNet-5.
-- **Liens du ticket.** Référence aux ID du panneau de Grafana ou aux exportations PNG ajoutées au ticket
+- **Liens du ticket.** Référence aux ID du panneau de Grafana ou aux exportations image ajoutées au ticket
   de changement, en même temps que la route du rapport de sonde, pour que les réviseurs puissent croiser les SLO
   sans accéder à une coquille.
 

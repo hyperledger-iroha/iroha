@@ -45,7 +45,7 @@ description: قائمة مجمعة، نقاط قياس، وملاحظات الم
 | 06-04-2025 18:20 | נה `npm run manage:tryit-proxy -- --stage preview-w1` | אופס | ✅ تم التجهيز | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
 | 2025-04-12 14:45 | اللوحات اعلاه + `probe:portal` | Docs/DevRel + Ops | ✅ لقطة قبل الدعوة، بلا تراجعات | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
 | 19/04/2025 17:55 | اللوحات اعلاه + فرق زمن Try it | Docs/DevRel lead | ✅ اجتاز فحص منتصف الموجة (0 تنبيهات; زمن Try it p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
-| 26/04/2025 16:25 | اللوحات اعلاه + probe خروج | Docs/DevRel + קשר ממשל | ✅ لقطة خروج، صفر تنبيهات متبقية | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |عينات ساعات المكتب اليومية (2025-04-13 -> 2025-04-25) مجمعة كصادرات NDJSON + PNG تحت
+| 26/04/2025 16:25 | اللوحات اعلاه + probe خروج | Docs/DevRel + קשר ממשל | ✅ لقطة خروج، صفر تنبيهات متبقية | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |عينات ساعات المكتب اليومية (2025-04-13 -> 2025-04-25) مجمعة كصادرات NDJSON + image تحت
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` مع اسماء ملفات
 `docs-preview-integrity-<date>.json` واللقطات المقابلة.
 

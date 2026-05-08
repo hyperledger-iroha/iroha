@@ -49,7 +49,7 @@ Ancla los tiempos al calendario UTC definido en el plan W1.
 | 2025-04-19 17:55 | Dashboards de arriba + diff de latencia del proxy Try it | Docs/DevRel lead | Chequeo de mitad de ola ok (0 alertas; latencia Try it p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 2025-04-26 16:25 | Dashboards de arriba + probe de salida | Docs/DevRel + Governance liaison | Snapshot de salida, cero alertas pendientes | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-Las muestras diarias de office hours (2025-04-13 -> 2025-04-25) se agrupan como exportes NDJSON + PNG bajo
+Las muestras diarias de office hours (2025-04-13 -> 2025-04-25) se agrupan como exportes NDJSON + image bajo
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` con nombres de archivo
 `docs-preview-integrity-<date>.json` y los screenshots correspondientes.
 

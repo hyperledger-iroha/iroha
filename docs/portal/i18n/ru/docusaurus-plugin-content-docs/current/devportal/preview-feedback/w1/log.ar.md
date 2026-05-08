@@ -45,7 +45,7 @@ Sidebar_label: Открыть W1
 | 2025-04-06 18:20 | نص `npm run manage:tryit-proxy -- --stage preview-w1` | Операции | ✅ تم التجهيز | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
 | 2025-04-12 14:45 | Дополнительная информация + `probe:portal` | Документы/DevRel + Ops | ✅ لقطة قبل الدعوة, بلا تراجعات | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
 | 2025-04-19 17:55 | اللوحات اعلاه + فرق زمن Попробуйте | Руководитель отдела документации и разработки | ✅ اجتاز فحص منتصف الموجة (0 дней; زمن Попробуйте p95=410 мс) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
-| 2025-04-26 16:25 | Проверка + зонд خروج | Документы/DevRel + связь с управлением | ✅ لقطة خروج، صفر تنبيهات متبقية | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |Предыдущий выпуск (13 апреля 2025 г. -> 25 апреля 2025 г.) Создать файл NDJSON + PNG
+| 2025-04-26 16:25 | Проверка + зонд خروج | Документы/DevRel + связь с управлением | ✅ لقطة خروج، صفر تنبيهات متبقية | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |Предыдущий выпуск (13 апреля 2025 г. -> 25 апреля 2025 г.) Создать файл NDJSON + image
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` на складе
 `docs-preview-integrity-<date>.json` является заменой.
 

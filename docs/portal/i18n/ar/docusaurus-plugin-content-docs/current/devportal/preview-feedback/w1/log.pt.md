@@ -48,7 +48,7 @@ Ancore os horarios no cronograma UTC محدد في خطة W1.
 | 2025-04-19 17:55 | لوحات المعلومات أعلاه + فرق زمن الوصول للوكيل جربها | مستندات/DevRel الرصاص | نقطة تفتيش أفضل (0 تنبيهات؛ وقت الاستجابة جربها p95=410 مللي ثانية) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 2025-04-26 16:25 | لوحات العدادات هنا + مسبار صيدا | Docs/DevRel + اتصال الحوكمة | لقطة سعيدة، صفر تنبيهات معلقة | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-كما amostras diarias de ساعات العمل (2025-04-13 -> 2025-04-25) estao agrupadas como Exports NDJSON + PNG em
+كما amostras diarias de ساعات العمل (2025-04-13 -> 2025-04-25) estao agrupadas como Exports NDJSON + image em
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` بأسماء الملف
 `docs-preview-integrity-<date>.json` ولقطات الشاشة للمراسلين.
 

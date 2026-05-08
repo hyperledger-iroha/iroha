@@ -515,7 +515,7 @@ Antes de usar o cutover убедитесь, este novo alias резолвится
 - **Arquivos de teste.** Coloque `artifacts/sorafs_gateway_probe/<stamp>/` no git-annex ou no balde de evidências. Veja o resumo do probe, cabeçalhos e carga útil do PagerDuty.
 - **Liberar pacote.** Сохраняйте CAR resumo portal/SBOM/OpenAPI, pacotes de manifesto, assinaturas Sigstore, `portal.pin.report.json`, logs de sonda Try-It e relatórios de verificação de link no pacote adicional (por exemplo, `artifacts/sorafs/devportal/20260212T1103Z/`).
 - **Registro de perfuração.** Sondas de teste - часть broca, `scripts/telemetry/run_sorafs_gateway_probe.sh` добавляет запись в `ops/drill-log.md`, чтобы это покрывало SNNet-5 caos requisito.
-- **Links de ingressos.** Pesquisar IDs de painel Grafana ou configurar exportações PNG em alteração de ticket com o relatório de sondagem, чтобы ревьюеры могли SLOs seguros não são fornecidos pelo shell.
+- **Links de ingressos.** Pesquisar IDs de painel Grafana ou configurar exportações image em alteração de ticket com o relatório de sondagem, чтобы ревьюеры могли SLOs seguros não são fornecidos pelo shell.
 
 ## Capítulo 11 - Exercício de busca de múltiplas fontes e evidência de placar
 

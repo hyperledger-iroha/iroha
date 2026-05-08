@@ -1051,7 +1051,7 @@ if (resolved) {
   console.log(`${resolved.alias} → ${resolved.account_id}`);
 }
 
-const permissioned = await torii.resolveAlias("tidal-river-4160@mibank.bpng", {
+const permissioned = await torii.resolveAlias("tidal-river-4160@mibank.paynet", {
   canonicalAuth: {
     accountId: operatorAccountId,
     privateKey: operatorPrivateKey,
@@ -1077,7 +1077,7 @@ const request = await buildCanonicalJsonRequest({
   accountId: operatorAccountIdOrAlias,
   baseUrl: toriiBaseUrl,
   path: "/v1/aliases/resolve",
-  body: { alias: "tidal-river-4160@mibank.bpng" },
+  body: { alias: "tidal-river-4160@mibank.paynet" },
   sign: ({ messageBase64 }) => signWithWalletKey(messageBase64),
 });
 

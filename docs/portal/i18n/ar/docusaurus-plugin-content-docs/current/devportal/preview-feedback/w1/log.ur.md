@@ -47,7 +47,7 @@ Sidebar_label: W1 لاگ
 | 2025-04-19 17:55 | Dashboards اوپر + Try it proxy latency diff | مستندات/DevRel الرصاص | ✅ تم اجتياز فحص نقطة المنتصف (0 تنبيهات؛ جرب الكمون p95=410 مللي ثانية) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 2025-04-26 16:25 | لوحات المعلومات اوپر + مسبار الخروج | Docs/DevRel + اتصال الحوكمة | ✅ لقطة الخروج، صفر تنبيهات معلقة | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-عينات من ساعات العمل (2025-04-13 -> 2025-04-25) صادرات NDJSON + PNG
+عينات من ساعات العمل (2025-04-13 -> 2025-04-25) صادرات NDJSON + image
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` موجود، اسم مفضل
 `docs-preview-integrity-<date>.json` ولقطات شاشة تتعلق بموضوع کے ساتھ.
 

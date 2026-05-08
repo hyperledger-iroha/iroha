@@ -495,9 +495,7 @@ const LOCALNET_CBUAE_ALIAS_DATASPACE_ID: u64 = 12;
 const LOCALNET_PAYNET_ALIAS_LANE_INDEX: u32 = 3;
 const LOCALNET_CBUAE_ALIAS_LANE_INDEX: u32 = 4;
 const LOCALNET_NEXUS_ALIAS_LANE_COUNT: i64 = 5;
-const LOCALNET_BPNG_ALIAS_DATASPACE_ID: u64 = 10;
-const LOCALNET_BPNG_ALIAS_LANE_INDEX: u32 = 3;
-const LOCALNET_BPNG_ALIAS_LANE_COUNT: i64 = 4;
+const LOCALNET_PAYNET_ALIAS_LANE_COUNT: i64 = 4;
 
 fn localnet_uses_alias_multilane_catalog(sora_profile: Option<SoraProfile>) -> bool {
     matches!(
@@ -1428,8 +1426,9 @@ fn localnet_dataspace_catalog(
             ),
         ],
         Some(SoraProfile::Dataspace) => vec![(
-            "bpng",
-            i64::try_from(LOCALNET_BPNG_ALIAS_DATASPACE_ID).expect("BPNG dataspace id fits i64"),
+            "paynet",
+            i64::try_from(LOCALNET_PAYNET_ALIAS_DATASPACE_ID)
+                .expect("PAYNET dataspace id fits i64"),
             "Bank of Papua New Guinea private Digital Kina dataspace",
         )],
         None => Vec::new(),
@@ -1504,14 +1503,14 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
         }
         Some(SoraProfile::Dataspace) => {
             lane_specs.push((
-                i64::from(LOCALNET_BPNG_ALIAS_LANE_INDEX),
-                "bpng",
+                i64::from(LOCALNET_PAYNET_ALIAS_LANE_INDEX),
+                "paynet",
                 "Bank of Papua New Guinea private Digital Kina dataspace lane",
-                "bpng",
+                "paynet",
                 "restricted",
                 Some("parliament"),
             ));
-            LOCALNET_BPNG_ALIAS_LANE_COUNT
+            LOCALNET_PAYNET_ALIAS_LANE_COUNT
         }
         None => return None,
     };
@@ -1589,16 +1588,16 @@ fn localnet_routing_policy(sora_profile: Option<SoraProfile>) -> Option<toml::Ta
         }
         Some(SoraProfile::Dataspace) => {
             rules.push(rule(
-                LOCALNET_BPNG_ALIAS_LANE_INDEX,
-                "bpng",
+                LOCALNET_PAYNET_ALIAS_LANE_INDEX,
+                "paynet",
                 "account",
-                "*@bpng",
+                "*@paynet",
             ));
             rules.push(rule(
-                LOCALNET_BPNG_ALIAS_LANE_INDEX,
-                "bpng",
+                LOCALNET_PAYNET_ALIAS_LANE_INDEX,
+                "paynet",
                 "account",
-                "*@mibank.bpng",
+                "*@mibank.paynet",
             ));
         }
         None => {}
@@ -5327,7 +5326,7 @@ mod tests {
     }
 
     #[test]
-    fn dataspace_localnet_binds_bpng_restricted_lane_before_genesis_signing() {
+    fn dataspace_localnet_binds_paynet_restricted_lane_before_genesis_signing() {
         use std::collections::{BTreeMap, BTreeSet};
 
         let temp = tempfile::tempdir().expect("tmp dir");
@@ -5337,7 +5336,7 @@ mod tests {
             sora_profile: Some(SoraProfile::Dataspace),
             perf_profile: None,
             peers: peer_count,
-            seed: Some("localnet-bpng-dataspace-lane".to_owned()),
+            seed: Some("localnet-paynet-dataspace-lane".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
             public_host: DEFAULT_PUBLIC_HOST.to_owned(),
             base_api_port: 34080,
@@ -5366,8 +5365,8 @@ mod tests {
             .expect("nexus table");
         assert_eq!(
             nexus.get("lane_count").and_then(toml::Value::as_integer),
-            Some(LOCALNET_BPNG_ALIAS_LANE_COUNT),
-            "dataspace profile should declare the BPNG lane before genesis signing"
+            Some(LOCALNET_PAYNET_ALIAS_LANE_COUNT),
+            "dataspace profile should declare the PAYNET lane before genesis signing"
         );
 
         let lane_catalog = nexus
@@ -5397,8 +5396,8 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            lanes_by_alias.get("bpng"),
-            Some(&("bpng".to_owned(), "restricted".to_owned()))
+            lanes_by_alias.get("paynet"),
+            Some(&("paynet".to_owned(), "restricted".to_owned()))
         );
 
         let dataspace_catalog = nexus
@@ -5422,10 +5421,10 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            dataspaces_by_alias.get("bpng"),
+            dataspaces_by_alias.get("paynet"),
             Some(
-                &i64::try_from(LOCALNET_BPNG_ALIAS_DATASPACE_ID)
-                    .expect("BPNG dataspace id fits i64")
+                &i64::try_from(LOCALNET_PAYNET_ALIAS_DATASPACE_ID)
+                    .expect("PAYNET dataspace id fits i64")
             )
         );
 
@@ -5449,7 +5448,7 @@ mod tests {
             .collect();
         assert_eq!(
             account_rules,
-            BTreeSet::from(["*@bpng".to_owned(), "*@mibank.bpng".to_owned()])
+            BTreeSet::from(["*@paynet".to_owned(), "*@mibank.paynet".to_owned()])
         );
 
         let manifest = localnet_genesis_for_opts(&opts);
@@ -5465,7 +5464,7 @@ mod tests {
         assert_eq!(
             validator_lanes,
             BTreeSet::from([LaneId::SINGLE.as_u32()]),
-            "restricted BPNG dataspace lane must not be bootstrapped as a public stake-elected lane"
+            "restricted PAYNET dataspace lane must not be bootstrapped as a public stake-elected lane"
         );
 
         let source = TomlSource::from_file(temp.path().join("peer0.toml")).expect("read config");
@@ -5478,7 +5477,7 @@ mod tests {
         assert_eq!(
             block.header().da_proof_policies_hash(),
             Some(expected_hash),
-            "signed genesis should embed the BPNG dataspace proof policy bundle from peer config"
+            "signed genesis should embed the PAYNET dataspace proof policy bundle from peer config"
         );
     }
 

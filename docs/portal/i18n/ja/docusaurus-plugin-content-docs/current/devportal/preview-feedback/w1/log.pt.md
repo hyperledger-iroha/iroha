@@ -46,7 +46,7 @@ ID: プレビュー-フィードバック-w1-log
 | 2025-04-19 17:55 |ダッシュボード acima + diff de latencia do proxy 試してみる |ドキュメント/DevRel リード |最初のチェックポイント (0 アラート; 遅延 お試しください p95=410 ミリ秒) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 2025-04-26 16:25 |ダッシュボード acima + プローブ デ サイダ |ドキュメント/DevRel + ガバナンス連携 |スナップショット、保留中のアラートはゼロ | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-オフィスアワーの日記として (2025-04-13 -> 2025-04-25) estao agrupadas como exports NDJSON + PNG em
+オフィスアワーの日記として (2025-04-13 -> 2025-04-25) estao agrupadas como exports NDJSON + image em
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` com の名前
 `docs-preview-integrity-<date>.json` のスクリーンショットの対応者。
 

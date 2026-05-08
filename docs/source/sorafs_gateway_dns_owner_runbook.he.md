@@ -163,7 +163,7 @@ promtool test rules dashboards/alerts/tests/soradns_transparency_rules.test.yml
 1. Refresh the GAR telemetry snapshot file (`docs/source/sorafs_gateway_dns_design_gar_telemetry.md`)
    by scraping staging metrics into a new `.prom` artefact (see §2 timeline).
 2. Verify the GAR/telemetry dashboards referenced in the roadmap remain green
-   and export PNGs for the evidence bundle.
+   and export images for the evidence bundle.
 3. Prepare rollback commands by recording:
    - `sorafs_cli manifest revert` invocation with the previous manifest digest (available via the `rollback.manifest_digest_hex` field in `portal.dns-cutover.json`).
    - DNS reverse plan derived from the descriptor’s `rollback.plan_path` (swap the hostname back to `docs.staging.sora.link`, reuse `npm run probe:portal` to ensure rollback succeeded).
@@ -209,7 +209,7 @@ promtool test rules dashboards/alerts/tests/soradns_transparency_rules.test.yml
 7. **Telemetry watch:** Keep `torii_sorafs_gar_violations_total`,
    `torii_sorafs_gateway_refusals_total`, and
    `torii_sorafs_tls_cert_expiry_seconds` dashboards in view for ≥30 minutes.
-   Export PNG snapshots and add them to the artefact bundle.
+   Export image snapshots and add them to the artefact bundle.
 8. **Rollback triggers:** If GAR violations spike or probe fails,
    - Revert the DNS entry using the previous zonefile skeleton.
    - Run `npm run probe:portal` against the prior hostname.

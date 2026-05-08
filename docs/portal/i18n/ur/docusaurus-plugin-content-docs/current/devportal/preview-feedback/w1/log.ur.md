@@ -47,7 +47,7 @@ description: پہلی پارٹنر preview wave کے لئے مجموعی roster�
 | 2025-04-19 17:55 | Dashboards اوپر + Try it proxy latency diff | Docs/DevRel lead | ✅ Midpoint check passed (0 alerts; Try it latency p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 2025-04-26 16:25 | Dashboards اوپر + exit probe | Docs/DevRel + Governance liaison | ✅ Exit snapshot, zero outstanding alerts | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-روزانہ office-hour samples (2025-04-13 -> 2025-04-25) NDJSON + PNG exports کے طور پر
+روزانہ office-hour samples (2025-04-13 -> 2025-04-25) NDJSON + image exports کے طور پر
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` میں موجود ہیں، فائل نام
 `docs-preview-integrity-<date>.json` اور متعلقہ screenshots کے ساتھ۔
 

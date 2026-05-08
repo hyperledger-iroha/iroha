@@ -524,7 +524,7 @@ DOCS-7 требует, чтобы портал, OpenAPI spec и SBOM артеф�
 - **Probe archives.** Храните `artifacts/sorafs_gateway_probe/<stamp>/` в git-annex или evidence bucket. Включайте probe summary, headers и PagerDuty payload.
 - **Release bundle.** Сохраняйте CAR summary портала/SBOM/OpenAPI, manifest bundles, Sigstore signatures, `portal.pin.report.json`, Try-It probe logs и link-check reports в одной папке (например, `artifacts/sorafs/devportal/20260212T1103Z/`).
 - **Drill log.** Когда probes - часть drill, `scripts/telemetry/run_sorafs_gateway_probe.sh` добавляет запись в `ops/drill-log.md`, чтобы это покрывало SNNet-5 chaos requirement.
-- **Ticket links.** Ссылайтесь на Grafana panel IDs или прикрепленные PNG exports в change ticket вместе с путем к probe report, чтобы ревьюеры могли сверить SLOs без shell доступа.
+- **Ticket links.** Ссылайтесь на Grafana panel IDs или прикрепленные image exports в change ticket вместе с путем к probe report, чтобы ревьюеры могли сверить SLOs без shell доступа.
 
 ## Шаг 11 - Multi-source fetch drill и scoreboard evidence
 

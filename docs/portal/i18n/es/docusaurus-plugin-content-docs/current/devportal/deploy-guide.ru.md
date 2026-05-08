@@ -484,7 +484,7 @@ Antes de comprobar la transición, qué nuevas soluciones de alias tienen SoraDN
 - **Archivos de sonda.** Consulte `artifacts/sorafs_gateway_probe/<stamp>/` en git-annex o en el depósito de evidencia. Vea el resumen de la sonda, los encabezados y la carga útil de PagerDuty.
 - **Paquete de lanzamiento.** Portal de resumen de CAR actualizado/SBOM/OpenAPI, paquetes de manifiesto, firmas Sigstore, `portal.pin.report.json`, registros de sonda Try-It e informes de verificación de enlaces en el nuevo documento (por ejemplo, `artifacts/sorafs/devportal/20260212T1103Z/`).
 - **Registro de perforación.** Когда sondas - часть drill, `scripts/telemetry/run_sorafs_gateway_probe.sh` добавляет запись в `ops/drill-log.md`, чтобы это покрывало SNNet-5 caos requisito.
-- **Enlaces de tickets.** Utilice los ID del panel Grafana o exporte PNG en el ticket de cambio desde el informe de sonda, y puede consultar los SLO desde el enlace. shell доступа.
+- **Enlaces de tickets.** Utilice los ID del panel Grafana o exporte image en el ticket de cambio desde el informe de sonda, y puede consultar los SLO desde el enlace. shell доступа.
 
 ## Paso 11 - Ejercicio de búsqueda de fuentes múltiples y evidencia de marcador
 

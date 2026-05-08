@@ -785,7 +785,7 @@ Kəsmə elan etməzdən əvvəl, yeni ləqəbin SoraDNS vasitəsilə həll olund
 - **Qazma jurnalı.** Zondlar qazmağın bir hissəsi olduqda icazə verin
   `scripts/telemetry/run_sorafs_gateway_probe.sh` `ops/drill-log.md`-a əlavə edin
   buna görə də eyni sübut SNNet-5 xaos tələbini ödəyir.
-- **Bilet bağlantıları.** Grafana panel ID-lərinə və ya əlavə edilmiş PNG ixracına istinad edin
+- **Bilet bağlantıları.** Grafana panel ID-lərinə və ya əlavə edilmiş image ixracına istinad edin
   dəyişiklik bileti, araşdırma hesabat yolu ilə birlikdə, beləliklə, dəyişiklik-rəyçilər
   qabıq girişi olmadan SLO-ları çarpaz yoxlaya bilər.
 

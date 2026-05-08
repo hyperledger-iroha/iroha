@@ -59,7 +59,7 @@ follow the steps below.
    `/v1/accounts/{account_id}/transactions`).
 2. **Freeze risky deploys:** pause manifest promotions and SDK releases touching
    address parsing until the root cause is understood.
-3. **Collect telemetry snapshots:** download PNG/JSON snapshots from
+3. **Collect telemetry snapshots:** download image/JSON snapshots from
    `address_ingest.json` and `account_address_fixture_status.json`. Save them in
    the incident folder (e.g., `docs/source/sns/incidents/YYYY-MM/<ticket>/`).
 4. **Pull log samples:** use `journalctl` (or your log aggregation tool) to grab

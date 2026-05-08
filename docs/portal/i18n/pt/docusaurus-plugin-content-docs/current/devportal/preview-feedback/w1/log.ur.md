@@ -47,7 +47,7 @@ descrição: پہلی پارٹنر onda de visualização کے لئے مجموع
 | 19/04/2025 17:55 | Dashboards اوپر + Experimente diferença de latência de proxy | Líder do Documentos/DevRel | ✅ Verificação de ponto médio aprovada (0 alertas; latência de teste p95 = 410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 26/04/2025 16:25 | Painéis de controle + sonda de saída | Contato do Docs/DevRel + Governança | ✅ Instantâneo de saída, zero alertas pendentes | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-Amostras de horário comercial (2025-04-13 -> 2025-04-25) Exportações NDJSON + PNG کے طور پر
+Amostras de horário comercial (2025-04-13 -> 2025-04-25) Exportações NDJSON + image کے طور پر
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` میں موجود ہیں, فائل نام
 `docs-preview-integrity-<date>.json` اور متعلقہ screenshots کے ساتھ۔
 

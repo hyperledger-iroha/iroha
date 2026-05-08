@@ -110,7 +110,7 @@ test("resolveAlias attaches canonical auth when provided", async () => {
   const fetchImpl = async (input, init) => {
     lastRequest = { input, init };
     return jsonResponse(200, {
-      alias: "tidal-river-4160@mibank.bpng",
+      alias: "tidal-river-4160@mibank.paynet",
       account_id: VALID_ACCOUNT_ID,
       source: "runtime",
     });
@@ -120,7 +120,7 @@ test("resolveAlias attaches canonical auth when provided", async () => {
     fetchImpl,
   });
 
-  const result = await client.resolveAlias("tidal-river-4160@mibank.bpng", {
+  const result = await client.resolveAlias("tidal-river-4160@mibank.paynet", {
     canonicalAuth: { accountId: signerAccountId, privateKey },
   });
 

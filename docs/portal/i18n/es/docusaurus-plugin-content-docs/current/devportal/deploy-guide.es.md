@@ -706,7 +706,7 @@ engrapan pruebas frescas:
 - **Drill log.** Cuando los sondas son parte de un taladro, deja que
   `scripts/telemetry/run_sorafs_gateway_probe.sh` agregar entradas a `ops/drill-log.md`
   para que la misma evidencia satisfaga el requisito de caos SNNet-5.
-- **Links de ticket.** Referencia los IDs de panel de Grafana o exports PNG adjuntos en el ticket
+- **Links de ticket.** Referencia los IDs de panel de Grafana o exports image adjuntos en el ticket
   de cambio, junto con la ruta del reporte de probe, para que los revisores puedan cruzar los SLOs
   sin acceso a concha.
 

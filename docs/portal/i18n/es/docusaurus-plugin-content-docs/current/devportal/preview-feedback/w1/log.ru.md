@@ -43,7 +43,7 @@ Siga la conexión UTC rápidamente en el plano W1.
 | 2025-04-06 18:20 | Transcripción `npm run manage:tryit-proxy -- --stage preview-w1` | Operaciones | ✅ Подготовлено | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
 | 2025-04-12 14:45 | Дашборды выше + `probe:portal` | Documentos/DevRel + Operaciones | ✅ Instantánea previa a la invitación, без регрессий | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
 | 2025-04-19 17:55 | Дашборды выше + diff по латентности Pruébalo proxy | Líder de Docs/DevRel | ✅ Verificación del punto medio прошел (0 алертов; латентность Pruébelo p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
-| 2025-04-26 16:25 | Дашборды выше + sonda de salida | Docs/DevRel + enlace de gobernanza | ✅ Salir de la instantánea, нет активных алертов | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |Ежедневные выборки horario de oficina (2025-04-13 -> 2025-04-25) упакованы как NDJSON + PNG эксportы под
+| 2025-04-26 16:25 | Дашборды выше + sonda de salida | Docs/DevRel + enlace de gobernanza | ✅ Salir de la instantánea, нет активных алертов | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |Ежедневные выборки horario de oficina (2025-04-13 -> 2025-04-25) упакованы как NDJSON + image эксportы под
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` con archivos de iconos
 `docs-preview-integrity-<date>.json` y соответствующими скриншотами.
 

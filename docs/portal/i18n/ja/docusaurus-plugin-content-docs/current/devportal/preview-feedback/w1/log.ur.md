@@ -45,7 +45,7 @@ W1 پلان میں دی گئی UTC スケジュール کے مطابق رکھیں
 | 2025-04-19 17:55 |ダッシュボード + Try it プロキシ レイテンシの差 |ドキュメント/DevRel リード | ✅ 中間点チェックに合格しました (アラート 0 件、試用レイテンシ p95=410 ミリ秒) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 2025-04-26 16:25 |ダッシュボード + 終了プローブ |ドキュメント/DevRel + ガバナンス連携 | ✅ スナップショットを終了、未処理のアラートはゼロ | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-オフィスアワーのサンプル (2025-04-13 -> 2025-04-25) NDJSON + PNG エクスポート
+オフィスアワーのサンプル (2025-04-13 -> 2025-04-25) NDJSON + image エクスポート
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` میں موجود ہیں، فائل نام
 `docs-preview-integrity-<date>.json` のスクリーンショット
 

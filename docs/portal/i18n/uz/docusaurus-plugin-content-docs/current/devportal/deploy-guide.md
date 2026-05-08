@@ -783,7 +783,7 @@ shlyuzlar shtapel yangi dalillar:
 - **Burg'ulash jurnali.** Zondlar matkapning bir qismi bo'lsa, ruxsat bering
   `scripts/telemetry/run_sorafs_gateway_probe.sh` `ops/drill-log.md` ga qo'shing
   shuning uchun xuddi shu dalil SNNet-5 xaos talabini qondiradi.
-- **Chipta havolalari.** Grafana panel identifikatorlariga yoki biriktirilgan PNG eksportiga havola qiling.
+- **Chipta havolalari.** Grafana panel identifikatorlariga yoki biriktirilgan image eksportiga havola qiling.
   o'zgartirish chiptasi, tekshirish hisoboti yo'li bilan birga, shuning uchun o'zgartirish-reviewers
   qobiq kirishisiz SLO-larni o'zaro tekshirishi mumkin.
 

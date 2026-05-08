@@ -4743,13 +4743,13 @@ mod tests {
                 default_dataspace: DataSpaceId::UNIVERSAL,
                 rules: vec![],
             },
-            dataspace_catalog(&[(dataspace_id, "bpng")]),
+            dataspace_catalog(&[(dataspace_id, "paynet")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
                 (lane_id, dataspace_id),
             ]),
         );
-        let target = iroha_data_model::musubi::MusubiPackageId::from_parts("mibank.bpng", "fx")
+        let target = iroha_data_model::musubi::MusubiPackageId::from_parts("mibank.paynet", "fx")
             .expect("package id");
         let alias =
             iroha_data_model::musubi::MusubiShortAlias::new("fx".parse().expect("alias"), target);
@@ -5166,7 +5166,7 @@ mod tests {
     fn opaque_offline_note_issue_defers_to_state_for_asset_definition_dataspace() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "bpng")]);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
         let lane_catalog = catalog_with_lane_dataspaces(&[
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(2), dataspace_id),
@@ -5209,7 +5209,7 @@ mod tests {
             dataspace_catalog,
             lane_catalog,
         );
-        bind_asset_definition_alias(&mut state, &opaque_asset_definition, "kina#bpng");
+        bind_asset_definition_alias(&mut state, &opaque_asset_definition, "kina#paynet");
 
         assert_eq!(
             router
@@ -7749,7 +7749,7 @@ mod tests {
         let (holder_id, _) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
-        let catalog = dataspace_catalog(&[(dataspace_id, "bpng")]);
+        let catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
         let lane_catalog = catalog_with_lane_dataspaces(&[
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
@@ -7788,7 +7788,7 @@ mod tests {
         let (holder_id, _) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
-        let catalog = dataspace_catalog(&[(dataspace_id, "bpng")]);
+        let catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
         let lane_catalog = catalog_with_lane_dataspaces(&[
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
@@ -7804,7 +7804,7 @@ mod tests {
         );
         let permission = Permission::from(CanResolveAccountAlias {
             scope: AccountAliasPermissionScope::Domain(
-                DomainId::try_new("mibank", "bpng").expect("domain id"),
+                DomainId::try_new("mibank", "paynet").expect("domain id"),
             ),
         });
         let tx = sample_transaction(
@@ -7899,7 +7899,7 @@ mod tests {
         let (holder_id, _) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
-        let catalog = dataspace_catalog(&[(dataspace_id, "bpng")]);
+        let catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
             default_dataspace: DataSpaceId::UNIVERSAL,
@@ -7907,7 +7907,7 @@ mod tests {
                 lane: lane_id,
                 dataspace: Some(dataspace_id),
                 matcher: LaneRoutingMatcher {
-                    account: Some("*@bpng".to_string()),
+                    account: Some("*@paynet".to_string()),
                     instruction: None,
                     description: None,
                 },

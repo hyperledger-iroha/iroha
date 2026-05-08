@@ -45,7 +45,7 @@ translation_last_reviewed: 2026-02-07
 | 2025-04-19 17:55 | ከላይ ያሉት ዳሽቦርዶች + ይሞክሩት የተኪ መዘግየት ልዩነት | ሰነዶች/DevRel አመራር | ✅ የመሃል ነጥብ ቼክ አልፏል (0 ማንቂያዎች፤ ይሞክሩት መዘግየት p95=410ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 2025-04-26 16:25 | ዳሽቦርዶች ከላይ + መውጫ መፈተሻ | ሰነዶች/DevRel + የአስተዳደር ግንኙነት | ✅ ከቅጽበተ-ፎቶ ውጣ፣ ዜሮ አስደናቂ ማንቂያዎች | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-ዕለታዊ የቢሮ-ሰዓት ናሙናዎች (2025-04-13 → 2025-04-25) እንደ NDJSON + PNG ወደ ውጭ እንደሚላኩ ተጠቃለዋል።
+ዕለታዊ የቢሮ-ሰዓት ናሙናዎች (2025-04-13 → 2025-04-25) እንደ NDJSON + image ወደ ውጭ እንደሚላኩ ተጠቃለዋል።
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` ከፋይል ስሞች ጋር
 `docs-preview-integrity-<date>.json` እና ተዛማጅ ቅጽበታዊ ገጽ እይታዎች።
 

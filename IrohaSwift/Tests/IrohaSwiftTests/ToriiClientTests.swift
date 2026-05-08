@@ -566,7 +566,7 @@ final class ToriiClientTests: XCTestCase {
             authentication: try ToriiClientAuthentication.bearerToken(
                 " wallet-token ",
                 accountId: " sora-account-1 ",
-                dataspaceId: " mibank.bpng ",
+                dataspaceId: " mibank.paynet ",
                 additionalHeaders: ["X-Trace-Id": "trace-123"]
             )
         )
@@ -574,7 +574,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(request.url?.path, "/v1/health")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer wallet-token")
             XCTAssertEqual(request.value(forHTTPHeaderField: "X-Account-Id"), "sora-account-1")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Dataspace-Id"), "mibank.bpng")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Dataspace-Id"), "mibank.paynet")
             XCTAssertEqual(request.value(forHTTPHeaderField: "X-Trace-Id"), "trace-123")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/plain")
             let response = HTTPURLResponse(url: request.url!,
@@ -599,14 +599,14 @@ final class ToriiClientTests: XCTestCase {
             authentication: try ToriiClientAuthentication.authorizationHeader(
                 "Bearer wallet-token",
                 accountId: "sora-account-1",
-                dataspaceId: "mibank.bpng"
+                dataspaceId: "mibank.paynet"
             )
         )
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/aliases/resolve")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer wallet-token")
             XCTAssertEqual(request.value(forHTTPHeaderField: "X-Account-Id"), "sora-account-1")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Dataspace-Id"), "mibank.bpng")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Dataspace-Id"), "mibank.paynet")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
             let response = HTTPURLResponse(url: request.url!,
@@ -631,7 +631,7 @@ final class ToriiClientTests: XCTestCase {
             authentication: try ToriiClientAuthentication.bearerToken(
                 "wallet-token",
                 accountId: "sora-account-1",
-                dataspaceId: "mibank.bpng"
+                dataspaceId: "mibank.paynet"
             )
         )
 

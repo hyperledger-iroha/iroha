@@ -48,7 +48,7 @@ Ancore os horários no cronograma UTC definido no plano W1.
 | 19/04/2025 17:55 | Dashboards acima + diferença de latência do proxy Experimente | Líder do Documentos/DevRel | Checkpoint de meio aprovado (0 alertas; latência Experimente p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 26/04/2025 16:25 | Dashboards acima + sonda de saida | Contato do Docs/DevRel + Governança | Instantâneo de Saida, zero alertas pendentes | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-As amostras diárias de horário comercial (2025-04-13 -> 2025-04-25) estão agrupadas como exports NDJSON + PNG em
+As amostras diárias de horário comercial (2025-04-13 -> 2025-04-25) estão agrupadas como exports NDJSON + image em
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` com nomes de arquivo
 `docs-preview-integrity-<date>.json` e capturas de tela correspondentes.
 

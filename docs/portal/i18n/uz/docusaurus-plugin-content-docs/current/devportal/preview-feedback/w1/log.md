@@ -45,7 +45,7 @@ Vaqtlarni W1 rejasida belgilangan UTC jadvaliga bog'lang.
 | 2025-04-19 17:55 | Yuqoridagi asboblar paneli + Buni sinab ko'ring proksi kechikish farqi | Docs/DevRel yetakchisi | ✅ Oʻrta nuqta tekshiruvidan oʻtdi (0 ta ogohlantirish; Uni sinab koʻring kechikish p95=410ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 2025-04-26 16:25 | Yuqoridagi asboblar paneli + probdan chiqish | Docs/DevRel + Boshqaruv aloqasi | ✅ Snapshotdan chiqish, nol ajoyib ogohlantirishlar | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-Kundalik ish vaqti namunalari (2025-04-13 → 2025-04-25) NDJSON + PNG eksporti sifatida birlashtirilgan.
+Kundalik ish vaqti namunalari (2025-04-13 → 2025-04-25) NDJSON + image eksporti sifatida birlashtirilgan.
 Fayl nomlari bilan `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
 `docs-preview-integrity-<date>.json` va tegishli skrinshotlar.
 

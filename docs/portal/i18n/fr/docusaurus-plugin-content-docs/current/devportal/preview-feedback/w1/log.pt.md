@@ -43,7 +43,7 @@ Encore les horaires dans le chronogramme UTC définis sur le plan W1.
 | 2025-04-06 18:20 | Transcription de `npm run manage:tryit-proxy -- --stage preview-w1` | Opérations | Mise en scène | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
 | 2025-04-12 14:45 | Tableaux de bord acima + `probe:portal` | Docs/DevRel + Ops | Pré-invitation d'instantané, sans régression | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
 | 2025-04-19 17:55 | Tableaux de bord acima + diff de latencia do proxy Essayez-le | Responsable Docs/DevRel | Checkpoint de meio approuvé (0 alertes; latence Essayez-le p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
-| 2025-04-26 16:25 | Tableaux de bord acima + sonde de Saida | Docs/DevRel + liaison gouvernance | Instantané de Saida, zéro alerte pendante | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |En ce qui concerne les horaires de bureau (2025-04-13 -> 2025-04-25), estao agrupadas como exporte NDJSON + PNG em
+| 2025-04-26 16:25 | Tableaux de bord acima + sonde de Saida | Docs/DevRel + liaison gouvernance | Instantané de Saida, zéro alerte pendante | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |En ce qui concerne les horaires de bureau (2025-04-13 -> 2025-04-25), estao agrupadas como exporte NDJSON + image em
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` avec noms d'archives
 `docs-preview-integrity-<date>.json` et captures d'écran correspondantes.
 
