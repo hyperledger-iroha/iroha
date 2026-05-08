@@ -258,6 +258,17 @@ Last updated: 2026-05-09
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-sumeragi cargo test -p iroha_core duplicate_commit_qc_clears_known_block_recovery_request --features fastpq-gpu -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-sumeragi cargo test -p iroha_core --lib da_proposal_uses_rbc_for_ram_lfe_tx_exceeding_consensus_payload_frame_cap --features fastpq-gpu -- --nocapture`
 
+## 2026-05-08 Sumeragi commit-to-proposal stack unwind
+
+- Successful commit-result handling now unwinds the large commit-application
+  frame before kickstarting the pacemaker for the next proposal. This keeps the
+  durable-commit fast path intact while avoiding stack overflow when proposal
+  assembly runs immediately after commit publication.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::commit_outcome_kickstarts_next_proposal_and_records_round_gap -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::kickstart_pacemaker_after_commit_triggers_only_when_allowed -- --nocapture`
+
 ## 2026-05-08 FASTPQ Poseidon prover batch path
 
 - FASTPQ trace column and Merkle hashing now use scalar CPU Poseidon for CPU
