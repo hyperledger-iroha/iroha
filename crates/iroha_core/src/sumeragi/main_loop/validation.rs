@@ -141,9 +141,8 @@ pub(super) fn spawn_validation_workers(
 
 impl Actor {
     const SUPERSEDED_VALIDATION_RESULT_CAP: usize = 4_096;
-    const FAST_FINALITY_INLINE_VALIDATION_TX_CAP: usize = 16;
 
-    fn fast_finality_inline_validation_tx_count(
+    pub(super) fn fast_finality_inline_validation_tx_count(
         &self,
         hash: HashOf<BlockHeader>,
         pending: &PendingBlock,
@@ -165,8 +164,15 @@ impl Actor {
         if !Self::local_payload_matches_hash(&pending.block, &pending.payload_hash) {
             return None;
         }
+        let tx_cap = self
+            .config
+            .worker
+            .fast_finality_inline_validation_max_transactions;
+        if tx_cap == 0 {
+            return None;
+        }
         let tx_count = pending.block.external_entrypoints_cloned().count();
-        (tx_count <= Self::FAST_FINALITY_INLINE_VALIDATION_TX_CAP).then_some(tx_count)
+        (tx_count <= tx_cap).then_some(tx_count)
     }
 
     fn replay_cached_precommit_qc_for_valid_block(

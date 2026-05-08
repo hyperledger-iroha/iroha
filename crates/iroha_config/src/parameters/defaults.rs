@@ -2816,6 +2816,8 @@ pub mod sumeragi {
     pub const VALIDATION_RESULT_QUEUE_CAP: usize = 0;
     /// Divisor used to derive queue-full inline-validation cutover from fast-timeout.
     pub const VALIDATION_QUEUE_FULL_INLINE_CUTOVER_DIVISOR: u32 = 2;
+    /// Maximum transaction count for inline validation of fast-finality blocks.
+    pub const VALIDATION_FAST_FINALITY_INLINE_MAX_TRANSACTIONS: usize = 16;
     /// QC verify worker threads (0 = auto).
     pub const QC_VERIFY_WORKER_THREADS: usize = 0;
     /// QC verify work queue capacity per worker (0 = auto).

@@ -789,6 +789,21 @@ impl Actor {
             })
     }
 
+    fn commit_qc_body_response_for_wire(
+        block: &SignedBlock,
+        qc: crate::sumeragi::consensus::Qc,
+    ) -> super::message::BlockBodyResponse {
+        let mut update = super::message::BlockSyncUpdate::from(block);
+        update.commit_qc = Some(qc);
+        let header = block.header();
+        super::message::BlockBodyResponse {
+            block_hash: block.hash(),
+            height: header.height().get(),
+            view: header.view_change_index(),
+            body: super::message::BlockBodyData::BlockSyncUpdate(update),
+        }
+    }
+
     fn direct_commit_qc_from_block_sync_update(
         &self,
         block_hash: HashOf<BlockHeader>,
@@ -886,6 +901,19 @@ impl Actor {
             );
             return false;
         };
+        let response = Self::commit_qc_body_response_for_wire(block, qc.clone());
+        info!(
+            height,
+            view,
+            block = %block_hash,
+            peer = %peer,
+            "sending commit-QC-only BlockBodyResponse companion"
+        );
+        self.dispatch_fetch_pending_block_response(
+            peer.clone(),
+            BlockMessage::BlockBodyResponse(response),
+            /*bypass_queue*/ true,
+        );
         self.dispatch_direct_commit_qc_companion(
             peer,
             qc,
@@ -4516,6 +4544,7 @@ impl Actor {
             block_hash,
             requester_hash: CryptoHash::new(peer.encode()),
             priority: request_priority,
+            commit_qc_only: request.commit_qc_only.unwrap_or(false),
         };
         let requester_roster_proof_known = request.requester_roster_proof_known.unwrap_or(false);
         let commit_qc_only = request.commit_qc_only.unwrap_or(false);

@@ -10617,6 +10617,7 @@ enum BlockPayloadDedupKey {
         block_hash: HashOf<BlockHeader>,
         requester_hash: CryptoHash,
         priority: message::FetchPendingBlockPriority,
+        commit_qc_only: bool,
     },
     RbcChunk {
         height: u64,
@@ -12020,6 +12021,7 @@ impl SumeragiHandle {
                     block_hash: request.block_hash,
                     requester_hash,
                     priority: request_priority,
+                    commit_qc_only: request.commit_qc_only.unwrap_or(false),
                 };
                 let duplicate = !self.dedup_block_payload(dedup_key);
                 if duplicate {

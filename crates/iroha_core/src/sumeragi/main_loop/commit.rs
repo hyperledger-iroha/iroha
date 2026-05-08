@@ -38,6 +38,22 @@ pub(super) struct CommitWork {
     pub(super) events_sender: crate::EventsSender,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct KnownBlockCommitQcRecoveryRequestPlan {
+    pub(super) commit_qc_only: bool,
+    pub(super) body: bool,
+}
+
+pub(super) const fn known_block_commit_qc_recovery_request_plan(
+    payload_materialized_locally: bool,
+    commit_qc_body_fallback: bool,
+) -> KnownBlockCommitQcRecoveryRequestPlan {
+    KnownBlockCommitQcRecoveryRequestPlan {
+        commit_qc_only: payload_materialized_locally,
+        body: !payload_materialized_locally || commit_qc_body_fallback,
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct CommitResult {
     pub(super) id: u64,
@@ -4068,12 +4084,18 @@ impl Actor {
             );
         }
 
-        let retry_window = self.missing_block_retry_window_with_rbc_progress(
-            block_hash,
-            height,
-            view,
-            self.rebroadcast_cooldown(),
-        );
+        let retry_window = self
+            .missing_block_retry_window_with_rbc_progress(
+                block_hash,
+                height,
+                view,
+                self.rebroadcast_cooldown(),
+            )
+            .max(
+                payload_materialized_locally
+                    .then(|| self.targeted_payload_rescue_cooldown())
+                    .unwrap_or(Duration::ZERO),
+            );
         let view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
         let topology = super::network_topology::Topology::new(filtered_targets.clone());
         let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
@@ -4134,7 +4156,11 @@ impl Actor {
                     );
                     return true;
                 }
-                if payload_materialized_locally && !commit_qc_body_fallback {
+                let request_plan = known_block_commit_qc_recovery_request_plan(
+                    payload_materialized_locally,
+                    commit_qc_body_fallback,
+                );
+                if request_plan.commit_qc_only {
                     super::send_missing_commit_qc_request(
                         &self.network,
                         &self.common_config.peer.id,
@@ -4145,7 +4171,8 @@ impl Actor {
                         requester_roster_proof_known,
                         &targets,
                     );
-                } else {
+                }
+                if request_plan.body {
                     super::send_missing_block_request(
                         &self.network,
                         &self.common_config.peer.id,
@@ -4163,8 +4190,9 @@ impl Actor {
                     block = %block_hash,
                     targets = ?targets,
                     target_kind = target_kind.label(),
-                    commit_qc_only = payload_materialized_locally && !commit_qc_body_fallback,
+                    commit_qc_only = request_plan.commit_qc_only,
                     commit_qc_body_fallback,
+                    body_request = request_plan.body,
                     trigger,
                     retry_window_ms = retry_window.as_millis(),
                     dwell_ms,
@@ -4338,6 +4366,59 @@ impl Actor {
             None,
         );
         true
+    }
+
+    pub(super) fn maybe_retry_local_commit_votes_after_new_view_qc(
+        &mut self,
+        qc: &crate::sumeragi::consensus::Qc,
+        commit_topology: &[PeerId],
+        trigger: &'static str,
+    ) -> bool {
+        if !matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
+            return false;
+        }
+        let Some(highest_qc) = qc.highest_qc else {
+            return false;
+        };
+        if self
+            .cached_new_view_qc_extends_committed_frontier(qc.height, qc.view, highest_qc)
+            .is_none()
+        {
+            return false;
+        }
+
+        let now = Instant::now();
+        let candidates: Vec<_> = self
+            .pending
+            .pending_blocks
+            .iter()
+            .filter_map(|(block_hash, pending)| {
+                (pending.height == qc.height
+                    && pending.view == qc.view
+                    && !pending.aborted
+                    && !pending.local_commit_vote_emitted()
+                    && !pending.commit_qc_observed()
+                    && pending.validation_status == ValidationStatus::Valid
+                    && pending.kura_retry_due(now)
+                    && pending.block.header().prev_block_hash()
+                        == Some(highest_qc.subject_block_hash))
+                .then_some(*block_hash)
+            })
+            .collect();
+
+        let mut emitted = false;
+        for block_hash in candidates {
+            if self.maybe_emit_local_commit_vote_for_pending_event(
+                block_hash,
+                qc.height,
+                qc.view,
+                commit_topology,
+                trigger,
+            ) {
+                emitted = true;
+            }
+        }
+        emitted
     }
 
     fn local_commit_vote_roster(&self, height: u64, commit_topology: &[PeerId]) -> Vec<PeerId> {

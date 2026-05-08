@@ -5558,25 +5558,28 @@ impl Actor {
             qc.view,
             qc.epoch,
         );
-        if self
-            .qc_cache
-            .get(&qc_cache_key)
-            .is_some_and(|cached| cached == &qc)
-        {
-            debug!(
-                height = qc.height,
-                view = qc.view,
-                epoch = qc.epoch,
-                phase = ?qc.phase,
-                block = %qc.subject_block_hash,
-                "dropping duplicate cached QC before aggregate validation"
-            );
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::Qc,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::Duplicate,
-            );
-            return Ok(());
+        if let Some(cached) = self.qc_cache.get(&qc_cache_key) {
+            let cached_has_aggregate = !cached.aggregate.signers_bitmap.is_empty()
+                && !cached.aggregate.bls_aggregate_signature.is_empty();
+            if cached == &qc || cached_has_aggregate {
+                debug!(
+                    height = qc.height,
+                    view = qc.view,
+                    epoch = qc.epoch,
+                    phase = ?qc.phase,
+                    block = %qc.subject_block_hash,
+                    exact_duplicate = cached == &qc,
+                    cached_signers_len = cached.aggregate.signers_bitmap.len(),
+                    incoming_signers_len = qc.aggregate.signers_bitmap.len(),
+                    "dropping cached same-slot QC before aggregate validation"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::Qc,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::Duplicate,
+                );
+                return Ok(());
+            }
         }
         let was_qc_cached = self.qc_cache.contains_key(&qc_cache_key);
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
@@ -6039,6 +6042,11 @@ impl Actor {
                 self.qc_cache.insert(qc_cache_key, qc.clone());
                 if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
                     let _ = self.replay_deferred_votes_for_slot(qc.height, qc.view, "new_view_qc");
+                    let _ = self.maybe_retry_local_commit_votes_after_new_view_qc(
+                        &qc,
+                        topology.as_ref(),
+                        "new_view_qc",
+                    );
                 }
                 return Ok(());
             }
@@ -6351,6 +6359,11 @@ impl Actor {
         self.qc_cache.insert(qc_cache_key, qc.clone());
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
             let _ = self.replay_deferred_votes_for_slot(qc.height, qc.view, "new_view_qc");
+            let _ = self.maybe_retry_local_commit_votes_after_new_view_qc(
+                &qc,
+                topology.as_ref(),
+                "new_view_qc",
+            );
         }
         iroha_logger::info!(
             height = qc.height,

@@ -721,6 +721,15 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
                     i64::try_from(block_max_txs).expect("realistic block max txs fits i64"),
                 )
                 .write(
+                    [
+                        "sumeragi",
+                        "advanced",
+                        "worker",
+                        "fast_finality_inline_validation_max_transactions",
+                    ],
+                    i64::try_from(block_max_txs).expect("realistic block max txs fits i64"),
+                )
+                .write(
                     ["sumeragi", "advanced", "pacing_governor", "min_factor_bps"],
                     10_000_i64,
                 )

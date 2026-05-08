@@ -2167,10 +2167,15 @@ mod run {
         hi_consensus_payload_rx: &mut post_channel::Receiver<T>,
         hi_consensus_chunk_rx: &mut post_channel::Receiver<T>,
     ) -> Option<(HighTopic, T)> {
+        let consensus_pending = !hi_consensus_rx.is_empty();
         let availability_pending =
             !hi_consensus_payload_rx.is_empty() || !hi_consensus_chunk_rx.is_empty();
+        let availability_burst_active =
+            *availability_burst > 0 && *availability_burst < HI_AVAILABILITY_BURST_MAX;
         let availability_preferred = availability_pending
-            && (*availability_burst < HI_AVAILABILITY_BURST_MAX || hi_consensus_rx.is_empty());
+            && (!consensus_pending
+                || *consensus_burst >= HI_CONSENSUS_BURST_MAX
+                || availability_burst_active);
 
         if *control_burst >= HI_CONTROL_BURST_MAX {
             if availability_preferred
@@ -2717,10 +2722,11 @@ mod run {
                     drained_lo = drained_lo.saturating_add(1);
                 }
 
-                let availability_direct_allowed = hi_availability_burst
-                    < HI_AVAILABILITY_BURST_MAX
-                    || hi_consensus_rx.is_empty()
-                    || hi_consensus_burst >= HI_CONSENSUS_BURST_MAX;
+                let consensus_direct_pending = !hi_consensus_rx.is_empty();
+                let availability_direct_allowed = !consensus_direct_pending
+                    || hi_consensus_burst >= HI_CONSENSUS_BURST_MAX
+                    || (hi_availability_burst > 0
+                        && hi_availability_burst < HI_AVAILABILITY_BURST_MAX);
 
                 tokio::select! {
                     // High-priority topics first (budgeted to avoid starvation).
@@ -3990,16 +3996,20 @@ mod run {
                 return Some(HighBatchClass::Control);
             }
 
+            let consensus_pending = !self.queue_high_consensus.is_empty();
             let background_pending = !self.queue_high_consensus_payload.is_empty()
                 || !self.queue_high_consensus_chunk.is_empty();
+            let availability_burst_active = self.high_availability_burst > 0
+                && self.high_availability_burst < Self::MAX_BATCH_AVAILABILITY_BURST;
             let availability_preferred = background_pending
-                && (self.high_availability_burst < Self::MAX_BATCH_AVAILABILITY_BURST
-                    || self.queue_high_consensus.is_empty());
+                && (!consensus_pending
+                    || self.high_consensus_burst >= Self::MAX_BATCH_CONSENSUS_BURST
+                    || availability_burst_active);
             if availability_preferred && let Some(class) = self.next_high_background_class() {
                 return Some(class);
             }
 
-            if !self.queue_high_consensus.is_empty()
+            if consensus_pending
                 && (!background_pending
                     || self.high_consensus_burst < Self::MAX_BATCH_CONSENSUS_BURST)
             {
@@ -4629,9 +4639,9 @@ mod run {
                 delivered,
                 vec![
                     RoutedMsg::Control(4),
+                    RoutedMsg::Consensus(3),
                     RoutedMsg::ConsensusPayload(1),
                     RoutedMsg::ConsensusChunk(2),
-                    RoutedMsg::Consensus(3),
                 ]
             );
         }
@@ -4798,12 +4808,12 @@ mod run {
             assert_eq!(
                 delivered,
                 vec![
-                    RoutedMsg::ConsensusPayload(10),
-                    RoutedMsg::ConsensusChunk(11),
                     RoutedMsg::Consensus(1),
                     RoutedMsg::Consensus(2),
                     RoutedMsg::Consensus(3),
                     RoutedMsg::Consensus(4),
+                    RoutedMsg::ConsensusPayload(10),
+                    RoutedMsg::ConsensusChunk(11),
                     RoutedMsg::Consensus(5),
                     RoutedMsg::Consensus(6),
                     RoutedMsg::Consensus(7),
@@ -4864,9 +4874,9 @@ mod run {
             assert_eq!(
                 &delivered[..3],
                 [
-                    RoutedMsg::ConsensusChunk(1),
-                    RoutedMsg::ConsensusChunk(2),
                     RoutedMsg::Consensus(1),
+                    RoutedMsg::Consensus(2),
+                    RoutedMsg::ConsensusChunk(1),
                 ]
             );
         }
@@ -4928,13 +4938,13 @@ mod run {
             assert_eq!(
                 delivered,
                 vec![
-                    RoutedMsg::ConsensusPayload(10),
-                    RoutedMsg::ConsensusChunk(11),
                     RoutedMsg::Consensus(1),
                     RoutedMsg::Consensus(2),
-                    RoutedMsg::TxGossip(90),
                     RoutedMsg::Consensus(3),
                     RoutedMsg::Consensus(4),
+                    RoutedMsg::ConsensusPayload(10),
+                    RoutedMsg::ConsensusChunk(11),
+                    RoutedMsg::TxGossip(90),
                 ]
             );
         }
@@ -5193,7 +5203,7 @@ mod run {
         }
 
         #[tokio::test(flavor = "current_thread")]
-        async fn high_lane_availability_bypasses_consensus_posts() {
+        async fn high_lane_serves_consensus_before_availability_posts() {
             let (control_tx, mut control_rx) = post_channel::channel(8);
             let (consensus_tx, mut consensus_rx) = post_channel::channel(8);
             let (payload_tx, mut payload_rx) = post_channel::channel(8);
@@ -5246,9 +5256,9 @@ mod run {
             )
             .expect("third high message");
 
-            assert_eq!(first, (HighTopic::ConsensusPayload, "payload"));
-            assert_eq!(second, (HighTopic::ConsensusChunk, "chunk"));
-            assert_eq!(third, (HighTopic::Consensus, "consensus"));
+            assert_eq!(first, (HighTopic::Consensus, "consensus"));
+            assert_eq!(second, (HighTopic::ConsensusPayload, "payload"));
+            assert_eq!(third, (HighTopic::ConsensusChunk, "chunk"));
         }
 
         #[tokio::test(flavor = "current_thread")]
@@ -5293,12 +5303,12 @@ mod run {
             }
 
             let expected = vec![
-                (HighTopic::ConsensusPayload, String::from("payload")),
-                (HighTopic::ConsensusChunk, String::from("chunk")),
                 (HighTopic::Consensus, String::from("c1")),
                 (HighTopic::Consensus, String::from("c2")),
                 (HighTopic::Consensus, String::from("c3")),
                 (HighTopic::Consensus, String::from("c4")),
+                (HighTopic::ConsensusPayload, String::from("payload")),
+                (HighTopic::ConsensusChunk, String::from("chunk")),
                 (HighTopic::Consensus, String::from("c5")),
                 (HighTopic::Consensus, String::from("c6")),
                 (HighTopic::Consensus, String::from("c7")),
@@ -5347,11 +5357,14 @@ mod run {
             }
 
             assert_eq!(
-                &served[..3],
+                &served[..6],
                 [
+                    (HighTopic::Consensus, String::from("c1")),
+                    (HighTopic::Consensus, String::from("c2")),
+                    (HighTopic::Consensus, String::from("c3")),
+                    (HighTopic::Consensus, String::from("c4")),
                     (HighTopic::ConsensusChunk, String::from("chunk1")),
                     (HighTopic::ConsensusChunk, String::from("chunk2")),
-                    (HighTopic::Consensus, String::from("c1")),
                 ]
             );
             assert!(

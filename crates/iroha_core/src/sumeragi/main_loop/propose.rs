@@ -1035,6 +1035,11 @@ impl Actor {
                     && pending.validation_status != ValidationStatus::Invalid
                     && pending.commit_qc_observed()
             });
+        let new_view_qc_supersedes_owner = self.latest_committed_qc().is_some_and(|highest_qc| {
+            self.new_view_qc_supersedes_same_height_vote_conflict(
+                height, view, highest_qc, owner_hash, owner_view,
+            )
+        });
         let Some(owner_pending) = self
             .pending
             .pending_blocks
@@ -1055,13 +1060,14 @@ impl Actor {
                 let protected_owner = owner_qc_observed
                     || slot_commit_qc_repairable
                     || local_vote_consensus_locked
-                    || competing_quorum_locked
+                    || (competing_quorum_locked && !new_view_qc_supersedes_owner)
                     || commit_inflight_live;
                 body_repair_requested = protected_owner
                     && self.request_frontier_owner_body_repair(owner_hash, height, owner_view, now);
                 let stale_vote_locked_owner = protected_owner
                     && owner_age >= hard_yield_age
-                    && (local_vote_consensus_locked || competing_quorum_locked)
+                    && (local_vote_consensus_locked
+                        || (competing_quorum_locked && !new_view_qc_supersedes_owner))
                     && !owner_qc_observed
                     && !owner_pending_commit_qc_observed
                     && !commit_inflight_live;
@@ -1084,6 +1090,7 @@ impl Actor {
                             hard_yield_age_ms = hard_yield_age.as_millis(),
                             local_vote_consensus_locked,
                             competing_quorum_locked,
+                            new_view_qc_supersedes_owner,
                             "escalated stale vote-locked frontier owner to committed-anchor catch-up"
                         );
                     }
@@ -1094,7 +1101,7 @@ impl Actor {
                     && !owner_qc_observed
                     && !owner_pending_commit_qc_observed
                     && !local_vote_consensus_locked
-                    && !competing_quorum_locked
+                    && (!competing_quorum_locked || new_view_qc_supersedes_owner)
                     && !commit_inflight_live
                 {
                     self.frontier_slot = None;
@@ -1108,6 +1115,8 @@ impl Actor {
                         queue_len = pending_queue_len,
                         frontier_commit_qc_observed,
                         owner_pending_commit_qc_observed,
+                        competing_quorum_locked,
+                        new_view_qc_supersedes_owner,
                         "cleared no-pending stale frontier owner for fresh resilience proposal"
                     );
                     return true;
@@ -1143,6 +1152,7 @@ impl Actor {
                     commit_inflight_live,
                     body_repair_requested,
                     stale_vote_locked_recovery_requested,
+                    new_view_qc_supersedes_owner,
                     frontier_commit_qc_observed = owner_slot_evidence
                         .is_some_and(|(_, observed, _)| observed),
                     competing_quorum_locked = owner_slot_evidence
@@ -1160,8 +1170,20 @@ impl Actor {
         let recovery_exhausted =
             owner_age >= hard_yield_age || recovery_age.is_some_and(|age| age >= hard_yield_age);
         let local_vote = self.local_same_height_vote(height, self.epoch_for_height(height));
+        let local_vote_new_view_qc_supersedes = local_vote.as_ref().is_some_and(|vote| {
+            self.latest_committed_qc().is_some_and(|highest_qc| {
+                self.new_view_qc_supersedes_same_height_vote_conflict(
+                    height,
+                    view,
+                    highest_qc,
+                    vote.block_hash,
+                    vote.view,
+                )
+            })
+        });
         let local_vote_blocks = local_vote.as_ref().is_some_and(|vote| {
-            self.local_same_height_vote_blocks_fresh_proposal(height, view, vote, now, false)
+            !local_vote_new_view_qc_supersedes
+                && self.local_same_height_vote_blocks_fresh_proposal(height, view, vote, now, false)
         });
         let (frontier_commit_qc_observed, competing_quorum_locked) = self
             .frontier_slot
@@ -1176,10 +1198,12 @@ impl Actor {
                 )
             });
         let frontier_commit_qc_blocks_yield = frontier_commit_qc_observed && !recovery_exhausted;
+        let competing_quorum_blocks_yield =
+            competing_quorum_locked && !new_view_qc_supersedes_owner;
         if owner_qc_observed
             || frontier_commit_qc_blocks_yield
             || local_vote_consensus_locked
-            || competing_quorum_locked
+            || competing_quorum_blocks_yield
             || (local_vote_blocks && !recovery_exhausted)
         {
             if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
@@ -1206,6 +1230,9 @@ impl Actor {
                     local_vote_consensus_locked,
                     local_vote_blocks,
                     competing_quorum_locked,
+                    competing_quorum_blocks_yield,
+                    new_view_qc_supersedes_owner,
+                    local_vote_new_view_qc_supersedes,
                     suppressed_since_last,
                     "stale frontier owner yield blocked by consensus evidence"
                 );
@@ -1433,9 +1460,7 @@ impl Actor {
                 && slot.view == existing_vote.view
                 && slot.block_hash == existing_vote.block_hash
                 && (slot.quorum_progress.commit_qc_observed
-                    || (!recovery_exhausted
-                        && self
-                            .frontier_slot_competing_quorum_locked_for_view(slot, proposal_view)))
+                    || self.frontier_slot_competing_quorum_locked_for_view(slot, proposal_view))
         }) {
             return true;
         }
@@ -1547,55 +1572,39 @@ impl Actor {
                     proposal_height,
                     lock.view,
                 );
-                if recovery_exhausted && !qc_observed {
-                    info!(
-                        height = proposal_height,
-                        view,
-                        epoch = proposal_epoch,
-                        locked_block = %lock.block_hash,
-                        locked_view = lock.view,
-                        locked_votes = lock.vote_count,
-                        conflicting_voters = lock.conflicting_voters,
-                        candidate_possible_votes = lock.candidate_possible_votes,
-                        required = lock.required,
-                        total_validators = lock.total_validators,
-                        "allowing proposal assembly: stale same-height vote lock has no QC"
-                    );
-                } else {
-                    let _ = self.seed_frontier_slot_from_same_height_evidence(
+                let _ = self.seed_frontier_slot_from_same_height_evidence(
+                    proposal_height,
+                    view,
+                    now,
+                    "vote_locked_same_height",
+                    false,
+                );
+                let stale_vote_locked_recovery_requested = recovery_exhausted
+                    && !qc_observed
+                    && self.escalate_stale_vote_locked_frontier_owner_recovery(
+                        lock.block_hash,
                         proposal_height,
-                        view,
+                        lock.view,
                         now,
-                        "vote_locked_same_height",
-                        false,
+                        "exhausted_vote_locked_same_height",
                     );
-                    let stale_vote_locked_recovery_requested = recovery_exhausted
-                        && !qc_observed
-                        && self.escalate_stale_vote_locked_frontier_owner_recovery(
-                            lock.block_hash,
-                            proposal_height,
-                            lock.view,
-                            now,
-                            "exhausted_vote_locked_same_height",
-                        );
-                    warn!(
-                        height = proposal_height,
-                        view,
-                        epoch = proposal_epoch,
-                        locked_block = %lock.block_hash,
-                        locked_view = lock.view,
-                        locked_votes = lock.vote_count,
-                        conflicting_voters = lock.conflicting_voters,
-                        candidate_possible_votes = lock.candidate_possible_votes,
-                        required = lock.required,
-                        total_validators = lock.total_validators,
-                        recovery_exhausted,
-                        qc_observed,
-                        stale_vote_locked_recovery_requested,
-                        "deferring proposal assembly: same-height vote history makes a fresh branch non-viable"
-                    );
-                    return Ok(false);
-                }
+                warn!(
+                    height = proposal_height,
+                    view,
+                    epoch = proposal_epoch,
+                    locked_block = %lock.block_hash,
+                    locked_view = lock.view,
+                    locked_votes = lock.vote_count,
+                    conflicting_voters = lock.conflicting_voters,
+                    candidate_possible_votes = lock.candidate_possible_votes,
+                    required = lock.required,
+                    total_validators = lock.total_validators,
+                    recovery_exhausted,
+                    qc_observed,
+                    stale_vote_locked_recovery_requested,
+                    "deferring proposal assembly: same-height vote history makes a fresh branch non-viable"
+                );
+                return Ok(false);
             }
         }
         if let Some(existing_vote) = self.local_same_height_vote(proposal_height, proposal_epoch) {
@@ -4696,13 +4705,22 @@ impl Actor {
             && let Some(existing_vote) =
                 self.local_same_height_vote(height, self.epoch_for_height(height))
         {
-            if !self.local_same_height_vote_blocks_fresh_proposal(
+            let new_view_qc_supersedes = self.new_view_qc_supersedes_same_height_vote_conflict(
                 height,
                 view_idx,
-                &existing_vote,
-                now,
-                true,
-            ) {
+                highest_qc,
+                existing_vote.block_hash,
+                existing_vote.view,
+            );
+            if new_view_qc_supersedes
+                || !self.local_same_height_vote_blocks_fresh_proposal(
+                    height,
+                    view_idx,
+                    &existing_vote,
+                    now,
+                    true,
+                )
+            {
                 debug!(
                     height,
                     view = view_idx,
@@ -4710,6 +4728,7 @@ impl Actor {
                     voted_view = existing_vote.view,
                     voted_phase = ?existing_vote.phase,
                     voted_block = %existing_vote.block_hash,
+                    new_view_qc_supersedes,
                     "allowing fresh proposal after stale prior-view local same-height vote"
                 );
             } else {

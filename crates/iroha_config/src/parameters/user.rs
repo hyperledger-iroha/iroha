@@ -5677,6 +5677,12 @@ pub struct SumeragiWorker {
         default = "defaults::sumeragi::VALIDATION_QUEUE_FULL_INLINE_CUTOVER_DIVISOR"
     )]
     pub validation_queue_full_inline_cutover_divisor: u32,
+    /// Maximum transaction count for inline validation of fast-finality blocks.
+    #[config(
+        env = "SUMERAGI_VALIDATION_FAST_FINALITY_INLINE_MAX_TRANSACTIONS",
+        default = "defaults::sumeragi::VALIDATION_FAST_FINALITY_INLINE_MAX_TRANSACTIONS"
+    )]
+    pub fast_finality_inline_validation_max_transactions: usize,
     /// QC verify worker threads (0 = auto).
     #[config(
         env = "SUMERAGI_QC_VERIFY_WORKER_THREADS",
@@ -7559,6 +7565,8 @@ impl Sumeragi {
                 validation_result_queue_cap: worker.validation_result_queue_cap,
                 validation_queue_full_inline_cutover_divisor: worker
                     .validation_queue_full_inline_cutover_divisor,
+                fast_finality_inline_validation_max_transactions: worker
+                    .fast_finality_inline_validation_max_transactions,
                 qc_verify_worker_threads: worker.qc_verify_worker_threads,
                 qc_verify_work_queue_cap: worker.qc_verify_work_queue_cap,
                 qc_verify_result_queue_cap: worker.qc_verify_result_queue_cap,
