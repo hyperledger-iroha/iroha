@@ -4722,7 +4722,7 @@ pub struct SumeragiPersistence {
     pub kura_retry_interval: Duration,
     /// Maximum number of kura persistence retry attempts before aborting.
     pub kura_retry_max_attempts: u32,
-    /// Timeout for inflight commit jobs before aborting.
+    /// Timeout for inflight commit jobs before liveness recovery reports a stall.
     pub commit_inflight_timeout: Duration,
     /// Commit worker work-queue capacity.
     pub commit_work_queue_cap: usize,

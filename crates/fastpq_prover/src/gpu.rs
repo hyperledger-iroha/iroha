@@ -415,6 +415,24 @@ pub fn poseidon_hash_columns(
     }
 }
 
+pub fn poseidon_hash_rows(columns: &[Vec<u64>], backend: GpuBackend) -> Result<Vec<u64>, GpuError> {
+    if columns.is_empty() {
+        return Ok(Vec::new());
+    }
+    let row_count = columns[0].len();
+    if columns.iter().any(|column| column.len() != row_count) {
+        return Err(GpuError::InvalidInput("columns must share row length"));
+    }
+    if row_count == 0 {
+        return Ok(Vec::new());
+    }
+    match backend {
+        #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+        GpuBackend::Metal => metal::poseidon_hash_rows(columns),
+        other => Err(GpuError::Unsupported(other)),
+    }
+}
+
 fn poseidon_hash_columns_cuda(batch: &PoseidonColumnBatch) -> Result<Vec<u64>, GpuError> {
     if batch.is_empty() {
         return Ok(Vec::new());

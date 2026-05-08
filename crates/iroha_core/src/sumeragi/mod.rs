@@ -3528,12 +3528,28 @@ mod tests {
             signer: 0,
             bls_sig: vec![1, 2, 3],
         });
+        let mut update_with_vnext_sidecar = message::BlockSyncUpdate::from(&block);
+        update_with_vnext_sidecar
+            .vnext_view_change_certificates
+            .push(vnext::ViewChangeCertificate {
+                new_view: 1,
+                highest_slot: Some(vnext::SlotId {
+                    height: 1,
+                    view: 0,
+                    epoch: 0,
+                    block_hash,
+                }),
+                chain_order_hash: Hash::prehashed([0xCC; 32]),
+                signer_bitmap: vec![0b0000_0001],
+                aggregate_signature: vec![0xAA],
+            });
 
         handle.incoming_block_message(BlockMessage::BlockSyncUpdate(update));
         handle.incoming_block_message(BlockMessage::BlockSyncUpdate(update_with_votes));
+        handle.incoming_block_message(BlockMessage::BlockSyncUpdate(update_with_vnext_sidecar));
 
         let received: Vec<_> = rbc_chunk_rx.try_iter().collect();
-        assert_eq!(received.len(), 2);
+        assert_eq!(received.len(), 3);
         assert!(received.iter().all(|msg| matches!(
             msg,
             InboundBlockMessage {
@@ -10844,11 +10860,16 @@ fn block_sync_update_evidence_hash(update: &message::BlockSyncUpdate) -> CryptoH
         .stake_snapshot
         .as_ref()
         .map(|snapshot| CryptoHash::new(&snapshot.encode()));
+    let rechain_sidecars_hash = CryptoHash::new(&update.vnext_rechain_certificates.encode());
+    let view_change_sidecars_hash =
+        CryptoHash::new(&update.vnext_view_change_certificates.encode());
     let mut buf = Vec::new();
     buf.extend_from_slice(commit_votes_hash.as_ref());
     push_optional_hash(&mut buf, commit_qc_hash);
     push_optional_hash(&mut buf, checkpoint_hash);
     push_optional_hash(&mut buf, stake_snapshot_hash);
+    buf.extend_from_slice(rechain_sidecars_hash.as_ref());
+    buf.extend_from_slice(view_change_sidecars_hash.as_ref());
     CryptoHash::new(&buf)
 }
 

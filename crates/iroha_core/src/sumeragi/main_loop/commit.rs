@@ -2191,6 +2191,7 @@ impl Actor {
                         &commit_topology,
                     );
                 }
+                self.persist_vnext_certificates_for_committed_block(committed_block.as_ref());
                 self.flush_pending_fetch_requests_if_ready(committed_block.as_ref());
                 self.flush_pending_block_body_requests_if_ready(committed_block.as_ref());
                 if pending_height == 1 {
@@ -2260,6 +2261,11 @@ impl Actor {
                     block = %block_hash,
                     pending_previously_marked_kura_persisted,
                     "stored committed block to kura"
+                );
+                self.drive_vnext_commit_persisted_for_block(
+                    block_hash,
+                    pending_height,
+                    pending_view,
                 );
                 if let Some((height, payload_len)) =
                     self.kura.durable_block_payload_len_by_hash(block_hash)

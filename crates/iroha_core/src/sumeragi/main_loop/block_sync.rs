@@ -1200,6 +1200,7 @@ impl Actor {
             self.state.as_ref(),
             self.config.consensus_mode,
         );
+        self.attach_vnext_certificates_to_block_sync_update(&mut update);
         let (consensus_mode, _, _) = self.consensus_context_for_height(block_height);
         let has_roster = super::block_sync_update_has_roster(&update, consensus_mode);
         let has_cached_qc = update.commit_qc.is_some() || !update.commit_votes.is_empty();
@@ -1908,6 +1909,8 @@ impl Actor {
             commit_qc: incoming_qc,
             validator_checkpoint,
             stake_snapshot,
+            vnext_rechain_certificates,
+            vnext_view_change_certificates,
         } = update;
         let mut incoming_qc = incoming_qc;
         let mut validator_checkpoint = validator_checkpoint;
@@ -1915,6 +1918,33 @@ impl Actor {
         let block_hash = block.hash();
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
+        let matching_rechain_certificates = vnext_rechain_certificates
+            .iter()
+            .filter(|certificate| {
+                super::vnext_rechain_certificate_matches_block(
+                    certificate,
+                    block_hash,
+                    block_height,
+                    block_view,
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let matching_view_change_certificates = vnext_view_change_certificates
+            .iter()
+            .filter(|certificate| {
+                super::vnext_view_change_certificate_matches_block(
+                    certificate,
+                    block_height,
+                    block_view,
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        self.install_vnext_block_sync_sidecars(
+            &matching_rechain_certificates,
+            &matching_view_change_certificates,
+        );
         self.maybe_cache_rehydrated_kura_body(&block);
         let parent_hash = block.header().prev_block_hash();
         let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
@@ -2652,6 +2682,8 @@ impl Actor {
                     commit_qc: incoming_qc,
                     validator_checkpoint,
                     stake_snapshot,
+                    vnext_rechain_certificates,
+                    vnext_view_change_certificates,
                 },
                 sender,
                 block_hash,

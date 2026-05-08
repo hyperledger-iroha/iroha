@@ -1,6 +1,6 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-05-08
+Last updated: 2026-05-09
 
 Completed history lives in `status.md`. This file should only track unfinished work.
 
@@ -17,22 +17,43 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Sumeragi vNext consensus replacement
 
-- Finish moving proposal, DA/RBC availability, commit-persistence, and
-  block-sync sidecar flows onto typed
+- Prove the active-load five-second production ceiling with a fresh 20k Izanami
+  gate/profile. The implementation now caps active-pending/idle recovery
+  damping at five seconds under transaction backlog and lowers the default
+  commit-inflight stall reporting window to `5_000ms`; the open work is to
+  rebuild release binaries, rerun the 120s gate and 90s sampled profile, verify
+  there are no block-production gaps above five seconds, and beat the latest
+  clean gate baseline of `61,622` strict-approved transactions with final queue
+  depth below `861,515`. The latest 120s return artifact
+  `dist/izanami-prebuilt-20k-fastpq-gpu-sumeragi-5s-clean2-120s-20260508-185439`
+  confirms the timeout cap fires but does not satisfy the production-cadence or
+  throughput gates: strict approved ended at `12,388`, strict height `5`, queue
+  depth `880,537`, and peer logs show active-pending recovery churn, missing-QC
+  block-sync repair, and height-skew validation rejection. Next work is to make
+  the height/frontier recovery path converge after the capped timeout instead
+  of rotating views around stale or ahead-of-frontier block evidence.
+- Finish moving the remaining consensus-shell effects onto typed
   `sumeragi::vnext::ReactorEvent`/`ReactorEffect` adapters. vNext control
-  frames, timeout ticks, and validation worker dispatch/start/result now enter
-  the live reactor, but the broader block consensus shell still needs the
-  remaining effect adapters before the legacy cooperative commit sweep and
-  inline validation fallback can be deleted.
+  frames, accepted body-backed proposals, DA/RBC availability handoffs, timeout
+  ticks, validation worker dispatch/start/result, the proposal-backed
+  validation gate, validation accept/reject/defer effects,
+  validation/re-chain recovery effects, re-chain/view-change vote aggregation,
+  view-change certificate installation, block-sync certificate sidecar replay,
+  and commit-persistence completion now enter the live reactor, but the broader
+  block consensus shell still needs the remaining effect adapters before the
+  legacy cooperative commit sweep and inline validation fallback can be deleted.
 - Finish auditing chain-order hash and `rechain_seq` binding in deferred
   vote/QC caches, signer-tally/cache keys, and evidence replay paths used by
   the replacement shell. Vote/QC preimages, precommit signer history,
   block-sync-derived QCs, validator-checkpoint sidecars, raw/deferred vote
   caches, and vote/QC verifier cache keys now carry the selected binding.
 - Reconstruct vNext chain order from committed/replayed re-chain and
-  view-change certificates during block-sync catch-up. The live actor now keeps
-  a bounded in-memory certificate journal; persistence/sidecar replay remains
-  open.
+  view-change certificates during catch-up. The live actor now keeps a bounded
+  in-memory certificate journal, persists matching certificates into committed
+  Kura roster sidecars, reloads those durable sidecars into outgoing
+  `BlockSyncUpdate` payloads, and replays inbound sidecars before vote/QC
+  processing. The remaining open work is to broaden catch-up model and
+  integration coverage around the durable sidecar path.
 - Add model and integration coverage for slow validation, queue saturation,
   malicious accusers, head failure during re-chain, NPoS stake-quorum
   quarantine edges, and DA/RBC loss during re-chain.

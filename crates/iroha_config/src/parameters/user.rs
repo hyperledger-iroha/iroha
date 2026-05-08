@@ -5840,7 +5840,7 @@ pub struct SumeragiPersistence {
         default = "defaults::sumeragi::KURA_STORE_RETRY_MAX_ATTEMPTS"
     )]
     pub kura_retry_max_attempts: u32,
-    /// Timeout (ms) for inflight commit jobs before aborting.
+    /// Timeout (ms) for inflight commit jobs before liveness recovery reports a stall.
     #[config(
         env = "SUMERAGI_COMMIT_INFLIGHT_TIMEOUT_MS",
         default = "defaults::sumeragi::COMMIT_INFLIGHT_TIMEOUT_MS"

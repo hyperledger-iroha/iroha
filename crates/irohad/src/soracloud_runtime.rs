@@ -122,6 +122,8 @@ const MODEL_HOST_VIOLATION_REPORT_COOLDOWN_MS: u64 = 30_000;
 const GENERATED_HF_RECONCILE_REQUEST_COOLDOWN_MS: u64 = 30_000;
 const INROU_HOST_ADVERT_ATTEMPT_COOLDOWN_MS: u64 = 10_000;
 const INROU_HOST_HEARTBEAT_TTL_FLOOR_MS: u64 = 300_000;
+// Avoid rewriting authoritative adverts just to push the same heartbeat expiry forward.
+const INROU_HOST_HEARTBEAT_REFRESH_MARGIN_FLOOR_MS: u64 = 60_000;
 const INROU_PLACEMENT_RECONCILE_ATTEMPT_COOLDOWN_MS: u64 = 10_000;
 const SORACLOUD_LOCAL_READ_MAX_SNAPSHOT_LAG_BLOCKS: u64 = 64;
 const INROU_PORTABLE_START_GRACE_FLOOR: Duration = Duration::from_secs(180);
@@ -3305,11 +3307,8 @@ impl SoracloudRuntimeManager {
             .world()
             .soracloud_inrou_host_capabilities()
             .get(&desired.validator_account_id);
-        let needs_refresh = authoritative.is_none_or(|existing| {
-            !inrou_host_capability_matches(existing, &desired)
-                || !existing.is_active_at(now_ms)
-                || existing.heartbeat_expires_at_ms < desired.heartbeat_expires_at_ms
-        });
+        let needs_refresh =
+            inrou_host_capability_refresh_needed(authoritative, &desired, now_ms, &self.config);
         if !needs_refresh || !self.local_inrou_host_advert_attempt_allowed(now_ms) {
             return;
         }
@@ -9493,11 +9492,32 @@ fn desired_inrou_host_heartbeat_expiry_ms(
     now_ms: u64,
     config: &SoracloudRuntimeManagerConfig,
 ) -> u64 {
+    now_ms.saturating_add(inrou_host_heartbeat_ttl_ms(config))
+}
+
+fn inrou_host_heartbeat_ttl_ms(config: &SoracloudRuntimeManagerConfig) -> u64 {
     let interval_ms = u64::try_from(config.reconcile_interval.as_millis()).unwrap_or(u64::MAX);
-    let ttl_ms = interval_ms
+    interval_ms
         .saturating_mul(4)
-        .max(INROU_HOST_HEARTBEAT_TTL_FLOOR_MS);
-    now_ms.saturating_add(ttl_ms)
+        .max(INROU_HOST_HEARTBEAT_TTL_FLOOR_MS)
+}
+
+fn inrou_host_heartbeat_refresh_margin_ms(config: &SoracloudRuntimeManagerConfig) -> u64 {
+    let interval_ms = u64::try_from(config.reconcile_interval.as_millis()).unwrap_or(u64::MAX);
+    inrou_host_heartbeat_ttl_ms(config).min(
+        interval_ms
+            .saturating_mul(2)
+            .max(INROU_HOST_HEARTBEAT_REFRESH_MARGIN_FLOOR_MS),
+    )
+}
+
+fn inrou_host_heartbeat_refresh_due(
+    existing: &SoraInrouHostCapabilityRecordV1,
+    now_ms: u64,
+    config: &SoracloudRuntimeManagerConfig,
+) -> bool {
+    existing.heartbeat_expires_at_ms
+        <= now_ms.saturating_add(inrou_host_heartbeat_refresh_margin_ms(config))
 }
 
 fn inrou_host_capability_matches(
@@ -9513,6 +9533,19 @@ fn inrou_host_capability_matches(
         && existing.max_memory_bytes == desired.max_memory_bytes
         && existing.max_storage_bytes == desired.max_storage_bytes
         && existing.proxy_only == desired.proxy_only
+}
+
+fn inrou_host_capability_refresh_needed(
+    existing: Option<&SoraInrouHostCapabilityRecordV1>,
+    desired: &SoraInrouHostCapabilityRecordV1,
+    now_ms: u64,
+    config: &SoracloudRuntimeManagerConfig,
+) -> bool {
+    existing.is_none_or(|existing| {
+        !inrou_host_capability_matches(existing, desired)
+            || !existing.is_active_at(now_ms)
+            || inrou_host_heartbeat_refresh_due(existing, now_ms, config)
+    })
 }
 
 fn apartment_result_commitment(
@@ -16522,6 +16555,50 @@ mod tests {
             desired_inrou_host_heartbeat_expiry_ms(now_ms, &config),
             now_ms + INROU_HOST_HEARTBEAT_TTL_FLOOR_MS
         );
+    }
+
+    #[test]
+    fn inrou_host_capability_refresh_waits_until_heartbeat_margin() {
+        let config = test_runtime_manager_config(PathBuf::from(
+            "/tmp/test-soracloud-runtime-inrou-refresh-margin",
+        ))
+        .with_local_host_identity(ALICE_ID.clone(), "12D3KooWInrouRefreshMarginHost");
+        let manager = SoracloudRuntimeManager::new(config.clone(), test_state().expect("test state"));
+        let now_ms = 1_000_000;
+        let (desired, _) = manager
+            .build_local_inrou_host_capability_record(now_ms)
+            .expect("host identity configured");
+        let ttl_ms = inrou_host_heartbeat_ttl_ms(&config);
+        let margin_ms = inrou_host_heartbeat_refresh_margin_ms(&config);
+        assert!(ttl_ms > margin_ms.saturating_add(5_000));
+
+        let mut existing = desired.clone();
+        existing.advertised_at_ms = now_ms.saturating_sub(5_000);
+        existing.heartbeat_expires_at_ms = desired.heartbeat_expires_at_ms.saturating_sub(5_000);
+        assert!(existing.heartbeat_expires_at_ms < desired.heartbeat_expires_at_ms);
+        assert!(!inrou_host_capability_refresh_needed(
+            Some(&existing),
+            &desired,
+            now_ms,
+            &config
+        ));
+
+        existing.heartbeat_expires_at_ms = now_ms.saturating_add(margin_ms);
+        assert!(inrou_host_capability_refresh_needed(
+            Some(&existing),
+            &desired,
+            now_ms,
+            &config
+        ));
+
+        existing.heartbeat_expires_at_ms = now_ms.saturating_add(ttl_ms);
+        existing.supported_guest_isas.clear();
+        assert!(inrou_host_capability_refresh_needed(
+            Some(&existing),
+            &desired,
+            now_ms,
+            &config
+        ));
     }
 
     #[test]

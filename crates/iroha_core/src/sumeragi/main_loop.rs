@@ -390,6 +390,8 @@ const BLOCK_SYNC_WARN_COOLDOWN_FLOOR: Duration = Duration::from_secs(3);
 const QC_INSUFFICIENT_WARN_COOLDOWN: Duration = Duration::from_secs(3);
 /// Keep recent vNext order-changing certificates in memory for replay/catch-up sidecars.
 const VNEXT_CERTIFICATE_JOURNAL_CAP: usize = 256;
+/// Bound pre-certificate vNext vote caches by body to keep malformed gossip from growing memory.
+const VNEXT_VOTE_CACHE_CAP: usize = 512;
 /// Cap the number of block-sync quorum-miss warnings emitted per burst window.
 const BLOCK_SYNC_WARN_BURST_CAP: u32 = 3;
 /// Window used by block-sync warning burst suppression.
@@ -400,6 +402,8 @@ const HOTSPOT_LOG_SUMMARY_INTERVAL: Duration = Duration::from_secs(30);
 const FRONTIER_INGRESS_BACKLOG_DRAIN_GRACE_CEILING: Duration = Duration::from_millis(250);
 /// Minimum drain window used when there is no transaction backlog forcing proposal progress.
 const FRONTIER_INGRESS_IDLE_DRAIN_GRACE_FLOOR: Duration = Duration::from_millis(750);
+/// Maximum active-load liveness window before the round must produce a block or rotate.
+const ACTIVE_BLOCK_PRODUCTION_GAP_CEILING: Duration = Duration::from_secs(5);
 /// Align control-plane rebroadcast cadence with block time while enforcing a safe floor.
 ///
 /// Control-plane messages (votes / missing-block pulls / RBC READY/DELIVER coordination) are
@@ -2970,6 +2974,19 @@ fn validation_reject_reason_label(err: &BlockValidationError) -> &'static str {
         | BlockValidationError::TransactionInTheFuture
         | BlockValidationError::NposEffectsInvalid(_)
         | BlockValidationError::PreviousRosterEvidenceInvalid(_) => VALIDATION_REASON_STATELESS,
+    }
+}
+
+fn vnext_validation_reject_reason_label(reason_label: &str) -> &'static str {
+    match reason_label {
+        VALIDATION_REASON_STATELESS => VALIDATION_REASON_STATELESS,
+        VALIDATION_REASON_EXECUTION => VALIDATION_REASON_EXECUTION,
+        VALIDATION_REASON_PREV_HASH => VALIDATION_REASON_PREV_HASH,
+        VALIDATION_REASON_PREV_HEIGHT => VALIDATION_REASON_PREV_HEIGHT,
+        VALIDATION_REASON_TOPOLOGY => VALIDATION_REASON_TOPOLOGY,
+        "validation_roots_missing" => VALIDATION_REASON_EXECUTION,
+        "pending_block_invalid" => VALIDATION_REASON_STATELESS,
+        _ => VALIDATION_REASON_STATELESS,
     }
 }
 
@@ -10639,6 +10656,54 @@ where
     candidates
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct VNextRechainVoteKey {
+    slot_height: u64,
+    slot_view: u64,
+    slot_epoch: u64,
+    slot_block_hash: HashOf<BlockHeader>,
+    previous_chain_order_hash: Hash,
+    new_chain_order_hash: Hash,
+    rechain_seq: u64,
+}
+
+impl From<&super::vnext::RechainVote> for VNextRechainVoteKey {
+    fn from(vote: &super::vnext::RechainVote) -> Self {
+        Self {
+            slot_height: vote.slot.height,
+            slot_view: vote.slot.view,
+            slot_epoch: vote.slot.epoch,
+            slot_block_hash: vote.slot.block_hash,
+            previous_chain_order_hash: vote.previous_chain_order_hash,
+            new_chain_order_hash: vote.new_chain_order_hash,
+            rechain_seq: vote.rechain_seq,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct VNextViewChangeVoteKey {
+    new_view: u64,
+    highest_slot_height: Option<u64>,
+    highest_slot_view: Option<u64>,
+    highest_slot_epoch: Option<u64>,
+    highest_slot_block_hash: Option<HashOf<BlockHeader>>,
+    chain_order_hash: Hash,
+}
+
+impl From<&super::vnext::ViewChangeVote> for VNextViewChangeVoteKey {
+    fn from(vote: &super::vnext::ViewChangeVote) -> Self {
+        Self {
+            new_view: vote.new_view,
+            highest_slot_height: vote.highest_slot.map(|slot| slot.height),
+            highest_slot_view: vote.highest_slot.map(|slot| slot.view),
+            highest_slot_epoch: vote.highest_slot.map(|slot| slot.epoch),
+            highest_slot_block_hash: vote.highest_slot.map(|slot| slot.block_hash),
+            chain_order_hash: vote.chain_order_hash,
+        }
+    }
+}
+
 /// Lightweight wrapper around the consensus main loop.
 ///
 /// This struct subsumes the former stub actor as we integrate the
@@ -10746,6 +10811,9 @@ pub(super) struct Actor {
     qc_cache: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
     qc_signer_tally: BTreeMap<QcVoteKey, QcSignerTally>,
     vnext_reactors: BTreeMap<(u64, u64), super::vnext::Reactor>,
+    vnext_rechain_votes: BTreeMap<VNextRechainVoteKey, BTreeMap<PeerId, super::vnext::RechainVote>>,
+    vnext_view_change_votes:
+        BTreeMap<VNextViewChangeVoteKey, BTreeMap<PeerId, super::vnext::ViewChangeVote>>,
     vnext_rechain_journal: VecDeque<super::vnext::RechainCertificate>,
     vnext_view_change_journal: VecDeque<super::vnext::ViewChangeCertificate>,
     epoch_manager: Option<EpochManager>,
@@ -11693,7 +11761,6 @@ struct ValidationState {
     vnext_inflight: BTreeMap<HashOf<BlockHeader>, VNextValidationInFlight>,
     superseded_results: BTreeMap<HashOf<BlockHeader>, u64>,
     duration_ema: Option<Duration>,
-    next_id: u64,
     next_worker: usize,
 }
 
@@ -11719,15 +11786,8 @@ impl ValidationState {
             vnext_inflight: BTreeMap::new(),
             superseded_results: BTreeMap::new(),
             duration_ema: None,
-            next_id: 0,
             next_worker: 0,
         }
-    }
-
-    fn next_id(&mut self) -> u64 {
-        let id = self.next_id;
-        self.next_id = self.next_id.saturating_add(1);
-        id
     }
 
     fn record_duration(&mut self, duration: Duration) {
@@ -13325,6 +13385,56 @@ fn block_sync_update_with_certified_roster(
     )
 }
 
+fn vnext_rechain_certificate_matches_block(
+    certificate: &super::vnext::RechainCertificate,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+) -> bool {
+    certificate.slot.height == height
+        && certificate.slot.view == view
+        && certificate.slot.block_hash == block_hash
+}
+
+fn vnext_view_change_certificate_matches_block(
+    certificate: &super::vnext::ViewChangeCertificate,
+    height: u64,
+    view: u64,
+) -> bool {
+    certificate
+        .highest_slot
+        .is_some_and(|slot| slot.height == height && certificate.new_view == view)
+}
+
+fn attach_vnext_certificates_from_roster_sidecar(
+    kura: &Kura,
+    update: &mut super::message::BlockSyncUpdate,
+) {
+    let block_hash = update.block.hash();
+    let height = update.block.header().height().get();
+    let view = update.block.header().view_change_index();
+    let Some(sidecar) = kura.read_roster_metadata(height) else {
+        return;
+    };
+    if sidecar.block_hash != block_hash {
+        return;
+    }
+    for certificate in sidecar.vnext_rechain_certificates {
+        if vnext_rechain_certificate_matches_block(&certificate, block_hash, height, view)
+            && !update.vnext_rechain_certificates.contains(&certificate)
+        {
+            update.vnext_rechain_certificates.push(certificate);
+        }
+    }
+    for certificate in sidecar.vnext_view_change_certificates {
+        if vnext_view_change_certificate_matches_block(&certificate, height, view)
+            && !update.vnext_view_change_certificates.contains(&certificate)
+        {
+            update.vnext_view_change_certificates.push(certificate);
+        }
+    }
+}
+
 fn block_sync_update_with_roster_inner(
     block: &SignedBlock,
     state: &State,
@@ -13409,6 +13519,7 @@ fn block_sync_update_with_roster_inner(
             update.stake_snapshot = roster_cache.stake_snapshot_for_roster(roster);
         }
     }
+    attach_vnext_certificates_from_roster_sidecar(kura, &mut update);
     update
 }
 
@@ -14340,6 +14451,42 @@ impl Actor {
             );
             self.state
                 .record_commit_roster_with_sidecar(&cert, &checkpoint, stake_snapshot);
+        }
+    }
+
+    fn persist_vnext_certificates_for_committed_block(&self, block: &SignedBlock) {
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let rechain_certificates = self
+            .vnext_rechain_journal
+            .iter()
+            .filter(|certificate| {
+                vnext_rechain_certificate_matches_block(certificate, block_hash, height, view)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let view_change_certificates = self
+            .vnext_view_change_journal
+            .iter()
+            .filter(|certificate| {
+                vnext_view_change_certificate_matches_block(certificate, height, view)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if rechain_certificates.is_empty() && view_change_certificates.is_empty() {
+            return;
+        }
+
+        let mut sidecar = self
+            .kura
+            .read_roster_metadata(height)
+            .filter(|sidecar| sidecar.block_hash == block_hash)
+            .unwrap_or_else(|| {
+                crate::kura::RosterSidecar::new(height, block_hash, None, None, None)
+            });
+        if sidecar.merge_vnext_certificates(rechain_certificates, view_change_certificates) {
+            self.kura.write_roster_metadata(&sidecar);
         }
     }
 
@@ -18360,6 +18507,8 @@ impl Actor {
             qc_cache: BTreeMap::new(),
             qc_signer_tally: BTreeMap::new(),
             vnext_reactors: BTreeMap::new(),
+            vnext_rechain_votes: BTreeMap::new(),
+            vnext_view_change_votes: BTreeMap::new(),
             vnext_rechain_journal: VecDeque::new(),
             vnext_view_change_journal: VecDeque::new(),
             epoch_manager,
@@ -20866,6 +21015,96 @@ impl Actor {
         Some((chain_order, quorum))
     }
 
+    pub(super) fn drive_vnext_proposal_accepted_for_block(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        payload_hash: Hash,
+    ) -> bool {
+        let Some((base_chain_order, quorum)) =
+            self.base_vnext_chain_order_and_quorum_for(height, view)
+        else {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "unable to mark vNext proposal without chain order/quorum"
+            );
+            return false;
+        };
+
+        let key = (height, view);
+        let chain_order = self
+            .vnext_reactors
+            .get(&key)
+            .map(|reactor| reactor.chain_order.clone())
+            .unwrap_or(base_chain_order);
+        let slot = super::vnext::SlotId {
+            height,
+            view,
+            epoch: chain_order.epoch,
+            block_hash,
+        };
+        let config = super::vnext::PerformanceFaultConfig::from(&self.config.vnext);
+        let effects = {
+            let reactor = self
+                .vnext_reactors
+                .entry(key)
+                .or_insert_with(|| super::vnext::Reactor::new(chain_order, quorum.clone(), config));
+            reactor.quorum = quorum;
+            reactor.config = config;
+            reactor
+                .handle_event(super::vnext::ReactorEvent::ProposalAccepted { slot, payload_hash })
+        };
+        self.apply_vnext_effects(effects);
+        true
+    }
+
+    pub(super) fn drive_vnext_availability_ready_for_block(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        let Some((base_chain_order, quorum)) =
+            self.base_vnext_chain_order_and_quorum_for(height, view)
+        else {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "unable to mark vNext availability without chain order/quorum"
+            );
+            return false;
+        };
+
+        let key = (height, view);
+        let chain_order = self
+            .vnext_reactors
+            .get(&key)
+            .map(|reactor| reactor.chain_order.clone())
+            .unwrap_or(base_chain_order);
+        let slot = super::vnext::SlotId {
+            height,
+            view,
+            epoch: chain_order.epoch,
+            block_hash,
+        };
+        let config = super::vnext::PerformanceFaultConfig::from(&self.config.vnext);
+        let effects = {
+            let reactor = self
+                .vnext_reactors
+                .entry(key)
+                .or_insert_with(|| super::vnext::Reactor::new(chain_order, quorum.clone(), config));
+            reactor.quorum = quorum;
+            reactor.config = config;
+            reactor.handle_event(super::vnext::ReactorEvent::AvailabilityReady { slot })
+        };
+        self.apply_vnext_effects(effects);
+        true
+    }
+
     pub(super) fn drive_vnext_validation_for_pending(
         &mut self,
         block_hash: HashOf<BlockHeader>,
@@ -20916,6 +21155,50 @@ impl Actor {
                 reactor.handle_event(super::vnext::ReactorEvent::ValidationNeeded { slot, now_ms }),
             );
             effects
+        };
+        self.apply_vnext_effects(effects);
+        true
+    }
+
+    pub(super) fn drive_vnext_commit_persisted_for_block(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        let Some((base_chain_order, quorum)) =
+            self.base_vnext_chain_order_and_quorum_for(height, view)
+        else {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "unable to mark vNext commit without chain order/quorum"
+            );
+            return false;
+        };
+
+        let key = (height, view);
+        let chain_order = self
+            .vnext_reactors
+            .get(&key)
+            .map(|reactor| reactor.chain_order.clone())
+            .unwrap_or(base_chain_order);
+        let slot = super::vnext::SlotId {
+            height,
+            view,
+            epoch: chain_order.epoch,
+            block_hash,
+        };
+        let config = super::vnext::PerformanceFaultConfig::from(&self.config.vnext);
+        let effects = {
+            let reactor = self
+                .vnext_reactors
+                .entry(key)
+                .or_insert_with(|| super::vnext::Reactor::new(chain_order, quorum.clone(), config));
+            reactor.quorum = quorum;
+            reactor.config = config;
+            reactor.handle_event(super::vnext::ReactorEvent::CommitPersisted { slot })
         };
         self.apply_vnext_effects(effects);
         true
@@ -21272,6 +21555,7 @@ impl Actor {
                         post_state_root = %roots.post_state_root,
                         "vNext reactor accepted validated slot"
                     );
+                    self.accept_vnext_validated_slot(slot, roots);
                 }
                 super::vnext::ReactorEffect::RejectValidation { slot, failure } => {
                     debug!(
@@ -21281,6 +21565,7 @@ impl Actor {
                         reason = %failure.reason_label,
                         "vNext reactor rejected validation"
                     );
+                    self.reject_vnext_validation_slot(slot, failure);
                 }
                 super::vnext::ReactorEffect::BroadcastVNext { mut message } => {
                     self.sign_local_vnext_message(&mut message);
@@ -21296,6 +21581,7 @@ impl Actor {
                         ?reason,
                         "vNext reactor entered recovery"
                     );
+                    self.start_vnext_recovery(slot, reason);
                 }
                 super::vnext::ReactorEffect::InstallRechain { certificate } => {
                     self.install_vnext_rechain_certificate(certificate);
@@ -21313,6 +21599,7 @@ impl Actor {
                         signer = %vote.signer,
                         "vNext reactor accepted re-chain vote"
                     );
+                    self.accept_vnext_rechain_vote(vote);
                 }
                 super::vnext::ReactorEffect::AcceptViewChangeVote { vote } => {
                     debug!(
@@ -21320,18 +21607,13 @@ impl Actor {
                         signer = %vote.signer,
                         "vNext reactor accepted view-change vote"
                     );
+                    self.accept_vnext_view_change_vote(vote);
                 }
                 super::vnext::ReactorEffect::InstallViewChange { certificate } => {
-                    self.push_vnext_view_change_certificate(certificate);
+                    self.install_vnext_view_change_certificate(certificate);
                 }
                 super::vnext::ReactorEffect::RequireViewChange { slot, reason_label } => {
-                    debug!(
-                        height = slot.height,
-                        view = slot.view,
-                        block = %slot.block_hash,
-                        reason = %reason_label,
-                        "vNext reactor requires view change"
-                    );
+                    self.require_vnext_view_change(slot, reason_label);
                 }
                 super::vnext::ReactorEffect::DropStaleWorkerResult {
                     slot,
@@ -21360,7 +21642,62 @@ impl Actor {
         }
     }
 
+    fn clear_vnext_validation_worker_ownership(&mut self, slot: super::vnext::SlotId) {
+        self.subsystems.validation.inflight.remove(&slot.block_hash);
+        self.subsystems
+            .validation
+            .vnext_inflight
+            .remove(&slot.block_hash);
+        self.subsystems
+            .validation
+            .superseded_results
+            .remove(&slot.block_hash);
+    }
+
+    fn start_vnext_recovery(
+        &mut self,
+        slot: super::vnext::SlotId,
+        reason: super::vnext::RecoveryReason,
+    ) {
+        self.clear_vnext_validation_worker_ownership(slot);
+
+        let cause = match reason {
+            super::vnext::RecoveryReason::ValidationTimeout
+            | super::vnext::RecoveryReason::ValidationBackpressure => {
+                ViewChangeCause::QuorumTimeout
+            }
+            super::vnext::RecoveryReason::SuccessorObligation => {
+                ViewChangeCause::CensorshipEvidence
+            }
+        };
+        self.trigger_view_change_with_cause(slot.height, slot.view, cause);
+    }
+
+    fn require_vnext_view_change(&mut self, slot: super::vnext::SlotId, reason_label: String) {
+        self.clear_vnext_validation_worker_ownership(slot);
+        debug!(
+            height = slot.height,
+            view = slot.view,
+            block = %slot.block_hash,
+            reason = %reason_label,
+            "vNext reactor required a live view change"
+        );
+        self.broadcast_vnext_view_change_vote_for_slot(slot, slot.view.saturating_add(1));
+        self.trigger_view_change_with_cause(
+            slot.height,
+            slot.view,
+            ViewChangeCause::CensorshipEvidence,
+        );
+    }
+
     fn install_vnext_rechain_certificate(&mut self, certificate: super::vnext::RechainCertificate) {
+        if self
+            .vnext_rechain_journal
+            .iter()
+            .any(|existing| existing == &certificate)
+        {
+            return;
+        }
         while self.vnext_rechain_journal.len() >= VNEXT_CERTIFICATE_JOURNAL_CAP {
             self.vnext_rechain_journal.pop_front();
         }
@@ -21374,10 +21711,19 @@ impl Actor {
         self.vnext_rechain_journal.push_back(certificate);
     }
 
-    fn push_vnext_view_change_certificate(
+    fn install_vnext_view_change_certificate(
         &mut self,
         certificate: super::vnext::ViewChangeCertificate,
     ) {
+        if self
+            .vnext_view_change_journal
+            .iter()
+            .any(|existing| existing == &certificate)
+        {
+            return;
+        }
+        let height = self.vnext_view_change_certificate_height(&certificate);
+        let new_view = certificate.new_view;
         while self.vnext_view_change_journal.len() >= VNEXT_CERTIFICATE_JOURNAL_CAP {
             self.vnext_view_change_journal.pop_front();
         }
@@ -21387,6 +21733,329 @@ impl Actor {
             "installed vNext view-change certificate"
         );
         self.vnext_view_change_journal.push_back(certificate);
+        if new_view > 0 {
+            self.trigger_view_change_with_cause(
+                height,
+                new_view.saturating_sub(1),
+                ViewChangeCause::CensorshipEvidence,
+            );
+        }
+    }
+
+    pub(super) fn attach_vnext_certificates_to_block_sync_update(
+        &self,
+        update: &mut super::message::BlockSyncUpdate,
+    ) {
+        let block_hash = update.block.hash();
+        let height = update.block.header().height().get();
+        let view = update.block.header().view_change_index();
+        attach_vnext_certificates_from_roster_sidecar(self.kura.as_ref(), update);
+        for certificate in &self.vnext_rechain_journal {
+            if vnext_rechain_certificate_matches_block(certificate, block_hash, height, view)
+                && !update.vnext_rechain_certificates.contains(certificate)
+            {
+                update.vnext_rechain_certificates.push(certificate.clone());
+            }
+        }
+        for certificate in &self.vnext_view_change_journal {
+            if vnext_view_change_certificate_matches_block(certificate, height, view)
+                && !update.vnext_view_change_certificates.contains(certificate)
+            {
+                update
+                    .vnext_view_change_certificates
+                    .push(certificate.clone());
+            }
+        }
+    }
+
+    pub(super) fn install_vnext_block_sync_sidecars(
+        &mut self,
+        rechain_certificates: &[super::vnext::RechainCertificate],
+        view_change_certificates: &[super::vnext::ViewChangeCertificate],
+    ) {
+        for certificate in rechain_certificates {
+            if let Err(err) = self.handle_vnext_message(
+                super::vnext::ConsensusMessage::RechainCertificate(certificate.clone()),
+            ) {
+                debug!(?err, "failed to apply vNext re-chain block-sync sidecar");
+            }
+        }
+        for certificate in view_change_certificates {
+            if let Err(err) = self.handle_vnext_message(
+                super::vnext::ConsensusMessage::ViewChangeCertificate(certificate.clone()),
+            ) {
+                debug!(?err, "failed to apply vNext view-change block-sync sidecar");
+            }
+        }
+    }
+
+    fn accept_vnext_rechain_vote(&mut self, vote: super::vnext::RechainVote) {
+        let key = VNextRechainVoteKey::from(&vote);
+        {
+            let votes = self.vnext_rechain_votes.entry(key.clone()).or_default();
+            votes.entry(vote.signer.clone()).or_insert(vote);
+        }
+        Self::prune_vnext_vote_cache(&mut self.vnext_rechain_votes);
+        let certificate = self
+            .vnext_rechain_votes
+            .get(&key)
+            .and_then(|votes| self.aggregate_vnext_rechain_votes(votes));
+        if let Some(certificate) = certificate {
+            self.vnext_rechain_votes.remove(&key);
+            self.publish_vnext_rechain_certificate(certificate);
+        }
+    }
+
+    fn aggregate_vnext_rechain_votes(
+        &self,
+        votes: &BTreeMap<PeerId, super::vnext::RechainVote>,
+    ) -> Option<super::vnext::RechainCertificate> {
+        let first = votes.values().next()?;
+        if !votes
+            .values()
+            .all(|vote| Self::vnext_rechain_vote_body_matches(first, vote))
+        {
+            return None;
+        }
+        let (_, quorum) =
+            self.base_vnext_chain_order_and_quorum_for(first.slot.height, first.slot.view)?;
+        let (_, mode_tag, _) = self.consensus_context_for_height(first.slot.height);
+        let signer_roster = first.new_order.critical_path().to_vec();
+        let mut signer_indices = Vec::new();
+        let mut signers = Vec::new();
+        let mut signature_refs = Vec::new();
+        for (index, signer) in signer_roster.iter().enumerate() {
+            let Some(vote) = votes.get(signer) else {
+                continue;
+            };
+            if vote.signature.is_empty() {
+                continue;
+            }
+            signer_indices.push(index);
+            signers.push(signer.clone());
+            signature_refs.push(vote.signature.as_slice());
+        }
+        if !quorum.satisfied_by(&signers) {
+            return None;
+        }
+        let signer_bitmap =
+            super::vnext::build_signer_bitmap(&signer_indices, signer_roster.len()).ok()?;
+        let aggregate_signature =
+            iroha_crypto::bls_normal_aggregate_signatures(&signature_refs).ok()?;
+        let certificate = super::vnext::RechainCertificate {
+            slot: first.slot,
+            previous_chain_order_hash: first.previous_chain_order_hash,
+            new_chain_order_hash: first.new_chain_order_hash,
+            new_order: first.new_order.clone(),
+            rechain_seq: first.rechain_seq,
+            tainted: first.tainted.clone(),
+            suspicions: first.suspicions.clone(),
+            signer_bitmap,
+            aggregate_signature,
+        };
+        let signer_pops = self.vnext_signer_pops(&signer_roster)?;
+        let signer_pop_refs = signer_pops.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        certificate
+            .verify_aggregate_signature(
+                &self.chain_id,
+                mode_tag,
+                &signer_roster,
+                &signer_pop_refs,
+                &quorum,
+            )
+            .ok()?;
+        Some(certificate)
+    }
+
+    fn publish_vnext_rechain_certificate(&mut self, certificate: super::vnext::RechainCertificate) {
+        let slot = certificate.slot;
+        let effects = self
+            .vnext_reactors
+            .get_mut(&(slot.height, slot.view))
+            .map(|reactor| {
+                reactor.handle_event(super::vnext::ReactorEvent::RechainCertificateReceived {
+                    certificate: certificate.clone(),
+                    now_ms: Self::vnext_now_ms(),
+                })
+            })
+            .unwrap_or_else(|| {
+                vec![super::vnext::ReactorEffect::InstallRechain {
+                    certificate: certificate.clone(),
+                }]
+            });
+        self.apply_vnext_effects(effects);
+        self.broadcast_vnext_control_message(super::vnext::ConsensusMessage::RechainCertificate(
+            certificate,
+        ));
+    }
+
+    fn accept_vnext_view_change_vote(&mut self, vote: super::vnext::ViewChangeVote) {
+        let key = VNextViewChangeVoteKey::from(&vote);
+        {
+            let votes = self.vnext_view_change_votes.entry(key.clone()).or_default();
+            votes.entry(vote.signer.clone()).or_insert(vote);
+        }
+        Self::prune_vnext_vote_cache(&mut self.vnext_view_change_votes);
+        let certificate = self
+            .vnext_view_change_votes
+            .get(&key)
+            .and_then(|votes| self.aggregate_vnext_view_change_votes(votes));
+        if let Some(certificate) = certificate {
+            self.vnext_view_change_votes.remove(&key);
+            self.publish_vnext_view_change_certificate(certificate);
+        }
+    }
+
+    fn aggregate_vnext_view_change_votes(
+        &self,
+        votes: &BTreeMap<PeerId, super::vnext::ViewChangeVote>,
+    ) -> Option<super::vnext::ViewChangeCertificate> {
+        let first = votes.values().next()?;
+        if !votes
+            .values()
+            .all(|vote| Self::vnext_view_change_vote_body_matches(first, vote))
+        {
+            return None;
+        }
+        let height = self.vnext_view_change_vote_height(first);
+        let (chain_order, quorum) =
+            self.active_vnext_chain_order_and_quorum_for(height, first.new_view)?;
+        if chain_order.hash() != first.chain_order_hash {
+            return None;
+        }
+        let (_, mode_tag, _) = self.consensus_context_for_height(height);
+        let signer_roster = chain_order.critical_path().to_vec();
+        let mut signer_indices = Vec::new();
+        let mut signers = Vec::new();
+        let mut signature_refs = Vec::new();
+        for (index, signer) in signer_roster.iter().enumerate() {
+            let Some(vote) = votes.get(signer) else {
+                continue;
+            };
+            if vote.signature.is_empty() {
+                continue;
+            }
+            signer_indices.push(index);
+            signers.push(signer.clone());
+            signature_refs.push(vote.signature.as_slice());
+        }
+        if !quorum.satisfied_by(&signers) {
+            return None;
+        }
+        let signer_bitmap =
+            super::vnext::build_signer_bitmap(&signer_indices, signer_roster.len()).ok()?;
+        let aggregate_signature =
+            iroha_crypto::bls_normal_aggregate_signatures(&signature_refs).ok()?;
+        let certificate = super::vnext::ViewChangeCertificate {
+            new_view: first.new_view,
+            highest_slot: first.highest_slot,
+            chain_order_hash: first.chain_order_hash,
+            signer_bitmap,
+            aggregate_signature,
+        };
+        let signer_pops = self.vnext_signer_pops(&signer_roster)?;
+        let signer_pop_refs = signer_pops.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        certificate
+            .verify_aggregate_signature(
+                &self.chain_id,
+                mode_tag,
+                &signer_roster,
+                &signer_pop_refs,
+                &quorum,
+            )
+            .ok()?;
+        Some(certificate)
+    }
+
+    fn publish_vnext_view_change_certificate(
+        &mut self,
+        certificate: super::vnext::ViewChangeCertificate,
+    ) {
+        let height = self.vnext_view_change_certificate_height(&certificate);
+        let view = certificate.new_view;
+        let effects = self
+            .vnext_reactors
+            .get_mut(&(height, view))
+            .map(|reactor| {
+                reactor.handle_event(super::vnext::ReactorEvent::ViewChangeCertificateReceived {
+                    certificate: certificate.clone(),
+                })
+            })
+            .unwrap_or_else(|| {
+                vec![super::vnext::ReactorEffect::InstallViewChange {
+                    certificate: certificate.clone(),
+                }]
+            });
+        self.apply_vnext_effects(effects);
+        self.broadcast_vnext_control_message(
+            super::vnext::ConsensusMessage::ViewChangeCertificate(certificate),
+        );
+    }
+
+    fn broadcast_vnext_control_message(&mut self, message: super::vnext::ConsensusMessage) {
+        self.schedule_background(BackgroundRequest::Broadcast {
+            msg: BlockMessageWire::new(BlockMessage::VNext(message)),
+        });
+    }
+
+    fn prune_vnext_vote_cache<K: Ord, V>(cache: &mut BTreeMap<K, V>) {
+        while cache.len() > VNEXT_VOTE_CACHE_CAP {
+            cache.pop_first();
+        }
+    }
+
+    fn active_vnext_chain_order_and_quorum_for(
+        &self,
+        height: u64,
+        view: u64,
+    ) -> Option<(super::vnext::ChainOrder, super::vnext::QuorumPolicy)> {
+        let (base_chain_order, quorum) =
+            self.base_vnext_chain_order_and_quorum_for(height, view)?;
+        let chain_order = self
+            .vnext_reactors
+            .get(&(height, view))
+            .map(|reactor| reactor.chain_order.clone())
+            .unwrap_or(base_chain_order);
+        Some((chain_order, quorum))
+    }
+
+    fn vnext_view_change_vote_height(&self, vote: &super::vnext::ViewChangeVote) -> u64 {
+        vote.highest_slot.map_or_else(
+            || self.committed_height_snapshot().saturating_add(1),
+            |slot| slot.height,
+        )
+    }
+
+    fn vnext_view_change_certificate_height(
+        &self,
+        certificate: &super::vnext::ViewChangeCertificate,
+    ) -> u64 {
+        certificate.highest_slot.map_or_else(
+            || self.committed_height_snapshot().saturating_add(1),
+            |slot| slot.height,
+        )
+    }
+
+    fn vnext_rechain_vote_body_matches(
+        first: &super::vnext::RechainVote,
+        candidate: &super::vnext::RechainVote,
+    ) -> bool {
+        first.slot == candidate.slot
+            && first.previous_chain_order_hash == candidate.previous_chain_order_hash
+            && first.new_chain_order_hash == candidate.new_chain_order_hash
+            && first.new_order == candidate.new_order
+            && first.rechain_seq == candidate.rechain_seq
+            && first.tainted == candidate.tainted
+            && first.suspicions == candidate.suspicions
+    }
+
+    fn vnext_view_change_vote_body_matches(
+        first: &super::vnext::ViewChangeVote,
+        candidate: &super::vnext::ViewChangeVote,
+    ) -> bool {
+        first.new_view == candidate.new_view
+            && first.highest_slot == candidate.highest_slot
+            && first.chain_order_hash == candidate.chain_order_hash
     }
 
     fn sign_local_vnext_message(&self, message: &mut super::vnext::ConsensusMessage) {
@@ -21426,9 +22095,59 @@ impl Actor {
             warn!(?err, "failed to sign vNext re-chain vote");
             return;
         }
+        self.accept_vnext_rechain_vote(vote.clone());
         self.schedule_background(BackgroundRequest::Broadcast {
             msg: BlockMessageWire::new(BlockMessage::VNext(
                 super::vnext::ConsensusMessage::RechainVote(vote),
+            )),
+        });
+    }
+
+    fn broadcast_vnext_view_change_vote_for_slot(
+        &mut self,
+        slot: super::vnext::SlotId,
+        new_view: u64,
+    ) {
+        let Some((chain_order, _)) =
+            self.active_vnext_chain_order_and_quorum_for(slot.height, new_view)
+        else {
+            debug!(
+                height = slot.height,
+                view = slot.view,
+                new_view,
+                "unable to sign vNext view-change vote without chain order"
+            );
+            return;
+        };
+        let local_peer = self.common_config.peer.id().clone();
+        if !chain_order
+            .critical_path()
+            .iter()
+            .any(|peer| peer == &local_peer)
+        {
+            return;
+        }
+        let certificate = super::vnext::ViewChangeCertificate {
+            new_view,
+            highest_slot: Some(slot),
+            chain_order_hash: chain_order.hash(),
+            signer_bitmap: Vec::new(),
+            aggregate_signature: Vec::new(),
+        };
+        let (_, mode_tag, _) = self.consensus_context_for_height(slot.height);
+        let mut vote = super::vnext::ViewChangeVote::unsigned(&certificate, local_peer);
+        if let Err(err) = vote.sign(
+            &self.chain_id,
+            mode_tag,
+            self.common_config.key_pair.private_key(),
+        ) {
+            warn!(?err, "failed to sign vNext view-change vote");
+            return;
+        }
+        self.accept_vnext_view_change_vote(vote.clone());
+        self.schedule_background(BackgroundRequest::Broadcast {
+            msg: BlockMessageWire::new(BlockMessage::VNext(
+                super::vnext::ConsensusMessage::ViewChangeVote(vote),
             )),
         });
     }
@@ -21874,6 +22593,7 @@ impl Actor {
         let header = update.block.header();
         let height = header.height().get();
         let view = header.view_change_index();
+        self.attach_vnext_certificates_to_block_sync_update(update);
 
         if !self.trim_block_sync_update_for_frame_cap(update) {
             let evidence = classify_block_sync_roster_evidence(update, consensus_mode);
@@ -21917,6 +22637,17 @@ impl Actor {
         let mut wire_len = block_sync_update_wire_len(origin, update);
         if wire_len <= payload_cap {
             return true;
+        }
+
+        if !update.vnext_rechain_certificates.is_empty()
+            || !update.vnext_view_change_certificates.is_empty()
+        {
+            update.vnext_rechain_certificates.clear();
+            update.vnext_view_change_certificates.clear();
+            wire_len = block_sync_update_wire_len(origin, update);
+            if wire_len <= payload_cap {
+                return true;
+            }
         }
 
         if !update.commit_votes.is_empty() {
@@ -25327,6 +26058,7 @@ impl Actor {
             if let Some(telemetry) = telemetry_ref {
                 telemetry.inc_rbc_deliver_broadcasts();
             }
+            self.drive_vnext_availability_ready_for_block(key.0, key.1, key.2);
         }
 
         iroha_logger::info!(
@@ -34384,6 +35116,7 @@ impl Actor {
         } = backlog_signals;
         let recovery_backlog_signals_active =
             worker_recovery_backlog || residual_round_backlog || unresolved_rbc_backlog;
+        let active_block_production_sla = queue_active_backlog || self.queue.active_len() > 0;
         let near_quorum_fast_timeout_gate_open =
             Self::stalled_pending_near_quorum_fast_timeout_gate_open(backlog_signals);
         let near_quorum_recent_progress_grace =
@@ -34774,6 +35507,10 @@ impl Actor {
                     .max(Duration::from_millis(1)),
             )
             .max(effective_timeout);
+        let frontier_repair_exhaustion_window = self.cap_active_block_production_gap(
+            frontier_repair_exhaustion_window,
+            active_block_production_sla,
+        );
         let resilience_ingress_backlog_active =
             self.config.resilience.enabled && Self::frontier_consensus_ingress_queued(queue_depths);
         let force_frontier_view_advance_after_repair = self.config.resilience.enabled
@@ -34844,6 +35581,26 @@ impl Actor {
             && !backlog_signals.residual_round_backlog
     }
 
+    fn active_block_production_gap_ceiling(&self) -> Duration {
+        self.config
+            .persistence
+            .commit_inflight_timeout
+            .min(ACTIVE_BLOCK_PRODUCTION_GAP_CEILING)
+            .max(Duration::from_millis(1))
+    }
+
+    fn cap_active_block_production_gap(
+        &self,
+        timeout: Duration,
+        active_tx_backlog: bool,
+    ) -> Duration {
+        if active_tx_backlog {
+            timeout.min(self.active_block_production_gap_ceiling())
+        } else {
+            timeout
+        }
+    }
+
     fn stalled_pending_frontier_pending_timeout(
         &self,
         base_timeout: Duration,
@@ -34862,8 +35619,10 @@ impl Actor {
         } else {
             2
         };
-        saturating_mul_duration(self.recovery_deferred_qc_ttl(), deferred_qc_multiplier)
-            .max(backlog_timeout)
+        let timeout =
+            saturating_mul_duration(self.recovery_deferred_qc_ttl(), deferred_qc_multiplier)
+                .max(backlog_timeout);
+        self.cap_active_block_production_gap(timeout, backlog_signals.queue_active_backlog)
     }
 
     fn stalled_pending_same_block_recovery_active(
@@ -35084,6 +35843,7 @@ impl Actor {
             near_quorum_queue_backlog,
             near_quorum_rbc_backlog,
         } = backlog_signals;
+        let active_block_production_sla = queue_active_backlog || self.queue.active_len() > 0;
         let empty_tx_queue_recovery_work_active = residual_round_backlog
             || self.frontier_recovery_exists_at_height(height)
             || self.frontier_slot.as_ref().is_some_and(|slot| {
@@ -35268,7 +36028,10 @@ impl Actor {
         } else {
             Duration::ZERO
         };
-        let effective_timeout = timeout.saturating_add(initial_frontier_proposal_grace);
+        let effective_timeout = self.cap_active_block_production_gap(
+            timeout.saturating_add(initial_frontier_proposal_grace),
+            active_block_production_sla,
+        );
         let timed_out = idle_round_timed_out(true, age, effective_timeout);
         if !timed_out && initial_frontier_proposal_grace != Duration::ZERO && age >= timeout {
             debug!(
@@ -35292,9 +36055,13 @@ impl Actor {
         } else {
             Duration::ZERO
         };
+        let proposal_gap_backlog_deadline = self.cap_active_block_production_gap(
+            timeout.saturating_add(proposal_gap_backlog_grace),
+            active_block_production_sla,
+        );
         let proposal_gap_backlog_grace_expired = !proposal_seen
             && proposal_gap_backlog_grace > Duration::ZERO
-            && queue_age >= timeout.saturating_add(proposal_gap_backlog_grace);
+            && queue_age >= proposal_gap_backlog_deadline;
         // Defer idle view-change while backlog is within the timeout window.
         if (rbc_backlog || relay_backpressure) && !timed_out {
             if rbc_backlog {
@@ -35345,7 +36112,10 @@ impl Actor {
                 current_view,
                 now,
                 queue_depths,
-                timeout.saturating_add(self.frontier_ingress_drain_grace(da_enabled)),
+                self.cap_active_block_production_gap(
+                    timeout.saturating_add(self.frontier_ingress_drain_grace(da_enabled)),
+                    active_block_production_sla,
+                ),
             )
         {
             debug!(
@@ -35374,7 +36144,10 @@ impl Actor {
             && !self.frontier_recovery_exists_at_height(height)
         {
             let ingress_grace = self.frontier_ingress_drain_grace(da_enabled);
-            let ingress_deadline = timeout.saturating_add(ingress_grace);
+            let ingress_deadline = self.cap_active_block_production_gap(
+                timeout.saturating_add(ingress_grace),
+                active_block_production_sla,
+            );
             if age < ingress_deadline {
                 debug!(
                     height,
@@ -35702,7 +36475,10 @@ impl Actor {
             }
         }
         if missing_qc_actionable_dependency_signals && proposal_gap_backlog_grace > Duration::ZERO {
-            let backlog_grace_deadline = timeout.saturating_add(proposal_gap_backlog_grace);
+            let backlog_grace_deadline = self.cap_active_block_production_gap(
+                timeout.saturating_add(proposal_gap_backlog_grace),
+                active_block_production_sla,
+            );
             let backlog_age = if proposal_seen { age } else { queue_age };
             if backlog_age < backlog_grace_deadline {
                 debug!(
@@ -35722,7 +36498,10 @@ impl Actor {
             } else {
                 rbc_progress_window.max(proposal_gap_backlog_grace)
             };
-            let progress_grace_deadline = timeout.saturating_add(progress_grace);
+            let progress_grace_deadline = self.cap_active_block_production_gap(
+                timeout.saturating_add(progress_grace),
+                active_block_production_sla,
+            );
             let progress_age = if proposal_seen { age } else { queue_age };
             if progress_age < progress_grace_deadline {
                 debug!(

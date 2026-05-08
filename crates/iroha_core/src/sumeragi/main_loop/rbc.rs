@@ -2718,6 +2718,7 @@ impl Actor {
                         self.rbc_session_has_authoritative_payload_for_progress(key, session)
                     });
             if authoritative_after {
+                self.drive_vnext_availability_ready_for_block(key.0, key.1, key.2);
                 self.recover_block_from_rbc_session(key);
                 self.request_commit_pipeline_for_round(
                     key.1,
@@ -4818,6 +4819,7 @@ impl Actor {
         let authoritative_transition = !authoritative_before && authoritative_after;
         if !delivered_before && (authoritative_transition || (authoritative_after && ready_emitted))
         {
+            self.drive_vnext_availability_ready_for_block(key.0, key.1, key.2);
             self.recover_block_from_rbc_session(key);
             self.request_commit_pipeline_for_round(
                 key.1,
@@ -5566,6 +5568,7 @@ impl Actor {
             deliver_emitted,
             ready_quorum_reached,
         ) {
+            self.drive_vnext_availability_ready_for_block(key.0, key.1, key.2);
             let queue_depths = super::status::worker_queue_depth_snapshot();
             let consensus_queue_backlog = queue_depths.vote_rx > 0
                 || queue_depths.block_payload_rx > 0
@@ -6632,6 +6635,7 @@ impl Actor {
         // the full RBC payload is delivered so validation and votes can proceed.
         self.recover_block_from_rbc_session(key);
         if should_process_commit_after_deliver(first_deliver) {
+            self.drive_vnext_availability_ready_for_block(key.0, deliver.height, deliver.view);
             self.request_commit_pipeline_for_round(
                 deliver.height,
                 deliver.view,

@@ -43,7 +43,7 @@ pub fn ordering_hash(batch: &TransitionBatch) -> Result<Hash> {
     );
     limbs.extend(encoded_packed.limbs);
 
-    let digest = poseidon::hash_field_elements(&limbs);
+    let digest = poseidon::hash_field_elements_cpu(&limbs);
     let mut bytes = [0u8; Hash::LENGTH];
     bytes[..8].copy_from_slice(&digest.to_le_bytes());
     Ok(Hash::prehashed(bytes))

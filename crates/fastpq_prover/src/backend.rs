@@ -11,7 +11,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, TryLockError},
 };
 
-use fastpq_isi::StarkParameterSet;
+use fastpq_isi::{StarkParameterSet, poseidon::PoseidonSponge};
 use iroha_crypto::Hash;
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 use metal::{Device, MTLDeviceLocation};
@@ -20,12 +20,12 @@ use rayon::prelude::*;
 use crate::{
     Error, Result, TransitionBatch,
     fft::Planner,
-    overrides, pack_bytes,
-    poseidon::{self, PoseidonSponge},
+    overrides, pack_bytes, poseidon,
     proof::{AirConstraintOpening, FriQueryOpening, FriRoundOpening, PublicIO},
     trace::{
         PoseidonPipelinePolicy, build_trace, column_index, derive_polynomial_data,
-        hash_columns_from_coefficients, merkle_root, merkle_root_with_first_level,
+        hash_columns_from_coefficients, hash_trace_merkle_pairs_batched, merkle_root,
+        merkle_root_with_first_level,
     },
 };
 
@@ -1020,14 +1020,14 @@ pub fn hash_lde_leaves(evaluations: &[u64], arity: u32) -> Result<Vec<u64>> {
         return Ok(Vec::new());
     }
     let chunk = lde_chunk_size(arity);
-    let mut leaves = Vec::with_capacity(evaluations.len().div_ceil(chunk));
+    let mut messages = Vec::with_capacity(evaluations.len().div_ceil(chunk));
     for (idx, group) in evaluations.chunks(chunk).enumerate() {
         let mut limbs = Vec::with_capacity(group.len() + 1);
-        limbs.push(u64::try_from(idx).expect("chunk index fits field limb"));
+        limbs.push(u64::try_from(idx).map_err(|_| Error::QueryIndexOverflow { index: idx })?);
         limbs.extend(group.iter().copied());
-        leaves.push(hash_with_domain(LDE_LEAF_DOMAIN, &limbs)?);
+        messages.push(limbs);
     }
-    Ok(leaves)
+    hash_with_domain_limb_batches(LDE_LEAF_DOMAIN, &messages)
 }
 
 /// Hash one LDE leaf chunk using the same domain as [`hash_lde_leaves`].
@@ -1082,12 +1082,21 @@ pub fn hash_air_trace_rows(columns: &[Vec<u64>]) -> Result<Vec<u64>> {
     if !columns.iter().all(|column| column.len() == row_count) {
         return Err(Error::AirOpeningMismatch { index: 0 });
     }
-    (0..row_count)
-        .map(|row_index| {
-            let row = air_row_at(columns, row_index)?;
-            hash_air_trace_row(row_index, &row)
-        })
-        .collect()
+    let column_count = u64::try_from(columns.len()).map_err(|_| Error::PayloadLengthOverflow {
+        length: columns.len(),
+    })?;
+    let mut messages = Vec::with_capacity(row_count);
+    for row_index in 0..row_count {
+        let row_index_field =
+            u64::try_from(row_index).map_err(|_| Error::QueryIndexOverflow { index: row_index })?;
+        let row = air_row_at(columns, row_index)?;
+        let mut limbs = Vec::with_capacity(row.len() + 2);
+        limbs.push(row_index_field);
+        limbs.push(column_count);
+        limbs.extend(row);
+        messages.push(limbs);
+    }
+    hash_with_domain_limb_batches(AIR_TRACE_LEAF_DOMAIN, &messages)
 }
 
 /// Hash all AIR composition leaves.
@@ -1095,12 +1104,12 @@ pub fn hash_air_trace_rows(columns: &[Vec<u64>]) -> Result<Vec<u64>> {
 /// # Errors
 /// Returns an error if leaf hashing fails.
 pub fn hash_air_composition_leaves(values: &[u64]) -> Result<Vec<u64>> {
-    values
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(index, value)| hash_air_composition_leaf(index, value))
-        .collect()
+    let mut messages = Vec::with_capacity(values.len());
+    for (index, value) in values.iter().copied().enumerate() {
+        let index = u64::try_from(index).map_err(|_| Error::QueryIndexOverflow { index })?;
+        messages.push(vec![index, value]);
+    }
+    hash_with_domain_limb_batches(AIR_COMPOSITION_LEAF_DOMAIN, &messages)
 }
 
 /// Evaluate the sampled FASTPQ AIR composition value for two adjacent rows.
@@ -1511,10 +1520,8 @@ fn build_merkle_levels(leaves: &[u64]) -> Result<Vec<Vec<u64>>> {
             current.push(last);
         }
         levels.push(current.clone());
-        let mut next = Vec::with_capacity(current.len() / 2);
-        for pair in current.chunks(2) {
-            next.push(merkle_node_hash(pair[0], pair[1]));
-        }
+        let pairs: Vec<[u64; 2]> = current.chunks(2).map(|pair| [pair[0], pair[1]]).collect();
+        let next = hash_trace_merkle_pairs_batched(&pairs);
         if next.len() == 1 {
             levels.push(next.clone());
             break;
@@ -1525,11 +1532,7 @@ fn build_merkle_levels(leaves: &[u64]) -> Result<Vec<Vec<u64>>> {
 }
 
 fn merkle_node_hash(left: u64, right: u64) -> u64 {
-    let mut sponge = PoseidonSponge::new();
-    sponge.absorb(domain_seed(TRACE_NODE_DOMAIN));
-    sponge.absorb(left);
-    sponge.absorb(right);
-    sponge.squeeze()
+    hash_field_with_domain_cpu(TRACE_NODE_DOMAIN, &[left, right])
 }
 
 fn domain_seed(domain: &[u8]) -> u64 {
@@ -1540,6 +1543,13 @@ fn domain_seed(domain: &[u8]) -> u64 {
     let raw = u64::from_le_bytes(chunk);
     let reduced = u128::from(raw) % u128::from(GOLDILOCKS_MODULUS);
     u64::try_from(reduced).expect("modulus reduction fits u64")
+}
+
+fn hash_field_with_domain_cpu(domain: &[u8], values: &[u64]) -> u64 {
+    let mut sponge = PoseidonSponge::new();
+    sponge.absorb(domain_seed(domain));
+    sponge.absorb_slice(values);
+    sponge.squeeze()
 }
 
 /// Compute the Fiat–Shamir lookup grand product accumulator over the supplied
@@ -1563,7 +1573,7 @@ pub fn compute_lookup_grand_product(
         }
         running.push(acc);
     }
-    poseidon::hash_field_elements(&running)
+    poseidon::hash_field_elements_cpu(&running)
 }
 
 pub fn hash_trace_rows(columns: &[Vec<u64>]) -> Vec<u64> {
@@ -1572,26 +1582,56 @@ pub fn hash_trace_rows(columns: &[Vec<u64>]) -> Vec<u64> {
     }
 
     let row_count = columns[0].len();
-    let column_count = columns.len();
     assert!(
         columns.iter().all(|column| column.len() == row_count),
         "LDE columns must have a consistent length"
     );
 
+    #[cfg(feature = "fastpq-gpu")]
+    if let Some(backend) = current_gpu_backend() {
+        match crate::gpu::poseidon_hash_rows(columns, backend) {
+            Ok(hashes) if hashes.len() == row_count => return hashes,
+            Ok(hashes) => {
+                tracing::warn!(
+                    target: "fastpq::poseidon",
+                    expected_rows = row_count,
+                    actual_rows = hashes.len(),
+                    "gpu Poseidon row hash returned an unexpected row count; falling back to CPU"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "fastpq::poseidon",
+                    backend = ?backend,
+                    %error,
+                    "gpu Poseidon row hash failed; falling back to CPU"
+                );
+            }
+        }
+    }
+
+    hash_trace_rows_cpu(columns)
+}
+
+fn hash_trace_rows_cpu(columns: &[Vec<u64>]) -> Vec<u64> {
+    if columns.is_empty() {
+        return Vec::new();
+    }
+    let row_count = columns[0].len();
+    let column_count = columns.len();
     let column_count_field = (column_count as u64) % GOLDILOCKS_MODULUS;
-    let hashes: Vec<u64> = (0..row_count)
+    (0..row_count)
         .into_par_iter()
         .map(|row_index| {
-            let mut sponge = PoseidonSponge::new();
-            sponge.absorb((row_index as u64) % GOLDILOCKS_MODULUS);
-            sponge.absorb(column_count_field);
+            let mut limbs = Vec::with_capacity(column_count + 2);
+            limbs.push((row_index as u64) % GOLDILOCKS_MODULUS);
+            limbs.push(column_count_field);
             for column in columns {
-                sponge.absorb(column[row_index]);
+                limbs.push(column[row_index]);
             }
-            sponge.squeeze()
+            poseidon::hash_field_elements_cpu(&limbs)
         })
-        .collect();
-    hashes
+        .collect()
 }
 
 pub fn extend_row_hashes(
@@ -1769,11 +1809,18 @@ fn hash_fri_leaves(round: usize, values: &[u64], arity: u32) -> Result<Vec<u64>>
         return Ok(Vec::new());
     }
     let chunk = fri_chunk_size(arity).max(1);
-    let mut leaves = Vec::with_capacity(values.len().div_ceil(chunk));
+    let round_field =
+        u64::try_from(round).map_err(|_| Error::QueryIndexOverflow { index: round })?;
+    let mut messages = Vec::with_capacity(values.len().div_ceil(chunk));
     for (idx, group) in values.chunks(chunk).enumerate() {
-        leaves.push(hash_fri_chunk(round, idx, group)?);
+        let index = u64::try_from(idx).map_err(|_| Error::QueryIndexOverflow { index: idx })?;
+        let mut limbs = Vec::with_capacity(group.len() + 2);
+        limbs.push(round_field);
+        limbs.push(index);
+        limbs.extend(group.iter().copied());
+        messages.push(limbs);
     }
-    Ok(leaves)
+    hash_with_domain_limb_batches(FRI_LEAF_DOMAIN, &messages)
 }
 
 fn open_fri_query_chains(
@@ -1899,21 +1946,21 @@ fn fold_round(values: &[u64], arity: usize, challenge: u64) -> Vec<u64> {
 
 #[cfg(test)]
 fn fri_layer_commitment(round: usize, values: &[u64]) -> u64 {
-    let mut sponge = PoseidonSponge::new();
     let modulus = u128::from(GOLDILOCKS_MODULUS);
     let round_field =
         u64::try_from((round as u128) % modulus).expect("round reduced modulo field fits u64");
     let len_field = u64::try_from((values.len() as u128) % modulus)
         .expect("evaluation count reduced modulo field fits u64");
-    sponge.absorb(round_field);
-    sponge.absorb(len_field);
+    let mut limbs = Vec::with_capacity(2 + values.len().saturating_mul(2));
+    limbs.push(round_field);
+    limbs.push(len_field);
     for (idx, &value) in values.iter().enumerate() {
         let index_field =
             u64::try_from((idx as u128) % modulus).expect("index reduced modulo field fits u64");
-        sponge.absorb(index_field);
-        sponge.absorb(value);
+        limbs.push(index_field);
+        limbs.push(value);
     }
-    sponge.squeeze()
+    poseidon::hash_field_elements_cpu(&limbs)
 }
 
 pub fn sample_queries(
@@ -2199,6 +2246,22 @@ impl Transcript {
 }
 
 fn hash_with_domain(domain: &[u8], values: &[u64]) -> Result<u64> {
+    let limbs = hash_with_domain_limbs(domain, values)?;
+    Ok(poseidon::hash_field_elements_cpu(&limbs))
+}
+
+fn hash_with_domain_limb_batches(domain: &[u8], messages: &[Vec<u64>]) -> Result<Vec<u64>> {
+    if messages.is_empty() {
+        return Ok(Vec::new());
+    }
+    let limbs = messages
+        .iter()
+        .map(|values| hash_with_domain_limbs(domain, values))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(hash_poseidon_limb_batches(&limbs))
+}
+
+fn hash_with_domain_limbs(domain: &[u8], values: &[u64]) -> Result<Vec<u64>> {
     let mut payload = Vec::with_capacity(values.len() * 8);
     for value in values {
         payload.extend_from_slice(&value.to_le_bytes());
@@ -2216,7 +2279,33 @@ fn hash_with_domain(domain: &[u8], values: &[u64]) -> Result<u64> {
     })?;
     limbs.push(payload_len);
     limbs.extend(payload_packed.limbs);
-    Ok(poseidon::hash_field_elements(&limbs))
+    Ok(limbs)
+}
+
+fn hash_poseidon_limb_batches(messages: &[Vec<u64>]) -> Vec<u64> {
+    if messages.is_empty() {
+        return Vec::new();
+    }
+    #[cfg(feature = "fastpq-gpu")]
+    {
+        if let Some(batch) = crate::trace::PoseidonColumnBatch::from_limb_slices(messages) {
+            if let Some(hashes) = crate::trace::hash_columns_gpu_batch(&batch) {
+                if hashes.len() == messages.len() {
+                    return hashes;
+                }
+                tracing::warn!(
+                    target: "fastpq::poseidon",
+                    expected = messages.len(),
+                    actual = hashes.len(),
+                    "gpu Poseidon limb batch returned an unexpected count; falling back to CPU"
+                );
+            }
+        }
+    }
+    messages
+        .par_iter()
+        .map(|limbs| poseidon::hash_field_elements_cpu(limbs))
+        .collect()
 }
 
 fn add_mod(a: u64, b: u64) -> u64 {
@@ -2329,6 +2418,36 @@ mod tests {
         let leaf = hash_lde_chunk(leaf_index, &chunks[0]).expect("leaf hash");
 
         assert!(verify_merkle_path(root, leaf, leaf_index, &paths[0]).expect("path verifies"));
+    }
+
+    #[test]
+    fn trace_row_hashes_match_cpu_reference_for_edge_shapes() {
+        let cases = [
+            vec![Vec::<u64>::new(), Vec::<u64>::new()],
+            vec![vec![1u64], vec![2]],
+            vec![vec![1u64, u64::MAX], vec![3, 4], vec![5, 6]],
+            vec![(0u64..17).collect(), (20u64..37).collect()],
+            (0u64..19).map(|offset| vec![offset, offset + 1]).collect(),
+        ];
+        for columns in cases {
+            assert_eq!(hash_trace_rows(&columns), hash_trace_rows_cpu(&columns));
+        }
+    }
+
+    #[test]
+    fn domain_hash_batches_match_scalar_reference() {
+        let messages = vec![
+            Vec::<u64>::new(),
+            vec![1u64],
+            vec![2u64, 3, u64::MAX],
+            (0u64..17).collect(),
+        ];
+        let batched = hash_with_domain_limb_batches(FRI_LEAF_DOMAIN, &messages).expect("batched");
+        let expected = messages
+            .iter()
+            .map(|message| hash_with_domain(FRI_LEAF_DOMAIN, message).expect("scalar"))
+            .collect::<Vec<_>>();
+        assert_eq!(batched, expected);
     }
 
     #[test]
@@ -2545,16 +2664,16 @@ mod tests {
             .expect("round reduced modulo field fits u64");
         let len_field = u64::try_from(u128::try_from(values.len()).unwrap_or(0) % modulus)
             .expect("evaluation count reduced modulo field fits u64");
-        let mut sponge = PoseidonSponge::new();
-        sponge.absorb(round_field);
-        sponge.absorb(len_field);
+        let mut limbs = Vec::with_capacity(2 + values.len().saturating_mul(2));
+        limbs.push(round_field);
+        limbs.push(len_field);
         for (idx, &value) in values.iter().enumerate() {
             let index_field = u64::try_from(u128::try_from(idx).unwrap_or(0) % modulus)
                 .expect("index reduced modulo field fits u64");
-            sponge.absorb(index_field);
-            sponge.absorb(value);
+            limbs.push(index_field);
+            limbs.push(value);
         }
-        sponge.squeeze()
+        poseidon::hash_field_elements_cpu(&limbs)
     }
 
     #[test]

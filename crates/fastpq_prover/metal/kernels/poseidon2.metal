@@ -15,6 +15,13 @@ struct PoseidonFusedArgs {
     uint leaf_offset;
     uint parent_offset;
 };
+struct PoseidonRowArgs {
+    uint row_count;
+    uint column_count;
+    uint row_offset;
+    uint batch_count;
+    uint states_per_lane;
+};
 struct PoseidonSlice {
     uint offset;
     uint len;
@@ -261,6 +268,30 @@ inline void absorb_block_chunk(
     }
 }
 
+inline void absorb_value_chunk(
+    thread ulong3 *chunk,
+    ushort count,
+    thread ushort &rate_index,
+    thread const ulong *values,
+    threadgroup ulong3 (&rounds)[TOTAL_ROUNDS],
+    thread const ulong3 (&mds)[STATE_WIDTH]
+) {
+    if (rate_index == 0) {
+        for (ushort i = 0; i < count; ++i) {
+            chunk[i].x = add_mod(chunk[i].x, values[i]);
+        }
+    } else {
+        for (ushort i = 0; i < count; ++i) {
+            chunk[i].y = add_mod(chunk[i].y, values[i]);
+        }
+    }
+    rate_index += 1;
+    if (rate_index == POSEIDON_RATE) {
+        permute_chunk(chunk, count, rounds, mds);
+        rate_index = 0;
+    }
+}
+
 kernel void poseidon_permute(device ulong *states [[ buffer(0) ]],
                              constant PoseidonArgs &args [[ buffer(1) ]],
                              uint3 grid_pos [[ thread_position_in_grid ]],
@@ -311,6 +342,105 @@ kernel void poseidon_permute(device ulong *states [[ buffer(0) ]],
         }
         permute_chunk(chunk, loaded, shared_rounds, local_mds);
         store_state_chunk(chunk, loaded, start_state, states);
+        processed += loaded;
+    }
+}
+
+kernel void poseidon_hash_rows(device const ulong *columns [[ buffer(0) ]],
+                               device ulong *hashes [[ buffer(1) ]],
+                               constant PoseidonRowArgs &args [[ buffer(2) ]],
+                               uint3 grid_pos [[ thread_position_in_grid ]],
+                               uint3 tg_pos [[ thread_position_in_threadgroup ]],
+                               uint3 tg_size [[ threads_per_threadgroup ]]) {
+    if (args.batch_count == 0 || args.column_count == 0) {
+        return;
+    }
+    uint lane = tg_pos.x;
+    threadgroup ulong3 shared_rounds[TOTAL_ROUNDS];
+    threadgroup ulong3 shared_mds[STATE_WIDTH];
+
+    uint lane_stride = tg_size.x == 0 ? 1 : tg_size.x;
+    for (uint round = lane; round < TOTAL_ROUNDS; round += lane_stride) {
+        shared_rounds[round] = make_ulong3(
+            ROUND_CONSTANTS[round][0],
+            ROUND_CONSTANTS[round][1],
+            ROUND_CONSTANTS[round][2]);
+    }
+    for (uint row = lane; row < STATE_WIDTH; row += lane_stride) {
+        shared_mds[row] = make_ulong3(MDS[row][0], MDS[row][1], MDS[row][2]);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    thread ulong3 local_mds[STATE_WIDTH];
+    for (uint row = 0; row < STATE_WIDTH; ++row) {
+        local_mds[row] = shared_mds[row];
+    }
+
+    uint states_per_lane = max(args.states_per_lane, 1u);
+    uint batch_offset = grid_pos.x * states_per_lane;
+    thread ulong3 chunk[STATE_CHUNK];
+    thread uint row_indices[STATE_CHUNK];
+    thread ulong values[STATE_CHUNK];
+    uint processed = 0;
+
+    while (processed < states_per_lane) {
+        uint start_batch_row = batch_offset + processed;
+        if (start_batch_row >= args.batch_count) {
+            break;
+        }
+        uint remaining = states_per_lane - processed;
+        uint desired = remaining < STATE_CHUNK ? remaining : STATE_CHUNK;
+        ushort capacity = (ushort)desired;
+        ushort loaded = 0;
+        for (; loaded < capacity; ++loaded) {
+            uint batch_row = start_batch_row + loaded;
+            if (batch_row >= args.batch_count) {
+                break;
+            }
+            uint row_index = args.row_offset + batch_row;
+            if (row_index >= args.row_count) {
+                break;
+            }
+            row_indices[loaded] = row_index;
+            chunk[loaded] = make_ulong3(0, 0, 0);
+        }
+        if (loaded == 0) {
+            break;
+        }
+
+        ushort rate_index = 0;
+        for (ushort i = 0; i < loaded; ++i) {
+            values[i] = (ulong)row_indices[i];
+        }
+        absorb_value_chunk(chunk, loaded, rate_index, values, shared_rounds, local_mds);
+
+        for (ushort i = 0; i < loaded; ++i) {
+            values[i] = (ulong)args.column_count;
+        }
+        absorb_value_chunk(chunk, loaded, rate_index, values, shared_rounds, local_mds);
+
+        for (uint column = 0; column < args.column_count; ++column) {
+            ulong column_base = (ulong)column * (ulong)args.row_count;
+            for (ushort i = 0; i < loaded; ++i) {
+                values[i] = columns[column_base + row_indices[i]];
+            }
+            absorb_value_chunk(chunk, loaded, rate_index, values, shared_rounds, local_mds);
+        }
+
+        for (ushort i = 0; i < loaded; ++i) {
+            values[i] = 1ul;
+        }
+        absorb_value_chunk(chunk, loaded, rate_index, values, shared_rounds, local_mds);
+        while (rate_index != 0) {
+            for (ushort i = 0; i < loaded; ++i) {
+                values[i] = 0ul;
+            }
+            absorb_value_chunk(chunk, loaded, rate_index, values, shared_rounds, local_mds);
+        }
+
+        for (ushort i = 0; i < loaded; ++i) {
+            hashes[row_indices[i]] = chunk[i].x;
+        }
         processed += loaded;
     }
 }

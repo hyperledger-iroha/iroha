@@ -2899,8 +2899,8 @@ pub mod sumeragi {
     pub const KURA_STORE_RETRY_INTERVAL_MS: u64 = 1_000;
     /// Default maximum kura persistence retry attempts before aborting the block.
     pub const KURA_STORE_RETRY_MAX_ATTEMPTS: u32 = 5;
-    /// Default timeout for inflight commit jobs before aborting (milliseconds).
-    pub const COMMIT_INFLIGHT_TIMEOUT_MS: u64 = 30_000;
+    /// Default timeout for inflight commit jobs before liveness recovery reports a stall (milliseconds).
+    pub const COMMIT_INFLIGHT_TIMEOUT_MS: u64 = 5_000;
     /// Commit worker work-queue capacity.
     pub const COMMIT_WORK_QUEUE_CAP: usize = 1;
     /// Commit worker result-queue capacity.

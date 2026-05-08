@@ -19,8 +19,8 @@ use iroha_data_model::{
 use iroha_primitives::numeric::{Numeric, NumericSpec};
 use norito::codec::{Decode, Encode};
 
-// TODO: Wire these vNext types through the live consensus runner once the
-// replacement reactor is introduced.
+// TODO: Remove this standalone reactor boundary once the remaining block-sync
+// sidecar adapters and legacy consensus-shell cleanup are complete.
 
 /// Consensus slot identity used by vNext control messages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
@@ -1778,6 +1778,18 @@ pub enum ReactorEvent {
         /// Worker result.
         result: ValidationWorkerResult,
     },
+    /// Validation was deferred by the runtime shell without rejecting the block.
+    ValidationDeferred {
+        /// Slot whose validation must be retried later.
+        slot: SlotId,
+        /// Stable deferral reason label.
+        reason_label: String,
+    },
+    /// The block was durably persisted and applied locally.
+    CommitPersisted {
+        /// Committed slot.
+        slot: SlotId,
+    },
     /// Timer tick for timeout and recovery decisions.
     Tick {
         /// Logical timestamp in milliseconds.
@@ -1994,6 +2006,9 @@ impl Reactor {
         match event {
             ReactorEvent::ProposalAccepted { slot, payload_hash } => {
                 let reactor_slot = self.slot_mut(slot);
+                if matches!(reactor_slot.slot_state, SlotState::Committed { .. }) {
+                    return Vec::new();
+                }
                 reactor_slot.slot_state = SlotState::Proposed {
                     block_hash: slot.block_hash,
                     payload_hash,
@@ -2002,6 +2017,9 @@ impl Reactor {
             }
             ReactorEvent::AvailabilityReady { slot } => {
                 let reactor_slot = self.slot_mut(slot);
+                if matches!(reactor_slot.slot_state, SlotState::Committed { .. }) {
+                    return Vec::new();
+                }
                 reactor_slot.slot_state = SlotState::AwaitingValidation {
                     block_hash: slot.block_hash,
                 };
@@ -2067,6 +2085,27 @@ impl Reactor {
             ReactorEvent::ValidationResult { slot, result } => {
                 self.handle_validation_result(slot, result)
             }
+            ReactorEvent::ValidationDeferred {
+                slot,
+                reason_label: _,
+            } => {
+                let reactor_slot = self.slot_mut(slot);
+                if matches!(reactor_slot.slot_state, SlotState::Committed { .. }) {
+                    return Vec::new();
+                }
+                reactor_slot.validation = ValidationState::Unqueued;
+                reactor_slot.slot_state = SlotState::AwaitingValidation {
+                    block_hash: slot.block_hash,
+                };
+                Vec::new()
+            }
+            ReactorEvent::CommitPersisted { slot } => {
+                let reactor_slot = self.slot_mut(slot);
+                reactor_slot.slot_state = SlotState::Committed {
+                    block_hash: slot.block_hash,
+                };
+                Vec::new()
+            }
             ReactorEvent::Tick { now_ms } => self.handle_tick(now_ms),
             ReactorEvent::SuccessorObligationMissed {
                 slot,
@@ -2117,7 +2156,11 @@ impl Reactor {
 
     fn handle_validation_needed(&mut self, slot: SlotId, now_ms: u64) -> Vec<ReactorEffect> {
         let config = self.config;
-        let decision = self.slot_mut(slot).validation.decision_at(now_ms, &config);
+        let reactor_slot = self.slot_mut(slot);
+        if matches!(reactor_slot.slot_state, SlotState::Committed { .. }) {
+            return Vec::new();
+        }
+        let decision = reactor_slot.validation.decision_at(now_ms, &config);
         if !matches!(decision, ValidationDecision::DispatchWorker) {
             return Vec::new();
         }
@@ -2146,6 +2189,16 @@ impl Reactor {
         let result_id = result.id;
         let result_generation = result.generation;
         let reactor_slot = self.slot_mut(slot);
+        if matches!(
+            reactor_slot.slot_state,
+            SlotState::Recovering { .. } | SlotState::Aborted { .. } | SlotState::Committed { .. }
+        ) {
+            return vec![ReactorEffect::DropStaleWorkerResult {
+                slot,
+                id: result_id,
+                generation: result_generation,
+            }];
+        }
         if reactor_slot.validation.apply_worker_result(result) == WorkerResultAction::IgnoredStale {
             return vec![ReactorEffect::DropStaleWorkerResult {
                 slot,
@@ -2591,6 +2644,48 @@ mod tests {
     }
 
     #[test]
+    fn reactor_marks_slot_committed_after_persistence_event() {
+        let mut reactor = reactor_with(peers(4), 3, 3);
+        let slot = slot(0xC0);
+
+        assert!(
+            reactor
+                .handle_event(ReactorEvent::CommitPersisted { slot })
+                .is_empty()
+        );
+
+        let reactor_slot = reactor.slot(slot.block_hash).expect("slot tracked");
+        assert!(matches!(
+            reactor_slot.slot_state,
+            SlotState::Committed { block_hash } if block_hash == slot.block_hash
+        ));
+
+        assert!(
+            reactor
+                .handle_event(ReactorEvent::ProposalAccepted {
+                    slot,
+                    payload_hash: Hash::new(b"late"),
+                })
+                .is_empty()
+        );
+        assert!(
+            reactor
+                .handle_event(ReactorEvent::AvailabilityReady { slot })
+                .is_empty()
+        );
+        assert!(
+            reactor
+                .handle_event(ReactorEvent::ValidationNeeded { slot, now_ms: 1 })
+                .is_empty()
+        );
+        let reactor_slot = reactor.slot(slot.block_hash).expect("slot tracked");
+        assert!(matches!(
+            reactor_slot.slot_state,
+            SlotState::Committed { block_hash } if block_hash == slot.block_hash
+        ));
+    }
+
+    #[test]
     fn running_validation_never_inlines_after_timeout() {
         let cfg = PerformanceFaultConfig::default();
         let state = ValidationState::Running {
@@ -2784,6 +2879,86 @@ mod tests {
                 .expect("tracked slot")
                 .slot_state,
             SlotState::Prepared { .. }
+        ));
+    }
+
+    #[test]
+    fn reactor_validation_deferred_returns_slot_to_awaiting_validation() {
+        let validators = peers(4);
+        let mut reactor = reactor_with(validators, 3, 3);
+        let slot = slot(15);
+        let (id, generation) = dispatch_validation(&mut reactor, slot, 10);
+        reactor.handle_event(ReactorEvent::ValidationWorkerStarted {
+            slot,
+            id,
+            generation,
+            started_at_ms: 12,
+        });
+
+        assert!(
+            reactor
+                .handle_event(ReactorEvent::ValidationDeferred {
+                    slot,
+                    reason_label: "prev_height".to_owned(),
+                })
+                .is_empty()
+        );
+        let reactor_slot = reactor.slot(slot.block_hash).expect("tracked slot");
+        assert!(matches!(
+            reactor_slot.slot_state,
+            SlotState::AwaitingValidation { block_hash } if block_hash == slot.block_hash
+        ));
+        assert!(matches!(reactor_slot.validation, ValidationState::Unqueued));
+
+        let (retry_id, retry_generation) = dispatch_validation(&mut reactor, slot, 13);
+        assert!(retry_id > id);
+        assert_eq!(retry_generation, generation.saturating_add(1));
+    }
+
+    #[test]
+    fn reactor_drops_late_worker_result_after_recovery() {
+        let validators = peers(4);
+        let mut reactor = reactor_with(validators, 3, 3);
+        let slot = slot(16);
+        let roots = validation_roots();
+        let (id, generation) = dispatch_validation(&mut reactor, slot, 10);
+        reactor.handle_event(ReactorEvent::ValidationWorkerStarted {
+            slot,
+            id,
+            generation,
+            started_at_ms: 12,
+        });
+        assert_eq!(
+            reactor.handle_event(ReactorEvent::Tick {
+                now_ms: 12 + reactor.config.suspicion_timeout_ms,
+            }),
+            vec![ReactorEffect::StartRecovery {
+                slot,
+                reason: RecoveryReason::ValidationTimeout,
+            }]
+        );
+
+        assert_eq!(
+            reactor.handle_event(ReactorEvent::ValidationResult {
+                slot,
+                result: ValidationWorkerResult {
+                    id,
+                    generation,
+                    outcome: ValidationWorkerOutcome::Valid(roots),
+                },
+            }),
+            vec![ReactorEffect::DropStaleWorkerResult {
+                slot,
+                id,
+                generation,
+            }]
+        );
+        let reactor_slot = reactor.slot(slot.block_hash).expect("tracked slot");
+        assert!(matches!(
+            reactor_slot.slot_state,
+            SlotState::Recovering {
+                block_hash: Some(block_hash),
+            } if block_hash == slot.block_hash
         ));
     }
 

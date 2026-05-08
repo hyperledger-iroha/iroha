@@ -53,6 +53,7 @@ type MetalResult<T> = Result<T, GpuError>;
 
 const POSEIDON_PERMUTE_KERNEL: &str = "poseidon_permute";
 const POSEIDON_HASH_KERNEL: &str = "poseidon_hash_columns";
+const POSEIDON_HASH_ROWS_KERNEL: &str = "poseidon_hash_rows";
 const POSEIDON_TRACE_FUSED_KERNEL: &str = "poseidon_trace_fused";
 const POSEIDON_TRACE_PARENTS_KERNEL: &str = "poseidon_trace_parents";
 const FFT_KERNEL: &str = "fastpq_fft_columns";
@@ -94,6 +95,7 @@ const COLUMN_STAGING_PIPE_DEPTH: usize = 2;
 const ADAPTIVE_TARGET_MS: f64 = 2.0;
 const ADAPTIVE_BACKOFF_RATIO: f64 = 1.3;
 const METAL_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+const METAL_COMMAND_PERMIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn debug_env_var(name: &str) -> Option<String> {
     overrides::guard_env_override(|| overrides::debug_env_string(name))
@@ -1624,6 +1626,15 @@ const METAL_KERNEL_DESCRIPTORS: &[MetalKernelDescriptor] = &[
                 absorb loop on the CPU.",
     },
     MetalKernelDescriptor {
+        entry_point: "poseidon_hash_rows",
+        kind: KernelKind::Poseidon,
+        threadgroup_cap: Some(POSEIDON_THREADGROUP_CAPACITY),
+        tile_stage_cap: None,
+        notes: "Consumes column-major trace values and hashes independent row messages \
+                (row index, column count, row values) in one batched dispatch window. \
+                Output row digests are written in row order with scalar Poseidon padding.",
+    },
+    MetalKernelDescriptor {
         entry_point: "poseidon_trace_fused",
         kind: KernelKind::Poseidon,
         threadgroup_cap: Some(POSEIDON_THREADGROUP_CAPACITY),
@@ -2041,6 +2052,16 @@ struct PoseidonFusedArgs {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+struct PoseidonRowArgs {
+    row_count: u32,
+    column_count: u32,
+    row_offset: u32,
+    batch_count: u32,
+    states_per_lane: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 struct Bn254PoseidonArgs {
     batch_count: u32,
     states_per_lane: u32,
@@ -2053,6 +2074,61 @@ struct Bn254PoseidonArgs {
 struct Bn254PoseidonMetalSlice {
     offset: u32,
     len: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PoseidonRowDispatchEvidence {
+    batch_count: u32,
+    batch_rows: u32,
+    row_count: u32,
+    column_count: u32,
+    logical_threads: u64,
+    threadgroups: u64,
+    threadgroup_width: u64,
+    states_per_lane: u32,
+    queue_index: usize,
+    byte_estimate: u64,
+}
+
+impl PoseidonRowDispatchEvidence {
+    fn contextualize_error(self, error: GpuError) -> GpuError {
+        warn!(
+            target: "fastpq::metal",
+            batch_count = self.batch_count,
+            batch_rows = self.batch_rows,
+            row_count = self.row_count,
+            column_count = self.column_count,
+            logical_threads = self.logical_threads,
+            threadgroups = self.threadgroups,
+            threadgroup_width = self.threadgroup_width,
+            states_per_lane = self.states_per_lane,
+            queue_index = self.queue_index,
+            byte_estimate = self.byte_estimate,
+            %error,
+            "Poseidon row-hash Metal runtime dispatch failed"
+        );
+        match error {
+            GpuError::Execution { backend, message } => GpuError::Execution {
+                backend,
+                message: format!(
+                    "{message}; poseidon rows batch_count={} batch_rows={} row_count={} column_count={} \
+                     logical_threads={} threadgroups={} threadgroup_width={} states_per_lane={} \
+                     queue_index={} byte_estimate={}",
+                    self.batch_count,
+                    self.batch_rows,
+                    self.row_count,
+                    self.column_count,
+                    self.logical_threads,
+                    self.threadgroups,
+                    self.threadgroup_width,
+                    self.states_per_lane,
+                    self.queue_index,
+                    self.byte_estimate,
+                ),
+            },
+            other => other,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2222,6 +2298,7 @@ struct MetalPipelines {
     queues: QueuePool,
     poseidon_permute: ComputePipelineState,
     poseidon_hash: ComputePipelineState,
+    poseidon_hash_rows: ComputePipelineState,
     poseidon_trace_fused: ComputePipelineState,
     #[allow(dead_code)]
     poseidon_trace_parents: ComputePipelineState,
@@ -2493,6 +2570,7 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
 
     let poseidon_permute = load_pipeline(&device, &library, POSEIDON_PERMUTE_KERNEL)?;
     let poseidon_hash = load_pipeline(&device, &library, POSEIDON_HASH_KERNEL)?;
+    let poseidon_hash_rows = load_pipeline(&device, &library, POSEIDON_HASH_ROWS_KERNEL)?;
     let poseidon_trace_fused = load_pipeline(&device, &library, POSEIDON_TRACE_FUSED_KERNEL)?;
     let poseidon_trace_parents = load_pipeline(&device, &library, POSEIDON_TRACE_PARENTS_KERNEL)?;
     let fft = load_pipeline(&device, &library, FFT_KERNEL)?;
@@ -2534,6 +2612,7 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
         queues,
         poseidon_permute,
         poseidon_hash,
+        poseidon_hash_rows,
         poseidon_trace_fused,
         poseidon_trace_parents,
         fft,
@@ -3539,6 +3618,103 @@ pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64
     Ok(result)
 }
 
+pub fn poseidon_hash_rows(columns: &[Vec<u64>]) -> MetalResult<Vec<u64>> {
+    if columns.is_empty() {
+        return Ok(Vec::new());
+    }
+    let row_len = columns[0].len();
+    if columns.iter().any(|column| column.len() != row_len) {
+        return Err(GpuError::InvalidInput(
+            "poseidon row columns must share length",
+        ));
+    }
+    if row_len == 0 {
+        return Ok(Vec::new());
+    }
+    let row_count = u32::try_from(row_len)
+        .map_err(|_| GpuError::InvalidInput("poseidon row count exceeds u32::MAX"))?;
+    let column_count = u32::try_from(columns.len())
+        .map_err(|_| GpuError::InvalidInput("poseidon row column count exceeds u32::MAX"))?;
+
+    let context = metal_context()?;
+    let mut column_chunk = flatten_with_stats(columns, ColumnStagingPhase::Poseidon);
+    let column_buffer = shared_buffer(&context.device, column_chunk.as_mut_slice());
+    let mut result = PooledBuffer::zeroed(row_len);
+    let result_buffer = shared_buffer(&context.device, result.as_mut_slice());
+    let limits = pipeline_limits(&context.poseidon_hash_rows);
+    let tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
+    let selection = select_poseidon_batch(row_count, tuning);
+    let batch_size = selection.columns();
+    let total_batches =
+        u32::try_from(column_batch_ranges(row_count, batch_size).len()).unwrap_or(u32::MAX);
+    let mut tickets = Vec::new();
+
+    for (batch_index, (offset, count)) in column_batch_ranges(row_count, batch_size)
+        .into_iter()
+        .enumerate()
+    {
+        let (threadgroups, threadgroup, logical_threads, states_per_lane) =
+            poseidon_dispatch_geometry(count, tuning, &limits);
+        let args = PoseidonRowArgs {
+            row_count,
+            column_count,
+            row_offset: offset,
+            batch_count: count,
+            states_per_lane,
+        };
+        let byte_estimate = poseidon_row_hash_bytes_per_batch(count, column_count);
+        let profile = KernelProfileParams {
+            kind: KernelKind::Poseidon,
+            bytes: byte_estimate,
+            elements: u64::from(count),
+            columns: count,
+        };
+        let (queue, queue_index) = context.queues.select(row_count, batch_index);
+        let evidence = PoseidonRowDispatchEvidence {
+            batch_count: total_batches,
+            batch_rows: count,
+            row_count,
+            column_count,
+            logical_threads,
+            threadgroups: threadgroups.width,
+            threadgroup_width: threadgroup.width,
+            states_per_lane,
+            queue_index,
+            byte_estimate,
+        };
+        let sample_request = selection.sample_for(count);
+        let mut ticket = submit_compute_with_geometry(
+            queue,
+            queue_index,
+            &context.poseidon_hash_rows,
+            Some((threadgroups, threadgroup, logical_threads)),
+            logical_threads,
+            Some(profile),
+            sample_request.is_some(),
+            |encoder: &ComputeCommandEncoderRef| {
+                encoder.set_buffer(0, Some(&column_buffer), 0);
+                encoder.set_buffer(1, Some(&result_buffer), 0);
+                encoder.set_bytes(
+                    2,
+                    mem::size_of::<PoseidonRowArgs>() as u64,
+                    ptr::from_ref(&args).cast(),
+                );
+            },
+        )
+        .map_err(|error| evidence.contextualize_error(error))?;
+        if let Some(sample) = sample_request {
+            ticket = ticket.with_adaptive_sample(sample);
+        }
+        tickets.push((ticket, evidence));
+    }
+
+    for (ticket, evidence) in tickets {
+        wait_for_ticket(ticket).map_err(|error| evidence.contextualize_error(error))?;
+    }
+
+    Ok(result.as_slice().to_vec())
+}
+
 pub fn bn254_poseidon_hash_words(
     words: &[u64],
     slices: &[Bn254PoseidonBatchSlice],
@@ -3918,7 +4094,7 @@ where
     F: FnOnce(&ComputeCommandEncoderRef),
 {
     debug_assert!(logical_threads > 0, "Metal dispatch requires threads > 0");
-    let mut permit = CommandPermit::new(queue_index);
+    let mut permit = CommandPermit::try_new(queue_index)?;
     let (threadgroups, threadgroup, logical_threads) = match geometry {
         Some((groups, group, logical)) => (groups, group, logical),
         None => {
@@ -4032,6 +4208,15 @@ fn poseidon_hash_bytes_per_batch(states: u32, padded_len: u32) -> u64 {
         .saturating_add(state)
         .saturating_add(descriptor_total);
     clamp_u128_to_u64(per_column.saturating_mul(u128::from(states)))
+}
+
+fn poseidon_row_hash_bytes_per_batch(rows: u32, columns: u32) -> u64 {
+    let element_bytes = u64::try_from(mem::size_of::<u64>()).unwrap_or(u64::MAX);
+    let input = u128::from(rows)
+        .saturating_mul(u128::from(columns))
+        .saturating_mul(u128::from(element_bytes));
+    let output = u128::from(rows).saturating_mul(u128::from(element_bytes));
+    clamp_u128_to_u64(input.saturating_add(output))
 }
 
 fn bn254_poseidon_hash_bytes(
@@ -4617,15 +4802,25 @@ impl CommandSemaphore {
         }
     }
 
-    fn acquire(&self) {
+    fn acquire_timeout(&self, timeout: Duration) -> bool {
+        let started = Instant::now();
         let mut guard = self.state.lock().expect("command semaphore poisoned");
         while *guard >= self.limit {
-            guard = self
+            let elapsed = started.elapsed();
+            let Some(remaining) = timeout.checked_sub(elapsed) else {
+                return false;
+            };
+            let (next_guard, result) = self
                 .condvar
-                .wait(guard)
+                .wait_timeout(guard, remaining)
                 .expect("command semaphore wait failed");
+            guard = next_guard;
+            if result.timed_out() && *guard >= self.limit {
+                return false;
+            }
         }
         *guard += 1;
+        true
     }
 
     fn release(&self) {
@@ -4662,15 +4857,28 @@ struct CommandPermit {
 }
 
 impl CommandPermit {
-    fn new(queue_index: usize) -> Self {
+    fn try_new(queue_index: usize) -> MetalResult<Self> {
         let semaphore = command_semaphore();
-        semaphore.acquire();
-        Self {
+        if !semaphore.acquire_timeout(METAL_COMMAND_PERMIT_TIMEOUT) {
+            let snapshot = command_limit_snapshot();
+            return Err(GpuError::Execution {
+                backend: GpuBackend::Metal,
+                message: format!(
+                    "timed out waiting {METAL_COMMAND_PERMIT_TIMEOUT:?} for Metal command permit \
+                     on queue {queue_index}; limit={}",
+                    snapshot.as_ref().map_or_else(
+                        || semaphore.limit().to_string(),
+                        |state| { state.limit.to_string() }
+                    )
+                ),
+            });
+        }
+        Ok(Self {
             semaphore,
             queue_index,
             released: false,
             launched: false,
-        }
+        })
     }
 
     fn mark_launched(&mut self) {
@@ -5588,10 +5796,10 @@ mod tests {
     fn queue_stats_capture_overlap() {
         super::enable_queue_depth_stats(true);
         {
-            let mut first = super::CommandPermit::new(0);
+            let mut first = super::CommandPermit::try_new(0).expect("first command permit");
             first.mark_launched();
             thread::sleep(Duration::from_millis(1));
-            let mut second = super::CommandPermit::new(0);
+            let mut second = super::CommandPermit::try_new(0).expect("second command permit");
             second.mark_launched();
             thread::sleep(Duration::from_millis(1));
             second.complete();
@@ -5845,13 +6053,14 @@ mod tests {
     #[test]
     fn kernel_descriptors_cover_entry_points() {
         let descriptors = super::metal_kernel_descriptors();
-        assert_eq!(descriptors.len(), 8);
+        assert_eq!(descriptors.len(), 9);
         for name in [
             "fastpq_fft_columns",
             "fastpq_fft_post_tiling",
             "fastpq_lde_columns",
             "poseidon_permute",
             "poseidon_hash_columns",
+            "poseidon_hash_rows",
             "poseidon_trace_fused",
             "poseidon_trace_parents",
             "bn254_poseidon_hash_words",

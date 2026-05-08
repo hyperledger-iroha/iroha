@@ -2764,6 +2764,144 @@ async fn vnext_quorum_policy_uses_npos_stake_snapshot() {
     );
 }
 
+fn signed_vnext_rechain_certificate_for_actor(
+    actor: &Actor,
+    key_pairs: &[KeyPair],
+    height: u64,
+    view: u64,
+    block_hash: HashOf<BlockHeader>,
+) -> (
+    crate::sumeragi::vnext::RechainCertificate,
+    crate::sumeragi::vnext::ChainOrder,
+) {
+    let epoch = actor.epoch_for_height(height);
+    let roster = actor.effective_commit_topology();
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let topology = super::network_topology::Topology::new(roster);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let roster = signature_topology.as_ref().to_vec();
+    let quorum = actor
+        .vnext_quorum_policy(consensus_mode, &roster)
+        .expect("vNext quorum");
+    let critical_prefix_len = quorum
+        .smallest_satisfying_prefix_len(&roster)
+        .expect("vNext quorum has satisfying prefix");
+    let order = crate::sumeragi::vnext::ChainOrder::new(
+        height,
+        view,
+        epoch,
+        0,
+        roster.clone(),
+        critical_prefix_len,
+        critical_prefix_len,
+    )
+    .expect("base chain order");
+    let mut suspect = crate::sumeragi::vnext::Suspect::unsigned(
+        crate::sumeragi::vnext::SlotId {
+            height,
+            view,
+            epoch,
+            block_hash,
+        },
+        roster[1].clone(),
+        roster[2].clone(),
+        crate::sumeragi::vnext::MissedObligation::AckValidation,
+        &order,
+        900,
+    );
+    suspect
+        .sign(
+            &actor.common_config.chain,
+            mode_tag,
+            keypair_for_peer(key_pairs, &roster[1]).private_key(),
+        )
+        .expect("sign suspicion");
+    let mut certificate = order
+        .rechain_after_suspect(suspect, &quorum)
+        .expect("re-chain certificate body");
+    let signer_roster = certificate.new_order.critical_path().to_vec();
+    let signer_count = usize::from(
+        quorum
+            .smallest_satisfying_prefix_len(&signer_roster)
+            .expect("new order satisfies quorum"),
+    );
+    let signer_indices = (0..signer_count).collect::<Vec<_>>();
+    certificate.signer_bitmap =
+        crate::sumeragi::vnext::build_signer_bitmap(&signer_indices, signer_roster.len())
+            .expect("signer bitmap");
+    let preimage = certificate
+        .signing_preimage(&actor.common_config.chain, mode_tag)
+        .expect("certificate preimage");
+    let signatures = signer_indices
+        .iter()
+        .map(|index| {
+            let peer = &signer_roster[*index];
+            let keypair = keypair_for_peer(key_pairs, peer);
+            Signature::new(keypair.private_key(), &preimage)
+                .payload()
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+    let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    certificate.aggregate_signature =
+        iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+            .expect("aggregate vNext re-chain certificate signatures");
+    let expected_order = certificate.new_order.clone();
+    (certificate, expected_order)
+}
+
+fn signed_vnext_view_change_certificate_for_actor(
+    actor: &Actor,
+    key_pairs: &[KeyPair],
+    highest_slot: crate::sumeragi::vnext::SlotId,
+    new_view: u64,
+) -> (
+    crate::sumeragi::vnext::ViewChangeCertificate,
+    crate::sumeragi::vnext::ChainOrder,
+) {
+    let height = highest_slot.height;
+    let (chain_order, quorum) = actor
+        .active_vnext_chain_order_and_quorum_for(height, new_view)
+        .expect("vNext chain order for new view");
+    let signer_roster = chain_order.critical_path().to_vec();
+    let signer_count = usize::from(
+        quorum
+            .smallest_satisfying_prefix_len(&signer_roster)
+            .expect("new-view order satisfies quorum"),
+    );
+    let signer_indices = (0..signer_count).collect::<Vec<_>>();
+    let mut certificate = crate::sumeragi::vnext::ViewChangeCertificate {
+        new_view,
+        highest_slot: Some(highest_slot),
+        chain_order_hash: chain_order.hash(),
+        signer_bitmap: crate::sumeragi::vnext::build_signer_bitmap(
+            &signer_indices,
+            signer_roster.len(),
+        )
+        .expect("signer bitmap"),
+        aggregate_signature: Vec::new(),
+    };
+    let (_, mode_tag, _) = actor.consensus_context_for_height(height);
+    let preimage = certificate
+        .signing_preimage(&actor.common_config.chain, mode_tag)
+        .expect("view-change certificate preimage");
+    let signatures = signer_indices
+        .iter()
+        .map(|index| {
+            let peer = &signer_roster[*index];
+            let keypair = keypair_for_peer(key_pairs, peer);
+            Signature::new(keypair.private_key(), &preimage)
+                .payload()
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+    let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    certificate.aggregate_signature =
+        iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+            .expect("aggregate vNext view-change certificate signatures");
+    (certificate, chain_order)
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn block_message_vnext_rechain_certificate_installs_reactor_chain_order() {
     let mut harness = test_actor_harness(7).await;
@@ -2888,6 +3026,238 @@ async fn block_message_vnext_rechain_certificate_installs_reactor_chain_order() 
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn vnext_rechain_block_sync_sidecar_installs_chain_order() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(5, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let height = {
+        let view = actor.state.view();
+        u64::try_from(view.height())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1)
+    };
+    let view = 0;
+    let block = sample_block(height, view, actor.state.latest_block_hash_fast());
+    let (certificate, expected_order) = signed_vnext_rechain_certificate_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        view,
+        block.hash(),
+    );
+
+    actor.install_vnext_block_sync_sidecars(std::slice::from_ref(&certificate), &[]);
+    actor.install_vnext_block_sync_sidecars(std::slice::from_ref(&certificate), &[]);
+
+    let reactor = actor
+        .vnext_reactors
+        .get(&(height, view))
+        .expect("vNext reactor created for block-sync sidecar");
+    assert_eq!(reactor.chain_order, expected_order);
+    assert_eq!(
+        actor
+            .vnext_rechain_journal
+            .iter()
+            .filter(|entry| *entry == &certificate)
+            .count(),
+        1,
+        "duplicate block-sync sidecars should not duplicate the journal"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn vnext_block_sync_update_attaches_certificate_sidecars() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(5, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let height = {
+        let view = actor.state.view();
+        u64::try_from(view.height())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1)
+    };
+    let epoch = actor.epoch_for_height(height);
+    let parent = actor.state.latest_block_hash_fast();
+    let rechain_block = sample_block(height, 0, parent);
+    let (rechain_certificate, _) = signed_vnext_rechain_certificate_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        0,
+        rechain_block.hash(),
+    );
+    let highest_slot = crate::sumeragi::vnext::SlotId {
+        height,
+        view: 0,
+        epoch,
+        block_hash: rechain_block.hash(),
+    };
+    let (view_change_certificate, _) =
+        signed_vnext_view_change_certificate_for_actor(actor, &harness.key_pairs, highest_slot, 1);
+    actor
+        .vnext_rechain_journal
+        .push_back(rechain_certificate.clone());
+    actor
+        .vnext_view_change_journal
+        .push_back(view_change_certificate.clone());
+
+    let mut rechain_update = super::message::BlockSyncUpdate::from(&rechain_block);
+    actor.attach_vnext_certificates_to_block_sync_update(&mut rechain_update);
+    assert_eq!(
+        rechain_update.vnext_rechain_certificates,
+        vec![rechain_certificate.clone()]
+    );
+    assert!(rechain_update.vnext_view_change_certificates.is_empty());
+
+    let other_parent = Some(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed([0x5A; 32]),
+    ));
+    let other_block_same_height_view = sample_block(height, 0, other_parent);
+    let mut other_update = super::message::BlockSyncUpdate::from(&other_block_same_height_view);
+    actor.attach_vnext_certificates_to_block_sync_update(&mut other_update);
+    assert!(
+        other_update.vnext_rechain_certificates.is_empty(),
+        "re-chain sidecars should be exact-block scoped"
+    );
+
+    let view_block = sample_block(height, 1, parent);
+    let mut view_update = super::message::BlockSyncUpdate::from(&view_block);
+    actor.attach_vnext_certificates_to_block_sync_update(&mut view_update);
+    assert!(view_update.vnext_rechain_certificates.is_empty());
+    assert_eq!(
+        view_update.vnext_view_change_certificates,
+        vec![view_change_certificate]
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn vnext_committed_block_persists_certificate_sidecars() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(5, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let height = {
+        let view = actor.state.view();
+        u64::try_from(view.height())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1)
+    };
+    let parent = actor.state.latest_block_hash_fast();
+    let committed_block = sample_block(height, 1, parent);
+    let old_view_block = sample_block(height, 0, parent);
+    let (rechain_certificate, _) = signed_vnext_rechain_certificate_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        1,
+        committed_block.hash(),
+    );
+    let highest_slot = crate::sumeragi::vnext::SlotId {
+        height,
+        view: 0,
+        epoch: actor.epoch_for_height(height),
+        block_hash: old_view_block.hash(),
+    };
+    let (view_change_certificate, _) =
+        signed_vnext_view_change_certificate_for_actor(actor, &harness.key_pairs, highest_slot, 1);
+    actor
+        .vnext_rechain_journal
+        .push_back(rechain_certificate.clone());
+    actor
+        .vnext_view_change_journal
+        .push_back(view_change_certificate.clone());
+
+    actor.persist_vnext_certificates_for_committed_block(&committed_block);
+
+    let sidecar = actor
+        .kura
+        .read_roster_metadata(height)
+        .expect("vNext certificate sidecar persisted");
+    assert_eq!(
+        sidecar.vnext_rechain_certificates,
+        vec![rechain_certificate.clone()]
+    );
+    assert_eq!(
+        sidecar.vnext_view_change_certificates,
+        vec![view_change_certificate.clone()]
+    );
+
+    let update = super::block_sync_update_with_roster(
+        &committed_block,
+        actor.state.as_ref(),
+        actor.kura.as_ref(),
+        actor.config.consensus_mode,
+        actor.common_config.trusted_peers.value(),
+        actor.common_config.peer.id(),
+        &actor.roster_validation_cache,
+    );
+    assert_eq!(update.vnext_rechain_certificates, vec![rechain_certificate]);
+    assert_eq!(
+        update.vnext_view_change_certificates,
+        vec![view_change_certificate]
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn vnext_view_change_block_sync_sidecar_advances_live_view() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let height = {
+        let view = actor.state.view();
+        u64::try_from(view.height())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1)
+    };
+    let old_view = 0;
+    let new_view = 1;
+    let block = sample_block(height, old_view, actor.state.latest_block_hash_fast());
+    let highest_slot = crate::sumeragi::vnext::SlotId {
+        height,
+        view: old_view,
+        epoch: actor.epoch_for_height(height),
+        block_hash: block.hash(),
+    };
+    let (certificate, chain_order) = signed_vnext_view_change_certificate_for_actor(
+        actor,
+        &harness.key_pairs,
+        highest_slot,
+        new_view,
+    );
+
+    actor.install_vnext_block_sync_sidecars(&[], std::slice::from_ref(&certificate));
+
+    assert_eq!(
+        actor
+            .vnext_view_change_journal
+            .back()
+            .expect("view-change sidecar journaled"),
+        &certificate
+    );
+    assert_eq!(actor.phase_tracker.current_view(height), Some(new_view));
+    let reactor = actor
+        .vnext_reactors
+        .get(&(height, new_view))
+        .expect("vNext reactor created for view-change sidecar");
+    assert_eq!(reactor.chain_order.hash(), chain_order.hash());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn tick_drives_vnext_validation_timeout_recovery() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -2975,6 +3345,21 @@ async fn tick_drives_vnext_validation_timeout_recovery() {
             .is_empty()
     );
     harness.actor.vnext_reactors.insert((height, view), reactor);
+    harness.actor.subsystems.validation.inflight.insert(
+        block_hash,
+        super::ValidationInFlight {
+            id: *id,
+            started_at: Instant::now(),
+            frontier_generation: None,
+        },
+    );
+    harness.actor.subsystems.validation.vnext_inflight.insert(
+        block_hash,
+        super::VNextValidationInFlight {
+            slot,
+            generation: *generation,
+        },
+    );
 
     let deadline_anchor = Instant::now();
     let next_due = harness
@@ -3008,6 +3393,325 @@ async fn tick_drives_vnext_validation_timeout_recovery() {
         );
     };
     assert_eq!(*recovered_hash, block_hash);
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&block_hash),
+        "vNext recovery should detach stale legacy worker ownership"
+    );
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "vNext recovery should detach stale vNext worker ownership"
+    );
+    assert!(
+        harness
+            .actor
+            .phase_tracker
+            .current_view(height)
+            .unwrap_or(0)
+            > view,
+        "vNext recovery should request a live view change"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn vnext_require_view_change_drives_live_view_change() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let height = {
+        let view = harness.actor.state.view();
+        u64::try_from(view.height())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1)
+    };
+    let local_peer = harness.actor.common_config.peer.id().clone();
+    let view = (0..8)
+        .find(|candidate_view| {
+            harness
+                .actor
+                .active_vnext_chain_order_and_quorum_for(height, candidate_view + 1)
+                .is_some_and(|(order, _)| {
+                    order.critical_path().iter().any(|peer| peer == &local_peer)
+                })
+        })
+        .expect("local peer signs a nearby vNext view-change vote");
+    let epoch = harness.actor.epoch_for_height(height);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xBC; Hash::LENGTH]));
+    let slot = crate::sumeragi::vnext::SlotId {
+        height,
+        view,
+        epoch,
+        block_hash,
+    };
+    harness.actor.subsystems.validation.inflight.insert(
+        block_hash,
+        super::ValidationInFlight {
+            id: 7,
+            started_at: Instant::now(),
+            frontier_generation: None,
+        },
+    );
+    harness.actor.subsystems.validation.vnext_inflight.insert(
+        block_hash,
+        super::VNextValidationInFlight {
+            slot,
+            generation: 11,
+        },
+    );
+    harness
+        .actor
+        .subsystems
+        .validation
+        .superseded_results
+        .insert(block_hash, 7);
+    let background_log = attach_background_log(&mut harness.actor);
+
+    harness.actor.apply_vnext_effects(vec![
+        crate::sumeragi::vnext::ReactorEffect::RequireViewChange {
+            slot,
+            reason_label: "rechain_would_weaken_quorum".to_owned(),
+        },
+    ]);
+
+    assert!(
+        harness
+            .actor
+            .phase_tracker
+            .current_view(height)
+            .unwrap_or(0)
+            > view,
+        "vNext required view change should advance the live Sumeragi view"
+    );
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&block_hash),
+        "required view change should detach stale legacy worker ownership"
+    );
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "required view change should detach stale vNext worker ownership"
+    );
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .validation
+            .superseded_results
+            .contains_key(&block_hash),
+        "required view change should clear stale validation generations"
+    );
+    assert!(
+        harness
+            .actor
+            .vnext_view_change_votes
+            .values()
+            .any(|votes| votes.contains_key(&local_peer)),
+        "required view change should count the locally signed vNext view-change vote"
+    );
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries.iter().any(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("VNext")
+        }),
+        "required view change should broadcast the local vNext view-change vote"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn vnext_rechain_votes_aggregate_certificate() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(5, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let height = {
+        let view = actor.state.view();
+        u64::try_from(view.height())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1)
+    };
+    let view = 0;
+    let epoch = actor.epoch_for_height(height);
+    let block_hash = pending_session_key(height).0;
+    let roster = actor.effective_commit_topology();
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let topology = super::network_topology::Topology::new(roster);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let roster = signature_topology.as_ref().to_vec();
+    let quorum = actor
+        .vnext_quorum_policy(ConsensusMode::Permissioned, &roster)
+        .expect("permissioned vNext quorum");
+    let critical_prefix_len = quorum
+        .smallest_satisfying_prefix_len(&roster)
+        .expect("permissioned quorum has satisfying prefix");
+    let order = crate::sumeragi::vnext::ChainOrder::new(
+        height,
+        view,
+        epoch,
+        0,
+        roster.clone(),
+        critical_prefix_len,
+        critical_prefix_len,
+    )
+    .expect("base chain order");
+    let mut suspect = crate::sumeragi::vnext::Suspect::unsigned(
+        crate::sumeragi::vnext::SlotId {
+            height,
+            view,
+            epoch,
+            block_hash,
+        },
+        roster[1].clone(),
+        roster[2].clone(),
+        crate::sumeragi::vnext::MissedObligation::AckValidation,
+        &order,
+        900,
+    );
+    suspect
+        .sign(
+            &actor.common_config.chain,
+            mode_tag,
+            keypair_for_peer(&harness.key_pairs, &roster[1]).private_key(),
+        )
+        .expect("sign suspicion");
+    let certificate = order
+        .rechain_after_suspect(suspect, &quorum)
+        .expect("re-chain certificate body");
+    let signer_roster = certificate.new_order.critical_path().to_vec();
+    let signer_count = usize::from(
+        quorum
+            .smallest_satisfying_prefix_len(&signer_roster)
+            .expect("new order satisfies quorum"),
+    );
+    let background_log = attach_background_log(actor);
+    for signer in signer_roster.iter().take(signer_count) {
+        let mut vote = crate::sumeragi::vnext::RechainVote::unsigned(&certificate, signer.clone());
+        vote.sign(
+            &actor.common_config.chain,
+            mode_tag,
+            keypair_for_peer(&harness.key_pairs, signer).private_key(),
+        )
+        .expect("sign re-chain vote");
+        actor.apply_vnext_effects(vec![
+            crate::sumeragi::vnext::ReactorEffect::AcceptRechainVote { vote },
+        ]);
+    }
+
+    assert!(
+        actor.vnext_rechain_votes.is_empty(),
+        "aggregated re-chain votes should leave no live cache entry"
+    );
+    let installed = actor
+        .vnext_rechain_journal
+        .back()
+        .expect("aggregated re-chain certificate journaled");
+    assert_eq!(installed.new_order, certificate.new_order);
+    assert!(!installed.signer_bitmap.is_empty());
+    assert!(!installed.aggregate_signature.is_empty());
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries.iter().any(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("VNext")
+        }),
+        "aggregated re-chain certificate should be broadcast"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn vnext_view_change_votes_aggregate_certificate_and_advance_view() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let height = {
+        let view = actor.state.view();
+        u64::try_from(view.height())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1)
+    };
+    let new_view = 1;
+    let (chain_order, quorum) = actor
+        .active_vnext_chain_order_and_quorum_for(height, new_view)
+        .expect("vNext chain order for new view");
+    let signer_roster = chain_order.critical_path().to_vec();
+    let signer_count = usize::from(
+        quorum
+            .smallest_satisfying_prefix_len(&signer_roster)
+            .expect("new-view order satisfies quorum"),
+    );
+    let certificate = crate::sumeragi::vnext::ViewChangeCertificate {
+        new_view,
+        highest_slot: None,
+        chain_order_hash: chain_order.hash(),
+        signer_bitmap: Vec::new(),
+        aggregate_signature: Vec::new(),
+    };
+    let (_, mode_tag, _) = actor.consensus_context_for_height(height);
+    let background_log = attach_background_log(actor);
+    for signer in signer_roster.iter().take(signer_count) {
+        let mut vote =
+            crate::sumeragi::vnext::ViewChangeVote::unsigned(&certificate, signer.clone());
+        vote.sign(
+            &actor.common_config.chain,
+            mode_tag,
+            keypair_for_peer(&harness.key_pairs, signer).private_key(),
+        )
+        .expect("sign view-change vote");
+        actor.apply_vnext_effects(vec![
+            crate::sumeragi::vnext::ReactorEffect::AcceptViewChangeVote { vote },
+        ]);
+    }
+
+    assert!(
+        actor.vnext_view_change_votes.is_empty(),
+        "aggregated view-change votes should leave no live cache entry"
+    );
+    let installed = actor
+        .vnext_view_change_journal
+        .back()
+        .expect("aggregated view-change certificate journaled");
+    assert_eq!(installed.new_view, new_view);
+    assert_eq!(installed.chain_order_hash, chain_order.hash());
+    assert!(!installed.signer_bitmap.is_empty());
+    assert!(!installed.aggregate_signature.is_empty());
+    assert_eq!(actor.phase_tracker.current_view(height), Some(new_view));
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries.iter().any(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("VNext")
+        }),
+        "aggregated view-change certificate should be broadcast"
+    );
+
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -3177,6 +3881,14 @@ async fn vnext_dispatch_validation_queues_worker_and_accepts_result() {
         reactor_slot.validation,
         crate::sumeragi::vnext::ValidationState::Valid { .. }
     ));
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending block retained after vNext validation");
+    assert_eq!(pending.validation_status, ValidationStatus::Valid);
+    assert_eq!(pending.parent_state_root, Some(zero_state_root()));
+    assert_eq!(pending.post_state_root, Some(zero_state_root()));
     assert!(
         !actor
             .subsystems
@@ -3185,6 +3897,189 @@ async fn vnext_dispatch_validation_queues_worker_and_accepts_result() {
             .contains_key(&block_hash),
         "vNext worker generation should be cleared after result"
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn vnext_reject_validation_aborts_slot_and_removes_pending() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let view = 0;
+    let parent = actor.state.latest_block_hash_fast();
+    let block = sample_block(height, view, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+
+    let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    let (result_tx, result_rx) = mpsc::sync_channel::<super::validation::ValidationResult>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+    actor.subsystems.validation.result_rx = Some(result_rx);
+
+    assert!(
+        actor.drive_vnext_validation_for_pending(block_hash, height, view, payload_hash),
+        "vNext validation adapter should dispatch worker validation"
+    );
+    let queued_work = work_rx
+        .try_recv()
+        .expect("vNext dispatch should queue validation work");
+    let slot = actor
+        .subsystems
+        .validation
+        .vnext_inflight
+        .get(&block_hash)
+        .map(|inflight| inflight.slot)
+        .expect("vNext inflight marker installed");
+
+    result_tx
+        .send(super::validation::ValidationResult {
+            id: queued_work.id,
+            hash: block_hash,
+            height,
+            view,
+            frontier_generation: queued_work.frontier_generation,
+            commit_topology: queued_work.commit_topology,
+            duration: Duration::from_millis(3),
+            outcome: Err(BlockValidationError::EmptyBlock),
+        })
+        .expect("send validation rejection");
+
+    assert!(
+        actor.poll_validation_results(),
+        "vNext worker rejection should be processed"
+    );
+    let reactor_slot = actor
+        .vnext_reactors
+        .get(&(height, view))
+        .and_then(|reactor| reactor.slot(block_hash))
+        .expect("vNext slot retained after rejection");
+    assert!(matches!(
+        reactor_slot.slot_state,
+        crate::sumeragi::vnext::SlotState::Aborted { .. }
+    ));
+    assert_eq!(slot.block_hash, block_hash);
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "rejected vNext block should leave pending ownership"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "vNext inflight marker should clear after rejection"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn vnext_commit_persisted_marks_reactor_slot_committed() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let view = 0;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC0; Hash::LENGTH]));
+
+    assert!(
+        actor.drive_vnext_commit_persisted_for_block(block_hash, height, view),
+        "commit-persisted adapter should install or update a vNext reactor"
+    );
+    let reactor_slot = actor
+        .vnext_reactors
+        .get(&(height, view))
+        .and_then(|reactor| reactor.slot(block_hash))
+        .expect("vNext commit slot tracked");
+    assert!(matches!(
+        reactor_slot.slot_state,
+        crate::sumeragi::vnext::SlotState::Committed { block_hash: committed }
+            if committed == block_hash
+    ));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn vnext_proposal_accepted_marks_reactor_slot_proposed() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let view = 0;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA7; Hash::LENGTH]));
+    let payload_hash = Hash::new(b"body-backed-proposal");
+
+    assert!(
+        actor.drive_vnext_proposal_accepted_for_block(block_hash, height, view, payload_hash),
+        "proposal adapter should install or update a vNext reactor"
+    );
+    let reactor_slot = actor
+        .vnext_reactors
+        .get(&(height, view))
+        .and_then(|reactor| reactor.slot(block_hash))
+        .expect("vNext proposal slot tracked");
+    assert!(matches!(
+        reactor_slot.slot_state,
+        crate::sumeragi::vnext::SlotState::Proposed {
+            block_hash: proposed,
+            payload_hash: observed,
+        } if proposed == block_hash && observed == payload_hash
+    ));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn vnext_availability_ready_marks_reactor_slot_awaiting_validation() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let view = 0;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAD; Hash::LENGTH]));
+
+    assert!(
+        actor.drive_vnext_availability_ready_for_block(block_hash, height, view),
+        "availability adapter should install or update a vNext reactor"
+    );
+    let reactor_slot = actor
+        .vnext_reactors
+        .get(&(height, view))
+        .and_then(|reactor| reactor.slot(block_hash))
+        .expect("vNext availability slot tracked");
+    assert!(matches!(
+        reactor_slot.slot_state,
+        crate::sumeragi::vnext::SlotState::AwaitingValidation { block_hash: tracked }
+            if tracked == block_hash
+    ));
 
     harness.shutdown.send();
 }
@@ -3822,6 +4717,36 @@ async fn actor_next_tick_deadline_tracks_commit_pipeline_wakeup() {
         .next_tick_deadline(now)
         .expect("commit pipeline wakeup should schedule immediate tick");
     assert_eq!(deadline, now);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn actor_next_tick_deadline_tracks_default_commit_inflight_sla() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let now = Instant::now();
+    let (height, tip_hash) = {
+        let view = actor.state.view();
+        (
+            u64::try_from(view.height()).unwrap_or(0).saturating_add(1),
+            view.latest_block_hash(),
+        )
+    };
+    let block = sample_block(height, 0, tip_hash);
+    let mut inflight = commit_inflight_for_block(actor, block, height, 0);
+    inflight.enqueue_time = now;
+    actor.subsystems.commit.inflight = Some(inflight);
+
+    let deadline = actor
+        .next_tick_deadline(now)
+        .expect("commit inflight work should schedule a liveness deadline");
+    assert_eq!(
+        deadline,
+        now + Duration::from_secs(5),
+        "default commit-inflight liveness deadline should enforce the five-second production SLA"
+    );
 
     harness.shutdown.send();
 }
@@ -30522,6 +31447,7 @@ async fn duplicate_commit_qc_clears_known_block_recovery_request() {
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
     let epoch = actor.epoch_for_height(height);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view);
     let mut qc = qc_with_bitmap(
         &actor.common_config.chain,
         block_hash,
@@ -30533,12 +31459,9 @@ async fn duplicate_commit_qc_clears_known_block_recovery_request() {
         &topology,
         &harness.key_pairs,
     );
-    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view);
     qc.chain_order_hash = chain_order_hash;
     qc.rechain_seq = rechain_seq;
-    actor
-        .qc_cache
-        .insert(super::qc_vote_key_from_qc(&qc), qc.clone());
+    actor.qc_cache.insert(Actor::qc_tally_key(&qc), qc.clone());
 
     let now = Instant::now();
     actor.pending.missing_commit_qc_requests.insert(
@@ -86384,7 +87307,7 @@ async fn stalled_pending_timeout_decision_uses_active_recovery_timeout_for_same_
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn stalled_pending_timeout_decision_widens_recovery_window_under_consensus_ingress_backlog() {
+async fn stalled_pending_timeout_decision_caps_recovery_window_under_active_tx_backlog() {
     let _worker_guard = super::status::worker_queue_test_guard();
     super::status::reset_worker_loop_snapshot_for_tests();
 
@@ -86435,6 +87358,17 @@ async fn stalled_pending_timeout_decision_widens_recovery_window_under_consensus
     let backlog_timeout = actor.backlog_extended_view_change_timeout(base_timeout, false);
     let widened_frontier_timeout =
         super::saturating_mul_duration(actor.recovery_deferred_qc_ttl(), 4).max(backlog_timeout);
+    let capped_frontier_timeout =
+        widened_frontier_timeout.min(actor.active_block_production_gap_ceiling());
+    assert_eq!(
+        actor.active_block_production_gap_ceiling(),
+        Duration::from_secs(5),
+        "default active-load production SLA should stay at five seconds"
+    );
+    assert!(
+        widened_frontier_timeout > capped_frontier_timeout,
+        "test requires consensus ingress damping to exceed the production SLA before capping"
+    );
 
     assert_eq!(
         decision.class,
@@ -86446,8 +87380,8 @@ async fn stalled_pending_timeout_decision_widens_recovery_window_under_consensus
         "test setup should activate same-block payload recovery tracking"
     );
     assert_eq!(
-        decision.timeout, widened_frontier_timeout,
-        "consensus ingress backlog should widen the recovery window before rotating"
+        decision.timeout, capped_frontier_timeout,
+        "active transaction backlog must cap recovery damping at the block production SLA"
     );
 
     super::status::reset_worker_loop_snapshot_for_tests();
@@ -105201,7 +106135,7 @@ async fn da_proposal_uses_rbc_for_ram_lfe_tx_exceeding_consensus_payload_frame_c
 
     let tx = sample_ram_lfe_policy_transaction(actor.consensus_payload_frame_cap);
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let encoded_len = accepted.encoded_len();
+    let encoded_len = accepted.entrypoint_bytes().len();
     assert!(
         encoded_len > actor.consensus_payload_frame_cap,
         "RAM-LFE policy transaction should exceed the single consensus frame cap"
@@ -125567,7 +126501,11 @@ async fn validation_forces_inline_for_near_tip_commit_votes() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn validation_dispatches_non_near_quorum_commit_votes_to_workers() {
-    let mut harness = test_actor_harness(4).await;
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg
+        .worker
+        .fast_finality_inline_validation_max_transactions = 0;
+    let mut harness = test_actor_harness_with_config(7, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
     let parent_hash = seed_genesis_block_for_state(&actor.state);
@@ -125583,6 +126521,7 @@ async fn validation_dispatches_non_near_quorum_commit_votes_to_workers() {
         block_hash,
         PendingBlock::new(block, payload_hash, height, view),
     );
+    actor.note_proposal_seen(height, view, payload_hash);
 
     let seeded =
         seed_commit_votes_for_block(actor, &harness.key_pairs, block_hash, height, view, 1);
@@ -125611,6 +126550,14 @@ async fn validation_dispatches_non_near_quorum_commit_votes_to_workers() {
             .inflight
             .contains_key(&block_hash),
         "worker-dispatched validation should stay inflight until the worker result arrives"
+    );
+    assert!(
+        actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "worker-dispatched validation should be owned by vNext"
     );
     let pending = actor
         .pending

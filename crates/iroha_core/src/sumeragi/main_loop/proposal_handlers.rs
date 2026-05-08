@@ -3952,6 +3952,8 @@ impl Actor {
                 self.note_proposal_seen(height, view, payload_hash);
             }
             self.note_authoritative_slot_owner(height, view, block_hash);
+            self.drive_vnext_proposal_accepted_for_block(block_hash, height, view, payload_hash);
+            self.drive_vnext_availability_ready_for_block(block_hash, height, view);
         }
         if stale_payload_only {
             self.clear_missing_block_request(

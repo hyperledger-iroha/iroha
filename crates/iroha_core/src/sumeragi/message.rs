@@ -539,6 +539,14 @@ pub struct BlockSyncUpdate {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub stake_snapshot: Option<super::stake_snapshot::CommitStakeSnapshot>,
+    /// vNext re-chain certificates needed to reconstruct the chain order for this block.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    pub vnext_rechain_certificates: Vec<super::vnext::RechainCertificate>,
+    /// vNext view-change certificates needed to reconstruct the live view for this block.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    pub vnext_view_change_certificates: Vec<super::vnext::ViewChangeCertificate>,
 }
 
 impl From<&SignedBlock> for BlockSyncUpdate {
@@ -549,6 +557,8 @@ impl From<&SignedBlock> for BlockSyncUpdate {
             commit_qc: None,
             validator_checkpoint: None,
             stake_snapshot: None,
+            vnext_rechain_certificates: Vec::new(),
+            vnext_view_change_certificates: Vec::new(),
         }
     }
 }

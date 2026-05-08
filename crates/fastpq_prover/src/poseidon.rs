@@ -11,17 +11,14 @@ use std::sync::OnceLock;
 
 /// Goldilocks field modulus (2^64 - 2^32 + 1).
 pub use cpu::FIELD_MODULUS;
-use fastpq_isi::poseidon::{self as cpu, PoseidonSponge as CpuPoseidonSponge};
 #[cfg(feature = "fastpq-gpu")]
-use fastpq_isi::poseidon::{RATE, STATE_WIDTH};
+use fastpq_isi::poseidon::STATE_WIDTH;
+use fastpq_isi::poseidon::{self as cpu, PoseidonSponge as CpuPoseidonSponge};
 #[cfg(feature = "fastpq-gpu")]
 use {
     crate::backend::{self, GpuBackend},
     crate::fastpq_cuda,
-    std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    std::sync::atomic::{AtomicBool, Ordering},
     tracing::warn,
 };
 
@@ -91,71 +88,14 @@ impl PoseidonSpongeCore for CpuSponge {
 #[cfg(feature = "fastpq-gpu")]
 #[derive(Clone)]
 struct GpuPoseidonBackend {
-    accelerator: GpuBackend,
     fallback: CpuPoseidonBackend,
-    gpu_enabled: Arc<AtomicBool>,
 }
 
 #[cfg(feature = "fastpq-gpu")]
 impl GpuPoseidonBackend {
-    fn new(accelerator: GpuBackend) -> Self {
+    fn new(_accelerator: GpuBackend) -> Self {
         Self {
-            accelerator,
             fallback: CpuPoseidonBackend,
-            gpu_enabled: Arc::new(AtomicBool::new(
-                !POSEIDON_GPU_DISABLED.load(Ordering::Acquire),
-            )),
-        }
-    }
-
-    fn is_gpu_enabled(&self) -> bool {
-        self.gpu_enabled.load(Ordering::Acquire)
-    }
-
-    fn disable_gpu_with_warning(&self, message: &str, context: &str) {
-        if self
-            .gpu_enabled
-            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
-            .is_ok()
-        {
-            warn!(
-                target: "fastpq::poseidon",
-                backend = ?self.accelerator,
-                error = message,
-                context,
-                "GPU Poseidon backend failed; falling back to CPU implementation"
-            );
-        }
-    }
-
-    fn permute_state(&self, state: &mut [u64; STATE_WIDTH]) {
-        if !self.is_gpu_enabled() {
-            cpu::permute_state(state);
-            return;
-        }
-
-        let mut buffer = *state;
-        let result: Result<(), String> = {
-            let _guard = backend::acquire_gpu_lane();
-            match self.accelerator {
-                GpuBackend::Cuda => fastpq_cuda::fastpq_poseidon_permute(buffer.as_mut_slice())
-                    .map_err(|err| err.to_string()),
-                #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
-                GpuBackend::Metal => {
-                    metal::poseidon_permute(buffer.as_mut_slice()).map_err(|err| err.to_string())
-                }
-                other => Err(format!("{other:?} backend unsupported")),
-            }
-        };
-
-        match result {
-            Ok(()) => {
-                *state = buffer;
-            }
-            Err(error) => {
-                self.disable_gpu_with_warning(&error, "poseidon_permute");
-                cpu::permute_state(state);
-            }
         }
     }
 }
@@ -163,79 +103,11 @@ impl GpuPoseidonBackend {
 #[cfg(feature = "fastpq-gpu")]
 impl PoseidonBackend for GpuPoseidonBackend {
     fn hash_field_elements(&self, elements: &[u64]) -> u64 {
-        if !self.is_gpu_enabled() {
-            return self.fallback.hash_field_elements(elements);
-        }
-        hash_with_permute(elements, |state| self.permute_state(state))
+        self.fallback.hash_field_elements(elements)
     }
 
     fn new_sponge(&self) -> Box<dyn PoseidonSpongeCore> {
-        Box::new(GpuPoseidonSponge::new(self.clone()))
-    }
-}
-
-#[cfg(feature = "fastpq-gpu")]
-struct GpuPoseidonSponge {
-    backend: GpuPoseidonBackend,
-    state: [u64; STATE_WIDTH],
-    rate_index: usize,
-    finalised: bool,
-}
-
-#[cfg(feature = "fastpq-gpu")]
-impl GpuPoseidonSponge {
-    fn new(backend: GpuPoseidonBackend) -> Self {
-        Self {
-            backend,
-            state: [0u64; STATE_WIDTH],
-            rate_index: 0,
-            finalised: false,
-        }
-    }
-
-    fn ensure_finalised(&mut self) {
-        if self.finalised {
-            return;
-        }
-        self.absorb(1);
-        while self.rate_index != 0 {
-            self.absorb(0);
-        }
-        self.finalised = true;
-    }
-}
-
-#[cfg(feature = "fastpq-gpu")]
-impl PoseidonSpongeCore for GpuPoseidonSponge {
-    fn absorb(&mut self, element: u64) {
-        debug_assert!(
-            !self.finalised,
-            "cannot absorb into a finalised sponge; start a new instance"
-        );
-        self.state[self.rate_index] = add_mod(self.state[self.rate_index], element);
-        self.rate_index += 1;
-        if self.rate_index == RATE {
-            self.backend.permute_state(&mut self.state);
-            self.rate_index = 0;
-        }
-    }
-
-    fn absorb_slice(&mut self, elements: &[u64]) {
-        for &element in elements {
-            self.absorb(element);
-        }
-    }
-
-    fn squeeze_element(&mut self) -> u64 {
-        self.ensure_finalised();
-        let element = self.state[0];
-        self.backend.permute_state(&mut self.state);
-        element
-    }
-
-    fn squeeze(mut self: Box<Self>) -> u64 {
-        self.ensure_finalised();
-        self.state[0]
+        self.fallback.new_sponge()
     }
 }
 
@@ -372,6 +244,12 @@ pub fn hash_field_elements(elements: &[u64]) -> u64 {
     backend().hash_field_elements(elements)
 }
 
+/// Hash the provided field elements with the canonical scalar Poseidon backend.
+#[must_use]
+pub(crate) fn hash_field_elements_cpu(elements: &[u64]) -> u64 {
+    cpu::hash_field_elements(elements)
+}
+
 /// Create a new Poseidon sponge backed by the active backend.
 pub struct PoseidonSponge {
     inner: Box<dyn PoseidonSpongeCore>,
@@ -414,38 +292,6 @@ impl Default for PoseidonSponge {
     fn default() -> Self {
         Self::new()
     }
-}
-
-#[cfg(feature = "fastpq-gpu")]
-fn hash_with_permute(elements: &[u64], mut permute: impl FnMut(&mut [u64; STATE_WIDTH])) -> u64 {
-    if elements.is_empty() {
-        return cpu::hash_field_elements(elements);
-    }
-    let mut padded = Vec::with_capacity(elements.len() + RATE);
-    padded.extend_from_slice(elements);
-    padded.push(1);
-    while padded.len() % RATE != 0 {
-        padded.push(0);
-    }
-
-    let mut state = [0u64; STATE_WIDTH];
-    for chunk in padded.chunks(RATE) {
-        state[0] = add_mod(state[0], chunk[0]);
-        if RATE > 1 {
-            state[1] = add_mod(state[1], chunk[1]);
-        }
-        permute(&mut state);
-    }
-    state[0]
-}
-
-#[cfg(feature = "fastpq-gpu")]
-#[inline]
-fn add_mod(a: u64, b: u64) -> u64 {
-    let sum = u128::from(a) + u128::from(b);
-    let modulus = u128::from(FIELD_MODULUS);
-    let reduced = if sum >= modulus { sum - modulus } else { sum };
-    u64::try_from(reduced).expect("Goldilocks reduction fits in u64")
 }
 
 #[cfg(test)]

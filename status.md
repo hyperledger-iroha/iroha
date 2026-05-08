@@ -1,9 +1,187 @@
 # Status
 
-Last updated: 2026-05-08
+Last updated: 2026-05-09
+
+## 2026-05-09 Sumeragi vNext durable certificate sidecars
+
+- Kura roster sidecars now persist vNext re-chain and view-change certificate
+  sidecars with the committed block metadata. Existing sidecars decode with
+  empty vNext certificate lists, and Kura rejects sidecars whose re-chain
+  certificate target or view-change certificate height does not match the
+  sidecar height.
+- Commit persistence now merges matching in-memory vNext certificates into the
+  committed block's roster sidecar, deduplicating exact certificates before
+  writing the updated sidecar.
+- Block-sync update construction now reloads persisted vNext certificates from
+  Kura sidecars, then merges live journal entries. Inbound updates still filter
+  re-chain sidecars by exact height/view/block hash and view-change sidecars by
+  target height/new view before replaying them into the reactor.
+- Validation:
+  - `cargo test -p iroha_core --lib roster_sidecar_roundtrip_with_vnext_certificates -- --nocapture`
+  - `cargo test -p iroha_core --lib roster_sidecar_rejects_vnext_rechain_certificate_mismatch -- --nocapture`
+  - `cargo test -p iroha_core --lib roster_sidecar_rejects_vnext_view_change_height_mismatch -- --nocapture`
+  - `cargo test -p iroha_core --lib vnext_committed_block_persists_certificate_sidecars -- --nocapture`
+  - `cargo test -p iroha_core --lib vnext_rechain_block_sync_sidecar_installs_chain_order -- --nocapture`
+  - `cargo test -p iroha_core --lib vnext_block_sync_update_attaches_certificate_sidecars -- --nocapture`
+  - `cargo test -p iroha_core --lib vnext_view_change_block_sync_sidecar_advances_live_view -- --nocapture`
+  - `cargo test -p iroha_core --lib vnext -- --nocapture`
+  - `cargo test -p iroha_core --lib block_sync_sidecar -- --nocapture`
+  - `cargo test -p iroha_core --lib incoming_block_message_accepts_block_sync_update_with_new_evidence -- --nocapture`
+  - `cargo check -p iroha_core --lib`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+
+## 2026-05-08 FastPQ prover compile hygiene
+
+- Restored the CPU backend's domain-separated Merkle-node hash helper in
+  `fastpq_prover` so `cargo check -p iroha_core --lib` can compile the
+  dependency graph without relying on a private helper from `trace.rs`.
+- Gated the GPU stub `poseidon_hash_rows` fallback to GPU builds and tests so
+  non-GPU library checks do not emit dead-code warnings for the stub-only path.
+- Validation:
+  - `cargo test -p fastpq_prover --lib merkle_paths -- --nocapture`
+  - `cargo check -p iroha_core --lib`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+
+## 2026-05-08 Sumeragi active-load 5s production ceiling
+
+- Active transaction backlog now caps Sumeragi liveness damping at a five-second
+  block-production ceiling. Active-pending frontier recovery, idle
+  same-frontier deferrals, proposal-gap backlog grace, ingress drain grace, and
+  RBC progress grace no longer extend active-load rotation/recovery windows
+  beyond the configured commit-inflight timeout capped at five seconds.
+- The default `sumeragi.persistence.commit_inflight_timeout_ms` is now `5_000`.
+  Timeout reporting still leaves the commit worker result attachable; it does
+  not abort the worker or change block output.
+- `next_tick_deadline()` now schedules default commit-inflight liveness checks at
+  the five-second deadline, and active tx backlog paths keep immediate ticking
+  behavior when the queue has work.
+- A 2026-05-08 return pass rebuilt release binaries in
+  `/tmp/iroha-codex-20k-sumeragi-5s-20260508-183004` and ran repeated 120s
+  20k prebuilt gates. The latest artifact is
+  `dist/izanami-prebuilt-20k-fastpq-gpu-sumeragi-5s-clean2-120s-20260508-185439`.
+  Izanami exited `0`, accepted and succeeded all `2,400,000` submissions, used
+  all `2,400,000` prebuilt transactions, and recorded zero submit failures,
+  confirmation failures, queue drops, prebuild fallbacks, prebuild skips, or
+  `BN254 Poseidon Metal batch failed` warnings. BN254 digest and general FASTPQ
+  Poseidon GPU preflight reported `ok=true` on all peers.
+- The gate is not accepted: it ended at strict height `5`, strict approved
+  `12,388`, max height skew `4`, approved-transaction skew `16,384`, and queue
+  depth `880,537 / 2,400,000`, which misses both the `61,622` strict-approved
+  and `861,515` queue-depth baselines. The run also had external Cargo/Rust
+  compiler contention during the window, so it is noisy, but the repeated runs
+  agreed on the same failure shape.
+- The five-second cap did fire: peer logs show `38` active-pending stall
+  warnings with `timeout_ms: 5000`, plus `5` exhausted active-pending repair
+  warnings. However, production still violated the block-cadence requirement:
+  max pending stall reached `13,400ms`, block sync logged `1,470` `no QC
+  available for block` messages, and two peers logged validation-rejection view
+  changes at height `7` for `prev_height` mismatch.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-sumeragi-5s cargo test -p iroha_core --lib actor_next_tick_deadline_tracks_default_commit_inflight_sla --features fastpq-gpu -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-sumeragi-5s cargo test -p iroha_core --lib stalled_pending_timeout_decision_caps_recovery_window_under_active_tx_backlog --features fastpq-gpu -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-sumeragi-5s cargo test -p iroha_core --lib maybe_force_view_change_for_stalled_pending_forces_frontier_advance_after_repair_exhaustion_under_tx_backlog --features fastpq-gpu -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-sumeragi-5s cargo test -p iroha_core --lib maybe_force_view_change_for_stalled_pending_defers_frontier_advance_while_consensus_ingress_drains --features fastpq-gpu -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-sumeragi-5s cargo test -p iroha_core --lib vnext_commit_persisted_marks_reactor_slot_committed --features fastpq-gpu -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-sumeragi-5s cargo test -p iroha_core --lib reactor_marks_slot_committed_after_persistence_event --features fastpq-gpu -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-sumeragi-5s cargo check -p iroha_core --features fastpq-gpu`
+  - `git diff --check`
+
+## 2026-05-08 20k Izanami Sumeragi vNext rerun
+
+- Rebuilt release `iroha3d` with `fastpq-gpu` and `izanami` in
+  `/tmp/iroha-codex-20k-sumeragi-20260508-195227`.
+- Fresh 120s 20k prebuilt gate artifacts are in
+  `dist/izanami-prebuilt-20k-fastpq-gpu-sumeragi-vnext-120s-20260508-200822`.
+  The run had no submit failures, validation rejects, confirmation failures,
+  queue drops, prebuild fallbacks, or prebuild skips. BN254 digest and general
+  FASTPQ Poseidon preflight reported `ok=true` on all peers, and there were no
+  `BN254 Poseidon Metal batch failed` runtime warnings.
+- The 120s gate reached strict approved `61,609` transactions at height `17`
+  with final queue depth `853,973`. Queue depth improved from the latest clean
+  baseline of `861,515`, but strict approved missed the `61,622` baseline by
+  `13` transactions, so this is not accepted as a throughput win.
+- Fresh 90s sampled artifacts are in
+  `dist/izanami-profile-20k-fastpq-gpu-sumeragi-vnext-sampled-90s-20260508-201200`.
+  The run had no submit or prebuild failures and the manual load-window sample
+  targeted the busiest peer process, `83820`.
+- The sampled profile no longer shows scalar
+  `iroha_zkp_halo2::poseidon::hash_u64_words_internal` or
+  `fastpq_prover::poseidon::GpuPoseidonBackend::permute_state` as the dominant
+  app leaf. The remaining visible leaves are Ed25519/Curve25519 verification,
+  Norito encode/decode, memory movement, SHA-256, Blake2, CRC64, and transport
+  crypto.
+- Peer logs show the next bottleneck is consensus recovery, not BN254 or the
+  general Poseidon GPU lane: one peer stalled at height `5` with active
+  pending state, commit inflight `(5, 0)`, and highest/locked commit QC already
+  at `(5, 0)`, then repeated `active_recovery_backlog` quorum-timeout view
+  advances. The next pass should make exact-frontier commit-QC/body recovery
+  either finish the known commit or clear/reacquire the stuck inflight state
+  deterministically.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-20k-sumeragi-20260508-195227 cargo build --release -p irohad --bin iroha3d --features fastpq-gpu`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-20k-sumeragi-20260508-195227 cargo build --release -p izanami --bin izanami`
+  - 120s 20k Izanami prebuilt gate using the rebuilt binaries and
+    `--duration 120s --tps 20000 --max-inflight 300000 --submitters 4096`
+  - 90s 20k Izanami sampled run using the rebuilt binaries and
+    `/usr/bin/sample 83820 45 1`
 
 ## 2026-05-08 Sumeragi vNext validation worker adapter
 
+- The live validation gate now hands proposal-backed worker validation to the
+  vNext reactor by emitting `ProposalAccepted`, `AvailabilityReady`, and
+  `ValidationNeeded` before any worker dispatch. Worker-capable paths no longer
+  use the removed direct queue/full-queue inline cutover branch.
+- `AcceptValidated` is now a live vNext effect: successful vNext-owned worker
+  results mark the pending block valid, store execution roots, replay cached
+  commit QCs, and wake commit progression through the effect adapter.
+- `RejectValidation` is now a live vNext effect for terminal worker rejects:
+  rejected slots are aborted through the reactor, pending ownership is removed,
+  validation-reject telemetry/view-change handling runs immediately, and
+  parent-height deferrals stay on the repair path instead of being misreported
+  as vNext rejects.
+- Non-terminal validation deferrals now emit `ValidationDeferred` into the
+  reactor so consumed worker results return the slot to `AwaitingValidation`
+  for a deterministic retry instead of leaving stale running-worker state.
+- `StartRecovery` is now a live actor effect: vNext validation
+  timeout/backpressure recovery clears stale worker ownership and drives the
+  existing quorum-timeout view-change path, while successor-obligation recovery
+  maps to censorship-evidence view changes.
+- `RequireViewChange` is now a live actor effect: unsafe re-chain evidence
+  clears stale validation worker ownership and drives the existing
+  censorship-evidence view-change path instead of only logging reactor output.
+- Accepted `RechainVote` and `ViewChangeVote` effects now feed bounded actor
+  vote caches. Once quorum is reached, the actor aggregates BLS signatures into
+  vNext certificates, feeds those certificates back into the reactor, journals
+  them, and gossips the aggregate certificate.
+- Locally signed vNext re-chain and view-change votes are inserted into the
+  same aggregation caches before gossip, so quorum formation no longer depends
+  on receiving the node's own vote back from the network.
+- `InstallViewChange` now advances the live Sumeragi view to the certified
+  target view while preserving the bounded vNext certificate journal.
+- `BlockSyncUpdate` now carries vNext re-chain and view-change certificate
+  sidecars. Block-sync broadcasts and exact-body fetch responses attach matching
+  certificates from the bounded journal, frame-cap trimming can drop sidecars
+  before commit evidence, and inbound updates install sidecars before processing
+  vote/QC evidence so catch-up can reconstruct chain order and live view.
+- Re-chain sidecars are exact-block scoped by height/view/block hash, while
+  view-change sidecars are attached to the target height/new view. Block-payload
+  dedup evidence now hashes both vNext sidecar lists, so sidecar-bearing
+  recovery updates are not dropped as duplicates of sparse updates.
+- Late worker results are ignored once the reactor slot is recovering,
+  committed, or aborted, preventing a timed-out validation from resurrecting a
+  slot as prepared after recovery starts.
+- Accepted `BlockCreated` bodies now emit `ProposalAccepted` and
+  `AvailabilityReady` into vNext as soon as the body-backed proposal becomes
+  authoritative, before validation is requested.
+- RBC payload hydration, chunk reconstruction, READY completion, and DELIVER
+  completion now emit `AvailabilityReady` into vNext at the same points that
+  wake the commit pipeline for payload availability.
+- Successful commit persistence now emits `CommitPersisted` into the live
+  reactor and marks the slot `Committed`; late proposal/availability/validation
+  events no longer downgrade committed vNext slots.
 - `ReactorEffect::DispatchValidation` now queues real validation work through the
   existing Sumeragi validation worker lanes instead of logging and returning.
 - The actor records the vNext slot/generation beside the legacy inflight worker
@@ -13,7 +191,22 @@ Last updated: 2026-05-08
   work; vNext timeout/recovery owns slow or saturated validation lanes.
 - Validation:
   - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib validation_gate_routes_proposal_worker_path_through_vnext_reactor -- --nocapture`
+  - `cargo test -p iroha_core --lib validation_dispatches_non_near_quorum_commit_votes_to_workers -- --nocapture`
+  - `cargo test -p iroha_core --lib vnext_proposal_accepted_marks_reactor_slot_proposed -- --nocapture`
+  - `cargo test -p iroha_core --lib vnext_availability_ready_marks_reactor_slot_awaiting_validation -- --nocapture`
+  - `cargo test -p iroha_core --lib reactor_marks_slot_committed_after_persistence_event -- --nocapture`
+  - `cargo test -p iroha_core --lib vnext_commit_persisted_marks_reactor_slot_committed -- --nocapture`
   - `cargo test -p iroha_core --lib vnext_dispatch_validation_queues_worker_and_accepts_result -- --nocapture`
+  - `cargo test -p iroha_core --lib vnext_reject_validation_aborts_slot_and_removes_pending -- --nocapture`
+  - `cargo test -p iroha_core --lib reactor_validation_deferred_returns_slot_to_awaiting_validation -- --nocapture`
+  - `cargo test -p iroha_core --lib reactor_drops_late_worker_result_after_recovery -- --nocapture`
+  - `cargo test -p iroha_core --lib vnext_require_view_change_drives_live_view_change -- --nocapture`
+  - `cargo test -p iroha_core --lib vnext_rechain_votes_aggregate_certificate -- --nocapture`
+  - `cargo test -p iroha_core --lib vnext_view_change_votes_aggregate_certificate_and_advance_view -- --nocapture`
+  - `cargo test -p iroha_core --lib vnext_block_sync -- --nocapture`
+  - `cargo test -p iroha_core --lib block_sync_sidecar -- --nocapture`
+  - `cargo test -p iroha_core --lib incoming_block_message_accepts_block_sync_update_with_new_evidence -- --nocapture`
   - `cargo test -p iroha_core --lib vnext -- --nocapture`
   - `cargo test -p iroha_core --lib validation_worker_result_replays_cached_precommit_qc_after_block_becomes_valid -- --nocapture`
   - `cargo check -p iroha_core --lib`

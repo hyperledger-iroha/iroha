@@ -438,20 +438,6 @@ impl Actor {
         })
     }
 
-    fn validation_queue_full_inline_cutover(&self) -> Duration {
-        let inline_fallback_timeout = self.commit_validation_inline_fallback_timeout();
-        let divisor = self
-            .config
-            .worker
-            .validation_queue_full_inline_cutover_divisor
-            .max(1);
-        if inline_fallback_timeout == Duration::ZERO {
-            Duration::ZERO
-        } else {
-            (inline_fallback_timeout / divisor).max(Duration::from_millis(1))
-        }
-    }
-
     /// Validate a pending block (stateless + stateful) before sending any votes.
     pub(super) fn validate_pending_block_for_voting(
         &mut self,
@@ -975,7 +961,7 @@ impl Actor {
                         continue;
                     }
 
-                    let vnext_result = vnext_inflight.map(|vnext| {
+                    let mut vnext_result = vnext_inflight.map(|vnext| {
                         let outcome = match &outcome {
                             Ok(Some(roots)) => {
                                 let roots = self
@@ -1046,6 +1032,19 @@ impl Actor {
                         self.pending.pending_blocks.insert(hash, pending);
                         progress = true;
                         continue;
+                    }
+
+                    if let Some((slot, result)) = vnext_result.take() {
+                        if matches!(
+                            result.outcome,
+                            super::vnext::ValidationWorkerOutcome::Valid(_)
+                        ) {
+                            self.pending.pending_blocks.insert(hash, pending);
+                            self.handle_vnext_validation_result(slot, result);
+                            progress = true;
+                            continue;
+                        }
+                        vnext_result = Some((slot, result));
                     }
 
                     match outcome {
@@ -1152,8 +1151,48 @@ impl Actor {
                                 progress = true;
                                 continue;
                             }
-                            let _ = self.finalize_validation_failure(hash, pending, &err);
-                            self.request_commit_pipeline();
+                            match self.finalize_validation_failure(hash, pending, &err) {
+                                ValidationGateOutcome::Invalid {
+                                    hash: invalid_hash,
+                                    height: invalid_height,
+                                    view: invalid_view,
+                                    evidence,
+                                    reason,
+                                    reason_label,
+                                } => {
+                                    self.handle_validation_reject(
+                                        invalid_hash,
+                                        invalid_height,
+                                        invalid_view,
+                                        evidence,
+                                        reason,
+                                        reason_label,
+                                    );
+                                    if let Some((slot, result)) = vnext_result.take() {
+                                        self.handle_vnext_validation_result(slot, result);
+                                    }
+                                    progress = true;
+                                    continue;
+                                }
+                                ValidationGateOutcome::Deferred => {
+                                    if let Some((slot, _result)) = vnext_result.take() {
+                                        let effects = self.handle_vnext_worker_event(
+                                            slot,
+                                            super::vnext::ReactorEvent::ValidationDeferred {
+                                                slot,
+                                                reason_label: validation_reject_reason_label(&err)
+                                                    .to_owned(),
+                                            },
+                                        );
+                                        self.apply_vnext_effects(effects);
+                                    }
+                                    self.request_commit_pipeline();
+                                }
+                                ValidationGateOutcome::Valid => {
+                                    vnext_result = None;
+                                    self.request_commit_pipeline();
+                                }
+                            }
                         }
                     }
                     if let Some((slot, result)) = vnext_result {
@@ -1177,6 +1216,156 @@ impl Actor {
             self.subsystems.validation.result_rx = Some(result_rx);
         }
         progress
+    }
+
+    pub(super) fn accept_vnext_validated_slot(
+        &mut self,
+        slot: super::vnext::SlotId,
+        roots: super::vnext::ValidationRoots,
+    ) {
+        let Some(mut pending) = self.pending.pending_blocks.remove(&slot.block_hash) else {
+            warn!(
+                height = slot.height,
+                view = slot.view,
+                block = %slot.block_hash,
+                "vNext accepted validation for missing pending block"
+            );
+            return;
+        };
+        if pending.height != slot.height || pending.view != slot.view {
+            warn!(
+                pending_height = pending.height,
+                pending_view = pending.view,
+                slot_height = slot.height,
+                slot_view = slot.view,
+                block = %slot.block_hash,
+                "vNext accepted validation for mismatched pending slot"
+            );
+            self.pending.pending_blocks.insert(slot.block_hash, pending);
+            return;
+        }
+
+        pending.parent_state_root = Some(roots.parent_state_root);
+        pending.post_state_root = Some(roots.post_state_root);
+        pending.note_validated_commit_artifact(
+            slot.block_hash,
+            slot.height,
+            slot.view,
+            roots.parent_state_root,
+            roots.post_state_root,
+        );
+        pending.validation_status = ValidationStatus::Valid;
+        pending.touch_progress(Instant::now());
+        self.pending.pending_blocks.insert(slot.block_hash, pending);
+
+        let commit_topology = self
+            .vnext_reactors
+            .get(&(slot.height, slot.view))
+            .map(|reactor| reactor.chain_order.ordered_validators.clone())
+            .unwrap_or_else(|| self.effective_commit_topology());
+        self.replay_cached_precommit_qc_for_valid_block(
+            slot.block_hash,
+            slot.height,
+            slot.view,
+            &commit_topology,
+            "vnext_validation",
+        );
+        let _ = self.maybe_emit_local_commit_vote_for_pending_event(
+            slot.block_hash,
+            slot.height,
+            slot.view,
+            &commit_topology,
+            "vnext_validation_passed",
+        );
+        self.request_commit_pipeline_for_pending(
+            slot.block_hash,
+            super::status::RoundEventCauseTrace::ValidationPassed,
+            None,
+        );
+    }
+
+    pub(super) fn reject_vnext_validation_slot(
+        &mut self,
+        slot: super::vnext::SlotId,
+        failure: super::vnext::ValidationFailure,
+    ) {
+        let Some(mut pending) = self.pending.pending_blocks.remove(&slot.block_hash) else {
+            debug!(
+                height = slot.height,
+                view = slot.view,
+                block = %slot.block_hash,
+                reason = %failure.reason_label,
+                "vNext rejected validation after the actor already handled the pending block"
+            );
+            return;
+        };
+        if pending.height != slot.height || pending.view != slot.view {
+            warn!(
+                pending_height = pending.height,
+                pending_view = pending.view,
+                slot_height = slot.height,
+                slot_view = slot.view,
+                block = %slot.block_hash,
+                reason = %failure.reason_label,
+                "vNext rejected validation for mismatched pending slot"
+            );
+            self.pending.pending_blocks.insert(slot.block_hash, pending);
+            return;
+        }
+
+        let should_requeue =
+            pending.validation_status != ValidationStatus::Invalid && !pending.aborted;
+        if should_requeue {
+            let txs: Vec<_> = pending.block.external_entrypoints_cloned().collect();
+            let (_requeued, failures, _duplicates, _) =
+                requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), txs);
+            if failures > 0 {
+                warn!(
+                    height = slot.height,
+                    view = slot.view,
+                    block = %slot.block_hash,
+                    failures,
+                    "failed to requeue some transactions after vNext validation rejection"
+                );
+            }
+        }
+        pending.validation_status = ValidationStatus::Invalid;
+        pending.mark_aborted();
+        let _ = pending;
+
+        self.subsystems.validation.inflight.remove(&slot.block_hash);
+        self.subsystems
+            .validation
+            .vnext_inflight
+            .remove(&slot.block_hash);
+        self.subsystems
+            .validation
+            .superseded_results
+            .remove(&slot.block_hash);
+        self.subsystems
+            .propose
+            .proposal_cache
+            .pop_proposal(slot.height, slot.view);
+        self.subsystems
+            .propose
+            .proposal_cache
+            .pop_hint(slot.height, slot.view);
+        self.clean_rbc_sessions_for_block(slot.block_hash, slot.height);
+        self.qc_cache
+            .retain(|(_, cached_hash, _, _, _, _, _), _| cached_hash != &slot.block_hash);
+        self.qc_signer_tally
+            .retain(|(_, cached_hash, _, _, _, _, _), _| cached_hash != &slot.block_hash);
+
+        let reason_label = vnext_validation_reject_reason_label(&failure.reason_label);
+        let reason = format!("vNext validation rejected: {}", failure.reason_label);
+        self.handle_validation_reject(
+            slot.block_hash,
+            slot.height,
+            slot.view,
+            None,
+            reason,
+            reason_label,
+        );
     }
 
     fn check_pending_validation_status(
