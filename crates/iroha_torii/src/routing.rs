@@ -9485,7 +9485,9 @@ fn evidence_within_horizon(
 mod evidence_submit_tests {
     use std::sync::{LazyLock, Mutex};
 
-    use iroha_core::sumeragi::consensus::{Evidence, EvidenceKind, EvidencePayload, Phase, Vote};
+    use iroha_core::sumeragi::consensus::{
+        Evidence, EvidenceKind, EvidencePayload, Phase, Vote, default_chain_order_hash,
+    };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         block::BlockHeader,
@@ -9532,6 +9534,8 @@ mod evidence_submit_tests {
             height,
             view,
             epoch: 0,
+            chain_order_hash: default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
@@ -31305,100 +31309,7 @@ fn instruction_matches_account_id(
     instr: &iroha_data_model::isi::InstructionBox,
     expected: &AccountId,
 ) -> bool {
-    use iroha_data_model::isi::{
-        BurnBox, CustomInstruction, MintBox, RemoveAssetKeyValue, SetAssetKeyValue,
-        TransferAssetBatch, TransferBox, staking::RecordPublicLaneRewards,
-    };
-    use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
-
-    let any = instr.as_any();
-    if let Some(transfer) = any.downcast_ref::<TransferBox>() {
-        return match transfer {
-            TransferBox::Domain(inner) => {
-                inner.source() == expected || inner.destination() == expected
-            }
-            TransferBox::AssetDefinition(inner) => {
-                inner.source() == expected || inner.destination() == expected
-            }
-            TransferBox::Asset(inner) => {
-                inner.destination() == expected || inner.source().account() == expected
-            }
-            TransferBox::Nft(inner) => {
-                inner.source() == expected || inner.destination() == expected
-            }
-        };
-    }
-    if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
-        return batch
-            .entries()
-            .iter()
-            .any(|entry| entry.from() == expected || entry.to() == expected);
-    }
-    if let Some(mint) = any.downcast_ref::<MintBox>() {
-        if let MintBox::Asset(asset_mint) = mint {
-            return asset_mint.destination().account() == expected;
-        }
-        return false;
-    }
-    if let Some(burn) = any.downcast_ref::<BurnBox>() {
-        if let BurnBox::Asset(asset_burn) = burn {
-            return asset_burn.destination().account() == expected;
-        }
-        return false;
-    }
-    if let Some(set) = any.downcast_ref::<SetAssetKeyValue>() {
-        return set.asset().account() == expected;
-    }
-    if let Some(set) = any.downcast_ref::<SetKeyValueBox>() {
-        return matches!(set, SetKeyValueBox::Account(inner) if inner.object() == expected);
-    }
-    if let Some(remove) = any.downcast_ref::<RemoveAssetKeyValue>() {
-        return remove.asset().account() == expected;
-    }
-    if let Some(remove) = any.downcast_ref::<RemoveKeyValueBox>() {
-        return matches!(
-            remove,
-            RemoveKeyValueBox::Account(inner) if inner.object() == expected
-        );
-    }
-    if let Some(rewards) = any.downcast_ref::<RecordPublicLaneRewards>() {
-        return rewards.reward_asset().account() == expected;
-    }
-    // Offline V2 note instructions: match by participant account.
-    {
-        use iroha_data_model::isi::offline::{
-            AuditOfflineNoteV2, IssueOfflineNoteV2, RedeemOfflineNoteV2,
-        };
-        if let Some(issue) = any.downcast_ref::<IssueOfflineNoteV2>() {
-            return issue.issue.asset.account() == expected
-                || issue.issue.key_certificate.account_id == *expected;
-        }
-        if let Some(redeem) = any.downcast_ref::<RedeemOfflineNoteV2>() {
-            return redeem.redemption.recipient == *expected
-                || redeem.redemption.sender_key_certificate.account_id == *expected;
-        }
-        if let Some(audit) = any.downcast_ref::<AuditOfflineNoteV2>() {
-            return audit.audit.sender_key_certificate.account_id == *expected;
-        }
-    }
-    if let Some(custom) = any.downcast_ref::<CustomInstruction>() {
-        if let Ok(multisig) = MultisigInstructionBox::try_from(custom.payload()) {
-            return match multisig {
-                MultisigInstructionBox::Register(register) => register.account == *expected,
-                MultisigInstructionBox::Approve(approve) => approve.account == *expected,
-                MultisigInstructionBox::Cancel(cancel) => cancel.account == *expected,
-                MultisigInstructionBox::Propose(propose) => {
-                    propose.account == *expected
-                        || propose
-                            .instructions
-                            .iter()
-                            .any(|nested| instruction_matches_account_id(nested, expected))
-                }
-            };
-        }
-        return false;
-    }
-    false
+    crate::account_activity::instruction_matches_account_id(instr, expected)
 }
 
 #[cfg(feature = "app_api")]
@@ -46582,6 +46493,8 @@ mod status_tests {
             height: header.height().get(),
             view: 3,
             epoch: 1,
+            chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             mode_tag: iroha_core::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
             highest_qc: None,
             validator_set_hash: HashOf::new(&validator_set),

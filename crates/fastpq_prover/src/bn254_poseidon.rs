@@ -1,8 +1,8 @@
 //! BN254 Poseidon batch helpers for FASTPQ host-side transcript work.
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     OnceLock,
+    atomic::{AtomicBool, Ordering},
 };
 
 #[cfg(feature = "fastpq-gpu")]

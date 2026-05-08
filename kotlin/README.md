@@ -140,6 +140,16 @@ ls ~/.m2/repository/org/hyperledger/iroha/sdk/offline-wallet-android/0.1-SNAPSHO
 ./gradlew :offline-wallet-android:publishToMavenLocal
 ```
 
+## Push Device Registration
+
+`core-jvm` includes thin Torii helpers for `/v1/notify/devices`. Android apps still obtain FCM tokens from their app layer; the SDK only encodes the signed Torii request:
+
+```kotlin
+val request = PushDeviceRequest(accountId, "FCM", fcmToken, listOf("activity"))
+transport.registerPushDevice(request, canonicalAuth).join()
+transport.unregisterPushDevice(request, canonicalAuth).join()
+```
+
 ## Signing Algorithm Selection
 
 Android apps can now choose the transaction and offline-wallet signing

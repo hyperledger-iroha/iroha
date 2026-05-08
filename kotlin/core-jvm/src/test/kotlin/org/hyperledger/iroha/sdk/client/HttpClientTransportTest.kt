@@ -504,6 +504,39 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun pushDeviceRegisterAndUnregisterSignCanonicalBody() {
+        val executor = QueueResponseExecutor(listOf(202 to "", 202 to ""))
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+        )
+        val requestBody = PushDeviceRequest(" alice ", "FCM", " token-1 ", listOf(" activity "))
+
+        transport.registerPushDevice(
+            requestBody,
+            ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_010L, "push-nonce-1"),
+        ).join()
+        transport.unregisterPushDevice(
+            requestBody,
+            ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_011L, "push-nonce-2"),
+        ).join()
+
+        val register = executor.requests[0]
+        assertEquals("POST", register.method)
+        assertEquals("https://torii.example/v1/notify/devices", register.uri.toString())
+        assertEquals("""{"account_id":"alice","platform":"FCM","token":"token-1","topics":["activity"]}""", readBody(register))
+        assertEquals("alice", register.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
+        assertCanonicalSignature(register, keyPair.public, 1_700_000_000_010L, "push-nonce-1")
+
+        val unregister = executor.requests[1]
+        assertEquals("DELETE", unregister.method)
+        assertEquals("https://torii.example/v1/notify/devices", unregister.uri.toString())
+        assertEquals(readBody(register), readBody(unregister))
+        assertCanonicalSignature(unregister, keyPair.public, 1_700_000_000_011L, "push-nonce-2")
+    }
+
+    @Test
     fun vpnSessionAndReceiptMethodsUseNativeLeaseDtos() {
         val sessionId = "33".repeat(32)
         val paymentTxHash = "44".repeat(32)

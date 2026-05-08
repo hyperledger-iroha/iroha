@@ -717,6 +717,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                     iroha_config::parameters::defaults::sumeragi::USE_STAKE_SNAPSHOT_ROSTER,
             },
             resilience: A::SumeragiResilience::default(),
+            vnext: A::SumeragiVNext::default(),
             adaptive_observability:
                 iroha_config::parameters::actual::AdaptiveObservability::default(),
             debug: A::SumeragiDebug {

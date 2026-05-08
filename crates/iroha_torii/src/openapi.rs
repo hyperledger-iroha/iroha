@@ -4400,57 +4400,78 @@ fn soranet_paths() -> Map {
 }
 
 fn push_paths() -> Map {
+    fn push_device_operation(summary: &str, description: &str, accepted: &str) -> Map {
+        let mut operation = Map::new();
+        operation.insert(
+            "tags".into(),
+            Value::Array(vec![Value::String("Push".to_owned())]),
+        );
+        operation.insert("summary".into(), Value::String(summary.to_owned()));
+        operation.insert("description".into(), Value::String(description.to_owned()));
+        operation.insert(
+            "requestBody".into(),
+            Value::Object(json_request_body(
+                "#/components/schemas/PushRegisterDeviceRequest",
+            )),
+        );
+        let mut responses = Map::new();
+        let mut accepted_response = Map::new();
+        accepted_response.insert("description".into(), Value::String(accepted.to_owned()));
+        responses.insert("202".to_owned(), Value::Object(accepted_response));
+        responses.insert(
+            "400".to_owned(),
+            json_response("Invalid device request.", error_schema_reference()),
+        );
+        responses.insert(
+            "401".to_owned(),
+            json_response(
+                "Canonical request signature is required or invalid.",
+                error_schema_reference(),
+            ),
+        );
+        responses.insert(
+            "403".to_owned(),
+            json_response(
+                "Signed account does not match the device account.",
+                error_schema_reference(),
+            ),
+        );
+        responses.insert(
+            "429".to_owned(),
+            json_response("Push registration rate limited.", error_schema_reference()),
+        );
+        responses.insert(
+            "503".to_owned(),
+            json_response(
+                "Push provider is disabled or credentials are unavailable.",
+                error_schema_reference(),
+            ),
+        );
+        operation.insert("responses".into(), Value::Object(responses));
+        operation
+    }
+
     let mut paths = Map::new();
     paths.insert(
         "/v1/notify/devices".to_owned(),
         Value::Object({
-            let mut operation = Map::new();
-            operation.insert(
-                "tags".into(),
-                Value::Array(vec![Value::String("Push".to_owned())]),
-            );
-            operation.insert(
-                "summary".into(),
-                Value::String("Register a push device.".to_owned()),
-            );
-            operation.insert(
-                "description".into(),
-                Value::String("Register a device token for push notifications.".to_owned()),
-            );
-            operation.insert(
-                "requestBody".into(),
-                Value::Object(json_request_body(
-                    "#/components/schemas/PushRegisterDeviceRequest",
+            let mut methods = Map::new();
+            methods.insert(
+                "post".to_owned(),
+                Value::Object(push_device_operation(
+                    "Register a push device.",
+                    "Register a device token for push notifications. The JSON body is signed with canonical request headers; X-Iroha-Account must resolve to the same canonical account as account_id.",
+                    "Device registration accepted.",
                 )),
             );
-            let mut responses = Map::new();
-            let mut accepted = Map::new();
-            accepted.insert(
-                "description".into(),
-                Value::String("Device registration accepted.".to_owned()),
+            methods.insert(
+                "delete".to_owned(),
+                Value::Object(push_device_operation(
+                    "Unregister a push device.",
+                    "Unregister a device token using the same signed JSON body shape. Tokens stay out of URLs and logs.",
+                    "Device unregistration accepted.",
+                )),
             );
-            responses.insert("202".to_owned(), Value::Object(accepted));
-            responses.insert(
-                "400".to_owned(),
-                json_response(
-                    "Invalid device registration request.",
-                    error_schema_reference(),
-                ),
-            );
-            responses.insert(
-                "429".to_owned(),
-                json_response("Push registration rate limited.", error_schema_reference()),
-            );
-            responses.insert(
-                "503".to_owned(),
-                json_response(
-                    "Push registration is unavailable.",
-                    error_schema_reference(),
-                ),
-            );
-            operation.insert("responses".into(), Value::Object(responses));
-            let mut methods = Map::new();
-            methods.insert("post".to_owned(), Value::Object(operation));
             methods
         }),
     );
@@ -7650,13 +7671,13 @@ fn openapi_schemas() -> Map {
             "required": ["account_id", "platform", "token"],
             "additionalProperties": false,
             "properties": {
-                "account_id": { "type": "string", "description": "Account selector for the device owner (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`); registrations are stored against the resolved canonical I105 account id." },
+                "account_id": { "type": "string", "description": "Account selector for the device owner (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`). The signed X-Iroha-Account header must resolve to the same canonical account; registrations are stored under that canonical I105 account id." },
                 "platform": { "type": "string", "description": "Push platform label (FCM, APNS)." },
-                "token": { "type": "string", "description": "Device token." },
+                "token": { "type": "string", "description": "Provider device token. Use DELETE with this body shape to unregister; do not place tokens in URLs." },
                 "topics": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Optional topics to subscribe the device to."
+                    "description": "Optional topic labels stored with the device; bounded by torii.push.max_topics_per_device."
                 }
             }
         }),

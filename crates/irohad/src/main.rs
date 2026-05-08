@@ -2165,10 +2165,20 @@ impl NetworkRelayShared {
                     Some(proposal.slot.height),
                     Some(proposal.slot.view),
                 ),
+                iroha_core::sumeragi::vnext::ConsensusMessage::RechainVote(vote) => (
+                    "VNextRechainVote",
+                    Some(vote.slot.height),
+                    Some(vote.slot.view),
+                ),
                 iroha_core::sumeragi::vnext::ConsensusMessage::RechainCertificate(certificate) => (
                     "VNextRechainCertificate",
                     Some(certificate.slot.height),
                     Some(certificate.slot.view),
+                ),
+                iroha_core::sumeragi::vnext::ConsensusMessage::ViewChangeVote(vote) => (
+                    "VNextViewChangeVote",
+                    vote.highest_slot.map(|slot| slot.height),
+                    vote.highest_slot.map(|slot| slot.view),
                 ),
                 iroha_core::sumeragi::vnext::ConsensusMessage::ViewChangeCertificate(
                     certificate,
@@ -2761,7 +2771,7 @@ mod network_relay_tests {
     }
 
     fn qc_vote_msg() -> iroha_core::NetworkMessage {
-        use iroha_core::sumeragi::consensus::{Phase, Vote};
+        use iroha_core::sumeragi::consensus::{Phase, Vote, default_chain_order_hash};
 
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([2; 32]));
         let vote = Vote {
@@ -2770,6 +2780,8 @@ mod network_relay_tests {
             height: 1,
             view: 0,
             epoch: 0,
+            chain_order_hash: default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
@@ -2780,7 +2792,7 @@ mod network_relay_tests {
     }
 
     fn qc_msg() -> iroha_core::NetworkMessage {
-        use iroha_core::sumeragi::consensus::{Phase, Qc, QcAggregate};
+        use iroha_core::sumeragi::consensus::{Phase, Qc, QcAggregate, default_chain_order_hash};
 
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([3; 32]));
         let validator = PeerId::new(KeyPair::random().public_key().clone());
@@ -2792,6 +2804,8 @@ mod network_relay_tests {
             height: 1,
             view: 0,
             epoch: 0,
+            chain_order_hash: default_chain_order_hash(),
+            rechain_seq: 0,
             mode_tag: iroha_core::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
             highest_qc: None,
             validator_set_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x12; 32])),

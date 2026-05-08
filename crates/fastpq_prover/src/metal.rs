@@ -15,8 +15,8 @@ use std::{
     process::{Command, Stdio},
     ptr,
     sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
         Condvar, Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -38,8 +38,8 @@ use crate::{
     backend::GpuBackend,
     bn254_poseidon::Bn254PoseidonBatchSlice,
     bn254_poseidon_params::{
-        bn254_limbs_to_bytes, bn254_poseidon_width3_params, Bn254PoseidonWidth3Params, BN254_LIMBS,
-        BN254_POSEIDON_WIDTH,
+        BN254_LIMBS, BN254_POSEIDON_WIDTH, Bn254PoseidonWidth3Params, bn254_limbs_to_bytes,
+        bn254_poseidon_width3_params,
     },
     gpu::GpuError,
     metal_config::{self, DeviceHints},
@@ -1519,11 +1519,7 @@ impl QueueLaneStats {
 
 fn saturating_sub_ms(current: f64, previous: f64) -> f64 {
     let delta = current - previous;
-    if delta <= 0.0 {
-        0.0
-    } else {
-        delta
-    }
+    if delta <= 0.0 { 0.0 } else { delta }
 }
 
 /// Kernel categories profiled by the Metal backend.
@@ -1585,8 +1581,7 @@ const METAL_KERNEL_DESCRIPTORS: &[MetalKernelDescriptor] = &[
         kind: KernelKind::Fft,
         threadgroup_cap: Some(FFT_THREADGROUP_CAPACITY),
         tile_stage_cap: Some(FFT_TILE_STAGE_LIMIT),
-        notes:
-            "Forward FFT over trace columns. Uses shared-memory tiles up to FFT_TILE_STAGE_LIMIT \
+        notes: "Forward FFT over trace columns. Uses shared-memory tiles up to FFT_TILE_STAGE_LIMIT \
                 stages with coset=1 and applies inverse scaling when requested.",
     },
     MetalKernelDescriptor {
@@ -5107,10 +5102,10 @@ fn compute_stage_twiddles(log_len: u32, root: u64, inverse: bool) -> Vec<u64> {
 #[cfg(test)]
 mod helper_tests {
     use super::{
-        default_queue_column_threshold, lde_tile_stage_limit, parse_queue_fanout_override,
-        parse_queue_threshold_override, poseidon_element_range,
-        poseidon_recommended_states_per_batch, post_tile_stage_start, queue_total_columns_hint,
-        select_poseidon_batch, QueuePolicy, MAX_QUEUE_FANOUT, STATE_WIDTH,
+        MAX_QUEUE_FANOUT, QueuePolicy, STATE_WIDTH, default_queue_column_threshold,
+        lde_tile_stage_limit, parse_queue_fanout_override, parse_queue_threshold_override,
+        poseidon_element_range, poseidon_recommended_states_per_batch, post_tile_stage_start,
+        queue_total_columns_hint, select_poseidon_batch,
     };
     use crate::metal_config::{self, DeviceHints};
 
@@ -5325,7 +5320,7 @@ mod bn254_helper_tests {
 mod tests {
     use std::{thread, time::Duration};
 
-    use fastpq_isi::{poseidon as cpu_poseidon, CANONICAL_PARAMETER_SETS};
+    use fastpq_isi::{CANONICAL_PARAMETER_SETS, poseidon as cpu_poseidon};
 
     use super::{ensure_multi_queue_env, unwrap_or_skip, *};
     use crate::fft::Planner;

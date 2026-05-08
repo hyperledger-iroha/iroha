@@ -1652,6 +1652,8 @@ pub mod torii {
     pub const PUSH_REQUEST_TIMEOUT_MS: u64 = 10_000;
     /// Maximum topics recorded per registered device.
     pub const PUSH_MAX_TOPICS_PER_DEVICE: usize = 32;
+    /// Default APNs environment for provider-token delivery.
+    pub const PUSH_APNS_ENVIRONMENT: &str = "sandbox";
     /// Base directory for Torii persistence (attachments, webhooks, DA queues).
     pub fn data_dir() -> PathBuf {
         PathBuf::from("./storage/torii")

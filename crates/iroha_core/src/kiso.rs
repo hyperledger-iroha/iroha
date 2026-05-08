@@ -1030,7 +1030,15 @@ mod tests {
                         iroha_config::parameters::defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE.max(1),
                     )
                     .expect("non-zero push topics cap"),
+                    fcm_project_id: None,
+                    fcm_service_account_path: None,
                     fcm_api_key: None,
+                    apns_environment:
+                        iroha_config::parameters::defaults::torii::PUSH_APNS_ENVIRONMENT.to_string(),
+                    apns_topic: None,
+                    apns_team_id: None,
+                    apns_key_id: None,
+                    apns_private_key_path: None,
                     apns_endpoint: None,
                     apns_auth_token: None,
                 },

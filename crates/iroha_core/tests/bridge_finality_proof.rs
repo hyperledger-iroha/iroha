@@ -9,7 +9,7 @@ use std::{
 };
 
 use iroha_core::sumeragi::consensus::{
-    PERMISSIONED_TAG, Phase, ValidatorIndex, Vote, vote_preimage,
+    PERMISSIONED_TAG, Phase, ValidatorIndex, Vote, default_chain_order_hash, vote_preimage,
 };
 use iroha_core::{
     bridge::{
@@ -148,6 +148,8 @@ fn aggregate_signature_for_signers(
         height,
         view,
         epoch,
+        chain_order_hash: default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -198,6 +200,8 @@ fn build_commit_qc(
         height,
         view,
         epoch,
+        chain_order_hash: default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash,

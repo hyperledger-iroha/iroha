@@ -15,7 +15,9 @@ use iroha_core::{
     prelude::World,
     query::store::LiveQueryStore,
     state::State,
-    sumeragi::consensus::{Evidence, EvidenceKind, EvidencePayload, Phase, Vote},
+    sumeragi::consensus::{
+        Evidence, EvidenceKind, EvidencePayload, Phase, Vote, default_chain_order_hash,
+    },
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{ChainId, peer::PeerId};
@@ -136,6 +138,8 @@ fn sample_evidence_hex() -> String {
             height: 1,
             view: 0,
             epoch: 0,
+            chain_order_hash: default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),

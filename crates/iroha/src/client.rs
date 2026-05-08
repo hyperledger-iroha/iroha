@@ -4084,7 +4084,8 @@ mod evidence_http_tests {
     use http::StatusCode;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, Signature};
     use iroha_data_model::block::consensus::{
-        CertPhase as Phase, Evidence, EvidenceKind, EvidencePayload, EvidenceRecord, QcVote as Vote,
+        CertPhase as Phase, Evidence, EvidenceKind, EvidencePayload, EvidenceRecord,
+        QcVote as Vote, default_chain_order_hash,
     };
     use iroha_test_samples::gen_account_in;
     use norito::json::Value;
@@ -5147,6 +5148,8 @@ mod evidence_http_tests {
             height,
             view,
             epoch: 0,
+            chain_order_hash: default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
@@ -14120,7 +14123,7 @@ mod tests {
                 SumeragiVoteValidationDropStatus,
             },
         },
-        consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
+        consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1, default_chain_order_hash},
         da::{
             commitment::{
                 DaCommitmentBundle, DaCommitmentLocation, DaCommitmentProof, DaCommitmentRecord,
@@ -14185,6 +14188,8 @@ mod tests {
             height: block_header.height().get(),
             view: 5,
             epoch: 1,
+            chain_order_hash: default_chain_order_hash(),
+            rechain_seq: 0,
             mode_tag: PERMISSIONED_TAG.to_string(),
             highest_qc: None,
             validator_set_hash: HashOf::new(&validator_set),

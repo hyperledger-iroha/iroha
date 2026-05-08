@@ -56,6 +56,8 @@
 //! - `connect` (on by default): WalletConnect-style WS and minimal in-node relay
 //! - `app_api_https` (off by default): enables HTTPS webhook delivery using reqwest + rustls native roots
 //! - `app_api_wss` (off by default): enables WebSocket/WebSocket Secure webhook delivery
+#[cfg(feature = "app_api")]
+mod account_activity;
 mod api_version;
 #[cfg(feature = "app_api")]
 mod app_api;
@@ -3473,29 +3475,24 @@ fn push_error_response(
 #[cfg(all(feature = "app_api", feature = "push"))]
 async fn handler_push_register_device(
     State(app): State<SharedAppState>,
-    NoritoJson(mut req): NoritoJson<push::RegisterDeviceRequest>,
+    method: HttpMethod,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+    crate::utils::extractors::NoritoJsonWithBytes {
+        value: mut req,
+        raw,
+    }: crate::utils::extractors::NoritoJsonWithBytes<push::RegisterDeviceRequest>,
 ) -> AxResponse {
-    if app.push.is_none() {
-        return push_error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "push_disabled",
-            "push bridge disabled",
-        );
-    }
-    let account_id = match routing::parse_account_literal_with_state(
-        app.state.as_ref(),
+    let account_id = match push_authorize_device_request(
+        &app,
+        &method,
+        &uri,
+        &headers,
+        raw.as_ref(),
         &req.account_id,
-        &app.telemetry,
-        "/v1/notify/devices",
     ) {
-        Ok((account_id, _)) => account_id,
-        Err(_) => {
-            return push_error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_account",
-                format!("invalid account id `{}`", req.account_id.trim()),
-            );
-        }
+        Ok(account_id) => account_id,
+        Err(response) => return response,
     };
     req.account_id = account_id.to_string();
     let rate_key = format!("push:{}", req.account_id);
@@ -3539,7 +3536,141 @@ async fn handler_push_register_device(
             "empty_token",
             "token must not be empty",
         ),
+        Err(push::PushError::InvalidEnvironment(value)) => push_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "push_invalid_environment",
+            format!("unsupported APNs environment `{value}`"),
+        ),
+        Err(push::PushError::Storage(value)) => push_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "push_storage_error",
+            value,
+        ),
     }
+}
+
+#[cfg(all(feature = "app_api", feature = "push"))]
+async fn handler_push_unregister_device(
+    State(app): State<SharedAppState>,
+    method: HttpMethod,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+    crate::utils::extractors::NoritoJsonWithBytes {
+        value: mut req,
+        raw,
+    }: crate::utils::extractors::NoritoJsonWithBytes<push::UnregisterDeviceRequest>,
+) -> AxResponse {
+    let account_id = match push_authorize_device_request(
+        &app,
+        &method,
+        &uri,
+        &headers,
+        raw.as_ref(),
+        &req.account_id,
+    ) {
+        Ok(account_id) => account_id,
+        Err(response) => return response,
+    };
+    req.account_id = account_id.to_string();
+    let bridge = app.push.as_ref().expect("checked push presence");
+    match bridge.unregister_device(req) {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(push::PushError::Disabled) => push_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "push_disabled",
+            "push bridge disabled",
+        ),
+        Err(push::PushError::InvalidAccount(value)) => push_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_account",
+            format!("invalid account id `{value}`"),
+        ),
+        Err(push::PushError::InvalidPlatform(value)) => push_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_platform",
+            format!("unsupported platform `{value}`"),
+        ),
+        Err(push::PushError::EmptyToken) => push_error_response(
+            StatusCode::BAD_REQUEST,
+            "empty_token",
+            "token must not be empty",
+        ),
+        Err(push::PushError::Storage(value)) => push_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "push_storage_error",
+            value,
+        ),
+        Err(push::PushError::MissingCredentials { .. })
+        | Err(push::PushError::TooManyTopics { .. })
+        | Err(push::PushError::InvalidEnvironment(_)) => StatusCode::ACCEPTED.into_response(),
+    }
+}
+
+#[cfg(all(feature = "app_api", feature = "push"))]
+fn push_authorize_device_request(
+    app: &SharedAppState,
+    method: &HttpMethod,
+    uri: &axum::http::Uri,
+    headers: &HeaderMap,
+    body: &[u8],
+    account_literal: &str,
+) -> Result<AccountId, AxResponse> {
+    if app.push.is_none() {
+        return Err(push_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "push_disabled",
+            "push bridge disabled",
+        ));
+    }
+    let account_id = match routing::parse_account_literal_with_state(
+        app.state.as_ref(),
+        account_literal,
+        &app.telemetry,
+        "/v1/notify/devices",
+    ) {
+        Ok((account_id, _)) => account_id,
+        Err(_) => {
+            return Err(push_error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_account",
+                format!("invalid account id `{}`", account_literal.trim()),
+            ));
+        }
+    };
+    match crate::app_auth::verify_canonical_request(
+        &app.state,
+        headers,
+        method,
+        uri,
+        body,
+        Some(&account_id),
+    ) {
+        Ok(Some(_)) => Ok(account_id),
+        Ok(None) => Err(push_error_response(
+            StatusCode::UNAUTHORIZED,
+            "push_auth_required",
+            "signed account headers are required",
+        )),
+        Err(error) => Err(push_auth_error_response(error)),
+    }
+}
+
+#[cfg(all(feature = "app_api", feature = "push"))]
+fn push_auth_error_response(error: Error) -> AxResponse {
+    if let Error::Query(iroha_data_model::ValidationFail::NotPermitted(message)) = &error
+        && message.contains("does not match")
+    {
+        return push_error_response(
+            StatusCode::FORBIDDEN,
+            "push_account_mismatch",
+            "signed account does not match device account",
+        );
+    }
+    push_error_response(
+        StatusCode::UNAUTHORIZED,
+        "push_auth_invalid",
+        error.to_string(),
+    )
 }
 
 fn ensure_proof_api_version(
@@ -33912,7 +34043,10 @@ impl Torii {
                 )
                 .route("/v1/offline/v2/audit", post(handler_offline_note_v2_audit));
             #[cfg(feature = "push")]
-            let router = router.route("/v1/notify/devices", post(handler_push_register_device));
+            let router = router.route(
+                "/v1/notify/devices",
+                post(handler_push_register_device).delete(handler_push_unregister_device),
+            );
             let router = router
                 // Ledger-backed SNS namespace registry
                 .route("/v1/sns/names", post(sns::handle_register_name))
@@ -34966,7 +35100,9 @@ impl Torii {
         #[cfg(feature = "push")]
         let (push_bridge, push_rate_limiter) = {
             let bridge = if config.push.enabled {
-                Some(push::PushBridge::new(config.push.clone()))
+                let bridge = push::PushBridge::new(config.push.clone());
+                bridge.start_event_worker(kura.clone(), events.clone());
+                Some(bridge)
             } else {
                 None
             };
@@ -38207,6 +38343,14 @@ pub(crate) mod tests_runtime_handlers {
 
     pub fn mk_app_state_for_tests_with_world(world: World) -> SharedAppState {
         mk_app_state_for_tests_with_world_and_options(world, None, None, None, None)
+    }
+
+    #[cfg(feature = "push")]
+    pub fn mk_app_state_for_tests_with_world_and_push(
+        world: World,
+        push: iroha_config::parameters::actual::Push,
+    ) -> SharedAppState {
+        mk_app_state_for_tests_with_world_and_options(world, None, None, None, Some(push))
     }
 
     #[cfg(feature = "app_api")]
@@ -44027,13 +44171,59 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[cfg(all(feature = "app_api", feature = "push"))]
-    fn mk_push_request(token: &str) -> push::RegisterDeviceRequest {
+    fn push_test_identity(seed: u8) -> (KeyPair, AccountId) {
+        let key_pair = KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519);
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        (key_pair, account_id)
+    }
+
+    #[cfg(all(feature = "app_api", feature = "push"))]
+    fn push_test_config() -> iroha_config::parameters::actual::Push {
+        iroha_config::parameters::actual::Push {
+            enabled: true,
+            fcm_project_id: Some("project".to_string()),
+            fcm_service_account_path: Some(std::path::PathBuf::from("/tmp/service-account.json")),
+            ..Default::default()
+        }
+    }
+
+    #[cfg(all(feature = "app_api", feature = "push"))]
+    fn mk_push_request(account_id: &AccountId, token: &str) -> push::RegisterDeviceRequest {
         push::RegisterDeviceRequest {
-            account_id: "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE".to_string(),
+            account_id: account_id.to_string(),
             platform: "FCM".to_string(),
             token: token.to_string(),
             topics: Some(vec!["orders".into()]),
         }
+    }
+
+    #[cfg(all(feature = "app_api", feature = "push"))]
+    fn signed_push_json<T>(
+        account_id: &AccountId,
+        key_pair: &KeyPair,
+        method: Method,
+        uri: axum::http::Uri,
+        value: T,
+    ) -> (
+        Method,
+        axum::http::Uri,
+        HeaderMap,
+        crate::utils::extractors::NoritoJsonWithBytes<T>,
+    )
+    where
+        T: Clone + norito::json::JsonSerialize,
+    {
+        let body = norito::json::to_vec(&value).expect("encode push body");
+        let headers = signed_app_headers(account_id, key_pair, &method, &uri, body.as_ref());
+        (
+            method,
+            uri,
+            headers,
+            crate::utils::extractors::NoritoJsonWithBytes {
+                value,
+                raw: axum::body::Bytes::from(body),
+            },
+        )
     }
 
     #[cfg(all(feature = "app_api", feature = "push"))]
@@ -44048,12 +44238,15 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn push_registration_rejected_when_disabled() {
         let app = mk_app_state_for_tests();
+        let (key_pair, account_id) = push_test_identity(1);
+        let req = mk_push_request(&account_id, "t-disabled");
+        let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
+        let (method, uri, headers, body) =
+            signed_push_json(&account_id, &key_pair, Method::POST, uri, req);
 
-        let resp = super::handler_push_register_device(
-            State(app.clone()),
-            NoritoJson(mk_push_request("t-disabled")),
-        )
-        .await;
+        let resp =
+            super::handler_push_register_device(State(app.clone()), method, uri, headers, body)
+                .await;
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         let err = extract_error(resp).await;
         assert_eq!(err.code(), "push_disabled");
@@ -44066,21 +44259,23 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(all(feature = "app_api", feature = "push"))]
     #[tokio::test]
     async fn push_registration_requires_credentials() {
-        let app = mk_app_state_for_tests_with_options(
-            None,
-            None,
-            None,
-            Some(iroha_config::parameters::actual::Push {
+        let (key_pair, account_id) = push_test_identity(2);
+        let _data_dir = crate::test_utils::TestDataDirGuard::new();
+        let app = mk_app_state_for_tests_with_world_and_push(
+            world_with_account(&account_id),
+            iroha_config::parameters::actual::Push {
                 enabled: true,
                 ..Default::default()
-            }),
+            },
         );
+        let req = mk_push_request(&account_id, "t-missing-creds");
+        let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
+        let (method, uri, headers, body) =
+            signed_push_json(&account_id, &key_pair, Method::POST, uri, req);
 
-        let resp = super::handler_push_register_device(
-            State(app.clone()),
-            NoritoJson(mk_push_request("t-missing-creds")),
-        )
-        .await;
+        let resp =
+            super::handler_push_register_device(State(app.clone()), method, uri, headers, body)
+                .await;
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         let err = extract_error(resp).await;
         assert_eq!(err.code(), "push_missing_credentials");
@@ -44091,22 +44286,20 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(all(feature = "app_api", feature = "push"))]
     #[tokio::test]
     async fn push_registration_succeeds_with_credentials() {
-        let app = mk_app_state_for_tests_with_options(
-            None,
-            None,
-            None,
-            Some(iroha_config::parameters::actual::Push {
-                enabled: true,
-                fcm_api_key: Some("k".to_string()),
-                ..Default::default()
-            }),
+        let (key_pair, account_id) = push_test_identity(3);
+        let _data_dir = crate::test_utils::TestDataDirGuard::new();
+        let app = mk_app_state_for_tests_with_world_and_push(
+            world_with_account(&account_id),
+            push_test_config(),
         );
+        let req = mk_push_request(&account_id, "t-success");
+        let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
+        let (method, uri, headers, body) =
+            signed_push_json(&account_id, &key_pair, Method::POST, uri, req);
 
-        let resp = super::handler_push_register_device(
-            State(app.clone()),
-            NoritoJson(mk_push_request("t-success")),
-        )
-        .await;
+        let resp =
+            super::handler_push_register_device(State(app.clone()), method, uri, headers, body)
+                .await;
         assert_eq!(resp.status(), StatusCode::ACCEPTED);
         let bridge = app.push.as_ref().expect("push bridge configured");
         assert_eq!(bridge.device_count(), 1);
@@ -44115,24 +44308,22 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(all(feature = "app_api", feature = "push"))]
     #[tokio::test]
     async fn push_registration_accepts_account_alias_and_stores_canonical_i105() {
-        let app = mk_app_state_for_tests_with_options(
-            None,
-            None,
-            None,
-            Some(iroha_config::parameters::actual::Push {
-                enabled: true,
-                fcm_api_key: Some("k".to_string()),
-                ..Default::default()
-            }),
+        let (key_pair, canonical_account) = push_test_identity(4);
+        let _data_dir = crate::test_utils::TestDataDirGuard::new();
+        let app = mk_app_state_for_tests_with_world_and_push(
+            world_with_account(&canonical_account),
+            push_test_config(),
         );
-        let mut req = mk_push_request("t-alias");
-        let canonical_account = AccountId::parse_encoded(&req.account_id)
-            .expect("canonical test i105 should parse")
-            .into_account_id();
+        let mut req = mk_push_request(&canonical_account, "t-alias");
         bind_account_alias_for_test(&app, &canonical_account, "wallet@universal");
         req.account_id = "wallet@universal".to_string();
+        let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
+        let (method, uri, headers, body) =
+            signed_push_json(&canonical_account, &key_pair, Method::POST, uri, req);
 
-        let resp = super::handler_push_register_device(State(app.clone()), NoritoJson(req)).await;
+        let resp =
+            super::handler_push_register_device(State(app.clone()), method, uri, headers, body)
+                .await;
         assert_eq!(resp.status(), StatusCode::ACCEPTED);
 
         let bridge = app.push.as_ref().expect("push bridge configured");
@@ -44140,6 +44331,76 @@ pub(crate) mod tests_runtime_handlers {
             .registered_device("t-alias")
             .expect("registered device should exist");
         assert_eq!(device.account_id, canonical_account.to_string());
+    }
+
+    #[cfg(all(feature = "app_api", feature = "push"))]
+    #[tokio::test]
+    async fn push_registration_rejects_unsigned_request() {
+        let (_key_pair, account_id) = push_test_identity(5);
+        let _data_dir = crate::test_utils::TestDataDirGuard::new();
+        let app = mk_app_state_for_tests_with_world_and_push(
+            world_with_account(&account_id),
+            push_test_config(),
+        );
+        let req = mk_push_request(&account_id, "t-unsigned");
+        let raw = norito::json::to_vec(&req).expect("push json");
+        let resp = super::handler_push_register_device(
+            State(app),
+            Method::POST,
+            "/v1/notify/devices".parse().expect("uri"),
+            HeaderMap::new(),
+            crate::utils::extractors::NoritoJsonWithBytes {
+                value: req,
+                raw: axum::body::Bytes::from(raw),
+            },
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let err = extract_error(resp).await;
+        assert_eq!(err.code(), "push_auth_required");
+    }
+
+    #[cfg(all(feature = "app_api", feature = "push"))]
+    #[tokio::test]
+    async fn push_unregister_removes_device() {
+        let (key_pair, account_id) = push_test_identity(6);
+        let _data_dir = crate::test_utils::TestDataDirGuard::new();
+        let app = mk_app_state_for_tests_with_world_and_push(
+            world_with_account(&account_id),
+            push_test_config(),
+        );
+        let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
+        let req = mk_push_request(&account_id, "t-remove");
+        let (method, signed_uri, headers, body) = signed_push_json(
+            &account_id,
+            &key_pair,
+            Method::POST,
+            uri.clone(),
+            req.clone(),
+        );
+        let resp = super::handler_push_register_device(
+            State(app.clone()),
+            method,
+            signed_uri,
+            headers,
+            body,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+        let (method, signed_uri, headers, body) =
+            signed_push_json(&account_id, &key_pair, Method::DELETE, uri, req);
+        let resp = super::handler_push_unregister_device(
+            State(app.clone()),
+            method,
+            signed_uri,
+            headers,
+            body,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        let bridge = app.push.as_ref().expect("push bridge configured");
+        assert_eq!(bridge.device_count(), 0);
     }
 
     fn make_signed_block(
@@ -45309,6 +45570,8 @@ pub(crate) mod tests_runtime_handlers {
             height,
             view,
             epoch,
+            chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
@@ -45333,6 +45596,8 @@ pub(crate) mod tests_runtime_handlers {
                 height,
                 view,
                 epoch,
+                chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
+                rechain_seq: 0,
                 mode_tag: PERMISSIONED_TAG.to_string(),
                 highest_qc: None,
                 validator_set_hash: HashOf::new(&validator_set),
@@ -45362,6 +45627,8 @@ pub(crate) mod tests_runtime_handlers {
             height,
             view: 0,
             epoch: 0,
+            chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
@@ -45376,6 +45643,8 @@ pub(crate) mod tests_runtime_handlers {
             post_state_root,
             view: 0,
             epoch: 0,
+            chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
             mode_tag: PERMISSIONED_TAG.to_string(),
             highest_qc: None,
             validator_set_hash: HashOf::new(&vec![peer_id.clone()]),
@@ -55490,6 +55759,8 @@ mod tests {
     };
 
     use super::*;
+    #[cfg(feature = "push")]
+    use crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_push;
     #[cfg(feature = "telemetry")]
     use crate::tests_runtime_handlers::mk_norito_rpc_test_harness;
     #[cfg(feature = "app_api")]

@@ -14,7 +14,7 @@ use iroha_core::{
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     block::BlockHeader,
-    consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
+    consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1, default_chain_order_hash},
 };
 use nonzero_ext::nonzero;
 
@@ -36,6 +36,8 @@ fn seed_commit_qc_state() -> (Arc<CoreState>, HashOf<BlockHeader>, iroha_crypto:
         height: 7,
         view: 3,
         epoch: 2,
+        chain_order_hash: default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: iroha_core::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),

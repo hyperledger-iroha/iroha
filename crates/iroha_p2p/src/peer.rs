@@ -3533,6 +3533,14 @@ mod run {
         /// - Fail to decrypt message
         /// - Fail to decode the encrypted envelope
         fn parse_next_encrypted_frame(&mut self) -> Result<bool, Error> {
+            enum ParsedFrame<M> {
+                Messages(VecDeque<(M, usize)>),
+                Malformed {
+                    context: MalformedPayloadFrameContext,
+                    messages: VecDeque<(M, usize)>,
+                },
+            }
+
             self.last_malformed_payload = None;
             let mut buf = &self.buffer[..];
             if buf.remaining() < Self::U32_SIZE {
@@ -3549,14 +3557,6 @@ mod run {
             }
 
             let data = &buf[..size];
-            enum ParsedFrame<M> {
-                Messages(VecDeque<(M, usize)>),
-                Malformed {
-                    context: MalformedPayloadFrameContext,
-                    messages: VecDeque<(M, usize)>,
-                },
-            }
-
             let parsed = (|| -> Result<ParsedFrame<M>, Error> {
                 let decrypted = self.cryptographer.decrypt_into(data, &mut self.decrypted)?;
                 // Decrypted payload may contain multiple Norito-framed messages.

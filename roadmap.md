@@ -1,8 +1,14 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-05-07
+Last updated: 2026-05-08
 
 Completed history lives in `status.md`. This file should only track unfinished work.
+
+## Account push notifications
+
+- Rerun `./gradlew :core-jvm:test --console=plain` from `kotlin/` in a shell
+  with a JDK installed. The 2026-05-08 push bridge validation could not run the
+  Kotlin/JVM suite because `/usr/libexec/java_home -V` reported no Java runtime.
 
 ## Sumeragi vNext consensus replacement
 
@@ -12,10 +18,11 @@ Completed history lives in `status.md`. This file should only track unfinished w
   frames now enter the live reactor, but the broader block consensus shell
   still needs the remaining effect adapters before the legacy cooperative
   tick/commit sweep and inline validation fallback can be deleted.
-- Bind the selected vNext chain-order hash and `rechain_seq` into the remaining
-  QC vote/certificate preimages, signer-tally/cache keys, deferred vote/QC
-  caches, block-sync sidecars, and evidence replay paths used by the
-  replacement shell.
+- Finish auditing chain-order hash and `rechain_seq` binding in deferred
+  vote/QC caches, signer-tally/cache keys, and evidence replay paths used by
+  the replacement shell. Vote/QC preimages, precommit signer history,
+  block-sync-derived QCs, and validator-checkpoint sidecars now carry the
+  selected binding.
 - Reconstruct vNext chain order from committed/replayed re-chain and
   view-change certificates during block-sync catch-up. The live actor now keeps
   a bounded in-memory certificate journal; persistence/sidecar replay remains

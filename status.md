@@ -2,6 +2,46 @@
 
 Last updated: 2026-05-08
 
+## 2026-05-08 Torii account push notification bridge
+
+- Torii push registration now persists devices under the configured Torii data
+  directory, requires canonical signed request auth for register/unregister,
+  and supports idempotent `POST` plus `DELETE /v1/notify/devices` without
+  putting raw provider tokens in URLs.
+- Added a best-effort non-consensus delivery bridge for committed
+  account-affecting external transactions. The bridge reuses the Explorer
+  account-instruction matcher, queues minimal payloads with persistent
+  dedupe/retry state, dispatches through FCM HTTP v1 and APNs token-auth HTTP/2,
+  and removes invalid provider tokens on permanent provider errors.
+- `torii.push` config now exposes FCM HTTP v1 service-account fields and APNs
+  sandbox/production token-auth fields while retaining deprecated legacy fields
+  for configuration compatibility. OpenAPI, Swift SDK helpers, Kotlin/JVM SDK
+  helpers, and mobile SDK docs were updated for signed registration and
+  unregistration.
+- Focused validation passed with
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-push-target cargo check -p iroha_torii`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-push-target cargo test -p iroha_torii --test push_bridge`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-push-target cargo test -p iroha_torii push --lib`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-push-target cargo test -p iroha_torii account_activity --lib`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-push-target cargo test -p iroha_config push`,
+  and `swift test` from `IrohaSwift`. Kotlin/JVM validation is pending because
+  this shell has no Java runtime (`/usr/libexec/java_home -V` fails).
+
+## 2026-05-08 Sumeragi vNext chain-order sidecar binding
+
+- Block-sync commit QC derivation now preserves the vNext `chain_order_hash`
+  and `rechain_seq` carried by precommit signer history instead of rebuilding
+  sidecar QCs with the default pre-rechain binding.
+- Validator-set checkpoint sidecars now carry the same chain-order binding as
+  the QC they summarize. Checkpoint aggregate verification uses those fields in
+  the commit-vote preimage, so checkpoint-derived QCs cannot be replayed across
+  a different installed chain order.
+- Focused validation passed with
+  `cargo test -p iroha_data_model --lib validator_set_checkpoint_roundtrip_and_hash -- --nocapture`,
+  `cargo test -p iroha_core --lib validate_checkpoint_roster_binds_chain_order -- --nocapture`,
+  `cargo test -p iroha_core --lib vnext -- --nocapture`, and
+  `cargo check -p iroha_core --lib`.
+
 ## 2026-05-07 Sumeragi vNext live control path
 
 - `BlockMessage::VNext` is no longer a validate-and-ignore path in the

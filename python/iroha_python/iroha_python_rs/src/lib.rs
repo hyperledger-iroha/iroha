@@ -39,7 +39,9 @@ use iroha_data_model::{
         BlockHeader,
         consensus::{LaneBlockCommitment, PERMISSIONED_TAG},
     },
-    consensus::{CertPhase, Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
+    consensus::{
+        CertPhase, Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1, default_chain_order_hash,
+    },
     domain::prelude::{Domain, DomainId},
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     isi::{
@@ -7896,6 +7898,8 @@ fn lane_relay_envelope_fixture_py() -> PyResult<(Vec<u8>, Vec<u8>)> {
         height: header.height().get(),
         view: 1,
         epoch: 0,
+        chain_order_hash: default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),

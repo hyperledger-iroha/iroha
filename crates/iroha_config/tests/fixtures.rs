@@ -1110,7 +1110,14 @@ fn minimal_config_snapshot() {
                     connect_timeout: 5s,
                     request_timeout: 10s,
                     max_topics_per_device: 32,
+                    fcm_project_id: None,
+                    fcm_service_account_path: None,
                     fcm_api_key: None,
+                    apns_environment: "sandbox",
+                    apns_topic: None,
+                    apns_team_id: None,
+                    apns_key_id: None,
+                    apns_private_key_path: None,
                     apns_endpoint: None,
                     apns_auth_token: None,
                 },
@@ -4075,7 +4082,7 @@ fn sumeragi_fast_finality_max_transactions_env_parses() {
             .sumeragi
             .block
             .fast_finality_max_transactions
-            .map(|cap| cap.get()),
+            .map(std::num::NonZero::get),
         None
     );
 
@@ -4091,7 +4098,7 @@ fn sumeragi_fast_finality_max_transactions_env_parses() {
         cfg.sumeragi
             .block
             .fast_finality_max_transactions
-            .map(|cap| cap.get()),
+            .map(std::num::NonZero::get),
         Some(256)
     );
 }

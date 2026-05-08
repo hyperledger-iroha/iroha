@@ -3886,6 +3886,47 @@ public struct ToriiCanonicalRequestAuth: Sendable, Equatable {
     }
 }
 
+public struct ToriiPushDeviceRequest: Encodable, Sendable, Equatable {
+    public var accountId: String
+    public var platform: String
+    public var token: String
+    public var topics: [String]?
+
+    private enum CodingKeys: String, CodingKey {
+        case accountId = "account_id"
+        case platform
+        case token
+        case topics
+    }
+
+    public init(accountId: String,
+                platform: String,
+                token: String,
+                topics: [String]? = nil) {
+        self.accountId = accountId
+        self.platform = platform
+        self.token = token
+        self.topics = topics
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalizedAccount = try ToriiRequestValidation.normalizedNonEmpty(accountId,
+                                                                              field: "account_id")
+        let normalizedPlatform = try ToriiRequestValidation.normalizedNonEmpty(platform,
+                                                                               field: "platform")
+        let normalizedToken = try ToriiRequestValidation.normalizedNonEmpty(token,
+                                                                            field: "token")
+        let normalizedTopics = try topics?.map {
+            try ToriiRequestValidation.normalizedNonEmpty($0, field: "topics")
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(normalizedAccount, forKey: .accountId)
+        try container.encode(normalizedPlatform, forKey: .platform)
+        try container.encode(normalizedToken, forKey: .token)
+        try container.encodeIfPresent(normalizedTopics, forKey: .topics)
+    }
+}
+
 public struct ToriiVpnProfile: Decodable, Sendable, Equatable {
     public let available: Bool
     public let supportedExitClasses: [String]
@@ -11526,6 +11567,20 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
+    public func registerPushDevice(_ requestBody: ToriiPushDeviceRequest,
+                                   canonicalAuth: ToriiCanonicalRequestAuth,
+                                   completion: @escaping (Result<Void, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.registerPushDevice(requestBody, canonicalAuth: canonicalAuth) }
+    }
+
+    @discardableResult
+    public func unregisterPushDevice(_ requestBody: ToriiPushDeviceRequest,
+                                     canonicalAuth: ToriiCanonicalRequestAuth,
+                                     completion: @escaping (Result<Void, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.unregisterPushDevice(requestBody, canonicalAuth: canonicalAuth) }
+    }
+
+    @discardableResult
     public func createVpnQuote(_ requestBody: ToriiVpnQuoteCreateRequest,
                                canonicalAuth: ToriiCanonicalRequestAuth? = nil,
                                completion: @escaping (Result<ToriiVpnQuote, Swift.Error>) -> Void) -> Task<Void, Never> {
@@ -12830,6 +12885,26 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                       headers: ["Accept": "application/json"])
         let data = try await data(for: request)
         return try decodeJSON(ToriiVpnProfile.self, from: data)
+    }
+
+    public func registerPushDevice(_ requestBody: ToriiPushDeviceRequest,
+                                   canonicalAuth: ToriiCanonicalRequestAuth) async throws {
+        let body = try JSONEncoder().encode(requestBody)
+        let request = try makeVpnRequest(path: "/v1/notify/devices",
+                                         method: .post,
+                                         body: body,
+                                         canonicalAuth: canonicalAuth)
+        _ = try await data(for: request, acceptedStatus: 202..<203, allowEmptyBody: true)
+    }
+
+    public func unregisterPushDevice(_ requestBody: ToriiPushDeviceRequest,
+                                     canonicalAuth: ToriiCanonicalRequestAuth) async throws {
+        let body = try JSONEncoder().encode(requestBody)
+        let request = try makeVpnRequest(path: "/v1/notify/devices",
+                                         method: .delete,
+                                         body: body,
+                                         canonicalAuth: canonicalAuth)
+        _ = try await data(for: request, acceptedStatus: 202..<203, allowEmptyBody: true)
     }
 
     public func createVpnQuote(_ requestBody: ToriiVpnQuoteCreateRequest,

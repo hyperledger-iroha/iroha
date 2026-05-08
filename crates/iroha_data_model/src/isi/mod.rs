@@ -15,6 +15,8 @@
 //!   closed, visitable set. Despite the name, they are not heap boxes; they are
 //!   plain tagged unions that implement [`crate::isi::Instruction`].
 
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
+
 #[cfg(test)]
 use std::cell::RefCell;
 use std::{

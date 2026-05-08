@@ -139,6 +139,19 @@ canonical unprefixed Base58 asset-definition IDs on the Swift surface.
 
 `IrohaSDK` trims and validates chain/account/asset identifiers before signing and fails fast on malformed inputs. Override `creationTimeProvider` when you need deterministic timestamps for fixture generation or offline signing flows. `defaultSigningAlgorithm` controls the SDK helpers used by `generateSigningKey()` / `signingKey(fromSeed:)`; `Keypair` convenience APIs are Ed25519-only while native-backed algorithms use `NoritoBridge`.
 
+### Push Devices
+
+`ToriiClient.registerPushDevice` and `unregisterPushDevice` wrap `/v1/notify/devices`. Apps obtain their FCM/APNs token from the platform SDK, then submit the token with canonical request auth for the owning account:
+
+```swift
+let body = ToriiPushDeviceRequest(accountId: accountId,
+                                  platform: "FCM",
+                                  token: fcmToken,
+                                  topics: ["activity"])
+try await torii.registerPushDevice(body, canonicalAuth: auth)
+try await torii.unregisterPushDevice(body, canonicalAuth: auth)
+```
+
 ### Subscriptions
 
 Subscription plans live on asset definitions and are billed by triggers. Use

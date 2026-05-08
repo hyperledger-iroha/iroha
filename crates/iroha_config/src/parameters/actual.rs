@@ -5496,11 +5496,25 @@ pub struct Push {
     pub request_timeout: Duration,
     /// Maximum topics recorded per registered device.
     pub max_topics_per_device: NonZeroUsize,
-    /// Optional FCM API key used for dispatch.
+    /// Firebase project ID used with FCM HTTP v1.
+    pub fcm_project_id: Option<String>,
+    /// Path to a Firebase service-account JSON key used to mint FCM OAuth tokens.
+    pub fcm_service_account_path: Option<PathBuf>,
+    /// Deprecated FCM legacy API key. Kept for configuration compatibility only.
     pub fcm_api_key: Option<String>,
-    /// Optional APNS endpoint base URL.
+    /// APNs environment (`sandbox` or `production`).
+    pub apns_environment: String,
+    /// APNs topic, usually the app bundle identifier.
+    pub apns_topic: Option<String>,
+    /// Apple developer team ID for APNs token authentication.
+    pub apns_team_id: Option<String>,
+    /// APNs key ID for token authentication.
+    pub apns_key_id: Option<String>,
+    /// Path to the APNs `.p8` private key used for token authentication.
+    pub apns_private_key_path: Option<PathBuf>,
+    /// Optional APNs endpoint base URL override for tests or private deployments.
     pub apns_endpoint: Option<String>,
-    /// Optional APNS auth token (e.g., JWT).
+    /// Deprecated static APNs auth token. Kept for configuration compatibility only.
     pub apns_auth_token: Option<String>,
 }
 
@@ -5517,7 +5531,14 @@ impl Default for Push {
                 defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE.max(1),
             )
             .expect("default push max topics non-zero"),
+            fcm_project_id: None,
+            fcm_service_account_path: None,
             fcm_api_key: None,
+            apns_environment: defaults::torii::PUSH_APNS_ENVIRONMENT.to_string(),
+            apns_topic: None,
+            apns_team_id: None,
+            apns_key_id: None,
+            apns_private_key_path: None,
             apns_endpoint: None,
             apns_auth_token: None,
         }

@@ -2401,6 +2401,46 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterAndUnregisterPushDeviceSignCanonicalBody() async throws {
+        let auth = ToriiCanonicalRequestAuth(accountId: "alice",
+                                             privateKey: Data(repeating: 7, count: 32),
+                                             timestampMs: 1_700_000_000_010,
+                                             nonce: "push-nonce-1")
+        var callCount = 0
+        StubURLProtocol.handler = { request in
+            callCount += 1
+            XCTAssertEqual(request.url?.path, "/v1/notify/devices")
+            XCTAssertEqual(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount), "alice")
+            XCTAssertEqual(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature) == nil, false)
+            let body = self.bodyJSON(from: request)
+            XCTAssertEqual(body["account_id"] as? String, "alice")
+            XCTAssertEqual(body["platform"] as? String, "FCM")
+            XCTAssertEqual(body["token"] as? String, "token-1")
+            XCTAssertEqual(body["topics"] as? [String], ["activity"])
+            if callCount == 1 {
+                XCTAssertEqual(request.httpMethod, "POST")
+            } else {
+                XCTAssertEqual(request.httpMethod, "DELETE")
+            }
+            let response = HTTPURLResponse(url: request.url!, statusCode: 202, httpVersion: nil,
+                                           headerFields: [:])!
+            return (response, Data())
+        }
+        let client = makeClient()
+        let request = ToriiPushDeviceRequest(accountId: " alice ",
+                                             platform: "FCM",
+                                             token: " token-1 ",
+                                             topics: [" activity "])
+        try await client.registerPushDevice(request, canonicalAuth: auth)
+        let deleteAuth = ToriiCanonicalRequestAuth(accountId: "alice",
+                                                   privateKey: Data(repeating: 7, count: 32),
+                                                   timestampMs: 1_700_000_000_011,
+                                                   nonce: "push-nonce-2")
+        try await client.unregisterPushDevice(request, canonicalAuth: deleteAuth)
+        XCTAssertEqual(callCount, 2)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testCreateVpnQuoteSignsAndDeserializesOpenLeaseInstruction() async throws {
         let meteringKey = String(repeating: "ab", count: 32)
         let quoteId = String(repeating: "cd", count: 32)

@@ -17,7 +17,7 @@ use iroha_core::{
     queue::Queue,
     state::{State, World},
     sumeragi::{
-        consensus::{PERMISSIONED_TAG, Phase, Vote, vote_preimage},
+        consensus::{PERMISSIONED_TAG, Phase, Vote, default_chain_order_hash, vote_preimage},
         status::{record_commit_qc, reset_commit_certs_for_tests},
     },
 };
@@ -94,6 +94,8 @@ async fn bridge_finality_endpoint_roundtrips_into_verifier() {
         height: 1,
         view: 0,
         epoch: 0,
+        chain_order_hash: default_chain_order_hash(),
+        rechain_seq: 0,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -112,6 +114,8 @@ async fn bridge_finality_endpoint_roundtrips_into_verifier() {
         post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
         view: 0,
         epoch: 0,
+        chain_order_hash: default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: mode_tag.to_string(),
         highest_qc: None,
         validator_set_hash,

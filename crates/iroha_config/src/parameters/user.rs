@@ -15566,11 +15566,26 @@ pub struct ToriiPush {
     /// Maximum topics recorded per registered device.
     #[config(default = "defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE")]
     pub max_topics_per_device: usize,
-    /// Optional FCM API key for push delivery.
+    /// Firebase project ID used with FCM HTTP v1.
+    pub fcm_project_id: Option<String>,
+    /// Path to a Firebase service-account JSON key used to mint FCM OAuth tokens.
+    pub fcm_service_account_path: Option<PathBuf>,
+    /// Deprecated FCM legacy API key. Kept for configuration compatibility only.
     pub fcm_api_key: Option<String>,
-    /// Optional APNS endpoint base URL.
+    /// APNs environment (`sandbox` or `production`).
+    #[config(default = "defaults::torii::PUSH_APNS_ENVIRONMENT.to_owned()")]
+    pub apns_environment: String,
+    /// APNs topic, usually the app bundle identifier.
+    pub apns_topic: Option<String>,
+    /// Apple developer team ID for APNs token authentication.
+    pub apns_team_id: Option<String>,
+    /// APNs key ID for token authentication.
+    pub apns_key_id: Option<String>,
+    /// Path to the APNs `.p8` private key used for token authentication.
+    pub apns_private_key_path: Option<PathBuf>,
+    /// Optional APNs endpoint base URL override for tests or private deployments.
     pub apns_endpoint: Option<String>,
-    /// Optional APNS auth token (e.g., JWT).
+    /// Deprecated static APNs auth token. Kept for configuration compatibility only.
     pub apns_auth_token: Option<String>,
 }
 
@@ -15587,11 +15602,29 @@ impl Default for ToriiPush {
                 defaults::torii::PUSH_REQUEST_TIMEOUT_MS,
             )),
             max_topics_per_device: defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE,
+            fcm_project_id: None,
+            fcm_service_account_path: None,
             fcm_api_key: None,
+            apns_environment: defaults::torii::PUSH_APNS_ENVIRONMENT.to_owned(),
+            apns_topic: None,
+            apns_team_id: None,
+            apns_key_id: None,
+            apns_private_key_path: None,
             apns_endpoint: None,
             apns_auth_token: None,
         }
     }
+}
+
+fn trim_optional(value: Option<String>) -> Option<String> {
+    value.and_then(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_owned())
+        }
+    })
 }
 
 impl ToriiPush {
@@ -15610,10 +15643,112 @@ impl ToriiPush {
             request_timeout: self.request_timeout_ms.get(),
             max_topics_per_device: std::num::NonZeroUsize::new(self.max_topics_per_device.max(1))
                 .unwrap_or(nonzero!(1_usize)),
+            fcm_project_id: trim_optional(self.fcm_project_id),
+            fcm_service_account_path: self.fcm_service_account_path,
             fcm_api_key: self.fcm_api_key,
+            apns_environment: if self.apns_environment.trim().is_empty() {
+                defaults::torii::PUSH_APNS_ENVIRONMENT.to_owned()
+            } else {
+                self.apns_environment.trim().to_ascii_lowercase()
+            },
+            apns_topic: trim_optional(self.apns_topic),
+            apns_team_id: trim_optional(self.apns_team_id),
+            apns_key_id: trim_optional(self.apns_key_id),
+            apns_private_key_path: self.apns_private_key_path,
             apns_endpoint: self.apns_endpoint,
             apns_auth_token: self.apns_auth_token,
         }
+    }
+}
+
+#[cfg(test)]
+mod torii_push_tests {
+    use super::*;
+
+    #[test]
+    fn torii_push_parse_defaults_push_bridge_fields() {
+        let parsed = ToriiPush::default().parse();
+
+        assert!(!parsed.enabled);
+        assert_eq!(
+            parsed.rate_per_minute.map(NonZeroU32::get),
+            defaults::torii::PUSH_RATE_PER_MINUTE
+        );
+        assert_eq!(
+            parsed.burst.map(NonZeroU32::get),
+            defaults::torii::PUSH_BURST
+        );
+        assert_eq!(
+            parsed.connect_timeout,
+            Duration::from_millis(defaults::torii::PUSH_CONNECT_TIMEOUT_MS)
+        );
+        assert_eq!(
+            parsed.request_timeout,
+            Duration::from_millis(defaults::torii::PUSH_REQUEST_TIMEOUT_MS)
+        );
+        assert_eq!(
+            parsed.max_topics_per_device.get(),
+            defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE
+        );
+        assert_eq!(
+            parsed.apns_environment,
+            defaults::torii::PUSH_APNS_ENVIRONMENT
+        );
+        assert!(parsed.fcm_project_id.is_none());
+        assert!(parsed.fcm_service_account_path.is_none());
+        assert!(parsed.apns_topic.is_none());
+        assert!(parsed.apns_team_id.is_none());
+        assert!(parsed.apns_key_id.is_none());
+        assert!(parsed.apns_private_key_path.is_none());
+    }
+
+    #[test]
+    fn torii_push_parse_http_v1_apns_and_deprecated_fields() {
+        let parsed = ToriiPush {
+            enabled: true,
+            rate_per_minute: Some(0),
+            burst: Some(0),
+            connect_timeout_ms: DurationMs(Duration::from_millis(250)),
+            request_timeout_ms: DurationMs(Duration::from_millis(750)),
+            max_topics_per_device: 0,
+            fcm_project_id: Some("  taira-mobile  ".to_owned()),
+            fcm_service_account_path: Some(PathBuf::from("/run/secrets/fcm.json")),
+            fcm_api_key: Some("legacy-key".to_owned()),
+            apns_environment: "  PRODUCTION  ".to_owned(),
+            apns_topic: Some("  org.sora.wallet  ".to_owned()),
+            apns_team_id: Some("  TEAMID  ".to_owned()),
+            apns_key_id: Some("  KEYID  ".to_owned()),
+            apns_private_key_path: Some(PathBuf::from("/run/secrets/AuthKey_KEYID.p8")),
+            apns_endpoint: Some("https://apns.internal.example".to_owned()),
+            apns_auth_token: Some("legacy-apns-token".to_owned()),
+        }
+        .parse();
+
+        assert!(parsed.enabled);
+        assert!(parsed.rate_per_minute.is_none());
+        assert!(parsed.burst.is_none());
+        assert_eq!(parsed.connect_timeout, Duration::from_millis(250));
+        assert_eq!(parsed.request_timeout, Duration::from_millis(750));
+        assert_eq!(parsed.max_topics_per_device.get(), 1);
+        assert_eq!(parsed.fcm_project_id.as_deref(), Some("taira-mobile"));
+        assert_eq!(
+            parsed.fcm_service_account_path.as_deref(),
+            Some(Path::new("/run/secrets/fcm.json"))
+        );
+        assert_eq!(parsed.fcm_api_key.as_deref(), Some("legacy-key"));
+        assert_eq!(parsed.apns_environment, "production");
+        assert_eq!(parsed.apns_topic.as_deref(), Some("org.sora.wallet"));
+        assert_eq!(parsed.apns_team_id.as_deref(), Some("TEAMID"));
+        assert_eq!(parsed.apns_key_id.as_deref(), Some("KEYID"));
+        assert_eq!(
+            parsed.apns_private_key_path.as_deref(),
+            Some(Path::new("/run/secrets/AuthKey_KEYID.p8"))
+        );
+        assert_eq!(
+            parsed.apns_endpoint.as_deref(),
+            Some("https://apns.internal.example")
+        );
+        assert_eq!(parsed.apns_auth_token.as_deref(), Some("legacy-apns-token"));
     }
 }
 

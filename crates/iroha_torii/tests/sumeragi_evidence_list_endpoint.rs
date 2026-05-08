@@ -10,7 +10,10 @@ use iroha_core::{
     kura::Kura,
     query::{insert_evidence_record_for_test, store::LiveQueryStore},
     state::{State as CoreState, World},
-    sumeragi::consensus::{Evidence, EvidenceKind, EvidencePayload, Phase, Qc, QcAggregate, Vote},
+    sumeragi::consensus::{
+        Evidence, EvidenceKind, EvidencePayload, Phase, Qc, QcAggregate, Vote,
+        default_chain_order_hash,
+    },
     telemetry::StateTelemetry,
 };
 use iroha_crypto::{Hash, HashOf};
@@ -30,6 +33,8 @@ fn make_invalid_commit_qc_evidence(height: u64, seed: u8) -> Evidence {
         height,
         view: 0,
         epoch: 0,
+        chain_order_hash: default_chain_order_hash(),
+        rechain_seq: 0,
         mode_tag: "test-mode".to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x11; 32])),
@@ -60,6 +65,8 @@ fn make_double_prevote_evidence(height: u64, seed: u8) -> Evidence {
             height,
             view: 0,
             epoch: 0,
+            chain_order_hash: default_chain_order_hash(),
+            rechain_seq: 0,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),

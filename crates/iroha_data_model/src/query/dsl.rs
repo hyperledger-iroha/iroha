@@ -939,7 +939,7 @@ mod codec_tests {
         trigger,
     };
 
-    fn expect_committed_tx_tree(predicate: CompoundPredicate<query::CommittedTransaction>) -> P {
+    fn expect_committed_tx_tree(predicate: &CompoundPredicate<query::CommittedTransaction>) -> P {
         match predicate.to_wire() {
             CompoundPredicateWire::TxPredicate(tree) => tree,
             other => panic!(
@@ -1166,7 +1166,7 @@ mod codec_tests {
             },
         );
 
-        let tree = expect_committed_tx_tree(left.and(right));
+        let tree = expect_committed_tx_tree(&left.and(right));
         assert!(matches!(tree, P::ResultEq(true)));
     }
 
@@ -1179,7 +1179,7 @@ mod codec_tests {
             P::And(vec![P::TsGte(10), P::EntryExists(true)]),
         );
 
-        let tree = expect_committed_tx_tree(left.and(right));
+        let tree = expect_committed_tx_tree(&left.and(right));
         assert!(matches!(
             tree,
             P::And(children)
@@ -1202,7 +1202,7 @@ mod codec_tests {
             P::TsGte(10),
         );
 
-        let tree = expect_committed_tx_tree(left.and(right));
+        let tree = expect_committed_tx_tree(&left.and(right));
         assert!(matches!(
             tree,
             P::And(children)
@@ -1222,7 +1222,7 @@ mod codec_tests {
             },
         );
 
-        let tree = expect_committed_tx_tree(left.and(right));
+        let tree = expect_committed_tx_tree(&left.and(right));
         assert!(matches!(
             tree,
             P::And(children)
@@ -1390,7 +1390,7 @@ mod codec_tests {
             P::ResultEq(true),
         );
 
-        let tree = expect_committed_tx_tree(left.and(right));
+        let tree = expect_committed_tx_tree(&left.and(right));
         assert!(matches!(tree, P::Const(false)));
     }
 

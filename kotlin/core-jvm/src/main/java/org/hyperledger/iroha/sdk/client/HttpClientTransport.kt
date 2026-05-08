@@ -184,6 +184,16 @@ class HttpClientTransport(
     fun getVpnProfile(): CompletableFuture<VpnProfile> =
         fetchJson(buildJsonGetRequest("/v1/vpn/profile", emptyMap()), VpnJsonParser::parseProfile, "vpn profile")
 
+    fun registerPushDevice(requestBody: PushDeviceRequest, canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<ClientResponse> {
+        val body = encodeJsonBody(buildPushDevicePayload(requestBody.accountId, requestBody.platform, requestBody.token, requestBody.topics))
+        return executeAccepted(buildVpnRequest("POST", "/v1/notify/devices", body, canonicalAuth), "push device register", 202)
+    }
+
+    fun unregisterPushDevice(requestBody: PushDeviceRequest, canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<ClientResponse> {
+        val body = encodeJsonBody(buildPushDevicePayload(requestBody.accountId, requestBody.platform, requestBody.token, requestBody.topics))
+        return executeAccepted(buildVpnRequest("DELETE", "/v1/notify/devices", body, canonicalAuth), "push device unregister", 202)
+    }
+
     fun createVpnQuote(requestBody: VpnQuoteCreateRequest, canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<VpnQuote> {
         val body = encodeJsonBody(buildVpnQuoteCreatePayload(requestBody.exitClass, requestBody.meteringPublicKeyHex))
         return fetchJson(buildVpnRequest("POST", "/v1/vpn/quotes", body, canonicalAuth), VpnJsonParser::parseQuote, "vpn quote create")
@@ -505,6 +515,27 @@ class HttpClientTransport(
         }; return future
     }
 
+    private fun executeAccepted(request: TransportRequest, errorContext: String, acceptedStatus: Int): CompletableFuture<ClientResponse> {
+        notifyRequest(request); val future = CompletableFuture<ClientResponse>()
+        executor.execute(request).whenComplete { response, throwable ->
+            if (throwable != null) {
+                val cause = if (throwable is CompletionException) throwable.cause else throwable
+                notifyFailure(request, cause!!)
+                future.completeExceptionally(RuntimeException("$errorContext request failed", cause))
+                return@whenComplete
+            }
+            val clientResponse = ClientResponse(response.statusCode, response.body, response.message, null, extractRejectCode(response))
+            if (response.statusCode != acceptedStatus) {
+                val error = RuntimeException("$errorContext request failed with status ${response.statusCode}")
+                notifyFailure(request, error)
+                future.completeExceptionally(error)
+                return@whenComplete
+            }
+            notifyResponse(request, clientResponse)
+            future.complete(clientResponse)
+        }; return future
+    }
+
     private fun <T : Any> fetchJsonAllowingNotFound(request: TransportRequest, parser: Function<ByteArray, T>, errorContext: String): CompletableFuture<Optional<T>> {
         notifyRequest(request); val future = CompletableFuture<Optional<T>>()
         executor.execute(request).whenComplete { response, throwable ->
@@ -640,6 +671,15 @@ class HttpClientTransport(
             val payload = LinkedHashMap<String, Any>()
             payload["exit_class"] = normalizeOptionalNonBlank(exitClass, "exitClass") ?: ""
             payload["metering_public_key_hex"] = normalizeHex32(meteringPublicKeyHex, "meteringPublicKeyHex")
+            return payload
+        }
+
+        @JvmStatic internal fun buildPushDevicePayload(accountId: String, platform: String, token: String, topics: List<String>?): Map<String, Any> {
+            val payload = LinkedHashMap<String, Any>()
+            payload["account_id"] = normalizeNonBlank(accountId, "accountId")
+            payload["platform"] = normalizeNonBlank(platform, "platform")
+            payload["token"] = normalizeNonBlank(token, "token")
+            if (topics != null) payload["topics"] = topics.map { normalizeNonBlank(it, "topics") }
             return payload
         }
 
