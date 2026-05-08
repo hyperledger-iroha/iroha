@@ -2,6 +2,18 @@
 
 Last updated: 2026-05-08
 
+## 2026-05-08 Sumeragi block-body response repair test harness
+
+- Moved
+  `block_body_response_retains_same_height_known_block_commit_qc_repair_after_frontier_view_advances`
+  onto the existing Sumeragi test-thread builder so the deep block-body
+  response/QC repair path runs with the same explicit stack budget as live
+  Sumeragi worker threads.
+- Focused validation passed with `cargo fmt --all`,
+  `cargo test -p iroha_core sumeragi::main_loop::tests::block_body_response_retains_same_height_known_block_commit_qc_repair_after_frontier_view_advances --lib -- --nocapture`,
+  and
+  `cargo test -p iroha_core sumeragi::main_loop::tests::block_created_clears_missing_request_on_duplicate --lib -- --nocapture`.
+
 ## 2026-05-08 Iroha Config Snapshot Defaults
 
 - Refreshed `minimal_config_snapshot` to match the current Sumeragi defaults:
