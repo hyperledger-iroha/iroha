@@ -8,8 +8,10 @@ public enum OfflineNoteV2WalletNoteState: String, Sendable {
     case receivePending
     case changePending
     case spendPending
+    case spent
     case redeemPending
     case redeemed
+    case cancelled
 }
 
 public enum OfflineNoteV2WalletError: Error, LocalizedError, Equatable {
@@ -335,6 +337,20 @@ public protocol OfflineNoteV2TransactionSubmitter {
     func submitRedeem(_ redemption: OfflineNoteRedeemV2) async throws
 }
 
+public struct OfflineNoteV2SyncResolution: Equatable, Sendable {
+    public let state: OfflineNoteV2WalletNoteState
+    public let transactionHashHex: String?
+
+    public init(state: OfflineNoteV2WalletNoteState, transactionHashHex: String? = nil) {
+        self.state = state
+        self.transactionHashHex = transactionHashHex
+    }
+}
+
+public protocol OfflineNoteV2SyncResolver {
+    func resolvePendingNote(_ note: OfflineNoteV2WalletNote) async throws -> OfflineNoteV2SyncResolution?
+}
+
 @available(iOS 15.0, macOS 12.0, *)
 public final class IrohaOfflineNoteV2TransactionSubmitter: OfflineNoteV2TransactionSubmitter {
     private let sdk: IrohaSDK
@@ -382,6 +398,7 @@ public final class OfflineNoteV2Wallet {
     private let store: OfflineNoteV2Store
     private let issuerClient: OfflineNoteV2IssuerClient?
     private let transactionSubmitter: OfflineNoteV2TransactionSubmitter?
+    private let syncResolver: OfflineNoteV2SyncResolver?
     private let proofProvider: OfflineNoteV2ProofProvider
     private let randomSource: OfflineNoteV2RandomSource
     private let idGenerator: OfflineNoteV2IdGenerator
@@ -393,6 +410,7 @@ public final class OfflineNoteV2Wallet {
                 store: OfflineNoteV2Store = InMemoryOfflineNoteV2Store(),
                 issuerClient: OfflineNoteV2IssuerClient? = nil,
                 transactionSubmitter: OfflineNoteV2TransactionSubmitter? = nil,
+                syncResolver: OfflineNoteV2SyncResolver? = nil,
                 proofProvider: OfflineNoteV2ProofProvider,
                 randomSource: OfflineNoteV2RandomSource = SecureOfflineNoteV2RandomSource(),
                 idGenerator: OfflineNoteV2IdGenerator = UuidOfflineNoteV2IdGenerator(),
@@ -403,6 +421,7 @@ public final class OfflineNoteV2Wallet {
         self.store = store
         self.issuerClient = issuerClient
         self.transactionSubmitter = transactionSubmitter
+        self.syncResolver = syncResolver
         self.proofProvider = proofProvider
         self.randomSource = randomSource
         self.idGenerator = idGenerator
@@ -675,10 +694,22 @@ public final class OfflineNoteV2Wallet {
         return pending
     }
 
-    public func sync() async -> [OfflineNoteV2WalletNote] {
-        // TODO: Reconcile change/spend/redeem-pending notes against Torii pipeline status once
-        // the Swift SDK exposes an Offline Note V2 transaction-outcome index.
-        store.listNotes()
+    public func sync() async throws -> [OfflineNoteV2WalletNote] {
+        guard let syncResolver else {
+            return store.listNotes()
+        }
+        for snapshot in store.listNotes() where snapshot.state.isPending {
+            guard let current = store.findNote(noteCommitment: snapshot.noteCommitment),
+                  current.state.isPending
+            else {
+                continue
+            }
+            if let resolution = try await syncResolver.resolvePendingNote(current),
+               resolution.state != current.state {
+                store.upsert(try current.withState(resolution.state, updatedAtMs: clock()))
+            }
+        }
+        return store.listNotes()
     }
 
     private func selectSpendableNotes(
@@ -745,6 +776,17 @@ private func placeholderProof() throws -> OfflineNoteRecursiveProofV2 {
         publicInputsHash: IrohaHash.hash(Data("offline-note-v2-draft-proof".utf8)),
         proofBytes: Data([0x01])
     )
+}
+
+private extension OfflineNoteV2WalletNoteState {
+    var isPending: Bool {
+        switch self {
+        case .receivePending, .changePending, .spendPending, .redeemPending:
+            return true
+        case .spendable, .spent, .redeemed, .cancelled:
+            return false
+        }
+    }
 }
 
 private func walletAssetId(assetDefinitionId: String, accountId: String) -> String {

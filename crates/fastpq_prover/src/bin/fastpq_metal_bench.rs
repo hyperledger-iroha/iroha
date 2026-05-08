@@ -190,6 +190,18 @@ mod tests {
     }
 
     #[test]
+    fn operation_filter_parses_poseidon_merkle_pairs() {
+        let args = vec!["--operation".to_owned(), "poseidon_merkle_pairs".to_owned()];
+        let cfg = Config::from_iter(args.into_iter()).expect("operation parses");
+        assert!(matches!(
+            cfg.operation,
+            OperationFilter::Only(BenchOperation::PoseidonMerklePairs)
+        ));
+        assert!(cfg.operation.includes(BenchOperation::PoseidonMerklePairs));
+        assert!(!cfg.operation.includes_fft_tuning());
+    }
+
+    #[test]
     fn operation_filter_parses_bn254_poseidon_words() {
         let args = vec!["--operation".to_owned(), "bn254_poseidon_words".to_owned()];
         let cfg = Config::from_iter(args.into_iter()).expect("operation parses");
@@ -715,6 +727,7 @@ mod harness {
     const POSEIDON_MICRO_ITERATIONS: usize = 5;
     const POSEIDON_MICRO_SCALAR_LANES: &str = "32";
     const POSEIDON_MICRO_SCALAR_BATCH: &str = "1";
+    const TRACE_NODE_DOMAIN: &[u8] = b"fastpq:v1:trace:node";
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(crate) enum PoseidonMicroMode {
@@ -903,7 +916,7 @@ mod harness {
         println!(concat!(
             "Usage: fastpq_metal_bench [--rows <u32>] [--warmups <u32>] [--iterations <u32>] [--output <path>] ",
             "[--trace-auto] [--trace-dir <dir>] [--trace-output <path>] [--trace-template <name>] [--trace-seconds <u32>] ",
-            "[--operation <fft|ifft|lde|poseidon_hash_columns|bn254_poseidon_words|all>] [--require-gpu] [--require-telemetry] [--gpu-probe]\n",
+            "[--operation <fft|ifft|lde|poseidon_hash_columns|poseidon_merkle_pairs|bn254_poseidon_words|all>] [--require-gpu] [--require-telemetry] [--gpu-probe]\n",
             "             Defaults: rows=20000 warmups=1 iterations=5; output omitted prints JSON to stdout; --operation defaults to 'all'.\n",
             "             `--trace-auto` captures to ./fastpq.trace, `--trace-dir` writes timestamped traces underneath the provided directory,\n",
             "             and other tracing flags launch under `xcrun xctrace record` (Metal System Trace by default).\n",
@@ -968,7 +981,12 @@ mod harness {
         }
 
         pub(crate) fn includes_fft_tuning(&self) -> bool {
-            !matches!(self, Self::Only(BenchOperation::Bn254PoseidonWords))
+            !matches!(
+                self,
+                Self::Only(
+                    BenchOperation::Bn254PoseidonWords | BenchOperation::PoseidonMerklePairs
+                )
+            )
         }
     }
 
@@ -978,6 +996,7 @@ mod harness {
         Ifft,
         Lde,
         Poseidon,
+        PoseidonMerklePairs,
         Bn254PoseidonWords,
     }
 
@@ -988,6 +1007,7 @@ mod harness {
                 Self::Ifft => "ifft",
                 Self::Lde => "lde",
                 Self::Poseidon => "poseidon_hash_columns",
+                Self::PoseidonMerklePairs => "poseidon_merkle_pairs",
                 Self::Bn254PoseidonWords => "bn254_poseidon_words",
             }
         }
@@ -1002,6 +1022,9 @@ mod harness {
                 "ifft" => Ok(Self::Ifft),
                 "lde" => Ok(Self::Lde),
                 "poseidon_hash_columns" | "poseidon" | "poseidon-hash" => Ok(Self::Poseidon),
+                "poseidon_merkle_pairs" | "poseidon-merkle-pairs" | "merkle-pairs" => {
+                    Ok(Self::PoseidonMerklePairs)
+                }
                 "bn254_poseidon_words" | "bn254-poseidon-words" => Ok(Self::Bn254PoseidonWords),
                 _ => Err(()),
             }
@@ -1290,6 +1313,52 @@ mod harness {
         Some(Summary::from_samples(&samples))
     }
 
+    fn measure_merkle_pairs<F, R>(
+        source: &[[u64; 2]],
+        warmups: usize,
+        iterations: usize,
+        op: F,
+    ) -> Summary
+    where
+        F: Fn(&[[u64; 2]]) -> R,
+    {
+        for _ in 0..warmups {
+            let result = op(source);
+            black_box(result);
+        }
+        let mut samples = Vec::with_capacity(iterations);
+        for _ in 0..iterations {
+            let started = Instant::now();
+            let result = op(source);
+            samples.push(elapsed_ms(started.elapsed()));
+            black_box(result);
+        }
+        Summary::from_samples(&samples)
+    }
+
+    fn measure_merkle_pairs_optional<F, R>(
+        source: &[[u64; 2]],
+        warmups: usize,
+        iterations: usize,
+        op: F,
+    ) -> Option<Summary>
+    where
+        F: Fn(&[[u64; 2]]) -> Option<R>,
+    {
+        for _ in 0..warmups {
+            let result = op(source)?;
+            black_box(result);
+        }
+        let mut samples = Vec::with_capacity(iterations);
+        for _ in 0..iterations {
+            let started = Instant::now();
+            let result = op(source)?;
+            samples.push(elapsed_ms(started.elapsed()));
+            black_box(result);
+        }
+        Some(Summary::from_samples(&samples))
+    }
+
     fn measure_gpu_lde(
         planner: &Planner,
         source: &[Vec<u64>],
@@ -1420,6 +1489,67 @@ mod harness {
                 sponge.squeeze()
             })
             .collect()
+    }
+
+    fn generate_merkle_pairs(pair_count: usize) -> Vec<[u64; 2]> {
+        (0..pair_count)
+            .map(|idx| {
+                let left = (idx as u64)
+                    .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                    .wrapping_add(0x51a2_d3f4)
+                    % GOLDILOCKS_MODULUS;
+                let right = (idx as u64)
+                    .wrapping_mul(0xd1b5_4a32_d192_ed03)
+                    .rotate_left((idx % 63) as u32)
+                    % GOLDILOCKS_MODULUS;
+                [left, right]
+            })
+            .collect()
+    }
+
+    fn hash_merkle_pairs_cpu(pairs: &[[u64; 2]]) -> Vec<u64> {
+        pairs
+            .iter()
+            .map(|pair| {
+                let mut sponge = CpuPoseidonSponge::new();
+                sponge.absorb(domain_seed(TRACE_NODE_DOMAIN));
+                sponge.absorb_slice(pair);
+                sponge.squeeze()
+            })
+            .collect()
+    }
+
+    fn hash_merkle_pairs_gpu(pairs: &[[u64; 2]]) -> Option<Vec<u64>> {
+        let batch = PoseidonColumnBatch::from_domain_and_pairs(TRACE_NODE_DOMAIN, pairs)?;
+        hash_columns_gpu_batch(&batch)
+    }
+
+    fn collect_poseidon_merkle_pairs_operation(config: &Config, gpu_available: bool) -> Value {
+        let pairs = generate_merkle_pairs(config.rows.max(1));
+        let cpu_summary = measure_merkle_pairs(
+            &pairs,
+            config.warmups,
+            config.iterations,
+            hash_merkle_pairs_cpu,
+        );
+        let gpu_summary = if gpu_available {
+            measure_merkle_pairs_optional(
+                &pairs,
+                config.warmups,
+                config.iterations,
+                hash_merkle_pairs_gpu,
+            )
+        } else {
+            None
+        };
+        operation_value(
+            BenchOperation::PoseidonMerklePairs.as_str(),
+            pairs.len().saturating_mul(2),
+            pairs.len(),
+            &cpu_summary,
+            gpu_summary.as_ref(),
+            None,
+        )
     }
 
     struct Bn254PoseidonWordBatch {
@@ -2197,6 +2327,24 @@ mod harness {
         map.insert(
             "fallbacks".into(),
             json::to_value(&stats.fallbacks).expect("serialize fallback count"),
+        );
+        map.insert(
+            "merkle_pair_gpu_batches".into(),
+            json::to_value(&stats.merkle_pair_gpu_batches)
+                .expect("serialize merkle gpu batch count"),
+        );
+        map.insert(
+            "merkle_pair_cpu_batches".into(),
+            json::to_value(&stats.merkle_pair_cpu_batches)
+                .expect("serialize merkle cpu batch count"),
+        );
+        map.insert(
+            "merkle_pair_fallbacks".into(),
+            json::to_value(&stats.merkle_pair_fallbacks).expect("serialize merkle fallback count"),
+        );
+        map.insert(
+            "merkle_pair_max_pairs".into(),
+            json::to_value(&stats.merkle_pair_max_pairs).expect("serialize merkle max pairs"),
         );
         Value::Object(map)
     }
@@ -3326,6 +3474,16 @@ mod harness {
                 &cpu_summary,
                 gpu_summary.as_ref(),
                 None,
+            ));
+        }
+
+        if config
+            .operation
+            .includes(BenchOperation::PoseidonMerklePairs)
+        {
+            operations.push(collect_poseidon_merkle_pairs_operation(
+                config,
+                gpu_available,
             ));
         }
 

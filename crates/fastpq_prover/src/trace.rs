@@ -8,23 +8,16 @@
 use core::{cmp::max, convert::TryFrom};
 #[cfg(feature = "fastpq-gpu")]
 use std::sync::Mutex;
+#[cfg(feature = "fastpq-gpu")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     collections::{BTreeMap, HashMap},
     sync::{Arc, OnceLock, RwLock},
 };
-#[cfg(feature = "fastpq-gpu")]
-use std::{
-    env,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
-    thread,
-};
 
-use fastpq_isi::{StarkParameterSet, poseidon::PoseidonSponge as CpuPoseidonSponge};
 #[cfg(feature = "fastpq-gpu")]
 use fastpq_isi::poseidon::RATE;
+use fastpq_isi::{StarkParameterSet, poseidon::PoseidonSponge as CpuPoseidonSponge};
 use iroha_crypto::Hash;
 use iroha_data_model::fastpq::TRANSFER_TRANSCRIPTS_METADATA_KEY;
 use rayon::prelude::*;
@@ -32,15 +25,12 @@ use tracing::warn;
 
 #[cfg(feature = "fastpq-gpu")]
 use crate::gpu;
-#[cfg(feature = "fastpq-gpu")]
-use crate::overrides;
 use crate::{
     Error, Result, StateTransition, TransitionBatch,
     backend::{self, ExecutionMode, PoseidonExecutionMode},
     fft::{GpuLdeDispatch, Planner},
     gadgets::transfer::{self, TransferRowKey},
-    pack_bytes,
-    poseidon::{self, PoseidonSponge},
+    pack_bytes, poseidon,
 };
 
 /// Goldilocks modulus used by the FASTPQ AIR.
@@ -62,29 +52,13 @@ const TRACE_COLUMN_DOMAIN_PREFIX: &str = "fastpq:v1:trace:column:";
 const TRACE_NODE_DOMAIN: &[u8] = b"fastpq:v1:trace:node";
 
 #[cfg(feature = "fastpq-gpu")]
-static DEBUG_FUSED_ENV: OnceLock<bool> = OnceLock::new();
-#[cfg(feature = "fastpq-gpu")]
-const GPU_POSEIDON_PIPE_COLUMNS_MIN: usize = 16;
-#[cfg(feature = "fastpq-gpu")]
-const GPU_POSEIDON_PIPE_COLUMNS_MAX: usize = 256;
-#[cfg(feature = "fastpq-gpu")]
-const GPU_POSEIDON_PIPE_DEPTH_MIN: usize = 1;
-#[cfg(feature = "fastpq-gpu")]
-const GPU_POSEIDON_PIPE_DEPTH_MAX: usize = 8;
-#[cfg(feature = "fastpq-gpu")]
-const GPU_POSEIDON_PIPE_COLUMNS_ENV: &str = "FASTPQ_POSEIDON_PIPE_COLUMNS";
-#[cfg(feature = "fastpq-gpu")]
-const GPU_POSEIDON_PIPE_DEPTH_ENV: &str = "FASTPQ_POSEIDON_PIPE_DEPTH";
-#[cfg(feature = "fastpq-gpu")]
-static GPU_POSEIDON_PIPE_COLUMNS_OVERRIDE: OnceLock<Option<usize>> = OnceLock::new();
-#[cfg(feature = "fastpq-gpu")]
-static GPU_POSEIDON_PIPE_DEPTH_OVERRIDE: OnceLock<Option<usize>> = OnceLock::new();
-#[cfg(feature = "fastpq-gpu")]
 static POSEIDON_PIPELINE_STATS_ENABLED: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "fastpq-gpu")]
 static POSEIDON_PIPELINE_STATS: OnceLock<Mutex<PoseidonPipelineStats>> = OnceLock::new();
 #[cfg(feature = "fastpq-gpu")]
 static POSEIDON_MERKLE_GPU_DISABLED: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "fastpq-gpu")]
+static POSEIDON_MERKLE_GPU_SELF_TEST: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "fastpq-gpu")]
 const POSEIDON_MERKLE_GPU_MIN_PAIRS: usize = 512;
 
@@ -94,17 +68,6 @@ type PoseidonPipelineObserver = dyn Fn(PoseidonPipelinePolicy, &'static str, Opt
     + 'static;
 static POSEIDON_PIPELINE_OBSERVER: OnceLock<RwLock<Option<Arc<PoseidonPipelineObserver>>>> =
     OnceLock::new();
-
-#[cfg(feature = "fastpq-gpu")]
-fn fused_debug_enabled() -> bool {
-    if let Some(enabled) = overrides::metal_debug_fused_override() {
-        return enabled;
-    }
-    overrides::guard_env_override(|| {
-        Some(*DEBUG_FUSED_ENV.get_or_init(|| env::var_os("FASTPQ_DEBUG_FUSED").is_some()))
-    })
-    .unwrap_or(false)
-}
 
 /// Poseidon pipeline execution policy derived from configuration and runtime detection.
 #[derive(Clone, Copy, Debug)]
@@ -328,6 +291,14 @@ pub struct PoseidonPipelineStats {
     pub batches: u32,
     /// Number of times the pipeline aborted and fell back.
     pub fallbacks: u32,
+    /// Number of Merkle parent batches hashed through the GPU pair path.
+    pub merkle_pair_gpu_batches: u32,
+    /// Number of Merkle parent batches hashed through the scalar pair path.
+    pub merkle_pair_cpu_batches: u32,
+    /// Number of Merkle parent GPU batches that failed and fell back.
+    pub merkle_pair_fallbacks: u32,
+    /// Largest Merkle parent pair batch observed while telemetry was enabled.
+    pub merkle_pair_max_pairs: u32,
 }
 
 /// Enable or disable collection of Poseidon pipeline telemetry.
@@ -391,6 +362,48 @@ fn record_poseidon_pipeline_fallback() {
         POSEIDON_PIPELINE_STATS.get_or_init(|| Mutex::new(PoseidonPipelineStats::default()));
     if let Ok(mut guard) = store.lock() {
         guard.fallbacks = guard.fallbacks.saturating_add(1);
+    }
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn record_poseidon_merkle_pair_gpu_batch(pair_count: usize) {
+    if !POSEIDON_PIPELINE_STATS_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    let store =
+        POSEIDON_PIPELINE_STATS.get_or_init(|| Mutex::new(PoseidonPipelineStats::default()));
+    if let Ok(mut guard) = store.lock() {
+        guard.merkle_pair_gpu_batches = guard.merkle_pair_gpu_batches.saturating_add(1);
+        guard.merkle_pair_max_pairs = guard
+            .merkle_pair_max_pairs
+            .max(pair_count.min(u32::MAX as usize) as u32);
+    }
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn record_poseidon_merkle_pair_cpu_batch(pair_count: usize) {
+    if !POSEIDON_PIPELINE_STATS_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    let store =
+        POSEIDON_PIPELINE_STATS.get_or_init(|| Mutex::new(PoseidonPipelineStats::default()));
+    if let Ok(mut guard) = store.lock() {
+        guard.merkle_pair_cpu_batches = guard.merkle_pair_cpu_batches.saturating_add(1);
+        guard.merkle_pair_max_pairs = guard
+            .merkle_pair_max_pairs
+            .max(pair_count.min(u32::MAX as usize) as u32);
+    }
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn record_poseidon_merkle_pair_fallback() {
+    if !POSEIDON_PIPELINE_STATS_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    let store =
+        POSEIDON_PIPELINE_STATS.get_or_init(|| Mutex::new(PoseidonPipelineStats::default()));
+    if let Ok(mut guard) = store.lock() {
+        guard.merkle_pair_fallbacks = guard.merkle_pair_fallbacks.saturating_add(1);
     }
 }
 
@@ -945,8 +958,8 @@ fn domain_seed(domain: &[u8]) -> u64 {
     u64::try_from(reduced).expect("modulus reduction fits u64")
 }
 
-fn hash_field_with_domain(domain: &[u8], values: &[u64]) -> u64 {
-    let mut sponge = PoseidonSponge::new();
+fn hash_field_with_domain_cpu(domain: &[u8], values: &[u64]) -> u64 {
+    let mut sponge = CpuPoseidonSponge::new();
     sponge.absorb(domain_seed(domain));
     sponge.absorb_slice(values);
     sponge.squeeze()
@@ -1094,6 +1107,75 @@ impl PoseidonColumnBatch {
         })
     }
 
+    /// Construct a flattened batch for domain-separated Merkle parent pairs.
+    pub fn from_domain_and_pairs(domain: &[u8], pairs: &[[u64; 2]]) -> Option<Self> {
+        if pairs.is_empty() {
+            return Some(Self::empty());
+        }
+        let padded_len = {
+            let payload = 4usize;
+            let remainder = payload % RATE;
+            if remainder == 0 {
+                payload
+            } else {
+                payload + (RATE - remainder)
+            }
+        };
+        let domain = domain_seed(domain);
+        let mut payloads =
+            Vec::with_capacity(pairs.len().saturating_mul(padded_len).max(padded_len));
+        let mut offsets = Vec::with_capacity(pairs.len());
+        let mut block_count = None;
+
+        for pair in pairs {
+            let start = payloads.len();
+            payloads.push(domain);
+            payloads.push(pair[0]);
+            payloads.push(pair[1]);
+            payloads.push(1);
+            let mut column_total = payloads.len() - start;
+            let remainder = column_total % RATE;
+            if remainder != 0 {
+                let padding = RATE - remainder;
+                payloads.extend(std::iter::repeat(0).take(padding));
+                column_total += padding;
+            }
+            let blocks = column_total / RATE;
+            if let Some(expected) = block_count {
+                debug_assert_eq!(
+                    expected, blocks,
+                    "poseidon pair batches must share the same block length"
+                );
+            } else {
+                block_count = Some(blocks);
+            }
+            match PoseidonColumnSlice::new(start, column_total) {
+                Some(slice) => offsets.push(slice),
+                None => {
+                    warn!(
+                        target: "fastpq::poseidon",
+                        offset = start,
+                        len = column_total,
+                        "poseidon pair descriptor exceeded GPU bounds"
+                    );
+                    return None;
+                }
+            }
+        }
+
+        Some(Self {
+            payloads: payloads.into(),
+            payload_start: 0,
+            payload_len: offsets
+                .last()
+                .map(|slice| slice.offset() + slice.len())
+                .unwrap_or(0),
+            offsets,
+            block_count: block_count.unwrap_or(0),
+            padded_len,
+        })
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.offsets.is_empty()
     }
@@ -1178,9 +1260,18 @@ impl PoseidonColumnBatch {
 /// an execution error, allowing callers to fall back to the CPU sponge.
 pub fn hash_columns_gpu_batch(batch: &PoseidonColumnBatch) -> Option<Vec<u64>> {
     let backend = backend::current_gpu_backend()?;
+    if !batch.is_empty() {
+        record_poseidon_pipeline_start(batch.columns(), 1);
+    }
     match gpu::poseidon_hash_columns(batch, backend) {
-        Ok(result) => Some(result),
+        Ok(result) => {
+            if !batch.is_empty() {
+                record_poseidon_pipeline_batch();
+            }
+            Some(result)
+        }
         Err(error) => {
+            record_poseidon_pipeline_fallback();
             warn!(
                 target: "fastpq::poseidon",
                 backend = ?backend,
@@ -1212,113 +1303,27 @@ pub fn hash_columns_cpu_batch_inputs(domains: &[&str], columns: &[Vec<u64>]) -> 
         domains
             .iter()
             .zip(columns.iter())
-            .map(|(domain, values)| hash_field_with_domain(domain.as_bytes(), values))
+            .map(|(domain, values)| hash_field_with_domain_cpu(domain.as_bytes(), values))
             .collect(),
     )
-}
-
-#[cfg(feature = "fastpq-gpu")]
-fn hash_columns_gpu_pipelined_batch(batch: &PoseidonColumnBatch) -> Option<Vec<u64>> {
-    let backend = backend::current_gpu_backend()?;
-    if batch.is_empty() {
-        return Some(Vec::new());
-    }
-    let chunk_size = poseidon_pipe_columns();
-    let pipe_depth = poseidon_pipe_depth();
-    record_poseidon_pipeline_start(chunk_size, pipe_depth);
-    let total_columns = batch.columns();
-    let (task_tx, task_rx) = mpsc::sync_channel::<(usize, PoseidonColumnBatch)>(pipe_depth);
-    let (result_tx, result_rx) =
-        mpsc::channel::<std::result::Result<(usize, Vec<u64>), gpu::GpuError>>();
-
-    let worker = thread::spawn(move || {
-        while let Ok((offset, chunk)) = task_rx.recv() {
-            let result = gpu::poseidon_hash_columns(&chunk, backend).map(|hashes| (offset, hashes));
-            if result_tx.send(result).is_err() {
-                break;
-            }
-        }
-    });
-
-    let mut dispatched = 0usize;
-    for chunk_start in (0..total_columns).step_by(chunk_size) {
-        let chunk_end = (chunk_start + chunk_size).min(total_columns);
-        let column_count = chunk_end - chunk_start;
-        let Some(chunk) = batch.column_window(chunk_start, column_count) else {
-            warn!(
-                target: "fastpq::poseidon",
-                chunk_start,
-                chunk_end,
-                "poseidon pipeline failed to materialise chunk; falling back to cpu hashing"
-            );
-            drop(task_tx);
-            record_poseidon_pipeline_fallback();
-            let _ = worker.join();
-            return None;
-        };
-        if task_tx.send((chunk_start, chunk)).is_err() {
-            warn!(
-                target: "fastpq::poseidon",
-                chunk_start,
-                chunk_end,
-                "poseidon pipeline worker unavailable; falling back to cpu hashing"
-            );
-            record_poseidon_pipeline_fallback();
-            let _ = worker.join();
-            return None;
-        }
-        record_poseidon_pipeline_batch();
-        dispatched += 1;
-    }
-    drop(task_tx);
-
-    let mut hashes = vec![0u64; total_columns];
-    let mut errored = false;
-    for _ in 0..dispatched {
-        match result_rx.recv() {
-            Ok(Ok((offset, chunk_hashes))) => {
-                let end = offset + chunk_hashes.len();
-                hashes[offset..end].copy_from_slice(&chunk_hashes);
-            }
-            Ok(Err(error)) => {
-                warn!(
-                    target: "fastpq::poseidon",
-                    backend = ?backend,
-                    %error,
-                    "poseidon pipeline chunk failed; falling back to cpu hashing"
-                );
-                errored = true;
-                record_poseidon_pipeline_fallback();
-                break;
-            }
-            Err(_) => {
-                warn!(
-                    target: "fastpq::poseidon",
-                    backend = ?backend,
-                    "poseidon pipeline dropped results; falling back to cpu hashing"
-                );
-                errored = true;
-                record_poseidon_pipeline_fallback();
-                break;
-            }
-        }
-    }
-    let _ = worker.join();
-    if errored { None } else { Some(hashes) }
 }
 
 #[cfg(feature = "fastpq-gpu")]
 /// Hash the supplied Poseidon column batch on the GPU, returning leaf digests
 /// alongside the fused depth-1 parent layer when acceleration succeeds.
 ///
+/// The public contract is a fused digest result; internally the implementation
+/// uses the parity-proven column batch kernel for leaves and the Merkle pair
+/// batch helper for parents.
+///
 /// Returns `None` when GPU acceleration is unavailable, disabled via
-/// [`ExecutionMode`], or the streaming pipeline encounters an error so callers
+/// [`ExecutionMode`], or a batch dispatch encounters an error so callers
 /// can fall back to the scalar sponge.
 pub fn hash_columns_gpu_fused(
     batch: &PoseidonColumnBatch,
     mode: ExecutionMode,
 ) -> Option<ColumnDigests> {
-    let backend = backend::current_gpu_backend()?;
+    let _backend = backend::current_gpu_backend()?;
     if !matches!(mode, ExecutionMode::Gpu | ExecutionMode::Auto) {
         return None;
     }
@@ -1331,316 +1336,13 @@ pub fn hash_columns_gpu_fused(
         return Some(ColumnDigests::new(leaves, Some(parents)));
     }
 
-    let total_columns = batch.columns();
-    let total_parents = (total_columns + 1) / 2;
-    let mut chunk_columns = poseidon_pipe_columns().max(2);
-    if chunk_columns % 2 != 0 {
-        chunk_columns = chunk_columns.saturating_sub(1);
-    }
-    if chunk_columns < 2 {
-        chunk_columns = 2;
-    }
-    let pipe_depth = poseidon_pipe_depth();
-    record_poseidon_pipeline_start(chunk_columns, pipe_depth);
-    let (task_tx, task_rx) =
-        mpsc::sync_channel::<(usize, usize, usize, usize, PoseidonColumnBatch)>(pipe_depth);
-    let (result_tx, result_rx) = mpsc::channel::<
-        std::result::Result<(usize, usize, usize, usize, Vec<u64>), gpu::GpuError>,
-    >();
-
-    let worker_backend = backend;
-    let worker = thread::spawn(move || {
-        while let Ok((offset, parent_offset, column_count, parent_count, chunk)) = task_rx.recv() {
-            let result = gpu::poseidon_hash_columns_fused(&chunk, worker_backend)
-                .map(|hashes| (offset, parent_offset, column_count, parent_count, hashes));
-            if result_tx.send(result).is_err() {
-                break;
-            }
-        }
+    let leaves = hash_columns_gpu_batch(batch)?;
+    let parent_pairs = merkle_pairs(&leaves);
+    let parents = hash_trace_merkle_pairs_gpu(&parent_pairs).unwrap_or_else(|| {
+        record_poseidon_merkle_pair_cpu_batch(parent_pairs.len());
+        hash_trace_merkle_pairs_cpu(&parent_pairs)
     });
-
-    let mut dispatched = 0usize;
-    let mut parent_cursor = 0usize;
-    for chunk_start in (0..total_columns).step_by(chunk_columns) {
-        let chunk_end = (chunk_start + chunk_columns).min(total_columns);
-        let column_count = chunk_end - chunk_start;
-        let chunk_parents = (column_count + 1) / 2;
-        let Some(chunk) = batch.column_window(chunk_start, column_count) else {
-            warn!(
-                target: "fastpq::poseidon",
-                chunk_start,
-                chunk_end,
-                "poseidon fused pipeline failed to materialise chunk; falling back"
-            );
-            drop(task_tx);
-            record_poseidon_pipeline_fallback();
-            let _ = worker.join();
-            return None;
-        };
-        if task_tx
-            .send((
-                chunk_start,
-                parent_cursor,
-                column_count,
-                chunk_parents,
-                chunk,
-            ))
-            .is_err()
-        {
-            warn!(
-                target: "fastpq::poseidon",
-                chunk_start,
-                chunk_end,
-                "poseidon fused pipeline worker unavailable; falling back"
-            );
-            drop(task_tx);
-            record_poseidon_pipeline_fallback();
-            let _ = worker.join();
-            return None;
-        }
-        record_poseidon_pipeline_batch();
-        dispatched += 1;
-        parent_cursor += chunk_parents;
-    }
-    drop(task_tx);
-
-    let mut leaves = vec![0u64; total_columns];
-    let mut parents = vec![0u64; total_parents];
-    let mut errored = false;
-    for _ in 0..dispatched {
-        match result_rx.recv() {
-            Ok(Ok((offset, parent_offset, column_count, parent_count, fused))) => {
-                if fused.len() != column_count + parent_count {
-                    warn!(
-                        target: "fastpq::poseidon",
-                        chunk_start = offset,
-                        chunk_end = offset + column_count,
-                        expected = column_count + parent_count,
-                        actual = fused.len(),
-                        "poseidon fused kernel returned unexpected digest count"
-                    );
-                    errored = true;
-                    record_poseidon_pipeline_fallback();
-                    break;
-                }
-                leaves[offset..offset + column_count].copy_from_slice(&fused[..column_count]);
-                parents[parent_offset..parent_offset + parent_count]
-                    .copy_from_slice(&fused[column_count..]);
-            }
-            Ok(Err(error)) => {
-                warn!(
-                    target: "fastpq::poseidon",
-                    backend = ?backend,
-                    %error,
-                    "poseidon fused pipeline chunk failed; falling back"
-                );
-                if fused_debug_enabled() {
-                    eprintln!("poseidon fused chunk failed: {error:?}");
-                }
-                errored = true;
-                record_poseidon_pipeline_fallback();
-                break;
-            }
-            Err(_) => {
-                warn!(
-                    target: "fastpq::poseidon",
-                    backend = ?backend,
-                    "poseidon fused pipeline dropped results; falling back"
-                );
-                errored = true;
-                record_poseidon_pipeline_fallback();
-                break;
-            }
-        }
-    }
-    let _ = worker.join();
-    if errored {
-        None
-    } else {
-        Some(ColumnDigests::new(leaves, Some(parents)))
-    }
-}
-
-#[cfg(feature = "fastpq-gpu")]
-fn hash_columns_gpu_overlap(trace: &Trace, planner: &Planner) -> Option<ColumnDigests> {
-    let backend = backend::current_gpu_backend()?;
-    if trace.columns.is_empty() {
-        return Some(ColumnDigests::new(Vec::new(), None));
-    }
-    let chunk_size = poseidon_pipe_columns();
-    let pipe_depth = poseidon_pipe_depth();
-    record_poseidon_pipeline_start(chunk_size, pipe_depth);
-    let (task_tx, task_rx) = mpsc::sync_channel::<(usize, PoseidonColumnBatch)>(pipe_depth);
-    let (result_tx, result_rx) =
-        mpsc::channel::<std::result::Result<(usize, Vec<u64>), gpu::GpuError>>();
-
-    let worker = thread::spawn(move || {
-        while let Ok((offset, batch)) = task_rx.recv() {
-            let result = gpu::poseidon_hash_columns(&batch, backend).map(|hashes| (offset, hashes));
-            if result_tx.send(result).is_err() {
-                break;
-            }
-        }
-    });
-
-    let mut dispatched = 0usize;
-    for chunk_start in (0..trace.columns.len()).step_by(chunk_size) {
-        let chunk_end = (chunk_start + chunk_size).min(trace.columns.len());
-        let mut coeff_chunk: Vec<Vec<u64>> = trace.columns[chunk_start..chunk_end]
-            .iter()
-            .map(|column| column.values.clone())
-            .collect();
-        planner.ifft_columns(&mut coeff_chunk);
-        let domain_names: Vec<String> = trace.columns[chunk_start..chunk_end]
-            .iter()
-            .map(|column| format!("{TRACE_COLUMN_DOMAIN_PREFIX}{}", column.name))
-            .collect();
-        let domain_refs: Vec<&str> = domain_names.iter().map(String::as_str).collect();
-        let Some(batch) = PoseidonColumnBatch::from_domains_and_columns(&domain_refs, &coeff_chunk)
-        else {
-            warn!(
-                target: "fastpq::poseidon",
-                chunk_start,
-                chunk_end,
-                "poseidon overlap pipeline failed to encode chunk; falling back to cpu hashing"
-            );
-            drop(task_tx);
-            record_poseidon_pipeline_fallback();
-            let _ = worker.join();
-            return None;
-        };
-        if task_tx.send((chunk_start, batch)).is_err() {
-            warn!(
-                target: "fastpq::poseidon",
-                chunk_start,
-                chunk_end,
-                "poseidon overlap worker unavailable; falling back to cpu hashing"
-            );
-            record_poseidon_pipeline_fallback();
-            let _ = worker.join();
-            return None;
-        }
-        record_poseidon_pipeline_batch();
-        dispatched += 1;
-    }
-    drop(task_tx);
-
-    let mut leaves = vec![0u64; trace.columns.len()];
-    let mut errored = false;
-    for _ in 0..dispatched {
-        match result_rx.recv() {
-            Ok(Ok((offset, chunk_hashes))) => {
-                let end = offset + chunk_hashes.len();
-                leaves[offset..end].copy_from_slice(&chunk_hashes);
-            }
-            Ok(Err(error)) => {
-                warn!(
-                    target: "fastpq::poseidon",
-                    backend = ?backend,
-                    %error,
-                    "poseidon overlap pipeline chunk failed; falling back to cpu hashing"
-                );
-                errored = true;
-                record_poseidon_pipeline_fallback();
-                break;
-            }
-            Err(_) => {
-                warn!(
-                    target: "fastpq::poseidon",
-                    backend = ?backend,
-                    "poseidon overlap pipeline dropped results; falling back to cpu hashing"
-                );
-                errored = true;
-                record_poseidon_pipeline_fallback();
-                break;
-            }
-        }
-    }
-    let _ = worker.join();
-    if errored {
-        None
-    } else {
-        Some(ColumnDigests::new(leaves, None))
-    }
-}
-
-#[cfg(feature = "fastpq-gpu")]
-fn poseidon_pipe_columns() -> usize {
-    let default = match backend::current_gpu_backend() {
-        // Smaller default batches to shorten Poseidon dispatches on large traces.
-        Some(backend::GpuBackend::Metal) => 32,
-        Some(backend::GpuBackend::Cuda) => 32,
-        _ => 32,
-    };
-    poseidon_pipe_columns_override()
-        .unwrap_or(default)
-        .clamp(GPU_POSEIDON_PIPE_COLUMNS_MIN, GPU_POSEIDON_PIPE_COLUMNS_MAX)
-}
-
-#[cfg(feature = "fastpq-gpu")]
-fn poseidon_pipe_columns_override() -> Option<usize> {
-    *GPU_POSEIDON_PIPE_COLUMNS_OVERRIDE.get_or_init(|| {
-        env::var(GPU_POSEIDON_PIPE_COLUMNS_ENV)
-            .ok()
-            .and_then(|raw| {
-                parse_pipe_override(
-                    &raw,
-                    GPU_POSEIDON_PIPE_COLUMNS_ENV,
-                    GPU_POSEIDON_PIPE_COLUMNS_MIN,
-                    GPU_POSEIDON_PIPE_COLUMNS_MAX,
-                )
-            })
-    })
-}
-
-#[cfg(feature = "fastpq-gpu")]
-fn poseidon_pipe_depth() -> usize {
-    // Shallower default depth reduces per-dispatch runtime on large traces where Poseidon dominates.
-    poseidon_pipe_depth_override()
-        .unwrap_or(1)
-        .clamp(GPU_POSEIDON_PIPE_DEPTH_MIN, GPU_POSEIDON_PIPE_DEPTH_MAX)
-}
-
-#[cfg(feature = "fastpq-gpu")]
-fn poseidon_pipe_depth_override() -> Option<usize> {
-    *GPU_POSEIDON_PIPE_DEPTH_OVERRIDE.get_or_init(|| {
-        env::var(GPU_POSEIDON_PIPE_DEPTH_ENV).ok().and_then(|raw| {
-            parse_pipe_override(
-                &raw,
-                GPU_POSEIDON_PIPE_DEPTH_ENV,
-                GPU_POSEIDON_PIPE_DEPTH_MIN,
-                GPU_POSEIDON_PIPE_DEPTH_MAX,
-            )
-        })
-    })
-}
-
-#[cfg(feature = "fastpq-gpu")]
-fn parse_pipe_override(raw: &str, env_key: &str, min: usize, max: usize) -> Option<usize> {
-    match raw.trim().parse::<usize>() {
-        Ok(value) if (min..=max).contains(&value) => Some(value),
-        Ok(value) => {
-            warn!(
-                target: "fastpq::poseidon",
-                env = env_key,
-                value,
-                min,
-                max,
-                "ignoring out-of-range poseidon pipeline override"
-            );
-            None
-        }
-        Err(error) => {
-            warn!(
-                target: "fastpq::poseidon",
-                env = env_key,
-                %error,
-                raw = raw.trim(),
-                "failed to parse poseidon pipeline override; keeping default"
-            );
-            None
-        }
-    }
+    Some(ColumnDigests::new(leaves, Some(parents)))
 }
 
 fn extract_asset_id(key: &[u8]) -> Vec<u8> {
@@ -1696,15 +1398,6 @@ pub fn column_hashes(trace: &Trace, params: &StarkParameterSet) -> Result<Column
     } else {
         ExecutionMode::Cpu
     };
-
-    #[cfg(feature = "fastpq-gpu")]
-    {
-        if mode != ExecutionMode::Cpu {
-            if let Some(result) = hash_columns_gpu_overlap(trace, &planner) {
-                return Ok(result);
-            }
-        }
-    }
 
     let coefficients = trace_coefficients(trace, &planner, mode);
 
@@ -1798,14 +1491,6 @@ pub(crate) fn hash_columns_from_coefficients(
                     );
                     return fused;
                 }
-                if let Some(result) = hash_columns_gpu_pipelined_batch(&batch) {
-                    notify_poseidon_pipeline_observer(
-                        poseidon_policy,
-                        "gpu_pipelined",
-                        poseidon_backend,
-                    );
-                    return ColumnDigests::new(result, None);
-                }
                 if poseidon_backend.is_some() {
                     if let Some(result) = hash_columns_gpu_batch(&batch) {
                         notify_poseidon_pipeline_observer(
@@ -1847,7 +1532,7 @@ pub(crate) fn hash_columns_from_coefficients(
         .zip(coefficients.par_iter())
         .map(|(column, coeffs)| {
             let domain = format!("{TRACE_COLUMN_DOMAIN_PREFIX}{}", column.name);
-            hash_field_with_domain(domain.as_bytes(), coeffs)
+            hash_field_with_domain_cpu(domain.as_bytes(), coeffs)
         })
         .collect();
 
@@ -1990,28 +1675,156 @@ pub fn merkle_root_with_first_level(leaves: &[u64], first_level: Option<&[u64]>)
     current[0]
 }
 
-/// Compute the traditional Merkle root by fully hashing all levels on the CPU.
+/// Compute the traditional Merkle root using scalar-equivalent Poseidon hashes.
 pub fn merkle_root(leaves: &[u64]) -> u64 {
     merkle_root_with_first_level(leaves, None)
 }
 
 fn compute_merkle_level(input: &[u64]) -> Vec<u64> {
+    let pairs = merkle_pairs(input);
+    #[cfg(feature = "fastpq-gpu")]
+    if let Some(hashes) = hash_trace_merkle_pairs_gpu(&pairs) {
+        return hashes;
+    }
+    #[cfg(feature = "fastpq-gpu")]
+    record_poseidon_merkle_pair_cpu_batch(pairs.len());
+    hash_trace_merkle_pairs_cpu(&pairs)
+}
+
+fn merkle_pairs(input: &[u64]) -> Vec<[u64; 2]> {
     if input.is_empty() {
         return Vec::new();
     }
-    let mut padded = input.to_vec();
-    if padded.len() % 2 == 1 {
-        let last = *padded.last().expect("non-empty vector");
-        padded.push(last);
+    let mut pairs = Vec::with_capacity(input.len().div_ceil(2));
+    for chunk in input.chunks(2) {
+        let left = chunk[0];
+        let right = *chunk.get(1).unwrap_or(&left);
+        pairs.push([left, right]);
     }
-    let mut next = Vec::with_capacity(padded.len() / 2);
-    for pair in padded.chunks(2) {
-        next.push(hash_field_with_domain(
-            TRACE_NODE_DOMAIN,
-            &[pair[0], pair[1]],
-        ));
+    pairs
+}
+
+fn hash_trace_merkle_pairs_cpu(pairs: &[[u64; 2]]) -> Vec<u64> {
+    pairs
+        .iter()
+        .map(|pair| hash_field_with_domain_cpu(TRACE_NODE_DOMAIN, pair))
+        .collect()
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn hash_trace_merkle_pairs_gpu(pairs: &[[u64; 2]]) -> Option<Vec<u64>> {
+    if pairs.is_empty() {
+        return Some(Vec::new());
     }
-    next
+    if pairs.len() < POSEIDON_MERKLE_GPU_MIN_PAIRS
+        || POSEIDON_MERKLE_GPU_DISABLED.load(Ordering::Acquire)
+    {
+        return None;
+    }
+    let backend = backend::current_gpu_backend()?;
+    if !poseidon_merkle_pair_gpu_preflight(backend) {
+        POSEIDON_MERKLE_GPU_DISABLED.store(true, Ordering::Release);
+        return None;
+    }
+    let Some(batch) = PoseidonColumnBatch::from_domain_and_pairs(TRACE_NODE_DOMAIN, pairs) else {
+        record_poseidon_merkle_pair_fallback();
+        return None;
+    };
+    match gpu::poseidon_hash_columns(&batch, backend) {
+        Ok(result) => {
+            record_poseidon_merkle_pair_gpu_batch(pairs.len());
+            Some(result)
+        }
+        Err(error) => {
+            disable_poseidon_merkle_gpu_with_warning(backend, pairs.len(), &error);
+            record_poseidon_merkle_pair_fallback();
+            None
+        }
+    }
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn poseidon_merkle_pair_gpu_preflight(backend: backend::GpuBackend) -> bool {
+    *POSEIDON_MERKLE_GPU_SELF_TEST.get_or_init(|| {
+        let pairs = [
+            [0u64, 0u64],
+            [1u64, 2u64],
+            [GOLDILOCKS_MODULUS - 1, 42u64],
+            [0xd1b5_4a32_d192_ed03, 0x9e37_79b9_7f4a_7c15],
+        ];
+        let Some(batch) = PoseidonColumnBatch::from_domain_and_pairs(TRACE_NODE_DOMAIN, &pairs)
+        else {
+            warn!(
+                target: "fastpq::poseidon",
+                backend = ?backend,
+                "gpu trace Merkle Poseidon pair preflight could not build batch; falling back"
+            );
+            return false;
+        };
+        match gpu::poseidon_hash_columns(&batch, backend) {
+            Ok(actual) => {
+                let expected = hash_trace_merkle_pairs_cpu(&pairs);
+                if actual == expected {
+                    return true;
+                }
+                let mismatch = actual
+                    .iter()
+                    .zip(expected.iter())
+                    .enumerate()
+                    .find_map(|(index, (actual, expected))| {
+                        (actual != expected).then_some((index, *actual, *expected))
+                    })
+                    .or_else(|| {
+                        (actual.len() != expected.len()).then_some((
+                            actual.len().min(expected.len()),
+                            actual.get(expected.len()).copied().unwrap_or(0),
+                            expected.get(actual.len()).copied().unwrap_or(0),
+                        ))
+                    });
+                let (mismatch_index, actual_value, expected_value) =
+                    mismatch.unwrap_or((0, 0, 0));
+                warn!(
+                    target: "fastpq::poseidon",
+                    backend = ?backend,
+                    mismatch_index,
+                    actual = actual_value,
+                    expected = expected_value,
+                    "gpu trace Merkle Poseidon pair preflight diverged; falling back to scalar hashing"
+                );
+                false
+            }
+            Err(error) => {
+                warn!(
+                    target: "fastpq::poseidon",
+                    backend = ?backend,
+                    %error,
+                    "gpu trace Merkle Poseidon pair preflight failed; falling back to scalar hashing"
+                );
+                false
+            }
+        }
+    })
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn disable_poseidon_merkle_gpu_with_warning(
+    backend: backend::GpuBackend,
+    pair_count: usize,
+    error: &gpu::GpuError,
+) {
+    if POSEIDON_MERKLE_GPU_DISABLED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok()
+    {
+        warn!(
+            target: "fastpq::poseidon",
+            backend = ?backend,
+            pair_count,
+            min_pairs = POSEIDON_MERKLE_GPU_MIN_PAIRS,
+            %error,
+            "gpu trace Merkle Poseidon pair batch failed; falling back to scalar hashing"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2152,7 +1965,10 @@ mod tests {
         );
         let via_api = column_hashes(&trace, &params).expect("hash via api");
         assert_eq!(via_coeffs.leaves(), via_api.leaves());
-        assert_eq!(via_coeffs.fused_parents(), via_api.fused_parents());
+        assert_eq!(
+            merkle_root_with_first_level(via_coeffs.leaves(), via_coeffs.fused_parents()),
+            merkle_root_with_first_level(via_api.leaves(), via_api.fused_parents())
+        );
         assert_eq!(data.lde_columns().len(), trace.columns.len());
     }
 
@@ -2178,7 +1994,7 @@ mod tests {
             .zip(coefficients.iter())
             .map(|(column, coeffs)| {
                 let domain = format!("{TRACE_COLUMN_DOMAIN_PREFIX}{}", column.name);
-                hash_field_with_domain(domain.as_bytes(), coeffs)
+                hash_field_with_domain_cpu(domain.as_bytes(), coeffs)
             })
             .collect();
 
@@ -2233,6 +2049,29 @@ mod tests {
                     .iter()
                     .all(|value| *value == 0)
             );
+        }
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn poseidon_column_batch_flattens_merkle_pairs() {
+        let pairs = vec![[1u64, 2u64], [3u64, 4u64], [5u64, 6u64]];
+        let batch =
+            PoseidonColumnBatch::from_domain_and_pairs(TRACE_NODE_DOMAIN, &pairs).expect("batch");
+        assert_eq!(batch.columns(), pairs.len());
+        let offsets = batch.offsets();
+        assert_eq!(offsets.len(), pairs.len());
+        assert!(offsets.iter().all(|slice| slice.len() % RATE == 0));
+        assert_eq!(batch.block_count(), offsets[0].len() / RATE);
+        let payloads = batch.payloads();
+        for (index, slice) in offsets.iter().enumerate() {
+            let start = slice.offset();
+            let end = slice.offset() + slice.len();
+            let region = &payloads[start..end];
+            assert_eq!(region[0], domain_seed(TRACE_NODE_DOMAIN));
+            assert_eq!(&region[1..3], pairs[index].as_slice());
+            assert_eq!(region[3], 1);
+            assert!(region[4..].iter().all(|value| *value == 0));
         }
     }
 
@@ -2344,7 +2183,7 @@ mod tests {
         let expected: Vec<u64> = domains
             .iter()
             .zip(columns.iter())
-            .map(|(domain, values)| hash_field_with_domain(domain.as_bytes(), values))
+            .map(|(domain, values)| hash_field_with_domain_cpu(domain.as_bytes(), values))
             .collect();
         assert_eq!(hashes, expected);
     }
@@ -2404,6 +2243,51 @@ mod tests {
             fused_root, full_root,
             "providing the first level must not change the merkle root"
         );
+    }
+
+    #[test]
+    fn merkle_levels_match_scalar_reference_for_mixed_shapes() {
+        let shapes = [
+            Vec::new(),
+            vec![1u64],
+            vec![1u64, 2],
+            vec![1u64, 2, 3],
+            (0_u64..17).collect::<Vec<_>>(),
+            (0_u64..128)
+                .map(|value| value.wrapping_mul(0x9e37_79b9_7f4a_7c15) % GOLDILOCKS_MODULUS)
+                .collect::<Vec<_>>(),
+            vec![GOLDILOCKS_MODULUS - 1, 0, 42, GOLDILOCKS_MODULUS - 2],
+        ];
+        for leaves in shapes {
+            let pairs = merkle_pairs(&leaves);
+            assert_eq!(
+                compute_merkle_level(&leaves),
+                hash_trace_merkle_pairs_cpu(&pairs),
+                "merkle level diverged for {leaves:?}"
+            );
+        }
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn merkle_pair_batch_stats_record_scalar_threshold_path() {
+        enable_poseidon_pipeline_stats(true);
+        let pair_count = POSEIDON_MERKLE_GPU_MIN_PAIRS - 1;
+        let leaves = (0..pair_count * 2)
+            .map(|value| (value as u64).wrapping_mul(0xd1b5_4a32_d192_ed03) % GOLDILOCKS_MODULUS)
+            .collect::<Vec<_>>();
+        let pairs = merkle_pairs(&leaves);
+        let expected = hash_trace_merkle_pairs_cpu(&pairs);
+        let actual = compute_merkle_level(&leaves);
+        assert_eq!(actual, expected);
+        let stats = take_poseidon_pipeline_stats().expect("stats enabled");
+        enable_poseidon_pipeline_stats(false);
+        assert!(
+            stats.merkle_pair_cpu_batches > 0,
+            "threshold Merkle level should be accounted for by pair-batch telemetry: {stats:?}"
+        );
+        assert_eq!(stats.merkle_pair_gpu_batches, 0);
+        assert_eq!(stats.merkle_pair_max_pairs, pair_count as u32);
     }
 
     #[cfg(feature = "fastpq-gpu")]

@@ -6,6 +6,8 @@ public enum OfflineNoteV2WalletNoteState {
   RECEIVE_PENDING,
   CHANGE_PENDING,
   SPEND_PENDING,
+  SPENT,
   REDEEM_PENDING,
-  REDEEMED
+  REDEEMED,
+  CANCELLED
 }

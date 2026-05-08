@@ -77,6 +77,7 @@ const FFT_TILE_STAGE_LIMIT: u32 = 32;
 /// Must match `FFT_TILE_STAGE_CAP` in `metal/kernels/ntt_stage.metal`.
 const LDE_TILE_STAGE_ENV: &str = "FASTPQ_METAL_LDE_TILE_STAGES";
 const POSEIDON_THREADGROUP_CAPACITY: u32 = 256;
+const POSEIDON_DISPATCH_PIPE_DEPTH: usize = 1;
 const BN254_POSEIDON_THREADGROUP_CAPACITY: u64 = 128;
 const POSEIDON_TARGET_THREADS: u32 = 8_192;
 const MIN_POSEIDON_STATES_PER_BATCH: u32 = 1;
@@ -2029,6 +2030,7 @@ struct PoseidonArgs {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 struct PoseidonFusedArgs {
     state_count: u32,
     states_per_lane: u32,
@@ -2221,6 +2223,7 @@ struct MetalPipelines {
     poseidon_permute: ComputePipelineState,
     poseidon_hash: ComputePipelineState,
     poseidon_trace_fused: ComputePipelineState,
+    #[allow(dead_code)]
     poseidon_trace_parents: ComputePipelineState,
     fft: ComputePipelineState,
     lde: ComputePipelineState,
@@ -3363,7 +3366,9 @@ pub fn poseidon_permute(states: &mut [u64]) -> MetalResult<()> {
     let poseidon_selection = select_poseidon_batch(state_count, tuning);
     let batch_states = poseidon_selection.columns();
     let batches = column_batch_ranges(state_count, batch_states);
-    let pipe_depth = COLUMN_STAGING_PIPE_DEPTH.max(1);
+    // TODO: Restore deeper Poseidon staging once command permits are released by
+    // Metal completion handlers instead of only by explicit ticket waits.
+    let pipe_depth = POSEIDON_DISPATCH_PIPE_DEPTH;
     let mut slots: Vec<Option<PoseidonBatchTicket>> = (0..pipe_depth).map(|_| None).collect();
 
     for (batch_index, (offset, count)) in batches.into_iter().enumerate() {
@@ -3450,7 +3455,9 @@ pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64
     let batches = column_batch_ranges(column_count, selection.columns());
     let mut result = vec![0u64; batch.columns()];
     let payloads = batch.payloads();
-    let pipe_depth = COLUMN_STAGING_PIPE_DEPTH.max(1);
+    // TODO: Restore deeper Poseidon staging once command permits are released by
+    // Metal completion handlers instead of only by explicit ticket waits.
+    let pipe_depth = POSEIDON_DISPATCH_PIPE_DEPTH;
     let mut slots: Vec<Option<PoseidonHashTicket>> = (0..pipe_depth).map(|_| None).collect();
 
     for (batch_index, (offset, count)) in batches.into_iter().enumerate() {
@@ -3740,6 +3747,9 @@ pub(crate) fn bn254_poseidon_hash_words_async(
     })
 }
 
+// TODO: Keep this low-level fused entry point parked until its leaves and
+// parents are parity-checked against the scalar-equivalent batch path.
+#[allow(dead_code)]
 pub fn poseidon_hash_columns_fused(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64>> {
     if batch.is_empty() {
         return Ok(Vec::new());
@@ -5592,6 +5602,11 @@ mod tests {
         assert!(stats.dispatch_count >= 2);
         assert!(stats.max_in_flight >= 1);
         assert!(stats.overlap_ms > 0.0);
+    }
+
+    #[test]
+    fn poseidon_dispatch_staging_does_not_chain_command_permits() {
+        assert_eq!(super::POSEIDON_DISPATCH_PIPE_DEPTH, 1);
     }
 
     #[test]

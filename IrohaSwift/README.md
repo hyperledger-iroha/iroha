@@ -600,7 +600,9 @@ before signing, so callers pass real prover output instead of mock-proof placeho
 request preparation, P2P pay, accept/audit submission, redeem submission, and
 sync. The first release surface is dependency-injected: apps provide Torii
 canonical auth, device binding, attestation, proof, transaction submission, and
-persistent storage. The SDK includes an in-memory store, a
+persistent storage. `sync()` can also use an app-provided transaction-outcome
+resolver to finalize pending spend, change, and redeem note records after audit
+or redeem finality. The SDK includes an in-memory store, a
 `ToriiOfflineNoteV2IssuerClient` for body-signed key-refill plus note-issue
 loads, and a direct `IrohaSDK` audit/redeem submitter.
 Issuance is accepted only from an offline escrow manager with `CanManageOfflineEscrow`, and the

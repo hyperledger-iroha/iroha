@@ -4,6 +4,17 @@ Last updated: 2026-05-08
 
 Completed history lives in `status.md`. This file should only track unfinished work.
 
+## FASTPQ GPU acceleration follow-ups
+
+- Fix Metal/CUDA Poseidon Merkle parent-pair batch parity so the guarded
+  FASTPQ trace Merkle-pair accelerator can enable on real GPU backends. Keep
+  the scalar fallback active until the preflight passes.
+- Rebuild the parked low-level Poseidon fused column+parent kernels with real
+  Metal and CUDA parity proof before putting them back on the hot path. The
+  acceptance run needs scalar-equivalent leaf/parent vectors, a bench sample
+  for `poseidon_merkle_pairs`, and a fresh Izanami gate/profile showing the
+  general prover Poseidon lane mutex is no longer the dominant app leaf.
+
 ## Sumeragi vNext consensus replacement
 
 - Finish moving proposal, DA/RBC availability, validation-worker start/result,
@@ -29,11 +40,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 - Finish wallet reconciliation behind the one-call `OfflineNoteV2Wallet`
   facades:
-  - replace the first-pass `sync()` no-op with transaction-outcome
-    reconciliation for `CHANGE_PENDING`, `SPEND_PENDING`, and
-    `REDEEM_PENDING` note records;
+  - add production Torii/offline outcome-index adapters for the new
+    resolver-backed `sync()` path in Kotlin/JVM, Java Android, and Swift;
   - add duplicate-token, already-spent, failed-audit, and failed-redeem
-    mock-transport regressions around that reconciliation.
+    mock-transport regressions around resolver outcomes.
 - Add structured encrypted Offline Note V2 wallet-note stores:
   Android Keystore-backed secure storage in the platform module and Swift
   Keychain-backed storage modeled after `ConnectKeyStore`. Kotlin/JVM, Java

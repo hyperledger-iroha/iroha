@@ -21,8 +21,10 @@ enum class OfflineNoteV2WalletNoteState {
     RECEIVE_PENDING,
     CHANGE_PENDING,
     SPEND_PENDING,
+    SPENT,
     REDEEM_PENDING,
     REDEEMED,
+    CANCELLED,
 }
 
 /** Structured persisted note record; encrypted stores should serialize this shape. */
@@ -245,6 +247,17 @@ interface OfflineNoteV2TransactionSubmitter {
     fun submitRedeem(redemption: OfflineNoteV2.RedeemV2): CompletableFuture<ClientResponse>
 }
 
+/** Resolution returned by a wallet sync resolver for one pending Offline Note V2 note. */
+class OfflineNoteV2SyncResolution @JvmOverloads constructor(
+    val state: OfflineNoteV2WalletNoteState,
+    val transactionHashHex: String? = null,
+)
+
+/** Looks up transaction-outcome state for pending wallet notes. */
+interface OfflineNoteV2SyncResolver {
+    fun resolvePendingNote(note: OfflineNoteV2WalletNote): CompletableFuture<OfflineNoteV2SyncResolution?>
+}
+
 /** Transaction submitter that wraps Offline V2 instructions in signed Iroha transactions. */
 class IrohaOfflineNoteV2TransactionSubmitter @JvmOverloads constructor(
     private val client: IrohaClient,
@@ -281,6 +294,7 @@ class OfflineNoteV2Wallet @JvmOverloads constructor(
     private val store: OfflineNoteV2Store = InMemoryOfflineNoteV2Store(),
     private val issuerClient: OfflineNoteV2IssuerClient? = null,
     private val transactionSubmitter: OfflineNoteV2TransactionSubmitter? = null,
+    private val syncResolver: OfflineNoteV2SyncResolver? = null,
     private val proofProvider: OfflineNoteV2ProofProvider = NativeOfflineNoteV2ProofProvider(),
     private val randomSource: OfflineNoteV2RandomSource = SecureOfflineNoteV2RandomSource(),
     private val idGenerator: OfflineNoteV2IdGenerator = UuidOfflineNoteV2IdGenerator(),
@@ -540,9 +554,25 @@ class OfflineNoteV2Wallet @JvmOverloads constructor(
     }
 
     fun sync(): CompletableFuture<List<OfflineNoteV2WalletNote>> {
-        // TODO: Reconcile CHANGE_PENDING/SPEND_PENDING/REDEEM_PENDING notes against Torii
-        // pipeline status once the SDK exposes a transaction-outcome index for Offline Note V2.
-        return CompletableFuture.completedFuture(store.listNotes())
+        val resolver = syncResolver ?: return CompletableFuture.completedFuture(store.listNotes())
+        var chain = CompletableFuture.completedFuture(Unit)
+        for (snapshot in store.listNotes()) {
+            if (!isPendingState(snapshot.state)) continue
+            chain = chain.thenCompose {
+                val current = store.findNote(snapshot.noteCommitment())
+                    ?: return@thenCompose CompletableFuture.completedFuture(Unit)
+                if (!isPendingState(current.state)) {
+                    return@thenCompose CompletableFuture.completedFuture(Unit)
+                }
+                resolver.resolvePendingNote(current).thenApply { resolution ->
+                    if (resolution != null && resolution.state != current.state) {
+                        store.upsert(current.withState(resolution.state, clock.getAsLong()))
+                    }
+                    Unit
+                }
+            }
+        }
+        return chain.thenApply { store.listNotes() }
     }
 
     private fun selectSpendableNotes(
@@ -609,6 +639,19 @@ private fun ensureSuccess(response: ClientResponse) {
     require(response.statusCode in 200..299) {
         "Offline Note V2 transaction rejected with HTTP ${response.statusCode}: ${response.message}"
     }
+}
+
+private fun isPendingState(state: OfflineNoteV2WalletNoteState): Boolean = when (state) {
+    OfflineNoteV2WalletNoteState.RECEIVE_PENDING,
+    OfflineNoteV2WalletNoteState.CHANGE_PENDING,
+    OfflineNoteV2WalletNoteState.SPEND_PENDING,
+    OfflineNoteV2WalletNoteState.REDEEM_PENDING,
+    -> true
+    OfflineNoteV2WalletNoteState.SPENDABLE,
+    OfflineNoteV2WalletNoteState.SPENT,
+    OfflineNoteV2WalletNoteState.REDEEMED,
+    OfflineNoteV2WalletNoteState.CANCELLED,
+    -> false
 }
 
 private fun walletAssetId(assetDefinitionId: String, accountId: String): String =

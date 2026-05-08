@@ -444,6 +444,9 @@ fn poseidon_hash_columns_cuda(batch: &PoseidonColumnBatch) -> Result<Vec<u64>, G
         .collect())
 }
 
+// TODO: Re-enable the low-level fused kernels after Metal/CUDA parity is proven
+// against the scalar column batch plus Merkle-pair parent path.
+#[allow(dead_code)]
 pub fn poseidon_hash_columns_fused(
     batch: &PoseidonColumnBatch,
     backend: GpuBackend,
@@ -456,6 +459,9 @@ pub fn poseidon_hash_columns_fused(
     }
 }
 
+// TODO: Keep this parked with `poseidon_hash_columns_fused` until CUDA fused
+// parent parity has hardware evidence.
+#[allow(dead_code)]
 fn poseidon_hash_columns_fused_cuda(batch: &PoseidonColumnBatch) -> Result<Vec<u64>, GpuError> {
     if batch.is_empty() {
         return Ok(Vec::new());

@@ -452,6 +452,83 @@ class OfflineNoteV2Test {
         assertEquals(string(chainRedeem, "public_inputs_hash"), hex(recipientSubmitter.redemptions[0].publicInputsHash()))
     }
 
+    @Test
+    fun walletSyncReconcilesPendingSpendChangeAndRedeemStates() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val chainIssue = obj(chain, "issue")
+        val chainRedeem = obj(chain, "redeem")
+        val payment = obj(fixture, "payment_token")
+        val senderCertificate = certificate(obj(payment, "sender_key_certificate"))
+        val recipientCertificate = certificate(obj(payment, "recipient_key_certificate"))
+        val senderStore = InMemoryOfflineNoteV2Store()
+        senderStore.upsert(sourceWalletNote(fixture, senderCertificate))
+        val resolutions = linkedMapOf<String, OfflineNoteV2WalletNoteState>(
+            string(derivation, "source_note_commitment") to OfflineNoteV2WalletNoteState.SPENT,
+            string(derivation, "change_output_commitment") to OfflineNoteV2WalletNoteState.SPENDABLE,
+        )
+        val syncResolver = RecordingSyncResolver(resolutions)
+        val senderWallet = OfflineNoteV2Wallet(
+            chainId = string(derivation, "chain_id"),
+            accountId = accountFromAssetId(string(chainIssue, "asset_id")),
+            attestationProvider = StaticAttestationProvider(senderCertificate),
+            store = senderStore,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            syncResolver = syncResolver,
+            proofProvider = BindingProofProvider,
+            randomSource = QueueRandomSource(
+                listOf(
+                    hexBytes(string(derivation, "token_nonce_hex")),
+                    hexBytes(string(derivation, "change_note_secret_hex")),
+                )
+            ),
+            clock = { 1_700_000_002_000L },
+        )
+        val recipientWallet = OfflineNoteV2Wallet(
+            chainId = string(derivation, "chain_id"),
+            accountId = string(payment, "recipient_account_id"),
+            attestationProvider = StaticAttestationProvider(recipientCertificate),
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            randomSource = QueueRandomSource(listOf(hexBytes(string(derivation, "recipient_note_secret_hex")))),
+            idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
+            clock = { 1_700_000_002_100L },
+        )
+
+        val receiveRequest = recipientWallet.prepareReceive(
+            assetDefinitionId = assetDefinitionFromAssetId(string(chainIssue, "asset_id")),
+            amount = string(chainRedeem, "amount"),
+        )
+        senderWallet.pay(receiveRequest)
+        senderWallet.sync().get()
+
+        assertEquals(
+            OfflineNoteV2WalletNoteState.SPENT,
+            senderStore.findNote(hexBytes(string(derivation, "source_note_commitment")))?.state,
+        )
+        val spendableChange = senderStore.findNote(hexBytes(string(derivation, "change_output_commitment")))
+        assertEquals(OfflineNoteV2WalletNoteState.SPENDABLE, spendableChange?.state)
+        assertEquals(
+            listOf(
+                string(derivation, "source_note_commitment"),
+                string(derivation, "change_output_commitment"),
+            ),
+            syncResolver.resolvedCommitments,
+        )
+
+        resolutions[string(derivation, "change_output_commitment")] = OfflineNoteV2WalletNoteState.REDEEMED
+        val redeeming = senderWallet.redeem(requireNotNull(spendableChange)).get()
+        assertEquals(OfflineNoteV2WalletNoteState.REDEEM_PENDING, redeeming.state)
+
+        senderWallet.sync().get()
+
+        assertEquals(
+            OfflineNoteV2WalletNoteState.REDEEMED,
+            senderStore.findNote(hexBytes(string(derivation, "change_output_commitment")))?.state,
+        )
+    }
+
     private fun issue(fixture: Map<String, Any?>): OfflineNoteV2.IssueV2 {
         val chainIssue = obj(obj(fixture, "chain_vectors"), "issue")
         return OfflineNoteV2.IssueV2(
@@ -719,6 +796,22 @@ class OfflineNoteV2Test {
         override fun submitRedeem(redemption: OfflineNoteV2.RedeemV2): CompletableFuture<ClientResponse> {
             redemptions.add(redemption)
             return CompletableFuture.completedFuture(ClientResponse(202, byteArrayOf(), "accepted"))
+        }
+    }
+
+    private class RecordingSyncResolver(
+        private val resolutions: Map<String, OfflineNoteV2WalletNoteState>,
+    ) : OfflineNoteV2SyncResolver {
+        val resolvedCommitments = ArrayList<String>()
+
+        override fun resolvePendingNote(
+            note: OfflineNoteV2WalletNote,
+        ): CompletableFuture<OfflineNoteV2SyncResolution?> {
+            val commitment = note.noteCommitmentHex()
+            resolvedCommitments.add(commitment)
+            return CompletableFuture.completedFuture(
+                resolutions[commitment]?.let { OfflineNoteV2SyncResolution(it, "tx-$commitment") }
+            )
         }
     }
 

@@ -40,6 +40,7 @@ public final class OfflineNoteV2Test {
     walletLoadDerivesCommitmentBeforeIssuerSubmission();
     toriiIssuerClientBodySignsRefillAndIssuesWalletCommitment();
     walletLifecycleBuildsAuditAcceptAndRedeemTransactions();
+    walletSyncReconcilesPendingSpendChangeAndRedeemStates();
     System.out.println("[IrohaAndroid] OfflineNoteV2Test passed.");
   }
 
@@ -518,6 +519,98 @@ public final class OfflineNoteV2Test {
         "redeem public inputs hash");
   }
 
+  private static void walletSyncReconcilesPendingSpendChangeAndRedeemStates() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final Map<String, Object> derivation = obj(chain, "derivation");
+    final Map<String, Object> chainIssue = obj(chain, "issue");
+    final Map<String, Object> chainRedeem = obj(chain, "redeem");
+    final Map<String, Object> payment = obj(fixture, "payment_token");
+    final OfflineNoteV2.KeyCertificateV2 senderCertificate =
+        certificate(obj(payment, "sender_key_certificate"));
+    final OfflineNoteV2.KeyCertificateV2 recipientCertificate =
+        certificate(obj(payment, "recipient_key_certificate"));
+    final InMemoryOfflineNoteV2Store senderStore = new InMemoryOfflineNoteV2Store();
+    senderStore.upsert(sourceWalletNote(fixture, senderCertificate));
+    final Map<String, OfflineNoteV2WalletNoteState> resolutions = new LinkedHashMap<>();
+    resolutions.put(
+        string(derivation, "source_note_commitment"), OfflineNoteV2WalletNoteState.SPENT);
+    resolutions.put(
+        string(derivation, "change_output_commitment"), OfflineNoteV2WalletNoteState.SPENDABLE);
+    final RecordingSyncResolver syncResolver = new RecordingSyncResolver(resolutions);
+    final OfflineNoteV2Wallet senderWallet =
+        new OfflineNoteV2Wallet(
+            string(derivation, "chain_id"),
+            accountFromAssetId(string(chainIssue, "asset_id")),
+            new StaticAttestationProvider(senderCertificate),
+            senderStore,
+            null,
+            new RecordingTransactionSubmitter(),
+            syncResolver,
+            BindingProofProvider.INSTANCE,
+            new QueueRandomSource(
+                Arrays.asList(
+                    hexBytes(string(derivation, "token_nonce_hex")),
+                    hexBytes(string(derivation, "change_note_secret_hex")))),
+            new FixedIdGenerator(string(derivation, "payment_request_id")),
+            () -> 1_700_000_002_000L);
+    final OfflineNoteV2Wallet recipientWallet =
+        new OfflineNoteV2Wallet(
+            string(derivation, "chain_id"),
+            string(payment, "recipient_account_id"),
+            new StaticAttestationProvider(recipientCertificate),
+            new InMemoryOfflineNoteV2Store(),
+            null,
+            new RecordingTransactionSubmitter(),
+            BindingProofProvider.INSTANCE,
+            new QueueRandomSource(
+                Collections.singletonList(hexBytes(string(derivation, "recipient_note_secret_hex")))),
+            new FixedIdGenerator(string(derivation, "payment_request_id")),
+            () -> 1_700_000_002_100L);
+
+    final OfflineNoteV2ReceiveRequest receiveRequest =
+        recipientWallet.prepareReceive(
+            assetDefinitionFromAssetId(string(chainIssue, "asset_id")),
+            string(chainRedeem, "amount"));
+    senderWallet.pay(receiveRequest);
+    senderWallet.sync().get();
+
+    assertEquals(
+        OfflineNoteV2WalletNoteState.SPENT.name(),
+        senderStore.findNote(hexBytes(string(derivation, "source_note_commitment"))).state().name(),
+        "synced source note state");
+    final OfflineNoteV2WalletNote spendableChange =
+        senderStore.findNote(hexBytes(string(derivation, "change_output_commitment")));
+    assertEquals(
+        OfflineNoteV2WalletNoteState.SPENDABLE.name(),
+        spendableChange.state().name(),
+        "synced change note state");
+    assertEquals(2L, syncResolver.resolvedCommitments.size(), "sync resolver commitment count");
+    assertEquals(
+        string(derivation, "source_note_commitment"),
+        syncResolver.resolvedCommitments.get(0),
+        "sync resolver source commitment");
+    assertEquals(
+        string(derivation, "change_output_commitment"),
+        syncResolver.resolvedCommitments.get(1),
+        "sync resolver change commitment");
+
+    resolutions.put(
+        string(derivation, "change_output_commitment"), OfflineNoteV2WalletNoteState.REDEEMED);
+    final OfflineNoteV2WalletNote redeeming = senderWallet.redeem(spendableChange).get();
+    assertEquals(
+        OfflineNoteV2WalletNoteState.REDEEM_PENDING.name(),
+        redeeming.state().name(),
+        "redeeming note state");
+
+    senderWallet.sync().get();
+
+    assertEquals(
+        OfflineNoteV2WalletNoteState.REDEEMED.name(),
+        senderStore.findNote(hexBytes(string(derivation, "change_output_commitment"))).state().name(),
+        "synced redeemed note state");
+  }
+
   private static OfflineNoteV2.IssueV2 issue(final Map<String, Object> fixture) {
     final Map<String, Object> chainIssue = obj(obj(fixture, "chain_vectors"), "issue");
     return new OfflineNoteV2.IssueV2(
@@ -828,6 +921,25 @@ public final class OfflineNoteV2Test {
     public CompletableFuture<ClientResponse> submitRedeem(final OfflineNoteV2.RedeemV2 redemption) {
       redemptions.add(redemption);
       return CompletableFuture.completedFuture(new ClientResponse(202, new byte[0], "accepted"));
+    }
+  }
+
+  private static final class RecordingSyncResolver implements OfflineNoteV2SyncResolver {
+    private final Map<String, OfflineNoteV2WalletNoteState> resolutions;
+    private final List<String> resolvedCommitments = new ArrayList<>();
+
+    private RecordingSyncResolver(final Map<String, OfflineNoteV2WalletNoteState> resolutions) {
+      this.resolutions = resolutions;
+    }
+
+    @Override
+    public CompletableFuture<OfflineNoteV2SyncResolution> resolvePendingNote(
+        final OfflineNoteV2WalletNote note) {
+      final String commitment = note.noteCommitmentHex();
+      resolvedCommitments.add(commitment);
+      final OfflineNoteV2WalletNoteState state = resolutions.get(commitment);
+      return CompletableFuture.completedFuture(
+          state == null ? null : new OfflineNoteV2SyncResolution(state, "tx-" + commitment));
     }
   }
 

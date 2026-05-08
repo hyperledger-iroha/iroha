@@ -18,6 +18,7 @@ public final class OfflineNoteV2Wallet {
   private final OfflineNoteV2Store store;
   private final OfflineNoteV2IssuerClient issuerClient;
   private final OfflineNoteV2TransactionSubmitter transactionSubmitter;
+  private final OfflineNoteV2SyncResolver syncResolver;
   private final OfflineNoteV2ProofProvider proofProvider;
   private final OfflineNoteV2RandomSource randomSource;
   private final OfflineNoteV2IdGenerator idGenerator;
@@ -32,6 +33,7 @@ public final class OfflineNoteV2Wallet {
         accountId,
         attestationProvider,
         new InMemoryOfflineNoteV2Store(),
+        null,
         null,
         null,
         new NativeOfflineNoteV2ProofProvider(),
@@ -51,12 +53,39 @@ public final class OfflineNoteV2Wallet {
       final OfflineNoteV2RandomSource randomSource,
       final OfflineNoteV2IdGenerator idGenerator,
       final LongSupplier clock) {
+    this(
+        chainId,
+        accountId,
+        attestationProvider,
+        store,
+        issuerClient,
+        transactionSubmitter,
+        null,
+        proofProvider,
+        randomSource,
+        idGenerator,
+        clock);
+  }
+
+  public OfflineNoteV2Wallet(
+      final String chainId,
+      final String accountId,
+      final OfflineNoteV2AttestationProvider attestationProvider,
+      final OfflineNoteV2Store store,
+      final OfflineNoteV2IssuerClient issuerClient,
+      final OfflineNoteV2TransactionSubmitter transactionSubmitter,
+      final OfflineNoteV2SyncResolver syncResolver,
+      final OfflineNoteV2ProofProvider proofProvider,
+      final OfflineNoteV2RandomSource randomSource,
+      final OfflineNoteV2IdGenerator idGenerator,
+      final LongSupplier clock) {
     this.chainId = requireNonBlank(chainId, "chainId");
     this.accountId = requireNonBlank(accountId, "accountId");
     this.attestationProvider = Objects.requireNonNull(attestationProvider, "attestationProvider");
     this.store = Objects.requireNonNull(store, "store");
     this.issuerClient = issuerClient;
     this.transactionSubmitter = transactionSubmitter;
+    this.syncResolver = syncResolver;
     this.proofProvider = Objects.requireNonNull(proofProvider, "proofProvider");
     this.randomSource = Objects.requireNonNull(randomSource, "randomSource");
     this.idGenerator = Objects.requireNonNull(idGenerator, "idGenerator");
@@ -329,9 +358,28 @@ public final class OfflineNoteV2Wallet {
   }
 
   public CompletableFuture<List<OfflineNoteV2WalletNote>> sync() {
-    // TODO: Reconcile CHANGE_PENDING/SPEND_PENDING/REDEEM_PENDING notes against Torii
-    // pipeline status once the SDK exposes a transaction-outcome index for Offline Note V2.
-    return CompletableFuture.completedFuture(store.listNotes());
+    if (syncResolver == null) {
+      return CompletableFuture.completedFuture(store.listNotes());
+    }
+    CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
+    for (final OfflineNoteV2WalletNote snapshot : store.listNotes()) {
+      if (!isPendingState(snapshot.state())) {
+        continue;
+      }
+      chain = chain.thenCompose(ignored -> {
+        final OfflineNoteV2WalletNote current = store.findNote(snapshot.noteCommitment());
+        if (current == null || !isPendingState(current.state())) {
+          return CompletableFuture.completedFuture(null);
+        }
+        return syncResolver.resolvePendingNote(current).thenApply(resolution -> {
+          if (resolution != null && resolution.state() != current.state()) {
+            store.upsert(current.withState(resolution.state(), clock.getAsLong()));
+          }
+          return null;
+        });
+      });
+    }
+    return chain.thenApply(ignored -> store.listNotes());
   }
 
   private List<OfflineNoteV2WalletNote> selectSpendableNotes(
@@ -403,6 +451,13 @@ public final class OfflineNoteV2Wallet {
               + ": "
               + response.message());
     }
+  }
+
+  private static boolean isPendingState(final OfflineNoteV2WalletNoteState state) {
+    return state == OfflineNoteV2WalletNoteState.RECEIVE_PENDING
+        || state == OfflineNoteV2WalletNoteState.CHANGE_PENDING
+        || state == OfflineNoteV2WalletNoteState.SPEND_PENDING
+        || state == OfflineNoteV2WalletNoteState.REDEEM_PENDING;
   }
 
   private static String walletAssetId(final String assetDefinitionId, final String accountId) {

@@ -37,6 +37,9 @@ actions: load, prepare receive, pay, accept/audit, redeem, and sync. Wallets
 derive note commitments, input nullifiers, and payment token ids locally, then
 delegate Torii issuance, device attestation, proof generation, persistence, and
 direct audit/redeem transaction submission through injectable interfaces. The
+`sync()` call uses an optional transaction-outcome resolver to reconcile
+pending spend, change, and redeem note records once the app's Torii/outcome
+index observes finality.
 JVM core includes an in-memory store, `IrohaOfflineNoteV2TransactionSubmitter`,
 and `ToriiOfflineNoteV2IssuerClient` for Torii key-refill plus note-issue
 loads. Apps provide canonical auth and a device-binding provider; Android

@@ -1106,6 +1106,9 @@ receive request preparation, P2P pay, accept/audit submission, redeem
 submission, and sync. The wallet keeps issuer, attestation, random, proof,
 store, and direct transaction submission behind public interfaces so Android
 apps can bind them to Torii, Android Keystore, and app-specific persistence;
+`sync()` additionally accepts a transaction-outcome resolver for finalizing
+pending spend, change, and redeem note records after Torii observes the audit or
+redeem transaction outcome.
 the core module includes an in-memory store,
 `IrohaOfflineNoteV2TransactionSubmitter`, and
 `ToriiOfflineNoteV2IssuerClient` for body-signed key-refill plus note-issue

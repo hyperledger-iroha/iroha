@@ -324,6 +324,69 @@ final class OfflineNoteV2Tests: XCTestCase {
         )
     }
 
+    func testOfflineNoteV2WalletSyncReconcilesPendingSpendChangeAndRedeemStates() async throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let recipientCertificate = try Self.certificate(fixture.paymentToken.recipientKeyCertificate)
+        let senderStore = InMemoryOfflineNoteV2Store()
+        senderStore.upsert(try Self.sourceWalletNote(fixture, certificate: senderCertificate))
+        let syncResolver = RecordingSyncResolver(resolutions: [
+            derivation.sourceNoteCommitment: .spent,
+            derivation.changeOutputCommitment: .spendable
+        ])
+        let senderWallet = OfflineNoteV2Wallet(
+            chainId: derivation.chainId,
+            accountId: Self.accountId(fromAssetId: fixture.chainVectors.issue.assetId),
+            attestationProvider: StaticAttestationProvider(certificate: senderCertificate),
+            store: senderStore,
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            syncResolver: syncResolver,
+            proofProvider: BindingProofProvider(),
+            randomSource: QueueRandomSource(values: [
+                try Self.hex(derivation.tokenNonceHex),
+                try Self.hex(derivation.changeNoteSecretHex)
+            ]),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { 1_700_000_002_000 }
+        )
+        let recipientWallet = OfflineNoteV2Wallet(
+            chainId: derivation.chainId,
+            accountId: fixture.paymentToken.recipientAccountId,
+            attestationProvider: StaticAttestationProvider(certificate: recipientCertificate),
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            proofProvider: BindingProofProvider(),
+            randomSource: QueueRandomSource(values: [
+                try Self.hex(derivation.recipientNoteSecretHex)
+            ]),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { 1_700_000_002_100 }
+        )
+
+        let receiveRequest = try recipientWallet.prepareReceive(
+            assetDefinitionId: Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId),
+            amount: fixture.chainVectors.redeem.amount
+        )
+        _ = try senderWallet.pay(receiveRequest)
+        _ = try await senderWallet.sync()
+
+        XCTAssertEqual(senderStore.findNote(noteCommitment: try Self.hex(derivation.sourceNoteCommitment))?.state, .spent)
+        let spendableChange = senderStore.findNote(noteCommitment: try Self.hex(derivation.changeOutputCommitment))
+        XCTAssertEqual(spendableChange?.state, .spendable)
+        XCTAssertEqual(syncResolver.resolvedCommitments, [
+            derivation.sourceNoteCommitment,
+            derivation.changeOutputCommitment
+        ])
+
+        syncResolver.resolutions[derivation.changeOutputCommitment] = .redeemed
+        let redeeming = try await senderWallet.redeem(try XCTUnwrap(spendableChange))
+        XCTAssertEqual(redeeming.state, .redeemPending)
+
+        _ = try await senderWallet.sync()
+
+        XCTAssertEqual(senderStore.findNote(noteCommitment: try Self.hex(derivation.changeOutputCommitment))?.state, .redeemed)
+    }
+
     func testOfflineNoteV2TransactionBuildersProduceSignedEnvelopes() throws {
         let fixture = try Self.loadFixture()
         let keypair = try Keypair(privateKeyBytes: Data(0..<32))
@@ -1175,6 +1238,24 @@ final class OfflineNoteV2Tests: XCTestCase {
 
         func submitRedeem(_ redemption: OfflineNoteRedeemV2) async throws {
             redemptions.append(redemption)
+        }
+    }
+
+    private final class RecordingSyncResolver: OfflineNoteV2SyncResolver {
+        var resolutions: [String: OfflineNoteV2WalletNoteState]
+        private(set) var resolvedCommitments: [String] = []
+
+        init(resolutions: [String: OfflineNoteV2WalletNoteState]) {
+            self.resolutions = resolutions
+        }
+
+        func resolvePendingNote(_ note: OfflineNoteV2WalletNote) async throws -> OfflineNoteV2SyncResolution? {
+            let commitment = note.noteCommitmentHex
+            resolvedCommitments.append(commitment)
+            guard let state = resolutions[commitment] else {
+                return nil
+            }
+            return OfflineNoteV2SyncResolution(state: state, transactionHashHex: "tx-\(commitment)")
         }
     }
 

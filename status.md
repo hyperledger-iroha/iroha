@@ -2,6 +2,57 @@
 
 Last updated: 2026-05-08
 
+## 2026-05-08 FASTPQ Poseidon prover batch path
+
+- FASTPQ trace column and Merkle hashing now use scalar CPU Poseidon for CPU
+  fallback/reference work instead of routing single-state hashes through the
+  active backend sponge. This removes the global GPU lane mutex from the CPU
+  fallback path while preserving the existing digest domains.
+- Trace Merkle parent levels now build domain-separated `[left, right]` pair
+  batches. Large levels can use the existing Poseidon GPU column-batch kernel
+  after a scalar-equivalence preflight; runtime dispatch errors latch the
+  parent-pair accelerator off for the process and fall back to scalar hashing.
+- The high-level fused column API now returns leaves from the parity-proven
+  column-batch kernel and first-level parents from the guarded pair-batch path.
+  The older low-level Metal/CUDA fused parent kernels remain parked with TODOs
+  until they have hardware parity evidence.
+- Metal Poseidon dispatch now waits each staged batch before
+  submitting the next one. This avoids a command-semaphore cycle seen when
+  many proof tests simultaneously held one queued Poseidon ticket and blocked
+  trying to acquire another.
+- `fastpq_metal_bench` now has a `poseidon_merkle_pairs` operation, and
+  Poseidon pipeline telemetry reports Merkle pair GPU/CPU batches, fallback
+  count, and max pair batch size.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-poseidon-fix cargo test -p fastpq_prover metal::tests::poseidon_dispatch_staging_does_not_chain_command_permits --features fastpq-gpu -- --nocapture`
+  - `cargo test -p fastpq_prover trace::tests::merkle_levels_match_scalar_reference_for_mixed_shapes --features fastpq-gpu -- --nocapture`
+  - `cargo test -p fastpq_prover --bin fastpq_metal_bench operation_filter_parses_poseidon_merkle_pairs --features fastpq-gpu -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-poseidon-fix cargo test -p fastpq_prover poseidon --features fastpq-gpu -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-poseidon-fix cargo test -p fastpq_prover trace --features fastpq-gpu -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-poseidon-fix cargo test -p fastpq_prover proof::tests::verify_rejects_wrong_air_trace_root --features fastpq-gpu -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-poseidon-fix cargo check -p iroha_core --features fastpq-gpu`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-poseidon-fix cargo check -p irohad --features fastpq-gpu`
+  - `git diff --check`
+
+## 2026-05-08 Offline Note V2 wallet sync resolver
+
+- Kotlin/JVM, Java Android, and Swift `OfflineNoteV2Wallet.sync()` now reconcile
+  pending wallet notes through an injected transaction-outcome resolver instead
+  of returning the store snapshot unchanged. The resolver can finalize
+  `SPEND_PENDING` notes as `SPENT`, promote accepted `CHANGE_PENDING` outputs
+  to `SPENDABLE`, and settle `REDEEM_PENDING` notes as `REDEEMED`; rejected
+  flows can also map pending outputs to `CANCELLED` or restore notes to
+  `SPENDABLE`.
+- The three SDKs expose matching sync resolution types and add lifecycle
+  regressions that drive P2P pay, sync spent/change state, redeem the synced
+  change note, and sync redemption finality.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
+  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift`
+  - `git diff --check`
+
 ## 2026-05-08 Sumeragi idle timing cache
 
 - Sumeragi now caches the active and chain-effective consensus timing derived
@@ -158,6 +209,20 @@ Last updated: 2026-05-08
 - BN254 digest and prover Poseidon GPU preflight logged `ok=true` on all four
   peers, and diagnostics had zero `BN254 Poseidon Metal batch failed` /
   runtime-dispatch failures.
+- A later Poseidon-return rebuild under
+  `/tmp/iroha-codex-20k-poseidon-return-20260508-150858` reproduced the 20k
+  load with mixed consensus results. The first run in
+  `dist/izanami-prebuilt-20k-fastpq-gpu-poseidon-return-120s-20260508-150858`
+  stalled at height 4/5 with `final_strict_min_txs_approved=8279`,
+  `view_change_missing_qc_total=69`, and `tx_queue_depth=843329`; both
+  Poseidon preflights were still `ok=true` on all peers and no Metal runtime
+  failures were logged. The immediate repeat in
+  `dist/izanami-prebuilt-20k-fastpq-gpu-poseidon-return-repeat-120s-20260508-152225`
+  completed with `final_strict_min_txs_approved=70179`,
+  `view_change_missing_qc_total=1`, zero submit/validation/prebuild failures,
+  and zero BN254/general Poseidon Metal runtime failures. Its
+  `tx_queue_depth=875499` beats throughput but not the older queue-depth
+  baseline of `861515`, so queue drain remains the next gate metric to recover.
 - Focused validation passed with
   `CARGO_TARGET_DIR=/tmp/iroha-20k-validate-target cargo test -p iroha_core --lib rescue_rbc_missing_ready_peers -- --nocapture`,
   `CARGO_TARGET_DIR=/tmp/iroha-20k-validate-target cargo test -p iroha_core --lib targeted_payload_rescue_cooldown_keeps_heavy_repair_off_vote_cadence -- --nocapture`,
@@ -1290,9 +1355,9 @@ Last updated: 2026-05-08
   (`19` tests, `0` failures). Earlier derivation work in this slice also had
   focused Java fixture/Norito parity coverage and full `swift test` in
   `IrohaSwift` green. Formatting and whitespace checks are green with
-  `cargo fmt --all --check` and `git diff --check`. Non-no-op wallet sync
-  reconciliation, structured secure note stores, and public Norito decoders
-  remain tracked as release work in `roadmap.md`.
+  `cargo fmt --all --check` and `git diff --check`. Production sync outcome
+  adapters, structured secure note stores, and public Norito decoders remain
+  tracked as release work in `roadmap.md`.
 
 ## 2026-05-06 Torii query API WSV fast paths
 
