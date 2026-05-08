@@ -17,12 +17,13 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Sumeragi vNext consensus replacement
 
-- Finish moving proposal, DA/RBC availability, validation-worker start/result,
-  commit-persistence, timeout-tick, and block-sync sidecar flows onto typed
+- Finish moving proposal, DA/RBC availability, commit-persistence, and
+  block-sync sidecar flows onto typed
   `sumeragi::vnext::ReactorEvent`/`ReactorEffect` adapters. vNext control
-  frames now enter the live reactor, but the broader block consensus shell
-  still needs the remaining effect adapters before the legacy cooperative
-  tick/commit sweep and inline validation fallback can be deleted.
+  frames, timeout ticks, and validation worker dispatch/start/result now enter
+  the live reactor, but the broader block consensus shell still needs the
+  remaining effect adapters before the legacy cooperative commit sweep and
+  inline validation fallback can be deleted.
 - Finish auditing chain-order hash and `rechain_seq` binding in deferred
   vote/QC caches, signer-tally/cache keys, and evidence replay paths used by
   the replacement shell. Vote/QC preimages, precommit signer history,

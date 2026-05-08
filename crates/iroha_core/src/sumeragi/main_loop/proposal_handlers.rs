@@ -1788,6 +1788,7 @@ impl Actor {
             if let Some(pending) = self.pending.pending_blocks.remove(&hash) {
                 pending_removed = pending_removed.saturating_add(1);
                 self.subsystems.validation.inflight.remove(&hash);
+                self.subsystems.validation.vnext_inflight.remove(&hash);
                 self.subsystems.validation.superseded_results.remove(&hash);
                 self.pending.pending_fetch_requests.remove(&hash);
                 self.pending.pending_block_body_requests.remove(&hash);

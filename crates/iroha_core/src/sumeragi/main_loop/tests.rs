@@ -2887,6 +2887,308 @@ async fn block_message_vnext_rechain_certificate_installs_reactor_chain_order() 
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn tick_drives_vnext_validation_timeout_recovery() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.vnext.suspicion_timeout = Duration::from_millis(10);
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let height = {
+        let view = harness.actor.state.view();
+        u64::try_from(view.height())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1)
+    };
+    let view = 0;
+    let epoch = harness.actor.epoch_for_height(height);
+    let block_hash = pending_session_key(height).0;
+    let roster = harness.actor.effective_commit_topology();
+    let (_, mode_tag, prf_seed) = harness.actor.consensus_context_for_height(height);
+    let topology = super::network_topology::Topology::new(roster);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let roster = signature_topology.as_ref().to_vec();
+    let quorum = harness
+        .actor
+        .vnext_quorum_policy(ConsensusMode::Permissioned, &roster)
+        .expect("permissioned vNext quorum");
+    let critical_prefix_len = quorum
+        .smallest_satisfying_prefix_len(&roster)
+        .expect("permissioned quorum has satisfying prefix");
+    let order = crate::sumeragi::vnext::ChainOrder::new(
+        height,
+        view,
+        epoch,
+        0,
+        roster,
+        critical_prefix_len,
+        critical_prefix_len,
+    )
+    .expect("base chain order");
+    let config = crate::sumeragi::vnext::PerformanceFaultConfig::from(&harness.actor.config.vnext);
+    let slot = crate::sumeragi::vnext::SlotId {
+        height,
+        view,
+        epoch,
+        block_hash,
+    };
+    let started_at_ms = 1_000;
+    let mut reactor = crate::sumeragi::vnext::Reactor::new(order, quorum, config);
+    assert!(
+        reactor
+            .handle_event(crate::sumeragi::vnext::ReactorEvent::ProposalAccepted {
+                slot,
+                payload_hash: Hash::prehashed([0xA5; Hash::LENGTH]),
+            })
+            .is_empty()
+    );
+    assert!(
+        reactor
+            .handle_event(crate::sumeragi::vnext::ReactorEvent::AvailabilityReady { slot })
+            .is_empty()
+    );
+    let dispatch = reactor.handle_event(crate::sumeragi::vnext::ReactorEvent::ValidationNeeded {
+        slot,
+        now_ms: started_at_ms,
+    });
+    let [
+        crate::sumeragi::vnext::ReactorEffect::DispatchValidation {
+            slot: dispatch_slot,
+            id,
+            generation,
+        },
+    ] = dispatch.as_slice()
+    else {
+        panic!("expected validation dispatch effect, got {dispatch:?}");
+    };
+    assert_eq!(*dispatch_slot, slot);
+    assert!(
+        reactor
+            .handle_event(
+                crate::sumeragi::vnext::ReactorEvent::ValidationWorkerStarted {
+                    slot,
+                    id: *id,
+                    generation: *generation,
+                    started_at_ms,
+                },
+            )
+            .is_empty()
+    );
+    harness.actor.vnext_reactors.insert((height, view), reactor);
+
+    let deadline_anchor = Instant::now();
+    let next_due = harness
+        .actor
+        .vnext_reactor_next_due(deadline_anchor)
+        .expect("running validation should schedule a vNext tick");
+    assert!(
+        next_due <= deadline_anchor,
+        "already-overdue vNext validation should request an immediate tick"
+    );
+
+    assert!(
+        harness
+            .actor
+            .tick_vnext_reactors(started_at_ms + config.suspicion_timeout_ms),
+        "vNext tick should emit timeout recovery progress"
+    );
+    let reactor = harness
+        .actor
+        .vnext_reactors
+        .get(&(height, view))
+        .expect("vNext reactor remains installed");
+    let reactor_slot = reactor.slot(block_hash).expect("vNext slot tracked");
+    let crate::sumeragi::vnext::SlotState::Recovering {
+        block_hash: Some(recovered_hash),
+    } = &reactor_slot.slot_state
+    else {
+        panic!(
+            "expected vNext slot to enter recovery, got {:?}",
+            reactor_slot.slot_state
+        );
+    };
+    assert_eq!(*recovered_hash, block_hash);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn vnext_dispatch_validation_queues_worker_and_accepts_result() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let view = 0;
+    let epoch = actor.epoch_for_height(height);
+    let parent = actor.state.latest_block_hash_fast();
+    let block = sample_block(height, view, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+
+    let roster = actor.effective_commit_topology();
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let topology = super::network_topology::Topology::new(roster);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let roster = signature_topology.as_ref().to_vec();
+    let quorum = actor
+        .vnext_quorum_policy(ConsensusMode::Permissioned, &roster)
+        .expect("permissioned vNext quorum");
+    let critical_prefix_len = quorum
+        .smallest_satisfying_prefix_len(&roster)
+        .expect("permissioned quorum has satisfying prefix");
+    let order = crate::sumeragi::vnext::ChainOrder::new(
+        height,
+        view,
+        epoch,
+        0,
+        roster,
+        critical_prefix_len,
+        critical_prefix_len,
+    )
+    .expect("base chain order");
+    let config = crate::sumeragi::vnext::PerformanceFaultConfig::from(&actor.config.vnext);
+    let slot = crate::sumeragi::vnext::SlotId {
+        height,
+        view,
+        epoch,
+        block_hash,
+    };
+    let mut reactor = crate::sumeragi::vnext::Reactor::new(order, quorum, config);
+    assert!(
+        reactor
+            .handle_event(crate::sumeragi::vnext::ReactorEvent::ProposalAccepted {
+                slot,
+                payload_hash,
+            })
+            .is_empty()
+    );
+    assert!(
+        reactor
+            .handle_event(crate::sumeragi::vnext::ReactorEvent::AvailabilityReady { slot })
+            .is_empty()
+    );
+    let dispatch = reactor
+        .handle_event(crate::sumeragi::vnext::ReactorEvent::ValidationNeeded { slot, now_ms: 10 });
+    let [
+        crate::sumeragi::vnext::ReactorEffect::DispatchValidation {
+            slot: dispatch_slot,
+            id,
+            generation,
+        },
+    ] = dispatch.as_slice()
+    else {
+        panic!("expected validation dispatch effect, got {dispatch:?}");
+    };
+    assert_eq!(*dispatch_slot, slot);
+    let id = *id;
+    let generation = *generation;
+    actor.vnext_reactors.insert((height, view), reactor);
+
+    let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    let (result_tx, result_rx) = mpsc::sync_channel::<super::validation::ValidationResult>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+    actor.subsystems.validation.result_rx = Some(result_rx);
+
+    actor.apply_vnext_effects(dispatch);
+
+    let queued_work = work_rx
+        .try_recv()
+        .expect("vNext dispatch should queue validation work");
+    assert_eq!(queued_work.id, id);
+    assert_eq!(queued_work.hash, block_hash);
+    assert_eq!(queued_work.height, height);
+    assert_eq!(queued_work.view, view);
+    assert_eq!(
+        actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .get(&block_hash)
+            .map(|inflight| (inflight.slot, inflight.generation)),
+        Some((slot, generation))
+    );
+    let reactor_slot = actor
+        .vnext_reactors
+        .get(&(height, view))
+        .and_then(|reactor| reactor.slot(block_hash))
+        .expect("vNext slot tracked after worker start");
+    assert!(matches!(
+        reactor_slot.validation,
+        crate::sumeragi::vnext::ValidationState::Running {
+            id: running_id,
+            generation: running_generation,
+            ..
+        } if running_id == id && running_generation == generation
+    ));
+    let commit_topology = queued_work.commit_topology.clone();
+    let inline_outcome =
+        actor.validate_pending_block_for_voting_inline(block_hash, &commit_topology);
+    assert!(
+        matches!(inline_outcome, ValidationGateOutcome::Deferred),
+        "legacy inline validation should not supersede vNext-owned worker validation"
+    );
+    assert!(
+        actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "vNext worker ownership should survive a legacy inline fallback attempt"
+    );
+
+    result_tx
+        .send(super::validation::ValidationResult {
+            id,
+            hash: block_hash,
+            height,
+            view,
+            frontier_generation: queued_work.frontier_generation,
+            commit_topology: queued_work.commit_topology,
+            duration: Duration::from_millis(3),
+            outcome: Ok(Some(super::StateRoots {
+                parent_state_root: zero_state_root(),
+                post_state_root: zero_state_root(),
+            })),
+        })
+        .expect("send validation result");
+
+    assert!(
+        actor.poll_validation_results(),
+        "vNext worker result should be processed"
+    );
+    let reactor_slot = actor
+        .vnext_reactors
+        .get(&(height, view))
+        .and_then(|reactor| reactor.slot(block_hash))
+        .expect("vNext slot tracked after worker result");
+    assert!(matches!(
+        reactor_slot.slot_state,
+        crate::sumeragi::vnext::SlotState::Prepared { block_hash: prepared }
+            if prepared == block_hash
+    ));
+    assert!(matches!(
+        reactor_slot.validation,
+        crate::sumeragi::vnext::ValidationState::Valid { .. }
+    ));
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "vNext worker generation should be cleared after result"
+    );
+
+    harness.shutdown.send();
+}
+
 async fn test_actor_harness(peer_count: usize) -> TestActorHarness {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -30220,7 +30522,7 @@ async fn duplicate_commit_qc_clears_known_block_recovery_request() {
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
     let epoch = actor.epoch_for_height(height);
-    let qc = qc_with_bitmap(
+    let mut qc = qc_with_bitmap(
         &actor.common_config.chain,
         block_hash,
         height,
@@ -30231,9 +30533,12 @@ async fn duplicate_commit_qc_clears_known_block_recovery_request() {
         &topology,
         &harness.key_pairs,
     );
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view);
+    qc.chain_order_hash = chain_order_hash;
+    qc.rechain_seq = rechain_seq;
     actor
         .qc_cache
-        .insert((Phase::Commit, block_hash, height, view, epoch), qc.clone());
+        .insert(super::qc_vote_key_from_qc(&qc), qc.clone());
 
     let now = Instant::now();
     actor.pending.missing_commit_qc_requests.insert(
@@ -55201,6 +55506,184 @@ async fn same_height_no_proposal_storm_breaker_triggers_without_pending_blocks_w
     );
 
     super::status::reset_missing_block_fetch_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn active_pending_no_proposal_storm_schedules_tick_deadline() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = actor.committed_height_snapshot();
+    let height = committed_height.saturating_add(1);
+    let current_view = u64::from(super::NO_PROPOSAL_STORM_FORCE_BREAK_STREAK);
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let start = now
+        .checked_sub(timeout.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+    actor.slot_tracker.proposals_seen.clear();
+
+    let block = sample_block(height, 0, actor.state.latest_block_hash_fast());
+    let _block_hash = insert_validated_pending(actor, block);
+    assert_eq!(
+        actor.queue.active_len(),
+        0,
+        "test isolates tick scheduling from transaction queue wakeups"
+    );
+    let pending_due = actor
+        .pending_block_next_due(now)
+        .expect("active pending block should have a normal quorum deadline");
+    assert!(
+        pending_due > now,
+        "normal pending-block deadline should not be the immediate wake source"
+    );
+
+    let storm_due = actor
+        .active_pending_no_proposal_storm_next_due(now)
+        .expect("active pending no-proposal storm should schedule a tick");
+    assert!(
+        storm_due <= now,
+        "overdue active-pending no-proposal storm should request an immediate tick"
+    );
+    let next_due = actor
+        .next_tick_deadline(now)
+        .expect("actor should have a tick deadline");
+    assert!(
+        next_due <= now,
+        "actor tick deadline should include active-pending no-proposal storm wakeups"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_breaks_recorded_same_height_no_proposal_storm() {
+    use std::borrow::Cow;
+
+    let _missing_block_guard = super::status::missing_block_fetch_test_guard();
+    let _view_guard = super::status::view_change_cause_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = u64::from(super::NO_PROPOSAL_STORM_FORCE_BREAK_STREAK);
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let backlog_grace =
+        actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
+    let start = now
+        .checked_sub(
+            timeout
+                .saturating_add(backlog_grace)
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+    actor.slot_tracker.proposals_seen.clear();
+    actor.pending.pending_blocks.clear();
+    actor.pending.missing_block_requests.clear();
+
+    let block = sample_block(height, 0, actor.state.latest_block_hash_fast());
+    let block_hash = insert_validated_pending(actor, block);
+    let dependency_progress = actor.same_height_no_proposal_storm_dependency_progress_at(height);
+    actor.frontier_recovery = Some(super::FrontierRecoveryState {
+        frontier_height: height,
+        phase: super::FrontierRecoveryPhase::CatchUp,
+        entered_at: start,
+        last_progress_at: start,
+        last_dependency_progress_at: dependency_progress,
+        last_action_at: None,
+        no_progress_windows: super::NO_PROPOSAL_STORM_FORCE_BREAK_STREAK.saturating_sub(1),
+        cleanup_done: false,
+        last_view: current_view.saturating_sub(1),
+        last_rotation_view: None,
+        last_cause: "missing_qc",
+    });
+    actor.subsystems.propose.last_missing_qc_reacquire_attempt = Some((height, current_view));
+
+    let before = super::status::snapshot();
+    let progressed = actor.force_view_change_if_idle(now);
+    assert!(
+        progressed,
+        "recorded same-height no-proposal storm should trigger deterministic recovery cleanup"
+    );
+    let after = super::status::snapshot();
+
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "live idle path should purge stale same-height pending state through the storm breaker"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view),
+        "storm cleanup should run before emitting another missing-QC view rotation"
+    );
+    assert_eq!(
+        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
+        "storm cleanup should avoid counting an extra direct MissingQc rotation"
+    );
+    assert_eq!(
+        after.consensus_no_proposal_storm_total,
+        before.consensus_no_proposal_storm_total + 1,
+        "live idle path should increment no-proposal storm diagnostics"
+    );
+
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
 }
 
@@ -104718,7 +105201,7 @@ async fn da_proposal_uses_rbc_for_ram_lfe_tx_exceeding_consensus_payload_frame_c
 
     let tx = sample_ram_lfe_policy_transaction(actor.consensus_payload_frame_cap);
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let encoded_len = Queue::compute_tx_encoded_len(&accepted);
+    let encoded_len = accepted.encoded_len();
     assert!(
         encoded_len > actor.consensus_payload_frame_cap,
         "RAM-LFE policy transaction should exceed the single consensus frame cap"
@@ -125137,6 +125620,74 @@ async fn validation_dispatches_non_near_quorum_commit_votes_to_workers() {
     assert_eq!(pending.validation_status, ValidationStatus::Pending);
     assert!(pending.parent_state_root.is_none());
     assert!(pending.post_state_root.is_none());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn validation_gate_routes_proposal_worker_path_through_vnext_reactor() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.da.enabled = true;
+    consensus_cfg
+        .worker
+        .fast_finality_inline_validation_max_transactions = 0;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.note_proposal_seen(height, view, payload_hash);
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+
+    let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+    actor.subsystems.validation.result_rx = None;
+
+    let commit_topology = actor.effective_commit_topology();
+    let outcome = actor.validate_pending_block_for_voting(block_hash, &commit_topology);
+    assert!(
+        matches!(outcome, ValidationGateOutcome::Deferred),
+        "proposal-backed worker validation should be owned by vNext"
+    );
+
+    let queued_work = work_rx
+        .try_recv()
+        .expect("vNext validation should queue worker work");
+    assert_eq!(queued_work.hash, block_hash);
+    assert_eq!(queued_work.height, height);
+    assert_eq!(queued_work.view, view);
+    assert!(
+        actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "vNext worker ownership should be recorded with the inflight work"
+    );
+    let reactor_slot = actor
+        .vnext_reactors
+        .get(&(height, view))
+        .and_then(|reactor| reactor.slot(block_hash))
+        .expect("vNext reactor should track the validation slot");
+    assert!(matches!(
+        reactor_slot.slot_state,
+        crate::sumeragi::vnext::SlotState::AwaitingValidation { block_hash: tracked }
+            if tracked == block_hash
+    ));
+    assert!(matches!(
+        reactor_slot.validation,
+        crate::sumeragi::vnext::ValidationState::Running { .. }
+    ));
 
     harness.shutdown.send();
 }

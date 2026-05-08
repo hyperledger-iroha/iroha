@@ -11690,6 +11690,7 @@ struct ValidationState {
     work_txs: Vec<mpsc::SyncSender<validation::ValidationWork>>,
     result_rx: Option<mpsc::Receiver<validation::ValidationResult>>,
     inflight: BTreeMap<HashOf<BlockHeader>, ValidationInFlight>,
+    vnext_inflight: BTreeMap<HashOf<BlockHeader>, VNextValidationInFlight>,
     superseded_results: BTreeMap<HashOf<BlockHeader>, u64>,
     duration_ema: Option<Duration>,
     next_id: u64,
@@ -11703,12 +11704,19 @@ struct ValidationInFlight {
     frontier_generation: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct VNextValidationInFlight {
+    slot: super::vnext::SlotId,
+    generation: u64,
+}
+
 impl ValidationState {
     fn new() -> Self {
         Self {
             work_txs: Vec::new(),
             result_rx: None,
             inflight: BTreeMap::new(),
+            vnext_inflight: BTreeMap::new(),
             superseded_results: BTreeMap::new(),
             duration_ema: None,
             next_id: 0,
@@ -19126,6 +19134,55 @@ impl Actor {
         Some(now + timeout.saturating_sub(age))
     }
 
+    fn active_pending_no_proposal_storm_next_due(&self, now: Instant) -> Option<Instant> {
+        if !self.has_active_pending_blocks() {
+            return None;
+        }
+
+        let committed_height = self.committed_height_snapshot();
+        let height = self
+            .active_consensus_round_height()
+            .min(committed_height.saturating_add(1));
+        if height != committed_height.saturating_add(1) {
+            return None;
+        }
+        let current_view = self.phase_tracker.current_view(height).unwrap_or(0);
+        if self.slot_has_round_liveness(height, current_view) {
+            return None;
+        }
+        let view_age = self.phase_tracker.view_age(height, now)?;
+        let queue_since = self.queue_ready_since.and_then(|entry| {
+            (entry.height == height && entry.view == current_view).then_some(entry.since)
+        })?;
+        if self
+            .subsystems
+            .propose
+            .last_pacemaker_attempt
+            .is_none_or(|attempt| attempt < queue_since)
+        {
+            return None;
+        }
+        let timeout = idle_view_timeout(
+            false,
+            self.commit_quorum_timeout(),
+            self.subsystems.propose.pacemaker.propose_interval,
+            self.runtime_da_enabled(),
+        );
+        if timeout == Duration::ZERO {
+            return None;
+        }
+
+        let queue_age = now.saturating_duration_since(queue_since);
+        if idle_round_timed_out(true, view_age.max(queue_age), timeout) {
+            return Some(now);
+        }
+        let view_deadline = now
+            .checked_add(timeout.saturating_sub(view_age))
+            .unwrap_or(now);
+        let queue_deadline = queue_since.checked_add(timeout).unwrap_or(now);
+        Some(view_deadline.min(queue_deadline).max(now))
+    }
+
     fn rbc_next_due(&self, now: Instant) -> Option<Instant> {
         let rbc = &self.subsystems.da_rbc.rbc;
         if rbc.sessions.is_empty()
@@ -19359,6 +19416,10 @@ impl Actor {
 
         next_due = Self::merge_deadline(next_due, self.rbc_next_due(now));
         next_due = Self::merge_deadline(next_due, self.frontier_body_next_due(now));
+        next_due = Self::merge_deadline(
+            next_due,
+            self.active_pending_no_proposal_storm_next_due(now),
+        );
 
         if let Some(inflight) = self.subsystems.commit.inflight.as_ref() {
             let timeout = self.config.persistence.commit_inflight_timeout;
@@ -19370,6 +19431,33 @@ impl Actor {
 
         next_due = Self::merge_deadline(next_due, self.missing_block_next_due(now));
         next_due = Self::merge_deadline(next_due, self.idle_view_next_due(now));
+        next_due = Self::merge_deadline(next_due, self.vnext_reactor_next_due(now));
+
+        next_due
+    }
+
+    fn vnext_reactor_next_due(&self, now: Instant) -> Option<Instant> {
+        let now_ms = Self::vnext_now_ms();
+        let config = super::vnext::PerformanceFaultConfig::from(&self.config.vnext);
+        let mut next_due = None;
+
+        for reactor in self.vnext_reactors.values() {
+            for slot in reactor.slots.values() {
+                let timeout_anchor_ms = match slot.validation {
+                    super::vnext::ValidationState::Running { started_at_ms, .. } => started_at_ms,
+                    super::vnext::ValidationState::Backpressured { since_ms } => since_ms,
+                    _ => continue,
+                };
+                let due_ms = timeout_anchor_ms.saturating_add(config.suspicion_timeout_ms);
+                let due = if due_ms <= now_ms {
+                    now
+                } else {
+                    now.checked_add(Duration::from_millis(due_ms.saturating_sub(now_ms)))
+                        .unwrap_or(now)
+                };
+                next_due = Self::merge_deadline(next_due, Some(due));
+            }
+        }
 
         next_due
     }
@@ -19536,6 +19624,10 @@ impl Actor {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.known_block_qc_work");
             self.drain_known_block_qc_work(tick_deadline)
         };
+        let vnext_progress = {
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.vnext_reactor");
+            self.tick_vnext_reactors(Self::vnext_now_ms())
+        };
         let (missing_block_progress, missing_block_cost) = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.retry_missing_block");
             let step_start = Instant::now();
@@ -19623,6 +19715,7 @@ impl Actor {
             || frontier_body_progress
             || quarantined_block_sync_qc_progress
             || known_block_qc_progress
+            || vnext_progress
             || missing_block_progress
             || reschedule_progress
             || idle_view_progress
@@ -20670,6 +20763,33 @@ impl Actor {
             .unwrap_or(0)
     }
 
+    fn tick_vnext_reactors(&mut self, now_ms: u64) -> bool {
+        if self.vnext_reactors.is_empty() {
+            return false;
+        }
+
+        let config = super::vnext::PerformanceFaultConfig::from(&self.config.vnext);
+        let reactor_keys = self.vnext_reactors.keys().copied().collect::<Vec<_>>();
+        let mut progress = false;
+
+        for key in reactor_keys {
+            let effects = {
+                let Some(reactor) = self.vnext_reactors.get_mut(&key) else {
+                    continue;
+                };
+                reactor.config = config;
+                reactor.handle_event(super::vnext::ReactorEvent::Tick { now_ms })
+            };
+
+            if !effects.is_empty() {
+                progress = true;
+                self.apply_vnext_effects(effects);
+            }
+        }
+
+        progress
+    }
+
     pub(super) fn vnext_chain_order_binding_for(&self, height: u64, view: u64) -> (Hash, u64) {
         if let Some(reactor) = self.vnext_reactors.get(&(height, view)) {
             return (reactor.chain_order.hash(), reactor.chain_order.rechain_seq);
@@ -20711,6 +20831,417 @@ impl Actor {
         .unwrap_or_else(|_| (crate::sumeragi::consensus::default_chain_order_hash(), 0))
     }
 
+    fn base_vnext_chain_order_and_quorum_for(
+        &self,
+        height: u64,
+        view: u64,
+    ) -> Option<(super::vnext::ChainOrder, super::vnext::QuorumPolicy)> {
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let mut commit_topology = self.state.commit_topology_snapshot();
+        if commit_topology.is_empty() {
+            commit_topology = self.effective_commit_topology();
+        }
+        if commit_topology.is_empty() {
+            return None;
+        }
+
+        let topology = super::network_topology::Topology::new(commit_topology);
+        let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
+        let quorum = self.vnext_quorum_policy(consensus_mode, signature_topology.as_ref())?;
+        let critical_prefix_len =
+            quorum.smallest_satisfying_prefix_len(signature_topology.as_ref())?;
+        let epoch = self
+            .roster_validation_cache
+            .expected_epoch(height, consensus_mode);
+        let chain_order = super::vnext::ChainOrder::new(
+            height,
+            view,
+            epoch,
+            0,
+            signature_topology.as_ref().to_vec(),
+            critical_prefix_len,
+            critical_prefix_len,
+        )
+        .ok()?;
+        Some((chain_order, quorum))
+    }
+
+    pub(super) fn drive_vnext_validation_for_pending(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        payload_hash: Hash,
+    ) -> bool {
+        let Some((base_chain_order, quorum)) =
+            self.base_vnext_chain_order_and_quorum_for(height, view)
+        else {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "unable to start vNext validation without chain order/quorum"
+            );
+            return false;
+        };
+
+        let key = (height, view);
+        let chain_order = self
+            .vnext_reactors
+            .get(&key)
+            .map(|reactor| reactor.chain_order.clone())
+            .unwrap_or(base_chain_order);
+        let slot = super::vnext::SlotId {
+            height,
+            view,
+            epoch: chain_order.epoch,
+            block_hash,
+        };
+        let config = super::vnext::PerformanceFaultConfig::from(&self.config.vnext);
+        let now_ms = Self::vnext_now_ms();
+        let effects = {
+            let reactor = self
+                .vnext_reactors
+                .entry(key)
+                .or_insert_with(|| super::vnext::Reactor::new(chain_order, quorum.clone(), config));
+            reactor.quorum = quorum;
+            reactor.config = config;
+
+            let mut effects = reactor
+                .handle_event(super::vnext::ReactorEvent::ProposalAccepted { slot, payload_hash });
+            effects.extend(
+                reactor.handle_event(super::vnext::ReactorEvent::AvailabilityReady { slot }),
+            );
+            effects.extend(
+                reactor.handle_event(super::vnext::ReactorEvent::ValidationNeeded { slot, now_ms }),
+            );
+            effects
+        };
+        self.apply_vnext_effects(effects);
+        true
+    }
+
+    fn handle_vnext_worker_event(
+        &mut self,
+        slot: super::vnext::SlotId,
+        event: super::vnext::ReactorEvent,
+    ) -> Vec<super::vnext::ReactorEffect> {
+        let key = (slot.height, slot.view);
+        let config = super::vnext::PerformanceFaultConfig::from(&self.config.vnext);
+        let Some(reactor) = self.vnext_reactors.get_mut(&key) else {
+            warn!(
+                height = slot.height,
+                view = slot.view,
+                block = %slot.block_hash,
+                "vNext validation worker event had no installed reactor"
+            );
+            return Vec::new();
+        };
+        reactor.config = config;
+        reactor.handle_event(event)
+    }
+
+    fn handle_vnext_validation_result(
+        &mut self,
+        slot: super::vnext::SlotId,
+        result: super::vnext::ValidationWorkerResult,
+    ) {
+        let effects = self.handle_vnext_worker_event(
+            slot,
+            super::vnext::ReactorEvent::ValidationResult { slot, result },
+        );
+        if !effects.is_empty() {
+            self.apply_vnext_effects(effects);
+        }
+    }
+
+    fn handle_vnext_validation_queue_full(
+        &mut self,
+        slot: super::vnext::SlotId,
+        id: u64,
+        generation: u64,
+    ) -> Vec<super::vnext::ReactorEffect> {
+        self.handle_vnext_worker_event(
+            slot,
+            super::vnext::ReactorEvent::ValidationQueueFull {
+                slot,
+                id,
+                generation,
+                now_ms: Self::vnext_now_ms(),
+            },
+        )
+    }
+
+    fn dispatch_vnext_validation(
+        &mut self,
+        slot: super::vnext::SlotId,
+        id: u64,
+        generation: u64,
+    ) -> Vec<super::vnext::ReactorEffect> {
+        let Some((block, height, view, validation_status, roots)) = self
+            .pending
+            .pending_blocks
+            .get(&slot.block_hash)
+            .map(|pending| {
+                (
+                    pending.block.clone(),
+                    pending.height,
+                    pending.view,
+                    pending.validation_status,
+                    pending.parent_state_root.zip(pending.post_state_root),
+                )
+            })
+        else {
+            warn!(
+                height = slot.height,
+                view = slot.view,
+                block = %slot.block_hash,
+                "vNext validation dispatch could not find pending block"
+            );
+            return self.handle_vnext_validation_queue_full(slot, id, generation);
+        };
+
+        if height != slot.height || view != slot.view {
+            warn!(
+                height,
+                view,
+                slot_height = slot.height,
+                slot_view = slot.view,
+                block = %slot.block_hash,
+                "vNext validation dispatch slot does not match pending block"
+            );
+            return self.handle_vnext_validation_queue_full(slot, id, generation);
+        }
+
+        match validation_status {
+            ValidationStatus::Valid => {
+                let Some((parent_state_root, post_state_root)) = roots else {
+                    return self.handle_vnext_validation_result_and_continue(
+                        slot,
+                        super::vnext::ValidationWorkerResult {
+                            id,
+                            generation,
+                            outcome: super::vnext::ValidationWorkerOutcome::Invalid(
+                                super::vnext::ValidationFailure {
+                                    reason_label: "validation_roots_missing".to_owned(),
+                                    evidence_hash: None,
+                                },
+                            ),
+                        },
+                    );
+                };
+                return self.handle_vnext_validation_result_and_continue(
+                    slot,
+                    super::vnext::ValidationWorkerResult {
+                        id,
+                        generation,
+                        outcome: super::vnext::ValidationWorkerOutcome::Valid(
+                            super::vnext::ValidationRoots {
+                                parent_state_root,
+                                post_state_root,
+                            },
+                        ),
+                    },
+                );
+            }
+            ValidationStatus::Invalid => {
+                return self.handle_vnext_validation_result_and_continue(
+                    slot,
+                    super::vnext::ValidationWorkerResult {
+                        id,
+                        generation,
+                        outcome: super::vnext::ValidationWorkerOutcome::Invalid(
+                            super::vnext::ValidationFailure {
+                                reason_label: "pending_block_invalid".to_owned(),
+                                evidence_hash: None,
+                            },
+                        ),
+                    },
+                );
+            }
+            ValidationStatus::Pending => {}
+        }
+
+        if let Some(inflight) = self.subsystems.validation.inflight.get(&slot.block_hash) {
+            if inflight.id == id
+                && self
+                    .subsystems
+                    .validation
+                    .vnext_inflight
+                    .get(&slot.block_hash)
+                    .is_some_and(|vnext| vnext.generation == generation && vnext.slot == slot)
+            {
+                return self.handle_vnext_worker_event(
+                    slot,
+                    super::vnext::ReactorEvent::ValidationWorkerStarted {
+                        slot,
+                        id,
+                        generation,
+                        started_at_ms: Self::vnext_now_ms(),
+                    },
+                );
+            }
+            warn!(
+                height = slot.height,
+                view = slot.view,
+                block = %slot.block_hash,
+                inflight_id = inflight.id,
+                requested_id = id,
+                "vNext validation dispatch found conflicting validation work in flight"
+            );
+            return self.handle_vnext_validation_queue_full(slot, id, generation);
+        }
+
+        if self.subsystems.validation.work_txs.is_empty() {
+            warn!(
+                height = slot.height,
+                view = slot.view,
+                block = %slot.block_hash,
+                "vNext validation dispatch has no worker lanes"
+            );
+            return self.handle_vnext_validation_queue_full(slot, id, generation);
+        }
+
+        let (topology, commit_topology) =
+            if let Some(reactor) = self.vnext_reactors.get(&(slot.height, slot.view)) {
+                let commit_topology = reactor.chain_order.ordered_validators.clone();
+                if commit_topology.is_empty() {
+                    warn!(
+                        height = slot.height,
+                        view = slot.view,
+                        block = %slot.block_hash,
+                        "vNext validation dispatch has empty chain order"
+                    );
+                    return self.handle_vnext_validation_queue_full(slot, id, generation);
+                }
+                (
+                    super::network_topology::Topology::new(commit_topology.clone()),
+                    commit_topology,
+                )
+            } else {
+                let commit_topology = self.effective_commit_topology();
+                if commit_topology.is_empty() {
+                    warn!(
+                        height = slot.height,
+                        view = slot.view,
+                        block = %slot.block_hash,
+                        "vNext validation dispatch has empty fallback topology"
+                    );
+                    return self.handle_vnext_validation_queue_full(slot, id, generation);
+                }
+                let mut topology = super::network_topology::Topology::new(commit_topology.clone());
+                if let Err(err) = self.leader_index_for(&mut topology, slot.height, slot.view) {
+                    warn!(
+                        ?err,
+                        height = slot.height,
+                        view = slot.view,
+                        block = %slot.block_hash,
+                        "vNext validation dispatch failed to align fallback topology"
+                    );
+                    return self.handle_vnext_validation_queue_full(slot, id, generation);
+                }
+                (topology, commit_topology)
+            };
+
+        let frontier_generation =
+            self.frontier_owner_generation_for_block(slot.height, slot.view, slot.block_hash);
+        let mut work = validation::ValidationWork {
+            id,
+            hash: slot.block_hash,
+            block,
+            height: slot.height,
+            view: slot.view,
+            frontier_generation,
+            topology,
+            commit_topology,
+        };
+        let mut dispatched = false;
+        let mut disconnected = Vec::new();
+        let total = self.subsystems.validation.work_txs.len();
+        for _ in 0..total {
+            let idx = self.subsystems.validation.next_worker % total;
+            self.subsystems.validation.next_worker =
+                self.subsystems.validation.next_worker.saturating_add(1);
+            let work_tx = &self.subsystems.validation.work_txs[idx];
+            match work_tx.try_send(work) {
+                Ok(()) => {
+                    dispatched = true;
+                    break;
+                }
+                Err(mpsc::TrySendError::Full(returned)) => {
+                    work = returned;
+                }
+                Err(mpsc::TrySendError::Disconnected(returned)) => {
+                    work = returned;
+                    disconnected.push(idx);
+                }
+            }
+        }
+
+        if !disconnected.is_empty() {
+            disconnected.sort_unstable();
+            disconnected.dedup();
+            for idx in disconnected.into_iter().rev() {
+                if idx < self.subsystems.validation.work_txs.len() {
+                    self.subsystems.validation.work_txs.swap_remove(idx);
+                }
+            }
+            if self.subsystems.validation.next_worker >= self.subsystems.validation.work_txs.len() {
+                self.subsystems.validation.next_worker = 0;
+            }
+        }
+
+        if !dispatched {
+            if self.subsystems.validation.work_txs.is_empty() {
+                self.subsystems.validation.result_rx = None;
+            }
+            warn!(
+                height = slot.height,
+                view = slot.view,
+                block = %slot.block_hash,
+                "vNext validation worker queue saturated"
+            );
+            return self.handle_vnext_validation_queue_full(slot, id, generation);
+        }
+
+        self.subsystems
+            .validation
+            .superseded_results
+            .remove(&slot.block_hash);
+        self.subsystems.validation.inflight.insert(
+            slot.block_hash,
+            ValidationInFlight {
+                id,
+                started_at: Instant::now(),
+                frontier_generation,
+            },
+        );
+        self.subsystems.validation.vnext_inflight.insert(
+            slot.block_hash,
+            VNextValidationInFlight { slot, generation },
+        );
+        self.handle_vnext_worker_event(
+            slot,
+            super::vnext::ReactorEvent::ValidationWorkerStarted {
+                slot,
+                id,
+                generation,
+                started_at_ms: Self::vnext_now_ms(),
+            },
+        )
+    }
+
+    fn handle_vnext_validation_result_and_continue(
+        &mut self,
+        slot: super::vnext::SlotId,
+        result: super::vnext::ValidationWorkerResult,
+    ) -> Vec<super::vnext::ReactorEffect> {
+        self.handle_vnext_worker_event(
+            slot,
+            super::vnext::ReactorEvent::ValidationResult { slot, result },
+        )
+    }
+
     fn apply_vnext_effects(&mut self, effects: Vec<super::vnext::ReactorEffect>) {
         for effect in effects {
             match effect {
@@ -20727,6 +21258,10 @@ impl Actor {
                         generation,
                         "vNext reactor requested validation dispatch"
                     );
+                    let effects = self.dispatch_vnext_validation(slot, id, generation);
+                    if !effects.is_empty() {
+                        self.apply_vnext_effects(effects);
+                    }
                 }
                 super::vnext::ReactorEffect::AcceptValidated { slot, roots } => {
                     debug!(
@@ -27588,6 +28123,7 @@ impl Actor {
                 self.pending.pending_blocks.remove(&hash);
             }
             self.subsystems.validation.inflight.remove(&hash);
+            self.subsystems.validation.vnext_inflight.remove(&hash);
             self.subsystems.validation.superseded_results.remove(&hash);
             self.clean_rbc_sessions_for_block(hash, request_height);
 
@@ -29441,6 +29977,7 @@ impl Actor {
         for hash in stale_pending {
             if let Some(pending) = self.pending.pending_blocks.remove(&hash) {
                 self.subsystems.validation.inflight.remove(&hash);
+                self.subsystems.validation.vnext_inflight.remove(&hash);
                 self.subsystems.validation.superseded_results.remove(&hash);
                 self.pending.pending_fetch_requests.remove(&hash);
                 self.pending.pending_block_body_requests.remove(&hash);
@@ -29691,6 +30228,7 @@ impl Actor {
             pending_removed = pending_removed.saturating_add(1);
             cleared_heights.insert(height);
             self.subsystems.validation.inflight.remove(&hash);
+            self.subsystems.validation.vnext_inflight.remove(&hash);
             self.subsystems.validation.superseded_results.remove(&hash);
             self.pending.pending_fetch_requests.remove(&hash);
             self.pending.pending_block_body_requests.remove(&hash);
@@ -33402,6 +33940,63 @@ impl Actor {
         )
     }
 
+    fn maybe_break_active_pending_no_proposal_storm(&mut self, now: Instant) -> bool {
+        let committed_height = self.committed_height_snapshot();
+        let height = self
+            .active_consensus_round_height()
+            .min(committed_height.saturating_add(1));
+        if height != committed_height.saturating_add(1) {
+            return false;
+        }
+        let current_view = self.phase_tracker.current_view(height).unwrap_or(0);
+        if self.slot_has_round_liveness(height, current_view) {
+            return false;
+        }
+        let Some(view_age) = self.phase_tracker.view_age(height, now) else {
+            return false;
+        };
+        let Some(queue_since) = self.queue_ready_since.and_then(|entry| {
+            (entry.height == height && entry.view == current_view).then_some(entry.since)
+        }) else {
+            return false;
+        };
+        if self
+            .subsystems
+            .propose
+            .last_pacemaker_attempt
+            .is_none_or(|attempt| attempt < queue_since)
+        {
+            return false;
+        }
+        let timeout = idle_view_timeout(
+            false,
+            self.commit_quorum_timeout(),
+            self.subsystems.propose.pacemaker.propose_interval,
+            self.runtime_da_enabled(),
+        );
+        let age = view_age.max(now.saturating_duration_since(queue_since));
+        if !idle_round_timed_out(true, age, timeout) {
+            return false;
+        }
+
+        let dependency_progress_at =
+            self.same_height_no_proposal_storm_dependency_progress_at(height);
+        let storm_count = self.record_same_height_no_proposal_storm_timeout(
+            height,
+            current_view,
+            committed_height,
+            dependency_progress_at,
+        );
+        self.maybe_break_same_height_no_proposal_storm(
+            height,
+            current_view,
+            storm_count,
+            false,
+            now,
+            "missing_qc",
+        )
+    }
+
     fn maybe_trigger_payload_mismatch_recovery_bundle(
         &mut self,
         height: u64,
@@ -34411,6 +35006,9 @@ impl Actor {
             return true;
         }
         if self.has_active_pending_blocks() {
+            if self.maybe_break_active_pending_no_proposal_storm(now) {
+                return true;
+            }
             let _ = self.maybe_reacquire_active_frontier_dependency(now);
             return false;
         }
@@ -35210,6 +35808,34 @@ impl Actor {
             .flatten();
         let frontier_vote_backed_recovery_active = height == contiguous_frontier_height
             && self.frontier_vote_backed_recovery_active(height, current_view, now);
+        let storm_backlog_signals = missing_qc_actionable_dependency_signals
+            || residual_round_backlog
+            || consensus_queue_backlog
+            || rbc_backlog;
+        let has_same_height_storm_work =
+            storm_backlog_signals || self.pending_block_count_for_height(height) > 0;
+        let no_proposal_storm_count = if !proposal_seen && has_same_height_storm_work {
+            self.record_same_height_no_proposal_storm_timeout(
+                height,
+                current_view,
+                committed_height,
+                same_height_dependency_progress_at,
+            )
+        } else {
+            0
+        };
+        if !proposal_seen
+            && self.maybe_break_same_height_no_proposal_storm(
+                height,
+                current_view,
+                no_proposal_storm_count,
+                storm_backlog_signals,
+                now,
+                "missing_qc",
+            )
+        {
+            return true;
+        }
         if !missing_qc_actionable_dependency_signals {
             if height == contiguous_frontier_height {
                 if exact_frontier_body_repair_active {
@@ -35446,18 +36072,6 @@ impl Actor {
             return false;
         }
 
-        let storm_backlog_signals = missing_qc_actionable_dependency_signals
-            || residual_round_backlog
-            || consensus_queue_backlog
-            || rbc_backlog;
-        if !proposal_seen {
-            let _ = self.record_same_height_no_proposal_storm_timeout(
-                height,
-                current_view,
-                committed_height,
-                same_height_dependency_progress_at,
-            );
-        }
         if height == contiguous_frontier_height {
             if exact_frontier_body_repair_active {
                 if self.missing_qc_height_stall_rotation_window_available(height, now) {
@@ -35656,6 +36270,7 @@ impl Actor {
             }
             if let Some(mut pending) = self.pending.pending_blocks.remove(&hash) {
                 self.subsystems.validation.inflight.remove(&hash);
+                self.subsystems.validation.vnext_inflight.remove(&hash);
                 self.subsystems.validation.superseded_results.remove(&hash);
                 let committed = self.kura.get_block_height_by_hash(hash).is_some();
                 let invalid = matches!(pending.validation_status, ValidationStatus::Invalid);

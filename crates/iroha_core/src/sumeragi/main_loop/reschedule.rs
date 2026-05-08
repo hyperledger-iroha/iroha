@@ -1169,6 +1169,7 @@ impl Actor {
             self.block_signer_cache.remove_block(&hash);
             self.pending.pending_blocks.remove(&hash);
             self.subsystems.validation.inflight.remove(&hash);
+            self.subsystems.validation.vnext_inflight.remove(&hash);
             self.subsystems.validation.superseded_results.remove(&hash);
             aborted_removed = aborted_removed.saturating_add(1);
         }
@@ -1180,6 +1181,7 @@ impl Actor {
             }
             self.pending.pending_blocks.remove(&hash);
             self.subsystems.validation.inflight.remove(&hash);
+            self.subsystems.validation.vnext_inflight.remove(&hash);
             self.subsystems.validation.superseded_results.remove(&hash);
             self.clean_rbc_sessions_for_block(hash, height);
             self.qc_cache

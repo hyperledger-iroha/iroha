@@ -173,6 +173,7 @@ impl Actor {
         self.subsystems.propose.collector_role_index = None;
         self.pending.pending_blocks.clear();
         self.subsystems.validation.inflight.clear();
+        self.subsystems.validation.vnext_inflight.clear();
         self.subsystems.validation.superseded_results.clear();
         self.pending.pending_fetch_requests.clear();
         self.pending.pending_block_body_requests.clear();

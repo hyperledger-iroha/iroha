@@ -329,6 +329,7 @@ impl Actor {
         hash: HashOf<BlockHeader>,
     ) -> Option<super::ValidationInFlight> {
         let inflight = self.subsystems.validation.inflight.remove(&hash)?;
+        self.subsystems.validation.vnext_inflight.remove(&hash);
         self.remember_superseded_validation_result(hash, inflight.id);
         Some(inflight)
     }
@@ -342,6 +343,10 @@ impl Actor {
         self.subsystems
             .validation
             .superseded_results
+            .retain(|hash, _| self.pending.pending_blocks.contains_key(hash));
+        self.subsystems
+            .validation
+            .vnext_inflight
             .retain(|hash, _| self.pending.pending_blocks.contains_key(hash));
         before.saturating_sub(self.subsystems.validation.inflight.len())
     }
@@ -375,12 +380,44 @@ impl Actor {
         self.subsystems.validation.duration_ema
     }
 
+    fn vnext_validation_owns_block(
+        &self,
+        hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        self.subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&hash)
+            || self
+                .vnext_reactors
+                .get(&(height, view))
+                .and_then(|reactor| reactor.slot(hash))
+                .is_some_and(|slot| {
+                    matches!(
+                        slot.validation,
+                        super::vnext::ValidationState::Queued { .. }
+                            | super::vnext::ValidationState::Running { .. }
+                            | super::vnext::ValidationState::Backpressured { .. }
+                    )
+                })
+    }
+
     pub(super) fn validation_inflight_inline_reason(
         &self,
         hash: HashOf<BlockHeader>,
         height: u64,
     ) -> Option<ValidationInflightInlineReason> {
         let inflight = self.subsystems.validation.inflight.get(&hash)?;
+        if self
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&hash)
+        {
+            return None;
+        }
         if self.subsystems.validation.result_rx.is_none()
             || self.subsystems.validation.work_txs.is_empty()
         {
@@ -447,6 +484,21 @@ impl Actor {
         commit_topology: &[PeerId],
         dispatch: ValidationDispatch,
     ) -> ValidationGateOutcome {
+        if self
+            .pending
+            .pending_blocks
+            .get(&hash)
+            .is_some_and(|pending| {
+                pending.validation_status == ValidationStatus::Pending
+                    && self.vnext_validation_owns_block(hash, pending.height, pending.view)
+            })
+        {
+            debug!(
+                block = %hash,
+                "deferring legacy validation while vNext owns validation"
+            );
+            return ValidationGateOutcome::Deferred;
+        }
         if matches!(dispatch, ValidationDispatch::Inline) {
             // Inline validation supersedes any stale worker intent for this block.
             let _ = self.supersede_validation_inflight(hash);
@@ -461,6 +513,17 @@ impl Actor {
             Ok(pending) => pending,
             Err(outcome) => return outcome,
         };
+        if self.vnext_validation_owns_block(hash, pending.height, pending.view) {
+            debug!(
+                height = pending.height,
+                view = pending.view,
+                block = %hash,
+                "deferring legacy validation while vNext owns validation"
+            );
+            pending.validation_status = ValidationStatus::Pending;
+            self.pending.pending_blocks.insert(hash, pending);
+            return ValidationGateOutcome::Deferred;
+        }
 
         let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         if pending.height == local_height.saturating_add(1) {
@@ -645,110 +708,18 @@ impl Actor {
                 return ValidationGateOutcome::Deferred;
             }
 
-            let id = self.subsystems.validation.next_id();
-            let frontier_generation =
-                self.frontier_owner_generation_for_block(pending.height, pending.view, hash);
-            let mut work = ValidationWork {
-                id,
+            let pending_height = pending.height;
+            let pending_view = pending.view;
+            let payload_hash = pending.payload_hash;
+            pending.validation_status = ValidationStatus::Pending;
+            self.pending.pending_blocks.insert(hash, pending);
+            self.drive_vnext_validation_for_pending(
                 hash,
-                block: pending.block.clone(),
-                height: pending.height,
-                view: pending.view,
-                frontier_generation,
-                topology: topology.clone(),
-                commit_topology: commit_topology.to_vec(),
-            };
-            let mut dispatched = false;
-            let mut disconnected = Vec::new();
-            let total = self.subsystems.validation.work_txs.len();
-            for _ in 0..total {
-                let idx = self.subsystems.validation.next_worker % total;
-                self.subsystems.validation.next_worker =
-                    self.subsystems.validation.next_worker.saturating_add(1);
-                let work_tx = &self.subsystems.validation.work_txs[idx];
-                match work_tx.try_send(work) {
-                    Ok(()) => {
-                        dispatched = true;
-                        break;
-                    }
-                    Err(mpsc::TrySendError::Full(returned)) => {
-                        work = returned;
-                    }
-                    Err(mpsc::TrySendError::Disconnected(returned)) => {
-                        work = returned;
-                        disconnected.push(idx);
-                    }
-                }
-            }
-
-            if !disconnected.is_empty() {
-                disconnected.sort_unstable();
-                disconnected.dedup();
-                for idx in disconnected.into_iter().rev() {
-                    if idx < self.subsystems.validation.work_txs.len() {
-                        self.subsystems.validation.work_txs.swap_remove(idx);
-                    }
-                }
-                if self.subsystems.validation.next_worker
-                    >= self.subsystems.validation.work_txs.len()
-                {
-                    self.subsystems.validation.next_worker = 0;
-                }
-            }
-
-            if dispatched {
-                self.subsystems.validation.superseded_results.remove(&hash);
-                self.subsystems.validation.inflight.insert(
-                    hash,
-                    super::ValidationInFlight {
-                        id,
-                        started_at: Instant::now(),
-                        frontier_generation,
-                    },
-                );
-                pending.validation_status = ValidationStatus::Pending;
-                self.pending.pending_blocks.insert(hash, pending);
-                return ValidationGateOutcome::Deferred;
-            }
-
-            if self.subsystems.validation.work_txs.is_empty() {
-                warn!(
-                    height = pending.height,
-                    view = pending.view,
-                    block = %hash,
-                    "validation workers unavailable; running pre-vote validation inline"
-                );
-                self.subsystems.validation.result_rx = None;
-                self.subsystems.validation.inflight.clear();
-                self.subsystems.validation.superseded_results.clear();
-            } else {
-                let pending_age = pending.age();
-                let inline_fallback_timeout = self.commit_validation_inline_fallback_timeout();
-                let inline_cutover = self.validation_queue_full_inline_cutover();
-                if pending_age < inline_cutover {
-                    warn!(
-                        height = pending.height,
-                        view = pending.view,
-                        block = %hash,
-                        pending_age_ms = pending_age.as_millis(),
-                        inline_fallback_timeout_ms = inline_fallback_timeout.as_millis(),
-                        inline_cutover_ms = inline_cutover.as_millis(),
-                        "validation worker queue full; deferring pre-vote validation"
-                    );
-                    pending.validation_status = ValidationStatus::Pending;
-                    self.pending.pending_blocks.insert(hash, pending);
-                    return ValidationGateOutcome::Deferred;
-                }
-                warn!(
-                    height = pending.height,
-                    view = pending.view,
-                    block = %hash,
-                    pending_age_ms = pending_age.as_millis(),
-                    inline_fallback_timeout_ms = inline_fallback_timeout.as_millis(),
-                    inline_cutover_ms = inline_cutover.as_millis(),
-                    "validation worker queue saturated; running pre-vote validation inline"
-                );
-            }
+                pending_height,
+                pending_view,
+                payload_hash,
+            );
+            return ValidationGateOutcome::Deferred;
         }
 
         // This block is now taking the inline path (either explicitly requested
@@ -879,7 +850,7 @@ impl Actor {
                         outcome,
                     } = result;
                     self.subsystems.validation.record_duration(duration);
-                    let inflight_frontier_generation = match self
+                    let (inflight_frontier_generation, vnext_inflight) = match self
                         .subsystems
                         .validation
                         .inflight
@@ -897,9 +868,12 @@ impl Actor {
                                 );
                                 continue;
                             }
-                            inflight.frontier_generation
+                            let vnext_inflight =
+                                self.subsystems.validation.vnext_inflight.remove(&hash);
+                            (inflight.frontier_generation, vnext_inflight)
                         }
                         None => {
+                            self.subsystems.validation.vnext_inflight.remove(&hash);
                             if let Some(superseded_id) =
                                 self.subsystems.validation.superseded_results.remove(&hash)
                             {
@@ -979,7 +953,7 @@ impl Actor {
                                 view,
                                 "recovering validation result after inflight marker disappeared"
                             );
-                            None
+                            (None, None)
                         }
                     };
                     if let Some(frontier_generation) = inflight_frontier_generation
@@ -1000,6 +974,41 @@ impl Actor {
                         progress = true;
                         continue;
                     }
+
+                    let vnext_result = vnext_inflight.map(|vnext| {
+                        let outcome = match &outcome {
+                            Ok(Some(roots)) => {
+                                let roots = self
+                                    .maybe_corrupt_debug_witness_roots(hash, height, view, *roots);
+                                super::vnext::ValidationWorkerOutcome::Valid(
+                                    super::vnext::ValidationRoots {
+                                        parent_state_root: roots.parent_state_root,
+                                        post_state_root: roots.post_state_root,
+                                    },
+                                )
+                            }
+                            Ok(None) => super::vnext::ValidationWorkerOutcome::Invalid(
+                                super::vnext::ValidationFailure {
+                                    reason_label: "validation_roots_missing".to_owned(),
+                                    evidence_hash: None,
+                                },
+                            ),
+                            Err(err) => super::vnext::ValidationWorkerOutcome::Invalid(
+                                super::vnext::ValidationFailure {
+                                    reason_label: validation_reject_reason_label(err).to_owned(),
+                                    evidence_hash: None,
+                                },
+                            ),
+                        };
+                        (
+                            vnext.slot,
+                            super::vnext::ValidationWorkerResult {
+                                id,
+                                generation: vnext.generation,
+                                outcome,
+                            },
+                        )
+                    });
 
                     let Some(mut pending) = self.pending.pending_blocks.remove(&hash) else {
                         warn!(block = %hash, "validation result received without pending block");
@@ -1147,6 +1156,9 @@ impl Actor {
                             self.request_commit_pipeline();
                         }
                     }
+                    if let Some((slot, result)) = vnext_result {
+                        self.handle_vnext_validation_result(slot, result);
+                    }
                     progress = true;
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
@@ -1154,6 +1166,7 @@ impl Actor {
                     warn!("validation worker result channel closed; falling back to inline");
                     self.subsystems.validation.work_txs.clear();
                     self.subsystems.validation.inflight.clear();
+                    self.subsystems.validation.vnext_inflight.clear();
                     self.subsystems.validation.superseded_results.clear();
                     keep_rx = false;
                     break;

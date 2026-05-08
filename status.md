@@ -2,6 +2,69 @@
 
 Last updated: 2026-05-08
 
+## 2026-05-08 Sumeragi vNext validation worker adapter
+
+- `ReactorEffect::DispatchValidation` now queues real validation work through the
+  existing Sumeragi validation worker lanes instead of logging and returning.
+- The actor records the vNext slot/generation beside the legacy inflight worker
+  marker, sends `ValidationWorkerStarted` or `ValidationQueueFull` back into the
+  reactor, and routes matching worker results back as `ValidationResult`.
+- Legacy inline fallback no longer supersedes vNext-owned validation inflight
+  work; vNext timeout/recovery owns slow or saturated validation lanes.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib vnext_dispatch_validation_queues_worker_and_accepts_result -- --nocapture`
+  - `cargo test -p iroha_core --lib vnext -- --nocapture`
+  - `cargo test -p iroha_core --lib validation_worker_result_replays_cached_precommit_qc_after_block_becomes_valid -- --nocapture`
+  - `cargo check -p iroha_core --lib`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+
+## 2026-05-08 Sumeragi active-pending no-proposal scheduling
+
+- Reviewed the current Sumeragi idle/recovery logic around same-height
+  no-proposal storms. The breaker was reachable from `force_view_change_if_idle`
+  but active pending blocks suppressed idle tick deadlines, so an overdue
+  no-proposal storm could wait for an unrelated pending-block quorum wakeup.
+- `next_tick_deadline()` now mirrors the active-pending no-proposal storm
+  predicate and schedules the immediate tick when the view/queue age has
+  already exceeded the missing-leader timeout.
+- Added focused coverage proving the storm deadline is immediate while the
+  normal pending-block quorum deadline is still in the future.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-sumeragi cargo test -p iroha_core --lib active_pending_no_proposal_storm_schedules_tick_deadline --features fastpq-gpu -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-sumeragi cargo test -p iroha_core same_height_no_proposal_storm --features fastpq-gpu -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-sumeragi cargo check -p iroha_core --features fastpq-gpu`
+  - `git diff --check`
+
+## 2026-05-08 Sumeragi vNext timeout tick adapter
+
+- The main Sumeragi tick loop now schedules active vNext reactors when running
+  or backpressured validation reaches the configured suspicion timeout.
+- Tick handling fans `ReactorEvent::Tick` into every live reactor and applies
+  emitted `ReactorEffect`s through the existing actor adapter path, so slow
+  validation enters vNext recovery without falling through an inline validation
+  path.
+- The idle view-change path now runs the recorded same-height no-proposal storm
+  breaker before active pending blocks suppress idle handling, allowing stale
+  frontier pending state to be cleaned up deterministically without emitting an
+  extra MissingQc rotation.
+- Added focused main-loop coverage for a running vNext validation that times
+  out through the actor tick adapter, a vNext validation dispatch/result
+  round-trip through the worker lane, and the live idle path purging stale
+  same-height pending state during a recorded no-proposal storm.
+- Validation:
+  - `cargo fmt --all`
+  - `git diff --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-sumeragi cargo check -p iroha_core --features fastpq-gpu`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-sumeragi cargo test -p iroha_core --lib vnext_dispatch_validation_queues_worker_and_accepts_result --features fastpq-gpu -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-sumeragi cargo test -p iroha_core force_view_change_if_idle_breaks_recorded_same_height_no_proposal_storm --features fastpq-gpu -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-sumeragi cargo test -p iroha_core same_height_no_proposal_storm --features fastpq-gpu -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-sumeragi cargo test -p iroha_core tick_drives_vnext_validation_timeout_recovery --features fastpq-gpu -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-sumeragi cargo test -p iroha_core duplicate_commit_qc_clears_known_block_recovery_request --features fastpq-gpu -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-sumeragi cargo test -p iroha_core --lib da_proposal_uses_rbc_for_ram_lfe_tx_exceeding_consensus_payload_frame_cap --features fastpq-gpu -- --nocapture`
+
 ## 2026-05-08 FASTPQ Poseidon prover batch path
 
 - FASTPQ trace column and Merkle hashing now use scalar CPU Poseidon for CPU

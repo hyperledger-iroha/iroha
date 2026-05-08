@@ -3250,6 +3250,7 @@ impl Actor {
             {
                 if let Some(pending) = self.pending.pending_blocks.remove(&hash) {
                     self.subsystems.validation.inflight.remove(&hash);
+                    self.subsystems.validation.vnext_inflight.remove(&hash);
                     self.subsystems.validation.superseded_results.remove(&hash);
                     self.clean_rbc_sessions_for_committed_block_if_settled(hash, pending.height);
                 }
@@ -7729,6 +7730,7 @@ impl Actor {
     ) {
         self.pending.pending_blocks.clear();
         self.subsystems.validation.inflight.clear();
+        self.subsystems.validation.vnext_inflight.clear();
         self.subsystems.validation.superseded_results.clear();
         self.pending.pending_fetch_requests.clear();
         self.pending.pending_block_body_requests.clear();
