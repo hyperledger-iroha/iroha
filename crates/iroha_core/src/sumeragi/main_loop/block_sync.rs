@@ -789,21 +789,6 @@ impl Actor {
             })
     }
 
-    fn commit_qc_body_response_for_wire(
-        block: &SignedBlock,
-        qc: crate::sumeragi::consensus::Qc,
-    ) -> super::message::BlockBodyResponse {
-        let mut update = super::message::BlockSyncUpdate::from(block);
-        update.commit_qc = Some(qc);
-        let header = block.header();
-        super::message::BlockBodyResponse {
-            block_hash: block.hash(),
-            height: header.height().get(),
-            view: header.view_change_index(),
-            body: super::message::BlockBodyData::BlockSyncUpdate(update),
-        }
-    }
-
     fn direct_commit_qc_from_block_sync_update(
         &self,
         block_hash: HashOf<BlockHeader>,
@@ -901,18 +886,12 @@ impl Actor {
             );
             return false;
         };
-        let response = Self::commit_qc_body_response_for_wire(block, qc.clone());
         info!(
             height,
             view,
             block = %block_hash,
             peer = %peer,
-            "sending commit-QC-only BlockBodyResponse companion"
-        );
-        self.dispatch_fetch_pending_block_response(
-            peer.clone(),
-            BlockMessage::BlockBodyResponse(response),
-            /*bypass_queue*/ true,
+            "sending commit-QC-only fetch response"
         );
         self.dispatch_direct_commit_qc_companion(
             peer,
@@ -3074,6 +3053,15 @@ impl Actor {
                     }
                 }
             }
+            if self
+                .cached_commit_qc_for_block(block_hash, block_height, block_view)
+                .is_some()
+            {
+                self.clear_missing_commit_qc_request(
+                    &block_hash,
+                    MissingBlockClearReason::Obsolete,
+                );
+            }
             self.clear_missing_block_request(
                 &block_hash,
                 MissingBlockClearReason::PayloadAvailable,
@@ -5078,6 +5066,13 @@ impl Actor {
         let Some(qc) = qc else {
             return;
         };
+        if self
+            .cached_commit_qc_for_block(block_hash, height, view)
+            .is_some()
+        {
+            self.clear_missing_commit_qc_request(&block_hash, MissingBlockClearReason::Obsolete);
+            return;
+        }
         info!(
             height,
             view,
@@ -5094,6 +5089,12 @@ impl Actor {
                 context,
                 "failed to process commit QC from ignored BlockBodyResponse"
             );
+        }
+        if self
+            .cached_commit_qc_for_block(block_hash, height, view)
+            .is_some()
+        {
+            self.clear_missing_commit_qc_request(&block_hash, MissingBlockClearReason::Obsolete);
         }
     }
 

@@ -1,6 +1,6 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-05-06
+Last updated: 2026-05-08
 
 Completed history lives in `status.md`. This file should only track unfinished work.
 
@@ -61,6 +61,29 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - Once the alias lease slice is stable under those focused reruns, fold it into the next broader `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings` corridor.
 - Keep the Sumeragi main-loop broad corridor attached to future consensus
   changes.
+  - The 2026-05-08 idle timing-cache change is covered by focused cached
+    commit-quorum timeout, NPoS commit-floor, rebroadcast-cooldown,
+    commit-pipeline cooldown, effective-timing snapshot, mode-flip tick
+    deadline, commit-evidence replay cooldown, and proposal-backpressure timing
+    tests. Rerun the full `cargo test -p iroha_core --lib` corridor before the
+    next consensus sweep.
+  - The 2026-05-08 known-block commit-QC recovery dampening is covered by
+    focused cert-only fetch, duplicate-QC cleanup, committed-tip reacquisition,
+    stale same-height view pruning, bounded missing-QC view rotation,
+    stall-reset fallback handoff, local-payload recovery, retry-loop, and
+    same-height `BlockBodyResponse` repair tests. Rerun the full
+    `cargo test -p iroha_core --lib` corridor before the next consensus sweep.
+  - The realistic 30 TPS, 20-minute transfer soak passes as of the
+    2026-05-08 block-body response ingress fix. Remaining open work is
+    throughput margin, not liveness: the passing release-daemon run submitted
+    at 30.00 TPS but committed 21.61 TPS during load, peaked at 9,973 queued
+    transactions, and needed 722 seconds of drain time. Use
+    `integration_tests/artifacts/realistic-30tps-transfer-20min-640-release-daemon-block-body-response-block-lane/throughput-1778229477740/`
+    for the next worker/proposal throughput tuning pass.
+  - The 2026-05-08 DA/RBC large RAM-LFE proposal fallback is covered by focused
+    DA payload-budget tests, a RAM-LFE oversized-frame fallback regression, and
+    the adjacent unservable-payload deferral check. Rerun the full
+    `cargo test -p iroha_core --lib` corridor before the next consensus sweep.
   - The 2026-05-06 canonical proposal/block entrypoint-ordering fix is covered
     by focused ordering, mixed-entrypoint builder, rejection mapping,
     noncanonical static/unchecked-validation, and PrivateKaigi entrypoint

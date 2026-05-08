@@ -217,6 +217,133 @@ const READY_MISSING_LOG_LIMIT: usize = 8;
 /// Minimum interval between RBC DELIVER deferral log emissions per session.
 const RBC_DELIVER_DEFERRAL_LOG_COOLDOWN_FLOOR: Duration = Duration::from_millis(500);
 
+#[derive(Debug, Clone, Copy)]
+struct EffectiveConsensusTiming {
+    active_mode: ConsensusMode,
+    effective_mode: ConsensusMode,
+    staged_mode_tag: Option<&'static str>,
+    staged_mode_activation_height: Option<u64>,
+    block_time: Duration,
+    commit_time: Duration,
+    worker_block_time: Duration,
+    worker_commit_time: Duration,
+    da_enabled: bool,
+    min_finality_ms: u64,
+    pacing_factor_bps: u64,
+    commit_quorum_timeout: Duration,
+    availability_timeout: Duration,
+    rebroadcast_cooldown: Duration,
+    control_plane_rebroadcast_cooldown: Duration,
+    payload_rebroadcast_cooldown: Duration,
+    targeted_payload_rescue_cooldown: Duration,
+    rbc_deliver_rebroadcast_cooldown: Duration,
+}
+
+impl EffectiveConsensusTiming {
+    fn from_world(
+        config: &SumeragiConfig,
+        world: &impl WorldReadOnly,
+        committed_height: u64,
+        active_mode: ConsensusMode,
+    ) -> Self {
+        let params = world.parameters().sumeragi();
+        let effective_mode = super::effective_consensus_mode_for_height_from_world(
+            world,
+            committed_height,
+            config.consensus_mode,
+        );
+        let worker_mode = super::effective_consensus_mode_for_height_from_world(
+            world,
+            committed_height,
+            active_mode,
+        );
+        let npos_timing_needed = matches!(active_mode, ConsensusMode::Npos)
+            || matches!(effective_mode, ConsensusMode::Npos)
+            || matches!(worker_mode, ConsensusMode::Npos);
+        let npos_block_time =
+            npos_timing_needed.then(|| super::resolve_npos_block_time_from_world(world));
+        let npos_commit_time = npos_timing_needed
+            .then(|| super::resolve_npos_timeouts_from_world(world, &config.npos).commit);
+        let canonical_commit_time = params.effective_commit_time();
+        let block_time = match active_mode {
+            ConsensusMode::Permissioned => params.effective_block_time(),
+            ConsensusMode::Npos => npos_block_time.expect("NPoS block time resolved"),
+        };
+        let commit_time = match active_mode {
+            ConsensusMode::Permissioned => canonical_commit_time,
+            ConsensusMode::Npos => npos_commit_time
+                .expect("NPoS commit time resolved")
+                .max(canonical_commit_time),
+        };
+        let worker_block_time = match worker_mode {
+            ConsensusMode::Permissioned => params.effective_block_time(),
+            ConsensusMode::Npos => npos_block_time.expect("NPoS block time resolved"),
+        };
+        let worker_commit_time = match worker_mode {
+            ConsensusMode::Permissioned => canonical_commit_time,
+            ConsensusMode::Npos => npos_commit_time
+                .expect("NPoS commit time resolved")
+                .max(canonical_commit_time),
+        };
+        let da_enabled = params.da_enabled();
+        let commit_quorum_timeout = commit_quorum_timeout_from_durations(
+            block_time,
+            commit_time,
+            da_enabled,
+            config.da.quorum_timeout_multiplier.max(1),
+        );
+        let control_plane_rebroadcast_cooldown =
+            control_plane_rebroadcast_cooldown_from_block_time(block_time);
+        let payload_rebroadcast_cooldown = payload_rebroadcast_cooldown_from_block_time(block_time);
+        let rbc_deliver_rebroadcast_cooldown = saturating_mul_duration(
+            control_plane_rebroadcast_cooldown,
+            RBC_DELIVER_REBROADCAST_COOLDOWN_MULTIPLIER,
+        )
+        .max(RBC_DELIVER_REBROADCAST_COOLDOWN_FLOOR);
+        let (staged_mode_tag, staged_mode_activation_height) = staged_mode_info(params);
+
+        Self {
+            active_mode,
+            effective_mode,
+            staged_mode_tag,
+            staged_mode_activation_height,
+            block_time,
+            commit_time,
+            worker_block_time,
+            worker_commit_time,
+            da_enabled,
+            min_finality_ms: params.effective_min_finality_ms(),
+            pacing_factor_bps: u64::from(params.effective_pacing_factor_bps()),
+            commit_quorum_timeout,
+            availability_timeout: availability_timeout_from_quorum(
+                commit_quorum_timeout,
+                da_enabled,
+                config.da.availability_timeout_multiplier.max(1),
+                config.da.availability_timeout_floor,
+            ),
+            rebroadcast_cooldown: rebroadcast_cooldown_from_block_time(block_time),
+            control_plane_rebroadcast_cooldown,
+            payload_rebroadcast_cooldown,
+            targeted_payload_rescue_cooldown: targeted_payload_rescue_cooldown_from_block_time(
+                block_time,
+            ),
+            rbc_deliver_rebroadcast_cooldown,
+        }
+    }
+
+    fn quorum_timeout_for_da(&self, da_enabled: bool, da_quorum_multiplier: u32) -> Duration {
+        if da_enabled == self.da_enabled {
+            return self.commit_quorum_timeout;
+        }
+        commit_quorum_timeout_from_durations(
+            self.block_time,
+            self.commit_time,
+            da_enabled,
+            da_quorum_multiplier,
+        )
+    }
+}
+
 #[derive(Clone, Debug)]
 struct SameHeightVoteLock {
     block_hash: HashOf<BlockHeader>,
@@ -10701,6 +10828,7 @@ where
 pub(super) struct Actor {
     config: SumeragiConfig,
     consensus_mode: ConsensusMode,
+    effective_timing: Cell<EffectiveConsensusTiming>,
     common_config: CommonConfig,
     chain_id: ChainId,
     chain_hash: Hash,
@@ -15238,7 +15366,7 @@ impl Actor {
     }
 
     fn runtime_da_enabled(&self) -> bool {
-        sumeragi_da_enabled(&self.state)
+        self.effective_timing.get().da_enabled
     }
 
     /// Deterministic fallback roster derived from trusted peers.
@@ -17679,6 +17807,7 @@ impl Actor {
             epoch_params,
             pacemaker_timeouts,
             pacemaker_block_time,
+            effective_timing,
         ) = {
             let owned_world;
             let world = if let Some(initial_view) = initial_state_view {
@@ -17737,6 +17866,8 @@ impl Actor {
             } else {
                 SumeragiNposTimeouts::from_block_time(pacemaker_block_time)
             };
+            let effective_timing =
+                EffectiveConsensusTiming::from_world(&config, world, height, mode);
             super::log_sumeragi_startup_trace(
                 "sumeragi.actor_init.pacemaker_timing.ready",
                 startup_trace_started_at,
@@ -17918,6 +18049,7 @@ impl Actor {
                 Some(epoch_params),
                 pacemaker_timeouts,
                 pacemaker_block_time,
+                effective_timing,
             )
         };
         super::log_sumeragi_startup_trace(
@@ -17951,16 +18083,8 @@ impl Actor {
             #[cfg(feature = "telemetry")]
             telemetry.set_prf_context(Some(cfg.seed), block_count.0 as u64, 0);
         }
-        let (staged_mode_tag, staged_mode_activation_height) = {
-            let owned_world;
-            let params = if let Some(initial_view) = initial_state_view {
-                initial_view.world().parameters().sumeragi()
-            } else {
-                owned_world = state.world_view();
-                owned_world.parameters().sumeragi()
-            };
-            staged_mode_info(params)
-        };
+        let staged_mode_tag = effective_timing.staged_mode_tag;
+        let staged_mode_activation_height = effective_timing.staged_mode_activation_height;
         let mode_tag = match consensus_mode {
             ConsensusMode::Permissioned => PERMISSIONED_TAG,
             ConsensusMode::Npos => NPOS_TAG,
@@ -18306,6 +18430,7 @@ impl Actor {
         let mut actor = Self {
             config,
             consensus_mode,
+            effective_timing: Cell::new(effective_timing),
             common_config,
             chain_id,
             chain_hash,
@@ -18810,28 +18935,17 @@ impl Actor {
         world: &impl WorldReadOnly,
         consensus_mode: ConsensusMode,
     ) {
-        let params = world.parameters().sumeragi();
-        let min_finality_ms = params.effective_min_finality_ms();
-        let block_time = self.block_time_for_mode_from_world(world, consensus_mode);
-        let commit_time = self.commit_timeout_for_mode_from_world(world, consensus_mode);
-        let pacing_factor_bps = u64::from(params.effective_pacing_factor_bps());
-        let da_enabled = params.da_enabled();
-        let commit_quorum_timeout = commit_quorum_timeout_from_durations(
-            block_time,
-            commit_time,
-            da_enabled,
-            self.da_quorum_timeout_multiplier(),
+        let timing = EffectiveConsensusTiming::from_world(
+            &self.config,
+            world,
+            self.committed_height_snapshot(),
+            consensus_mode,
         );
-        let availability_timeout = availability_timeout_from_quorum(
-            commit_quorum_timeout,
-            da_enabled,
-            self.config.da.availability_timeout_multiplier.max(1),
-            self.config.da.availability_timeout_floor,
-        );
+        self.effective_timing.set(timing);
         let pacemaker_interval = self.subsystems.propose.pacemaker.propose_interval;
-        let (collectors_k, _) = self.collector_plan_params_for_mode(consensus_mode);
+        let (collectors_k, _) = self.collector_plan_params_for_mode(timing.active_mode);
         let redundant_send_r = self.subsystems.propose.collector_redundant_limit.max(1);
-        let npos_timeouts = if matches!(consensus_mode, ConsensusMode::Npos) {
+        let npos_timeouts = if matches!(timing.active_mode, ConsensusMode::Npos) {
             let timeouts = super::resolve_npos_timeouts_from_world(world, &self.config.npos);
             Some(super::status::NposTimeoutsSnapshot {
                 propose_ms: duration_ms_u64(timeouts.propose),
@@ -18848,12 +18962,12 @@ impl Actor {
         };
 
         super::status::set_effective_timing(
-            min_finality_ms,
-            duration_ms_u64(block_time),
-            duration_ms_u64(commit_time),
-            pacing_factor_bps,
-            duration_ms_u64(commit_quorum_timeout),
-            duration_ms_u64(availability_timeout),
+            timing.min_finality_ms,
+            duration_ms_u64(timing.block_time),
+            duration_ms_u64(timing.commit_time),
+            timing.pacing_factor_bps,
+            duration_ms_u64(timing.commit_quorum_timeout),
+            duration_ms_u64(timing.availability_timeout),
             duration_ms_u64(pacemaker_interval),
             u64::try_from(collectors_k).unwrap_or(u64::MAX),
             u64::from(redundant_send_r),
@@ -18918,22 +19032,11 @@ impl Actor {
     }
 
     fn tick_mode_management(&mut self) -> bool {
-        let (effective_mode, staged_mode_tag, staged_mode_activation_height, current_height) = {
-            let world = self.state.world_view();
-            let current_height = self.committed_height_snapshot();
-            let params = world.parameters().sumeragi();
-            let (staged_tag, staged_height) = staged_mode_info(params);
-            (
-                super::effective_consensus_mode_for_height_from_world(
-                    &world,
-                    current_height,
-                    self.config.consensus_mode,
-                ),
-                staged_tag,
-                staged_height,
-                current_height,
-            )
-        };
+        let timing = self.effective_timing.get();
+        let effective_mode = timing.effective_mode;
+        let staged_mode_tag = timing.staged_mode_tag;
+        let staged_mode_activation_height = timing.staged_mode_activation_height;
+        let current_height = self.committed_height_snapshot();
         let mode_activation_lag_blocks = mode_activation_lag(
             current_height,
             staged_mode_activation_height,
@@ -19302,18 +19405,10 @@ impl Actor {
     }
 
     pub(super) fn refresh_worker_loop_config(&mut self, cfg: &mut super::WorkerLoopConfig) {
-        let world = self.state.world_view();
-        let current_height = self.committed_height_snapshot();
-        let mode = super::effective_consensus_mode_for_height_from_world(
-            &world,
-            current_height,
-            self.consensus_mode,
-        );
-        let params = world.parameters().sumeragi();
-        let block_time = self.block_time_for_mode_from_world(&world, mode);
-        let commit_time = self.commit_timeout_for_mode_from_world(&world, mode);
-        let da_enabled = params.da_enabled();
-        drop(world);
+        let timing = self.effective_timing.get();
+        let block_time = timing.worker_block_time;
+        let commit_time = timing.worker_commit_time;
+        let da_enabled = timing.da_enabled;
 
         let time_budget = super::worker_time_budget(
             block_time,
@@ -19393,15 +19488,7 @@ impl Actor {
         if self.config.mode_flip.enabled {
             // If the committed height already requires a consensus-mode flip but we have not
             // applied it yet, keep ticking even when idle so the cutover cannot be missed.
-            let committed_height = self.committed_height_snapshot();
-            let effective_mode = {
-                let world = self.state.world_view();
-                super::effective_consensus_mode_for_height_from_world(
-                    &world,
-                    committed_height,
-                    self.config.consensus_mode,
-                )
-            };
+            let effective_mode = self.effective_timing.get().effective_mode;
             if effective_mode != self.consensus_mode {
                 return Some(now);
             }
@@ -24306,50 +24393,29 @@ impl Actor {
     }
 
     fn commit_quorum_timeout(&self) -> Duration {
-        let world = self.state.world_view();
-        let params = world.parameters().sumeragi();
-        let block_time = self.block_time_for_mode_from_world(&world, self.consensus_mode);
-        let commit_time = self.commit_timeout_for_mode_from_world(&world, self.consensus_mode);
-        let da_enabled = params.da_enabled();
-
-        commit_quorum_timeout_from_durations(
-            block_time,
-            commit_time,
-            da_enabled,
-            self.da_quorum_timeout_multiplier(),
-        )
+        self.effective_timing.get().commit_quorum_timeout
     }
 
     fn rebroadcast_cooldown(&self) -> Duration {
-        let world = self.state.world_view();
-        let block_time = self.block_time_for_mode_from_world(&world, self.consensus_mode);
-        rebroadcast_cooldown_from_block_time(block_time)
+        self.effective_timing.get().rebroadcast_cooldown
     }
 
     fn control_plane_rebroadcast_cooldown(&self) -> Duration {
-        let world = self.state.world_view();
-        let block_time = self.block_time_for_mode_from_world(&world, self.consensus_mode);
-        control_plane_rebroadcast_cooldown_from_block_time(block_time)
+        self.effective_timing
+            .get()
+            .control_plane_rebroadcast_cooldown
     }
 
     fn payload_rebroadcast_cooldown(&self) -> Duration {
-        let world = self.state.world_view();
-        let block_time = self.block_time_for_mode_from_world(&world, self.consensus_mode);
-        payload_rebroadcast_cooldown_from_block_time(block_time)
+        self.effective_timing.get().payload_rebroadcast_cooldown
     }
 
     fn targeted_payload_rescue_cooldown(&self) -> Duration {
-        let world = self.state.world_view();
-        let block_time = self.block_time_for_mode_from_world(&world, self.consensus_mode);
-        targeted_payload_rescue_cooldown_from_block_time(block_time)
+        self.effective_timing.get().targeted_payload_rescue_cooldown
     }
 
     fn rbc_deliver_rebroadcast_cooldown(&self) -> Duration {
-        saturating_mul_duration(
-            self.control_plane_rebroadcast_cooldown(),
-            RBC_DELIVER_REBROADCAST_COOLDOWN_MULTIPLIER,
-        )
-        .max(RBC_DELIVER_REBROADCAST_COOLDOWN_FLOOR)
+        self.effective_timing.get().rbc_deliver_rebroadcast_cooldown
     }
 
     fn deterministic_recovery_profile(&self) -> DeterministicRecoveryProfile {
@@ -25012,6 +25078,14 @@ impl Actor {
         committed_height: u64,
         now: Instant,
     ) -> bool {
+        if request.height == committed_height.saturating_add(1)
+            && self
+                .phase_tracker
+                .current_view(request.height)
+                .is_some_and(|current_view| current_view > request.view)
+        {
+            return false;
+        }
         let pending_payload_available =
             self.pending
                 .pending_blocks
@@ -26759,16 +26833,9 @@ impl Actor {
     }
 
     fn quorum_timeout(&self, da_enabled: bool) -> Duration {
-        let world = self.state.world_view();
-        let block_time = self.block_time_for_mode_from_world(&world, self.consensus_mode);
-        let commit_time = self.commit_timeout_for_mode_from_world(&world, self.consensus_mode);
-
-        commit_quorum_timeout_from_durations(
-            block_time,
-            commit_time,
-            da_enabled,
-            self.da_quorum_timeout_multiplier(),
-        )
+        self.effective_timing
+            .get()
+            .quorum_timeout_for_da(da_enabled, self.da_quorum_timeout_multiplier())
     }
 
     fn da_quorum_timeout_multiplier(&self) -> u32 {
@@ -35245,6 +35312,25 @@ impl Actor {
             }
         }
 
+        let stale_known_block_commit_qc: Vec<_> = self
+            .pending
+            .missing_commit_qc_requests
+            .iter()
+            .filter(|(_, request)| request.height == height && request.view < min_view)
+            .map(|(hash, _)| *hash)
+            .collect();
+        let mut missing_commit_qc_removed = 0usize;
+        for hash in stale_known_block_commit_qc {
+            if self
+                .pending
+                .missing_commit_qc_requests
+                .remove(&hash)
+                .is_some()
+            {
+                missing_commit_qc_removed = missing_commit_qc_removed.saturating_add(1);
+            }
+        }
+
         let stale_rbc: Vec<_> = self
             .subsystems
             .da_rbc
@@ -35272,13 +35358,19 @@ impl Actor {
             rbc_removed = rbc_removed.saturating_add(1);
         }
 
-        if pending_removed > 0 || pending_retained > 0 || missing_removed > 0 || rbc_removed > 0 {
+        if pending_removed > 0
+            || pending_retained > 0
+            || missing_removed > 0
+            || missing_commit_qc_removed > 0
+            || rbc_removed > 0
+        {
             info!(
                 height,
                 min_view,
                 pending_removed,
                 pending_retained,
                 missing_removed,
+                missing_commit_qc_removed,
                 rbc_removed,
                 "pruned stale view state after view change"
             );

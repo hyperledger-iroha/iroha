@@ -281,7 +281,6 @@ fn da_payload_budget(
     rbc_pending_max_bytes: usize,
     rbc_pending_max_chunks: usize,
     block_max_payload_bytes: Option<NonZeroUsize>,
-    consensus_payload_frame_cap: usize,
 ) -> usize {
     let rbc_budget = rbc_chunk_max_bytes
         .max(1)
@@ -291,8 +290,7 @@ fn da_payload_budget(
             .max(1)
             .saturating_mul(rbc_pending_max_chunks.max(1)),
     );
-    let payload_budget =
-        non_rbc_payload_budget(block_max_payload_bytes, consensus_payload_frame_cap);
+    let payload_budget = block_max_payload_bytes.map_or(usize::MAX, NonZeroUsize::get);
     payload_budget.min(rbc_budget).min(pending_budget)
 }
 
@@ -1954,7 +1952,6 @@ impl Actor {
                 self.config.rbc.pending_max_bytes,
                 self.config.rbc.pending_max_chunks,
                 self.config.block.max_payload_bytes,
-                self.consensus_payload_frame_cap,
             );
             tx_batch = Vec::with_capacity(transactions.len());
             routing_batch = Vec::with_capacity(routing_decisions.len());
@@ -2088,6 +2085,7 @@ impl Actor {
                 transactions_for_plan,
                 tx_sizes_for_plan,
                 block_hash,
+                block_created_frame_len,
             ) = loop {
                 let nexus = self.state.nexus_snapshot();
                 let nexus_enabled = nexus.enabled;
@@ -2464,7 +2462,7 @@ impl Actor {
                     self.common_config.peer.id(),
                     &block_created_msg,
                 );
-                if frame_len > self.consensus_payload_frame_cap {
+                if frame_len > self.consensus_payload_frame_cap && !da_enabled {
                     if tx_batch.len() <= 1 {
                         warn!(
                             height = proposal_height,
@@ -2510,6 +2508,7 @@ impl Actor {
                     tx_batch.clone(),
                     tx_sizes.clone(),
                     block_hash,
+                    frame_len,
                 );
             };
 
@@ -2547,6 +2546,8 @@ impl Actor {
                 &block_created_msg,
                 BlockMessage::BlockCreated(created) if created.frontier.is_some()
             );
+            let block_created_frame_fits =
+                block_created_frame_len <= self.consensus_payload_frame_cap;
             self.subsystems
                 .propose
                 .proposal_cache
@@ -2556,7 +2557,8 @@ impl Actor {
                 .proposal_cache
                 .insert_proposal(proposal);
             let frontier_rbc_transport_needed = frontier_block_created_ready
-                && rbc::chunk_count(payload_bytes.len(), self.config.rbc.chunk_max_bytes) > 1;
+                && (rbc::chunk_count(payload_bytes.len(), self.config.rbc.chunk_max_bytes) > 1
+                    || !block_created_frame_fits);
             let inline_frontier_block_created_transport =
                 frontier_block_created_ready && !frontier_rbc_transport_needed;
             let seed_frontier_backup_transport =
@@ -2586,8 +2588,8 @@ impl Actor {
 
             if let Some(plan) = rbc_plan.as_ref() {
                 // Non-frontier recovery always uses RBC transport. Frontier proposals keep the
-                // inline fast path for single-chunk payloads, but multi-chunk payloads use the
-                // classic Proposal + RBC path instead of relying on a large BlockCreated frame.
+                // inline fast path only when the exact body fits a consensus frame; multi-chunk
+                // or otherwise oversized BlockCreated bodies use Proposal + RBC.
                 self.install_rbc_session_plan(&plan.primary)?;
                 if let Some(dup) = plan.duplicate.as_ref() {
                     self.install_rbc_session_plan(dup)?;
@@ -2595,10 +2597,11 @@ impl Actor {
                 self.publish_rbc_backlog_snapshot();
             }
 
-            let block_created_wire = Arc::new(block_created_msg.clone());
-            let block_created_encoded = Arc::new(BlockMessageWire::encode_message(
-                block_created_wire.as_ref(),
-            ));
+            let block_created_wire = block_created_frame_fits.then(|| {
+                let wire = Arc::new(block_created_msg.clone());
+                let encoded = Arc::new(BlockMessageWire::encode_message(wire.as_ref()));
+                (wire, encoded)
+            });
             // A locally assembled proposal is authoritative evidence that this slot was observed,
             // even when the inline BlockCreated path skips proposal handling or validation consumes
             // and reinserts the proposal cache entry.
@@ -2610,17 +2613,27 @@ impl Actor {
             // evidence. Multi-chunk frontier payloads still use Proposal + RBC for DA transport,
             // but the body companion prevents a single missed chunk from pushing peers onto the
             // slower recovery path.
-            for peer in topology_peers {
-                if peer == &local_peer_id {
-                    continue;
+            if let Some((block_created_wire, block_created_encoded)) = block_created_wire.as_ref() {
+                for peer in topology_peers {
+                    if peer == &local_peer_id {
+                        continue;
+                    }
+                    self.schedule_background(BackgroundRequest::Post {
+                        peer: peer.clone(),
+                        msg: BlockMessageWire::with_encoded(
+                            Arc::clone(block_created_wire),
+                            Arc::clone(block_created_encoded),
+                        ),
+                    });
                 }
-                self.schedule_background(BackgroundRequest::Post {
-                    peer: peer.clone(),
-                    msg: BlockMessageWire::with_encoded(
-                        Arc::clone(&block_created_wire),
-                        Arc::clone(&block_created_encoded),
-                    ),
-                });
+            } else {
+                debug!(
+                    height = proposal_height,
+                    view,
+                    frame_len = block_created_frame_len,
+                    cap = self.consensus_payload_frame_cap,
+                    "skipping exact BlockCreated companion; Proposal + RBC will carry the payload"
+                );
             }
             if let Some(plan) = rbc_plan.take() {
                 self.broadcast_rbc_session_plan(plan.primary)?;
@@ -5271,7 +5284,7 @@ mod tests {
 
     #[test]
     fn da_payload_budget_caps_to_rbc_budget() {
-        let budget = da_payload_budget(1, 8 * 1024, 1024, None, 64 * 1024);
+        let budget = da_payload_budget(1, 8 * 1024, 1024, None);
         let rbc_budget =
             usize::try_from(super::super::RBC_MAX_TOTAL_CHUNKS).expect("fits in usize");
         assert_eq!(budget, rbc_budget.min(8 * 1024));
@@ -5280,14 +5293,20 @@ mod tests {
     #[test]
     fn da_payload_budget_honors_block_payload_cap() {
         let cap = NonZeroUsize::new(4096).expect("non-zero");
-        let budget = da_payload_budget(256 * 1024, 32 * 1024, 1024, Some(cap), 64 * 1024);
+        let budget = da_payload_budget(256 * 1024, 32 * 1024, 1024, Some(cap));
         assert_eq!(budget, 4096);
     }
 
     #[test]
     fn da_payload_budget_honors_pending_caps() {
-        let budget = da_payload_budget(256 * 1024, 4 * 1024, 1, None, 64 * 1024);
+        let budget = da_payload_budget(256 * 1024, 4 * 1024, 1, None);
         assert_eq!(budget, 4 * 1024);
+    }
+
+    #[test]
+    fn da_payload_budget_is_not_limited_by_single_consensus_frame() {
+        let budget = da_payload_budget(256 * 1024, 512 * 1024, 1024, None);
+        assert_eq!(budget, 512 * 1024);
     }
 
     #[test]
