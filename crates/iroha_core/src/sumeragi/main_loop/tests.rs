@@ -18204,6 +18204,109 @@ async fn block_body_response_routes_block_sync_update_through_commit_sidecar_pat
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn evidence_bearing_block_body_response_refreshes_pending_progress_for_commit_pipeline() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(genesis_hash));
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let now = Instant::now();
+
+    assert!(actor.update_frontier_slot(
+        block_hash,
+        height,
+        view,
+        None,
+        BTreeSet::new(),
+        /*block_created_seen*/ true,
+        /*exact_fetch_armed*/ true,
+        /*body_present*/ true,
+        None,
+        None,
+        now,
+    ));
+
+    let epoch = actor.epoch_for_height(height);
+    let mut pending = PendingBlock::new_with_payload_bytes(
+        block.clone(),
+        payload_hash,
+        height,
+        view,
+        payload_bytes,
+    );
+    pending.note_commit_qc_observed(epoch);
+    pending.touch_progress(
+        now.checked_sub(Duration::from_secs(10))
+            .expect("test instant should support stale progress timestamp"),
+    );
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers: BTreeSet<ValidatorIndex> = topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let mut update = super::message::BlockSyncUpdate::from(&block);
+    update.commit_qc = Some(qc);
+    actor.pending.commit_pipeline_wakeup = false;
+
+    let sender = actor
+        .effective_commit_topology()
+        .into_iter()
+        .find(|peer| peer != actor.common_config.peer.id())
+        .expect("remote sender");
+
+    actor
+        .handle_block_body_response(
+            super::message::BlockBodyResponse {
+                block_hash,
+                height,
+                view,
+                body: super::message::BlockBodyData::BlockSyncUpdate(update),
+            },
+            Some(sender),
+        )
+        .expect("evidence-bearing body response handled");
+
+    let progress_age = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending block should remain available for validation")
+        .progress_age(Instant::now());
+    assert!(
+        progress_age < Duration::from_secs(1),
+        "evidence-bearing body repair should refresh pending progress before round-liveness rotates"
+    );
+    assert!(
+        actor.commit_pipeline_wakeup_pending(),
+        "evidence-bearing body repair should wake the commit pipeline"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn non_exact_block_body_response_routes_qc_update_through_block_sync_path() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -127920,7 +128023,7 @@ async fn commit_qc_keeps_fresh_inflight_validation_deferred_past_inline_fallback
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn commit_qc_supersedes_stale_inflight_validation_inline() {
+async fn commit_qc_redrives_stale_inflight_validation_through_vnext() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -127975,43 +128078,37 @@ async fn commit_qc_supersedes_stale_inflight_validation_inline() {
     );
 
     assert!(
-        actor.maybe_validate_pending_for_commit_qc(&qc, &commit_topology),
-        "stale inflight validation should be superseded inline so commit QC can apply"
+        !actor.maybe_validate_pending_for_commit_qc(&qc, &commit_topology),
+        "stale inflight validation should redrive through vNext and remain deferred"
     );
+    let queued_work = work_rx
+        .try_recv()
+        .expect("stale commit-QC validation should enqueue replacement vNext work");
+    assert_eq!(queued_work.hash, block_hash);
     assert!(
-        matches!(work_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
-        "stale commit-QC validation should not enqueue replacement vNext work"
-    );
-    assert!(
-        !actor
+        actor
             .subsystems
             .validation
             .inflight
             .contains_key(&block_hash),
-        "stale commit-QC inflight entry should be superseded before inline validation"
+        "redriven commit-QC validation should install a fresh inflight marker"
     );
     assert!(
-        !actor
+        actor
             .subsystems
             .validation
             .vnext_inflight
             .contains_key(&block_hash),
-        "inline commit-QC validation should clear vNext ownership"
+        "redriven commit-QC validation should be owned by vNext"
     );
-    assert!(
-        !actor.pending.pending_blocks.contains_key(&block_hash),
-        "inline commit-QC validation should replay cached commit evidence and prune the pending block"
-    );
-    assert_eq!(
-        u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX),
-        height,
-        "inline commit-QC validation should commit the certified frontier block"
-    );
-    assert_eq!(
-        actor.state.latest_block_hash_fast(),
-        Some(block_hash),
-        "committed head should match the inline-validated block"
-    );
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained while redriven validation runs");
+    assert_eq!(pending.validation_status, ValidationStatus::Pending);
+    assert!(pending.parent_state_root.is_none());
+    assert!(pending.post_state_root.is_none());
 
     harness.shutdown.send();
 }
@@ -144183,7 +144280,8 @@ async fn da_commit_validation_inline_fallback_timeout_has_750ms_floor() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn commit_pipeline_inlines_validation_after_inline_fallback_timeout_when_worker_queue_full() {
+async fn commit_pipeline_keeps_validation_backpressured_after_fast_timeout_when_worker_queue_full()
+{
     use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
 
     let mut harness = test_actor_harness(4).await;
@@ -144249,16 +144347,16 @@ async fn commit_pipeline_inlines_validation_after_inline_fallback_timeout_when_w
         .expect("pending retained");
     assert_eq!(
         pending_after.validation_status,
-        ValidationStatus::Valid,
-        "inline fallback should validate once queue-full pending work exceeds the timeout"
+        ValidationStatus::Pending,
+        "queue-full pending work should stay deferred and backpressured"
     );
     assert!(
-        pending_after.parent_state_root.is_some(),
-        "inline fallback should record parent state root"
+        pending_after.parent_state_root.is_none(),
+        "queue-full redrive should not validate inline"
     );
     assert!(
-        pending_after.post_state_root.is_some(),
-        "inline fallback should record post state root"
+        pending_after.post_state_root.is_none(),
+        "queue-full redrive should not validate inline"
     );
     assert!(
         !actor
@@ -144280,17 +144378,17 @@ async fn commit_pipeline_inlines_validation_after_inline_fallback_timeout_when_w
         .vnext_reactors
         .get(&(height, view))
         .and_then(|reactor| reactor.slot(block_hash))
-        .expect("vNext reactor should retain the superseded validation slot");
+        .expect("vNext reactor should retain the backpressured validation slot");
     assert!(matches!(
         reactor_slot.validation,
-        crate::sumeragi::vnext::ValidationState::Unqueued
+        crate::sumeragi::vnext::ValidationState::Backpressured { .. }
     ));
 
     harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn commit_pipeline_inlines_validation_at_queue_full_fallback_timeout() {
+async fn commit_pipeline_ignores_queue_full_inline_cutover_for_vnext_runtime() {
     use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
 
     let mut harness = test_actor_harness(4).await;
@@ -144356,16 +144454,16 @@ async fn commit_pipeline_inlines_validation_at_queue_full_fallback_timeout() {
         .expect("pending retained");
     assert_eq!(
         pending_after.validation_status,
-        ValidationStatus::Valid,
-        "queue-full fallback timeout should run validation inline"
+        ValidationStatus::Pending,
+        "queue-full fallback timeout should keep validation deferred"
     );
     assert!(
-        pending_after.parent_state_root.is_some(),
-        "inline queue-full fallback should capture parent state root"
+        pending_after.parent_state_root.is_none(),
+        "queue-full vNext redrive should not capture roots inline"
     );
     assert!(
-        pending_after.post_state_root.is_some(),
-        "inline queue-full fallback should capture post state root"
+        pending_after.post_state_root.is_none(),
+        "queue-full vNext redrive should not capture roots inline"
     );
     assert!(
         !actor
@@ -144387,17 +144485,17 @@ async fn commit_pipeline_inlines_validation_at_queue_full_fallback_timeout() {
         .vnext_reactors
         .get(&(height, view))
         .and_then(|reactor| reactor.slot(block_hash))
-        .expect("vNext reactor should retain the superseded queue-full validation slot");
+        .expect("vNext reactor should retain the backpressured queue-full validation slot");
     assert!(matches!(
         reactor_slot.validation,
-        crate::sumeragi::vnext::ValidationState::Unqueued
+        crate::sumeragi::vnext::ValidationState::Backpressured { .. }
     ));
 
     harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn commit_pipeline_keeps_deferred_validation_before_inline_fallback_timeout() {
+async fn commit_pipeline_keeps_deferred_validation_before_queue_full_cutover() {
     use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
 
     let _history_guard = super::status::commit_history_test_guard();
@@ -144428,7 +144526,7 @@ async fn commit_pipeline_keeps_deferred_validation_before_inline_fallback_timeou
     let inline_fallback_timeout = actor.commit_validation_inline_fallback_timeout();
     assert!(
         inline_fallback_timeout > Duration::from_millis(1),
-        "test requires enough room below inline fallback timeout"
+        "test requires enough room below queue-full cutover timeout"
     );
     assert!(
         commit_topology_before.len() > 1,
@@ -144459,7 +144557,7 @@ async fn commit_pipeline_keeps_deferred_validation_before_inline_fallback_timeou
     assert_eq!(
         pending_after.validation_status,
         ValidationStatus::Pending,
-        "fresh queue-full pending block should stay deferred before inline fallback: age_ms={} inline_fallback_ms={} workers={} result_rx={} inflight={} commit_topology_len={}",
+        "fresh queue-full pending block should stay deferred before queue-full cutover: age_ms={} fallback_ms={} workers={} result_rx={} inflight={} commit_topology_len={}",
         pending_age_after.as_millis(),
         inline_fallback_timeout.as_millis(),
         actor.subsystems.validation.work_txs.len(),
@@ -144488,7 +144586,7 @@ async fn commit_pipeline_keeps_deferred_validation_before_inline_fallback_timeou
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn commit_pipeline_inlines_validation_after_configured_queue_full_fallback_timeout() {
+async fn commit_pipeline_keeps_backpressure_when_configured_queue_full_cutover_elapsed() {
     use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
 
     let mut harness = test_actor_harness(4).await;
@@ -144553,16 +144651,16 @@ async fn commit_pipeline_inlines_validation_after_configured_queue_full_fallback
         .expect("pending retained");
     assert_eq!(
         pending_after.validation_status,
-        ValidationStatus::Valid,
-        "configured queue-full fallback should validate inline once the fallback timeout elapses"
+        ValidationStatus::Pending,
+        "configured queue-full cutover should keep validation deferred"
     );
     assert!(
-        pending_after.parent_state_root.is_some(),
-        "configured queue-full inline fallback should capture parent state root"
+        pending_after.parent_state_root.is_none(),
+        "configured queue-full redrive should not validate inline"
     );
     assert!(
-        pending_after.post_state_root.is_some(),
-        "configured queue-full inline fallback should capture post state root"
+        pending_after.post_state_root.is_none(),
+        "configured queue-full redrive should not validate inline"
     );
     assert!(
         !actor
@@ -144587,7 +144685,7 @@ async fn commit_pipeline_inlines_validation_after_configured_queue_full_fallback
         .expect("vNext reactor should retain the configured queue-full validation slot");
     assert!(matches!(
         reactor_slot.validation,
-        crate::sumeragi::vnext::ValidationState::Unqueued
+        crate::sumeragi::vnext::ValidationState::Backpressured { .. }
     ));
 
     harness.shutdown.send();
@@ -144812,7 +144910,7 @@ async fn commit_pipeline_arms_missing_commit_qc_recovery_for_stalled_local_vote(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn commit_pipeline_supersedes_stalled_inflight_validation_inline() {
+async fn commit_pipeline_redrives_stalled_inflight_validation_through_vnext() {
     use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
 
     let mut harness = test_actor_harness(4).await;
@@ -144861,41 +144959,36 @@ async fn commit_pipeline_supersedes_stalled_inflight_validation_inline() {
     actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
 
     assert!(
-        matches!(
-            work_rx.try_recv(),
-            Err(std::sync::mpsc::TryRecvError::Empty)
-        ),
-        "stalled inflight validation should not enqueue replacement vNext work"
+        work_rx.try_recv().is_ok(),
+        "stalled inflight validation should enqueue replacement vNext work"
     );
-    assert!(
-        !actor.pending.pending_blocks.contains_key(&block_hash),
-        "stalled inflight validation should be superseded inline and committed"
-    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained while redriven validation runs");
     assert_eq!(
-        u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX),
-        height,
-        "inline stalled validation should commit the frontier block"
+        pending_after.validation_status,
+        ValidationStatus::Pending,
+        "stalled inflight validation should remain deferred after vNext redrive"
     );
-    assert_eq!(
-        actor.state.latest_block_hash_fast(),
-        Some(block_hash),
-        "committed head should match the inline-validated stalled block"
-    );
+    assert!(pending_after.parent_state_root.is_none());
+    assert!(pending_after.post_state_root.is_none());
     assert!(
-        !actor
+        actor
             .subsystems
             .validation
             .inflight
             .contains_key(&block_hash),
-        "stalled inflight entry should be superseded before inline validation"
+        "stalled inflight redrive should install a fresh inflight marker"
     );
     assert!(
-        !actor
+        actor
             .subsystems
             .validation
             .vnext_inflight
             .contains_key(&block_hash),
-        "inline stalled validation should not leave vNext-owned work"
+        "stalled inflight redrive should be owned by vNext"
     );
 
     harness.shutdown.send();
@@ -145082,7 +145175,7 @@ async fn commit_pipeline_keeps_vnext_owned_validation_deferred_past_inline_fallb
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn commit_pipeline_inlines_validation_when_inflight_worker_is_disconnected() {
+async fn commit_pipeline_redrives_disconnected_inflight_validation_through_vnext() {
     use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
 
     let mut harness = test_actor_harness(4).await;
@@ -145127,11 +145220,8 @@ async fn commit_pipeline_inlines_validation_when_inflight_worker_is_disconnected
     actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
 
     assert!(
-        matches!(
-            work_rx.try_recv(),
-            Err(std::sync::mpsc::TryRecvError::Empty)
-        ),
-        "disconnected inflight validation should not enqueue replacement vNext work"
+        work_rx.try_recv().is_ok(),
+        "disconnected inflight validation should enqueue replacement vNext work"
     );
     let pending_after = actor
         .pending
@@ -145140,32 +145230,32 @@ async fn commit_pipeline_inlines_validation_when_inflight_worker_is_disconnected
         .expect("pending retained");
     assert_eq!(
         pending_after.validation_status,
-        ValidationStatus::Valid,
-        "disconnected inflight validation should run inline"
+        ValidationStatus::Pending,
+        "disconnected inflight validation should stay deferred after vNext redrive"
     );
     assert!(
-        pending_after.parent_state_root.is_some(),
-        "inline disconnected validation should set parent state root"
+        pending_after.parent_state_root.is_none(),
+        "disconnected inflight redrive should not validate inline"
     );
     assert!(
-        pending_after.post_state_root.is_some(),
-        "inline disconnected validation should set post state root"
+        pending_after.post_state_root.is_none(),
+        "disconnected inflight redrive should not validate inline"
     );
     assert!(
-        !actor
+        actor
             .subsystems
             .validation
             .inflight
             .contains_key(&block_hash),
-        "disconnected inflight marker should be superseded"
+        "disconnected inflight redrive should install a fresh inflight marker"
     );
     assert!(
-        !actor
+        actor
             .subsystems
             .validation
             .vnext_inflight
             .contains_key(&block_hash),
-        "inline disconnected validation should not leave vNext-owned work"
+        "disconnected inflight redrive should be owned by vNext"
     );
 
     harness.shutdown.send();

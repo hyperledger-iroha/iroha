@@ -506,8 +506,9 @@ class IrohaKeyManager private constructor(
             signingAlgorithm: SigningAlgorithm,
             keyPair: KeyPair?,
         ): KeyMaterialValidation {
-            if (keyPair?.public !is NativeSigningPublicKey ||
-                keyPair.public.signingAlgorithm != signingAlgorithm
+            val publicKey = keyPair?.public
+            if (publicKey !is NativeSigningPublicKey ||
+                publicKey.signingAlgorithm != signingAlgorithm
             ) {
                 return KeyMaterialValidation.invalid(
                     0,
@@ -516,19 +517,20 @@ class IrohaKeyManager private constructor(
                     "${signingAlgorithm.wireName}_public_key_missing",
                 )
             }
-            if (keyPair.private !is NativeSigningPrivateKey ||
-                keyPair.private.signingAlgorithm != signingAlgorithm
+            val privateKey = keyPair.private
+            if (privateKey !is NativeSigningPrivateKey ||
+                privateKey.signingAlgorithm != signingAlgorithm
             ) {
                 return KeyMaterialValidation.invalid(
-                    keyPair.public.encoded.size,
-                    keyPair.public.encoded.size,
-                    toHex(keyPair.public.encoded, minOf(12, keyPair.public.encoded.size)),
+                    publicKey.encoded.size,
+                    publicKey.encoded.size,
+                    toHex(publicKey.encoded, minOf(12, publicKey.encoded.size)),
                     "${signingAlgorithm.wireName}_private_key_missing",
                 )
             }
-            val encodedPublic = keyPair.public.encoded
+            val encodedPublic = publicKey.encoded
             val expected = try {
-                NativeSignerBridge.publicKeyFromPrivate(signingAlgorithm, keyPair.private.encoded)
+                NativeSignerBridge.publicKeyFromPrivate(signingAlgorithm, privateKey.encoded)
             } catch (_: RuntimeException) {
                 return KeyMaterialValidation.invalid(
                     encodedPublic.size,

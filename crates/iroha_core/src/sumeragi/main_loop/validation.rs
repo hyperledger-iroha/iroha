@@ -43,14 +43,24 @@ pub(super) struct ValidationWorkerHandle {
 #[derive(Copy, Clone, Debug)]
 enum ValidationDispatch {
     TryWorker,
+    #[cfg(test)]
     Inline,
 }
 
 impl ValidationDispatch {
     fn try_worker(self) -> bool {
-        matches!(self, Self::TryWorker)
+        #[cfg(test)]
+        {
+            matches!(self, Self::TryWorker)
+        }
+        #[cfg(not(test))]
+        {
+            let _ = self;
+            true
+        }
     }
 
+    #[cfg(test)]
     fn inline(self) -> bool {
         matches!(self, Self::Inline)
     }
@@ -414,48 +424,6 @@ impl Actor {
                 })
     }
 
-    fn vnext_validation_slot_for_block(
-        &self,
-        hash: HashOf<BlockHeader>,
-    ) -> Option<super::vnext::SlotId> {
-        self.subsystems
-            .validation
-            .vnext_inflight
-            .get(&hash)
-            .map(|vnext| vnext.slot)
-            .or_else(|| {
-                let pending = self.pending.pending_blocks.get(&hash)?;
-                self.vnext_reactors
-                    .get(&(pending.height, pending.view))
-                    .and_then(|reactor| reactor.slot(hash))
-                    .map(|slot| slot.slot)
-            })
-    }
-
-    pub(super) fn supersede_validation_for_frontier_inline(
-        &mut self,
-        hash: HashOf<BlockHeader>,
-        reason_label: &'static str,
-    ) -> bool {
-        let slot = self.vnext_validation_slot_for_block(hash);
-        let mut superseded = self.supersede_validation_inflight(hash).is_some();
-        if let Some(slot) = slot {
-            let effects = self.handle_vnext_worker_event(
-                slot,
-                super::vnext::ReactorEvent::ValidationDeferred {
-                    slot,
-                    reason_label: reason_label.to_owned(),
-                },
-            );
-            if !effects.is_empty() {
-                self.apply_vnext_effects(effects);
-            }
-            self.subsystems.validation.vnext_inflight.remove(&hash);
-            superseded = true;
-        }
-        superseded
-    }
-
     pub(super) fn validation_inflight_inline_reason(
         &self,
         hash: HashOf<BlockHeader>,
@@ -502,6 +470,7 @@ impl Actor {
     }
 
     /// Validate a pending block before voting, running validation inline.
+    #[cfg(test)]
     pub(super) fn validate_pending_block_for_voting_inline(
         &mut self,
         hash: HashOf<BlockHeader>,
@@ -520,15 +489,13 @@ impl Actor {
         commit_topology: &[PeerId],
         dispatch: ValidationDispatch,
     ) -> ValidationGateOutcome {
-        if dispatch.try_worker()
-            && self
-                .pending
-                .pending_blocks
-                .get(&hash)
-                .is_some_and(|pending| {
-                    pending.validation_status == ValidationStatus::Pending
-                        && self.vnext_validation_owns_block(hash, pending.height, pending.view)
-                })
+        if self
+            .pending
+            .pending_blocks
+            .get(&hash)
+            .is_some_and(|pending| {
+                self.vnext_validation_owns_block(hash, pending.height, pending.view)
+            })
         {
             debug!(
                 block = %hash,
@@ -537,11 +504,9 @@ impl Actor {
             return ValidationGateOutcome::Deferred;
         }
 
+        #[cfg(test)]
         if dispatch.inline() {
-            // Inline frontier validation supersedes stale worker/vNext intent for this block;
-            // late worker results are filtered by inflight id.
-            let _ =
-                self.supersede_validation_for_frontier_inline(hash, "frontier_inline_validation");
+            let _ = self.supersede_validation_inflight(hash);
         }
 
         let pending = match self.pending.pending_blocks.remove(&hash) {
@@ -903,7 +868,7 @@ impl Actor {
                                     debug!(
                                         block = %hash,
                                         result_id = id,
-                                        "validation result superseded by frontier inline validation; dropping stale worker result"
+                                        "validation result superseded by validation redrive; dropping stale worker result"
                                     );
                                 } else {
                                     warn!(

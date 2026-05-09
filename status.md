@@ -41,7 +41,7 @@ Last updated: 2026-05-09
     `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-default-check`
   - `cargo clippy -p fastpq_prover -- -D warnings` with
     `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-default-check`
-  - `cargo fmt --all -- --check`
+  - `cargo fmt --all --check`
   - `git diff --check`
 
 ## 2026-05-09 Offline Note V2 explorer outcome sync adapters

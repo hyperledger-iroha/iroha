@@ -3119,8 +3119,7 @@ impl Actor {
             // Prefer validating via background workers to keep the tick loop responsive under load.
             // Inline validation can take hundreds of milliseconds and risks stalling vote/proposal
             // handling, which in turn causes view changes and reschedules.
-            let mut validation_outcome =
-                self.validate_pending_block_for_voting(hash, &commit_topology);
+            let validation_outcome = self.validate_pending_block_for_voting(hash, &commit_topology);
             if matches!(validation_outcome, ValidationGateOutcome::Deferred) {
                 if let Some((pending_height_snapshot, pending_view_snapshot, pending_age)) = self
                     .pending
@@ -3138,7 +3137,7 @@ impl Actor {
                                         height = pending_height_snapshot,
                                         view = pending_view_snapshot,
                                         block = %hash,
-                                        "validation worker channel disconnected; running pre-vote validation inline"
+                                        "validation worker channel disconnected; redriving pre-vote validation through vNext"
                                     );
                                 }
                                 super::validation::ValidationInflightInlineReason::StaleFrontier {
@@ -3149,7 +3148,7 @@ impl Actor {
                                         view = pending_view_snapshot,
                                         block = %hash,
                                         frontier_generation,
-                                        "validation inflight frontier generation is stale; running pre-vote validation inline"
+                                        "validation inflight frontier generation is stale; redriving pre-vote validation through vNext"
                                     );
                                 }
                                 super::validation::ValidationInflightInlineReason::Stalled {
@@ -3165,34 +3164,52 @@ impl Actor {
                                         validation_duration_ema_ms = self
                                             .validation_duration_ema()
                                             .map(|duration| duration.as_millis()),
-                                        "validation inflight exceeded worker stall timeout; running pre-vote validation inline"
+                                        "validation inflight exceeded worker stall timeout; redriving pre-vote validation through vNext"
                                     );
                                 }
                             }
-                            validation_outcome = self
-                                .validate_pending_block_for_voting_inline(hash, &commit_topology);
+                            if self.subsystems.validation.inflight.contains_key(&hash)
+                                && !self
+                                    .subsystems
+                                    .validation
+                                    .vnext_inflight
+                                    .contains_key(&hash)
+                            {
+                                let _ = self.supersede_validation_inflight(hash);
+                            }
+                            if let Some((height, view, payload_hash)) =
+                                self.pending.pending_blocks.get(&hash).map(|pending| {
+                                    (pending.height, pending.view, pending.payload_hash)
+                                })
+                            {
+                                debug!(
+                                    height,
+                                    view,
+                                    block = %hash,
+                                    reason = "commit_pipeline_legacy_inflight_redrive",
+                                    "redriving pending validation through vNext"
+                                );
+                                let _ = self.drive_vnext_validation_for_pending(
+                                    hash,
+                                    height,
+                                    view,
+                                    payload_hash,
+                                );
+                            }
                         }
                     } else if pending_age >= inline_fallback_timeout {
-                        let worker_path_available = self.subsystems.validation.result_rx.is_some()
-                            && !self.subsystems.validation.work_txs.is_empty();
-                        let vnext_owned = self.vnext_validation_owns_block(
+                        if self.vnext_validation_owns_block(
                             hash,
                             pending_height_snapshot,
                             pending_view_snapshot,
-                        );
-                        let active_backlog = self.queue.active_len() > 0;
-                        if worker_path_available || (vnext_owned && active_backlog) {
-                            debug!(
+                        ) {
+                            warn!(
                                 height = pending_height_snapshot,
                                 view = pending_view_snapshot,
                                 block = %hash,
                                 pending_age_ms = pending_age.as_millis(),
-                                inline_fallback_timeout_ms =
-                                    inline_fallback_timeout.as_millis(),
-                                validation_workers = self.subsystems.validation.work_txs.len(),
-                                vnext_owned,
-                                active_backlog,
-                                "deferring inline validation while background validation can still recover"
+                                inline_fallback_timeout_ms = inline_fallback_timeout.as_millis(),
+                                "vNext-owned frontier validation exceeded legacy inline fallback timeout; keeping validation deferred"
                             );
                         } else {
                             warn!(
@@ -3201,10 +3218,27 @@ impl Actor {
                                 block = %hash,
                                 pending_age_ms = pending_age.as_millis(),
                                 inline_fallback_timeout_ms = inline_fallback_timeout.as_millis(),
-                                "pending frontier validation exceeded fallback timeout; running validation inline"
+                                "pending frontier validation exceeded legacy inline fallback timeout; redriving validation through vNext"
                             );
-                            validation_outcome = self
-                                .validate_pending_block_for_voting_inline(hash, &commit_topology);
+                            if let Some((height, view, payload_hash)) =
+                                self.pending.pending_blocks.get(&hash).map(|pending| {
+                                    (pending.height, pending.view, pending.payload_hash)
+                                })
+                            {
+                                debug!(
+                                    height,
+                                    view,
+                                    block = %hash,
+                                    reason = "commit_pipeline_queue_full_redrive",
+                                    "redriving pending validation through vNext"
+                                );
+                                let _ = self.drive_vnext_validation_for_pending(
+                                    hash,
+                                    height,
+                                    view,
+                                    payload_hash,
+                                );
+                            }
                         }
                     }
                 }

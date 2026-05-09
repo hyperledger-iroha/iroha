@@ -4989,6 +4989,12 @@ impl Actor {
             evidence_hash: super::block_body_response_evidence_hash(&response),
         };
         let mut detached_commit_qc = self.direct_commit_qc_from_block_body_response(&response);
+        let response_has_commit_evidence = detached_commit_qc.is_some()
+            || matches!(
+                &response.body,
+                super::message::BlockBodyData::BlockSyncUpdate(update)
+                    if !update.commit_votes.is_empty()
+            );
         if !self.frontier_slot_is_exact_height(response.height) {
             if let super::message::BlockBodyData::BlockSyncUpdate(update) = response.body {
                 let header = update.block.header();
@@ -5189,9 +5195,25 @@ impl Actor {
                 "materialized block body from BlockBodyResponse"
             );
         }
+        let materialized_at = Instant::now();
+        if body_materialized
+            && response_has_commit_evidence
+            && let Some(pending) = self.pending.pending_blocks.get_mut(&response.block_hash)
+            && pending.height == response.height
+            && pending.view == response.view
+            && !pending.is_retry_aborted()
+        {
+            pending.touch_progress(materialized_at);
+            debug!(
+                height = response.height,
+                view = response.view,
+                block = %response.block_hash,
+                "refreshed pending progress after evidence-bearing BlockBodyResponse materialized local body"
+            );
+        }
         if body_materialized && slot_matches_after {
             let _ = self.handle_frontier_slot_event(
-                Instant::now(),
+                materialized_at,
                 super::FrontierSlotEvent::OnBodyAvailable {
                     block_hash: response.block_hash,
                     view: response.view,

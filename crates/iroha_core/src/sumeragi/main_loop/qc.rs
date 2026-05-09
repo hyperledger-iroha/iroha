@@ -723,7 +723,6 @@ impl Actor {
         if !needs_validation {
             return false;
         }
-        let mut force_inline_validation = false;
         if self.validation_inflight_elapsed(hash).is_some() {
             match self.validation_inflight_inline_reason(hash, pending_height) {
                 Some(reason) => {
@@ -735,7 +734,7 @@ impl Actor {
                                 block = %hash,
                                 qc_height = qc.height,
                                 qc_view = qc.view,
-                                "commit QC validation worker channel disconnected; running validation inline"
+                                "commit QC validation worker channel disconnected; redriving validation through vNext"
                             );
                         }
                         super::validation::ValidationInflightInlineReason::StaleFrontier {
@@ -748,7 +747,7 @@ impl Actor {
                                 qc_height = qc.height,
                                 qc_view = qc.view,
                                 frontier_generation,
-                                "commit QC validation inflight frontier generation is stale; running validation inline"
+                                "commit QC validation inflight frontier generation is stale; redriving validation through vNext"
                             );
                         }
                         super::validation::ValidationInflightInlineReason::Stalled {
@@ -766,23 +765,52 @@ impl Actor {
                                 validation_duration_ema_ms = self
                                     .validation_duration_ema()
                                     .map(|duration| duration.as_millis()),
-                                "commit QC validation inflight exceeded worker stall timeout; running validation inline"
+                                "commit QC validation inflight exceeded worker stall timeout; redriving validation through vNext"
                             );
                         }
                     }
-                    force_inline_validation = true;
+                    if self.subsystems.validation.inflight.contains_key(&hash)
+                        && !self
+                            .subsystems
+                            .validation
+                            .vnext_inflight
+                            .contains_key(&hash)
+                    {
+                        let _ = self.supersede_validation_inflight(hash);
+                    }
+                    if let Some((height, view, payload_hash)) = self
+                        .pending
+                        .pending_blocks
+                        .get(&hash)
+                        .map(|pending| (pending.height, pending.view, pending.payload_hash))
+                    {
+                        debug!(
+                            height,
+                            view,
+                            block = %hash,
+                            reason = "commit_qc_legacy_inflight_redrive",
+                            "redriving pending validation through vNext"
+                        );
+                        let _ = self.drive_vnext_validation_for_pending(
+                            hash,
+                            height,
+                            view,
+                            payload_hash,
+                        );
+                    }
+                    return false;
                 }
                 None => {
                     if self.vnext_validation_owns_block(hash, pending_height, pending_view) {
-                        warn!(
+                        debug!(
                             height = pending_height,
                             view = pending_view,
                             block = %hash,
                             qc_height = qc.height,
                             qc_view = qc.view,
-                            "commit QC superseding vNext-owned validation for active frontier"
+                            "commit QC waiting for vNext-owned validation on active frontier"
                         );
-                        force_inline_validation = true;
+                        return false;
                     } else {
                         debug!(
                             height = pending_height,
@@ -797,11 +825,7 @@ impl Actor {
                 }
             }
         }
-        let outcome = if force_inline_validation {
-            self.validate_pending_block_for_voting_inline(hash, commit_topology)
-        } else {
-            self.validate_pending_block_for_voting(hash, commit_topology)
-        };
+        let outcome = self.validate_pending_block_for_voting(hash, commit_topology);
         match outcome {
             ValidationGateOutcome::Valid => true,
             ValidationGateOutcome::Deferred => false,
