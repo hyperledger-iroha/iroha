@@ -1294,7 +1294,7 @@ fn minimal_config_snapshot() {
                 persistence: SumeragiPersistence {
                     kura_retry_interval: 1s,
                     kura_retry_max_attempts: 5,
-                    commit_inflight_timeout: 30s,
+                    commit_inflight_timeout: 5s,
                     commit_work_queue_cap: 1,
                     commit_result_queue_cap: 1,
                 },

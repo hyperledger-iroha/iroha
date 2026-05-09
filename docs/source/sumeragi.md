@@ -368,7 +368,7 @@ chunk_fanout = null             # RBC chunk fanout cap (null = full roster minus
 [sumeragi.persistence]
 kura_retry_interval_ms = 1000   # retry failed kura persistence with exponential backoff
 kura_retry_max_attempts = 5     # abort and requeue the block payload after repeated failures
-commit_inflight_timeout_ms = 30000
+commit_inflight_timeout_ms = 5000
 commit_work_queue_cap = 1       # commit worker queue capacity
 commit_result_queue_cap = 1     # commit worker result queue capacity
 

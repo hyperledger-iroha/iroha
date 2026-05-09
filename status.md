@@ -2,6 +2,18 @@
 
 Last updated: 2026-05-09
 
+## 2026-05-09 Iroha config minimal snapshot refresh
+
+- Refreshed `minimal_config_snapshot` so the expected Sumeragi persistence
+  defaults use the current `5s` commit-inflight timeout.
+- Updated Sumeragi configuration examples to show
+  `commit_inflight_timeout_ms = 5000`, matching the actual default.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-config cargo test -p iroha_config --test fixtures minimal_config_snapshot -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-config cargo test -p iroha_config --test fixtures`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+
 ## 2026-05-09 FASTPQ batched proof Poseidon and exact-frontier recovery
 
 - FASTPQ proof construction now routes independent Poseidon work through
