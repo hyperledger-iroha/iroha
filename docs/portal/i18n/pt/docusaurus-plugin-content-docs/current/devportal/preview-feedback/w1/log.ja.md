@@ -51,7 +51,7 @@ Ancore os horarios no cronograma UTC definido no plano W1.
 | 2025-04-19 17:55 | Dashboards acima + diff de latencia do proxy Try it | Docs/DevRel lead | Checkpoint de meio aprovado (0 alertas; latencia Try it p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 2025-04-26 16:25 | Dashboards acima + probe de saida | Docs/DevRel + Governance liaison | Snapshot de saida, zero alertas pendentes | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-As amostras diarias de office hours (2025-04-13 -> 2025-04-25) estao agrupadas como exports NDJSON + PNG em
+As amostras diarias de office hours (2025-04-13 -> 2025-04-25) estao agrupadas como exports NDJSON + image em
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` com nomes de arquivo
 `docs-preview-integrity-<date>.json` e screenshots correspondentes.
 

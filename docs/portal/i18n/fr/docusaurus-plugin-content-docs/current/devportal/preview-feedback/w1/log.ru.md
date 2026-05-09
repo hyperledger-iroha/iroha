@@ -43,7 +43,7 @@ Connectez-vous à l'heure UTC pour rejoindre l'avion W1.
 | 2025-04-06 18:20 | Transcription `npm run manage:tryit-proxy -- --stage preview-w1` | Opérations | ✅ Suivi | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
 | 2025-04-12 14:45 | Nous vous proposons + `probe:portal` | Docs/DevRel + Ops | ✅ Instantané de pré-invitation, sans inscription | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
 | 2025-04-19 17:55 | Дашbordы выше + diff по латентности Essayez-le proxy | Responsable Docs/DevRel | ✅ Vérification à mi-parcours (0 alerte; latente Essayez-le p95 = 410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
-| 2025-04-26 16:25 | Дашbordы выше + sonde de sortie | Docs/DevRel + liaison gouvernance | ✅ Quittez l'instantané, aucune alerte n'est activée | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |Horaires de bureau des travailleurs (2025-04-13 -> 2025-04-25) selon NDJSON + PNG exports под
+| 2025-04-26 16:25 | Дашbordы выше + sonde de sortie | Docs/DevRel + liaison gouvernance | ✅ Quittez l'instantané, aucune alerte n'est activée | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |Horaires de bureau des travailleurs (2025-04-13 -> 2025-04-25) selon NDJSON + image exports под
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` avec les noms des familles
 `docs-preview-integrity-<date>.json` et les étiquettes correspondantes.
 

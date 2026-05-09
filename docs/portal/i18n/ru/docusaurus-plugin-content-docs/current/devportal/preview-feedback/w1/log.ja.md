@@ -51,7 +51,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | 2025-04-19 17:55 | Дашборды выше + diff по латентности Try it proxy | Docs/DevRel lead | ✅ Midpoint check прошел (0 алертов; латентность Try it p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 2025-04-26 16:25 | Дашборды выше + exit probe | Docs/DevRel + Governance liaison | ✅ Exit snapshot, нет активных алертов | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-Ежедневные выборки office hours (2025-04-13 -> 2025-04-25) упакованы как NDJSON + PNG экспорты под
+Ежедневные выборки office hours (2025-04-13 -> 2025-04-25) упакованы как NDJSON + image экспорты под
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` с именами файлов
 `docs-preview-integrity-<date>.json` и соответствующими скриншотами.
 

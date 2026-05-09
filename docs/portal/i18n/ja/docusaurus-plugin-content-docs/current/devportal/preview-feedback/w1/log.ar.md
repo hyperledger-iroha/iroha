@@ -45,7 +45,7 @@ UTC 時間 W1。
 | 2025-04-06 18:20 | `npm run manage:tryit-proxy -- --stage preview-w1` |作戦 | ✅ いいえ | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
 | 2025-04-12 14:45 | और देखेंドキュメント/DevRel + オペレーション | ✅ قطة قبل الدعوة، بلا تراجعات | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
 | 2025-04-19 17:55 |試してみる |ドキュメント/DevRel リード | ✅ اجتاز فحص منتصف الموجة (0 تنبيهات; زمن Try it p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
-| 2025-04-26 16:25 |ニュース + プローブ ニュース |ドキュメント/DevRel + ガバナンス連携 | ✅ قطة خروج، صفر تنبيهات متبقية | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |عينات ساعات المكتب اليومية (2025-04-13 -> 2025-04-25) مجمعة كصادرات NDJSON + PNG تحت
+| 2025-04-26 16:25 |ニュース + プローブ ニュース |ドキュメント/DevRel + ガバナンス連携 | ✅ قطة خروج، صفر تنبيهات متبقية | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |عينات ساعات المكتب اليومية (2025-04-13 -> 2025-04-25) مجمعة كصادرات NDJSON + image تحت
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` ログイン
 `docs-preview-integrity-<date>.json` です。
 

@@ -117,7 +117,7 @@ Metrics exported via Prometheus/OTLP:
 Dashboards: `dashboards/grafana/sns_payment_settlement.json` (treasury/steward
 panel, referral chart, reconciliation heatmap) and Alertmanager rules under
 `dashboards/alerts/sns_payment_settlement_rules.yml`. Operators must capture
-PNG snapshots + `promtool` output and store them alongside monthly statements.
+image snapshots + `promtool` output and store them alongside monthly statements.
 
 ## 6. Evidence & Reporting
 

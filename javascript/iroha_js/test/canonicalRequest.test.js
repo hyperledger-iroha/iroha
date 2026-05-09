@@ -72,7 +72,7 @@ test("canonical request signing: JSON helper signs the exact request body with c
     accountId,
     method: "post",
     path,
-    body: { alias: "tidal-river-4160@mibank.bpng" },
+    body: { alias: "tidal-river-4160@mibank.paynet" },
     headers: { "X-Request-Id": "req_1" },
     timestampMs,
     nonce,
@@ -83,7 +83,7 @@ test("canonical request signing: JSON helper signs the exact request body with c
   });
 
   assert.equal(request.method, "POST");
-  assert.equal(request.body, '{"alias":"tidal-river-4160@mibank.bpng"}');
+  assert.equal(request.body, '{"alias":"tidal-river-4160@mibank.paynet"}');
   assert.equal(request.headers["Content-Type"], "application/json");
   assert.equal(request.headers.Accept, "application/json");
   assert.equal(request.headers["X-Request-Id"], "req_1");
@@ -121,8 +121,8 @@ test("canonical request signing: JSON helper includes reverse-proxy base paths",
     accountId,
     method: "post",
     baseUrl: "https://explorer.example/torii/",
-    path: "/v1/aliases/resolve?alias_scope=bpng",
-    body: { alias: "tidal-river-4160@mibank.bpng" },
+    path: "/v1/aliases/resolve?alias_scope=paynet",
+    body: { alias: "tidal-river-4160@mibank.paynet" },
     timestampMs,
     nonce,
     sign: async (input) => {
@@ -133,12 +133,12 @@ test("canonical request signing: JSON helper includes reverse-proxy base paths",
 
   assert.ok(signerInput);
   assert.equal(signerInput.path, "/torii/v1/aliases/resolve");
-  assert.equal(signerInput.query, "alias_scope=bpng");
+  assert.equal(signerInput.query, "alias_scope=paynet");
 
   const message = canonicalRequestSignatureMessage({
     method: request.method,
     path: "/torii/v1/aliases/resolve",
-    query: "alias_scope=bpng",
+    query: "alias_scope=paynet",
     body: request.body,
     timestampMs,
     nonce,
@@ -154,11 +154,11 @@ test("canonical request signing: explicit query overrides query strings in paths
   let signerInput = null;
 
   await buildCanonicalJsonRequest({
-    accountId: "operator@bpng",
+    accountId: "operator@paynet",
     baseUrl: "https://explorer.example/torii",
     path: "/v1/aliases/resolve?ignored=1",
-    query: "alias_scope=bpng",
-    body: { alias: "banking@bpng" },
+    query: "alias_scope=paynet",
+    body: { alias: "banking@paynet" },
     sign: (input) => {
       signerInput = input;
       return signEd25519(input.message, privateKey);
@@ -167,5 +167,5 @@ test("canonical request signing: explicit query overrides query strings in paths
 
   assert.ok(signerInput);
   assert.equal(signerInput.path, "/torii/v1/aliases/resolve");
-  assert.equal(signerInput.query, "alias_scope=bpng");
+  assert.equal(signerInput.query, "alias_scope=paynet");
 });

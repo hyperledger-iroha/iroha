@@ -509,7 +509,7 @@ Para o cutover, o alias do SoraDNS e o SoraDNS são as provas:
 - **Testes de teste.** O arquivo `artifacts/sorafs_gateway_probe/<stamp>/` está no git-annex e no arquivo .
 - **حزمة الاصدار.** خزّن ملخصات CAR ومجموعات المانيفست وتواقيع Sigstore و`portal.pin.report.json` وسجلات Try-It وتقارير الروابط تحت مجلد واحد بتاريخ.
 - **Brocas.** Você pode usar brocas, usando `scripts/telemetry/run_sorafs_gateway_probe.sh` ou `ops/drill-log.md` para usar o SNNet-5.
-- **روابط التذاكر.** اربط معرفات لوحات Grafana او صادرات PNG مع مسار تقرير probe حتى يتمكن المراجعون Meu nome é shell.
+- **روابط التذاكر.** اربط معرفات لوحات Grafana او صادرات image مع مسار تقرير probe حتى يتمكن المراجعون Meu nome é shell.
 
 ## الخطوة 11 - تمرين buscar متعدد المصادر وادلة placar
 

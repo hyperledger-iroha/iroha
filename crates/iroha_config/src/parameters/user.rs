@@ -19984,14 +19984,14 @@ private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E90
             .expect("snapshot table");
         snapshot.insert(
             "store_dir".into(),
-            Value::String("/snapshots/bpng-1".into()),
+            Value::String("/snapshots/paynet-1".into()),
         );
 
         let actual = load_root(table);
 
         assert_eq!(
             actual.snapshot.store_dir.value(),
-            &PathBuf::from("/snapshots/bpng-1")
+            &PathBuf::from("/snapshots/paynet-1")
         );
     }
 

@@ -47,7 +47,7 @@ A partida foi realizada no UTC no dia W1.
 | 19/04/2025 17:55 | اللوحات اعلاه + فرق زمن Experimente | Líder do Documentos/DevRel | ✅ اجتاز فحص منتصف الموجة (0 تنبيهات; زمن Experimente p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 26/04/2025 16:25 | Sonda + sonda Sonda | Contato do Docs/DevRel + Governança | ✅ لقطة خروج, صفر تنبيهات متبقية | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-عينات ساعات المكتب اليومية (2025-04-13 -> 2025-04-25) مجمعة كصادرات NDJSON + PNG تحت
+عينات ساعات المكتب اليومية (2025-04-13 -> 2025-04-25) مجمعة كصادرات NDJSON + image تحت
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` é um dispositivo de armazenamento
 `docs-preview-integrity-<date>.json` é um problema.
 

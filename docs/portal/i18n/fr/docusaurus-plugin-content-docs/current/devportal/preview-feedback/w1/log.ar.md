@@ -44,7 +44,7 @@ description: قائمة مجمعة، نقاط قياس، وملاحظات الم
 | 2025-04-19 17:55 | اللوحات اعلاه + فرق زمن Essayez-le | Responsable Docs/DevRel | ✅ اجتاز فحص منتصف الموجة (0 تنبيهات; زمن Essayez-le p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 2025-04-26 16:25 | اللوحات اعلاه + sonde خروج | Docs/DevRel + liaison gouvernance | ✅ لقطة خروج، صفر تنبيهات متبقية | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-عينات ساعات المكتب اليومية (2025-04-13 -> 2025-04-25) مجمعة كصادرات NDJSON + PNG تحت
+عينات ساعات المكتب اليومية (2025-04-13 -> 2025-04-25) مجمعة كصادرات NDJSON + image تحت
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` pour les utilisateurs
 `docs-preview-integrity-<date>.json` واللقطات المقابلة.
 

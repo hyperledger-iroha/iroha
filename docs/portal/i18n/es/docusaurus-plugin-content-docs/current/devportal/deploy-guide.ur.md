@@ -725,7 +725,7 @@ cutover کا اعلان کرنے سے پہلے ثابت کریں کہ نیا ali
 - **Registro de perforación۔** جب sondas کسی taladro کا حصہ ہوں تو
   `scripts/telemetry/run_sorafs_gateway_probe.sh` y `ops/drill-log.md` también agregar
   کرنے دیں تاکہ وہی evidencia del requisito del caos SNNet-5 پوری کرے۔
-- **Enlaces de boletos۔** cambiar boleto میں ID del panel Grafana یا exportaciones PNG adjuntas کا
+- **Enlaces de boletos۔** cambiar boleto میں ID del panel Grafana یا exportaciones image adjuntas کا
   حوالہ دیں، ساتھ ہی ruta del informe de sonda بھی شامل کریں، تاکہ acceso al shell de revisores
   کے بغیر SLO verificación cruzada کر سکیں۔
 

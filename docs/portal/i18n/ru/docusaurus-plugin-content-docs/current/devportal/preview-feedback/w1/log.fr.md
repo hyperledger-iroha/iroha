@@ -46,7 +46,7 @@ Renseignez **Пригласите посланника** и **Подтверди
 | 2025-04-19 17:55 | Dashboards ci-dessus + прокси-сервер diff delatence Попробуйте | Руководитель отдела документации и разработки | Действующая среда контрольной точки (0 предупреждений; задержка Попробуйте p95=410 мс) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 2025-04-26 16:25 | Приборные панели ci-dessus + зонд вылета | Документы/DevRel + связь с управлением | Снимок вылета, ноль оповещений о остатках | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-Les echantillons quotidiens d'office Часы (13 апреля 2025 г. -> 25 апреля 2025 г.) с перегруппировкой и экспортом NDJSON + PNG sous
+Les echantillons quotidiens d'office Часы (13 апреля 2025 г. -> 25 апреля 2025 г.) с перегруппировкой и экспортом NDJSON + image sous
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` с указанными именами
 `docs-preview-integrity-<date>.json` и др. захватывают корреспондентов.
 

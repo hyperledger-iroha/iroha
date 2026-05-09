@@ -48,7 +48,7 @@ governance יוכלו לשחזר את הראיות בלי לרדוף אחרי כ
 | 2025-04-19 17:55 | Dashboards לעיל + diff לטנטיות Try it | Docs/DevRel lead | ✅ בדיקת אמצע עברה (0 alertים; לטנטיות Try it p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 2025-04-26 16:25 | Dashboards לעיל + probe יציאה | Docs/DevRel + Governance liaison | ✅ snapshot יציאה, אפס alertים פתוחים | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-דגימות office hours יומיות (2025-04-13 -> 2025-04-25) ארוזות כ-exports NDJSON + PNG תחת
+דגימות office hours יומיות (2025-04-13 -> 2025-04-25) ארוזות כ-exports NDJSON + image תחת
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` עם שמות קבצים
 `docs-preview-integrity-<date>.json` וצילומי המסך התואמים.
 

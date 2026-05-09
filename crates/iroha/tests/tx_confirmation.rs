@@ -59,6 +59,7 @@ fn block_event(height: NonZeroU64, status: BlockStatus) -> EventBox {
         prev_roster_evidence_hash: None,
         npos_effects_hash: None,
         sccp_commitment_root: None,
+        execution_context_hash: None,
         creation_time_ms: 0,
         view_change_index: 0,
         execution_context_hash: None,

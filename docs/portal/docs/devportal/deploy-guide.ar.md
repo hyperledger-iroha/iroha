@@ -524,7 +524,7 @@ npm run monitor:publishing -- \
 - **ارشفة probes.** احتفظ بـ `artifacts/sorafs_gateway_probe/<stamp>/` ضمن git-annex او مخزن الادلة.
 - **حزمة الاصدار.** خزّن ملخصات CAR ومجموعات المانيفست وتواقيع Sigstore و`portal.pin.report.json` وسجلات Try-It وتقارير الروابط تحت مجلد واحد بتاريخ.
 - **سجل drills.** عند تشغيل drills، يحدث `scripts/telemetry/run_sorafs_gateway_probe.sh` ملف `ops/drill-log.md` لتلبية متطلبات SNNet-5.
-- **روابط التذاكر.** اربط معرفات لوحات Grafana او صادرات PNG مع مسار تقرير probe حتى يتمكن المراجعون من التحقق دون وصول shell.
+- **روابط التذاكر.** اربط معرفات لوحات Grafana او صادرات image مع مسار تقرير probe حتى يتمكن المراجعون من التحقق دون وصول shell.
 
 ## الخطوة 11 - تمرين fetch متعدد المصادر وادلة scoreboard
 

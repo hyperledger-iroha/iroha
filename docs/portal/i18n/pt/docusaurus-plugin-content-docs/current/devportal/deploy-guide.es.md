@@ -745,7 +745,7 @@ engrapan pruebas frescas:
 - **Drill log.** Quando as sondas são parte de uma broca, deixe isso
   `scripts/telemetry/run_sorafs_gateway_probe.sh` concordo com entradas para `ops/drill-log.md`
   para que a mesma evidência satisfaça o requisito de caos SNNet-5.
-- **Links de ticket.** Referência aos IDs do painel de Grafana ou exporta PNG adjuntos no ticket
+- **Links de ticket.** Referência aos IDs do painel de Grafana ou exporta image adjuntos no ticket
   de mudança, junto com a rota do relatório de sondagem, para que os revisores possam cruzar os SLOs
   sem acessar uma concha.
 

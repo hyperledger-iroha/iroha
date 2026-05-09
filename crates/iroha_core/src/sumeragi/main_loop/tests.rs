@@ -5082,7 +5082,7 @@ async fn actor_next_tick_deadline_tracks_aborted_retention() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn actor_next_tick_deadline_tracks_idle_view_timeout() {
+async fn actor_next_tick_deadline_skips_idle_view_timeout_without_work() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
@@ -5102,6 +5102,40 @@ async fn actor_next_tick_deadline_tracks_idle_view_timeout() {
     actor
         .phase_tracker
         .start_new_round(height, now.checked_sub(age).unwrap_or(now));
+
+    assert!(
+        actor.next_tick_deadline(now).is_none(),
+        "idle view timeout should not schedule ticks when no transactions or recovery work exist"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn actor_next_tick_deadline_tracks_idle_view_timeout_for_recovery_work() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let now = Instant::now();
+    let committed_qc = actor.latest_committed_qc();
+    let committed_height = committed_qc
+        .as_ref()
+        .map_or_else(|| actor.state.view().height() as u64, |qc| qc.height);
+    let height = super::active_round_height(actor.highest_qc, committed_qc, committed_height);
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let age = timeout / 2;
+    actor
+        .phase_tracker
+        .start_new_round(height, now.checked_sub(age).unwrap_or(now));
+    actor.subsystems.da_rbc.rbc.pending.insert(
+        pending_session_key(height),
+        super::pending_rbc::PendingRbcMessages::new(now),
+    );
 
     let deadline = actor
         .next_tick_deadline(now)
@@ -5269,12 +5303,15 @@ async fn actor_next_tick_deadline_tracks_rbc_rebroadcast_cooldown() {
     let now = Instant::now();
     let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
     let height = committed_height.saturating_add(1);
-    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x55; 32]));
+    let tip_hash = actor.state.view().latest_block_hash();
+    let block = sample_block(height, 0, tip_hash);
+    let block_hash = block.hash();
     let key = (block_hash, height, 0);
     let payload_hash = Hash::prehashed([0x11; Hash::LENGTH]);
     let chunk_root = Hash::prehashed([0x22; Hash::LENGTH]);
     let mut session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
     session.sent_ready = true;
+    session.test_set_block_header_and_signature(&block);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
     actor
         .subsystems
@@ -5308,6 +5345,42 @@ async fn actor_next_tick_deadline_tracks_rbc_rebroadcast_cooldown() {
         .next_tick_deadline(now)
         .expect("rbc session should schedule a rebroadcast deadline");
     assert_eq!(deadline, expected_deadline);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn actor_next_tick_deadline_ignores_inactive_delivered_rbc_session() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+
+    let mut harness = test_actor_harness_with_config(2, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let now = Instant::now();
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x77; Hash::LENGTH]));
+    let key = (
+        block_hash,
+        actor.committed_height_snapshot().saturating_add(1),
+        0,
+    );
+    let payload_hash = Hash::prehashed([0x33; Hash::LENGTH]);
+    let chunk_root = Hash::prehashed([0x44; Hash::LENGTH]);
+    let mut session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
+    session.sent_ready = true;
+    session.delivered = true;
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    assert!(
+        actor.rbc_next_due(now).is_none(),
+        "retained delivered RBC sessions outside the active repair window should not schedule ticks"
+    );
+    assert!(
+        actor.next_tick_deadline(now).is_none(),
+        "inactive retained RBC sessions should leave the idle actor asleep"
+    );
 
     harness.shutdown.send();
 }

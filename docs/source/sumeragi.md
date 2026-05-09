@@ -307,6 +307,7 @@ Actor Model
 Backpressure & Telemetry
 - Scheduler: with `sumeragi.advanced.worker.parallel_ingress = true`, per-queue worker threads feed a ticketed gate (one actor at a time, FIFO by ticket) instead of the single-thread priority mailbox; the priority mailbox (Votes → RBC chunks → blocks → block payloads → consensus control → lane relay → background) with starvation guards (`non_vote_starve_max`, `block_rx_starve_max`) is used only when `parallel_ingress = false`.
 - Pre-tick drain is bounded by the next tick deadline (with a tick-min-gap grace when the deadline is immediate) so pacemaker ticks are not delayed by long queue backlogs; remaining messages drain after the tick within the iteration budget.
+- The dedicated tick worker records every tick attempt, including no-progress maintenance ticks, for min-gap throttling; retained RBC sessions outside the active repair window do not by themselves schedule idle ticks.
 - Commit pipeline work runs on the tick path; inbound handlers only request a wakeup so heavy commit processing does not block mailbox drain. The tick path still runs on the max-gap cadence so commits continue without starving message drain.
 - Pre-vote block validation is offloaded to background workers; the main loop schedules validation jobs and applies results on tick to keep drain latency bounded under backlog.
 - Proposal, `BlockCreated`, `RbcInit`, and `RbcChunk` broadcasts bypass the background post queue and send inline so bulk RBC traffic cannot delay proposal delivery or chunk dissemination.

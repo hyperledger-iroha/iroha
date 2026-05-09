@@ -782,7 +782,7 @@ gateways staple fresh proofs:
 - **Drill log.** When probes are part of a drill, let
   `scripts/telemetry/run_sorafs_gateway_probe.sh` append to `ops/drill-log.md`
   so the same evidence satisfies the SNNet-5 chaos requirement.
-- **Ticket links.** Reference the Grafana panel IDs or attached PNG exports in
+- **Ticket links.** Reference the Grafana panel IDs or attached image exports in
   the change ticket, together with the probe report path, so change-reviewers
   can cross-check the SLOs without shell access.
 

@@ -48,7 +48,7 @@ Clique em **Приглашение отправлено** e **Ack** сразу �
 | 19/04/2025 17:55 | Дашборды выше + diff по латентности Experimente proxy | Líder do Documentos/DevRel | ✅ Verificação do ponto médio прошел (0 алертов; латентность Experimente p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 26/04/2025 16:25 | Дашборды выше + sonda de saída | Contato do Docs/DevRel + Governança | ✅ Sair do instantâneo, não ativar alertas | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-Ежедневные выборки horário comercial (2025-04-13 -> 2025-04-25) упакованы как NDJSON + PNG экспорты под
+Ежедневные выборки horário comercial (2025-04-13 -> 2025-04-25) упакованы как NDJSON + image экспорты под
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` com ícones de imagem
 `docs-preview-integrity-<date>.json` e telas seguras.
 

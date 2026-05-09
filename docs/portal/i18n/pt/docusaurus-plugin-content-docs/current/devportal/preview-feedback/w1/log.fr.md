@@ -48,7 +48,7 @@ Ancrez as horas de planejamento UTC definidas no plano W1.
 | 19/04/2025 17:55 | Dashboards ci-dessus + proxy diff de latência Experimente | Líder do Documentos/DevRel | Checkpoint meio válido (0 alertas; latência Experimente p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 26/04/2025 16:25 | Dashboards ci-dessus + sonda de surtida | Contato do Docs/DevRel + Governança | Instantâneo da surtida, zero alertas restantes | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-Os echantillons quotidiens d'office hours (2025-04-13 -> 2025-04-25) são reagrupados nas exportações NDJSON + PNG sous
+Os echantillons quotidiens d'office hours (2025-04-13 -> 2025-04-25) são reagrupados nas exportações NDJSON + image sous
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` com nomes de arquivo
 `docs-preview-integrity-<date>.json` e as capturas correspondentes.
 

@@ -48,7 +48,7 @@ Sidebar_label: المجلة W1
 | 2025-04-19 17:55 | لوحات المعلومات ci-dessus + diff de lantence proxy جربها | مستندات/DevRel الرصاص | بيئة نقطة التفتيش صالحة (0 تنبيهات؛ زمن الوصول جربها p95=410 مللي ثانية) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 2025-04-26 16:25 | لوحات المعلومات ci-dessus + مسبار الطلعة | Docs/DevRel + اتصال الحوكمة | لقطة من الطلعة، صفر تنبيهات ثابتة | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-يتم إعادة تجميع ساعات العمل اليومية (2025-04-13 -> 2025-04-25) وتصدير NDJSON + PNG sous
+يتم إعادة تجميع ساعات العمل اليومية (2025-04-13 -> 2025-04-25) وتصدير NDJSON + image sous
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` بأسماء الملفات
 `docs-preview-integrity-<date>.json` ويلتقط المراسلات.
 

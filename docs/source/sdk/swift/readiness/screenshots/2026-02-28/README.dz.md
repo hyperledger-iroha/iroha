@@ -15,7 +15,7 @@ translation_last_reviewed: 2026-02-07
 
 # Screenshot Index — Swift Telemetry Dry-Run (2026-02-28)
 
-Add PNG/JPEG captures from the rehearsal here. Files are stored in
+Add image/JPEG captures from the rehearsal here. Files are stored in
 `s3://sora-readiness/swift/telemetry/20260228/` to avoid bloating the repo; the
 table below lists canonical object names referenced by the archive notes.
 

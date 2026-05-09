@@ -45,7 +45,7 @@ translation_last_reviewed: 2026-02-07
 | 2025-04-19 17:55 |上面的仪表板 + 尝试代理延迟差异 |文档/DevRel 领导 | ✅ 中点检查已通过（0 个警报；尝试一下延迟 p95=410ms）| `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 2025-04-26 16:25 |上面的仪表板 + 出口探针 |文档/DevRel + 治理联络 | ✅ 退出快照，零未完成警报 | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-每日办公时间样本 (2025-04-13 → 2025-04-25) 捆绑为 NDJSON + PNG 导出，位于
+每日办公时间样本 (2025-04-13 → 2025-04-25) 捆绑为 NDJSON + image 导出，位于
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` 与文件名
 `docs-preview-integrity-<date>.json` 和相应的屏幕截图。
 

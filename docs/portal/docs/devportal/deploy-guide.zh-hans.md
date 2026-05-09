@@ -785,7 +785,7 @@ DOCS-7 需要门户构建、OpenAPI 规范和 SBOM 工件才能传输
 - **钻孔日志。** 当探头是钻孔的一部分时，让
   `scripts/telemetry/run_sorafs_gateway_probe.sh` 附加到 `ops/drill-log.md`
   因此相同的证据满足 SNNet-5 混沌要求。
-- **票证链接。** 参考 Grafana 面板 ID 或附加的 PNG 导出
+- **票证链接。** 参考 Grafana 面板 ID 或附加的 image 导出
   变更单以及探测报告路径，因此变更审核者
   无需 shell 访问即可交叉检查 SLO。
 

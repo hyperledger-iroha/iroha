@@ -725,7 +725,7 @@ cutover est en cours de création d'un alias SoraDNS et résout le problème.
 - **Journal de forage** جب sondes کسی forage کا حصہ ہوں تو
   `scripts/telemetry/run_sorafs_gateway_probe.sh` et `ops/drill-log.md` ajouter
   Il s'agit d'une preuve et d'une exigence de chaos SNNet-5.
-- **Liens de ticket** modifier le ticket avec les identifiants du panneau Grafana et les exportations PNG jointes
+- **Liens de ticket** modifier le ticket avec les identifiants du panneau Grafana et les exportations image jointes
   حوالہ دیں، ساتھ ہی chemin du rapport de sonde et accès au shell des réviseurs
   Vérifiez par recoupement les SLO
 

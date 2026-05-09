@@ -290,7 +290,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Fixtures: generate deterministic fixtures under `fixtures/qr_stream/` (receipt + transfer payloads, envelope bytes, frame bytes, parity frames) and document regeneration flow.
  - [x] Data model: add `qr_stream` types + helpers to `iroha_data_model` (encode/decode, CRC32, assembler state machine) with unit coverage.
  - [x] Data model: add assembler caps (max payload bytes/frames, timeout policy) and tests for rejection paths.
- - [x] CLI tooling: add `iroha offline qr encode` (binary QR mode, chunk sizing, ECC/fps controls, SVG/PNG + animated GIF/APNG export) with tests.
+ - [x] CLI tooling: add `iroha offline qr encode` (binary QR mode, chunk sizing, ECC/fps controls, SVG/image + animated GIF/Aimage export) with tests.
  - [x] CLI tooling: add `iroha offline qr decode` (frames/dir input, hash verification, Norito/JSON output) with tests.
  - [x] Swift SDK: add QrStream encoder/decoder + ScanSession core with unit tests.
  - [x] Swift SDK: integrate Vision/AVFoundation scan pipeline to feed raw bytes into ScanSession + fixture tests.

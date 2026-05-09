@@ -15,7 +15,7 @@
 - Translate the refreshed quickstart sections covering the Norito sample
   walkthrough, `/v1/pipeline` submission flow, and telemetry toggle explainer.
 - Update localized screenshot captions + callouts; English sources live under
-  `docs/assets/android/samples/quickstart/`. Annotated PNG exports are attached
+  `docs/assets/android/samples/quickstart/`. Annotated image exports are attached
   to the Docs tracker issue `DOCS-L10N-4930`.
 - Keep terminology aligned with `docs/source/sdk/android/key_management.md`
   (StrongBox alias lifecycle), `docs/source/sdk/android/offline_signing.md`
@@ -49,5 +49,5 @@
   translator attribution (`Co-authored-by` trailer).
 - HE reviewer relies on the Tuesday diff digest plus Thursday QA shadow to
   verify terminology; raise blockers in the Docs/DevRel weekly sync.
-- If screenshots change after this request, regenerate the PNG bundle and
+- If screenshots change after this request, regenerate the image bundle and
   update this file with the new hash/timestamp before re-running CI.

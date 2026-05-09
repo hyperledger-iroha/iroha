@@ -12339,8 +12339,8 @@ pub(crate) mod valid {
                 ConsensusKeyStatus::Active,
             );
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            let bpng_lane = LaneId::new(3);
-            let bpng_dataspace = DataSpaceId::new(10);
+            let paynet_lane = LaneId::new(3);
+            let paynet_dataspace = DataSpaceId::new(10);
             {
                 let mut nexus = state.nexus.write();
                 nexus.lane_catalog = LaneCatalog::new(
@@ -12348,9 +12348,9 @@ pub(crate) mod valid {
                     vec![
                         LaneConfig::default(),
                         LaneConfig {
-                            id: bpng_lane,
-                            dataspace_id: bpng_dataspace,
-                            alias: "bpng".to_owned(),
+                            id: paynet_lane,
+                            dataspace_id: paynet_dataspace,
+                            alias: "paynet".to_owned(),
                             ..LaneConfig::default()
                         },
                     ],
@@ -12359,8 +12359,8 @@ pub(crate) mod valid {
                 nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
                     DataSpaceMetadata::default(),
                     DataSpaceMetadata {
-                        id: bpng_dataspace,
-                        alias: "bpng".to_owned(),
+                        id: paynet_dataspace,
+                        alias: "paynet".to_owned(),
                         description: None,
                         fault_tolerance: 1,
                     },
@@ -12384,8 +12384,8 @@ pub(crate) mod valid {
             let execution_context =
                 BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
                     tx.hash_as_entrypoint(),
-                    bpng_lane,
-                    bpng_dataspace,
+                    paynet_lane,
+                    paynet_dataspace,
                 )]);
             let new_block = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
                 .chain(0, state.view().latest_block().as_deref())
@@ -18045,8 +18045,8 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state =
             State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-        let bpng_lane = LaneId::new(3);
-        let bpng_dataspace = DataSpaceId::new(10);
+        let paynet_lane = LaneId::new(3);
+        let paynet_dataspace = DataSpaceId::new(10);
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
@@ -18063,9 +18063,9 @@ mod tests {
                 vec![
                     LaneConfig::default(),
                     LaneConfig {
-                        id: bpng_lane,
-                        dataspace_id: bpng_dataspace,
-                        alias: "bpng".to_string(),
+                        id: paynet_lane,
+                        dataspace_id: paynet_dataspace,
+                        alias: "paynet".to_string(),
                         ..LaneConfig::default()
                     },
                 ],
@@ -18074,15 +18074,15 @@ mod tests {
             nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
                 iroha_data_model::nexus::DataSpaceMetadata::default(),
                 iroha_data_model::nexus::DataSpaceMetadata {
-                    id: bpng_dataspace,
-                    alias: "bpng".to_string(),
+                    id: paynet_dataspace,
+                    alias: "paynet".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
             ])
             .expect("dataspace catalog");
-            nexus.routing_policy.default_lane = bpng_lane;
-            nexus.routing_policy.default_dataspace = bpng_dataspace;
+            nexus.routing_policy.default_lane = paynet_lane;
+            nexus.routing_policy.default_dataspace = paynet_dataspace;
         }
 
         {

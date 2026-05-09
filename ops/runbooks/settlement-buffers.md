@@ -50,7 +50,7 @@ summary: Response plan for the unified settlement router buffer thresholds and c
    promtool query instant http://prometheus/api/v1/query \
      'iroha_settlement_buffer_status{lane="lane-A"}'
    ```
-2. Export the Grafana panel (PNG/JSON) from `nexus_lanes` for the affected lane.
+2. Export the Grafana panel (image/JSON) from `nexus_lanes` for the affected lane.
 3. Run `iroha_cli sumeragi status --format json > status.json` and isolate the lane metadata:
    ```bash
    jq '.lane_governance[] | select(.lane_id=="lane-A") | .settlement' status.json

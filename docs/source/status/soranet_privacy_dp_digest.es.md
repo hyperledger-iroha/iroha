@@ -28,7 +28,7 @@ summary: Weekly governance update on the SNNet-8 telemetry differential privacy 
 |----------|-------|--------|-------|
 | `artifacts/soranet_privacy_dp/summary.json` | Telemetry | ✅ Published | Captures ε/δ, Laplace scale, and sensitivity for each guard role. Baseline entry relays emit ε = 1.20, δ = 5×10⁻⁶; exit relays stay within ε ≤ 0.85 following suppression. |
 | `artifacts/soranet_privacy_dp/suppression_matrix.csv` | Telemetry | ✅ Published | Verifies suppression for contributor counts `< 12`; exit scenarios with 9 contributors stay suppressed. |
-| `notebooks/soranet_privacy_dp.ipynb` | Telemetry | ✅ Published | Replays workloads, recomputes artefacts, and exports PNG tables for governance packet. |
+| `notebooks/soranet_privacy_dp.ipynb` | Telemetry | ✅ Published | Replays workloads, recomputes artefacts, and exports image tables for governance packet. |
 | `scripts/telemetry/run_privacy_dp.py` | Tools | ✅ Published | Provides batch regeneration entrypoint; automation wrapper executes the notebook headlessly via `papermill`. |
 | `scripts/telemetry/run_privacy_dp_notebook.sh` | Tools | ✅ Published | Runs the harness and notebook together; dispatched via `.github/workflows/release-pipeline.yml`. |
 

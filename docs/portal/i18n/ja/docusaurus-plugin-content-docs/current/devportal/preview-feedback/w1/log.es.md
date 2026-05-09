@@ -46,7 +46,7 @@ ID: プレビュー-フィードバック-w1-log
 | 2025-04-19 17:55 |ダッシュボードのアリバ + 遅延時間のプロキシの差分 試してみる |ドキュメント/DevRel リード | Chequeo de mitad de ola ok (0 アラート; 遅延 お試しください p95=410 ミリ秒) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 2025-04-26 16:25 |アリバのダッシュボード + サリダのプローブ |ドキュメント/DevRel + ガバナンス連携 |サリダのスナップショット、保留中のセキュリティ警告 | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-営業時間 (2025 年 4 月 13 日 -> 2025 年 4 月 25 日) は、NDJSON + PNG を輸出するために必要です
+営業時間 (2025 年 4 月 13 日 -> 2025 年 4 月 25 日) は、NDJSON + image を輸出するために必要です
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` アーカイブ番号
 `docs-preview-integrity-<date>.json` y はスクリーンショットの対応者を失いました。
 

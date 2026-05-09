@@ -48,7 +48,7 @@ Anula os tempos do calendário UTC definido no plano W1.
 | 19/04/2025 17:55 | Dashboards de subida + diferença de latência do proxy Experimente | Líder do Documentos/DevRel | Verificação de metade de ola ok (0 alertas; latência Experimente p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 26/04/2025 16:25 | Dashboards de subida + sonda de saída | Contato do Docs/DevRel + Governança | Instantâneo de saída, zero alertas pendentes | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-As muestras diárias de horário comercial (2025-04-13 -> 2025-04-25) são agrupadas como exportações NDJSON + PNG abaixo
+As muestras diárias de horário comercial (2025-04-13 -> 2025-04-25) são agrupadas como exportações NDJSON + image abaixo
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` com nomes de arquivo
 `docs-preview-integrity-<date>.json` e as capturas de tela correspondentes.
 

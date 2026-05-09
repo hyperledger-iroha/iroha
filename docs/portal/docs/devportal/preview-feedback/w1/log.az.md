@@ -47,7 +47,7 @@ Vaxtları W1 planında müəyyən edilmiş UTC cədvəlinə bağlayın.
 | 2025-04-19 17:55 | Yuxarıdakı panellər + Bunu sınayın proxy gecikmə fərqi | Sənədlər/DevRel aparıcı | ✅ Orta nöqtə yoxlanışı keçdi (0 xəbərdarlıq; Bunu sınayın gecikmə p95=410ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 26-04-2025 16:25 | Yuxarıdakı idarə panelləri + çıxış zondu | Sənədlər/DevRel + İdarəetmə əlaqəsi | ✅ Snapshotdan çıxın, sıfır əlamətdar xəbərdarlıq | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-Gündəlik iş saatı nümunələri (2025-04-13 → 2025-04-25) NDJSON + PNG ixracı kimi paketlənir.
+Gündəlik iş saatı nümunələri (2025-04-13 → 2025-04-25) NDJSON + image ixracı kimi paketlənir.
 Fayl adları ilə `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
 `docs-preview-integrity-<date>.json` və müvafiq ekran görüntüləri.
 

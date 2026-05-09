@@ -1021,7 +1021,7 @@ Use this checklist when the Norito transport fails SLOs or generates alerts:
 1. Watch `torii_request_failures_total` and the decode counter return to baseline; clear Alertmanager silences only after the metrics stay flat for one evaluation period.
 2. Confirm `torii_active_connections_total{scheme="norito_rpc"}` stabilises and the `ToriiNoritoRpcSilentTraffic` alert stays green.
 3. Re-run the Norito RPC smoke test (`python/iroha_python/scripts/run_norito_rpc_smoke.sh`) and alert tests (`scripts/telemetry/test_torii_norito_rpc_alerts.sh`).
-4. Capture evidence (Grafana PNGs, config patches, CLI outputs) and attach it to the NRPC-2 runbook ticket plus `status.md` so the roadmap artifact remains auditable.
+4. Capture evidence (Grafana images, config patches, CLI outputs) and attach it to the NRPC-2 runbook ticket plus `status.md` so the roadmap artifact remains auditable.
 
 A new Prometheus counter `sumeragi_membership_mismatch_total{peer,height,view}` and gauge `sumeragi_membership_mismatch_active{peer}` were introduced to detect validator roster divergence. `/v1/sumeragi/status` now surfaces a `membership_mismatch` block with the active peer list and last mismatch context to speed triage.
 

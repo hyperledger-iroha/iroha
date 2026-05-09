@@ -484,7 +484,7 @@ Avant la mise en service du basculement, vous devez déterminer quelle nouvelle 
 - **Probe archives.** Enregistrez `artifacts/sorafs_gateway_probe/<stamp>/` dans git-annex ou dans le compartiment de preuves. Consultez le résumé de la sonde, les en-têtes et la charge utile PagerDuty.
 - **Release bundle.** Consultez le portail de résumé CAR/SBOM/OpenAPI, les bundles de manifestes, les signatures Sigstore, `portal.pin.report.json`, les journaux de sonde Try-It et les rapports de vérification des liens dans un autre document (par exemple, `artifacts/sorafs/devportal/20260212T1103Z/`).
 - **Journal de forage.** Sondes de recherche - forage en cours, `scripts/telemetry/run_sorafs_gateway_probe.sh` est ajouté à `ops/drill-log.md`, ce qui correspond à l'exigence de chaos SNNet-5.
-- **Liens de ticket.** Recherchez les ID de panneau Grafana ou utilisez les exportations PNG dans le ticket de modification lors du rapport de sonde, afin que les rapports puissent gérer les SLO sans le shell.
+- **Liens de ticket.** Recherchez les ID de panneau Grafana ou utilisez les exportations image dans le ticket de modification lors du rapport de sonde, afin que les rapports puissent gérer les SLO sans le shell.
 
 ## Partie 11 - Exercice de récupération multi-sources et preuves du tableau de bord
 

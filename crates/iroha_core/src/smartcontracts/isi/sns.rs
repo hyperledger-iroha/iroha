@@ -1003,7 +1003,7 @@ mod tests {
     fn acquire_account_alias_lease_uses_external_settlement_on_non_authoritative_route() {
         let authority = owner();
         let collector = another_owner();
-        let bpng = DataSpaceId::new(10);
+        let paynet = DataSpaceId::new(10);
         let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
             .parse()
             .expect("deployment payment asset definition id");
@@ -1034,8 +1034,8 @@ mod tests {
             nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
                 DataSpaceMetadata::default(),
                 DataSpaceMetadata {
-                    id: bpng,
-                    alias: "bpng".to_owned(),
+                    id: paynet,
+                    alias: "paynet".to_owned(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -1043,12 +1043,12 @@ mod tests {
             .expect("dataspace catalog");
         }
 
-        let alias = AccountAlias::domainless("retail".parse().expect("label"), bpng);
+        let alias = AccountAlias::domainless("retail".parse().expect("label"), paynet);
         {
             let mut block = state.block(next_header(&state));
             let mut stx = block.transaction();
-            stx.current_dataspace_id = Some(bpng);
-            stx.world.current_dataspace_id = Some(bpng);
+            stx.current_dataspace_id = Some(paynet);
+            stx.world.current_dataspace_id = Some(paynet);
             AcquireAccountAliasLease::new(alias, authority.clone(), authority.clone(), 1, None)
                 .execute(&authority, &mut stx)
                 .expect("external settlement skips local global asset transfer");
@@ -1061,7 +1061,7 @@ mod tests {
             view.world(),
             &view.nexus.dataspace_catalog,
             SnsNamespace::AccountAlias,
-            "retail@bpng",
+            "retail@paynet",
             0,
         )
         .expect("acquired alias lease");

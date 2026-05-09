@@ -717,7 +717,7 @@ agraffent des pruebas frescas:
 - **Registro de perforación.** Quand les probes font partie d'un drill, laissez
   `scripts/telemetry/run_sorafs_gateway_probe.sh` agregar entradas a `ops/drill-log.md`
   Para que la evidencia meme satisfaga el requisito caos SNNet-5.
-- **Liens de ticket.** Referencia a los ID del panel Grafana o a las exportaciones PNG adjuntas al archivo
+- **Liens de ticket.** Referencia a los ID del panel Grafana o a las exportaciones image adjuntas al archivo
   ticket de changement, avec le chemin du rapport probe, pour que les reviewers puissent
   Recupere los SLO sin acceso al shell.
 

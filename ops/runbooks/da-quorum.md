@@ -41,7 +41,7 @@ summary: Operator procedure for responding to DA quorum degradation, missing-ava
 
 ### Step 1 — Confirm the Signal
 
-1. Export the Grafana panels (PNG + JSON) showing the ratio and missing-availability traces.
+1. Export the Grafana panels (image + JSON) showing the ratio and missing-availability traces.
 2. Capture Prometheus samples:
    ```bash
    promtool query instant "$PROM" \

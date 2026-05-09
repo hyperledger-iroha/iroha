@@ -44,7 +44,7 @@ descripción: پہلی پارٹنر ola de vista previa کے لئے مجموعی
 | 2025-04-19 17:55 | Paneles de control + Pruébelo, diferencia de latencia de proxy | Líder de Docs/DevRel | ✅ Comprobación del punto medio superada (0 alertas; Pruébelo latencia p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 2025-04-26 16:25 | Cuadros de instrumentos اوپر + sonda de salida | Docs/DevRel + enlace de gobernanza | ✅ Instantánea de salida, cero alertas pendientes | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-روزانہ muestras de horario de oficina (2025-04-13 -> 2025-04-25) Exportaciones NDJSON + PNG کے طور پر
+روزانہ muestras de horario de oficina (2025-04-13 -> 2025-04-25) Exportaciones NDJSON + image کے طور پر
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` میں موجود ہیں، فائل نام
 `docs-preview-integrity-<date>.json` اور متعلقہ capturas de pantalla کے ساتھ۔
 

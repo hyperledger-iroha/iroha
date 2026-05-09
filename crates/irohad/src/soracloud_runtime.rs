@@ -226,17 +226,23 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
             .with_instructions([instruction])
             .with_metadata(soracloud_runtime_submission_metadata(&self.state))
             .sign(self.key_pair.private_key());
-        let view = self.state.view();
-        let params = view.world().parameters();
+        let (max_clock_drift, transaction_params, crypto) = {
+            let world = self.state.world_view();
+            let params = world.parameters();
+            (
+                params.sumeragi().max_clock_drift(),
+                params.transaction(),
+                self.state.crypto(),
+            )
+        };
         let accepted = AcceptedTransaction::accept(
             tx,
             &self.chain_id,
-            params.sumeragi().max_clock_drift(),
-            params.transaction(),
-            self.state.crypto().as_ref(),
+            max_clock_drift,
+            transaction_params,
+            crypto.as_ref(),
         )
         .wrap_err_with(|| format!("accept internal Soracloud runtime mutation at `{endpoint}`"))?;
-        drop(view);
         self.queue
             .push_with_lane_with_state(accepted, self.state.as_ref())
             .map(|_| ())
@@ -2844,42 +2850,83 @@ impl SoracloudRuntimeManager {
         fs::create_dir_all(self.service_data_root())
             .wrap_err_with(|| format!("create {}", self.service_data_root().display()))?;
 
-        let view = self.state.view();
-        self.report_local_model_host_advert_contradictions(&view);
-        let bundle_registry = collect_service_revision_registry(&view);
-        self.refresh_local_inrou_host_capability_if_needed(&view);
-        self.request_inrou_placement_reconcile_if_needed(&view, &bundle_registry);
-        let initial_snapshot = build_runtime_snapshot(
-            &view,
-            &bundle_registry,
-            &self.config.state_dir,
-            self.artifacts_root(),
-            self.config.local_validator_account_id.as_ref(),
-            self.config.local_peer_id.as_deref(),
-            !self.config.inrou.proxy_only,
-        )?;
+        let (
+            bundle_registry,
+            initial_snapshot,
+            inrou_host_capability_refresh,
+            inrou_placement_reconcile_needed,
+        ) = {
+            let view = self.state.view();
+            self.report_local_model_host_advert_contradictions(&view);
+            let bundle_registry = collect_service_revision_registry(&view);
+            let inrou_host_capability_refresh =
+                self.local_inrou_host_capability_refresh_candidate(&view);
+            let inrou_placement_reconcile_needed =
+                self.inrou_placement_reconcile_needed(&view, &bundle_registry);
+            let initial_snapshot = build_runtime_snapshot(
+                &view,
+                &bundle_registry,
+                &self.config.state_dir,
+                self.artifacts_root(),
+                self.config.local_validator_account_id.as_ref(),
+                self.config.local_peer_id.as_deref(),
+                !self.config.inrou.proxy_only,
+            )?;
+            (
+                bundle_registry,
+                initial_snapshot,
+                inrou_host_capability_refresh,
+                inrou_placement_reconcile_needed,
+            )
+        };
+        self.refresh_local_inrou_host_capability_if_needed(inrou_host_capability_refresh);
+        self.request_inrou_placement_reconcile_if_needed(inrou_placement_reconcile_needed);
 
-        self.write_service_materializations(&initial_snapshot, &bundle_registry, &view)?;
-        self.write_apartment_materializations(&initial_snapshot, &view)?;
+        {
+            let view = self.state.view();
+            self.write_service_materializations(&initial_snapshot, &bundle_registry, &view)?;
+            self.write_apartment_materializations(&initial_snapshot, &view)?;
+        }
         self.prune_stale_service_materializations(&initial_snapshot)?;
         self.prune_stale_secret_materializations(&initial_snapshot)?;
         self.prune_stale_apartment_materializations(&initial_snapshot)?;
-        self.import_hf_sources(&view, &initial_snapshot)?;
-        self.probe_local_hf_execution_hosts(&view, &initial_snapshot);
-        self.hydrate_missing_artifacts(&view, &initial_snapshot, &bundle_registry)?;
-        self.reconcile_hosted_http_workers(&view, &initial_snapshot, &bundle_registry)?;
-        self.enforce_cache_budgets(&view, &initial_snapshot)?;
-        let snapshot = build_runtime_snapshot(
-            &view,
-            &bundle_registry,
-            &self.config.state_dir,
-            self.artifacts_root(),
-            self.config.local_validator_account_id.as_ref(),
-            self.config.local_peer_id.as_deref(),
-            !self.config.inrou.proxy_only,
-        )?;
+        {
+            let view = self.state.view();
+            self.import_hf_sources(&view, &initial_snapshot)?;
+        }
+        {
+            let view = self.state.view();
+            self.probe_local_hf_execution_hosts(&view, &initial_snapshot);
+        }
+        {
+            let view = self.state.view();
+            self.hydrate_missing_artifacts(&view, &initial_snapshot, &bundle_registry)?;
+        }
+        {
+            let view = self.state.view();
+            self.reconcile_hosted_http_workers(&view, &initial_snapshot, &bundle_registry)?;
+        }
+        {
+            let view = self.state.view();
+            self.enforce_cache_budgets(&view, &initial_snapshot)?;
+        }
+        let snapshot = {
+            let view = self.state.view();
+            build_runtime_snapshot(
+                &view,
+                &bundle_registry,
+                &self.config.state_dir,
+                self.artifacts_root(),
+                self.config.local_validator_account_id.as_ref(),
+                self.config.local_peer_id.as_deref(),
+                !self.config.inrou.proxy_only,
+            )?
+        };
         self.prune_stale_hf_local_workers(&snapshot);
-        self.submit_http_service_runtime_state_updates(&view, &snapshot, &bundle_registry);
+        {
+            let view = self.state.view();
+            self.submit_http_service_runtime_state_updates(&view, &snapshot, &bundle_registry);
+        }
         write_json_atomic(
             &self.config.state_dir.join("runtime_snapshot.json"),
             &snapshot,
@@ -3293,15 +3340,15 @@ impl SoracloudRuntimeManager {
         true
     }
 
-    fn refresh_local_inrou_host_capability_if_needed(&self, view: &StateView<'_>) {
-        let Some(mutation_sink) = self.mutation_sink.as_ref() else {
-            return;
-        };
+    fn local_inrou_host_capability_refresh_candidate(
+        &self,
+        view: &StateView<'_>,
+    ) -> Option<(SoraInrouHostCapabilityRecordV1, bool)> {
         let now_ms = soracloud_runtime_observed_at_ms();
         let Some((desired, auto_proxy_only)) =
             self.build_local_inrou_host_capability_record(now_ms)
         else {
-            return;
+            return None;
         };
         let authoritative = view
             .world()
@@ -3309,15 +3356,33 @@ impl SoracloudRuntimeManager {
             .get(&desired.validator_account_id);
         let needs_refresh =
             inrou_host_capability_refresh_needed(authoritative, &desired, now_ms, &self.config);
-        if !needs_refresh || !self.local_inrou_host_advert_attempt_allowed(now_ms) {
+        if !needs_refresh {
+            return None;
+        }
+        Some((desired, auto_proxy_only))
+    }
+
+    fn refresh_local_inrou_host_capability_if_needed(
+        &self,
+        refresh: Option<(SoraInrouHostCapabilityRecordV1, bool)>,
+    ) {
+        let Some(mutation_sink) = self.mutation_sink.as_ref() else {
+            return;
+        };
+        let Some((desired, auto_proxy_only)) = refresh else {
+            return;
+        };
+        let now_ms = soracloud_runtime_observed_at_ms();
+        if !self.local_inrou_host_advert_attempt_allowed(now_ms) {
             return;
         }
-        if auto_proxy_only {
+        if !should_submit_local_inrou_host_capability(auto_proxy_only) {
             iroha_logger::warn!(
                 validator_account_id = %desired.validator_account_id,
                 peer_id = %desired.peer_id,
-                "Inrou backend support is unavailable on this host; advertising zero hosted-service capacity"
+                "Inrou backend support is unavailable on this host; suppressing zero-capacity host advert"
             );
+            return;
         }
         if let Err(error) = mutation_sink.submit_inrou_host_capability(&desired) {
             iroha_logger::warn!(
@@ -3409,15 +3474,11 @@ impl SoracloudRuntimeManager {
             })
     }
 
-    fn request_inrou_placement_reconcile_if_needed(
-        &self,
-        view: &StateView<'_>,
-        bundle_registry: &BTreeMap<(String, String), SoraDeploymentBundleV1>,
-    ) {
+    fn request_inrou_placement_reconcile_if_needed(&self, needed: bool) {
         let Some(mutation_sink) = self.mutation_sink.as_ref() else {
             return;
         };
-        if !self.inrou_placement_reconcile_needed(view, bundle_registry) {
+        if !needed {
             return;
         }
         let now_ms = soracloud_runtime_observed_at_ms();
@@ -9518,6 +9579,10 @@ fn inrou_host_heartbeat_refresh_due(
 ) -> bool {
     existing.heartbeat_expires_at_ms
         <= now_ms.saturating_add(inrou_host_heartbeat_refresh_margin_ms(config))
+}
+
+fn should_submit_local_inrou_host_capability(auto_proxy_only: bool) -> bool {
+    !auto_proxy_only
 }
 
 fn inrou_host_capability_matches(
@@ -16599,6 +16664,85 @@ mod tests {
             now_ms,
             &config
         ));
+    }
+
+    #[test]
+    fn inrou_host_capability_refresh_candidate_respects_authoritative_state() -> Result<()> {
+        let mut state = test_state()?;
+        let config = test_runtime_manager_config(PathBuf::from(
+            "/tmp/test-soracloud-runtime-host-refresh-candidate",
+        ))
+        .with_local_host_identity(ALICE_ID.clone(), "12D3KooWRuntimeHostRefreshCandidate");
+        let (mut capability, _auto_proxy_only) = {
+            let manager = SoracloudRuntimeManager::new(config.clone(), Arc::clone(&state));
+            manager
+                .build_local_inrou_host_capability_record(123)
+                .expect("host identity configured")
+        };
+        capability.heartbeat_expires_at_ms = u64::MAX;
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            world
+                .soracloud_inrou_host_capabilities_mut_for_testing()
+                .insert(ALICE_ID.clone(), capability);
+        }
+
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        let view = state.view();
+
+        assert!(
+            manager
+                .local_inrou_host_capability_refresh_candidate(&view)
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_local_inrou_host_capability_submits_candidate() {
+        let mut config =
+            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime-host-refresh"));
+        config.inrou.proxy_only = true;
+        config =
+            config.with_local_host_identity(ALICE_ID.clone(), "12D3KooWRuntimeHostRefreshSubmit");
+        let state = test_state().expect("test state");
+        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state))
+            .with_mutation_sink(mutation_sink.clone());
+        let candidate = {
+            let view = state.view();
+            manager.local_inrou_host_capability_refresh_candidate(&view)
+        };
+
+        manager.refresh_local_inrou_host_capability_if_needed(candidate);
+
+        let capabilities = mutation_sink.submitted_inrou_host_capabilities();
+        assert_eq!(capabilities.len(), 1);
+        assert!(capabilities[0].capability.proxy_only);
+    }
+
+    #[test]
+    fn inrou_placement_reconcile_request_obeys_needed_flag_and_cooldown() {
+        let config = test_runtime_manager_config(PathBuf::from(
+            "/tmp/test-soracloud-runtime-placement-reconcile",
+        ));
+        let state = test_state().expect("test state");
+        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+        let manager =
+            SoracloudRuntimeManager::new(config, state).with_mutation_sink(mutation_sink.clone());
+
+        manager.request_inrou_placement_reconcile_if_needed(false);
+        assert_eq!(mutation_sink.submitted_inrou_placement_reconciles(), 0);
+
+        manager.request_inrou_placement_reconcile_if_needed(true);
+        manager.request_inrou_placement_reconcile_if_needed(true);
+        assert_eq!(mutation_sink.submitted_inrou_placement_reconciles(), 1);
+    }
+
+    #[test]
+    fn auto_proxy_only_inrou_host_advert_is_suppressed() {
+        assert!(!should_submit_local_inrou_host_capability(true));
+        assert!(should_submit_local_inrou_host_capability(false));
     }
 
     #[test]

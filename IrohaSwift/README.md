@@ -83,7 +83,7 @@ let walletToken = "<wallet-session-token>"
 let toriiAuth = try ToriiClientAuthentication.bearerToken(
     walletToken,
     accountId: accountId,
-    dataspaceId: "mibank.bpng"
+    dataspaceId: "mibank.paynet"
 )
 let torii = ToriiClient(baseURL: toriiURL, authentication: toriiAuth)
 

@@ -386,6 +386,42 @@ Last updated: 2026-05-09
   - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift`
   - `git diff --check`
 
+## 2026-05-08 Sumeragi idle RBC tick throttling
+
+- The dedicated parallel Sumeragi tick worker now records every tick attempt,
+  including no-progress maintenance ticks, as the last tick time. Idle
+  maintenance that returns no progress therefore sleeps for the configured
+  tick-min-gap instead of immediately ticking again.
+- Idle-view deadlines are no longer scheduled when the transaction queue is
+  empty and there is no recovery, backlog, proposal-liveness, or vote-backed
+  consensus evidence to act on.
+- RBC rebroadcast deadlines now ignore inactive retained sessions, including
+  delivered sessions outside the active repair window, so stale RBC/DA state
+  does not keep an otherwise idle actor awake.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib spawn_tick_worker_throttles_no_progress_ticks -- --nocapture`
+  - `cargo test -p iroha_core --lib actor_next_tick_deadline -- --nocapture`
+
+## 2026-05-08 Soracloud Inrou host-advert suppression
+
+- The embedded Soracloud runtime no longer submits an authoritative
+  `AdvertiseSoracloudInrouHost` transaction when the host has no local Inrou
+  backend and the manager only derived an automatic zero-capacity proxy-only
+  capability. This keeps backend discovery failures from turning into repeated
+  validator-authored Inrou advert traffic.
+- The affected live deployment was also rolled to a same-source Linux `irohad`
+  built without `embedded-soracloud-runtime` so the live nodes cannot start the
+  embedded Inrou runtime. The deployed binary SHA-256 is
+  `d724c4a69373817f120833ed840ccf1ad878bde92e709089f5a34afba6a4f862`.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc cargo build -p irohad --bin irohad --release --target x86_64-unknown-linux-gnu`
+  - `cargo test -p irohad auto_proxy_only_inrou_host_advert_is_suppressed --features embedded-soracloud-runtime -- --nocapture`
+  - Live binary-only rollout evidence was captured outside this repository.
+  - Live `make minamoto-live-endpoint-smoke`
+  - Live `make minamoto-monitor-check`
+
 ## 2026-05-08 Sumeragi idle timing cache
 
 - Sumeragi now caches the active and chain-effective consensus timing derived
@@ -437,6 +473,30 @@ Last updated: 2026-05-09
   - `cargo test -p iroha_core --lib run_parallel_worker_prioritizes_block_ingress_before_vote_cert_burst -- --nocapture`
   - `cargo build -p irohad --release`
   - `TEST_NETWORK_BIN_IROHAD=/Users/takemiyamakoto/dev/iroha/target/release/irohad IROHA_TEST_SKIP_BUILD=1 IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_THROUGHPUT_ARTIFACT_DIR=/Users/takemiyamakoto/dev/iroha/integration_tests/artifacts/realistic-30tps-transfer-20min-640-release-daemon-block-body-response-block-lane cargo test -p integration_tests --test consensus_and_da sumeragi_localnet_smoke::permissioned_localnet_realistic_30tps_20min -- --ignored --exact --nocapture --test-threads=1`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+
+## 2026-05-08 Realistic RAM-LFE email soak
+
+- The realistic 30 TPS localnet soak now supports
+  `IROHA_REALISTIC_30TPS_LOAD_KIND=ram-lfe-email`. This mode registers the
+  email identifier policy and RAM-LFE program policy during genesis, creates
+  640 UAID-bearing account targets, and submits signed `ClaimIdentifier`
+  transactions with RAM-LFE email receipts instead of transfer instructions.
+- The release-daemon 20-minute RAM-LFE email run passed. It submitted all
+  36,000 email-claim transactions, reached the 36,008 approved target including
+  the 8 baseline approvals, and ended with zero rejects, all peers at 723
+  non-empty blocks, and queue size 0. Throughput margin remains similar to the
+  transfer soak: load submitted at 30.00 TPS, committed at 21.27 TPS during
+  load, peaked at 10,377 queued transactions, and needed 677 seconds of drain
+  time. Artifact:
+  `integration_tests/artifacts/realistic-30tps-ram-lfe-email-20min-release-daemon/throughput-1778232961671/summary.json`.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test consensus_and_da realistic_ram_lfe_email -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da realistic_30tps_load_kind_parses_email_mode_and_defaults_to_transfer -- --nocapture`
+  - `TEST_NETWORK_BIN_IROHAD=/Users/takemiyamakoto/dev/iroha/target/release/irohad IROHA_TEST_SKIP_BUILD=1 IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_REALISTIC_30TPS_LOAD_KIND=ram-lfe-email IROHA_REALISTIC_30TPS_DURATION_SECS=5 IROHA_REALISTIC_30TPS_TARGET_TPS=2 IROHA_REALISTIC_30TPS_TARGET_BLOCKS=2 IROHA_REALISTIC_30TPS_BLOCK_MAX_TXS=5 IROHA_REALISTIC_30TPS_STALL_SECS=30 IROHA_THROUGHPUT_ARTIFACT_DIR=/Users/takemiyamakoto/dev/iroha/integration_tests/artifacts/realistic-ram-lfe-email-smoke cargo test -p integration_tests --test consensus_and_da sumeragi_localnet_smoke::permissioned_localnet_realistic_30tps_20min -- --ignored --exact --nocapture --test-threads=1`
+  - `TEST_NETWORK_BIN_IROHAD=/Users/takemiyamakoto/dev/iroha/target/release/irohad IROHA_TEST_SKIP_BUILD=1 IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_REALISTIC_30TPS_LOAD_KIND=ram-lfe-email IROHA_THROUGHPUT_ARTIFACT_DIR=/Users/takemiyamakoto/dev/iroha/integration_tests/artifacts/realistic-30tps-ram-lfe-email-20min-release-daemon cargo test -p integration_tests --test consensus_and_da sumeragi_localnet_smoke::permissioned_localnet_realistic_30tps_20min -- --ignored --exact --nocapture --test-threads=1`
   - `cargo fmt --all --check`
   - `git diff --check`
 
@@ -6946,7 +7006,7 @@ Last updated: 2026-05-09
 - Tightened Torii Offline V2 readiness smoke coverage so the exposed verifier id and public-input schema hash match the canonical fixture contract.
 - Test-network genesis generation now computes and injects the confidential verifier-registry root from appended verifier-key registration instructions, so Offline V2 real-verifier localnets no longer start with a stale `vk_set_hash`.
 - Added four-peer `network_functional` coverage that registers the real Offline V2 Halo2 IPA verifier, issues a note, audits it into a new note, redeems it, validates balances, and rejects replay/nullifier reuse under consensus.
-- Added native app validation coverage for the shared `interop_contract_v2.json`, synthetic Android counter rejection, transcript-like recursive proof rejection, and old QR prefix rejection. Android PK and PNG now also have physical-only KeyMint runner scripts that require a selected API 31+ non-emulator device and capture public attestation artifacts under untracked `artifacts/offline/keymint/`.
+- Added native app validation coverage for the shared `interop_contract_v2.json`, synthetic Android counter rejection, transcript-like recursive proof rejection, and old QR prefix rejection. Android PK and the companion app now also have physical-only KeyMint runner scripts that require a selected API 31+ non-emulator device and capture public attestation artifacts under untracked `artifacts/offline/keymint/`.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo test -p iroha_data_model offline_note_v2 --lib -- --nocapture`
@@ -6959,17 +7019,17 @@ Last updated: 2026-05-09
   - `cd kotlin && ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test' --console=plain`
   - `cd java/iroha_android && ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --console=plain`
   - `cd /Users/takemiyamakoto/dev/pk-retail-wallet-android && ./gradlew --no-daemon :core:test --console=plain`
-  - `cd /Users/takemiyamakoto/dev/png-retail-wallet-android && ./gradlew --no-daemon :core:test --console=plain`
+  - `cd /Users/takemiyamakoto/dev/partner-retail-wallet-android && ./gradlew --no-daemon :core:test --console=plain`
   - `cd /Users/takemiyamakoto/dev/pk-retail-wallet-android && ANDROID_SERIAL=19181FDF600918 E2E_DEVICE_SERIAL=19181FDF600918 scripts/run_offline_keymint_physical.sh`
-  - `cd /Users/takemiyamakoto/dev/png-retail-wallet-android && ANDROID_SERIAL=19181FDF600918 E2E_DEVICE_SERIAL=19181FDF600918 scripts/run_offline_keymint_physical.sh`
+  - `cd /Users/takemiyamakoto/dev/partner-retail-wallet-android && ANDROID_SERIAL=19181FDF600918 E2E_DEVICE_SERIAL=19181FDF600918 scripts/run_offline_keymint_physical.sh`
   - `cd /Users/takemiyamakoto/dev/pk-retail-wallet-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Debug -destination 'platform=iOS Simulator,id=A7E7B24D-46DE-4D6D-B23B-622C5AD9A464' -only-testing:RetailWalletIOSTests/OfflineAPIContractTests -only-testing:RetailWalletIOSTests/AppAttestationAssertionDecoderTests -only-testing:RetailWalletIOSTests/OfflineProofVerifierFixtureTests`
-  - `cd /Users/takemiyamakoto/dev/png-retail-wallet-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Debug -destination 'platform=iOS Simulator,id=A7E7B24D-46DE-4D6D-B23B-622C5AD9A464' -only-testing:RetailWalletIOSTests/OfflineAPIContractTests -only-testing:RetailWalletIOSTests/AppAttestationAssertionDecoderTests -only-testing:RetailWalletIOSTests/OfflineProofVerifierFixtureTests`
+  - `cd /Users/takemiyamakoto/dev/partner-retail-wallet-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Debug -destination 'platform=iOS Simulator,id=A7E7B24D-46DE-4D6D-B23B-622C5AD9A464' -only-testing:RetailWalletIOSTests/OfflineAPIContractTests -only-testing:RetailWalletIOSTests/AppAttestationAssertionDecoderTests -only-testing:RetailWalletIOSTests/OfflineProofVerifierFixtureTests`
   - `cd /Users/takemiyamakoto/dev/pk-retail-wallet-ios && xcodebuild build -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Debug -destination 'generic/platform=iOS Simulator'`
-  - `cd /Users/takemiyamakoto/dev/png-retail-wallet-ios && xcodebuild build -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Debug -destination 'generic/platform=iOS Simulator'`
+  - `cd /Users/takemiyamakoto/dev/partner-retail-wallet-ios && xcodebuild build -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Debug -destination 'generic/platform=iOS Simulator'`
   - `git diff --check` in the Iroha root and all four touched app repositories.
   - `shasum -a 256` confirmed every copied `fixtures/offline/interop_contract_v2.json` has hash `2660dd41e3b8c1f4b8337d14febbc88e3febe45428c08e4d083197ef01d4e0f6`.
   - Targeted changed-file scans found no temporary-work markers, exact retired proof-domain identifiers, or retired fountain QR v1 identifiers.
-- The physical KeyMint gate ran on Pixel 6 serial `19181FDF600918`. PK artifacts were captured under `/Users/takemiyamakoto/dev/pk-retail-wallet-android/artifacts/offline/keymint/20260428T081251Z-19181FDF600918`; PNG artifacts were captured under `/Users/takemiyamakoto/dev/png-retail-wallet-android/artifacts/offline/keymint/20260428T081331Z-19181FDF600918`.
+- The physical KeyMint gate ran on Pixel 6 serial `19181FDF600918`. PK artifacts were captured under `/Users/takemiyamakoto/dev/pk-retail-wallet-android/artifacts/offline/keymint/20260428T081251Z-19181FDF600918`; companion app artifacts were captured under `/Users/takemiyamakoto/dev/partner-retail-wallet-android/artifacts/offline/keymint/20260428T081331Z-19181FDF600918`.
 
 ## 2026-04-27 Sumeragi future-new-view recovery and Izanami stable gate
 
@@ -7017,7 +7077,7 @@ Last updated: 2026-05-09
 
 - Standardized the first-release mobile offline contract on the Iroha Offline Note V2 fixture (`fixtures/offline/interop_contract_v2.json`) with canonical Norito-backed public-input hashes, opaque recursive proof bytes, `iroha:qr1:` QR stream frames, and `parity_group=3`.
 - Added native Kotlin/JVM and Java Android Offline Note V2 model/codec surfaces that mirror the Swift SDK without Rust FFI/JNI. The parity tests validate key-certificate signing bytes, issue/redeem/audit Norito payloads, public-input hashes, proof binding rejection, and the shared fixture.
-- Updated the PK and PNG iOS/Android app offline flows to call the native SDK-backed Offline Note V2 helpers for certificate payloads, issued/output claims, payment-token public inputs, QR framing, and validation instead of app-local text transcripts.
+- Updated the PK and companion iOS/Android app offline flows to call the native SDK-backed Offline Note V2 helpers for certificate payloads, issued/output claims, payment-token public inputs, QR framing, and validation instead of app-local text transcripts.
 - Focused validation for this slice:
   - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors`
   - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors`
@@ -7025,9 +7085,9 @@ Last updated: 2026-05-09
   - `cd kotlin && ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test' --rerun-tasks --console=plain`
   - `cd java/iroha_android && ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --rerun-tasks --console=plain`
   - `cd /Users/takemiyamakoto/dev/pk-retail-wallet-android && ./gradlew --no-daemon :core:test --console=plain`
-  - `cd /Users/takemiyamakoto/dev/png-retail-wallet-android && ./gradlew --no-daemon :core:test --console=plain`
+  - `cd /Users/takemiyamakoto/dev/partner-retail-wallet-android && ./gradlew --no-daemon :core:test --console=plain`
   - `cd /Users/takemiyamakoto/dev/pk-retail-wallet-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Debug -destination 'platform=iOS Simulator,id=A7E7B24D-46DE-4D6D-B23B-622C5AD9A464' -only-testing:RetailWalletIOSTests/OfflineAPIContractTests`
-  - `cd /Users/takemiyamakoto/dev/png-retail-wallet-ios && xcodebuild -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Debug -destination 'platform=iOS Simulator,id=A7E7B24D-46DE-4D6D-B23B-622C5AD9A464' build`
+  - `cd /Users/takemiyamakoto/dev/partner-retail-wallet-ios && xcodebuild -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Debug -destination 'platform=iOS Simulator,id=A7E7B24D-46DE-4D6D-B23B-622C5AD9A464' build`
 
 ## 2026-04-27 Swift Offline V2 transaction builders
 

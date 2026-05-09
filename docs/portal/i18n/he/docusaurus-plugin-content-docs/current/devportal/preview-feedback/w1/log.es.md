@@ -46,7 +46,7 @@ Ancla los tiempos al calendario UTC definido en el plan W1.
 | 19/04/2025 17:55 | לוחות מחוונים של arriba + diff de latencia del proxy נסה זאת | Docs/DevRel lead | Chequeo de mitad de ola ok (0 התראות; עכבות נסה את זה p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
 | 26/04/2025 16:25 | לוחות מחוונים דה arriba + probe de salida | Docs/DevRel + קשר ממשל | תמונת מצב של סלידה, cro alertas pendientes | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-Las muestras diarias de office hours (2025-04-13 -> 2025-04-25) se agrupan como מייצא NDJSON + PNG bajo
+Las muestras diarias de office hours (2025-04-13 -> 2025-04-25) se agrupan como מייצא NDJSON + image bajo
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` עם שמות ארכיון
 `docs-preview-integrity-<date>.json` y los צילומי מסך מתכתבים.
 

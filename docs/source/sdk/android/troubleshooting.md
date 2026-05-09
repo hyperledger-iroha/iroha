@@ -49,7 +49,7 @@ Program Lead if mitigation exceeds the SLA.
 ## 4. Evidence & Reporting Checklist
 
 1. **Dashboards:** Capture the relevant Grafana panels (latency, queue depth,
-   exporter health) and store PNGs under
+   exporter health) and store images under
    `docs/source/sdk/android/readiness/screenshots/<date>/`.
 2. **Logs:** Export CLI outputs (`telemetry/check_redaction_status`,
    `run_schema_diff`, queue inspector) into the incident folder under

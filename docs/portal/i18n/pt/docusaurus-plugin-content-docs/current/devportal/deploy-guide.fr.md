@@ -756,7 +756,7 @@ agraffent des proves frais:
 - **Registro de perfuração.** Quando as sondas font partie d'un drill, laissez
   `scripts/telemetry/run_sorafs_gateway_probe.sh` adiciona entradas a `ops/drill-log.md`
   para que a evidência do meme satisfaça o requisito do caos SNNet-5.
-- **Liens de ticket.** Consulte os IDs do painel Grafana ou os exports PNG anexados no arquivo
+- **Liens de ticket.** Consulte os IDs do painel Grafana ou os exports image anexados no arquivo
   bilhete de mudança, com o caminho da sonda de rapport, para que os revisores possam
   recuperar SLOs sem acesso ao shell.
 

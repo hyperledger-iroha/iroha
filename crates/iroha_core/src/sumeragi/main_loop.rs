@@ -19262,6 +19262,10 @@ impl Actor {
         }
 
         let height = self.active_consensus_round_height();
+        if self.queue.active_len() == 0 && !self.has_empty_queue_idle_view_work(height) {
+            return None;
+        }
+
         let current_view = self.phase_tracker.current_view(height).unwrap_or(0);
         let Some(age) = self.phase_tracker.view_age(height, now) else {
             // Avoid scheduling idle view changes before the round tracker is seeded.
@@ -19332,6 +19336,31 @@ impl Actor {
         Some(view_deadline.min(queue_deadline).max(now))
     }
 
+    fn has_empty_queue_idle_view_work(&self, height: u64) -> bool {
+        self.has_residual_round_backlog_for_height(height)
+            || self.frontier_recovery_exists_at_height(height)
+            || self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == height
+                    && !matches!(
+                        slot.mode,
+                        FrontierSlotMode::Finalized | FrontierSlotMode::PassiveCatchup
+                    )
+            })
+            || self
+                .subsystems
+                .propose
+                .proposal_liveness
+                .is_some_and(|slot| slot.height == height)
+            || self
+                .subsystems
+                .propose
+                .new_view_tracker
+                .entries
+                .keys()
+                .any(|(entry_height, _)| *entry_height == height)
+            || self.height_has_vote_backed_consensus_evidence(height)
+    }
+
     fn rbc_next_due(&self, now: Instant) -> Option<Instant> {
         let rbc = &self.subsystems.da_rbc.rbc;
         if rbc.sessions.is_empty()
@@ -19350,6 +19379,8 @@ impl Actor {
         let payload_cooldown = self.payload_rebroadcast_cooldown();
         let ready_cooldown = self.rebroadcast_cooldown();
         let deliver_cooldown = self.rbc_deliver_rebroadcast_cooldown();
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
 
         for (key, session) in &rbc.sessions {
             if session.is_invalid() {
@@ -19358,7 +19389,18 @@ impl Actor {
             if self.exact_frontier_block_created_owner_active(*key) {
                 continue;
             }
+            if !self.rbc_rebroadcast_active_with_tip_and_session(
+                *key,
+                tip_height,
+                tip_hash,
+                Some(session),
+            ) {
+                continue;
+            }
             if session.delivered {
+                if self.suppress_rbc_hot_repair(*key) {
+                    continue;
+                }
                 let deadline = rbc
                     .deliver_rebroadcast_last_sent
                     .get(key)
@@ -35888,28 +35930,7 @@ impl Actor {
             near_quorum_rbc_backlog,
         } = backlog_signals;
         let active_block_production_sla = queue_active_backlog || self.queue.active_len() > 0;
-        let empty_tx_queue_recovery_work_active = residual_round_backlog
-            || self.frontier_recovery_exists_at_height(height)
-            || self.frontier_slot.as_ref().is_some_and(|slot| {
-                slot.height == height
-                    && !matches!(
-                        slot.mode,
-                        FrontierSlotMode::Finalized | FrontierSlotMode::PassiveCatchup
-                    )
-            })
-            || self
-                .subsystems
-                .propose
-                .proposal_liveness
-                .is_some_and(|slot| slot.height == height)
-            || self
-                .subsystems
-                .propose
-                .new_view_tracker
-                .entries
-                .keys()
-                .any(|(entry_height, _)| *entry_height == height)
-            || self.height_has_vote_backed_consensus_evidence(height);
+        let empty_tx_queue_recovery_work_active = self.has_empty_queue_idle_view_work(height);
         if self.queue.active_len() == 0 && !empty_tx_queue_recovery_work_active {
             // Skip idle view-change churn when neither transactions nor recovery work are queued.
             self.queue_ready_since = None;

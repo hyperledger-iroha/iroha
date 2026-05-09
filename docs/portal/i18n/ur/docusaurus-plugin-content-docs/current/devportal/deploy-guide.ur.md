@@ -772,7 +772,7 @@ cutover کا اعلان کرنے سے پہلے ثابت کریں کہ نیا ali
 - **Drill log۔** جب probes کسی drill کا حصہ ہوں تو
   `scripts/telemetry/run_sorafs_gateway_probe.sh` کو `ops/drill-log.md` میں append
   کرنے دیں تاکہ وہی evidence SNNet-5 chaos requirement پوری کرے۔
-- **Ticket links۔** change ticket میں Grafana panel IDs یا attached PNG exports کا
+- **Ticket links۔** change ticket میں Grafana panel IDs یا attached image exports کا
   حوالہ دیں، ساتھ ہی probe report path بھی شامل کریں، تاکہ reviewers shell access
   کے بغیر SLOs cross-check کر سکیں۔
 
