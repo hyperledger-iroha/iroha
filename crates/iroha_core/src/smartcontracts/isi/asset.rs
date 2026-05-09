@@ -2553,6 +2553,7 @@ pub mod query {
     mod tests {
         use std::collections::{BTreeMap, BTreeSet};
 
+        use iroha_crypto::Hash;
         use iroha_data_model::account::{
             NewAccount,
             rekey::{AccountAlias, AccountAliasDomain},
@@ -3103,6 +3104,7 @@ pub mod query {
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
+            stx.tx_call_hash = Some(Hash::prehashed([0xB1; Hash::LENGTH]));
 
             let key: Name = "tag".parse().expect("metadata key");
             let value = Json::from(norito::json!("seed"));
@@ -3245,6 +3247,7 @@ pub mod query {
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 86_400_000, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
+            stx.tx_call_hash = Some(Hash::prehashed([0xB2; Hash::LENGTH]));
 
             SetAssetTransferControl::new(
                 ALICE_ID.clone(),
@@ -4084,6 +4087,7 @@ pub mod query {
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
+            stx.tx_call_hash = Some(Hash::prehashed([0xB3; Hash::LENGTH]));
             stx.current_dataspace_id = Some(source_dataspace);
             stx.world.current_dataspace_id = Some(source_dataspace);
 
@@ -4274,6 +4278,7 @@ pub mod query {
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
+            stx.tx_call_hash = Some(Hash::prehashed([0xB4; Hash::LENGTH]));
             Transfer::asset_numeric(source_asset_id, 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect("one matching allowed domain membership should authorize transfer");

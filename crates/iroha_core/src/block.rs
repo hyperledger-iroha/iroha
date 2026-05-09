@@ -5859,12 +5859,6 @@ pub(crate) mod valid {
                 if cached_stateless_ok.len() != prepared_txs.len() {
                     return Err(BlockValidationError::MerkleRootMismatch);
                 }
-                for (prechecked, cached_ok) in ed25519_prechecked
-                    .iter_mut()
-                    .zip(cached_stateless_ok.iter())
-                {
-                    *prechecked = *cached_ok;
-                }
             }
             let ed25519_batch_cap = pipeline_cfg.signature_batch_max_ed25519;
             if !is_genesis_block && ed25519_batch_cap > 0 {
@@ -6536,8 +6530,6 @@ pub(crate) mod valid {
             let fraud_cfg = &state_block.fraud_monitoring;
             let cache_cap = state_block.pipeline.stateless_cache_cap;
             let cache_enabled = cache_cap > 0 && !is_genesis_block;
-            let now_ms = block_creation_time.as_millis();
-            let mut cached_ok = vec![false; txs.len()];
             let max_clock_drift_ms = max_clock_drift.as_millis();
             let cache_context = if cache_enabled {
                 Some(crate::state::StatelessValidationContext::new(
@@ -6553,11 +6545,6 @@ pub(crate) mod valid {
                 let mut cache = state_block.stateless_validation_cache().lock();
                 cache.set_cap(cache_cap);
                 cache.ensure_context(cache_context.clone());
-                for (idx, prepared) in prepared_txs.iter().enumerate() {
-                    if cache.get_ok(&prepared.metadata.signed_hash, now_ms) {
-                        cached_ok[idx] = true;
-                    }
-                }
             }
             let embedded_routing =
                 Self::embedded_routing_decisions_for_signed_transactions(block, txs.len());
@@ -6704,9 +6691,6 @@ pub(crate) mod valid {
                     let mut public_keys = Vec::with_capacity(chunk_capacity);
                     let mut scratch = iroha_crypto::Ed25519BatchScratch::default();
                     for (idx, (tx, prepared)) in txs.iter().zip(prepared_txs.iter()).enumerate() {
-                        if cached_ok[idx] {
-                            continue;
-                        }
                         let AccountController::Single(signatory) = tx.authority().controller()
                         else {
                             continue;
@@ -6769,9 +6753,6 @@ pub(crate) mod valid {
                     }
                     let mut items: Vec<SecpItem> = Vec::new();
                     for (idx, tx) in txs.iter().enumerate() {
-                        if cached_ok[idx] {
-                            continue;
-                        }
                         let AccountController::Single(signatory) = tx.authority().controller()
                         else {
                             continue;
@@ -6865,9 +6846,6 @@ pub(crate) mod valid {
                     }
                     let mut items: Vec<PqcItem> = Vec::new();
                     for (idx, tx) in txs.iter().enumerate() {
-                        if cached_ok[idx] {
-                            continue;
-                        }
                         let AccountController::Single(signatory) = tx.authority().controller()
                         else {
                             continue;
@@ -6962,9 +6940,6 @@ pub(crate) mod valid {
                     let mut items_normal: Vec<BlsItem> = Vec::new();
                     let mut items_small: Vec<BlsItem> = Vec::new();
                     for (idx, tx) in txs.iter().enumerate() {
-                        if cached_ok[idx] {
-                            continue;
-                        }
                         let AccountController::Single(signatory) = tx.authority().controller()
                         else {
                             continue;
@@ -7162,9 +7137,6 @@ pub(crate) mod valid {
                         ) {
                             return Some(reason);
                         }
-                    }
-                    if cached_ok[idx] {
-                        return None;
                     }
                     if skip_stateless_checks {
                         return None;
@@ -14035,6 +14007,7 @@ pub(crate) mod valid {
         #[test]
         fn validate_keep_voting_block_accepts_ordered_genesis_parameter_transactions() {
             use iroha_data_model::{
+                IntoKeyValue,
                 parameter::{Parameter, system::SumeragiParameter},
                 peer::PeerId,
                 prelude::*,
@@ -14067,7 +14040,12 @@ pub(crate) mod valid {
 
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let mut world = World::default();
+            let (account_id, account_value) = Account::new(genesis_account.clone())
+                .build(&genesis_account)
+                .into_key_value();
+            world.accounts.insert(account_id, account_value);
+            let state = State::new(world, kura, query_handle);
             let topology = Topology::new(vec![PeerId::new(KeyPair::random().public_key().clone())]);
             let time_source = TimeSource::new_system();
             let mut voting_block = None;

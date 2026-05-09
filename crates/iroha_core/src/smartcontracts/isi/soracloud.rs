@@ -13978,6 +13978,7 @@ mod tests {
         .header();
         let mut second_state_block = state.block(second_block_header);
         let mut second_stx = second_state_block.transaction();
+        second_stx.tx_call_hash = Some(Hash::prehashed([0xE1; Hash::LENGTH]));
 
         isi::JoinSoracloudHfSharedLease {
             repo_id: repo_id.to_string(),

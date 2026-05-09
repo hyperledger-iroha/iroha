@@ -6448,6 +6448,7 @@ mod tests {
         };
 
         let mut stx = block.transaction();
+        stx.tx_call_hash = Some(Hash::prehashed([0xE6; Hash::LENGTH]));
         executor
             .execute_instruction_with_contract_runtime_context(
                 &mut stx,

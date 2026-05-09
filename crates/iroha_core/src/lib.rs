@@ -310,8 +310,6 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 | BlockMessage::FetchPendingBlock(_)
                 | BlockMessage::RbcInitRequest(_)
                 | BlockMessage::RbcChunkRequest(_)
-                | BlockMessage::RbcReady(_)
-                | BlockMessage::RbcDeliver(_)
                 | BlockMessage::ConsensusParams(_)
                 | BlockMessage::KuraReplicaAdvert(_)
                 | BlockMessage::ExecWitness(_)
@@ -326,7 +324,10 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 | BlockMessage::BlockSyncUpdate(_)
                 | BlockMessage::BlockBodyResponse(_)
                 | BlockMessage::RbcInit(_) => T::ConsensusPayload,
-                BlockMessage::RbcChunk(_) | BlockMessage::RbcChunkCompact(_) => T::ConsensusChunk,
+                BlockMessage::RbcReady(_)
+                | BlockMessage::RbcDeliver(_)
+                | BlockMessage::RbcChunk(_)
+                | BlockMessage::RbcChunkCompact(_) => T::ConsensusChunk,
             },
             NetworkMessage::SumeragiControlFlow(_)
             | NetworkMessage::LaneRelay(_)
@@ -578,7 +579,12 @@ mod tests {
     fn canonical_signed_transaction_payload(
         signed: &iroha_data_model::transaction::SignedTransaction,
     ) -> Arc<Vec<u8>> {
-        Arc::new(ncore::to_bytes(signed).expect("encode signed transaction"))
+        Arc::new(
+            ncore::to_bytes(
+                &iroha_data_model::transaction::TransactionEntrypoint::External(signed.clone()),
+            )
+            .expect("encode signed transaction entrypoint"),
+        )
     }
 
     #[test]
@@ -926,8 +932,9 @@ mod tests {
         let msg = NetworkMessage::TransactionGossiper(Arc::new(gossip));
 
         let bytes = msg.encode();
-        let decoded: NetworkMessage =
-            Decode::decode(&mut bytes.as_slice()).expect("decode gossip network");
+        let (decoded, used) = <NetworkMessage as ncore::DecodeFromSlice>::decode_from_slice(&bytes)
+            .expect("decode gossip network");
+        assert_eq!(used, bytes.len());
 
         match decoded {
             NetworkMessage::TransactionGossiper(gossip) => {
@@ -958,7 +965,12 @@ mod tests {
         let canonical_payload = canonical_signed_transaction_payload(&signed);
         let payload = {
             let _guard = ncore::DecodeFlagsGuard::enter(ncore::header_flags::COMPACT_LEN);
-            Arc::new(ncore::to_bytes(&signed).expect("encode signed transaction"))
+            Arc::new(
+                ncore::to_bytes(
+                    &iroha_data_model::transaction::TransactionEntrypoint::External(signed.clone()),
+                )
+                .expect("encode signed transaction entrypoint"),
+            )
         };
         std::thread::spawn(move || {
             let gossip = TransactionGossip {
@@ -975,8 +987,10 @@ mod tests {
             let msg = NetworkMessage::TransactionGossiper(Arc::new(gossip));
 
             let bytes = msg.encode();
-            let decoded: NetworkMessage =
-                Decode::decode(&mut bytes.as_slice()).expect("decode gossip network");
+            let (decoded, used) =
+                <NetworkMessage as ncore::DecodeFromSlice>::decode_from_slice(&bytes)
+                    .expect("decode gossip network");
+            assert_eq!(used, bytes.len());
 
             match decoded {
                 NetworkMessage::TransactionGossiper(gossip) => {

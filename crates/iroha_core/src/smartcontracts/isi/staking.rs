@@ -4771,6 +4771,7 @@ mod tests {
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
+        stx.tx_call_hash = Some(Hash::prehashed([0xD1; Hash::LENGTH]));
 
         let (_sink, validator, reward_asset, asset_def_id) =
             configure_reward_fixture(&mut stx, LaneId::new(0), 1_000);
@@ -4827,6 +4828,7 @@ mod tests {
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
+        stx.tx_call_hash = Some(Hash::prehashed([0xD2; Hash::LENGTH]));
 
         let (_sink, validator, reward_asset, asset_def_id) =
             configure_reward_fixture(&mut stx, LaneId::new(11), 500);
@@ -4881,6 +4883,7 @@ mod tests {
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
+        stx.tx_call_hash = Some(Hash::prehashed([0xD3; Hash::LENGTH]));
 
         let (_sink, validator, reward_asset, _asset_def_id) =
             configure_reward_fixture(&mut stx, LaneId::new(12), 200);

@@ -287,6 +287,10 @@ fn roster_member_has_live_consensus_key(
     overlap_grace_blocks: u64,
     expiry_grace_blocks: u64,
 ) -> bool {
+    if world.consensus_keys().is_empty() && world.consensus_keys_by_pk().is_empty() {
+        return true;
+    }
+
     let pk = peer.public_key();
     let pk_label = pk.to_string();
     let mut found_index_record = false;
@@ -1040,6 +1044,32 @@ mod tests {
             filter_roster_with_live_consensus_keys_at_height_world(&world.view(), peers.clone(), 1);
 
         assert_eq!(filtered, vec![peers[0].clone()]);
+    }
+
+    #[test]
+    fn active_topology_allows_empty_consensus_key_registry_bootstrap() {
+        let keypairs: Vec<KeyPair> = (0..2)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let peers: Vec<PeerId> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+
+        let world = World::new();
+        {
+            let mut block = world.block();
+            let peers_cell = block.peers.get_mut();
+            for peer in &peers {
+                let _ = peers_cell.push(peer.clone());
+            }
+            block.commit();
+        }
+
+        let filtered =
+            filter_roster_with_live_consensus_keys_at_height_world(&world.view(), peers.clone(), 1);
+
+        assert_eq!(filtered, peers);
     }
 
     #[test]

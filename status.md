@@ -2,6 +2,27 @@
 
 Last updated: 2026-05-09
 
+## 2026-05-09 iroha_core library regression sweep
+
+- Repaired the broad `iroha_core` library regression set covering block
+  stateless validation, genesis parameter transaction fixtures, network gossip
+  roundtrips, IVM admission/host policy checks, FastPQ transfer transcript
+  call-hash fixtures, SNS/account-admission transfer flows, domain NFT cleanup,
+  block-sync RBC ingress handling, Sumeragi roster/QC/vote recovery, cached
+  proposal rotation, VRF reveal routing, and proposal timing.
+- Sumeragi vote/QC handling now validates cached and replayed evidence against
+  the roster context used to aggregate it, preserves fresh cached frontier
+  proposals before their repair window expires, and signs NPoS VRF reveal test
+  messages with the peer selected by the effective commit topology.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib external_vrf_reveal_broadcasts_after_acceptance -- --nocapture`
+  - `cargo test -p iroha_core --lib on_block_message_handles_vrf_reveal_before_commit_catchup_finalizes_epoch -- --nocapture`
+  - `cargo test -p iroha_core --lib assemble_proposal_allows_stale_retired_prior_view_local_vote_history -- --nocapture`
+  - `cargo test -p iroha_core --lib pacemaker_does_not_rotate_fresh_cached_frontier_proposal_before_body_materializes -- --nocapture`
+  - `cargo test -p iroha_core --lib cached_recovery_proposal_ -- --nocapture`
+  - `cargo test -p iroha_core --lib` (`5530` passed, `0` failed, `22` ignored)
+
 ## 2026-05-09 FASTPQ GPU Izanami fallback cleanup
 
 - BN254 Poseidon word-batch submission now drains deterministic 128-slice

@@ -366,7 +366,7 @@ pub(super) fn ensure_receiving_account(
 mod tests {
     use std::collections::BTreeMap;
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         account::{ACCOUNT_ADMISSION_POLICY_METADATA_KEY, admission::ImplicitAccountCreationFee},
         parameter::Parameters,
@@ -476,6 +476,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
+        stx.tx_call_hash = Some(Hash::prehashed([0xA1; Hash::LENGTH]));
         let dest = random_account_id();
         Transfer::asset_numeric(alice_asset_id.clone(), 10_u32, dest.clone())
             .execute(&ALICE_ID, &mut stx)
@@ -557,6 +558,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
+        stx.tx_call_hash = Some(Hash::prehashed([0xA2; Hash::LENGTH]));
 
         let dest = random_account_id();
         let entry = TransferAssetBatchEntry::new(

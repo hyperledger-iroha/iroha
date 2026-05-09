@@ -498,6 +498,7 @@ impl Execute for iroha_data_model::isi::sns::UnfreezeSnsName {
 mod tests {
     use std::num::NonZeroU64;
 
+    use iroha_crypto::Hash;
     use iroha_data_model::{
         account::{Account, AccountAddress, rekey::AccountAlias},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
@@ -635,6 +636,7 @@ mod tests {
         {
             let mut block = state.block(next_header(state));
             let mut stx = block.transaction();
+            stx.tx_call_hash = Some(Hash::prehashed([0xC1; Hash::LENGTH]));
             iroha_data_model::isi::sns::RegisterSnsName::new(request)
                 .execute(payer, &mut stx)
                 .expect("register SNS alias");
@@ -755,6 +757,7 @@ mod tests {
         {
             let mut block = state.block(next_header(&state));
             let mut stx = block.transaction();
+            stx.tx_call_hash = Some(Hash::prehashed([0xC2; Hash::LENGTH]));
             AcquireAccountAliasLease::new(
                 alias.clone(),
                 authority.clone(),
@@ -784,6 +787,7 @@ mod tests {
         {
             let mut block = state.block(next_header(&state));
             let mut stx = block.transaction();
+            stx.tx_call_hash = Some(Hash::prehashed([0xC3; Hash::LENGTH]));
             RenewAccountAliasLease::new(alias, authority.clone(), 1)
                 .execute(&authority, &mut stx)
                 .expect("renew lease");
@@ -857,6 +861,7 @@ mod tests {
         {
             let mut block = state.block(next_header(&state));
             let mut stx = block.transaction();
+            stx.tx_call_hash = Some(Hash::prehashed([0xC4; Hash::LENGTH]));
             iroha_data_model::isi::sns::RenewSnsName::new(
                 ACCOUNT_ALIAS_SUFFIX_ID,
                 "renewed@universal",
@@ -915,6 +920,7 @@ mod tests {
 
         let mut block = state.block(next_header(&state));
         let mut stx = block.transaction();
+        stx.tx_call_hash = Some(Hash::prehashed([0xC5; Hash::LENGTH]));
         iroha_data_model::isi::sns::RegisterSnsName::new(request)
             .execute(&payer, &mut stx)
             .expect_err("unfunded payer must not register SNS name");
@@ -975,6 +981,7 @@ mod tests {
         {
             let mut block = state.block(next_header(&state));
             let mut stx = block.transaction();
+            stx.tx_call_hash = Some(Hash::prehashed([0xC6; Hash::LENGTH]));
             AcquireAccountAliasLease::new(alias, authority.clone(), authority.clone(), 1, None)
                 .execute(&authority, &mut stx)
                 .expect("acquire lease with deployment payment asset");
@@ -1049,6 +1056,7 @@ mod tests {
             let mut stx = block.transaction();
             stx.current_dataspace_id = Some(paynet);
             stx.world.current_dataspace_id = Some(paynet);
+            stx.tx_call_hash = Some(Hash::prehashed([0xC7; Hash::LENGTH]));
             AcquireAccountAliasLease::new(alias, authority.clone(), authority.clone(), 1, None)
                 .execute(&authority, &mut stx)
                 .expect("external settlement skips local global asset transfer");
@@ -1106,6 +1114,7 @@ mod tests {
 
         let mut block = state.block(next_header(&state));
         let mut stx = block.transaction();
+        stx.tx_call_hash = Some(Hash::prehashed([0xC8; Hash::LENGTH]));
         let err = AcquireAccountAliasLease::new(
             AccountAlias::domainless("merchant".parse().expect("label"), DataSpaceId::UNIVERSAL),
             authority.clone(),
@@ -1180,6 +1189,7 @@ mod tests {
 
         let mut block = state.block(next_header(&state));
         let mut stx = block.transaction();
+        stx.tx_call_hash = Some(Hash::prehashed([0xC9; Hash::LENGTH]));
         let err = RenewAccountAliasLease::new(alias, authority.clone(), 1)
             .execute(&authority, &mut stx)
             .expect_err("non-owner without permission must fail");

@@ -4023,6 +4023,12 @@ impl Actor {
             .max_by_key(|qc| qc.view)
             .cloned()
         {
+            if let Some(pending) = self.pending.pending_blocks.get_mut(&block_hash)
+                && pending.height == height
+                && pending.view == view
+            {
+                pending.note_commit_qc_observed(qc.epoch);
+            }
             let block_known_for_lock = self.block_known_for_lock(block_hash);
             if self.process_precommit_qc(&qc, block_known_for_lock, false) {
                 debug!(
@@ -4174,8 +4180,16 @@ impl Actor {
                 .cloned()
                 .collect();
             for qc in cached_qcs {
-                if let Err(err) = self.handle_qc(qc) {
-                    warn!(?err, "failed to replay cached QC after block payload");
+                match qc.phase {
+                    crate::sumeragi::consensus::Phase::Prepare => {
+                        self.process_prevote_qc(&qc, self.block_known_locally(block_hash));
+                    }
+                    crate::sumeragi::consensus::Phase::NewView => {
+                        if let Err(err) = self.handle_qc(qc) {
+                            warn!(?err, "failed to replay cached QC after block payload");
+                        }
+                    }
+                    crate::sumeragi::consensus::Phase::Commit => {}
                 }
             }
             let _ = self.try_replay_deferred_qcs();

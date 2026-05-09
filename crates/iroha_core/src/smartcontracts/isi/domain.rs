@@ -1902,11 +1902,20 @@ pub mod isi {
                     .remove_asset_and_metadata_with_total(&asset_id)?;
             }
 
-            let remove_nfts: Vec<NftId> = state_transaction
+            let mut remove_nfts: BTreeSet<NftId> = state_transaction
                 .world
                 .nfts_in_account_iter(&account_id)
                 .map(|nft| nft.id().clone())
                 .collect();
+            remove_nfts.extend(
+                state_transaction
+                    .world
+                    .nfts
+                    .iter()
+                    .filter_map(|(nft_id, nft)| {
+                        (nft.owned_by == account_id).then(|| nft_id.clone())
+                    }),
+            );
             for nft_id in remove_nfts {
                 crate::smartcontracts::isi::nft::isi::remove_nft_associated_permissions(
                     state_transaction,

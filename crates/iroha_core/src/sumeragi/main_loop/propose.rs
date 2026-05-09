@@ -1203,7 +1203,9 @@ impl Actor {
                     && !owner_qc_observed
                     && !owner_pending_commit_qc_observed
                     && !local_vote_consensus_locked
-                    && (!competing_quorum_locked || new_view_qc_supersedes_owner)
+                    && (!competing_quorum_locked
+                        || new_view_qc_supersedes_owner
+                        || recovery_exhausted)
                     && !commit_inflight_live
                 {
                     self.frontier_slot = None;
@@ -2062,22 +2064,22 @@ impl Actor {
 
         let queue_len_after_pop = self.queue.queued_len();
         let mut internal_work = if transactions.is_empty() {
-            let work = self.internal_proposal_work(proposal_height, prev_block.as_deref());
-            if !work.has_work() {
-                if allow_recovery_heartbeat {
-                    let heartbeat = self.build_recovery_heartbeat_transaction(proposal_height)?;
-                    let encoded_len = heartbeat.encoded_len();
-                    transactions.push(heartbeat);
-                    routing_decisions.push(RoutingDecision::default());
-                    tx_sizes.push(encoded_len);
-                    info!(
-                        height = proposal_height,
-                        view,
-                        queue_len = queue_len_after_pop,
-                        "injecting recovery heartbeat transaction for empty leader queue"
-                    );
-                    None
-                } else {
+            if allow_recovery_heartbeat {
+                let heartbeat = self.build_recovery_heartbeat_transaction(proposal_height)?;
+                let encoded_len = heartbeat.encoded_len();
+                transactions.push(heartbeat);
+                routing_decisions.push(RoutingDecision::default());
+                tx_sizes.push(encoded_len);
+                info!(
+                    height = proposal_height,
+                    view,
+                    queue_len = queue_len_after_pop,
+                    "injecting recovery heartbeat transaction for empty leader queue"
+                );
+                None
+            } else {
+                let work = self.internal_proposal_work(proposal_height, prev_block.as_deref());
+                if !work.has_work() {
                     info!(
                         height,
                         view,
@@ -2086,7 +2088,6 @@ impl Actor {
                     );
                     return Ok(false);
                 }
-            } else {
                 Some(work)
             }
         } else {
@@ -3210,17 +3211,20 @@ impl Actor {
         let mut retained_sizes = Vec::with_capacity(tx_sizes.len());
         let mut dropped = 0usize;
 
-        for (((guard, tx), routing), size) in tx_guards
+        let mut guard_iter = tx_guards.into_iter();
+        for ((tx, routing), size) in transactions
             .into_iter()
-            .zip(transactions.into_iter())
             .zip(routing_decisions.into_iter())
             .zip(tx_sizes.into_iter())
         {
+            let guard = guard_iter.next();
             if state.has_committed_transaction(tx.hash()) {
                 dropped = dropped.saturating_add(1);
                 continue;
             }
-            retained_guards.push(guard);
+            if let Some(guard) = guard {
+                retained_guards.push(guard);
+            }
             retained_transactions.push(tx);
             retained_routing.push(routing);
             retained_sizes.push(size);
@@ -4295,7 +4299,10 @@ impl Actor {
                         "cached proposal has no live pending body and no active exact repair; rotating recovery view"
                     );
                 }
-                if cache_age.is_some_and(|age| age < repair_window) {
+                if (cached_hint.is_some() || pending_queue_len == 0)
+                    && !repair_exhausted
+                    && cache_age.is_some_and(|age| age < repair_window)
+                {
                     self.subsystems.propose.pacemaker.next_deadline = now
                         .checked_add(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
                         .unwrap_or(now);
