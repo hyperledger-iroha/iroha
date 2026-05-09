@@ -72395,7 +72395,6 @@ mod tests {
             execution_context_hash: None,
             creation_time_ms: 0,
             view_change_index: 0,
-            execution_context_hash: None,
             confidential_features: None,
         };
         let committed: EventBox = BlockEvent {
@@ -72419,7 +72418,6 @@ mod tests {
                 execution_context_hash: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
-                execution_context_hash: None,
                 confidential_features: None,
             },
             status: BlockStatus::Committed,
@@ -72440,7 +72438,6 @@ mod tests {
             execution_context_hash: None,
             creation_time_ms: 0,
             view_change_index: 0,
-            execution_context_hash: None,
             confidential_features: None,
         };
         let created: EventBox = BlockEvent {
@@ -72464,7 +72461,6 @@ mod tests {
                 execution_context_hash: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
-                execution_context_hash: None,
                 confidential_features: None,
             },
             status: BlockStatus::Created,
