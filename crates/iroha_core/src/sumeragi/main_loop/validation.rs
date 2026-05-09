@@ -46,6 +46,16 @@ enum ValidationDispatch {
     Inline,
 }
 
+impl ValidationDispatch {
+    fn try_worker(self) -> bool {
+        matches!(self, Self::TryWorker)
+    }
+
+    fn inline(self) -> bool {
+        matches!(self, Self::Inline)
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub(super) enum ValidationInflightInlineReason {
     WorkerDisconnected,
@@ -380,7 +390,7 @@ impl Actor {
         self.subsystems.validation.duration_ema
     }
 
-    fn vnext_validation_owns_block(
+    pub(super) fn vnext_validation_owns_block(
         &self,
         hash: HashOf<BlockHeader>,
         height: u64,
@@ -404,22 +414,62 @@ impl Actor {
                 })
     }
 
+    fn vnext_validation_slot_for_block(
+        &self,
+        hash: HashOf<BlockHeader>,
+    ) -> Option<super::vnext::SlotId> {
+        self.subsystems
+            .validation
+            .vnext_inflight
+            .get(&hash)
+            .map(|vnext| vnext.slot)
+            .or_else(|| {
+                let pending = self.pending.pending_blocks.get(&hash)?;
+                self.vnext_reactors
+                    .get(&(pending.height, pending.view))
+                    .and_then(|reactor| reactor.slot(hash))
+                    .map(|slot| slot.slot)
+            })
+    }
+
+    pub(super) fn supersede_validation_for_frontier_inline(
+        &mut self,
+        hash: HashOf<BlockHeader>,
+        reason_label: &'static str,
+    ) -> bool {
+        let slot = self.vnext_validation_slot_for_block(hash);
+        let mut superseded = self.supersede_validation_inflight(hash).is_some();
+        if let Some(slot) = slot {
+            let effects = self.handle_vnext_worker_event(
+                slot,
+                super::vnext::ReactorEvent::ValidationDeferred {
+                    slot,
+                    reason_label: reason_label.to_owned(),
+                },
+            );
+            if !effects.is_empty() {
+                self.apply_vnext_effects(effects);
+            }
+            self.subsystems.validation.vnext_inflight.remove(&hash);
+            superseded = true;
+        }
+        superseded
+    }
+
     pub(super) fn validation_inflight_inline_reason(
         &self,
         hash: HashOf<BlockHeader>,
         height: u64,
     ) -> Option<ValidationInflightInlineReason> {
         let inflight = self.subsystems.validation.inflight.get(&hash)?;
-        if self
+        let vnext_owned = self
             .subsystems
             .validation
             .vnext_inflight
-            .contains_key(&hash)
-        {
-            return None;
-        }
-        if self.subsystems.validation.result_rx.is_none()
-            || self.subsystems.validation.work_txs.is_empty()
+            .contains_key(&hash);
+        if !vnext_owned
+            && (self.subsystems.validation.result_rx.is_none()
+                || self.subsystems.validation.work_txs.is_empty())
         {
             return Some(ValidationInflightInlineReason::WorkerDisconnected);
         }
@@ -470,14 +520,15 @@ impl Actor {
         commit_topology: &[PeerId],
         dispatch: ValidationDispatch,
     ) -> ValidationGateOutcome {
-        if self
-            .pending
-            .pending_blocks
-            .get(&hash)
-            .is_some_and(|pending| {
-                pending.validation_status == ValidationStatus::Pending
-                    && self.vnext_validation_owns_block(hash, pending.height, pending.view)
-            })
+        if dispatch.try_worker()
+            && self
+                .pending
+                .pending_blocks
+                .get(&hash)
+                .is_some_and(|pending| {
+                    pending.validation_status == ValidationStatus::Pending
+                        && self.vnext_validation_owns_block(hash, pending.height, pending.view)
+                })
         {
             debug!(
                 block = %hash,
@@ -485,9 +536,12 @@ impl Actor {
             );
             return ValidationGateOutcome::Deferred;
         }
-        if matches!(dispatch, ValidationDispatch::Inline) {
-            // Inline validation supersedes any stale worker intent for this block.
-            let _ = self.supersede_validation_inflight(hash);
+
+        if dispatch.inline() {
+            // Inline frontier validation supersedes stale worker/vNext intent for this block;
+            // late worker results are filtered by inflight id.
+            let _ =
+                self.supersede_validation_for_frontier_inline(hash, "frontier_inline_validation");
         }
 
         let pending = match self.pending.pending_blocks.remove(&hash) {
@@ -499,18 +553,6 @@ impl Actor {
             Ok(pending) => pending,
             Err(outcome) => return outcome,
         };
-        if self.vnext_validation_owns_block(hash, pending.height, pending.view) {
-            debug!(
-                height = pending.height,
-                view = pending.view,
-                block = %hash,
-                "deferring legacy validation while vNext owns validation"
-            );
-            pending.validation_status = ValidationStatus::Pending;
-            self.pending.pending_blocks.insert(hash, pending);
-            return ValidationGateOutcome::Deferred;
-        }
-
         let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         if pending.height == local_height.saturating_add(1) {
             let expected_parent = self.state.view().latest_block_hash();
@@ -583,7 +625,8 @@ impl Actor {
                 .pending_block_commit_votes_count(hash, pending.height, pending.view)
                 .saturating_add(1)
                 >= topology.min_votes_for_commit().max(1);
-        let inline_tx_count = matches!(dispatch, ValidationDispatch::TryWorker)
+        let inline_tx_count = dispatch
+            .try_worker()
             .then(|| {
                 self.fast_finality_inline_validation_tx_count(
                     hash,
@@ -593,31 +636,26 @@ impl Actor {
                 )
             })
             .flatten();
-        let dispatch = if matches!(dispatch, ValidationDispatch::TryWorker)
-            && (matches!(validation_priority_reason, Some("commit_qc" | "cached_qc"))
-                || near_quorum_commit_votes
-                || inline_tx_count.is_some())
-        {
-            let reason = if near_quorum_commit_votes {
+        let fast_finality_validation_reason =
+            if matches!(validation_priority_reason, Some("commit_qc" | "cached_qc")) {
+                validation_priority_reason
+            } else if near_quorum_commit_votes {
                 Some("commit_votes_near_quorum")
             } else if inline_tx_count.is_some() {
                 Some("small_fast_finality_block")
             } else {
-                validation_priority_reason
+                None
             };
+        if dispatch.try_worker() && fast_finality_validation_reason.is_some() {
             debug!(
                 height = pending.height,
                 view = pending.view,
                 block = %hash,
-                reason,
+                reason = fast_finality_validation_reason,
                 tx_count = inline_tx_count,
-                "forcing inline validation for pending block with fast-finality evidence"
+                "routing fast-finality validation evidence through vNext worker path"
             );
-            ValidationDispatch::Inline
-        } else {
-            dispatch
-        };
-
+        }
         let superseded_by_newer_view = self.pending.pending_blocks.values().any(|other| {
             other.height == pending.height
                 && other.view > pending.view
@@ -667,21 +705,22 @@ impl Actor {
             return ValidationGateOutcome::Deferred;
         }
 
-        let local_only_commit_topology =
-            commit_topology.len() == 1 && commit_topology[0] == *self.common_config.peer.id();
-        if local_only_commit_topology {
-            debug!(
-                height = pending.height,
-                view = pending.view,
-                block = %hash,
-                "running pre-vote validation inline for local-only commit topology"
-            );
-        }
+        if dispatch.try_worker() {
+            if self.subsystems.validation.work_txs.is_empty() {
+                let pending_height = pending.height;
+                let pending_view = pending.view;
+                let payload_hash = pending.payload_hash;
+                pending.validation_status = ValidationStatus::Pending;
+                self.pending.pending_blocks.insert(hash, pending);
+                self.drive_vnext_validation_for_pending(
+                    hash,
+                    pending_height,
+                    pending_view,
+                    payload_hash,
+                );
+                return ValidationGateOutcome::Deferred;
+            }
 
-        if matches!(dispatch, ValidationDispatch::TryWorker)
-            && !local_only_commit_topology
-            && !self.subsystems.validation.work_txs.is_empty()
-        {
             if self.subsystems.validation.inflight.contains_key(&hash) {
                 debug!(
                     height = pending.height,
@@ -708,11 +747,8 @@ impl Actor {
             return ValidationGateOutcome::Deferred;
         }
 
-        // This block is now taking the inline path (either explicitly requested
-        // or because workers were unavailable/full), so any prior async marker
-        // is stale and must not keep the block deferred.
-        let _ = self.supersede_validation_inflight(hash);
-
+        // Inline fallback is reserved for active-frontier recovery when worker
+        // or vNext validation is disconnected, stale, or stalled.
         let mut voting_block = self.voting_block.take();
         let validation_start = Instant::now();
         let result = validate_block_for_voting(
@@ -867,7 +903,7 @@ impl Actor {
                                     debug!(
                                         block = %hash,
                                         result_id = id,
-                                        "validation result superseded by inline fallback; dropping stale worker result"
+                                        "validation result superseded by frontier inline validation; dropping stale worker result"
                                     );
                                 } else {
                                     warn!(

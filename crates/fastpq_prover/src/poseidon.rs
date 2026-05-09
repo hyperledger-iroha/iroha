@@ -246,7 +246,7 @@ pub fn hash_field_elements(elements: &[u64]) -> u64 {
 
 /// Hash the provided field elements with the canonical scalar Poseidon backend.
 #[must_use]
-pub(crate) fn hash_field_elements_cpu(elements: &[u64]) -> u64 {
+pub fn hash_field_elements_cpu(elements: &[u64]) -> u64 {
     cpu::hash_field_elements(elements)
 }
 

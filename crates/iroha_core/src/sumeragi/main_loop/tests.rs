@@ -444,6 +444,7 @@ fn seed_commit_votes_for_block_with_roster(
     let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology =
         super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view_idx);
 
     for peer in signature_topology
         .as_ref()
@@ -468,8 +469,8 @@ fn seed_commit_votes_for_block_with_roster(
             height,
             view: view_idx,
             epoch,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
+            chain_order_hash,
+            rechain_seq,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -497,6 +498,7 @@ fn seed_verified_commit_votes_for_block_with_roster(
     let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology =
         super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view_idx);
 
     let mut seeded = 0usize;
     for peer in signature_topology
@@ -522,8 +524,8 @@ fn seed_verified_commit_votes_for_block_with_roster(
             height,
             view: view_idx,
             epoch,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
+            chain_order_hash,
+            rechain_seq,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -600,6 +602,7 @@ fn seed_remote_commit_votes_for_block(
     let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology =
         super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view_idx);
     let local_signer = actor
         .local_validator_index_for_topology(&signature_topology)
         .expect("local signer in topology");
@@ -622,8 +625,8 @@ fn seed_remote_commit_votes_for_block(
             height,
             view: view_idx,
             epoch,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
+            chain_order_hash,
+            rechain_seq,
             highest_qc: None,
             signer,
             bls_sig: Vec::new(),
@@ -3377,6 +3380,7 @@ async fn vnext_view_change_block_sync_sidecar_advances_live_view() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
     let height = {
@@ -3994,22 +3998,6 @@ async fn vnext_dispatch_validation_queues_worker_and_accepts_result() {
             ..
         } if running_id == id && running_generation == generation
     ));
-    let commit_topology = queued_work.commit_topology.clone();
-    let inline_outcome =
-        actor.validate_pending_block_for_voting_inline(block_hash, &commit_topology);
-    assert!(
-        matches!(inline_outcome, ValidationGateOutcome::Deferred),
-        "legacy inline validation should not supersede vNext-owned worker validation"
-    );
-    assert!(
-        actor
-            .subsystems
-            .validation
-            .vnext_inflight
-            .contains_key(&block_hash),
-        "vNext worker ownership should survive a legacy inline fallback attempt"
-    );
-
     result_tx
         .send(super::validation::ValidationResult {
             id,
@@ -7538,6 +7526,7 @@ async fn resilience_fast_paths_same_height_commit_votes_for_medium_rosters() {
     );
     let topology = super::network_topology::Topology::new(roster);
     let epoch = actor.epoch_for_height(height);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view_idx);
     let mut vote = crate::sumeragi::consensus::Vote {
         phase: Phase::Commit,
         block_hash,
@@ -7546,8 +7535,8 @@ async fn resilience_fast_paths_same_height_commit_votes_for_medium_rosters() {
         height,
         view: view_idx,
         epoch,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
+        chain_order_hash,
+        rechain_seq,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -7983,6 +7972,7 @@ async fn block_sync_update_known_block_vote_only_uses_fast_path() {
     assert!(!roster.is_empty(), "test requires commit roster");
     let topology = super::network_topology::Topology::new(roster);
     let epoch = actor.epoch_for_height(height);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view_idx);
     let mut vote = crate::sumeragi::consensus::Vote {
         phase: Phase::Commit,
         block_hash,
@@ -7991,8 +7981,8 @@ async fn block_sync_update_known_block_vote_only_uses_fast_path() {
         height,
         view: view_idx,
         epoch,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
+        chain_order_hash,
+        rechain_seq,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -8053,6 +8043,7 @@ async fn block_sync_update_known_block_vote_only_fast_path_bypasses_deferral_gat
     assert!(!roster.is_empty(), "test requires commit roster");
     let topology = super::network_topology::Topology::new(roster);
     let epoch = actor.epoch_for_height(height);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view_idx);
     let mut vote = crate::sumeragi::consensus::Vote {
         phase: Phase::Commit,
         block_hash,
@@ -8061,8 +8052,8 @@ async fn block_sync_update_known_block_vote_only_fast_path_bypasses_deferral_gat
         height,
         view: view_idx,
         epoch,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
+        chain_order_hash,
+        rechain_seq,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -13101,6 +13092,7 @@ async fn block_sync_update_defers_while_commit_inflight_and_replays() {
     assert!(!roster.is_empty(), "test requires commit roster");
     let topology = super::network_topology::Topology::new(roster.clone());
     let epoch = actor.epoch_for_height(height);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view_idx);
     let mut vote = crate::sumeragi::consensus::Vote {
         phase: Phase::Commit,
         block_hash,
@@ -13109,8 +13101,8 @@ async fn block_sync_update_defers_while_commit_inflight_and_replays() {
         height,
         view: view_idx,
         epoch,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
+        chain_order_hash,
+        rechain_seq,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -14053,17 +14045,22 @@ async fn block_sync_update_rejects_conflicting_precommit_qc_against_lock() {
     );
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let chain = actor.common_config.chain.clone();
-    let qc = qc_with_bitmap(
+    let mut qc = qc_with_bitmap(
         &chain,
         conflicting_block.hash(),
         locked_height,
         1,
         0,
         vec![0b0000_1111],
-        Phase::Commit,
+        Phase::Prepare,
         &topology,
         &harness.key_pairs,
     );
+    let (chain_order, _) = actor
+        .active_vnext_chain_order_and_quorum_for(locked_height, 1)
+        .expect("active vNext chain order");
+    resign_qc_with_chain_order_for_actor(&mut qc, actor, &harness.key_pairs, &chain_order);
+    let qc_key = Actor::qc_tally_key(&qc);
     update.commit_qc = Some(qc);
 
     actor
@@ -14071,16 +14068,8 @@ async fn block_sync_update_rejects_conflicting_precommit_qc_against_lock() {
         .expect("block sync update");
 
     assert!(
-        !actor.qc_cache.contains_key(&(
-            Phase::Commit,
-            conflicting_block.hash(),
-            locked_height,
-            1,
-            0,
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0
-        )),
-        "conflicting precommit QC should not be cached from block sync"
+        !actor.qc_cache.contains_key(&qc_key),
+        "conflicting prepare QC should not be cached from block sync"
     );
     let snapshot = status::snapshot();
     assert_eq!(
@@ -14219,17 +14208,22 @@ async fn block_sync_update_requests_locked_payload_before_prefilter_conflict_whe
     );
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let chain = actor.common_config.chain.clone();
-    let qc = qc_with_bitmap(
+    let mut qc = qc_with_bitmap(
         &chain,
         conflicting_block.hash(),
         locked_height,
         1,
         0,
         vec![0b0000_1111],
-        Phase::Commit,
+        Phase::Prepare,
         &topology,
         &harness.key_pairs,
     );
+    let (chain_order, _) = actor
+        .active_vnext_chain_order_and_quorum_for(locked_height, 1)
+        .expect("active vNext chain order");
+    resign_qc_with_chain_order_for_actor(&mut qc, actor, &harness.key_pairs, &chain_order);
+    let qc_key = Actor::qc_tally_key(&qc);
     update.commit_qc = Some(qc);
 
     actor
@@ -14244,15 +14238,7 @@ async fn block_sync_update_requests_locked_payload_before_prefilter_conflict_whe
         "missing locked payload should be requested before dropping conflicting QC"
     );
     assert!(
-        !actor.qc_cache.contains_key(&(
-            Phase::Commit,
-            conflicting_block.hash(),
-            locked_height,
-            1,
-            0,
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0
-        )),
+        !actor.qc_cache.contains_key(&qc_key),
         "conflicting QC should not be cached while lock payload is missing"
     );
     let snapshot = status::snapshot();
@@ -15803,7 +15789,7 @@ async fn block_sync_update_known_block_applies_commit_qc_to_pending() {
     }
     let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
     let epoch = actor.epoch_for_height(block_height);
-    let qc = qc_with_bitmap(
+    let mut qc = qc_with_bitmap(
         &actor.common_config.chain,
         block_hash,
         block_height,
@@ -15814,6 +15800,10 @@ async fn block_sync_update_known_block_applies_commit_qc_to_pending() {
         &topology,
         &harness.key_pairs,
     );
+    let (chain_order, _) = actor
+        .active_vnext_chain_order_and_quorum_for(block_height, view)
+        .expect("active vNext chain order");
+    resign_qc_with_chain_order_for_actor(&mut qc, actor, &harness.key_pairs, &chain_order);
     let roster_cache =
         roster_cache_for_state(actor.state.as_ref(), actor.config.npos.epoch_length_blocks);
     let mut update = super::block_sync_update_with_roster(
@@ -18177,6 +18167,7 @@ async fn block_body_response_routes_block_sync_update_through_commit_sidecar_pat
             .expect("block payload dedup cache poisoned");
         guard.insert(dedup_key, Instant::now());
     }
+    actor.pending.commit_pipeline_wakeup = false;
 
     let sender = actor
         .effective_commit_topology()
@@ -18195,6 +18186,10 @@ async fn block_body_response_routes_block_sync_update_through_commit_sidecar_pat
     assert!(
         actor.frontier_block_materialized_locally(block_hash),
         "exact BlockBodyResponse should materialize the frontier payload locally"
+    );
+    assert!(
+        actor.commit_pipeline_wakeup_pending(),
+        "exact BlockBodyResponse should wake the commit pipeline after materializing the tracked frontier payload"
     );
     let slot = actor
         .frontier_slot
@@ -24597,6 +24592,7 @@ async fn event_driven_precommit_joins_higher_view_when_candidate_votes_outweigh_
 async fn commit_pipeline_uses_commit_qc_roster_for_validation() {
     use crate::sumeragi::status;
 
+    let _history_guard = status::commit_history_test_guard();
     status::reset_commit_certs_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -24618,22 +24614,17 @@ async fn commit_pipeline_uses_commit_qc_roster_for_validation() {
         "history roster should differ from active roster"
     );
 
-    let parent_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; Hash::LENGTH]));
-    {
-        let mut hashes = actor.state.block_hashes.block();
-        hashes.push(parent_hash);
-        hashes.commit_for_tests();
-    }
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
 
     let height = 2u64;
     let view = 0u64;
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology = super::topology_for_view(
         &super::network_topology::Topology::new(history_roster.clone()),
         height,
         view,
-        PERMISSIONED_TAG,
-        None,
+        mode_tag,
+        prf_seed,
     );
     let signer_peer = signature_topology
         .as_ref()
@@ -24644,25 +24635,18 @@ async fn commit_pipeline_uses_commit_qc_roster_for_validation() {
         .iter()
         .find(|kp| kp.public_key() == signer_peer.public_key())
         .expect("signer keypair exists in harness");
-    let header = BlockHeader {
-        height: NonZeroU64::new(height).expect("block height must be non-zero"),
-        prev_block_hash: Some(parent_hash),
-        merkle_root: None,
-        result_merkle_root: None,
-        da_proof_policies_hash: None,
-        da_commitments_hash: None,
-        da_pin_intents_hash: None,
-        prev_roster_evidence_hash: None,
-        npos_effects_hash: None,
-        execution_context_hash: None,
-        sccp_commitment_root: None,
-        creation_time_ms: 0,
-        view_change_index: view,
-        confidential_features: None,
-    };
-    let signature = SignatureOf::from_hash(signer_kp.private_key(), header.hash());
-    let block_signature = BlockSignature::new(0, signature);
-    let block = SignedBlock::presigned(block_signature, header, Vec::new());
+    let signer_idx = signature_topology
+        .position(signer_kp.public_key())
+        .expect("signer index in topology");
+    let block = heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.common_config.chain,
+        height,
+        view,
+        Some(parent_hash),
+        signer_kp,
+        u64::try_from(signer_idx).expect("signer index fits u64"),
+    );
     let block_hash = block.hash();
 
     let mut signers = BTreeSet::new();
@@ -24671,9 +24655,10 @@ async fn commit_pipeline_uses_commit_qc_roster_for_validation() {
     }
     let signers_bitmap = super::build_signers_bitmap(&signers, history_roster.len());
     let topology = super::network_topology::Topology::new(history_roster.clone());
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view);
     let bls_aggregate_signature = aggregate_signature_for_bitmap(
         &actor.common_config.chain,
-        PERMISSIONED_TAG,
+        mode_tag,
         Phase::Commit,
         block_hash,
         height,
@@ -24691,9 +24676,9 @@ async fn commit_pipeline_uses_commit_qc_roster_for_validation() {
         height,
         view,
         epoch: 0,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
+        chain_order_hash,
+        rechain_seq,
+        mode_tag: mode_tag.to_string(),
         highest_qc: None,
         validator_set_hash: HashOf::new(&history_roster),
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
@@ -24713,18 +24698,19 @@ async fn commit_pipeline_uses_commit_qc_roster_for_validation() {
     actor.pending.pending_blocks.insert(block_hash, pending);
     actor.note_proposal_seen(height, view, payload_hash);
     actor.pending.last_commit_pipeline_run = Instant::now() - Duration::from_secs(10);
+    actor.subsystems.commit.work_tx = None;
+    actor.subsystems.commit.result_rx = None;
 
     actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
 
-    let has_vote = actor.vote_log.values().any(|vote| {
-        vote.phase == Phase::Commit
-            && vote.block_hash == block_hash
-            && vote.height == height
-            && vote.view == view
-    });
     assert!(
-        has_vote,
-        "commit pipeline should validate and emit precommit vote using commit certificate roster"
+        actor.kura.get_block_height_by_hash(block_hash).is_some(),
+        "commit pipeline should finalize a pending block with a cached commit certificate roster"
+    );
+    assert_eq!(
+        actor.state.latest_block_hash_fast(),
+        Some(block_hash),
+        "state tip should advance to the certified pending block"
     );
 
     status::reset_commit_certs_for_tests();
@@ -24732,7 +24718,7 @@ async fn commit_pipeline_uses_commit_qc_roster_for_validation() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn commit_pipeline_validates_inline_for_local_only_commit_topology() {
+async fn commit_pipeline_routes_local_only_commit_topology_through_vnext_worker() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
@@ -24783,16 +24769,34 @@ async fn commit_pipeline_validates_inline_for_local_only_commit_topology() {
         .expect("pending block retained");
     assert_eq!(
         pending.validation_status,
-        ValidationStatus::Valid,
-        "single-validator commit pipeline should validate inline"
+        ValidationStatus::Pending,
+        "single-validator commit pipeline should defer while vNext worker validation owns the block"
     );
     assert!(
-        pending.local_commit_vote_emitted(),
-        "single-validator commit pipeline should emit a local precommit vote"
+        !pending.local_commit_vote_emitted(),
+        "single-validator commit pipeline should wait for vNext validation before voting"
+    );
+    let queued_work = work_rx
+        .try_recv()
+        .expect("local-only topology should still dispatch vNext worker validation");
+    assert_eq!(queued_work.hash, block_hash);
+    assert_eq!(queued_work.height, height);
+    assert_eq!(queued_work.view, view);
+    assert!(
+        actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&block_hash),
+        "vNext validation should leave worker work inflight"
     );
     assert!(
-        work_rx.try_recv().is_err(),
-        "local-only commit topology should not dispatch background validation work"
+        actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "local-only validation should be tracked as vNext-owned work"
     );
     let has_vote = actor.vote_log.values().any(|vote| {
         vote.phase == Phase::Commit
@@ -24801,8 +24805,8 @@ async fn commit_pipeline_validates_inline_for_local_only_commit_topology() {
             && vote.view == view
     });
     assert!(
-        has_vote,
-        "single-validator commit pipeline should record a precommit vote"
+        !has_vote,
+        "single-validator commit pipeline should not record a precommit vote before vNext validation finishes"
     );
 
     harness.shutdown.send();
@@ -24841,33 +24845,34 @@ fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
                 actor.pending.pending_blocks.insert(block_hash, pending);
 
                 let roster = vec![actor.common_config.peer.id().clone()];
-                let topology = super::network_topology::Topology::new(roster.clone());
                 let signers_bitmap = vec![0b0000_0001];
                 let chain = actor.common_config.chain.clone();
-                let keypairs = vec![actor.common_config.key_pair.clone()];
-                let bls_aggregate_signature = aggregate_signature_for_bitmap(
-                    &chain,
-                    PERMISSIONED_TAG,
-                    Phase::Commit,
+                let (chain_order_hash, rechain_seq) =
+                    actor.vnext_chain_order_binding_for(height, view);
+                let mut vote = crate::sumeragi::consensus::Vote {
+                    phase: Phase::Commit,
                     block_hash,
+                    parent_state_root: zero_state_root(),
+                    post_state_root: zero_state_root(),
                     height,
                     view,
-                    0,
-                    &signers_bitmap,
-                    &topology,
-                    &keypairs,
+                    epoch: 0,
+                    chain_order_hash,
+                    rechain_seq,
+                    highest_qc: None,
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                };
+                let preimage = super::vote_preimage(&chain, PERMISSIONED_TAG, &vote);
+                let signature =
+                    Signature::new(actor.common_config.key_pair.private_key(), &preimage);
+                vote.bls_sig = signature.payload().to_vec();
+                assert!(
+                    !vote.bls_sig.is_empty(),
+                    "test vote should include a BLS signature"
                 );
-                let checkpoint_signature = aggregate_vote_signature_for_bitmap(
-                    &chain,
-                    PERMISSIONED_TAG,
-                    block_hash,
-                    height,
-                    view,
-                    0,
-                    &signers_bitmap,
-                    &topology,
-                    &keypairs,
-                );
+                let bls_aggregate_signature = vote.bls_sig.clone();
+                let checkpoint_signature = vote.bls_sig.clone();
                 let commit_qc = Qc {
                     phase: Phase::Commit,
                     subject_block_hash: block_hash,
@@ -24876,8 +24881,8 @@ fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
                     height,
                     view,
                     epoch: 0,
-                    chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-                    rechain_seq: 0,
+                    chain_order_hash,
+                    rechain_seq,
                     mode_tag: PERMISSIONED_TAG.to_string(),
                     highest_qc: None,
                     validator_set_hash: HashOf::new(&roster),
@@ -24911,32 +24916,7 @@ fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
                     block.commit();
                 }
 
-                let mut vote = crate::sumeragi::consensus::Vote {
-                    phase: Phase::Commit,
-                    block_hash,
-                    parent_state_root: zero_state_root(),
-                    post_state_root: zero_state_root(),
-                    height,
-                    view,
-                    epoch: 0,
-                    chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-                    rechain_seq: 0,
-                    highest_qc: None,
-                    signer: 0,
-                    bls_sig: Vec::new(),
-                };
-                let preimage = super::vote_preimage(&chain, PERMISSIONED_TAG, &vote);
-                let signature =
-                    Signature::new(actor.common_config.key_pair.private_key(), &preimage);
-                vote.bls_sig = signature.payload().to_vec();
-                assert!(
-                    !vote.bls_sig.is_empty(),
-                    "test vote should include a BLS signature"
-                );
-                actor.vote_log.insert(
-                    default_vote_log_key(Phase::Commit, height, view, 0, 0),
-                    vote,
-                );
+                actor.vote_log.insert(vote_log_key_for_vote(&vote), vote);
 
                 assert!(
                     actor
@@ -25037,8 +25017,8 @@ fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
                     height,
                     view,
                     epoch: 0,
-                    chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-                    rechain_seq: 0,
+                    chain_order_hash,
+                    rechain_seq,
                     mode_tag: PERMISSIONED_TAG.to_string(),
                     highest_qc: None,
                     validator_set_hash: HashOf::new(&validator_set),
@@ -25105,8 +25085,8 @@ fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
                         height,
                         view,
                         0,
-                        crate::sumeragi::consensus::default_chain_order_hash(),
-                        0
+                        chain_order_hash,
+                        rechain_seq
                     )),
                     "QC rebuild should run even when the active commit roster is empty"
                 );
@@ -26816,6 +26796,124 @@ async fn commit_pipeline_recovery_includes_certified_aborted_pending_block() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_keeps_certified_recovery_candidate_eligible_with_active_same_height_branch()
+ {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let certified_view = 0_u64;
+    let active_view = 2_u64;
+
+    let certified_block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        certified_view,
+        Some(genesis_hash),
+    );
+    let certified_hash = insert_validated_pending(actor, certified_block);
+    let active_block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        active_view,
+        Some(genesis_hash),
+    );
+    let active_hash = insert_validated_pending(actor, active_block);
+    let epoch = actor.epoch_for_height(height);
+
+    {
+        let pending = actor
+            .pending
+            .pending_blocks
+            .get_mut(&certified_hash)
+            .expect("certified pending block inserted");
+        pending.retire_same_height();
+        pending.note_commit_qc_observed(epoch);
+        pending.commit_qc_epoch = Some(epoch);
+        pending.validation_status = ValidationStatus::Valid;
+        pending.parent_state_root = Some(zero_state_root());
+        pending.post_state_root = Some(zero_state_root());
+    }
+    {
+        let pending = actor
+            .pending
+            .pending_blocks
+            .get_mut(&active_hash)
+            .expect("active pending block inserted");
+        pending.note_local_commit_vote_emitted();
+        pending.validation_status = ValidationStatus::Valid;
+        pending.parent_state_root = Some(zero_state_root());
+        pending.post_state_root = Some(zero_state_root());
+    }
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    actor.qc_cache.insert(
+        (
+            Phase::Commit,
+            certified_hash,
+            height,
+            certified_view,
+            epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
+        qc_with_bitmap(
+            &actor.common_config.chain,
+            certified_hash,
+            height,
+            certified_view,
+            epoch,
+            vec![0b0000_1111],
+            Phase::Commit,
+            &topology,
+            &harness.key_pairs,
+        ),
+    );
+
+    let tip_height = actor.state.committed_height();
+    let tip_hash = actor.state.latest_block_hash_fast();
+    assert_eq!(
+        actor.active_pending_blocks_len_for_tip(tip_height, tip_hash),
+        1,
+        "later same-height branch should stay active"
+    );
+    assert_eq!(
+        actor.commit_candidate_blocks_len(false),
+        1,
+        "normal hot path should only count the active branch"
+    );
+    assert_eq!(
+        actor.commit_candidate_blocks_len(true),
+        2,
+        "recovery path must keep the certified branch eligible even while another branch is active"
+    );
+
+    let timings =
+        actor.process_commit_candidates_with_trigger_inner(CommitPipelineTrigger::Tick, None, true);
+
+    assert!(
+        timings.blocks_considered >= 2
+            || !actor.pending.pending_blocks.contains_key(&certified_hash),
+        "commit pipeline should inspect or finalize the certified recovery candidate"
+    );
+    assert_eq!(
+        u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX),
+        height,
+        "the certified same-height branch should finalize"
+    );
+    assert_eq!(
+        actor.state.latest_block_hash_fast(),
+        Some(certified_hash),
+        "the commit-QC-backed branch should become canonical"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn commit_pipeline_recovery_includes_vote_backed_retired_same_height_pending_block() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -27562,6 +27660,82 @@ async fn commit_inflight_timeout_reports_and_keeps_inflight_result_attachable() 
     assert_eq!(snapshot.commit_failure_total, 0);
 
     super::status::reset_view_change_cause_counters_for_tests();
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stalled_pending_timeout_defers_view_change_while_commit_inflight_owns_frontier() {
+    use std::borrow::Cow;
+
+    let mut cfg = test_sumeragi_config();
+    cfg.consensus_mode = ConsensusMode::Permissioned;
+    cfg.da.enabled = true;
+    cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let committed_height = view.height() as u64;
+    let height = committed_height.saturating_add(1);
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let view_idx = 0_u64;
+    let block = sample_block(height, view_idx, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let now = Instant::now();
+    let base_timeout = actor.commit_quorum_timeout().max(Duration::from_millis(1));
+    let backlog_timeout = actor.backlog_extended_view_change_timeout(base_timeout, true);
+    let frontier_timeout =
+        super::saturating_mul_duration(actor.recovery_deferred_qc_ttl(), 2).max(backlog_timeout);
+    let stalled_at = now
+        .checked_sub(frontier_timeout.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+
+    let mut inflight = commit_inflight_for_block(actor, block, height, view_idx);
+    inflight.pending.validation_status = ValidationStatus::Valid;
+    inflight
+        .pending
+        .note_commit_qc_observed(actor.epoch_for_height(height));
+    inflight.pending.touch_progress(stalled_at);
+    inflight.enqueue_time = stalled_at;
+    actor.subsystems.commit.inflight = Some(inflight);
+    actor.note_proposal_seen(height, view_idx, payload_hash);
+    actor
+        .phase_tracker
+        .on_view_change(height, view_idx, stalled_at);
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push queued transaction");
+
+    assert!(
+        !actor.maybe_force_view_change_for_stalled_pending(now),
+        "a stalled frontier commit worker must remain attachable instead of triggering view churn"
+    );
+    assert!(
+        actor
+            .subsystems
+            .commit
+            .inflight
+            .as_ref()
+            .is_some_and(|inflight| inflight.block_hash == block_hash),
+        "the active commit worker should keep owning the frontier"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(view_idx),
+        "view should not advance while a matching commit worker owns the frontier"
+    );
+    assert!(
+        actor.subsystems.propose.forced_view_after_timeout.is_none(),
+        "forced-view marker should stay clear while waiting for the commit result"
+    );
 
     harness.shutdown.send();
 }
@@ -31408,9 +31582,9 @@ async fn known_block_commit_qc_recovery_requests_pending_block_fetch() {
 }
 
 #[test]
-fn known_block_commit_qc_recovery_keeps_cert_request_when_body_fallback_is_armed() {
+fn known_block_commit_qc_recovery_request_plan_prefers_cert_only_for_local_payload() {
     assert_eq!(
-        super::commit::known_block_commit_qc_recovery_request_plan(false, false),
+        super::commit::known_block_commit_qc_recovery_request_plan(false),
         super::commit::KnownBlockCommitQcRecoveryRequestPlan {
             commit_qc_only: false,
             body: true,
@@ -31418,20 +31592,12 @@ fn known_block_commit_qc_recovery_keeps_cert_request_when_body_fallback_is_armed
         "unknown local payloads still need a body fetch"
     );
     assert_eq!(
-        super::commit::known_block_commit_qc_recovery_request_plan(true, false),
+        super::commit::known_block_commit_qc_recovery_request_plan(true),
         super::commit::KnownBlockCommitQcRecoveryRequestPlan {
             commit_qc_only: true,
             body: false,
         },
         "known local payloads should first request only the missing commit QC"
-    );
-    assert_eq!(
-        super::commit::known_block_commit_qc_recovery_request_plan(true, true),
-        super::commit::KnownBlockCommitQcRecoveryRequestPlan {
-            commit_qc_only: true,
-            body: true,
-        },
-        "body fallback must not suppress the certificate-only repair path"
     );
 }
 
@@ -88123,6 +88289,204 @@ async fn idle_backlog_signals_do_not_promote_tx_queue_activity_to_consensus_back
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn maybe_force_view_change_for_stalled_pending_defers_base_frontier_pending_under_tx_backlog()
+{
+    use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let committed_height = view.height() as u64;
+    let height = committed_height.saturating_add(1);
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let view_idx = 0_u64;
+    let block = sample_block(height, view_idx, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let base_timeout = actor.commit_quorum_timeout().max(Duration::from_millis(1));
+
+    let now = Instant::now();
+    let stalled_age = base_timeout.saturating_add(Duration::from_millis(1));
+    let stalled_at = now.checked_sub(stalled_age).unwrap_or(now);
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.touch_progress(stalled_at);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.note_proposal_seen(height, view_idx, payload_hash);
+    actor
+        .phase_tracker
+        .on_view_change(height, view_idx, stalled_at);
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let backlog_signals =
+        actor.idle_backlog_signals_for_height(height, super::status::worker_queue_depth_snapshot());
+    assert!(
+        backlog_signals.queue_active_backlog,
+        "test setup should expose active transaction backlog"
+    );
+    assert!(
+        !backlog_signals.existing_worker_backlog
+            && !backlog_signals.worker_recovery_backlog
+            && !backlog_signals.residual_round_backlog
+            && !backlog_signals.unresolved_rbc_backlog,
+        "tx backlog alone should not masquerade as consensus/RBC recovery backlog"
+    );
+    let decision = actor.stalled_pending_timeout_decision(
+        block_hash,
+        actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .expect("pending retained"),
+        backlog_signals,
+        now,
+    );
+    assert_eq!(
+        decision.class,
+        super::StalledPendingTimeoutClass::BaseQuorumTimeout,
+        "plain frontier pending under tx backlog should keep base classification"
+    );
+    assert_eq!(
+        decision.timeout, base_timeout,
+        "tx backlog damping is applied by the frontier-pending guard, not by reclassifying the block"
+    );
+
+    let frontier_pending_timeout =
+        actor.stalled_pending_frontier_pending_timeout(base_timeout, backlog_signals);
+    assert!(
+        frontier_pending_timeout > base_timeout,
+        "test requires tx backlog to widen the active frontier pending timeout"
+    );
+    assert!(
+        !actor.maybe_force_view_change_for_stalled_pending(now),
+        "active tx backlog should not rotate a body-present frontier block at the base timeout"
+    );
+    assert!(
+        actor.subsystems.propose.forced_view_after_timeout.is_none(),
+        "forced-view marker should stay clear inside the active tx backlog window"
+    );
+
+    let later = now
+        .checked_add(
+            frontier_pending_timeout
+                .saturating_sub(base_timeout)
+                .saturating_add(Duration::from_millis(2)),
+        )
+        .unwrap_or(now);
+    assert!(
+        !actor.maybe_force_view_change_for_stalled_pending(later),
+        "body-present round liveness should keep the frontier view stable while active tx backlog is the only damping signal"
+    );
+    assert_eq!(
+        actor.subsystems.propose.forced_view_after_timeout, None,
+        "forced-view marker should stay clear while tx-backlog liveness defers rotation"
+    );
+
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maybe_force_view_change_for_stalled_pending_rotates_tx_backlog_frontier_without_round_liveness()
+ {
+    use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let committed_height = view.height() as u64;
+    let height = committed_height.saturating_add(1);
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let view_idx = 1_u64;
+    let block = sample_block(height, view_idx, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let base_timeout = actor.commit_quorum_timeout().max(Duration::from_millis(1));
+
+    let now = Instant::now();
+    let stalled_age = base_timeout.saturating_add(Duration::from_millis(1));
+    let stalled_at = now.checked_sub(stalled_age).unwrap_or(now);
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.touch_progress(stalled_at);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor
+        .phase_tracker
+        .on_view_change(height, view_idx, stalled_at);
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let backlog_signals =
+        actor.idle_backlog_signals_for_height(height, super::status::worker_queue_depth_snapshot());
+    assert!(
+        backlog_signals.queue_active_backlog,
+        "test setup should expose active transaction backlog"
+    );
+    assert!(
+        !actor
+            .slot_tracker
+            .proposals_seen
+            .contains(&(height, view_idx))
+            && actor
+                .subsystems
+                .propose
+                .proposal_cache
+                .get_proposal(height, view_idx)
+                .is_none(),
+        "test setup should not seed proposal metadata for the pending frontier"
+    );
+    let frontier_pending_timeout =
+        actor.stalled_pending_frontier_pending_timeout(base_timeout, backlog_signals);
+
+    let later = now
+        .checked_add(
+            frontier_pending_timeout
+                .saturating_sub(base_timeout)
+                .saturating_add(Duration::from_millis(2)),
+        )
+        .unwrap_or(now);
+    assert!(
+        actor.maybe_force_view_change_for_stalled_pending(later),
+        "frontier pending without round liveness should still rotate once the active tx backlog window expires"
+    );
+    assert_eq!(
+        actor.subsystems.propose.forced_view_after_timeout,
+        Some((height, view_idx.saturating_add(1)))
+    );
+
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn maybe_force_view_change_for_stalled_pending_non_near_path_waits_for_frontier_pending_timeout()
  {
     let _worker_guard = super::status::worker_queue_test_guard();
@@ -88309,6 +88673,120 @@ async fn maybe_force_view_change_for_stalled_pending_forces_frontier_advance_aft
     assert_eq!(
         actor.phase_tracker.current_view(height),
         Some(view_idx.saturating_add(1))
+    );
+    assert_eq!(
+        actor.subsystems.propose.forced_view_after_timeout,
+        Some((height, view_idx.saturating_add(1)))
+    );
+
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maybe_force_view_change_for_stalled_pending_defers_repair_exhaustion_while_rbc_sender_active()
+ {
+    use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let committed_height = view.height() as u64;
+    let height = committed_height.saturating_add(1);
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let view_idx = 0_u64;
+    let block = sample_block(height, view_idx, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let base_timeout = actor.commit_quorum_timeout().max(Duration::from_millis(1));
+    let backlog_timeout = actor.backlog_extended_view_change_timeout(base_timeout, true);
+    let frontier_pending_timeout =
+        super::saturating_mul_duration(actor.recovery_deferred_qc_ttl(), 2).max(backlog_timeout);
+    let repair_exhaustion_window = frontier_pending_timeout.saturating_add(
+        actor
+            .frontier_slot_lag_window()
+            .max(actor.rebroadcast_cooldown())
+            .max(Duration::from_millis(1)),
+    );
+
+    let now = Instant::now();
+    let stalled_age = repair_exhaustion_window.saturating_add(Duration::from_millis(2));
+    let stalled_at = now.checked_sub(stalled_age).unwrap_or(now);
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.touch_progress(stalled_at);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.note_proposal_seen(height, view_idx, payload_hash);
+    actor
+        .phase_tracker
+        .on_view_change(height, view_idx, stalled_at);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        view_idx,
+        block_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        false,
+        true,
+        false,
+        None,
+        None,
+    ));
+    actor.subsystems.validation.inflight.insert(
+        block_hash,
+        super::ValidationInFlight {
+            id: 23,
+            started_at: now,
+            frontier_generation: None,
+        },
+    );
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .ready_rebroadcast_last_sent
+        .insert((block_hash, height, view_idx), now);
+
+    assert!(
+        actor.frontier_recovery_same_height_rbc_sender_activity_active(height, now),
+        "test setup should expose recent same-height RBC sender activity"
+    );
+    assert!(
+        !actor.maybe_force_view_change_for_stalled_pending(now),
+        "recent same-height RBC sender activity should defer active-pending repair exhaustion"
+    );
+    assert!(
+        actor.subsystems.propose.forced_view_after_timeout.is_none(),
+        "forced-view marker should stay clear while RBC sender activity owns recovery"
+    );
+
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .ready_rebroadcast_last_sent
+        .clear();
+    assert!(
+        actor.maybe_force_view_change_for_stalled_pending(now),
+        "once RBC sender activity clears, exhausted active-pending repair should force a view advance"
     );
     assert_eq!(
         actor.subsystems.propose.forced_view_after_timeout,
@@ -126665,7 +127143,20 @@ async fn validation_allows_near_tip_commit_votes_without_proposal_evidence() {
         block_hash,
         PendingBlock::new(block, payload_hash, height, view),
     );
-    seed_near_quorum_commit_votes_for_block(actor, &harness.key_pairs, block_hash, height, view);
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = topology.min_votes_for_commit().max(1);
+    assert!(required >= 2, "test requires at least two validators");
+    let seeded = seed_verified_commit_votes_for_block_with_roster(
+        actor,
+        &harness.key_pairs,
+        block_hash,
+        height,
+        view,
+        &roster,
+        required.saturating_sub(1),
+    );
+    assert_eq!(seeded, required.saturating_sub(1));
 
     let commit_topology = actor.effective_commit_topology();
     let outcome = actor.validate_pending_block_for_voting_inline(block_hash, &commit_topology);
@@ -126682,7 +127173,7 @@ async fn validation_allows_near_tip_commit_votes_without_proposal_evidence() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn validation_forces_inline_for_near_tip_commit_votes() {
+async fn validation_routes_near_tip_commit_votes_through_vnext_worker() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -126695,42 +127186,53 @@ async fn validation_forces_inline_for_near_tip_commit_votes() {
         nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
-    actor.pending.pending_blocks.insert(
-        block_hash,
-        PendingBlock::new(block, payload_hash, height, view),
-    );
-    seed_near_quorum_commit_votes_for_block(actor, &harness.key_pairs, block_hash, height, view);
-
     let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
     actor.subsystems.validation.work_txs = vec![work_tx];
     actor.subsystems.validation.result_rx = None;
 
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+    actor.note_proposal_seen(height, view, payload_hash);
+    seed_near_quorum_commit_votes_for_block(actor, &harness.key_pairs, block_hash, height, view);
+
     let commit_topology = actor.effective_commit_topology();
     let outcome = actor.validate_pending_block_for_voting(block_hash, &commit_topology);
     assert!(
-        matches!(outcome, ValidationGateOutcome::Valid),
-        "near-tip vote-backed blocks should validate inline once the local vote can complete commit quorum"
+        matches!(outcome, ValidationGateOutcome::Deferred),
+        "near-tip vote-backed blocks should be owned by vNext worker validation"
     );
+    let queued_work = work_rx
+        .try_recv()
+        .expect("near-quorum vote-backed validation should queue worker work");
+    assert_eq!(queued_work.hash, block_hash);
+    assert_eq!(queued_work.height, height);
+    assert_eq!(queued_work.view, view);
     assert!(
-        matches!(work_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
-        "near-quorum vote-backed validation should not stay queued behind workers"
-    );
-    assert!(
-        !actor
+        actor
             .subsystems
             .validation
             .inflight
             .contains_key(&block_hash),
-        "inline validation should not leave a stale inflight worker marker"
+        "vNext validation should leave worker work inflight"
+    );
+    assert!(
+        actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "near-quorum validation should be tracked as vNext-owned work"
     );
     let pending = actor
         .pending
         .pending_blocks
         .get(&block_hash)
         .expect("pending retained");
-    assert_eq!(pending.validation_status, ValidationStatus::Valid);
-    assert!(pending.parent_state_root.is_some());
-    assert!(pending.post_state_root.is_some());
+    assert_eq!(pending.validation_status, ValidationStatus::Pending);
+    assert!(pending.parent_state_root.is_none());
+    assert!(pending.post_state_root.is_none());
 
     harness.shutdown.send();
 }
@@ -126876,7 +127378,7 @@ async fn validation_gate_routes_proposal_worker_path_through_vnext_reactor() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn validation_forces_inline_for_small_fast_finality_block_with_proposal_evidence() {
+async fn validation_routes_small_fast_finality_block_through_vnext_worker() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
@@ -126904,27 +127406,39 @@ async fn validation_forces_inline_for_small_fast_finality_block_with_proposal_ev
     let commit_topology = actor.effective_commit_topology();
     let outcome = actor.validate_pending_block_for_voting(block_hash, &commit_topology);
     assert!(
-        matches!(outcome, ValidationGateOutcome::Valid),
-        "small fast-finality blocks with proposal evidence should not wait behind async validation"
+        matches!(outcome, ValidationGateOutcome::Deferred),
+        "small fast-finality blocks should be owned by vNext worker validation"
     );
+    let queued_work = work_rx
+        .try_recv()
+        .expect("small fast-finality block should enqueue worker validation");
+    assert_eq!(queued_work.hash, block_hash);
+    assert_eq!(queued_work.height, height);
+    assert_eq!(queued_work.view, view);
     assert!(
-        matches!(work_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
-        "fast-finality inline validation should not enqueue worker validation"
-    );
-    assert!(
-        !actor
+        actor
             .subsystems
             .validation
             .inflight
             .contains_key(&block_hash),
-        "inline validation should not leave a stale inflight worker marker"
+        "vNext worker validation should stay inflight"
+    );
+    assert!(
+        actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "small fast-finality validation should be tracked as vNext-owned work"
     );
     let pending = actor
         .pending
         .pending_blocks
         .get(&block_hash)
         .expect("pending retained");
-    assert_eq!(pending.validation_status, ValidationStatus::Valid);
+    assert_eq!(pending.validation_status, ValidationStatus::Pending);
+    assert!(pending.parent_state_root.is_none());
+    assert!(pending.post_state_root.is_none());
 
     harness.shutdown.send();
 }
@@ -127406,7 +127920,7 @@ async fn commit_qc_keeps_fresh_inflight_validation_deferred_past_inline_fallback
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn commit_qc_recovers_from_stale_inflight_validation_inline() {
+async fn commit_qc_supersedes_stale_inflight_validation_inline() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -127462,11 +127976,11 @@ async fn commit_qc_recovers_from_stale_inflight_validation_inline() {
 
     assert!(
         actor.maybe_validate_pending_for_commit_qc(&qc, &commit_topology),
-        "stale inflight validation should recover inline after commit QC"
+        "stale inflight validation should be superseded inline so commit QC can apply"
     );
     assert!(
         matches!(work_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
-        "stale inflight recovery should not enqueue duplicate validation"
+        "stale commit-QC validation should not enqueue replacement vNext work"
     );
     assert!(
         !actor
@@ -127474,18 +127988,30 @@ async fn commit_qc_recovers_from_stale_inflight_validation_inline() {
             .validation
             .inflight
             .contains_key(&block_hash),
-        "stale inflight entry should be cleared"
+        "stale commit-QC inflight entry should be superseded before inline validation"
     );
-    if let Some(pending) = actor.pending.pending_blocks.get(&block_hash) {
-        assert_eq!(pending.validation_status, ValidationStatus::Valid);
-        assert!(pending.parent_state_root.is_some());
-        assert!(pending.post_state_root.is_some());
-    } else {
-        assert!(
-            actor.kura.get_block_height_by_hash(block_hash).is_some(),
-            "stale inflight validation should either leave a validated pending block or commit it"
-        );
-    }
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "inline commit-QC validation should clear vNext ownership"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "inline commit-QC validation should replay cached commit evidence and prune the pending block"
+    );
+    assert_eq!(
+        u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX),
+        height,
+        "inline commit-QC validation should commit the certified frontier block"
+    );
+    assert_eq!(
+        actor.state.latest_block_hash_fast(),
+        Some(block_hash),
+        "committed head should match the inline-validated block"
+    );
 
     harness.shutdown.send();
 }
@@ -143657,7 +144183,7 @@ async fn da_commit_validation_inline_fallback_timeout_has_750ms_floor() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn commit_pipeline_inlines_validation_after_fast_timeout_when_worker_queue_full() {
+async fn commit_pipeline_inlines_validation_after_inline_fallback_timeout_when_worker_queue_full() {
     use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
 
     let mut harness = test_actor_harness(4).await;
@@ -143683,13 +144209,10 @@ async fn commit_pipeline_inlines_validation_after_fast_timeout_when_worker_queue
 
     let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
     let commit_topology = actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
-    let fast_timeout = {
-        let view = actor.state.view();
-        actor.pending_fast_path_timeout(&view, consensus_mode)
-    };
+    let inline_fallback_timeout = actor.commit_validation_inline_fallback_timeout();
     assert!(
-        fast_timeout > Duration::ZERO,
-        "test requires non-zero fast timeout"
+        inline_fallback_timeout > Duration::ZERO,
+        "test requires non-zero inline fallback timeout"
     );
 
     let (_work_tx, _work_rx) =
@@ -143714,7 +144237,7 @@ async fn commit_pipeline_inlines_validation_after_fast_timeout_when_worker_queue
     pending.validation_status = ValidationStatus::Pending;
     pending.parent_state_root = None;
     pending.post_state_root = None;
-    pending.inserted_at = Instant::now() - fast_timeout - Duration::from_millis(1);
+    pending.inserted_at = Instant::now() - inline_fallback_timeout - Duration::from_millis(1);
     actor.pending.pending_blocks.insert(block_hash, pending);
 
     actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
@@ -143727,22 +144250,47 @@ async fn commit_pipeline_inlines_validation_after_fast_timeout_when_worker_queue
     assert_eq!(
         pending_after.validation_status,
         ValidationStatus::Valid,
-        "fast-timeout fallback should validate inline when worker queues are full"
+        "inline fallback should validate once queue-full pending work exceeds the timeout"
     );
     assert!(
         pending_after.parent_state_root.is_some(),
-        "inline validation should record parent state root"
+        "inline fallback should record parent state root"
     );
     assert!(
         pending_after.post_state_root.is_some(),
-        "inline validation should record post state root"
+        "inline fallback should record post state root"
     );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&block_hash),
+        "queue-full vNext validation should not register worker inflight work"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "queue-full vNext validation should not register worker ownership without a dispatch"
+    );
+    let reactor_slot = actor
+        .vnext_reactors
+        .get(&(height, view))
+        .and_then(|reactor| reactor.slot(block_hash))
+        .expect("vNext reactor should retain the superseded validation slot");
+    assert!(matches!(
+        reactor_slot.validation,
+        crate::sumeragi::vnext::ValidationState::Unqueued
+    ));
 
     harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn commit_pipeline_inlines_validation_at_queue_full_cutover() {
+async fn commit_pipeline_inlines_validation_at_queue_full_fallback_timeout() {
     use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
 
     let mut harness = test_actor_harness(4).await;
@@ -143768,19 +144316,10 @@ async fn commit_pipeline_inlines_validation_at_queue_full_cutover() {
 
     let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
     let commit_topology = actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
-    let fast_timeout = {
-        let view = actor.state.view();
-        actor.pending_fast_path_timeout(&view, consensus_mode)
-    };
-    let inline_cutover = (fast_timeout
-        / actor
-            .config
-            .worker
-            .validation_queue_full_inline_cutover_divisor)
-        .max(Duration::from_millis(1));
+    let inline_fallback_timeout = actor.commit_validation_inline_fallback_timeout();
     assert!(
-        inline_cutover < fast_timeout,
-        "test requires inline cutover to be below fast timeout"
+        inline_fallback_timeout > Duration::ZERO,
+        "test requires non-zero inline fallback timeout"
     );
 
     let (_work_tx, _work_rx) =
@@ -143795,7 +144334,7 @@ async fn commit_pipeline_inlines_validation_at_queue_full_cutover() {
     let outcome = actor.validate_pending_block_for_voting_inline(block_hash, &commit_topology);
     assert!(
         matches!(outcome, ValidationGateOutcome::Valid),
-        "block should validate inline before testing queue-full cutover fallback: {outcome:?}"
+        "block should validate inline before testing queue-full fallback: {outcome:?}"
     );
     let mut pending = actor
         .pending
@@ -143805,7 +144344,7 @@ async fn commit_pipeline_inlines_validation_at_queue_full_cutover() {
     pending.validation_status = ValidationStatus::Pending;
     pending.parent_state_root = None;
     pending.post_state_root = None;
-    pending.inserted_at = Instant::now() - inline_cutover - Duration::from_millis(1);
+    pending.inserted_at = Instant::now() - inline_fallback_timeout - Duration::from_millis(1);
     actor.pending.pending_blocks.insert(block_hash, pending);
 
     actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
@@ -143818,22 +144357,47 @@ async fn commit_pipeline_inlines_validation_at_queue_full_cutover() {
     assert_eq!(
         pending_after.validation_status,
         ValidationStatus::Valid,
-        "queue-full fallback should validate inline once pending age reaches cutover"
+        "queue-full fallback timeout should run validation inline"
     );
     assert!(
         pending_after.parent_state_root.is_some(),
-        "inline cutover fallback should capture parent state root"
+        "inline queue-full fallback should capture parent state root"
     );
     assert!(
         pending_after.post_state_root.is_some(),
-        "inline cutover fallback should capture post state root"
+        "inline queue-full fallback should capture post state root"
     );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&block_hash),
+        "queue-full fallback should not register worker inflight work"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "queue-full fallback should not register worker ownership without a dispatch"
+    );
+    let reactor_slot = actor
+        .vnext_reactors
+        .get(&(height, view))
+        .and_then(|reactor| reactor.slot(block_hash))
+        .expect("vNext reactor should retain the superseded queue-full validation slot");
+    assert!(matches!(
+        reactor_slot.validation,
+        crate::sumeragi::vnext::ValidationState::Unqueued
+    ));
 
     harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn commit_pipeline_keeps_deferred_validation_before_queue_full_cutover() {
+async fn commit_pipeline_keeps_deferred_validation_before_inline_fallback_timeout() {
     use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
 
     let _history_guard = super::status::commit_history_test_guard();
@@ -143861,19 +144425,10 @@ async fn commit_pipeline_keeps_deferred_validation_before_queue_full_cutover() {
     let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
     let commit_topology_before =
         actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
-    let fast_timeout = {
-        let view = actor.state.view();
-        actor.pending_fast_path_timeout(&view, consensus_mode)
-    };
-    let inline_cutover = (fast_timeout
-        / actor
-            .config
-            .worker
-            .validation_queue_full_inline_cutover_divisor)
-        .max(Duration::from_millis(1));
+    let inline_fallback_timeout = actor.commit_validation_inline_fallback_timeout();
     assert!(
-        inline_cutover > Duration::from_millis(1),
-        "test requires enough room below cutover"
+        inline_fallback_timeout > Duration::from_millis(1),
+        "test requires enough room below inline fallback timeout"
     );
     assert!(
         commit_topology_before.len() > 1,
@@ -143904,9 +144459,9 @@ async fn commit_pipeline_keeps_deferred_validation_before_queue_full_cutover() {
     assert_eq!(
         pending_after.validation_status,
         ValidationStatus::Pending,
-        "fresh queue-full pending block should stay deferred before cutover: age_ms={} inline_cutover_ms={} workers={} result_rx={} inflight={} commit_topology_len={}",
+        "fresh queue-full pending block should stay deferred before inline fallback: age_ms={} inline_fallback_ms={} workers={} result_rx={} inflight={} commit_topology_len={}",
         pending_age_after.as_millis(),
-        inline_cutover.as_millis(),
+        inline_fallback_timeout.as_millis(),
         actor.subsystems.validation.work_txs.len(),
         actor.subsystems.validation.result_rx.is_some(),
         actor.subsystems.validation.inflight.len(),
@@ -143933,7 +144488,7 @@ async fn commit_pipeline_keeps_deferred_validation_before_queue_full_cutover() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn commit_pipeline_uses_configured_queue_full_inline_cutover_divisor() {
+async fn commit_pipeline_inlines_validation_after_configured_queue_full_fallback_timeout() {
     use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
 
     let mut harness = test_actor_harness(4).await;
@@ -143946,11 +144501,6 @@ async fn commit_pipeline_uses_configured_queue_full_inline_cutover_divisor() {
         params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1500)));
         block.commit();
     }
-    actor
-        .config
-        .worker
-        .validation_queue_full_inline_cutover_divisor = 4;
-
     let parent_hash = seed_genesis_block_for_state(&actor.state);
     let height = u64::try_from(actor.state.view().height())
         .unwrap_or(0)
@@ -143963,31 +144513,11 @@ async fn commit_pipeline_uses_configured_queue_full_inline_cutover_divisor() {
 
     let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
     let commit_topology = actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
-    let fast_timeout = {
-        let view = actor.state.view();
-        actor.pending_fast_path_timeout(&view, consensus_mode)
-    };
-    let default_cutover = (fast_timeout
-        / iroha_config::parameters::defaults::sumeragi::
-            VALIDATION_QUEUE_FULL_INLINE_CUTOVER_DIVISOR)
-        .max(Duration::from_millis(1));
-    let configured_cutover = (fast_timeout
-        / actor
-            .config
-            .worker
-            .validation_queue_full_inline_cutover_divisor)
-        .max(Duration::from_millis(1));
+    let inline_fallback_timeout = actor.commit_validation_inline_fallback_timeout();
     assert!(
-        configured_cutover < default_cutover,
-        "configured divisor should move cutover earlier than default"
+        inline_fallback_timeout > Duration::ZERO,
+        "test requires non-zero inline fallback timeout"
     );
-    let gap = default_cutover.saturating_sub(configured_cutover);
-    assert!(
-        gap > Duration::from_millis(1),
-        "test requires enough spacing between configured and default cutovers"
-    );
-    let pending_age = configured_cutover + (gap / 2);
-    assert!(pending_age < default_cutover);
 
     let (_work_tx, _work_rx) =
         std::sync::mpsc::sync_channel::<super::validation::ValidationWork>(0);
@@ -144001,7 +144531,7 @@ async fn commit_pipeline_uses_configured_queue_full_inline_cutover_divisor() {
     let outcome = actor.validate_pending_block_for_voting_inline(block_hash, &commit_topology);
     assert!(
         matches!(outcome, ValidationGateOutcome::Valid),
-        "block should validate inline before testing configured queue-full cutover: {outcome:?}"
+        "block should validate inline before testing configured queue-full fallback: {outcome:?}"
     );
     let mut pending = actor
         .pending
@@ -144011,7 +144541,7 @@ async fn commit_pipeline_uses_configured_queue_full_inline_cutover_divisor() {
     pending.validation_status = ValidationStatus::Pending;
     pending.parent_state_root = None;
     pending.post_state_root = None;
-    pending.inserted_at = Instant::now() - pending_age;
+    pending.inserted_at = Instant::now() - inline_fallback_timeout - Duration::from_millis(1);
     actor.pending.pending_blocks.insert(block_hash, pending);
 
     actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
@@ -144024,16 +144554,41 @@ async fn commit_pipeline_uses_configured_queue_full_inline_cutover_divisor() {
     assert_eq!(
         pending_after.validation_status,
         ValidationStatus::Valid,
-        "queue-full fallback should inline once configured cutover is reached"
+        "configured queue-full fallback should validate inline once the fallback timeout elapses"
     );
     assert!(
         pending_after.parent_state_root.is_some(),
-        "inline fallback should capture parent state root"
+        "configured queue-full inline fallback should capture parent state root"
     );
     assert!(
         pending_after.post_state_root.is_some(),
-        "inline fallback should capture post state root"
+        "configured queue-full inline fallback should capture post state root"
     );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&block_hash),
+        "configured queue-full fallback should not register worker inflight work"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "configured queue-full fallback should not register worker ownership without a dispatch"
+    );
+    let reactor_slot = actor
+        .vnext_reactors
+        .get(&(height, view))
+        .and_then(|reactor| reactor.slot(block_hash))
+        .expect("vNext reactor should retain the configured queue-full validation slot");
+    assert!(matches!(
+        reactor_slot.validation,
+        crate::sumeragi::vnext::ValidationState::Unqueued
+    ));
 
     harness.shutdown.send();
 }
@@ -144281,16 +144836,12 @@ async fn commit_pipeline_supersedes_stalled_inflight_validation_inline() {
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
 
-    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
-    let fast_timeout = {
-        let view = actor.state.view();
-        actor.pending_fast_path_timeout(&view, consensus_mode)
-    };
+    let inline_fallback_timeout = actor.commit_validation_inline_fallback_timeout();
     let stall_timeout = actor.validation_worker_stall_timeout();
 
     let mut pending = PendingBlock::new(block, payload_hash, height, view);
     pending.note_commit_qc_observed(actor.epoch_for_height(height));
-    pending.inserted_at = Instant::now() - fast_timeout - Duration::from_millis(1);
+    pending.inserted_at = Instant::now() - inline_fallback_timeout - Duration::from_millis(1);
     actor.pending.pending_blocks.insert(block_hash, pending);
     actor.note_proposal_seen(height, view, payload_hash);
     actor.subsystems.validation.inflight.insert(
@@ -144301,7 +144852,7 @@ async fn commit_pipeline_supersedes_stalled_inflight_validation_inline() {
             frontier_generation: None,
         },
     );
-    let (work_tx, _work_rx) = std::sync::mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    let (work_tx, work_rx) = std::sync::mpsc::sync_channel::<super::validation::ValidationWork>(1);
     actor.subsystems.validation.work_txs = vec![work_tx];
     let (_result_tx, result_rx) =
         std::sync::mpsc::sync_channel::<super::validation::ValidationResult>(1);
@@ -144309,34 +144860,42 @@ async fn commit_pipeline_supersedes_stalled_inflight_validation_inline() {
 
     actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
 
-    if let Some(pending_after) = actor.pending.pending_blocks.get(&block_hash) {
-        assert_eq!(
-            pending_after.validation_status,
-            ValidationStatus::Valid,
-            "stalled inflight validation must be superseded so the voter can rejoin quorum"
-        );
-        assert!(
-            pending_after.parent_state_root.is_some(),
-            "inline validation should set parent state root"
-        );
-        assert!(
-            pending_after.post_state_root.is_some(),
-            "inline validation should set post state root"
-        );
-    } else {
-        assert!(
-            actor.kura.get_block_height_by_hash(block_hash).is_some(),
-            "stalled inflight validation should either leave a validated pending block or commit it"
-        );
-    }
     assert!(
-        actor
+        matches!(
+            work_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ),
+        "stalled inflight validation should not enqueue replacement vNext work"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "stalled inflight validation should be superseded inline and committed"
+    );
+    assert_eq!(
+        u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX),
+        height,
+        "inline stalled validation should commit the frontier block"
+    );
+    assert_eq!(
+        actor.state.latest_block_hash_fast(),
+        Some(block_hash),
+        "committed head should match the inline-validated stalled block"
+    );
+    assert!(
+        !actor
             .subsystems
             .validation
             .inflight
-            .get(&block_hash)
-            .is_none(),
+            .contains_key(&block_hash),
         "stalled inflight entry should be superseded before inline validation"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "inline stalled validation should not leave vNext-owned work"
     );
 
     harness.shutdown.send();
@@ -144367,11 +144926,7 @@ async fn commit_pipeline_keeps_deferred_validation_when_inflight_is_fresh() {
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
 
-    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
-    let fast_timeout = {
-        let view = actor.state.view();
-        actor.pending_fast_path_timeout(&view, consensus_mode)
-    };
+    let inline_fallback_timeout = actor.commit_validation_inline_fallback_timeout();
 
     // Keep a non-empty worker set so the deferred path checks the inflight marker.
     let (work_tx, _work_rx) = std::sync::mpsc::sync_channel::<super::validation::ValidationWork>(1);
@@ -144382,7 +144937,7 @@ async fn commit_pipeline_keeps_deferred_validation_when_inflight_is_fresh() {
 
     let mut pending = PendingBlock::new(block, payload_hash, height, view);
     pending.note_commit_qc_observed(actor.epoch_for_height(height));
-    pending.inserted_at = Instant::now() - fast_timeout - Duration::from_millis(1);
+    pending.inserted_at = Instant::now() - inline_fallback_timeout - Duration::from_millis(1);
     actor.pending.pending_blocks.insert(block_hash, pending);
     actor.subsystems.validation.inflight.insert(
         block_hash,
@@ -144418,6 +144973,115 @@ async fn commit_pipeline_keeps_deferred_validation_when_inflight_is_fresh() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_keeps_vnext_owned_validation_deferred_past_inline_fallback() {
+    use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(1500)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1500)));
+        block.commit();
+    }
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let inline_fallback_timeout = actor.commit_validation_inline_fallback_timeout();
+
+    let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    let (_result_tx, result_rx) = mpsc::sync_channel::<super::validation::ValidationResult>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+    actor.subsystems.validation.result_rx = Some(result_rx);
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    pending.note_commit_qc_observed(actor.epoch_for_height(height));
+    pending.inserted_at = Instant::now() - inline_fallback_timeout - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.note_proposal_seen(height, view, payload_hash);
+
+    assert!(
+        actor.drive_vnext_validation_for_pending(block_hash, height, view, payload_hash),
+        "vNext validation should own the pending block"
+    );
+    let queued_work = work_rx
+        .try_recv()
+        .expect("vNext validation should queue worker work");
+    assert_eq!(queued_work.hash, block_hash);
+    let inflight_id = actor
+        .subsystems
+        .validation
+        .inflight
+        .get(&block_hash)
+        .map(|inflight| inflight.id)
+        .expect("vNext validation should install an inflight marker");
+    assert_eq!(queued_work.id, inflight_id);
+
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
+
+    assert!(
+        matches!(work_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "fresh vNext-owned validation should not enqueue duplicate work"
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .validation
+            .inflight
+            .get(&block_hash)
+            .map(|inflight| inflight.id),
+        Some(inflight_id),
+        "fresh vNext-owned validation should not be superseded inline"
+    );
+    assert!(
+        actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "vNext ownership should remain while the worker result is pending"
+    );
+    let reactor_slot = actor
+        .vnext_reactors
+        .get(&(height, view))
+        .and_then(|reactor| reactor.slot(block_hash))
+        .expect("vNext slot should remain tracked");
+    assert!(matches!(
+        reactor_slot.validation,
+        crate::sumeragi::vnext::ValidationState::Running {
+            id: running_id,
+            ..
+        } if running_id == inflight_id
+    ));
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending block should remain while vNext validation is fresh");
+    assert_eq!(
+        pending_after.validation_status,
+        ValidationStatus::Pending,
+        "fresh vNext-owned validation should remain deferred despite pending age"
+    );
+    assert!(pending_after.parent_state_root.is_none());
+    assert!(pending_after.post_state_root.is_none());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn commit_pipeline_inlines_validation_when_inflight_worker_is_disconnected() {
     use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
 
@@ -144441,18 +145105,14 @@ async fn commit_pipeline_inlines_validation_when_inflight_worker_is_disconnected
         nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
-    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
-    let fast_timeout = {
-        let view = actor.state.view();
-        actor.pending_fast_path_timeout(&view, consensus_mode)
-    };
+    let inline_fallback_timeout = actor.commit_validation_inline_fallback_timeout();
 
-    let (work_tx, _work_rx) = std::sync::mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    let (work_tx, work_rx) = std::sync::mpsc::sync_channel::<super::validation::ValidationWork>(1);
     actor.subsystems.validation.work_txs = vec![work_tx];
     actor.subsystems.validation.result_rx = None;
 
     let mut pending = PendingBlock::new(block, payload_hash, height, view);
-    pending.inserted_at = Instant::now() - fast_timeout - Duration::from_millis(1);
+    pending.inserted_at = Instant::now() - inline_fallback_timeout - Duration::from_millis(1);
     actor.pending.pending_blocks.insert(block_hash, pending);
     actor.note_proposal_seen(height, view, payload_hash);
     actor.subsystems.validation.inflight.insert(
@@ -144466,6 +145126,13 @@ async fn commit_pipeline_inlines_validation_when_inflight_worker_is_disconnected
 
     actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
 
+    assert!(
+        matches!(
+            work_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ),
+        "disconnected inflight validation should not enqueue replacement vNext work"
+    );
     let pending_after = actor
         .pending
         .pending_blocks
@@ -144474,7 +145141,15 @@ async fn commit_pipeline_inlines_validation_when_inflight_worker_is_disconnected
     assert_eq!(
         pending_after.validation_status,
         ValidationStatus::Valid,
-        "disconnected inflight validation should fall back to inline validation"
+        "disconnected inflight validation should run inline"
+    );
+    assert!(
+        pending_after.parent_state_root.is_some(),
+        "inline disconnected validation should set parent state root"
+    );
+    assert!(
+        pending_after.post_state_root.is_some(),
+        "inline disconnected validation should set post state root"
     );
     assert!(
         !actor
@@ -144482,7 +145157,15 @@ async fn commit_pipeline_inlines_validation_when_inflight_worker_is_disconnected
             .validation
             .inflight
             .contains_key(&block_hash),
-        "disconnected inflight marker should be cleared"
+        "disconnected inflight marker should be superseded"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "inline disconnected validation should not leave vNext-owned work"
     );
 
     harness.shutdown.send();
@@ -146792,6 +147475,7 @@ async fn stale_view_async_commit_votes_for_known_pending_block_still_form_qc() {
         .get(&block_hash)
         .and_then(|pending| pending.parent_state_root.zip(pending.post_state_root))
         .expect("validated pending block should expose execution roots");
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view);
     let required = topology.min_votes_for_commit().max(1);
     let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
     for signer_idx in 0..signature_topology.as_ref().len() {
@@ -146803,8 +147487,8 @@ async fn stale_view_async_commit_votes_for_known_pending_block_still_form_qc() {
             height,
             view,
             epoch,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
+            chain_order_hash,
+            rechain_seq,
             highest_qc: None,
             signer: u32::try_from(signer_idx).expect("signer index fits u32"),
             bls_sig: Vec::new(),
@@ -146835,8 +147519,8 @@ async fn stale_view_async_commit_votes_for_known_pending_block_still_form_qc() {
         height,
         view,
         epoch,
-        crate::sumeragi::consensus::default_chain_order_hash(),
-        0,
+        chain_order_hash,
+        rechain_seq,
     );
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
@@ -147424,6 +148108,7 @@ async fn block_sync_update_contiguous_frontier_with_commit_votes_still_routes_pa
     let block_hash = block.hash();
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let epoch = actor.epoch_for_height(height);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, 0);
     let mut vote = crate::sumeragi::consensus::Vote {
         phase: Phase::Commit,
         block_hash,
@@ -147432,8 +148117,8 @@ async fn block_sync_update_contiguous_frontier_with_commit_votes_still_routes_pa
         height,
         view: 0,
         epoch,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
+        chain_order_hash,
+        rechain_seq,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -147498,6 +148183,7 @@ async fn block_sync_update_stale_frontier_with_commit_votes_keeps_recovery_activ
     let block_hash = block.hash();
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let epoch = actor.epoch_for_height(height);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view);
     let mut vote = crate::sumeragi::consensus::Vote {
         phase: Phase::Commit,
         block_hash,
@@ -147506,8 +148192,8 @@ async fn block_sync_update_stale_frontier_with_commit_votes_keeps_recovery_activ
         height,
         view,
         epoch,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
+        chain_order_hash,
+        rechain_seq,
         highest_qc: None,
         signer: 1,
         bls_sig: Vec::new(),
@@ -148695,6 +149381,7 @@ async fn block_sync_update_accepts_partial_vote_sparse_recovery_for_explicit_mis
     );
 
     let epoch = actor.epoch_for_height(height);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, 0);
     let mut vote = crate::sumeragi::consensus::Vote {
         phase: Phase::Commit,
         block_hash,
@@ -148703,8 +149390,8 @@ async fn block_sync_update_accepts_partial_vote_sparse_recovery_for_explicit_mis
         height,
         view: 0,
         epoch,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
+        chain_order_hash,
+        rechain_seq,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -148763,6 +149450,7 @@ async fn block_sync_update_tracks_missing_qc_for_unknown_frontier_vote_only_upda
     );
 
     let epoch = actor.epoch_for_height(height);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, 0);
     let mut vote = crate::sumeragi::consensus::Vote {
         phase: Phase::Commit,
         block_hash,
@@ -148771,8 +149459,8 @@ async fn block_sync_update_tracks_missing_qc_for_unknown_frontier_vote_only_upda
         height,
         view: 0,
         epoch,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
+        chain_order_hash,
+        rechain_seq,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),

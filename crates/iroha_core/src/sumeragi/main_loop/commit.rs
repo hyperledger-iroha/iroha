@@ -46,11 +46,10 @@ pub(super) struct KnownBlockCommitQcRecoveryRequestPlan {
 
 pub(super) const fn known_block_commit_qc_recovery_request_plan(
     payload_materialized_locally: bool,
-    commit_qc_body_fallback: bool,
 ) -> KnownBlockCommitQcRecoveryRequestPlan {
     KnownBlockCommitQcRecoveryRequestPlan {
         commit_qc_only: payload_materialized_locally,
-        body: !payload_materialized_locally || commit_qc_body_fallback,
+        body: !payload_materialized_locally,
     }
 }
 
@@ -743,6 +742,17 @@ fn commit_qc_from_cache_or_history(
     ) {
         return Some(qc);
     }
+    commit_qc_from_history(block_hash, height, view, epoch, mode_tag)
+        .filter(|qc| qc.validator_set.as_slice() == commit_topology)
+}
+
+fn commit_qc_from_history(
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    epoch: u64,
+    mode_tag: &str,
+) -> Option<crate::sumeragi::consensus::Qc> {
     super::status::commit_qc_history().into_iter().find(|qc| {
         qc.phase == crate::sumeragi::consensus::Phase::Commit
             && qc.subject_block_hash == block_hash
@@ -750,7 +760,6 @@ fn commit_qc_from_cache_or_history(
             && qc.view == view
             && qc.epoch == epoch
             && qc.mode_tag == mode_tag
-            && qc.validator_set.as_slice() == commit_topology
             && !qc.aggregate.bls_aggregate_signature.is_empty()
     })
 }
@@ -2569,8 +2578,22 @@ impl Actor {
             rechain_seq,
         );
         let cached_commit_qc = self.qc_cache.get(&qc_key).cloned();
+        let history_commit_qc = cached_commit_qc
+            .as_ref()
+            .is_none()
+            .then(|| {
+                commit_qc_from_history(
+                    block_hash,
+                    pending_height,
+                    pending_view,
+                    lock.epoch,
+                    mode_tag,
+                )
+            })
+            .flatten();
         let certified_roster = cached_commit_qc
             .as_ref()
+            .or(history_commit_qc.as_ref())
             .map(|qc| qc.validator_set.clone())
             .filter(|roster| !roster.is_empty());
         let cached_vote_roster = self
@@ -2666,7 +2689,7 @@ impl Actor {
                 None
             }
         });
-        let mut commit_qc = cached_commit_qc.or_else(|| {
+        let mut commit_qc = cached_commit_qc.or(history_commit_qc).or_else(|| {
             commit_qc_from_cache_or_history(
                 &self.qc_cache,
                 block_hash,
@@ -3045,15 +3068,19 @@ impl Actor {
         let tip_hash = self.state.latest_block_hash_fast();
         let active_pending_exists =
             self.active_pending_blocks_len_for_tip(tip_height, tip_hash) > 0;
-        let include_recovery_candidate = include_recovery_candidates && !active_pending_exists;
         let mut pending_hashes: Vec<_> = self
             .pending
             .pending_blocks
             .iter()
             .filter(|(hash, pending)| {
-                self.pending_block_is_active_for_tip(**hash, pending, tip_height, tip_hash)
-                    || (include_recovery_candidate
-                        && self.pending_block_is_commit_recovery_candidate(**hash, pending))
+                self.pending_block_is_commit_pipeline_candidate(
+                    **hash,
+                    pending,
+                    tip_height,
+                    tip_hash,
+                    include_recovery_candidates,
+                    active_pending_exists,
+                )
             })
             .map(|(hash, pending)| (pending.height, pending.view, *hash))
             .collect();
@@ -3101,63 +3128,84 @@ impl Actor {
                     .get(&hash)
                     .map(|pending| (pending.height, pending.view, pending.age()))
                 {
-                    let mut should_inline_validation = false;
                     if self.validation_inflight_elapsed(hash).is_some() {
                         if let Some(reason) =
                             self.validation_inflight_inline_reason(hash, pending_height_snapshot)
                         {
-                            if self.supersede_validation_inflight(hash).is_some() {
-                                match reason {
-                                    super::validation::ValidationInflightInlineReason::WorkerDisconnected => {
-                                        warn!(
-                                            height = pending_height_snapshot,
-                                            view = pending_view_snapshot,
-                                            block = %hash,
-                                            "validation worker channel disconnected; forcing inline pre-vote validation"
-                                        );
-                                    }
-                                    super::validation::ValidationInflightInlineReason::StaleFrontier {
-                                        frontier_generation,
-                                    } => {
-                                        warn!(
-                                            height = pending_height_snapshot,
-                                            view = pending_view_snapshot,
-                                            block = %hash,
-                                            frontier_generation,
-                                            "validation inflight frontier generation is stale; forcing inline pre-vote validation"
-                                        );
-                                    }
-                                    super::validation::ValidationInflightInlineReason::Stalled {
-                                        elapsed,
-                                        stall_timeout,
-                                    } => {
-                                        warn!(
-                                            height = pending_height_snapshot,
-                                            view = pending_view_snapshot,
-                                            block = %hash,
-                                            inflight_elapsed_ms = elapsed.as_millis(),
-                                            worker_stall_timeout_ms = stall_timeout.as_millis(),
-                                            validation_duration_ema_ms = self
-                                                .validation_duration_ema()
-                                                .map(|duration| duration.as_millis()),
-                                            "validation inflight exceeded worker stall timeout; forcing inline pre-vote validation"
-                                        );
-                                    }
+                            match reason {
+                                super::validation::ValidationInflightInlineReason::WorkerDisconnected => {
+                                    warn!(
+                                        height = pending_height_snapshot,
+                                        view = pending_view_snapshot,
+                                        block = %hash,
+                                        "validation worker channel disconnected; running pre-vote validation inline"
+                                    );
                                 }
-                                should_inline_validation = true;
+                                super::validation::ValidationInflightInlineReason::StaleFrontier {
+                                    frontier_generation,
+                                } => {
+                                    warn!(
+                                        height = pending_height_snapshot,
+                                        view = pending_view_snapshot,
+                                        block = %hash,
+                                        frontier_generation,
+                                        "validation inflight frontier generation is stale; running pre-vote validation inline"
+                                    );
+                                }
+                                super::validation::ValidationInflightInlineReason::Stalled {
+                                    elapsed,
+                                    stall_timeout,
+                                } => {
+                                    warn!(
+                                        height = pending_height_snapshot,
+                                        view = pending_view_snapshot,
+                                        block = %hash,
+                                        inflight_elapsed_ms = elapsed.as_millis(),
+                                        worker_stall_timeout_ms = stall_timeout.as_millis(),
+                                        validation_duration_ema_ms = self
+                                            .validation_duration_ema()
+                                            .map(|duration| duration.as_millis()),
+                                        "validation inflight exceeded worker stall timeout; running pre-vote validation inline"
+                                    );
+                                }
                             }
+                            validation_outcome = self
+                                .validate_pending_block_for_voting_inline(hash, &commit_topology);
                         }
                     } else if pending_age >= inline_fallback_timeout {
-                        // No worker accepted the validation task (typically queue-full); avoid
-                        // indefinite deferral by validating inline after the fallback timeout.
-                        should_inline_validation = true;
-                    }
-
-                    if should_inline_validation
-                        && !self.subsystems.validation.inflight.contains_key(&hash)
-                    {
-                        validation_outcome =
-                            self.validate_pending_block_for_voting_inline(hash, &commit_topology);
+                        let worker_path_available = self.subsystems.validation.result_rx.is_some()
+                            && !self.subsystems.validation.work_txs.is_empty();
+                        let vnext_owned = self.vnext_validation_owns_block(
+                            hash,
+                            pending_height_snapshot,
+                            pending_view_snapshot,
+                        );
+                        let active_backlog = self.queue.active_len() > 0;
+                        if worker_path_available || (vnext_owned && active_backlog) {
+                            debug!(
+                                height = pending_height_snapshot,
+                                view = pending_view_snapshot,
+                                block = %hash,
+                                pending_age_ms = pending_age.as_millis(),
+                                inline_fallback_timeout_ms =
+                                    inline_fallback_timeout.as_millis(),
+                                validation_workers = self.subsystems.validation.work_txs.len(),
+                                vnext_owned,
+                                active_backlog,
+                                "deferring inline validation while background validation can still recover"
+                            );
+                        } else {
+                            warn!(
+                                height = pending_height_snapshot,
+                                view = pending_view_snapshot,
+                                block = %hash,
+                                pending_age_ms = pending_age.as_millis(),
+                                inline_fallback_timeout_ms = inline_fallback_timeout.as_millis(),
+                                "pending frontier validation exceeded fallback timeout; running validation inline"
+                            );
+                            validation_outcome = self
+                                .validate_pending_block_for_voting_inline(hash, &commit_topology);
+                        }
                     }
                 }
             }
@@ -3213,7 +3261,7 @@ impl Actor {
                                 rbc_sent_ready = rbc_log.as_ref().map(|entry| entry.5),
                                 rbc_invalid = rbc_log.as_ref().map(|entry| entry.6),
                                 trigger = ?trigger,
-                                "commit pipeline defers validation past inline fallback timeout"
+                                "commit pipeline defers validation while vNext owns validation"
                             );
                         }
                     }
@@ -4120,7 +4168,6 @@ impl Actor {
             .missing_commit_qc_requests
             .contains_key(&block_hash);
         let mut request_stalled = false;
-        let mut commit_qc_body_fallback = false;
         if height == self.committed_height_snapshot().saturating_add(1) {
             let stall_window = self.frontier_slot_lag_window();
             let dwell_window = stall_window.checked_mul(2).unwrap_or(stall_window);
@@ -4185,7 +4232,6 @@ impl Actor {
                 );
                 return true;
             }
-            commit_qc_body_fallback = payload_materialized_locally && request_stalled;
         }
 
         let committed_round = height <= self.committed_height_snapshot()
@@ -4267,10 +4313,8 @@ impl Actor {
                     );
                     return true;
                 }
-                let request_plan = known_block_commit_qc_recovery_request_plan(
-                    payload_materialized_locally,
-                    commit_qc_body_fallback,
-                );
+                let request_plan =
+                    known_block_commit_qc_recovery_request_plan(payload_materialized_locally);
                 if request_plan.commit_qc_only {
                     super::send_missing_commit_qc_request(
                         &self.network,
@@ -4302,7 +4346,7 @@ impl Actor {
                     targets = ?targets,
                     target_kind = target_kind.label(),
                     commit_qc_only = request_plan.commit_qc_only,
-                    commit_qc_body_fallback,
+                    request_stalled,
                     body_request = request_plan.body,
                     trigger,
                     retry_window_ms = retry_window.as_millis(),

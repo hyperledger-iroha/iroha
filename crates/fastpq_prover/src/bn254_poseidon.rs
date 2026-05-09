@@ -46,6 +46,7 @@ impl Bn254PoseidonBatchSlice {
 
 static BN254_POSEIDON_GPU_DISABLED: AtomicBool = AtomicBool::new(false);
 static BN254_POSEIDON_SELF_TEST: OnceLock<bool> = OnceLock::new();
+const BN254_POSEIDON_MAX_GPU_BATCH_SLICES: usize = 128;
 
 /// Try to hash flattened BN254 Poseidon word batches with the configured GPU backend.
 ///
@@ -128,10 +129,50 @@ pub fn try_submit_bn254_poseidon_word_batches(
         return None;
     }
 
-    try_submit_bn254_poseidon_word_batches_impl(words, slices).or_else(|| {
+    let pending = if slices.len() > BN254_POSEIDON_MAX_GPU_BATCH_SLICES {
+        try_submit_bn254_poseidon_word_batches_chunked(words, slices)
+    } else {
+        try_submit_bn254_poseidon_word_batches_impl(words, slices)
+    };
+
+    pending.or_else(|| {
         disable_bn254_poseidon_gpu();
         None
     })
+}
+
+fn try_submit_bn254_poseidon_word_batches_chunked(
+    words: &[u64],
+    slices: &[Bn254PoseidonBatchSlice],
+) -> Option<PendingBn254PoseidonWordBatch> {
+    let mut result = Vec::with_capacity(slices.len());
+    for slice_chunk in slices.chunks(BN254_POSEIDON_MAX_GPU_BATCH_SLICES) {
+        let (chunk_words, chunk_slices) = compact_bn254_poseidon_slice_chunk(words, slice_chunk)?;
+        let chunk = try_submit_bn254_poseidon_word_batches_impl(&chunk_words, &chunk_slices)?;
+        result.extend(chunk.wait()?);
+    }
+    Some(PendingBn254PoseidonWordBatch {
+        inner: PendingBn254PoseidonWordBatchInner::Ready(result),
+    })
+}
+
+fn compact_bn254_poseidon_slice_chunk(
+    words: &[u64],
+    slices: &[Bn254PoseidonBatchSlice],
+) -> Option<(Vec<u64>, Vec<Bn254PoseidonBatchSlice>)> {
+    let word_count = slices
+        .iter()
+        .try_fold(0usize, |total, slice| total.checked_add(slice.len()))?;
+    let mut chunk_words = Vec::with_capacity(word_count);
+    let mut chunk_slices = Vec::with_capacity(slices.len());
+    for slice in slices {
+        let end = slice.offset().checked_add(slice.len())?;
+        let source = words.get(slice.offset()..end)?;
+        let offset = chunk_words.len();
+        chunk_words.extend_from_slice(source);
+        chunk_slices.push(Bn254PoseidonBatchSlice::new(offset, source.len()));
+    }
+    Some((chunk_words, chunk_slices))
 }
 
 /// Preflight the configured BN254 Poseidon word-batch accelerator.
@@ -382,6 +423,24 @@ mod tests {
         (words, slices)
     }
 
+    #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+    fn generated_fixed_word_batch(
+        batch_count: usize,
+        word_len: usize,
+    ) -> (Vec<u64>, Vec<Bn254PoseidonBatchSlice>) {
+        let mut words = Vec::with_capacity(batch_count.saturating_mul(word_len));
+        let mut slices = Vec::with_capacity(batch_count);
+        for idx in 0..batch_count {
+            let offset = words.len();
+            for word in 0..word_len {
+                let seed = ((idx as u64) << 32) ^ word as u64;
+                words.push(seed.wrapping_mul(0xa076_1d64_78bd_642f));
+            }
+            slices.push(Bn254PoseidonBatchSlice::new(offset, word_len));
+        }
+        (words, slices)
+    }
+
     #[test]
     fn batch_slice_reports_offsets_and_lengths() {
         let slice = Bn254PoseidonBatchSlice::new(7, 3);
@@ -412,6 +471,35 @@ mod tests {
             expected_bn254_poseidon_word_hashes(&words, &slices).len(),
             slices.len()
         );
+    }
+
+    #[test]
+    fn compact_slice_chunk_rebases_offsets_and_preserves_words() {
+        let words = [10, 11, 12, 13, 14, 15, 16, 17, 18];
+        let slices = [
+            Bn254PoseidonBatchSlice::new(2, 3),
+            Bn254PoseidonBatchSlice::new(0, 0),
+            Bn254PoseidonBatchSlice::new(7, 2),
+        ];
+        let (chunk_words, chunk_slices) =
+            compact_bn254_poseidon_slice_chunk(&words, &slices).expect("valid slices compact");
+
+        assert_eq!(chunk_words, [12, 13, 14, 17, 18]);
+        assert_eq!(
+            chunk_slices,
+            [
+                Bn254PoseidonBatchSlice::new(0, 3),
+                Bn254PoseidonBatchSlice::new(3, 0),
+                Bn254PoseidonBatchSlice::new(3, 2),
+            ]
+        );
+    }
+
+    #[test]
+    fn compact_slice_chunk_rejects_out_of_bounds_ranges() {
+        let words = [1, 2, 3];
+        let slices = [Bn254PoseidonBatchSlice::new(2, 2)];
+        assert!(compact_bn254_poseidon_slice_chunk(&words, &slices).is_none());
     }
 
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
@@ -461,6 +549,19 @@ mod tests {
                 "Metal BN254 Poseidon output drifted on iteration {iteration}"
             );
         }
+    }
+
+    #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+    #[test]
+    fn public_gpu_bn254_poseidon_word_batches_chunk_large_izanami_shape() {
+        if !metal_backend_selected() {
+            return;
+        }
+        let (words, slices) = generated_fixed_word_batch(4_096, 30);
+        let actual = try_hash_bn254_poseidon_word_batches(&words, &slices)
+            .expect("chunked Metal BN254 Poseidon word batch should run");
+        let expected = expected_bn254_poseidon_word_hashes(&words, &slices);
+        assert_eq!(actual, expected);
     }
 
     #[cfg(not(feature = "fastpq-gpu"))]

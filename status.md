@@ -2,6 +2,253 @@
 
 Last updated: 2026-05-09
 
+## 2026-05-09 FASTPQ GPU Izanami fallback cleanup
+
+- BN254 Poseidon word-batch submission now drains deterministic 128-slice
+  accelerator chunks sequentially. This keeps large Izanami transcript batches
+  on the Metal path without exhausting command permits or re-entering the
+  scalar BN254 fallback.
+- Tiny GPU batches now stay on the scalar path before dispatch: row hashing
+  uses CPU below 32 rows, and grouped limb hashing uses CPU below 32 messages.
+  Larger homogeneous padded-length groups still use the accelerator path.
+- The 20k Izanami GPU gate
+  `dist/izanami-prebuilt-20k-fastpq-gpu-bn254-128seq-rowguard-120s-20260509-163329`
+  completed with `2,400,000` offered and accepted transactions, zero submit
+  failures, strict height `3`, and `4,361` strict approved transactions. The
+  logs contain no BN254 dispatch failures, row-hash dispatch failures, GPU
+  limb parity mismatches, scalar fallback warnings, or command-buffer failure
+  diagnostics.
+- The follow-up sampled profile
+  `dist/izanami-profile-20k-fastpq-gpu-clean-sampled-90s-20260509-163714`
+  completed with `1,800,000` offered and accepted transactions, strict height
+  `3`, and `4,279` strict approved transactions. The old
+  `iroha_zkp_halo2::poseidon::hash_u64_words_internal` CPU hotspot is absent;
+  the sampled proof-side wait is now Metal BN254 completion, while the live
+  progress limit remains consensus queue saturation and quorum timeout churn.
+- Validation:
+  - `cargo test -p fastpq_prover bn254_poseidon --features fastpq-gpu -- --nocapture`
+    with `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-limb-groups`
+  - `cargo test -p fastpq_prover trace_row_hashes --features fastpq-gpu -- --nocapture`
+    with `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-limb-groups`
+  - `cargo test -p fastpq_prover domain_hash --features fastpq-gpu -- --nocapture`
+    with `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-limb-groups`
+  - `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`
+    with `CARGO_TARGET_DIR=/tmp/iroha-codex-20k-limb-groups-20260509-151821`
+  - 20k Izanami GPU 120s gate using the prebuilt release binaries above
+  - 20k Izanami GPU 90s sampled profile using the prebuilt release binaries
+    above
+  - `cargo check -p fastpq_prover` with
+    `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-default-check`
+  - `cargo clippy -p fastpq_prover -- -D warnings` with
+    `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-default-check`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+
+## 2026-05-09 Offline Note V2 explorer outcome sync adapters
+
+- Kotlin/JVM, Java Android, and Swift now decode Offline Note V2 explorer
+  instruction envelopes for issue, audit, and redeem payloads. The public SDK
+  decoders accept both framed instruction payloads and the raw instruction
+  pair shape returned by explorer rows.
+- The SDKs now expose an `OfflineNoteV2OutcomeIndex` plus resolver/provider
+  adapters that turn committed or rejected audit/redeem explorer outcomes into
+  wallet sync resolutions. Committed audits spend input nullifiers and release
+  outputs, rejected audits restore inputs and cancel outputs, committed
+  redeems mark notes redeemed, and rejected redeems return notes to spendable.
+- Production Torii providers fetch `AuditOfflineNoteV2` and
+  `RedeemOfflineNoteV2` rows from `/v1/explorer/instructions`, extract
+  `r#box.encoded` instruction bytes, and feed the resolver-backed
+  `OfflineNoteV2Wallet.sync()` path.
+- Cross-SDK fixture tests cover explorer instruction decoding and committed /
+  rejected outcome reconciliation for pending spend, change, receive, and
+  redeem wallet notes.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :android:compileDebugJavaWithJavac --console=plain --rerun-tasks` from `java/iroha_android`
+  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift`
+  - `swift test` from `IrohaSwift`
+
+## 2026-05-09 Offline Note V2 Swift Keychain wallet-note store
+
+- Swift now has a public `OfflineNoteV2WalletNoteJsonCodec` matching the
+  Android persisted wallet-note shape, including Norito key certificates,
+  commitment origins, canonical amounts, state, and timestamps.
+- `OfflineNoteV2KeychainStore` implements `OfflineNoteV2Store` with a
+  Keychain-backed encrypted collection. The store supports app groups,
+  optional user-presence access control, sorted note listing, upsert, delete,
+  and clear operations.
+- Swift wallet store operations now throw, so Keychain or corrupt-store
+  failures propagate through wallet load/pay/accept/redeem/sync flows instead
+  of being hidden behind a non-throwing store API.
+- Validation:
+  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift`
+  - `swift test` from `IrohaSwift`
+
+## 2026-05-09 Offline Note V2 Android secure wallet-note store
+
+- Java Android now has a structured `OfflineNoteV2WalletNoteJsonCodec` for
+  persisted wallet notes. The codec preserves the note chain/account/asset,
+  canonical amount, Norito key certificate, commitment, note secret, origin,
+  state, and timestamps so platform stores do not invent an ad hoc shape.
+- The Android platform module now exposes `AndroidOfflineNoteV2SecureStore`,
+  an `OfflineNoteV2Store` implementation that encrypts wallet-note JSON with
+  Android Keystore AES-GCM and stores the encrypted envelopes plus commitment
+  index in private `SharedPreferences`.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :android:compileDebugJavaWithJavac --console=plain --rerun-tasks` from `java/iroha_android`
+
+## 2026-05-09 FASTPQ Poseidon limb-batch grouping and BN254 chunking
+
+- FASTPQ domain-separated limb hashing now groups GPU Poseidon batches by each
+  message's canonical padded sponge length before dispatch. This prevents the
+  fixed-`block_count` Metal/CUDA column kernel from permuting extra zero blocks
+  for shorter messages in a mixed batch.
+- `PoseidonColumnBatch::from_limb_slices` now rejects mixed padded lengths so
+  callers must split batches before entering the accelerator path. Ordered CPU
+  fallback remains intact whenever GPU dispatch is unavailable or a parity
+  sample fails.
+- BN254 Poseidon word-batch submission now splits oversized accelerator
+  batches into deterministic 128-slice chunks, compacts each chunk's word
+  buffer with rebased offsets, and concatenates completed chunk results in the
+  original order.
+- The oversized 4,096-slice Izanami-shaped BN254 word-batch regression now
+  stays on the Metal accelerator path and matches the scalar reference.
+- Validation:
+  - `cargo test -p fastpq_prover public_gpu_bn254_poseidon_word_batches_chunk_large_izanami_shape --features fastpq-gpu -- --nocapture`
+    with `CARGO_TARGET_DIR=/tmp/iroha-codex-continue-fastpq`
+  - `cargo test -p fastpq_prover compact_slice_chunk --features fastpq-gpu -- --nocapture`
+    with `CARGO_TARGET_DIR=/tmp/iroha-codex-continue-fastpq`
+  - `cargo test -p fastpq_prover chunked_pending --features fastpq-gpu -- --nocapture`
+    with `CARGO_TARGET_DIR=/tmp/iroha-codex-continue-fastpq`
+  - `cargo test -p fastpq_prover domain_hash --features fastpq-gpu -- --nocapture`
+    with `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-limb-groups`
+  - `cargo test -p fastpq_prover poseidon_column_batch --features fastpq-gpu -- --nocapture`
+    with `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-limb-groups`
+  - `cargo test -p fastpq_prover poseidon --features fastpq-gpu -- --nocapture`
+    with `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-limb-groups`
+  - `cargo test -p fastpq_prover proof --features fastpq-gpu -- --nocapture`
+    with `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-limb-groups`
+  - `cargo check -p fastpq_prover` with
+    `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-default-check`
+  - `cargo clippy -p fastpq_prover -- -D warnings` with
+    `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-default-check`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+
+## 2026-05-09 Offline Note V2 payment-token QR/JSON codec
+
+- Kotlin/JVM, Java Android, and Swift now expose payment-token handoff codecs
+  for Offline Note V2 wallet QR flows. The compact JSON payload carries the
+  v2 type/version, invoice/payment-request id, token id, creation timestamp,
+  and the canonical Norito audit bundle as `audit_norito_base64`.
+- The codecs roundtrip through the public Norito audit decoder, reject token
+  ids that do not match the embedded audit bundle, support the
+  `wallet-offline-payment-v2:` text prefix, and produce Fountain QR frames
+  tagged as `OFFLINE_PAYMENT_TOKEN_V2`.
+- Cross-SDK tests now cover JSON bytes, prefixed text, and QR frame
+  encode/decode roundtrips for the shared Offline Note V2 fixture token.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
+  - `swift test` from `IrohaSwift`
+
+## 2026-05-09 Offline Note V2 public SDK Norito decoders
+
+- Kotlin/JVM, Java Android, and Swift now expose public Offline Note V2 Norito
+  decoders for key certificate payloads/certificates, issue payloads, issued
+  claims, redeem payloads/public inputs, audit bundles/public inputs, and the
+  wallet-derived commitment/nullifier/payment-token-id preimages.
+- The SDK adapters now decode the same framed compact Norito payloads they
+  already encode, including account identifiers, asset identifiers, recursive
+  proof boxes, commitment origins, numeric amounts, hash vectors, and optional
+  certificate usage limits. Swift also handles bridge-unavailable asset address
+  roundtrips in tests with a checked fallback literal.
+- Cross-SDK fixture tests roundtrip the shared Offline Note V2 vectors through
+  the new public decoders and re-encode them back to the canonical bytes.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
+  - `swift test` from `IrohaSwift`
+
+## 2026-05-09 Sumeragi validation inline fallback cleanup
+
+- Commit and commit-QC validation now supersede stale, disconnected, stalled,
+  or expired active-frontier worker/vNext ownership and run validation inline.
+  Healthy near-quorum commit votes, commit-QC/cached-QC evidence, and small
+  fast-finality blocks still use the vNext worker path while that path is
+  making progress.
+- Inline fallback clears stale legacy inflight ids and vNext validation slots
+  before validating, so late worker results remain filtered and the active
+  frontier no longer waits indefinitely on dead ownership.
+- When cached commit evidence is already present, inline validation can replay
+  that evidence immediately, commit the frontier block, and prune the pending
+  entry instead of leaving it resident as `Valid`.
+- Vote-only exact-frontier block-sync updates now record commit-vote
+  placeholders for the tracked frontier and allow those votes through the
+  fast path without materializing a pending body when the block is still
+  unknown locally.
+- Synthetic vNext vote/QC block-sync fixtures now sign against the actor's
+  active `(chain_order_hash, rechain_seq)` binding, so exact-frontier recovery
+  tests exercise the same binding path as live peers instead of the default
+  genesis binding.
+- Focused tests cover stale commit-QC supersession, queue-full inline fallback,
+  configured fallback timing, stalled and disconnected inflight supersession,
+  fresh inflight deferral, healthy vNext worker dispatch, and unknown
+  vote-only frontier block-sync recovery. The broad `block_sync_update_` unit
+  sweep is green with `106` tests.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib block_sync_update_ --features fastpq-gpu -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib vote_only --features fastpq-gpu -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib stale_frontier_with --features fastpq-gpu -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib vnext_worker --features fastpq-gpu -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo check -p iroha_core --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib validation_inline -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib commit_pipeline_inlines_validation -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib fresh_inflight_validation -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib validation_dispatches_near_tip_cached_commit_qc_to_workers -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib block_sync_update_tracks_missing_qc_for_unknown_frontier_vote_only_update -- --nocapture`
+
+## 2026-05-09 Offline V2 issuer OpenAPI body auth
+
+- Torii OpenAPI now documents all Offline V2 issuer POST endpoints:
+  `/v1/offline/v2/keys/refill`, `/v1/offline/v2/notes/issue`,
+  `/v1/offline/v2/notes/redeem`, and `/v1/offline/v2/audit`.
+- The shared `OfflineV2IssuerBodyAuthRequest` schema records the required
+  top-level `account_id`, `timestamp_ms`, and `nonce` fields plus exactly one
+  proof field, `signature_base64` or `witness_base64`, and calls out that
+  nested fields with those names remain signed business data. The OpenAPI info
+  and Offline tag descriptions now state that these issuer POSTs reject legacy
+  `X-Iroha-*` app-auth headers.
+- Focused cleanup also removed current strict-clippy blockers in the Sumeragi
+  vNext validation diff and FASTPQ Poseidon helper visibility without changing
+  the public Offline V2 behavior.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-openapi cargo test -p iroha_torii --lib generated_spec_includes_documented_paths -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-openapi cargo test -p iroha_torii --lib generated_spec_documents_offline_v2_body_auth_schema -- --nocapture`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+
+## 2026-05-09 Offline Note V2 wallet regression hardening
+
+- Kotlin/JVM, Java Android, and Swift Offline Note V2 wallet tests now cover
+  duplicate P2P payment-token acceptance, already-pending input rejection, and
+  failed audit/redeem submission reconciliation through the resolver-backed
+  `sync()` path.
+- The failed-audit regressions assert that sender source notes are restored to
+  `SPENDABLE`, pending change outputs are cancelled, and recipient pending
+  outputs are cancelled when the audit transaction is rejected. The
+  failed-redeem regressions assert that `REDEEM_PENDING` notes return to
+  `SPENDABLE` after a rejected redeem transaction outcome.
+- Production Torii/offline outcome adapters were still open at this point;
+  the later 2026-05-09 explorer outcome sync adapters close that gap by
+  deriving wallet note resolutions from explorer instruction payloads.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
+  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift`
+
 ## 2026-05-09 FASTPQ batched proof Poseidon and exact-frontier recovery
 
 - FASTPQ proof construction now routes independent Poseidon work through
@@ -39,6 +286,54 @@ Last updated: 2026-05-09
   overflow in
   `plain_block_body_response_releases_dedup_for_active_missing_commit_qc_repair`.
   No fresh 20k Izanami gate/profile was run for this entry.
+
+## 2026-05-09 20k Izanami gate/profile rerun
+
+- Rebuilt current release binaries in
+  `/tmp/iroha-codex-20k-current-20260509-093407` with
+  `irohad/fastpq-gpu`. The build completed, but emitted existing FASTPQ Metal
+  dead-code warnings plus current Sumeragi unused-code warnings in
+  `commit.rs` and `validation.rs`.
+- The fresh 120s 20k prebuilt gate artifacts are in
+  `dist/izanami-prebuilt-20k-fastpq-gpu-current-120s-20260509-093407`. Izanami
+  accepted and submitted all `2,400,000` transactions with zero submit
+  failures, queue drops, prebuild fallbacks, prebuild skips, or prebuild build
+  failures. Submit latency stayed low (`p50=3ms`, `p95=14ms`).
+- The gate is a hard fail: strict height stopped at `2`, strict approved
+  transactions stopped at `114`, final queue depth was `893,219 / 2,400,000`,
+  and the run installed `73` view changes. Sumeragi reported `17` quorum-timeout
+  view changes, `11` missing-QC view changes, `314` missing-block fetches,
+  `17/17` missing-QC reacquire successes, and queue saturation.
+- Peer logs show the active-load stall is still exact-frontier consensus
+  recovery, not ingress: the run logged `2,891` `block sync: no QC available
+  for block` messages, `763` `skipping NEW_VIEW certificate` warnings, and
+  active-pending stalls with `timeout_ms: 5000` but `max_pending_stall_ms:
+  6138`. The five-second cap fires, but the production SLA is not satisfied.
+- FASTPQ preflights still reported `ok=true` on all peers and no BN254/Metal
+  preflight failures were logged, but the new proof Poseidon limb-batch path is
+  not accepted: the gate logged `65` GPU limb-batch parity mismatches followed
+  by CPU fallback.
+- A separate 90s sampled profile is in
+  `dist/izanami-profile-20k-fastpq-gpu-current-sampled-90s-20260509-093407`.
+  It reproduced the stall with strict height `2`, strict approved `41`, queue
+  depth `690,223`, and `711` installed view changes, mostly quorum timeouts.
+  `/usr/bin/sample` targeted peer process `10389` for `45s`; the sample still
+  shows CPU proof hashing in the hot set (`hash_u64_words_internal`) alongside
+  SHA-256, Curve25519/Ed25519, Blake2, CRC64, Norito encode/decode, allocator,
+  and transport crypto leaves.
+- Current critique: this tree regressed behind the previous 2026-05-08 gate.
+  The immediate blockers are (1) fix the Metal/domain-separated limb batch
+  parity mismatch so proof hashing does not fall back to CPU, and (2) fix
+  same-height Sumeragi recovery/view-change churn so exact-frontier commit QC
+  evidence either commits, advances, or clears stale ownership without repeated
+  no-QC/block-sync loops.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-20k-current-20260509-093407 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`
+  - 120s 20k Izanami prebuilt gate with rebuilt binaries and
+    `--duration 120s --pipeline-time 300ms --tps 20000 --max-inflight 300000 --submitters 4096 --prebuild-tx-buffer 2400000`
+  - 90s 20k Izanami sampled profile with rebuilt binaries and the same load
+    shape
+  - `/usr/bin/sample 10389 45 1`
 
 ## 2026-05-09 Sumeragi vNext durable certificate sidecars
 

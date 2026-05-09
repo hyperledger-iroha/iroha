@@ -6,11 +6,6 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## FASTPQ GPU acceleration follow-ups
 
-- Prove the new batched proof Poseidon paths in a fresh release 20k Izanami
-  gate/profile. The local proof and Poseidon suites are green, but the
-  acceptance run still needs to confirm that row/domain batch hashing removes
-  sustained single-state Poseidon GPU hot spots while beating the latest
-  `61,622` strict-approved baseline.
 - Fix Metal/CUDA Poseidon Merkle parent-pair batch parity so the guarded
   FASTPQ trace Merkle-pair accelerator can enable on real GPU backends. Keep
   the scalar fallback active until the preflight passes.
@@ -22,23 +17,23 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Sumeragi vNext consensus replacement
 
-- Prove the active-load five-second production ceiling with a fresh 20k Izanami
-  gate/profile. The implementation now caps active-pending/idle recovery
-  damping at five seconds under transaction backlog and lowers the default
-  commit-inflight stall reporting window to `5_000ms`; the open work is to
-  rebuild release binaries, rerun the 120s gate and 90s sampled profile, verify
-  there are no block-production gaps above five seconds, and beat the latest
-  clean gate baseline of `61,622` strict-approved transactions with final queue
-  depth below `861,515`. The latest 120s return artifact
-  `dist/izanami-prebuilt-20k-fastpq-gpu-sumeragi-5s-clean2-120s-20260508-185439`
-  confirms the timeout cap fires but does not satisfy the production-cadence or
-  throughput gates: strict approved ended at `12,388`, strict height `5`, queue
-  depth `880,537`, and peer logs show active-pending recovery churn, missing-QC
-  block-sync repair, and height-skew validation rejection. Exact-frontier
-  certified recovery now clears stale same-height commit-inflight ownership
-  while preserving payload-only repair semantics; next work is to make the
-  broader Sumeragi vote/QC/topology suite green again and then rerun the 20k
-  gate/profile.
+- Fix the active-load exact-frontier recovery regression exposed by the 20k
+  Izanami reruns. After the 2026-05-09 FASTPQ GPU fallback cleanup, the 120s
+  gate
+  `dist/izanami-prebuilt-20k-fastpq-gpu-bn254-128seq-rowguard-120s-20260509-163329`
+  accepted all `2,400,000` submissions with zero submit/prebuild failures and
+  no GPU fallback/parity warnings, but still stalled at strict height `3`,
+  strict approved `4,361`, queue depth `708,637`, and a saturated transaction
+  queue. The 90s sampled profile
+  `dist/izanami-profile-20k-fastpq-gpu-clean-sampled-90s-20260509-163714`
+  reproduced strict height `3`, strict approved `4,279`, queue depth
+  `653,043`, and quorum-timeout/backpressure churn. The 2026-05-09 model pass
+  now covers exact-frontier vote-only placeholders, active vNext
+  chain-order-bound vote/QC fixtures, and the broad `block_sync_update_` unit
+  sweep. The remaining acceptance step is a fresh Izanami run proving
+  same-height commit-QC/body recovery can commit the known frontier, advance the
+  view with quorum evidence, or clear stale local ownership under active load
+  without re-entering repeated no-QC repair loops.
 - Finish moving the remaining consensus-shell effects onto typed
   `sumeragi::vnext::ReactorEvent`/`ReactorEffect` adapters. vNext control
   frames, accepted body-backed proposals, DA/RBC availability handoffs, timeout
@@ -46,9 +41,12 @@ Completed history lives in `status.md`. This file should only track unfinished w
   validation gate, validation accept/reject/defer effects,
   validation/re-chain recovery effects, re-chain/view-change vote aggregation,
   view-change certificate installation, block-sync certificate sidecar replay,
-  and commit-persistence completion now enter the live reactor, but the broader
-  block consensus shell still needs the remaining effect adapters before the
-  legacy cooperative commit sweep and inline validation fallback can be deleted.
+  and commit-persistence completion now enter the live reactor. Healthy
+  validation remains on the vNext worker path, while stale, disconnected,
+  stalled, and expired frontier validation is superseded and validated inline
+  to keep the active frontier from waiting on dead worker ownership. The
+  broader block consensus shell still needs the remaining effect adapters
+  before the legacy cooperative commit sweep can be deleted.
 - Finish auditing chain-order hash and `rechain_seq` binding in deferred
   vote/QC caches, signer-tally/cache keys, and evidence replay paths used by
   the replacement shell. Vote/QC preimages, precommit signer history,
@@ -66,21 +64,6 @@ Completed history lives in `status.md`. This file should only track unfinished w
 - Add model and integration coverage for slow validation, queue saturation,
   malicious accusers, head failure during re-chain, NPoS stake-quorum
   quarantine edges, and DA/RBC loss during re-chain.
-
-## Offline Note V2 wallet SDK completion
-
-- Finish wallet reconciliation behind the one-call `OfflineNoteV2Wallet`
-  facades:
-  - add production Torii/offline outcome-index adapters for the new
-    resolver-backed `sync()` path in Kotlin/JVM, Java Android, and Swift;
-  - add duplicate-token, already-spent, failed-audit, and failed-redeem
-    mock-transport regressions around resolver outcomes.
-- Add structured encrypted Offline Note V2 wallet-note stores:
-  Android Keystore-backed secure storage in the platform module and Swift
-  Keychain-backed storage modeled after `ConnectKeyStore`. Kotlin/JVM, Java
-  Android, and Swift now have structured in-memory stores for SDK tests.
-- Add public Norito decoders for Offline Note V2 key certificates, issued
-  claims, redeem payloads, audit bundles, and payment tokens.
 
 ## Validation corridor
 

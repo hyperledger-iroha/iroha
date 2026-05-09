@@ -1,12 +1,26 @@
 package org.hyperledger.iroha.sdk.offline
 
 import java.math.BigDecimal
+import java.net.URI
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
+import java.time.Duration
+import java.util.Base64
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.function.LongSupplier
+import org.hyperledger.iroha.sdk.client.ClientObserver
 import org.hyperledger.iroha.sdk.client.ClientResponse
+import org.hyperledger.iroha.sdk.client.HttpErrorMessageExtractor
+import org.hyperledger.iroha.sdk.client.HttpTransportExecutor
 import org.hyperledger.iroha.sdk.client.IrohaClient
+import org.hyperledger.iroha.sdk.client.JsonEncoder
+import org.hyperledger.iroha.sdk.client.JsonParser
+import org.hyperledger.iroha.sdk.client.PlatformHttpTransportExecutor
+import org.hyperledger.iroha.sdk.client.TransportSecurity
+import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
@@ -241,6 +255,114 @@ class OfflineNoteV2PaymentToken(
     fun tokenIdHex(): String = hexLower(_tokenId)
 }
 
+/** QR/JSON handoff codec for Offline Note V2 payment tokens. */
+object OfflineNoteV2PaymentTokenCodec {
+    const val TYPE: String = "offline_payment_token_v2"
+    const val VERSION: Long = 2
+    const val TEXT_PREFIX: String = "wallet-offline-payment-v2:"
+
+    @JvmStatic
+    fun encodeJson(token: OfflineNoteV2PaymentToken): ByteArray {
+        val payload = linkedMapOf<String, Any?>(
+            "version" to VERSION,
+            "type" to TYPE,
+            "invoice_id" to token.paymentRequestId,
+            "token_id" to token.tokenIdHex(),
+            "audit_norito_base64" to Base64.getEncoder().encodeToString(token.audit.noritoEncoded()),
+            "created_at_ms" to token.createdAtMs,
+        )
+        return JsonEncoder.encode(payload).toByteArray(StandardCharsets.UTF_8)
+    }
+
+    @JvmStatic
+    fun decodeJson(payload: ByteArray): OfflineNoteV2PaymentToken {
+        val obj = parseObject(payload)
+        val version = asLong(obj["version"], "version")
+        require(version == VERSION) { "Offline Note V2 payment token JSON version must be $VERSION" }
+        require(asString(obj["type"], "type") == TYPE) { "Offline Note V2 payment token JSON type mismatch" }
+        val paymentRequestId = asOptionalString(obj["invoice_id"])
+            ?: asString(obj["payment_request_id"], "payment_request_id")
+        val tokenId = hexBytes(asString(obj["token_id"], "token_id"), "token_id")
+        val auditBytes = Base64.getDecoder().decode(asString(obj["audit_norito_base64"], "audit_norito_base64"))
+        val audit = OfflineNoteV2.decodeAudit(auditBytes)
+        require(audit.tokenId().contentEquals(tokenId)) {
+            "Offline Note V2 payment token id does not match audit bundle"
+        }
+        return OfflineNoteV2PaymentToken(
+            paymentRequestId = paymentRequestId,
+            tokenId = tokenId,
+            audit = audit,
+            createdAtMs = asLong(obj["created_at_ms"], "created_at_ms"),
+        )
+    }
+
+    @JvmStatic
+    fun encodeText(token: OfflineNoteV2PaymentToken): String =
+        TEXT_PREFIX + Base64.getEncoder().encodeToString(encodeJson(token))
+
+    @JvmStatic
+    fun decodeText(text: String): OfflineNoteV2PaymentToken {
+        val trimmed = text.trim()
+        require(trimmed.startsWith(TEXT_PREFIX)) { "Offline Note V2 payment token prefix missing" }
+        return decodeJson(Base64.getDecoder().decode(trimmed.substring(TEXT_PREFIX.length)))
+    }
+
+    @JvmStatic
+    fun encodeQrFrameBytes(token: OfflineNoteV2PaymentToken): List<ByteArray> =
+        encodeQrFrameBytes(token, OfflineQrStream.Options())
+
+    @JvmStatic
+    fun encodeQrFrameBytes(
+        token: OfflineNoteV2PaymentToken,
+        options: OfflineQrStream.Options,
+    ): List<ByteArray> =
+        OfflineQrStream.Encoder.encodeFrameBytes(
+            encodeJson(token),
+            OfflineQrStream.PayloadKind.OFFLINE_PAYMENT_TOKEN_V2,
+            options,
+        )
+
+    @JvmStatic
+    fun decodeQrPayload(payload: ByteArray): OfflineNoteV2PaymentToken = decodeJson(payload)
+
+    @Suppress("UNCHECKED_CAST")
+    private fun parseObject(payload: ByteArray): Map<String, Any?> {
+        val parsed = JsonParser.parse(String(payload, StandardCharsets.UTF_8))
+        require(parsed is Map<*, *>) { "Offline Note V2 payment token JSON root must be an object" }
+        return parsed as Map<String, Any?>
+    }
+
+    private fun asString(value: Any?, field: String): String {
+        require(value is String && value.isNotBlank()) { "$field must be a non-empty string" }
+        return value
+    }
+
+    private fun asOptionalString(value: Any?): String? {
+        if (value == null) return null
+        require(value is String && value.isNotBlank()) { "optional string field must be non-empty when present" }
+        return value
+    }
+
+    private fun asLong(value: Any?, field: String): Long = when (value) {
+        is Number -> value.toLong()
+        is String -> value.toLong()
+        else -> throw IllegalArgumentException("$field must be an integer")
+    }
+
+    private fun hexBytes(value: String, field: String): ByteArray {
+        val normalized = value.lowercase(Locale.ROOT)
+        require(normalized.length % 2 == 0) { "$field must have an even hex length" }
+        val out = ByteArray(normalized.length / 2)
+        for (index in out.indices) {
+            val hi = Character.digit(normalized[index * 2], 16)
+            val lo = Character.digit(normalized[index * 2 + 1], 16)
+            require(hi >= 0 && lo >= 0) { "$field must be hex" }
+            out[index] = ((hi shl 4) or lo).toByte()
+        }
+        return out
+    }
+}
+
 /** Submits direct Offline Note V2 audit/redeem transactions. */
 interface OfflineNoteV2TransactionSubmitter {
     fun submitAudit(audit: OfflineNoteV2.AuditBundleV2): CompletableFuture<ClientResponse>
@@ -256,6 +378,339 @@ class OfflineNoteV2SyncResolution @JvmOverloads constructor(
 /** Looks up transaction-outcome state for pending wallet notes. */
 interface OfflineNoteV2SyncResolver {
     fun resolvePendingNote(note: OfflineNoteV2WalletNote): CompletableFuture<OfflineNoteV2SyncResolution?>
+}
+
+/** One explorer instruction outcome used by Offline Note V2 wallet reconciliation. */
+class OfflineNoteV2ExplorerInstructionOutcome @JvmOverloads constructor(
+    val kind: String,
+    val transactionStatus: String,
+    val transactionHashHex: String? = null,
+    encodedInstruction: ByteArray,
+) {
+    private val _encodedInstruction = encodedInstruction.copyOf()
+
+    init {
+        require(kind.trim().isNotEmpty()) { "kind must not be blank" }
+        require(transactionStatus.trim().isNotEmpty()) { "transactionStatus must not be blank" }
+        require(_encodedInstruction.isNotEmpty()) { "encodedInstruction must not be empty" }
+    }
+
+    fun encodedInstruction(): ByteArray = _encodedInstruction.copyOf()
+}
+
+/** Supplies recent Offline Note V2 explorer outcomes for resolver-backed wallet sync. */
+interface OfflineNoteV2OutcomeProvider {
+    fun listOutcomes(): CompletableFuture<List<OfflineNoteV2ExplorerInstructionOutcome>>
+}
+
+/** Outcome index that maps committed/rejected Offline Note V2 instructions to note states. */
+class OfflineNoteV2OutcomeIndex {
+    private val spentInputNullifiers = LinkedHashMap<String, String?>()
+    private val rejectedAuditInputs = LinkedHashMap<String, String?>()
+    private val committedAuditOutputs = LinkedHashMap<String, String?>()
+    private val rejectedAuditOutputs = LinkedHashMap<String, String?>()
+    private val committedRedeems = LinkedHashMap<String, String?>()
+    private val rejectedRedeems = LinkedHashMap<String, String?>()
+
+    fun recordCommittedAudit(audit: OfflineNoteV2.AuditBundleV2, transactionHashHex: String?): OfflineNoteV2OutcomeIndex {
+        audit.inputNullifiers().forEach { putFirst(spentInputNullifiers, it, transactionHashHex) }
+        audit.outputCommitments().forEach { putFirst(committedAuditOutputs, it, transactionHashHex) }
+        return this
+    }
+
+    fun recordRejectedAudit(audit: OfflineNoteV2.AuditBundleV2, transactionHashHex: String?): OfflineNoteV2OutcomeIndex {
+        audit.inputClaims.forEach { putFirst(rejectedAuditInputs, it.noteCommitment(), transactionHashHex) }
+        audit.outputCommitments().forEach { putFirst(rejectedAuditOutputs, it, transactionHashHex) }
+        return this
+    }
+
+    fun recordCommittedRedeem(redeem: OfflineNoteV2.RedeemV2, transactionHashHex: String?): OfflineNoteV2OutcomeIndex {
+        putFirst(committedRedeems, redeem.sourceNoteCommitment(), transactionHashHex)
+        return this
+    }
+
+    fun recordRejectedRedeem(redeem: OfflineNoteV2.RedeemV2, transactionHashHex: String?): OfflineNoteV2OutcomeIndex {
+        putFirst(rejectedRedeems, redeem.sourceNoteCommitment(), transactionHashHex)
+        return this
+    }
+
+    fun resolve(note: OfflineNoteV2WalletNote): OfflineNoteV2SyncResolution? =
+        when (note.state) {
+            OfflineNoteV2WalletNoteState.SPEND_PENDING -> resolveSpendPending(note)
+            OfflineNoteV2WalletNoteState.CHANGE_PENDING,
+            OfflineNoteV2WalletNoteState.RECEIVE_PENDING -> resolveOutputPending(note)
+            OfflineNoteV2WalletNoteState.REDEEM_PENDING -> resolveRedeemPending(note)
+            else -> null
+        }
+
+    private fun resolveSpendPending(note: OfflineNoteV2WalletNote): OfflineNoteV2SyncResolution? {
+        val inputNullifier = OfflineNoteV2.deriveInputNullifier(
+            OfflineNoteV2.InputNullifierPreimageV2(
+                chainId = note.chainId,
+                sourceNoteCommitment = note.noteCommitment(),
+                ownerKeyCertificatePayloadHash = note.keyCertificate.payloadHash(),
+                noteSecret = note.noteSecret(),
+            )
+        )
+        val nullifierKey = hexLower(inputNullifier)
+        if (spentInputNullifiers.containsKey(nullifierKey)) {
+            return OfflineNoteV2SyncResolution(
+                OfflineNoteV2WalletNoteState.SPENT,
+                spentInputNullifiers[nullifierKey],
+            )
+        }
+        val commitmentKey = note.noteCommitmentHex()
+        if (rejectedAuditInputs.containsKey(commitmentKey)) {
+            return OfflineNoteV2SyncResolution(
+                OfflineNoteV2WalletNoteState.SPENDABLE,
+                rejectedAuditInputs[commitmentKey],
+            )
+        }
+        return null
+    }
+
+    private fun resolveOutputPending(note: OfflineNoteV2WalletNote): OfflineNoteV2SyncResolution? {
+        val commitmentKey = note.noteCommitmentHex()
+        if (committedAuditOutputs.containsKey(commitmentKey)) {
+            return OfflineNoteV2SyncResolution(
+                OfflineNoteV2WalletNoteState.SPENDABLE,
+                committedAuditOutputs[commitmentKey],
+            )
+        }
+        if (rejectedAuditOutputs.containsKey(commitmentKey)) {
+            return OfflineNoteV2SyncResolution(
+                OfflineNoteV2WalletNoteState.CANCELLED,
+                rejectedAuditOutputs[commitmentKey],
+            )
+        }
+        return null
+    }
+
+    private fun resolveRedeemPending(note: OfflineNoteV2WalletNote): OfflineNoteV2SyncResolution? {
+        val commitmentKey = note.noteCommitmentHex()
+        if (committedRedeems.containsKey(commitmentKey)) {
+            return OfflineNoteV2SyncResolution(
+                OfflineNoteV2WalletNoteState.REDEEMED,
+                committedRedeems[commitmentKey],
+            )
+        }
+        if (rejectedRedeems.containsKey(commitmentKey)) {
+            return OfflineNoteV2SyncResolution(
+                OfflineNoteV2WalletNoteState.SPENDABLE,
+                rejectedRedeems[commitmentKey],
+            )
+        }
+        return null
+    }
+
+    private fun putFirst(target: MutableMap<String, String?>, bytes: ByteArray, transactionHashHex: String?) {
+        val key = hexLower(bytes)
+        if (!target.containsKey(key)) {
+            target[key] = transactionHashHex
+        }
+    }
+
+    companion object {
+        const val KIND_ISSUE: String = "IssueOfflineNoteV2"
+        const val KIND_REDEEM: String = "RedeemOfflineNoteV2"
+        const val KIND_AUDIT: String = "AuditOfflineNoteV2"
+
+        @JvmStatic
+        fun fromExplorerOutcomes(outcomes: List<OfflineNoteV2ExplorerInstructionOutcome>): OfflineNoteV2OutcomeIndex {
+            val index = OfflineNoteV2OutcomeIndex()
+            for (outcome in outcomes) {
+                val committed = outcome.transactionStatus.equals("committed", ignoreCase = true)
+                val rejected = outcome.transactionStatus.equals("rejected", ignoreCase = true)
+                if (!committed && !rejected) continue
+                when {
+                    outcome.kind.equals(KIND_AUDIT, ignoreCase = true) -> {
+                        val audit = OfflineNoteV2.decodeAuditInstruction(outcome.encodedInstruction())
+                        if (committed) {
+                            index.recordCommittedAudit(audit, outcome.transactionHashHex)
+                        } else {
+                            index.recordRejectedAudit(audit, outcome.transactionHashHex)
+                        }
+                    }
+                    outcome.kind.equals(KIND_REDEEM, ignoreCase = true) -> {
+                        val redeem = OfflineNoteV2.decodeRedeemInstruction(outcome.encodedInstruction())
+                        if (committed) {
+                            index.recordCommittedRedeem(redeem, outcome.transactionHashHex)
+                        } else {
+                            index.recordRejectedRedeem(redeem, outcome.transactionHashHex)
+                        }
+                    }
+                }
+            }
+            return index
+        }
+    }
+}
+
+/** Sync resolver that rebuilds an outcome index from a provider for each wallet sync pass. */
+class OfflineNoteV2OutcomeIndexSyncResolver(
+    private val provider: OfflineNoteV2OutcomeProvider,
+) : OfflineNoteV2SyncResolver {
+    override fun resolvePendingNote(
+        note: OfflineNoteV2WalletNote,
+    ): CompletableFuture<OfflineNoteV2SyncResolution?> =
+        provider.listOutcomes().thenApply { OfflineNoteV2OutcomeIndex.fromExplorerOutcomes(it).resolve(note) }
+}
+
+/** Torii explorer-backed provider for Offline Note V2 wallet reconciliation outcomes. */
+class ToriiOfflineNoteV2OutcomeProvider @JvmOverloads constructor(
+    private val executor: HttpTransportExecutor = PlatformHttpTransportExecutor.createDefault(),
+    private val baseUri: URI = URI.create("http://localhost:8080"),
+    private val timeout: Duration? = Duration.ofSeconds(15),
+    defaultHeaders: Map<String, String> = emptyMap(),
+    observers: List<ClientObserver> = emptyList(),
+    private val perPage: Int = 100,
+) : OfflineNoteV2OutcomeProvider {
+    private val defaultHeaders: Map<String, String> = LinkedHashMap(defaultHeaders)
+    private val observers: List<ClientObserver> = observers.toList()
+
+    override fun listOutcomes(): CompletableFuture<List<OfflineNoteV2ExplorerInstructionOutcome>> {
+        val audit = fetchKind(OfflineNoteV2OutcomeIndex.KIND_AUDIT)
+        val redeem = fetchKind(OfflineNoteV2OutcomeIndex.KIND_REDEEM)
+        return CompletableFuture.allOf(audit, redeem).thenApply {
+            audit.join() + redeem.join()
+        }
+    }
+
+    private fun fetchKind(kind: String): CompletableFuture<List<OfflineNoteV2ExplorerInstructionOutcome>> {
+        val request = buildGetRequest(
+            "/v1/explorer/instructions",
+            linkedMapOf("kind" to kind, "per_page" to perPage.toString()),
+        )
+        notifyRequest(request)
+        val future = CompletableFuture<List<OfflineNoteV2ExplorerInstructionOutcome>>()
+        executor.execute(request).whenComplete { response, throwable ->
+            if (throwable != null) {
+                val error = OfflineToriiException(
+                    "Offline Note V2 outcome lookup failed: ${throwable.message ?: throwable.javaClass.simpleName}",
+                    throwable,
+                    null,
+                    null,
+                    null,
+                )
+                notifyFailure(request, error)
+                future.completeExceptionally(error)
+                return@whenComplete
+            }
+            val clientResponse = ClientResponse(
+                response.statusCode,
+                response.body,
+                response.message,
+                null,
+                HttpErrorMessageExtractor.extractRejectCode(response.headers, "x-iroha-reject-code"),
+            )
+            if (response.statusCode < 200 || response.statusCode >= 300) {
+                val error = OfflineToriiException(
+                    "Offline Note V2 outcome lookup failed with HTTP ${response.statusCode}",
+                    response.statusCode,
+                    clientResponse.rejectCode,
+                    HttpErrorMessageExtractor.extractMessage(response.body),
+                )
+                notifyFailure(request, error)
+                future.completeExceptionally(error)
+                return@whenComplete
+            }
+            try {
+                val parsed = parseExplorerOutcomes(response.body)
+                notifyResponse(request, clientResponse)
+                future.complete(parsed)
+            } catch (ex: RuntimeException) {
+                val error = OfflineToriiException(
+                    "Failed to parse Offline Note V2 explorer outcomes",
+                    ex,
+                    response.statusCode,
+                    clientResponse.rejectCode,
+                    HttpErrorMessageExtractor.extractMessage(response.body),
+                )
+                notifyFailure(request, error)
+                future.completeExceptionally(error)
+            }
+        }
+        return future
+    }
+
+    private fun buildGetRequest(path: String, queryParams: Map<String, String>): TransportRequest {
+        val target = appendQuery(resolvePath(path), queryParams)
+        val headers = mergeHeaders()
+        TransportSecurity.requireHttpRequestAllowed(
+            "ToriiOfflineNoteV2OutcomeProvider",
+            baseUri,
+            target,
+            headers,
+            null,
+        )
+        val builder = TransportRequest.builder().setUri(target).setMethod("GET").setTimeout(timeout)
+        headers.forEach { (name, value) -> builder.addHeader(name, value) }
+        return builder.build()
+    }
+
+    private fun resolvePath(path: String): URI {
+        val normalized = if (path.startsWith("/")) path.substring(1) else path
+        val base = baseUri.toString()
+        return URI.create(if (base.endsWith("/")) base + normalized else "$base/$normalized")
+    }
+
+    private fun appendQuery(uri: URI, params: Map<String, String>): URI {
+        if (params.isEmpty()) return uri
+        val query = params.entries.joinToString("&") {
+            "${urlEncode(it.key)}=${urlEncode(it.value)}"
+        }
+        val base = uri.toString()
+        val separator = if (base.contains("?")) "&" else "?"
+        return URI.create(base + separator + query)
+    }
+
+    private fun urlEncode(value: String): String =
+        URLEncoder.encode(value, StandardCharsets.UTF_8.name())
+
+    private fun mergeHeaders(): Map<String, String> {
+        val headers = LinkedHashMap(defaultHeaders)
+        headers[findHeader(headers, "Accept") ?: "Accept"] = "application/json"
+        return headers
+    }
+
+    private fun parseExplorerOutcomes(payload: ByteArray): List<OfflineNoteV2ExplorerInstructionOutcome> {
+        val parsed = JsonParser.parse(String(payload, StandardCharsets.UTF_8))
+        val root = requireObject(parsed, "explorer response")
+        val items = root["items"] as? List<*> ?: throw IllegalArgumentException("items must be an array")
+        return items.map { item ->
+            val obj = requireObject(item, "instruction item")
+            val box = requireObject(obj["r#box"] ?: obj["box"], "instruction box")
+            val encoded = box["encoded"] as? String
+                ?: requireNestedEncoded(box)
+            OfflineNoteV2ExplorerInstructionOutcome(
+                kind = requiredString(obj, "kind"),
+                transactionStatus = requiredString(obj, "transaction_status"),
+                transactionHashHex = obj["transaction_hash"] as? String,
+                encodedInstruction = hexBytes(encoded, "encoded"),
+            )
+        }
+    }
+
+    private fun requireNestedEncoded(box: Map<String, Any?>): String {
+        val json = box["json"] as? Map<*, *> ?: throw IllegalArgumentException("instruction box encoded payload missing")
+        val encoded = json["encoded"] as? String ?: throw IllegalArgumentException("instruction box encoded payload missing")
+        return encoded
+    }
+
+    private fun notifyRequest(request: TransportRequest) {
+        observers.forEach { it.onRequest(request) }
+    }
+
+    private fun notifyResponse(request: TransportRequest, response: ClientResponse) {
+        observers.forEach { it.onResponse(request, response) }
+    }
+
+    private fun notifyFailure(request: TransportRequest, error: Throwable) {
+        observers.forEach { it.onFailure(request, error) }
+    }
+
+    private fun findHeader(headers: Map<String, String>, name: String): String? =
+        headers.keys.firstOrNull { it.equals(name, ignoreCase = true) }
 }
 
 /** Transaction submitter that wraps Offline V2 instructions in signed Iroha transactions. */
@@ -677,6 +1132,31 @@ private fun <T> failedFuture(error: Throwable): CompletableFuture<T> {
     val future = CompletableFuture<T>()
     future.completeExceptionally(error)
     return future
+}
+
+@Suppress("UNCHECKED_CAST")
+private fun requireObject(value: Any?, path: String): Map<String, Any?> {
+    require(value is Map<*, *>) { "$path must be an object" }
+    return value as Map<String, Any?>
+}
+
+private fun requiredString(value: Map<String, Any?>, field: String): String {
+    val raw = value[field]
+    require(raw is String && raw.isNotBlank()) { "$field must be a non-empty string" }
+    return raw
+}
+
+private fun hexBytes(value: String, field: String): ByteArray {
+    val normalized = value.removePrefix("0x").removePrefix("0X").lowercase(Locale.ROOT)
+    require(normalized.length % 2 == 0) { "$field must have an even hex length" }
+    val out = ByteArray(normalized.length / 2)
+    for (index in out.indices) {
+        val hi = Character.digit(normalized[index * 2], 16)
+        val lo = Character.digit(normalized[index * 2 + 1], 16)
+        require(hi >= 0 && lo >= 0) { "$field must be hex" }
+        out[index] = ((hi shl 4) or lo).toByte()
+    }
+    return out
 }
 
 private fun hexLower(bytes: ByteArray): String {

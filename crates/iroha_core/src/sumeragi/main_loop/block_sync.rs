@@ -2606,6 +2606,28 @@ impl Actor {
             // can be dropped before they revive the pending entry.
             requested_missing_block = true;
         }
+        if vote_only_frontier_update
+            && exact_contiguous_frontier
+            && !block_known_locally
+            && !requested_missing_block
+        {
+            let now = Instant::now();
+            for vote in commit_votes.iter().filter(|vote| {
+                vote.phase == crate::sumeragi::consensus::Phase::Commit
+                    && vote.block_hash == block_hash
+                    && vote.height == block_height
+                    && vote.view == block_view
+                    && vote.epoch == expected_epoch
+            }) {
+                let _ = self.note_frontier_vote_placeholder(
+                    vote.block_hash,
+                    vote.height,
+                    vote.view,
+                    None,
+                    now,
+                );
+            }
+        }
         let mut commit_votes = Some(commit_votes);
         let mut process_commit_votes = |actor: &mut Actor| {
             let Some(commit_votes) = commit_votes.take() else {
@@ -5175,6 +5197,13 @@ impl Actor {
                     view: response.view,
                     sender: sender_for_slot,
                 },
+            );
+            let _ = self.try_replay_deferred_qcs();
+            let _ = self.try_replay_deferred_missing_payload_qcs(Instant::now());
+            self.request_commit_pipeline_for_pending(
+                response.block_hash,
+                super::status::RoundEventCauseTrace::BlockAvailable,
+                None,
             );
             // Plain exact-body fallbacks carry no certificate evidence. While
             // commit-QC repair is pending, release their dedup key so repeated

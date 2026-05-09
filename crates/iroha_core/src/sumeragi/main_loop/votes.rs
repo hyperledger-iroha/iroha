@@ -215,6 +215,13 @@ impl Actor {
             && self
                 .local_validator_index_for_topology(signature_topology)
                 .is_some_and(|idx| idx == vote.signer);
+        let tracked_frontier_vote = vote.phase == Phase::Commit
+            && vote.height == self.committed_height_snapshot().saturating_add(1)
+            && self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == vote.height
+                    && slot.view == vote.view
+                    && slot.block_hash == vote.block_hash
+            });
         self.should_fast_path_new_view_vote(vote)
             || (self.should_fast_path_commit_vote(vote)
                 && signature_topology.as_ref().len() <= inline_roster_max
@@ -222,7 +229,8 @@ impl Actor {
                     || self
                         .pending
                         .missing_block_requests
-                        .contains_key(&vote.block_hash)))
+                        .contains_key(&vote.block_hash)
+                    || tracked_frontier_vote))
             || local_commit_vote_for_known_block
     }
 

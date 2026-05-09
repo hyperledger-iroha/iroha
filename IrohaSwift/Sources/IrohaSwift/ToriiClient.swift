@@ -2374,6 +2374,7 @@ public struct ToriiExplorerPaginationMeta: Decodable, Sendable, Equatable {
 
 /// Instruction payload wrapper returned by `/v1/explorer/instructions`.
 public struct ToriiExplorerInstructionBox: Decodable, Sendable, Equatable {
+    public let encoded: String?
     public let scale: String?
     public let json: ToriiJSONValue
 }

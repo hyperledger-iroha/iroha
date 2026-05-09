@@ -727,63 +727,73 @@ impl Actor {
         if self.validation_inflight_elapsed(hash).is_some() {
             match self.validation_inflight_inline_reason(hash, pending_height) {
                 Some(reason) => {
-                    if self.supersede_validation_inflight(hash).is_some() {
-                        match reason {
-                            super::validation::ValidationInflightInlineReason::WorkerDisconnected => {
-                                warn!(
-                                    height = pending_height,
-                                    view = pending_view,
-                                    block = %hash,
-                                    qc_height = qc.height,
-                                    qc_view = qc.view,
-                                    "commit QC validation worker channel disconnected; forcing inline pre-vote validation"
-                                );
-                            }
-                            super::validation::ValidationInflightInlineReason::StaleFrontier {
-                                frontier_generation,
-                            } => {
-                                warn!(
-                                    height = pending_height,
-                                    view = pending_view,
-                                    block = %hash,
-                                    qc_height = qc.height,
-                                    qc_view = qc.view,
-                                    frontier_generation,
-                                    "commit QC validation inflight frontier generation is stale; forcing inline pre-vote validation"
-                                );
-                            }
-                            super::validation::ValidationInflightInlineReason::Stalled {
-                                elapsed,
-                                stall_timeout,
-                            } => {
-                                warn!(
-                                    height = pending_height,
-                                    view = pending_view,
-                                    block = %hash,
-                                    qc_height = qc.height,
-                                    qc_view = qc.view,
-                                    inflight_elapsed_ms = elapsed.as_millis(),
-                                    worker_stall_timeout_ms = stall_timeout.as_millis(),
-                                    validation_duration_ema_ms = self
-                                        .validation_duration_ema()
-                                        .map(|duration| duration.as_millis()),
-                                    "commit QC validation inflight exceeded worker stall timeout; forcing inline pre-vote validation"
-                                );
-                            }
+                    match reason {
+                        super::validation::ValidationInflightInlineReason::WorkerDisconnected => {
+                            warn!(
+                                height = pending_height,
+                                view = pending_view,
+                                block = %hash,
+                                qc_height = qc.height,
+                                qc_view = qc.view,
+                                "commit QC validation worker channel disconnected; running validation inline"
+                            );
                         }
-                        force_inline_validation = true;
+                        super::validation::ValidationInflightInlineReason::StaleFrontier {
+                            frontier_generation,
+                        } => {
+                            warn!(
+                                height = pending_height,
+                                view = pending_view,
+                                block = %hash,
+                                qc_height = qc.height,
+                                qc_view = qc.view,
+                                frontier_generation,
+                                "commit QC validation inflight frontier generation is stale; running validation inline"
+                            );
+                        }
+                        super::validation::ValidationInflightInlineReason::Stalled {
+                            elapsed,
+                            stall_timeout,
+                        } => {
+                            warn!(
+                                height = pending_height,
+                                view = pending_view,
+                                block = %hash,
+                                qc_height = qc.height,
+                                qc_view = qc.view,
+                                inflight_elapsed_ms = elapsed.as_millis(),
+                                worker_stall_timeout_ms = stall_timeout.as_millis(),
+                                validation_duration_ema_ms = self
+                                    .validation_duration_ema()
+                                    .map(|duration| duration.as_millis()),
+                                "commit QC validation inflight exceeded worker stall timeout; running validation inline"
+                            );
+                        }
                     }
+                    force_inline_validation = true;
                 }
                 None => {
-                    debug!(
-                        height = pending_height,
-                        view = pending_view,
-                        block = %hash,
-                        qc_height = qc.height,
-                        qc_view = qc.view,
-                        "commit QC waiting for background validation result"
-                    );
-                    return false;
+                    if self.vnext_validation_owns_block(hash, pending_height, pending_view) {
+                        warn!(
+                            height = pending_height,
+                            view = pending_view,
+                            block = %hash,
+                            qc_height = qc.height,
+                            qc_view = qc.view,
+                            "commit QC superseding vNext-owned validation for active frontier"
+                        );
+                        force_inline_validation = true;
+                    } else {
+                        debug!(
+                            height = pending_height,
+                            view = pending_view,
+                            block = %hash,
+                            qc_height = qc.height,
+                            qc_view = qc.view,
+                            "commit QC waiting for background validation result"
+                        );
+                        return false;
+                    }
                 }
             }
         }

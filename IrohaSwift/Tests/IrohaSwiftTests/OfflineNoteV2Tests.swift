@@ -33,6 +33,203 @@ final class OfflineNoteV2Tests: XCTestCase {
         )
     }
 
+    func testOfflineNoteV2PublicNoritoDecodersRoundTripFixturePayloads() throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let senderPayloadBytes = try Self.base64(fixture.chainVectors.certificates.senderPayloadBase64)
+        let issueBytes = try Self.base64(fixture.chainVectors.issue.noritoBase64)
+        let auditBytes = try Self.base64(fixture.chainVectors.audit.noritoBase64)
+        let redeemBytes = try Self.base64(fixture.chainVectors.redeem.noritoBase64)
+
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeKeyCertificatePayload(senderPayloadBytes)
+                .noritoEncoded()
+                .base64EncodedString(),
+            senderPayloadBytes.base64EncodedString()
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeKeyCertificate(try senderCertificate.noritoEncoded())
+                .noritoEncoded()
+                .base64EncodedString(),
+            try senderCertificate.noritoEncoded().base64EncodedString()
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeIssue(issueBytes).noritoEncoded().base64EncodedString(),
+            issueBytes.base64EncodedString()
+        )
+
+        let decodedAudit = try OfflineNoteV2Decoding.decodeAudit(auditBytes)
+        XCTAssertEqual(try decodedAudit.noritoEncoded().base64EncodedString(), auditBytes.base64EncodedString())
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeIssuedClaim(decodedAudit.inputClaims[0].noritoEncoded())
+                .noritoEncoded()
+                .base64EncodedString(),
+            try decodedAudit.inputClaims[0].noritoEncoded().base64EncodedString()
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeAuditPublicInputs(decodedAudit.publicInputs().noritoEncoded())
+                .noritoEncoded()
+                .base64EncodedString(),
+            try decodedAudit.publicInputs().noritoEncoded().base64EncodedString()
+        )
+
+        let decodedRedeem = try OfflineNoteV2Decoding.decodeRedeem(redeemBytes)
+        XCTAssertEqual(try decodedRedeem.noritoEncoded().base64EncodedString(), redeemBytes.base64EncodedString())
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeRedeemPublicInputs(decodedRedeem.publicInputs().noritoEncoded())
+                .noritoEncoded()
+                .base64EncodedString(),
+            try decodedRedeem.publicInputs().noritoEncoded().base64EncodedString()
+        )
+
+        let commitmentPreimage = try OfflineNoteCommitmentPreimageV2(
+            chainId: derivation.chainId,
+            ownerKeyCertificatePayloadHash: Self.hex(derivation.senderKeyCertificatePayloadHash),
+            assetId: fixture.chainVectors.issue.assetId,
+            amount: fixture.chainVectors.redeem.amount,
+            noteSecret: Self.hex(derivation.sourceNoteSecretHex),
+            origin: .issuerLoad(OfflineNoteIssuerLoadOriginV2(
+                operationId: derivation.issuerLoadOperationId,
+                lineageId: derivation.issuerLoadLineageId,
+                localRevision: derivation.issuerLoadLocalRevision
+            ))
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeNoteCommitmentPreimage(commitmentPreimage.noritoEncoded())
+                .noritoEncoded()
+                .base64EncodedString(),
+            try commitmentPreimage.noritoEncoded().base64EncodedString()
+        )
+
+        let nullifierPreimage = try OfflineNoteInputNullifierPreimageV2(
+            chainId: derivation.chainId,
+            sourceNoteCommitment: Self.hex(derivation.sourceNoteCommitment),
+            ownerKeyCertificatePayloadHash: Self.hex(derivation.senderKeyCertificatePayloadHash),
+            noteSecret: Self.hex(derivation.sourceNoteSecretHex)
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeInputNullifierPreimage(nullifierPreimage.noritoEncoded())
+                .noritoEncoded()
+                .base64EncodedString(),
+            try nullifierPreimage.noritoEncoded().base64EncodedString()
+        )
+
+        let tokenPreimage = try OfflineNotePaymentTokenIdPreimageV2(
+            chainId: derivation.chainId,
+            tokenNonce: Self.hex(derivation.tokenNonceHex),
+            senderKeyCertificatePayloadHash: Self.hex(derivation.senderKeyCertificatePayloadHash),
+            inputNullifiers: [Self.hex(derivation.inputNullifier)],
+            outputCommitments: [
+                Self.hex(derivation.recipientOutputCommitment),
+                Self.hex(derivation.changeOutputCommitment)
+            ]
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodePaymentTokenIdPreimage(tokenPreimage.noritoEncoded())
+                .noritoEncoded()
+                .base64EncodedString(),
+            try tokenPreimage.noritoEncoded().base64EncodedString()
+        )
+    }
+
+    func testOfflineNoteV2PublicNoritoInstructionDecodersReadExplorerEnvelopeBytes() throws {
+        let fixture = try Self.loadFixture()
+        let issue = try Self.issue(fixture)
+        let audit = try Self.audit(fixture)
+        let redeem = try Self.redeem(fixture)
+
+        let issueEnvelope = Self.rawInstructionPair(
+            wireName: OfflineNoteV2TypeNames.issueInstruction,
+            wirePayload: try Self.instructionWirePayload(
+                typeName: OfflineNoteV2TypeNames.issueInstruction,
+                modelPayload: OfflineNoteV2Encoding.encodeIssue(issue)
+            )
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeIssueInstruction(issueEnvelope).noritoEncoded().base64EncodedString(),
+            try issue.noritoEncoded().base64EncodedString()
+        )
+
+        let auditEnvelope = Self.rawInstructionPair(
+            wireName: OfflineNoteV2TypeNames.auditInstruction,
+            wirePayload: try Self.instructionWirePayload(
+                typeName: OfflineNoteV2TypeNames.auditInstruction,
+                modelPayload: OfflineNoteV2Encoding.encodeAudit(audit)
+            )
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeAuditInstruction(auditEnvelope).noritoEncoded().base64EncodedString(),
+            try audit.noritoEncoded().base64EncodedString()
+        )
+
+        let redeemEnvelope = Self.rawInstructionPair(
+            wireName: OfflineNoteV2TypeNames.redeemInstruction,
+            wirePayload: try Self.instructionWirePayload(
+                typeName: OfflineNoteV2TypeNames.redeemInstruction,
+                modelPayload: OfflineNoteV2Encoding.encodeRedeem(redeem)
+            )
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeRedeemInstruction(redeemEnvelope).noritoEncoded().base64EncodedString(),
+            try redeem.noritoEncoded().base64EncodedString()
+        )
+    }
+
+    func testOfflineNoteV2PaymentTokenCodecRoundTripsJsonTextAndQrFrames() throws {
+        let fixture = try Self.loadFixture()
+        let token = OfflineNoteV2PaymentToken(
+            paymentRequestId: fixture.paymentToken.invoiceId,
+            tokenId: try Self.hex(fixture.paymentToken.tokenId),
+            audit: try Self.audit(fixture),
+            createdAtMs: fixture.paymentToken.createdAtMs
+        )
+
+        let jsonDecoded = try OfflineNoteV2PaymentTokenCodec.decodeJson(
+            OfflineNoteV2PaymentTokenCodec.encodeJson(token)
+        )
+        XCTAssertEqual(jsonDecoded.tokenIdHex, token.tokenIdHex)
+        XCTAssertEqual(jsonDecoded.paymentRequestId, token.paymentRequestId)
+        XCTAssertEqual(try jsonDecoded.audit.noritoEncoded(), try token.audit.noritoEncoded())
+
+        let text = try OfflineNoteV2PaymentTokenCodec.encodeText(token)
+        XCTAssertTrue(text.hasPrefix(OfflineNoteV2PaymentTokenCodec.textPrefix))
+        XCTAssertEqual(try OfflineNoteV2PaymentTokenCodec.decodeText(text).tokenIdHex, token.tokenIdHex)
+
+        let frames = try OfflineNoteV2PaymentTokenCodec.encodeQrFrameBytes(
+            token,
+            options: OfflineQrStreamOptions(chunkSize: 180, parityGroup: 2)
+        )
+        let decoder = OfflineQrStreamDecoder()
+        var payload: Data?
+        for frame in frames {
+            let result = try decoder.ingest(frameBytes: frame)
+            payload = result.payload ?? payload
+        }
+        let qrDecoded = try OfflineNoteV2PaymentTokenCodec.decodeQrPayload(XCTUnwrap(payload))
+        XCTAssertEqual(qrDecoded.tokenIdHex, token.tokenIdHex)
+        XCTAssertEqual(try qrDecoded.audit.noritoEncoded(), try token.audit.noritoEncoded())
+    }
+
+    func testOfflineNoteV2WalletNoteJsonCodecRoundTripsFixtureNote() throws {
+        let fixture = try Self.loadFixture()
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let note = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
+
+        let decoded = try OfflineNoteV2WalletNoteJsonCodec.decode(
+            OfflineNoteV2WalletNoteJsonCodec.encode(note)
+        )
+
+        XCTAssertEqual(decoded, note)
+        XCTAssertEqual(try decoded.keyCertificate.noritoEncoded(), try note.keyCertificate.noritoEncoded())
+    }
+
+    func testOfflineNoteV2KeychainStoreRejectsInvalidLabel() {
+        XCTAssertThrowsError(try OfflineNoteV2KeychainStore(label: "bad/label")) { error in
+            XCTAssertEqual(error as? OfflineNoteV2KeychainStoreError, .invalidLabel("bad/label"))
+        }
+    }
+
     func testOfflineNoteV2WalletDerivationsMatchRustVectors() throws {
         let fixture = try Self.loadFixture()
         let derivation = fixture.chainVectors.derivation
@@ -373,10 +570,10 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertEqual(senderStore.findNote(noteCommitment: try Self.hex(derivation.sourceNoteCommitment))?.state, .spent)
         let spendableChange = senderStore.findNote(noteCommitment: try Self.hex(derivation.changeOutputCommitment))
         XCTAssertEqual(spendableChange?.state, .spendable)
-        XCTAssertEqual(syncResolver.resolvedCommitments, [
+        XCTAssertEqual(Set(syncResolver.resolvedCommitments), Set([
             derivation.sourceNoteCommitment,
             derivation.changeOutputCommitment
-        ])
+        ]))
 
         syncResolver.resolutions[derivation.changeOutputCommitment] = .redeemed
         let redeeming = try await senderWallet.redeem(try XCTUnwrap(spendableChange))
@@ -385,6 +582,234 @@ final class OfflineNoteV2Tests: XCTestCase {
         _ = try await senderWallet.sync()
 
         XCTAssertEqual(senderStore.findNote(noteCommitment: try Self.hex(derivation.changeOutputCommitment))?.state, .redeemed)
+    }
+
+    func testOfflineNoteV2WalletRejectsDuplicateTokenAndAlreadyPendingInputs() async throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let recipientCertificate = try Self.certificate(fixture.paymentToken.recipientKeyCertificate)
+        let senderStore = InMemoryOfflineNoteV2Store()
+        senderStore.upsert(try Self.sourceWalletNote(fixture, certificate: senderCertificate))
+        let senderWallet = OfflineNoteV2Wallet(
+            chainId: derivation.chainId,
+            accountId: Self.accountId(fromAssetId: fixture.chainVectors.issue.assetId),
+            attestationProvider: StaticAttestationProvider(certificate: senderCertificate),
+            store: senderStore,
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            proofProvider: BindingProofProvider(),
+            randomSource: QueueRandomSource(values: [
+                try Self.hex(derivation.tokenNonceHex),
+                try Self.hex(derivation.changeNoteSecretHex)
+            ]),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { 1_700_000_002_200 }
+        )
+        let recipientWallet = OfflineNoteV2Wallet(
+            chainId: derivation.chainId,
+            accountId: fixture.paymentToken.recipientAccountId,
+            attestationProvider: StaticAttestationProvider(certificate: recipientCertificate),
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            proofProvider: BindingProofProvider(),
+            randomSource: QueueRandomSource(values: [
+                try Self.hex(derivation.recipientNoteSecretHex)
+            ]),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { 1_700_000_002_300 }
+        )
+
+        let receiveRequest = try recipientWallet.prepareReceive(
+            assetDefinitionId: Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId),
+            amount: fixture.chainVectors.redeem.amount
+        )
+        let token = try senderWallet.pay(receiveRequest)
+
+        XCTAssertThrowsError(try senderWallet.pay(receiveRequest))
+
+        let accepted = try await recipientWallet.accept(token)
+        XCTAssertEqual(accepted.state, .spendable)
+        await XCTAssertThrowsErrorAsync(try await recipientWallet.accept(token)) { _ in }
+    }
+
+    func testOfflineNoteV2WalletSyncReconcilesFailedAuditAndRedeemOutcomes() async throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let recipientCertificate = try Self.certificate(fixture.paymentToken.recipientKeyCertificate)
+        let senderStore = InMemoryOfflineNoteV2Store()
+        senderStore.upsert(try Self.sourceWalletNote(fixture, certificate: senderCertificate))
+        let senderWallet = OfflineNoteV2Wallet(
+            chainId: derivation.chainId,
+            accountId: Self.accountId(fromAssetId: fixture.chainVectors.issue.assetId),
+            attestationProvider: StaticAttestationProvider(certificate: senderCertificate),
+            store: senderStore,
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            syncResolver: RecordingSyncResolver(resolutions: [
+                derivation.sourceNoteCommitment: .spendable,
+                derivation.changeOutputCommitment: .cancelled
+            ]),
+            proofProvider: BindingProofProvider(),
+            randomSource: QueueRandomSource(values: [
+                try Self.hex(derivation.tokenNonceHex),
+                try Self.hex(derivation.changeNoteSecretHex)
+            ]),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { 1_700_000_002_400 }
+        )
+        let recipientStore = InMemoryOfflineNoteV2Store()
+        let recipientWallet = OfflineNoteV2Wallet(
+            chainId: derivation.chainId,
+            accountId: fixture.paymentToken.recipientAccountId,
+            attestationProvider: StaticAttestationProvider(certificate: recipientCertificate),
+            store: recipientStore,
+            transactionSubmitter: FailingTransactionSubmitter(),
+            syncResolver: RecordingSyncResolver(resolutions: [
+                derivation.recipientOutputCommitment: .cancelled
+            ]),
+            proofProvider: BindingProofProvider(),
+            randomSource: QueueRandomSource(values: [
+                try Self.hex(derivation.recipientNoteSecretHex)
+            ]),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { 1_700_000_002_500 }
+        )
+
+        let receiveRequest = try recipientWallet.prepareReceive(
+            assetDefinitionId: Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId),
+            amount: fixture.chainVectors.redeem.amount
+        )
+        let token = try senderWallet.pay(receiveRequest)
+
+        await XCTAssertThrowsErrorAsync(try await recipientWallet.accept(token)) { _ in }
+        XCTAssertEqual(
+            recipientStore.findNote(noteCommitment: try Self.hex(derivation.recipientOutputCommitment))?.state,
+            .receivePending
+        )
+
+        _ = try await senderWallet.sync()
+        _ = try await recipientWallet.sync()
+
+        XCTAssertEqual(senderStore.findNote(noteCommitment: try Self.hex(derivation.sourceNoteCommitment))?.state, .spendable)
+        XCTAssertEqual(senderStore.findNote(noteCommitment: try Self.hex(derivation.changeOutputCommitment))?.state, .cancelled)
+        XCTAssertEqual(
+            recipientStore.findNote(noteCommitment: try Self.hex(derivation.recipientOutputCommitment))?.state,
+            .cancelled
+        )
+
+        let redeemStore = InMemoryOfflineNoteV2Store()
+        let redeemNote = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
+        redeemStore.upsert(redeemNote)
+        let redeemWallet = OfflineNoteV2Wallet(
+            chainId: derivation.chainId,
+            accountId: Self.accountId(fromAssetId: fixture.chainVectors.issue.assetId),
+            attestationProvider: StaticAttestationProvider(certificate: senderCertificate),
+            store: redeemStore,
+            transactionSubmitter: FailingTransactionSubmitter(),
+            syncResolver: RecordingSyncResolver(resolutions: [
+                derivation.sourceNoteCommitment: .spendable
+            ]),
+            proofProvider: BindingProofProvider(),
+            randomSource: QueueRandomSource(values: []),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { 1_700_000_002_600 }
+        )
+
+        await XCTAssertThrowsErrorAsync(try await redeemWallet.redeem(redeemNote)) { _ in }
+        XCTAssertEqual(redeemStore.findNote(noteCommitment: try Self.hex(derivation.sourceNoteCommitment))?.state, .redeemPending)
+
+        _ = try await redeemWallet.sync()
+
+        XCTAssertEqual(redeemStore.findNote(noteCommitment: try Self.hex(derivation.sourceNoteCommitment))?.state, .spendable)
+    }
+
+    func testOfflineNoteV2OutcomeIndexResolvesCommittedAndRejectedExplorerInstructions() throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let recipientCertificate = try Self.certificate(fixture.paymentToken.recipientKeyCertificate)
+        let audit = try Self.audit(fixture)
+        let redeem = try Self.redeem(fixture)
+        let changeOutput = fixture.paymentToken.outputClaims[1]
+
+        let sourceSpendPending = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
+            .withState(.spendPending, updatedAtMs: 1_700_000_003_000)
+        let changePending = try OfflineNoteV2WalletNote(
+            chainId: derivation.chainId,
+            accountId: changeOutput.accountId,
+            assetId: "\(changeOutput.assetDefinitionId)#\(changeOutput.accountId)",
+            amount: changeOutput.amount,
+            keyCertificate: senderCertificate,
+            noteCommitment: Self.hex(derivation.changeOutputCommitment),
+            noteSecret: Self.hex(derivation.changeNoteSecretHex),
+            origin: .p2pOutput(OfflineNoteP2pOutputOriginV2(
+                paymentRequestId: derivation.paymentRequestId,
+                outputIndex: 1
+            )),
+            state: .changePending,
+            createdAtMs: 1_700_000_002_000,
+            updatedAtMs: 1_700_000_003_000
+        )
+        let redeemPending = try OfflineNoteV2WalletNote(
+            chainId: derivation.chainId,
+            accountId: fixture.paymentToken.recipientAccountId,
+            assetId: fixture.chainVectors.redeem.assetId,
+            amount: fixture.chainVectors.redeem.amount,
+            keyCertificate: recipientCertificate,
+            noteCommitment: redeem.sourceNoteCommitment,
+            noteSecret: Self.hex(derivation.recipientNoteSecretHex),
+            origin: .p2pOutput(OfflineNoteP2pOutputOriginV2(
+                paymentRequestId: derivation.paymentRequestId,
+                outputIndex: 0
+            )),
+            state: .redeemPending,
+            createdAtMs: 1_700_000_002_000,
+            updatedAtMs: 1_700_000_003_000
+        )
+
+        let committed = try OfflineNoteV2OutcomeIndex.fromExplorerOutcomes([
+            OfflineNoteV2ExplorerInstructionOutcome(
+                kind: OfflineNoteV2OutcomeIndex.kindAudit,
+                transactionStatus: "Committed",
+                transactionHashHex: "audit-tx",
+                encodedInstruction: try Self.auditInstructionEnvelope(audit)
+            ),
+            OfflineNoteV2ExplorerInstructionOutcome(
+                kind: OfflineNoteV2OutcomeIndex.kindRedeem,
+                transactionStatus: "Committed",
+                transactionHashHex: "redeem-tx",
+                encodedInstruction: try Self.redeemInstructionEnvelope(redeem)
+            ),
+        ])
+
+        XCTAssertEqual(try committed.resolve(sourceSpendPending), OfflineNoteV2SyncResolution(
+            state: .spent,
+            transactionHashHex: "audit-tx"
+        ))
+        XCTAssertEqual(try committed.resolve(changePending), OfflineNoteV2SyncResolution(
+            state: .spendable,
+            transactionHashHex: "audit-tx"
+        ))
+        XCTAssertEqual(try committed.resolve(redeemPending), OfflineNoteV2SyncResolution(
+            state: .redeemed,
+            transactionHashHex: "redeem-tx"
+        ))
+
+        let rejected = OfflineNoteV2OutcomeIndex()
+            .recordRejectedAudit(audit, transactionHashHex: "audit-rejected")
+            .recordRejectedRedeem(redeem, transactionHashHex: "redeem-rejected")
+
+        XCTAssertEqual(try rejected.resolve(sourceSpendPending), OfflineNoteV2SyncResolution(
+            state: .spendable,
+            transactionHashHex: "audit-rejected"
+        ))
+        XCTAssertEqual(try rejected.resolve(changePending), OfflineNoteV2SyncResolution(
+            state: .cancelled,
+            transactionHashHex: "audit-rejected"
+        ))
+        XCTAssertEqual(try rejected.resolve(redeemPending), OfflineNoteV2SyncResolution(
+            state: .spendable,
+            transactionHashHex: "redeem-rejected"
+        ))
     }
 
     func testOfflineNoteV2TransactionBuildersProduceSignedEnvelopes() throws {
@@ -1241,6 +1666,16 @@ final class OfflineNoteV2Tests: XCTestCase {
         }
     }
 
+    private struct FailingTransactionSubmitter: OfflineNoteV2TransactionSubmitter {
+        func submitAudit(_ audit: OfflineNoteAuditBundleV2) async throws {
+            throw OfflineNoteV2WalletError.invalidState
+        }
+
+        func submitRedeem(_ redemption: OfflineNoteRedeemV2) async throws {
+            throw OfflineNoteV2WalletError.invalidState
+        }
+    }
+
     private final class RecordingSyncResolver: OfflineNoteV2SyncResolver {
         var resolutions: [String: OfflineNoteV2WalletNoteState]
         private(set) var resolvedCommitments: [String] = []
@@ -1256,6 +1691,83 @@ final class OfflineNoteV2Tests: XCTestCase {
                 return nil
             }
             return OfflineNoteV2SyncResolution(state: state, transactionHashHex: "tx-\(commitment)")
+        }
+    }
+
+    private static func issueInstructionEnvelope(_ issue: OfflineNoteIssueV2) throws -> Data {
+        rawInstructionPair(
+            wireName: OfflineNoteV2TypeNames.issueInstruction,
+            wirePayload: try instructionWirePayload(
+                typeName: OfflineNoteV2TypeNames.issueInstruction,
+                modelPayload: OfflineNoteV2Encoding.encodeIssue(issue)
+            )
+        )
+    }
+
+    private static func auditInstructionEnvelope(_ audit: OfflineNoteAuditBundleV2) throws -> Data {
+        rawInstructionPair(
+            wireName: OfflineNoteV2TypeNames.auditInstruction,
+            wirePayload: try instructionWirePayload(
+                typeName: OfflineNoteV2TypeNames.auditInstruction,
+                modelPayload: OfflineNoteV2Encoding.encodeAudit(audit)
+            )
+        )
+    }
+
+    private static func redeemInstructionEnvelope(_ redemption: OfflineNoteRedeemV2) throws -> Data {
+        rawInstructionPair(
+            wireName: OfflineNoteV2TypeNames.redeemInstruction,
+            wirePayload: try instructionWirePayload(
+                typeName: OfflineNoteV2TypeNames.redeemInstruction,
+                modelPayload: OfflineNoteV2Encoding.encodeRedeem(redemption)
+            )
+        )
+    }
+
+    private static func instructionWirePayload(typeName: String, modelPayload: Data) -> Data {
+        var payload = OfflineNoritoWriter()
+        payload.writeField(modelPayload)
+        return noritoEncode(typeName: typeName, payload: payload.data, flags: 0)
+    }
+
+    private static func rawInstructionPair(wireName: String, wirePayload: Data, compact: Bool = true) -> Data {
+        var data = Data()
+        writeInstructionField(encodeInstructionString(wireName, compact: compact), to: &data, compact: compact)
+        writeInstructionField(encodeInstructionBytesVec(wirePayload), to: &data, compact: compact)
+        return data
+    }
+
+    private static func encodeInstructionString(_ value: String, compact: Bool) -> Data {
+        let bytes = Data(value.utf8)
+        var data = Data()
+        appendInstructionLength(UInt64(bytes.count), to: &data, compact: compact)
+        data.append(bytes)
+        return data
+    }
+
+    private static func encodeInstructionBytesVec(_ value: Data) -> Data {
+        var data = Data()
+        appendInstructionLength(UInt64(value.count), to: &data, compact: false)
+        data.append(value)
+        return data
+    }
+
+    private static func writeInstructionField(_ payload: Data, to data: inout Data, compact: Bool) {
+        appendInstructionLength(UInt64(payload.count), to: &data, compact: compact)
+        data.append(payload)
+    }
+
+    private static func appendInstructionLength(_ value: UInt64, to data: inout Data, compact: Bool) {
+        if compact {
+            var remaining = value
+            while remaining >= 0x80 {
+                data.append(UInt8(remaining & 0x7f) | 0x80)
+                remaining >>= 7
+            }
+            data.append(UInt8(remaining))
+        } else {
+            var littleEndian = value.littleEndian
+            data.append(contentsOf: withUnsafeBytes(of: &littleEndian, Array.init))
         }
     }
 
@@ -1550,6 +2062,9 @@ private struct OfflineRedeemVector: Decodable {
 }
 
 private struct OfflinePaymentTokenJSON: Decodable {
+    let tokenId: String
+    let invoiceId: String
+    let createdAtMs: UInt64
     let senderAccountId: String
     let recipientAccountId: String
     let senderKeyCertificate: OfflineCertificateJSON
@@ -1558,6 +2073,9 @@ private struct OfflinePaymentTokenJSON: Decodable {
     let outputClaims: [OfflineOutputClaimJSON]
 
     private enum CodingKeys: String, CodingKey {
+        case tokenId = "token_id"
+        case invoiceId = "invoice_id"
+        case createdAtMs = "created_at_ms"
         case senderAccountId = "sender_account_id"
         case recipientAccountId = "recipient_account_id"
         case senderKeyCertificate = "sender_key_certificate"

@@ -24,7 +24,7 @@ fn info_section(license: Value) -> Value {
     info.insert(
         "description".into(),
         Value::String(
-            "HTTP surface for Torii. App endpoints accept optional canonical signing headers X-Iroha-Account/X-Iroha-Signature/X-Iroha-Timestamp-Ms/X-Iroha-Nonce."
+            "HTTP surface for Torii. App endpoints accept optional canonical signing headers X-Iroha-Account/X-Iroha-Signature/X-Iroha-Timestamp-Ms/X-Iroha-Nonce, except Offline V2 issuer POSTs, which use JSON body auth."
                 .to_owned(),
         ),
     );
@@ -86,7 +86,10 @@ fn tags_section() -> Value {
     offline.insert("name".into(), Value::String("Offline".to_owned()));
     offline.insert(
         "description".into(),
-        Value::String("Offline V2 readiness endpoint under `/v1/offline/v2/readiness`.".to_owned()),
+        Value::String(
+            "Offline V2 readiness and issuer endpoints. Issuer POSTs carry canonical auth in the JSON body instead of X-Iroha-* headers."
+                .to_owned(),
+        ),
     );
 
     let mut bridge = Map::new();
@@ -654,6 +657,40 @@ fn offline_paths() -> Map {
             Vec::new(),
         )),
     );
+    for (path, summary, description) in [
+        (
+            "/v1/offline/v2/keys/refill",
+            "Refill Offline V2 issuer keys.",
+            "POST issuer key-refill material. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+        ),
+        (
+            "/v1/offline/v2/notes/issue",
+            "Issue an Offline V2 note.",
+            "POST an Offline V2 note issuance request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+        ),
+        (
+            "/v1/offline/v2/notes/redeem",
+            "Redeem an Offline V2 note.",
+            "POST an Offline V2 note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+        ),
+        (
+            "/v1/offline/v2/audit",
+            "Submit an Offline V2 audit request.",
+            "POST an Offline V2 audit request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+        ),
+    ] {
+        paths.insert(
+            path.to_owned(),
+            Value::Object(json_post_operation(
+                "Offline",
+                summary,
+                description,
+                "#/components/schemas/OfflineV2IssuerBodyAuthRequest",
+                "#/components/schemas/JsonValue",
+                Vec::new(),
+            )),
+        );
+    }
     paths
 }
 
@@ -7457,6 +7494,48 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "OfflineV2IssuerBodyAuthRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "description": "Offline V2 issuer POST body. Top-level account_id, timestamp_ms, nonce, and exactly one proof field authenticate the request body. The canonical signed body removes only top-level signature_base64 and witness_base64, so nested fields with those names remain signed business data.",
+            "required": ["account_id", "timestamp_ms", "nonce"],
+            "additionalProperties": true,
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Canonical Iroha account id authorizing the issuer request."
+                },
+                "timestamp_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Unix timestamp in milliseconds included in the canonical signing envelope."
+                },
+                "nonce": {
+                    "type": "string",
+                    "description": "Caller-chosen replay nonce included in the canonical signing envelope."
+                },
+                "signature_base64": {
+                    "type": "string",
+                    "description": "Base64 single-account signature over the body-auth canonical request."
+                },
+                "witness_base64": {
+                    "type": "string",
+                    "description": "Base64 Norito CanonicalRequestWitnessV1 for multisig accounts."
+                }
+            },
+            "oneOf": [
+                {
+                    "required": ["signature_base64"],
+                    "not": { "required": ["witness_base64"] }
+                },
+                {
+                    "required": ["witness_base64"],
+                    "not": { "required": ["signature_base64"] }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
         "PipelineTransactionStatus".to_owned(),
         norito::json!({
             "type": "object",
@@ -10637,6 +10716,69 @@ mod tests {
         assert!(paths.contains_key("/v1/soranet/privacy/event"));
         assert!(paths.contains_key("/v1/webhooks"));
         assert!(paths.contains_key("/v1/notify/devices"));
+        assert!(paths.contains_key("/v1/offline/v2/keys/refill"));
+        assert!(paths.contains_key("/v1/offline/v2/notes/issue"));
+        assert!(paths.contains_key("/v1/offline/v2/notes/redeem"));
+        assert!(paths.contains_key("/v1/offline/v2/audit"));
+        let refill_post = paths
+            .get("/v1/offline/v2/keys/refill")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("offline refill post operation");
+        let refill_description = refill_post
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("offline refill description");
+        assert!(refill_description.contains("signature_base64 or witness_base64"));
+        assert!(refill_description.contains("X-Iroha-* app-auth headers are rejected"));
+        let refill_request_schema = refill_post
+            .get("requestBody")
+            .and_then(Value::as_object)
+            .and_then(|body| body.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/json"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str)
+            .expect("offline refill request schema");
+        assert_eq!(
+            refill_request_schema,
+            "#/components/schemas/OfflineV2IssuerBodyAuthRequest"
+        );
+    }
+
+    #[test]
+    fn generated_spec_documents_offline_v2_body_auth_schema() {
+        let doc = generate_spec();
+        let schema = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .and_then(|schemas| schemas.get("OfflineV2IssuerBodyAuthRequest"))
+            .and_then(Value::as_object)
+            .expect("Offline V2 body auth schema");
+        let required = schema
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("required fields");
+        for field in ["account_id", "timestamp_ms", "nonce"] {
+            assert!(required.contains(&Value::String(field.to_owned())));
+        }
+        let one_of = schema
+            .get("oneOf")
+            .and_then(Value::as_array)
+            .expect("proof oneOf");
+        assert_eq!(one_of.len(), 2);
+        let description = schema
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("schema description");
+        assert!(description.contains("exactly one proof field"));
+        assert!(description.contains("nested fields with those names remain signed"));
     }
 
     #[test]

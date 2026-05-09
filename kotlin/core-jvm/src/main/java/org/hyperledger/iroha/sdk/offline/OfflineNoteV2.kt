@@ -8,10 +8,12 @@ import org.hyperledger.iroha.sdk.address.AccountAddressException
 import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
 import org.hyperledger.iroha.sdk.address.MultisigMemberPayload
 import org.hyperledger.iroha.sdk.address.MultisigPolicyPayload
+import org.hyperledger.iroha.sdk.address.PublicKeyPayload
 import org.hyperledger.iroha.sdk.address.algorithmForCurveId
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
+import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
@@ -120,6 +122,77 @@ object OfflineNoteV2 {
         encodeWithHeader(value, PAYMENT_TOKEN_ID_PREIMAGE_SCHEMA, PaymentTokenIdPreimageAdapter)
 
     @JvmStatic
+    fun decodeCertificatePayload(bytes: ByteArray): KeyCertificatePayloadV2 =
+        decodeWithHeader(bytes, KEY_CERTIFICATE_PAYLOAD_SCHEMA, KeyCertificatePayloadAdapter)
+
+    @JvmStatic
+    fun decodeCertificate(bytes: ByteArray): KeyCertificateV2 =
+        decodeWithHeader(bytes, KEY_CERTIFICATE_SCHEMA, KeyCertificateAdapter)
+
+    @JvmStatic
+    fun decodeIssue(bytes: ByteArray): IssueV2 =
+        decodeWithHeader(bytes, ISSUE_SCHEMA, IssueAdapter)
+
+    @JvmStatic
+    fun decodeIssuedClaim(bytes: ByteArray): IssuedClaimV2 =
+        decodeWithHeader(bytes, ISSUED_CLAIM_SCHEMA, IssuedClaimAdapter)
+
+    @JvmStatic
+    fun decodeRedeem(bytes: ByteArray): RedeemV2 =
+        decodeWithHeader(bytes, REDEEM_SCHEMA, RedeemAdapter)
+
+    @JvmStatic
+    fun decodeRedeemPublicInputs(bytes: ByteArray): RedeemPublicInputsV2 =
+        decodeWithHeader(bytes, REDEEM_PUBLIC_INPUTS_SCHEMA, RedeemPublicInputsAdapter)
+
+    @JvmStatic
+    fun decodeAudit(bytes: ByteArray): AuditBundleV2 =
+        decodeWithHeader(bytes, AUDIT_SCHEMA, AuditAdapter)
+
+    @JvmStatic
+    fun decodeAuditPublicInputs(bytes: ByteArray): AuditPublicInputsV2 =
+        decodeWithHeader(bytes, AUDIT_PUBLIC_INPUTS_SCHEMA, AuditPublicInputsAdapter)
+
+    @JvmStatic
+    fun decodeNoteCommitmentPreimage(bytes: ByteArray): NoteCommitmentPreimageV2 =
+        decodeWithHeader(bytes, NOTE_COMMITMENT_PREIMAGE_SCHEMA, NoteCommitmentPreimageAdapter)
+
+    @JvmStatic
+    fun decodeInputNullifierPreimage(bytes: ByteArray): InputNullifierPreimageV2 =
+        decodeWithHeader(bytes, INPUT_NULLIFIER_PREIMAGE_SCHEMA, InputNullifierPreimageAdapter)
+
+    @JvmStatic
+    fun decodePaymentTokenIdPreimage(bytes: ByteArray): PaymentTokenIdPreimageV2 =
+        decodeWithHeader(bytes, PAYMENT_TOKEN_ID_PREIMAGE_SCHEMA, PaymentTokenIdPreimageAdapter)
+
+    @JvmStatic
+    fun decodeIssueInstruction(bytes: ByteArray): IssueV2 =
+        decodeInstructionModel(
+            bytes,
+            ISSUE_INSTRUCTION_SCHEMA,
+            ISSUE_SCHEMA,
+            IssueAdapter,
+        )
+
+    @JvmStatic
+    fun decodeRedeemInstruction(bytes: ByteArray): RedeemV2 =
+        decodeInstructionModel(
+            bytes,
+            REDEEM_INSTRUCTION_SCHEMA,
+            REDEEM_SCHEMA,
+            RedeemAdapter,
+        )
+
+    @JvmStatic
+    fun decodeAuditInstruction(bytes: ByteArray): AuditBundleV2 =
+        decodeInstructionModel(
+            bytes,
+            AUDIT_INSTRUCTION_SCHEMA,
+            AUDIT_SCHEMA,
+            AuditAdapter,
+        )
+
+    @JvmStatic
     fun issueInstruction(value: IssueV2): InstructionBox =
         InstructionBox.fromWirePayload(
             ISSUE_INSTRUCTION_SCHEMA,
@@ -173,8 +246,85 @@ object OfflineNoteV2 {
     private fun <T> encodeWithHeader(value: T, schema: String, adapter: TypeAdapter<T>): ByteArray =
         NoritoCodec.encode(value, schema, adapter, NoritoHeader.COMPACT_LEN)
 
+    private fun <T> decodeWithHeader(bytes: ByteArray, schema: String, adapter: TypeAdapter<T>): T =
+        NoritoCodec.decode(bytes, adapter, schema)
+
     private fun encodeInstructionWrapper(schema: String, modelPayload: ByteArray): ByteArray =
         NoritoCodec.encode(modelPayload, schema, InstructionWrapperAdapter, 0)
+
+    private fun <T> decodeInstructionModel(
+        bytes: ByteArray,
+        instructionSchema: String,
+        modelSchema: String,
+        modelAdapter: TypeAdapter<T>,
+    ): T {
+        val wirePayload = extractInstructionWirePayload(bytes, instructionSchema)
+        val modelPayload = NoritoCodec.decode(
+            wirePayload,
+            InstructionWrapperPayloadAdapter,
+            instructionSchema,
+        )
+        return decodeModelPayload(modelPayload.bytes, modelSchema, modelAdapter, modelPayload.flags)
+    }
+
+    private fun extractInstructionWirePayload(bytes: ByteArray, expectedWireName: String): ByteArray {
+        if (isNoritoFrame(bytes)) return bytes.copyOf()
+        tryDecodeInstructionPair(bytes, expectedWireName, NoritoHeader.COMPACT_LEN)?.let { return it }
+        tryDecodeInstructionPair(bytes, expectedWireName, 0)?.let { return it }
+        throw IllegalArgumentException("Offline Note V2 instruction envelope is invalid")
+    }
+
+    private fun tryDecodeInstructionPair(
+        bytes: ByteArray,
+        expectedWireName: String,
+        flags: Int,
+    ): ByteArray? = try {
+        val decoder = NoritoDecoder(bytes, flags)
+        val wireName = readField(decoder) { readString(it) }
+        require(wireName == expectedWireName) {
+            "Offline Note V2 instruction wire name mismatch: $wireName"
+        }
+        val wirePayload = readField(decoder) { readBytesVec(it) }
+        require(decoder.remaining() == 0) { "Trailing bytes after instruction envelope" }
+        wirePayload
+    } catch (_: RuntimeException) {
+        null
+    }
+
+    private fun <T> decodeModelPayload(
+        bytes: ByteArray,
+        modelSchema: String,
+        modelAdapter: TypeAdapter<T>,
+        flags: Int,
+    ): T {
+        if (isNoritoFrame(bytes)) {
+            return decodeWithHeader(bytes, modelSchema, modelAdapter)
+        }
+        val attempts = if (flags == NoritoHeader.COMPACT_LEN) {
+            intArrayOf(flags, 0)
+        } else {
+            intArrayOf(flags, NoritoHeader.COMPACT_LEN)
+        }
+        var lastError: RuntimeException? = null
+        for (attemptFlags in attempts) {
+            try {
+                val decoder = NoritoDecoder(bytes, attemptFlags)
+                val value = modelAdapter.decode(decoder)
+                require(decoder.remaining() == 0) { "Trailing bytes after Offline Note V2 model decode" }
+                return value
+            } catch (ex: RuntimeException) {
+                lastError = ex
+            }
+        }
+        throw IllegalArgumentException("Offline Note V2 instruction model payload is invalid", lastError)
+    }
+
+    private fun isNoritoFrame(bytes: ByteArray): Boolean =
+        bytes.size >= NoritoHeader.HEADER_LENGTH &&
+            bytes[0] == 'N'.code.toByte() &&
+            bytes[1] == 'R'.code.toByte() &&
+            bytes[2] == 'T'.code.toByte() &&
+            bytes[3] == '0'.code.toByte()
 
     class VerifyingKeyIdReference @JvmOverloads constructor(
         val backend: String = RECURSIVE_BACKEND,
@@ -761,8 +911,25 @@ object OfflineNoteV2 {
             writeField(encoder) { it.writeBytes(value) }
         }
 
-        override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): ByteArray =
-            throw UnsupportedOperationException("Offline Note V2 instruction decoding is not supported yet")
+        override fun decode(decoder: NoritoDecoder): ByteArray =
+            readField(decoder) { it.readBytes(it.remaining()) }
+    }
+
+    private class InstructionModelPayload(
+        val bytes: ByteArray,
+        val flags: Int,
+    )
+
+    private object InstructionWrapperPayloadAdapter : TypeAdapter<InstructionModelPayload> {
+        override fun encode(encoder: NoritoEncoder, value: InstructionModelPayload) {
+            writeField(encoder) { it.writeBytes(value.bytes) }
+        }
+
+        override fun decode(decoder: NoritoDecoder): InstructionModelPayload =
+            InstructionModelPayload(
+                bytes = readField(decoder) { it.readBytes(it.remaining()) },
+                flags = decoder.flags,
+            )
     }
 
     private object KeyCertificatePayloadAdapter : TypeAdapter<KeyCertificatePayloadV2> {
@@ -782,7 +949,20 @@ object OfflineNoteV2 {
         }
 
         override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): KeyCertificatePayloadV2 =
-            throw UnsupportedOperationException("Offline Note V2 decoding is not supported yet")
+            KeyCertificatePayloadV2(
+                domain = readField(decoder) { readString(it) },
+                version = readField(decoder) { it.readUInt(16).toInt() },
+                platform = readField(decoder) { readString(it) },
+                keyId = readField(decoder) { readString(it) },
+                deviceId = readField(decoder) { readString(it) },
+                accountId = readField(decoder) { readAccountId(it) },
+                publicKey = readField(decoder) { readBytesVec(it) },
+                assertionScheme = readField(decoder) { readString(it) },
+                assertionKeyAlgorithm = readField(decoder) { readString(it) },
+                assertionPublicKey = readField(decoder) { readBytesVec(it) },
+                assertionUsageCountLimit = readField(decoder) { readOptionU32(it) },
+                oneUse = readField(decoder) { readBool(it) },
+            )
     }
 
     private object KeyCertificateAdapter : TypeAdapter<KeyCertificateV2> {
@@ -802,7 +982,20 @@ object OfflineNoteV2 {
         }
 
         override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): KeyCertificateV2 =
-            throw UnsupportedOperationException("Offline Note V2 decoding is not supported yet")
+            KeyCertificateV2(
+                version = readField(decoder) { it.readUInt(16).toInt() },
+                platform = readField(decoder) { readString(it) },
+                keyId = readField(decoder) { readString(it) },
+                deviceId = readField(decoder) { readString(it) },
+                accountId = readField(decoder) { readAccountId(it) },
+                publicKey = readField(decoder) { readBytesVec(it) },
+                assertionScheme = readField(decoder) { readString(it) },
+                assertionKeyAlgorithm = readField(decoder) { readString(it) },
+                assertionPublicKey = readField(decoder) { readBytesVec(it) },
+                assertionUsageCountLimit = readField(decoder) { readOptionU32(it) },
+                oneUse = readField(decoder) { readBool(it) },
+                issuerSignature = readField(decoder) { readConstVec(it) },
+            )
     }
 
     private object RecursiveProofAdapter : TypeAdapter<RecursiveProofV2> {
@@ -813,7 +1006,11 @@ object OfflineNoteV2 {
         }
 
         override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): RecursiveProofV2 =
-            throw UnsupportedOperationException("Offline Note V2 decoding is not supported yet")
+            RecursiveProofV2(
+                verifierKeyId = readField(decoder) { readVerifyingKeyId(it) },
+                publicInputsHash = readField(decoder) { readHash(it, "public_inputs_hash") },
+                proof = readField(decoder) { readProofBox(it) },
+            )
     }
 
     private object IssueAdapter : TypeAdapter<IssueV2> {
@@ -825,7 +1022,12 @@ object OfflineNoteV2 {
         }
 
         override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): IssueV2 =
-            throw UnsupportedOperationException("Offline Note V2 decoding is not supported yet")
+            IssueV2(
+                noteCommitment = readField(decoder) { readHash(it, "note_commitment") },
+                keyCertificate = readField(decoder) { KeyCertificateAdapter.decode(it) },
+                assetId = readField(decoder) { readAssetId(it) },
+                amount = readField(decoder) { readNumeric(it) },
+            )
     }
 
     private object IssuedClaimAdapter : TypeAdapter<IssuedClaimV2> {
@@ -838,7 +1040,13 @@ object OfflineNoteV2 {
         }
 
         override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): IssuedClaimV2 =
-            throw UnsupportedOperationException("Offline Note V2 decoding is not supported yet")
+            IssuedClaimV2(
+                domain = readField(decoder) { readString(it) },
+                noteCommitment = readField(decoder) { readHash(it, "note_commitment") },
+                keyCertificatePayloadHash = readField(decoder) { readHash(it, "key_certificate_payload_hash") },
+                assetId = readField(decoder) { readAssetId(it) },
+                amount = readField(decoder) { readNumeric(it) },
+            )
     }
 
     private object AuditOutputClaimAdapter : TypeAdapter<AuditOutputClaimV2> {
@@ -850,7 +1058,12 @@ object OfflineNoteV2 {
         }
 
         override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): AuditOutputClaimV2 =
-            throw UnsupportedOperationException("Offline Note V2 decoding is not supported yet")
+            AuditOutputClaimV2(
+                noteCommitment = readField(decoder) { readHash(it, "note_commitment") },
+                keyCertificate = readField(decoder) { KeyCertificateAdapter.decode(it) },
+                assetId = readField(decoder) { readAssetId(it) },
+                amount = readField(decoder) { readNumeric(it) },
+            )
     }
 
     private object RedeemPublicInputsAdapter : TypeAdapter<RedeemPublicInputsV2> {
@@ -865,7 +1078,15 @@ object OfflineNoteV2 {
         }
 
         override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): RedeemPublicInputsV2 =
-            throw UnsupportedOperationException("Offline Note V2 decoding is not supported yet")
+            RedeemPublicInputsV2(
+                domain = readField(decoder) { readString(it) },
+                sourceNoteCommitment = readField(decoder) { readHash(it, "source_note_commitment") },
+                inputNullifiers = readField(decoder) { readVec(it) { child -> readHash(child, "input_nullifier") } },
+                keyCertificatePayloadHash = readField(decoder) { readHash(it, "key_certificate_payload_hash") },
+                recipient = readField(decoder) { readAccountId(it) },
+                assetId = readField(decoder) { readAssetId(it) },
+                amount = readField(decoder) { readNumeric(it) },
+            )
     }
 
     private object RedeemAdapter : TypeAdapter<RedeemV2> {
@@ -880,7 +1101,15 @@ object OfflineNoteV2 {
         }
 
         override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): RedeemV2 =
-            throw UnsupportedOperationException("Offline Note V2 decoding is not supported yet")
+            RedeemV2(
+                sourceNoteCommitment = readField(decoder) { readHash(it, "source_note_commitment") },
+                inputNullifiers = readField(decoder) { readVec(it) { child -> readHash(child, "input_nullifier") } },
+                senderKeyCertificate = readField(decoder) { KeyCertificateAdapter.decode(it) },
+                recipient = readField(decoder) { readAccountId(it) },
+                assetId = readField(decoder) { readAssetId(it) },
+                amount = readField(decoder) { readNumeric(it) },
+                recursiveProof = readField(decoder) { RecursiveProofAdapter.decode(it) },
+            )
     }
 
     private object AuditPublicInputsAdapter : TypeAdapter<AuditPublicInputsV2> {
@@ -895,7 +1124,15 @@ object OfflineNoteV2 {
         }
 
         override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): AuditPublicInputsV2 =
-            throw UnsupportedOperationException("Offline Note V2 decoding is not supported yet")
+            AuditPublicInputsV2(
+                domain = readField(decoder) { readString(it) },
+                tokenId = readField(decoder) { readHash(it, "token_id") },
+                keyCertificatePayloadHash = readField(decoder) { readHash(it, "key_certificate_payload_hash") },
+                inputNullifiers = readField(decoder) { readVec(it) { child -> readHash(child, "input_nullifier") } },
+                inputClaims = readField(decoder) { readVec(it) { child -> IssuedClaimAdapter.decode(child) } },
+                outputCommitments = readField(decoder) { readVec(it) { child -> readHash(child, "output_commitment") } },
+                outputClaims = readField(decoder) { readVec(it) { child -> IssuedClaimAdapter.decode(child) } },
+            )
     }
 
     private object AuditAdapter : TypeAdapter<AuditBundleV2> {
@@ -910,7 +1147,15 @@ object OfflineNoteV2 {
         }
 
         override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): AuditBundleV2 =
-            throw UnsupportedOperationException("Offline Note V2 decoding is not supported yet")
+            AuditBundleV2(
+                tokenId = readField(decoder) { readHash(it, "token_id") },
+                senderKeyCertificate = readField(decoder) { KeyCertificateAdapter.decode(it) },
+                inputNullifiers = readField(decoder) { readVec(it) { child -> readHash(child, "input_nullifier") } },
+                inputClaims = readField(decoder) { readVec(it) { child -> IssuedClaimAdapter.decode(child) } },
+                outputCommitments = readField(decoder) { readVec(it) { child -> readHash(child, "output_commitment") } },
+                outputClaims = readField(decoder) { readVec(it) { child -> AuditOutputClaimAdapter.decode(child) } },
+                recursiveProof = readField(decoder) { RecursiveProofAdapter.decode(it) },
+            )
     }
 
     private object NoteCommitmentPreimageAdapter : TypeAdapter<NoteCommitmentPreimageV2> {
@@ -925,7 +1170,17 @@ object OfflineNoteV2 {
         }
 
         override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): NoteCommitmentPreimageV2 =
-            throw UnsupportedOperationException("Offline Note V2 decoding is not supported yet")
+            NoteCommitmentPreimageV2(
+                domain = readField(decoder) { readString(it) },
+                chainId = readField(decoder) { readChainId(it) },
+                ownerKeyCertificatePayloadHash = readField(decoder) {
+                    readHash(it, "owner_key_certificate_payload_hash")
+                },
+                assetId = readField(decoder) { readAssetId(it) },
+                amount = readField(decoder) { readNumeric(it) },
+                noteSecret = readField(decoder) { readBytesVec(it) },
+                origin = readField(decoder) { readCommitmentOrigin(it) },
+            )
     }
 
     private object InputNullifierPreimageAdapter : TypeAdapter<InputNullifierPreimageV2> {
@@ -938,7 +1193,15 @@ object OfflineNoteV2 {
         }
 
         override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): InputNullifierPreimageV2 =
-            throw UnsupportedOperationException("Offline Note V2 decoding is not supported yet")
+            InputNullifierPreimageV2(
+                domain = readField(decoder) { readString(it) },
+                chainId = readField(decoder) { readChainId(it) },
+                sourceNoteCommitment = readField(decoder) { readHash(it, "source_note_commitment") },
+                ownerKeyCertificatePayloadHash = readField(decoder) {
+                    readHash(it, "owner_key_certificate_payload_hash")
+                },
+                noteSecret = readField(decoder) { readBytesVec(it) },
+            )
     }
 
     private object PaymentTokenIdPreimageAdapter : TypeAdapter<PaymentTokenIdPreimageV2> {
@@ -952,8 +1215,222 @@ object OfflineNoteV2 {
         }
 
         override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): PaymentTokenIdPreimageV2 =
-            throw UnsupportedOperationException("Offline Note V2 decoding is not supported yet")
+            PaymentTokenIdPreimageV2(
+                domain = readField(decoder) { readString(it) },
+                chainId = readField(decoder) { readChainId(it) },
+                tokenNonce = readField(decoder) { readBytesVec(it) },
+                senderKeyCertificatePayloadHash = readField(decoder) {
+                    readHash(it, "sender_key_certificate_payload_hash")
+                },
+                inputNullifiers = readField(decoder) { readVec(it) { child -> readHash(child, "input_nullifier") } },
+                outputCommitments = readField(decoder) { readVec(it) { child -> readHash(child, "output_commitment") } },
+            )
     }
+
+    private fun <T> readField(parent: NoritoDecoder, readPayload: (NoritoDecoder) -> T): T {
+        val length = checkedLength(parent.readLength(compact(parent)), "field length")
+        val child = NoritoDecoder(parent.readBytes(length), parent.flags, parent.flagsHint)
+        val value = readPayload(child)
+        require(child.remaining() == 0) { "Trailing bytes after Offline Note V2 field decode" }
+        return value
+    }
+
+    private fun readString(decoder: NoritoDecoder): String {
+        val length = checkedLength(decoder.readLength(compact(decoder)), "string length")
+        val bytes = decoder.readBytes(length)
+        return String(bytes, StandardCharsets.UTF_8)
+    }
+
+    private fun readBool(decoder: NoritoDecoder): Boolean =
+        when (val tag = decoder.readByte()) {
+            0 -> false
+            1 -> true
+            else -> throw IllegalArgumentException("invalid boolean tag: $tag")
+        }
+
+    private fun readBytesVec(decoder: NoritoDecoder): ByteArray {
+        val length = checkedLength(decoder.readUInt(64), "byte vector length")
+        return decoder.readBytes(length)
+    }
+
+    private fun readConstVec(decoder: NoritoDecoder): ByteArray {
+        val length = checkedLength(decoder.readUInt(64), "const vector length")
+        val out = ByteArray(length)
+        for (idx in out.indices) {
+            val elementLength = decoder.readLength(compact(decoder))
+            require(elementLength == 1L) { "const u8 vector element length must be 1" }
+            out[idx] = decoder.readByte().toByte()
+        }
+        return out
+    }
+
+    private fun readOptionU32(decoder: NoritoDecoder): Int? =
+        when (val tag = decoder.readByte()) {
+            0 -> null
+            1 -> readField(decoder) { it.readUInt(32).toInt() }
+            else -> throw IllegalArgumentException("invalid option tag: $tag")
+        }
+
+    private fun <T> readVec(
+        decoder: NoritoDecoder,
+        readElement: (NoritoDecoder) -> T,
+    ): List<T> {
+        val count = checkedLength(decoder.readUInt(64), "vector length")
+        val values = ArrayList<T>(count)
+        repeat(count) {
+            values.add(readField(decoder, readElement))
+        }
+        return values
+    }
+
+    private fun readHash(decoder: NoritoDecoder, field: String): ByteArray {
+        val bytes = decoder.readBytes(32)
+        requireHash(bytes, field)
+        return bytes
+    }
+
+    private fun readVerifyingKeyId(decoder: NoritoDecoder): VerifyingKeyIdReference =
+        VerifyingKeyIdReference(
+            backend = readField(decoder) { readString(it) },
+            name = readField(decoder) { readString(it) },
+        )
+
+    private fun readProofBox(decoder: NoritoDecoder): ProofBox =
+        ProofBox(
+            backend = readField(decoder) { readString(it) },
+            bytes = readField(decoder) { readBytesVec(it) },
+        )
+
+    private fun readChainId(decoder: NoritoDecoder): String =
+        readField(decoder) { readString(it) }
+
+    private fun readCommitmentOrigin(decoder: NoritoDecoder): CommitmentOriginV2 =
+        when (val tag = decoder.readUInt(32)) {
+            0L -> readField(decoder) { payload ->
+                CommitmentOriginV2.IssuerLoad(
+                    operationId = readField(payload) { readString(it) },
+                    lineageId = readField(payload) { readString(it) },
+                    localRevision = readField(payload) { it.readUInt(64) },
+                )
+            }
+            1L -> readField(decoder) { payload ->
+                CommitmentOriginV2.P2pOutput(
+                    paymentRequestId = readField(payload) { readString(it) },
+                    outputIndex = readField(payload) { it.readUInt(32).toInt() },
+                )
+            }
+            else -> throw IllegalArgumentException("unsupported commitment origin tag: $tag")
+        }
+
+    private fun readAccountId(decoder: NoritoDecoder): String =
+        when (val tag = decoder.readUInt(32)) {
+            0L -> readField(decoder) { payload ->
+                val publicKey = readPublicKeyPayload(payload)
+                val algorithm = algorithmForCurveId(publicKey.curveId)
+                    ?: throw IllegalArgumentException("unsupported public key curve id: ${publicKey.curveId}")
+                try {
+                    AccountAddress.fromAccount(publicKey.keyBytes, algorithm).toI105Default()
+                } catch (ex: AccountAddressException) {
+                    throw IllegalArgumentException("invalid decoded account id", ex)
+                }
+            }
+            1L -> readField(decoder) { payload ->
+                val policy = readMultisigPolicy(payload)
+                try {
+                    AccountAddress.fromMultisigPolicy(policy).toI105Default()
+                } catch (ex: AccountAddressException) {
+                    throw IllegalArgumentException("invalid decoded multisig account id", ex)
+                }
+            }
+            else -> throw IllegalArgumentException("unsupported account controller tag: $tag")
+        }
+
+    private fun readPublicKeyPayload(decoder: NoritoDecoder): PublicKeyPayload {
+        val payload = readConstVec(decoder)
+        require(payload.isNotEmpty()) { "public key payload must not be empty" }
+        val curveId = compactTagToCurveId(payload[0].toInt() and 0xFF)
+        return PublicKeyPayload(curveId, payload.copyOfRange(1, payload.size))
+    }
+
+    private fun readMultisigPolicy(decoder: NoritoDecoder): MultisigPolicyPayload {
+        val version = readField(decoder) { it.readUInt(8).toInt() }
+        val threshold = readField(decoder) { it.readUInt(16).toInt() }
+        val members = readField(decoder) { payload ->
+            readVec(payload) { member ->
+                val publicKey = readField(member) { readPublicKeyPayload(it) }
+                val weight = readField(member) { it.readUInt(16).toInt() }
+                MultisigMemberPayload(publicKey.curveId, weight, publicKey.keyBytes)
+            }
+        }
+        return MultisigPolicyPayload.of(version, threshold, members)
+    }
+
+    private fun readAssetId(decoder: NoritoDecoder): String {
+        val accountId = readField(decoder) { readAccountId(it) }
+        val definitionBytes = readField(decoder) { readAssetDefinitionAddress(it) }
+        val definitionId = AssetDefinitionIdEncoder.encodeFromBytes(definitionBytes)
+        val dataspaceId = readField(decoder) { readAssetBalanceScope(it) }
+        val base = "$definitionId#$accountId"
+        return if (dataspaceId == null) base else "$base#dataspace:$dataspaceId"
+    }
+
+    private fun readAssetDefinitionAddress(decoder: NoritoDecoder): ByteArray {
+        val bytes = ArrayList<Byte>()
+        while (decoder.remaining() > 0) {
+            val length = decoder.readLength(compact(decoder))
+            require(length == 1L) { "asset definition byte field length must be 1" }
+            bytes.add(decoder.readByte().toByte())
+        }
+        return bytes.toByteArray()
+    }
+
+    private fun readAssetBalanceScope(decoder: NoritoDecoder): Long? =
+        when (val tag = decoder.readUInt(32)) {
+            0L -> null
+            1L -> readField(decoder) { it.readUInt(64) }
+            else -> throw IllegalArgumentException("unsupported asset balance scope tag: $tag")
+        }
+
+    private fun readNumeric(decoder: NoritoDecoder): String {
+        val mantissaBytes = readField(decoder) { payload ->
+            val length = checkedLength(payload.readUInt(32), "numeric mantissa length")
+            payload.readBytes(length)
+        }
+        val scale = readField(decoder) { it.readUInt(32).toInt() }
+        val mantissa = bigIntegerFromLittleEndianTwosComplement(mantissaBytes)
+        return canonicalNumericString(mantissa, scale)
+    }
+
+    private fun bigIntegerFromLittleEndianTwosComplement(bytes: ByteArray): BigInteger {
+        if (bytes.isEmpty()) return BigInteger.ZERO
+        val bigEndian = ByteArray(bytes.size)
+        for (idx in bytes.indices) {
+            bigEndian[idx] = bytes[bytes.size - 1 - idx]
+        }
+        return BigInteger(bigEndian)
+    }
+
+    private fun checkedLength(value: Long, field: String): Int {
+        require(value >= 0) { "$field must be non-negative" }
+        require(value <= Int.MAX_VALUE) { "$field exceeds JVM array limit" }
+        return value.toInt()
+    }
+
+    private fun compactTagToCurveId(tag: Int): Int =
+        when (tag) {
+            0 -> 0x01
+            1 -> 0x04
+            2 -> 0x03
+            3 -> 0x05
+            4 -> 0x02
+            5 -> 0x0A
+            6 -> 0x0B
+            7 -> 0x0C
+            8 -> 0x0D
+            9 -> 0x0E
+            10 -> 0x0F
+            else -> throw IllegalArgumentException("unsupported public key compact tag: $tag")
+        }
 
     private fun writeField(parent: NoritoEncoder, writePayload: (NoritoEncoder) -> Unit) {
         val child = parent.childEncoder()
@@ -1361,6 +1838,9 @@ object OfflineNoteV2 {
 
     private fun compact(encoder: NoritoEncoder): Boolean =
         (encoder.flags and NoritoHeader.COMPACT_LEN) != 0
+
+    private fun compact(decoder: NoritoDecoder): Boolean =
+        (decoder.flags and NoritoHeader.COMPACT_LEN) != 0
 
     private fun hexLower(bytes: ByteArray): String =
         bytes.joinToString(separator = "") { "%02x".format(it.toInt() and 0xFF) }

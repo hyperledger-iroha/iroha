@@ -133,6 +133,7 @@ Note: First release policy
 - Keep changes minimal and scoped; avoid unrelated edits in the same patch.
 - Prefer internal modules over adding new dependencies; do not edit `Cargo.lock`.
 - Never bypass commit signing (do not use `git commit --no-gpg-sign`). If GPG signing is not available in the automation environment, leave the change uncommitted and ask the user to create a signed commit locally.
+- Never kill, signal, or interrupt other Codex processes or Codex-owned agent sessions, even if they appear idle or are holding resources; ask the user to resolve the contention.
 - Never kill `cargo` or `rustc` processes unless the user explicitly requests it. If there is build-lock contention, wait or ask first.
 - Use feature flags to guard hardware-accelerated paths (e.g., `simd`, `cuda`) and always provide a deterministic fallback path.
 - Ensure outputs remain identical across hardware; avoid relying on non-deterministic parallel reductions.

@@ -16,14 +16,6 @@ use std::{
 };
 
 #[cfg(feature = "fastpq-gpu")]
-use fastpq_isi::poseidon::RATE;
-use fastpq_isi::{StarkParameterSet, poseidon::PoseidonSponge as CpuPoseidonSponge};
-use iroha_crypto::Hash;
-use iroha_data_model::fastpq::TRANSFER_TRANSCRIPTS_METADATA_KEY;
-use rayon::prelude::*;
-use tracing::warn;
-
-#[cfg(feature = "fastpq-gpu")]
 use crate::gpu;
 use crate::{
     Error, Result, StateTransition, TransitionBatch,
@@ -32,6 +24,12 @@ use crate::{
     gadgets::transfer::{self, TransferRowKey},
     pack_bytes, poseidon,
 };
+#[cfg(feature = "fastpq-gpu")]
+use fastpq_isi::poseidon::RATE;
+use fastpq_isi::{StarkParameterSet, poseidon::PoseidonSponge as CpuPoseidonSponge};
+use iroha_crypto::Hash;
+use iroha_data_model::fastpq::TRANSFER_TRANSCRIPTS_METADATA_KEY;
+use rayon::prelude::*;
 
 /// Goldilocks modulus used by the FASTPQ AIR.
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
@@ -1015,6 +1013,17 @@ impl PoseidonColumnSlice {
 }
 
 #[cfg(feature = "fastpq-gpu")]
+pub(crate) fn poseidon_limb_padded_len(limb_len: usize) -> Option<usize> {
+    let payload = limb_len.checked_add(1)?;
+    let remainder = payload % RATE;
+    if remainder == 0 {
+        Some(payload)
+    } else {
+        payload.checked_add(RATE - remainder)
+    }
+}
+
+#[cfg(feature = "fastpq-gpu")]
 impl PoseidonColumnBatch {
     fn empty() -> Self {
         Self {
@@ -1030,7 +1039,7 @@ impl PoseidonColumnBatch {
     /// Construct a flattened batch from the supplied domains and coefficient columns.
     pub fn from_domains_and_columns(domains: &[&str], columns: &[Vec<u64>]) -> Option<Self> {
         if domains.len() != columns.len() {
-            warn!(
+            tracing::warn!(
                 target: "fastpq::poseidon",
                 domain_count = domains.len(),
                 column_count = columns.len(),
@@ -1043,7 +1052,7 @@ impl PoseidonColumnBatch {
         }
         let column_len = columns[0].len();
         if !columns.iter().all(|column| column.len() == column_len) {
-            warn!(
+            tracing::warn!(
                 target: "fastpq::poseidon",
                 "column length mismatch prevented gpu hashing"
             );
@@ -1087,7 +1096,7 @@ impl PoseidonColumnBatch {
             match PoseidonColumnSlice::new(start, column_total) {
                 Some(slice) => offsets.push(slice),
                 None => {
-                    warn!(
+                    tracing::warn!(
                         target: "fastpq::poseidon",
                         offset = start,
                         len = column_total,
@@ -1156,7 +1165,7 @@ impl PoseidonColumnBatch {
             match PoseidonColumnSlice::new(start, column_total) {
                 Some(slice) => offsets.push(slice),
                 None => {
-                    warn!(
+                    tracing::warn!(
                         target: "fastpq::poseidon",
                         offset = start,
                         len = column_total,
@@ -1185,16 +1194,26 @@ impl PoseidonColumnBatch {
         if messages.is_empty() {
             return Some(Self::empty());
         }
-        let max_len = messages.iter().map(Vec::len).max().unwrap_or(0);
-        let padded_len = {
-            let payload = max_len + 1;
-            let remainder = payload % RATE;
-            if remainder == 0 {
-                payload
-            } else {
-                payload + (RATE - remainder)
-            }
+        let Some(padded_len) = messages
+            .first()
+            .and_then(|message| poseidon_limb_padded_len(message.len()))
+        else {
+            tracing::warn!(
+                target: "fastpq::poseidon",
+                "poseidon limb batch length exceeded host bounds"
+            );
+            return None;
         };
+        if !messages
+            .iter()
+            .all(|message| poseidon_limb_padded_len(message.len()) == Some(padded_len))
+        {
+            tracing::warn!(
+                target: "fastpq::poseidon",
+                "mixed Poseidon limb padded lengths require separate gpu batches"
+            );
+            return None;
+        }
         let mut payloads =
             Vec::with_capacity(messages.len().saturating_mul(padded_len).max(padded_len));
         let mut offsets = Vec::with_capacity(messages.len());
@@ -1209,7 +1228,7 @@ impl PoseidonColumnBatch {
             match PoseidonColumnSlice::new(start, padded_len) {
                 Some(slice) => offsets.push(slice),
                 None => {
-                    warn!(
+                    tracing::warn!(
                         target: "fastpq::poseidon",
                         offset = start,
                         len = padded_len,
@@ -1333,7 +1352,7 @@ pub fn hash_columns_gpu_batch(batch: &PoseidonColumnBatch) -> Option<Vec<u64>> {
         }
         Err(error) => {
             record_poseidon_pipeline_fallback();
-            warn!(
+            tracing::warn!(
                 target: "fastpq::poseidon",
                 backend = ?backend,
                 %error,
@@ -1353,7 +1372,7 @@ fn poseidon_column_gpu_self_test(backend: backend::GpuBackend) -> bool {
         ];
         let columns = vec![vec![1u64, 2, 3, 4], vec![5u64, 6, 7, 8]];
         let Some(batch) = PoseidonColumnBatch::from_domains_and_columns(&domains, &columns) else {
-            warn!(
+            tracing::warn!(
                 target: "fastpq::poseidon",
                 "gpu poseidon column self-test could not build batch"
             );
@@ -1364,7 +1383,7 @@ fn poseidon_column_gpu_self_test(backend: backend::GpuBackend) -> bool {
         match gpu::poseidon_hash_columns(&batch, backend) {
             Ok(actual) if actual == expected => true,
             Ok(actual) => {
-                warn!(
+                tracing::warn!(
                     target: "fastpq::poseidon",
                     backend = ?backend,
                     expected = ?expected,
@@ -1374,7 +1393,7 @@ fn poseidon_column_gpu_self_test(backend: backend::GpuBackend) -> bool {
                 false
             }
             Err(error) => {
-                warn!(
+                tracing::warn!(
                     target: "fastpq::poseidon",
                     backend = ?backend,
                     %error,
@@ -1762,6 +1781,8 @@ pub(crate) fn hash_trace_merkle_pairs_with_mode(
     pairs: &[[u64; 2]],
     mode: backend::ExecutionMode,
 ) -> Vec<u64> {
+    #[cfg(not(feature = "fastpq-gpu"))]
+    let _ = mode;
     #[cfg(feature = "fastpq-gpu")]
     if mode == backend::ExecutionMode::Gpu {
         if let Some(hashes) = hash_trace_merkle_pairs_gpu(pairs) {
@@ -1800,7 +1821,7 @@ fn hash_trace_merkle_pairs_gpu(pairs: &[[u64; 2]]) -> Option<Vec<u64>> {
                 record_poseidon_merkle_pair_gpu_batch(pairs.len());
                 Some(result)
             } else {
-                warn!(
+                tracing::warn!(
                     target: "fastpq::poseidon",
                     backend = ?backend,
                     pair_count = pairs.len(),
@@ -1837,7 +1858,7 @@ fn trace_merkle_pair_gpu_matches_cpu_sample(pairs: &[[u64; 2]], hashes: &[u64]) 
         let expected = hash_field_with_domain_cpu(TRACE_NODE_DOMAIN, &pairs[index]);
         let actual = hashes[index];
         if actual != expected {
-            warn!(
+            tracing::warn!(
                 target: "fastpq::poseidon",
                 index,
                 actual,
@@ -1881,7 +1902,7 @@ fn poseidon_merkle_pair_gpu_preflight(backend: backend::GpuBackend) -> bool {
         ];
         let Some(batch) = PoseidonColumnBatch::from_domain_and_pairs(TRACE_NODE_DOMAIN, &pairs)
         else {
-            warn!(
+            tracing::warn!(
                 target: "fastpq::poseidon",
                 backend = ?backend,
                 "gpu trace Merkle Poseidon pair preflight could not build batch; falling back"
@@ -1910,7 +1931,7 @@ fn poseidon_merkle_pair_gpu_preflight(backend: backend::GpuBackend) -> bool {
                     });
                 let (mismatch_index, actual_value, expected_value) =
                     mismatch.unwrap_or((0, 0, 0));
-                warn!(
+                tracing::warn!(
                     target: "fastpq::poseidon",
                     backend = ?backend,
                     mismatch_index,
@@ -1921,7 +1942,7 @@ fn poseidon_merkle_pair_gpu_preflight(backend: backend::GpuBackend) -> bool {
                 false
             }
             Err(error) => {
-                warn!(
+                tracing::warn!(
                     target: "fastpq::poseidon",
                     backend = ?backend,
                     %error,
@@ -1943,7 +1964,7 @@ fn disable_poseidon_merkle_gpu_with_warning(
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
         .is_ok()
     {
-        warn!(
+        tracing::warn!(
             target: "fastpq::poseidon",
             backend = ?backend,
             pair_count,
@@ -2204,13 +2225,8 @@ mod tests {
 
     #[cfg(feature = "fastpq-gpu")]
     #[test]
-    fn poseidon_column_batch_flattens_variable_limb_slices() {
-        let messages = vec![
-            Vec::<u64>::new(),
-            vec![1u64],
-            vec![2u64, 3],
-            vec![u64::MAX, 5, 6, 7, 8],
-        ];
+    fn poseidon_column_batch_flattens_same_padded_limb_slices() {
+        let messages = vec![Vec::<u64>::new(), vec![1u64]];
         let batch = PoseidonColumnBatch::from_limb_slices(&messages).expect("batch");
         assert_eq!(batch.columns(), messages.len());
         assert!(batch.padded_len() % RATE == 0);
@@ -2228,6 +2244,16 @@ mod tests {
                     .all(|value| *value == 0)
             );
         }
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn poseidon_column_batch_rejects_mixed_padded_limb_slices() {
+        let messages = vec![vec![1u64], vec![2u64, 3], vec![4u64, 5, 6, 7]];
+        assert!(
+            PoseidonColumnBatch::from_limb_slices(&messages).is_none(),
+            "mixed canonical padded lengths must be grouped before GPU hashing"
+        );
     }
 
     #[cfg(feature = "fastpq-gpu")]

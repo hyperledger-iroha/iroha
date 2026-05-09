@@ -38,6 +38,12 @@ const AIR_COMPOSITION_LEAF_DOMAIN: &[u8] = b"fastpq:v1:air:composition:leaf";
 const TRACE_NODE_DOMAIN: &[u8] = b"fastpq:v1:trace:node";
 pub const LOOKUP_PRODUCT_DOMAIN: &str = "fastpq:v1:lookup:product";
 const FRI_FINAL_DOMAIN: &str = "fastpq:v1:fri:final";
+#[cfg(feature = "fastpq-gpu")]
+// Small grouped limb batches are cheaper and safer on the scalar path than a fixed Metal dispatch.
+const MIN_POSEIDON_LIMB_GPU_BATCH_MESSAGES: usize = 32;
+#[cfg(feature = "fastpq-gpu")]
+// Tiny row batches underutilise the fixed Metal dispatch and have failed under shared Izanami load.
+const MIN_POSEIDON_ROW_GPU_ROWS: usize = 32;
 #[cfg(target_os = "macos")]
 const METAL_FRAMEWORK: &str = "/System/Library/Frameworks/Metal.framework/Metal";
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
@@ -1640,6 +1646,10 @@ fn hash_trace_rows_with_mode(columns: &[Vec<u64>], mode: ExecutionMode) -> Vec<u
 
     if mode == ExecutionMode::Gpu {
         #[cfg(feature = "fastpq-gpu")]
+        if row_count < MIN_POSEIDON_ROW_GPU_ROWS {
+            return hash_trace_rows_cpu(columns);
+        }
+        #[cfg(feature = "fastpq-gpu")]
         if let Some(backend) = current_gpu_backend() {
             match crate::gpu::poseidon_hash_rows(columns, backend) {
                 Ok(hashes) if hashes.len() == row_count => return hashes,
@@ -2357,28 +2367,12 @@ fn hash_poseidon_limb_batches(messages: &[Vec<u64>], mode: ExecutionMode) -> Vec
     if messages.is_empty() {
         return Vec::new();
     }
+    #[cfg(not(feature = "fastpq-gpu"))]
+    let _ = mode;
     #[cfg(feature = "fastpq-gpu")]
     if mode == ExecutionMode::Gpu {
-        if let Some(batch) = crate::trace::PoseidonColumnBatch::from_limb_slices(messages) {
-            if let Some(hashes) = crate::trace::hash_columns_gpu_batch(&batch) {
-                if hashes.len() == messages.len() {
-                    if poseidon_limb_batch_matches_cpu_sample(messages, &hashes) {
-                        return hashes;
-                    }
-                    tracing::warn!(
-                        target: "fastpq::poseidon",
-                        count = messages.len(),
-                        "gpu Poseidon limb batch diverged from CPU parity sample; falling back to CPU"
-                    );
-                } else {
-                    tracing::warn!(
-                        target: "fastpq::poseidon",
-                        expected = messages.len(),
-                        actual = hashes.len(),
-                        "gpu Poseidon limb batch returned an unexpected count; falling back to CPU"
-                    );
-                }
-            }
+        if let Some(hashes) = hash_poseidon_limb_batches_gpu(messages) {
+            return hashes;
         }
     }
     messages
@@ -2388,7 +2382,84 @@ fn hash_poseidon_limb_batches(messages: &[Vec<u64>], mode: ExecutionMode) -> Vec
 }
 
 #[cfg(feature = "fastpq-gpu")]
-fn poseidon_limb_batch_matches_cpu_sample(messages: &[Vec<u64>], hashes: &[u64]) -> bool {
+fn hash_poseidon_limb_batches_gpu(messages: &[Vec<u64>]) -> Option<Vec<u64>> {
+    let mut groups = std::collections::BTreeMap::<usize, Vec<usize>>::new();
+    for (index, message) in messages.iter().enumerate() {
+        groups
+            .entry(crate::trace::poseidon_limb_padded_len(message.len())?)
+            .or_default()
+            .push(index);
+    }
+
+    let mut result = vec![0u64; messages.len()];
+    for indices in groups.values() {
+        let group_messages = indices
+            .iter()
+            .map(|index| messages[*index].clone())
+            .collect::<Vec<_>>();
+        if group_messages.len() < MIN_POSEIDON_LIMB_GPU_BATCH_MESSAGES {
+            for (index, hash) in indices
+                .iter()
+                .zip(hash_poseidon_limb_batch_cpu(&group_messages))
+            {
+                result[*index] = hash;
+            }
+            continue;
+        }
+        let batch = crate::trace::PoseidonColumnBatch::from_limb_slices(&group_messages)?;
+        let hashes = match crate::trace::hash_columns_gpu_batch(&batch) {
+            Some(hashes)
+                if hashes.len() == group_messages.len()
+                    && poseidon_limb_batch_matches_cpu_sample(
+                        &group_messages,
+                        &hashes,
+                        Some(indices),
+                    ) =>
+            {
+                hashes
+            }
+            Some(hashes) if hashes.len() != group_messages.len() => {
+                tracing::warn!(
+                    target: "fastpq::poseidon",
+                    expected = group_messages.len(),
+                    actual = hashes.len(),
+                    "gpu Poseidon limb batch returned an unexpected count; falling back to CPU"
+                );
+                hash_poseidon_limb_batch_cpu(&group_messages)
+            }
+            Some(_) => {
+                tracing::warn!(
+                    target: "fastpq::poseidon",
+                    count = group_messages.len(),
+                    padded_len = crate::trace::poseidon_limb_padded_len(group_messages[0].len())
+                        .unwrap_or(0),
+                    "gpu Poseidon limb batch diverged from CPU parity sample; falling back to CPU"
+                );
+                hash_poseidon_limb_batch_cpu(&group_messages)
+            }
+            None => hash_poseidon_limb_batch_cpu(&group_messages),
+        };
+        for (index, hash) in indices.iter().zip(hashes) {
+            result[*index] = hash;
+        }
+    }
+    Some(result)
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn hash_poseidon_limb_batch_cpu(messages: &[Vec<u64>]) -> Vec<u64> {
+    messages
+        .par_iter()
+        .map(|limbs| poseidon::hash_field_elements_cpu(limbs))
+        .collect()
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn poseidon_limb_batch_matches_cpu_sample(
+    messages: &[Vec<u64>],
+    hashes: &[u64],
+    original_indices: Option<&[usize]>,
+) -> bool {
     if messages.len() != hashes.len() {
         return false;
     }
@@ -2405,9 +2476,13 @@ fn poseidon_limb_batch_matches_cpu_sample(messages: &[Vec<u64>], hashes: &[u64])
         let expected = poseidon::hash_field_elements_cpu(&messages[index]);
         let actual = hashes[index];
         if actual != expected {
+            let original_index = original_indices
+                .and_then(|indices| indices.get(index))
+                .copied()
+                .unwrap_or(index);
             tracing::warn!(
                 target: "fastpq::poseidon",
-                index,
+                index = original_index,
                 actual,
                 expected,
                 limbs = messages[index].len(),
@@ -2602,6 +2677,50 @@ mod tests {
                 .expect("cpu batched");
         assert_eq!(cpu_batched, expected);
         assert_eq!(batched, expected);
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn domain_hash_gpu_batches_group_mixed_limb_lengths() {
+        let messages = vec![
+            Vec::<u64>::new(),
+            vec![1u64],
+            vec![2u64, 3, u64::MAX],
+            (0u64..17).collect(),
+        ];
+        let limbs = messages
+            .iter()
+            .map(|message| hash_with_domain_limbs(FRI_LEAF_DOMAIN, message).expect("limbs"))
+            .collect::<Vec<_>>();
+        let hashes =
+            hash_poseidon_limb_batches_gpu(&limbs).expect("mixed padded limb groups should hash");
+        let expected = limbs
+            .iter()
+            .map(|message| poseidon::hash_field_elements_cpu(message))
+            .collect::<Vec<_>>();
+        assert_eq!(hashes, expected);
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn domain_hash_gpu_batches_match_scalar_for_pair_of_len17_limb_messages() {
+        let messages = vec![
+            (0u64..10).collect::<Vec<_>>(),
+            (10u64..20).collect::<Vec<_>>(),
+        ];
+        let limbs = messages
+            .iter()
+            .map(|message| hash_with_domain_limbs(FRI_LEAF_DOMAIN, message).expect("limbs"))
+            .collect::<Vec<_>>();
+        assert_eq!(limbs.iter().map(Vec::len).collect::<Vec<_>>(), vec![17, 17]);
+
+        let hashes =
+            hash_poseidon_limb_batches_gpu(&limbs).expect("same-length limb group should hash");
+        let expected = limbs
+            .iter()
+            .map(|message| poseidon::hash_field_elements_cpu(message))
+            .collect::<Vec<_>>();
+        assert_eq!(hashes, expected);
     }
 
     #[test]

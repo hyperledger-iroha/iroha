@@ -6128,23 +6128,57 @@ impl Actor {
             && self.pending_block_has_commit_votes(block_hash, pending.height, pending.view)
     }
 
-    fn commit_recovery_candidate_blocks_len(&self) -> usize {
+    fn pending_block_has_commit_certificate_evidence(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        pending: &PendingBlock,
+    ) -> bool {
+        pending.commit_qc_observed()
+            || self.pending_block_has_qc(block_hash, pending.height, pending.view)
+    }
+
+    fn pending_block_is_commit_pipeline_candidate(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        pending: &PendingBlock,
+        tip_height: usize,
+        tip_hash: Option<HashOf<BlockHeader>>,
+        include_recovery_candidates: bool,
+        active_pending_exists: bool,
+    ) -> bool {
+        if self.pending_block_is_active_for_tip(block_hash, pending, tip_height, tip_hash) {
+            return true;
+        }
+        if !include_recovery_candidates {
+            return false;
+        }
+        if active_pending_exists
+            && !self.pending_block_has_commit_certificate_evidence(block_hash, pending)
+        {
+            return false;
+        }
+        self.pending_block_is_commit_recovery_candidate(block_hash, pending)
+    }
+
+    fn commit_candidate_blocks_len(&self, include_recovery_candidates: bool) -> usize {
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        let active_pending_exists =
+            self.active_pending_blocks_len_for_tip(tip_height, tip_hash) > 0;
         self.pending
             .pending_blocks
             .iter()
             .filter(|(hash, pending)| {
-                self.pending_block_is_commit_recovery_candidate(**hash, pending)
+                self.pending_block_is_commit_pipeline_candidate(
+                    **hash,
+                    pending,
+                    tip_height,
+                    tip_hash,
+                    include_recovery_candidates,
+                    active_pending_exists,
+                )
             })
             .count()
-    }
-
-    fn commit_candidate_blocks_len(&self, include_recovery_candidates: bool) -> usize {
-        let active = self.active_pending_blocks_len();
-        if active > 0 || !include_recovery_candidates {
-            return active;
-        }
-
-        self.commit_recovery_candidate_blocks_len()
     }
 
     fn has_active_pending_blocks(&self) -> bool {
@@ -35217,6 +35251,7 @@ impl Actor {
         let raw_backlog_dampens_frontier_pending = near_quorum_queue_backlog_raw
             || near_quorum_rbc_backlog_raw
             || existing_worker_backlog
+            || queue_active_backlog
             || unresolved_rbc_backlog;
         let backlog_recent_progress_grace = self.backlog_extended_view_change_timeout(
             self.rebroadcast_cooldown().max(Duration::from_millis(500)),
@@ -35434,6 +35469,27 @@ impl Actor {
             );
             same_block_recovery_stalled |= same_block_recovery_active;
         }
+        if stalled_pending == 0 && inflight_stalled {
+            if let Some((
+                height,
+                _,
+                stall_age,
+                pending_timeout,
+                timeout_class,
+                same_block_recovery_active,
+            )) = inflight_stall
+            {
+                debug!(
+                    height,
+                    stall_age_ms = stall_age.as_millis(),
+                    timeout_ms = pending_timeout.as_millis(),
+                    timeout_class = timeout_class.as_str(),
+                    same_block_recovery_active,
+                    "deferring forced view change while commit worker owns the stalled frontier"
+                );
+            }
+            return false;
+        }
         let mut near_quorum_preemptive_escalations = 0usize;
         if !near_quorum_recovery_candidates.is_empty() {
             let mut escalated_candidates = BTreeSet::<(HashOf<BlockHeader>, u64, u64)>::new();
@@ -35599,6 +35655,45 @@ impl Actor {
         );
         let resilience_ingress_backlog_active =
             self.config.resilience.enabled && Self::frontier_consensus_ingress_queued(queue_depths);
+        let same_height_rbc_sender_activity_active = self.config.resilience.enabled
+            && height == frontier_height
+            && queue_active_backlog
+            && self.frontier_recovery_same_height_rbc_sender_activity_active(height, now);
+        let body_present_proposal_metadata_seen =
+            self.slot_tracker.proposals_seen.contains(&(height, view))
+                || self
+                    .subsystems
+                    .propose
+                    .proposal_cache
+                    .get_proposal(height, view)
+                    .is_some();
+        if self.config.resilience.enabled
+            && height == frontier_height
+            && !recovery_backlog_stalled
+            && queue_active_backlog
+            && body_present_proposal_metadata_seen
+        {
+            debug!(
+                height,
+                view,
+                stalled_pending,
+                max_pending_stall_ms = max_pending_stall.as_millis(),
+                active_queue_len = self.queue.active_len(),
+                "deferring frontier view advance while body-present proposal metadata remains active under tx backlog"
+            );
+            return false;
+        }
+        if recovery_backlog_stalled && same_height_rbc_sender_activity_active {
+            debug!(
+                height,
+                view,
+                stalled_pending,
+                max_pending_stall_ms = max_pending_stall.as_millis(),
+                repair_exhaustion_window_ms = frontier_repair_exhaustion_window.as_millis(),
+                "deferring frontier view advance while same-height RBC sender activity remains active"
+            );
+            return false;
+        }
         let force_frontier_view_advance_after_repair = self.config.resilience.enabled
             && height == frontier_height
             && recovery_backlog_stalled
