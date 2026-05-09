@@ -18301,8 +18301,24 @@ async fn non_exact_block_body_response_routes_qc_update_through_block_sync_path(
     harness.shutdown.send();
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn plain_block_body_response_releases_dedup_for_active_missing_commit_qc_repair() {
+#[test]
+fn plain_block_body_response_releases_dedup_for_active_missing_commit_qc_repair() {
+    crate::sumeragi::sumeragi_thread_builder("sumeragi-block-body-response-qc-repair-test")
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build tokio test runtime");
+            runtime.block_on(
+                plain_block_body_response_releases_dedup_for_active_missing_commit_qc_repair_impl(),
+            );
+        })
+        .expect("spawn block-body response QC repair test worker")
+        .join()
+        .expect("block-body response QC repair test worker should not panic");
+}
+
+async fn plain_block_body_response_releases_dedup_for_active_missing_commit_qc_repair_impl() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
