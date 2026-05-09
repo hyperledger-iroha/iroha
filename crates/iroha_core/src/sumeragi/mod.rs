@@ -5428,6 +5428,39 @@ mod tests {
         }
     }
 
+    struct FalseProgressDueTickActor {
+        tick_tx: mpsc::Sender<()>,
+        tick_calls: Arc<AtomicUsize>,
+    }
+
+    impl WorkerActor for FalseProgressDueTickActor {
+        fn on_block_message(&mut self, _msg: InboundBlockMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_consensus_control(&mut self, _msg: ControlFlow) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_lane_relay(&mut self, _message: LaneRelayMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_background_request(&mut self, _request: BackgroundRequest) -> Result<()> {
+            Ok(())
+        }
+
+        fn next_tick_deadline(&self, now: Instant) -> Option<Instant> {
+            Some(now)
+        }
+
+        fn tick(&mut self) -> bool {
+            self.tick_calls.fetch_add(1, Ordering::Relaxed);
+            let _ = self.tick_tx.send(());
+            false
+        }
+    }
+
     #[derive(Default)]
     struct RecordingActorWithTick {
         events: Vec<&'static str>,
@@ -10279,6 +10312,58 @@ mod tests {
     }
 
     #[test]
+    fn spawn_tick_worker_throttles_no_progress_ticks() {
+        let (tick_tx, tick_rx) = mpsc::channel();
+        let tick_calls = Arc::new(AtomicUsize::new(0));
+        let actor = FalseProgressDueTickActor {
+            tick_tx,
+            tick_calls: Arc::clone(&tick_calls),
+        };
+        let gate = Arc::new(ActorGate::new(actor));
+        let active = Arc::new(AtomicUsize::new(0));
+        let (wake_tx, wake_rx) = mpsc::sync_channel::<()>(WORKER_WAKE_CHANNEL_CAP);
+        let shutdown_signal = ShutdownSignal::new();
+        let tick_gap = Duration::from_millis(300);
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: tick_gap,
+            tick_busy_gap: tick_gap,
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+        };
+        let shutdown_worker = shutdown_signal.clone();
+
+        let join = spawn_tick_worker(Arc::clone(&gate), active, config, wake_rx, shutdown_worker);
+
+        tick_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("tick worker should invoke the first due tick");
+        assert!(
+            tick_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "no-progress ticks must still update last_tick so the worker sleeps for tick_min_gap"
+        );
+
+        shutdown_signal.send();
+        let _ = wake_tx.send(());
+        join.join().expect("tick worker thread");
+        assert_eq!(tick_calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
     fn run_parallel_worker_exits_when_shutdown_is_sent() {
         let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -14505,9 +14590,8 @@ fn spawn_tick_worker<A: WorkerActor + Send + 'static>(
                         && (guard.actor_mut().should_bypass_tick_gap()
                             || should_run_tick(now, last_tick, tick_gap))
                     {
-                        if guard.actor_mut().tick() {
-                            last_tick = now;
-                        }
+                        let _ = guard.actor_mut().tick();
+                        last_tick = now;
                         guard.actor_mut().sync_external_hints();
                     }
                     status::record_worker_iteration(

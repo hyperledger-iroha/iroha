@@ -2,6 +2,23 @@
 
 Last updated: 2026-05-08
 
+## 2026-05-08 Sumeragi idle RBC tick throttling
+
+- The dedicated parallel Sumeragi tick worker now records every tick attempt,
+  including no-progress maintenance ticks, as the last tick time. Idle
+  maintenance that returns no progress therefore sleeps for the configured
+  tick-min-gap instead of immediately ticking again.
+- Idle-view deadlines are no longer scheduled when the transaction queue is
+  empty and there is no recovery, backlog, proposal-liveness, or vote-backed
+  consensus evidence to act on.
+- RBC rebroadcast deadlines now ignore inactive retained sessions, including
+  delivered sessions outside the active repair window, so stale RBC/DA state
+  does not keep an otherwise idle actor awake.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib spawn_tick_worker_throttles_no_progress_ticks -- --nocapture`
+  - `cargo test -p iroha_core --lib actor_next_tick_deadline -- --nocapture`
+
 ## 2026-05-08 Soracloud Inrou host-advert suppression
 
 - The embedded Soracloud runtime no longer submits an authoritative
