@@ -172,43 +172,34 @@ Last updated: 2026-05-09
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
   - `swift test` from `IrohaSwift`
 
-## 2026-05-09 Sumeragi validation inline fallback cleanup
+## 2026-05-09 Sumeragi validation vNext redrive cleanup
 
-- Commit and commit-QC validation now supersede stale, disconnected, stalled,
-  or expired active-frontier worker/vNext ownership and run validation inline.
-  Healthy near-quorum commit votes, commit-QC/cached-QC evidence, and small
-  fast-finality blocks still use the vNext worker path while that path is
-  making progress.
-- Inline fallback clears stale legacy inflight ids and vNext validation slots
-  before validating, so late worker results remain filtered and the active
-  frontier no longer waits indefinitely on dead ownership.
-- When cached commit evidence is already present, inline validation can replay
-  that evidence immediately, commit the frontier block, and prune the pending
-  entry instead of leaving it resident as `Valid`.
-- Vote-only exact-frontier block-sync updates now record commit-vote
-  placeholders for the tracked frontier and allow those votes through the
-  fast path without materializing a pending body when the block is still
-  unknown locally.
-- Synthetic vNext vote/QC block-sync fixtures now sign against the actor's
-  active `(chain_order_hash, rechain_seq)` binding, so exact-frontier recovery
-  tests exercise the same binding path as live peers instead of the default
-  genesis binding.
-- Focused tests cover stale commit-QC supersession, queue-full inline fallback,
-  configured fallback timing, stalled and disconnected inflight supersession,
-  fresh inflight deferral, healthy vNext worker dispatch, and unknown
-  vote-only frontier block-sync recovery. The broad `block_sync_update_` unit
-  sweep is green with `106` tests.
+- Commit and commit-QC validation now redrive stale, disconnected, stalled, or
+  expired frontier validation through vNext instead of falling back to
+  production inline execution. Legacy worker inflight state is superseded only
+  when vNext is not already tracking the block, so late worker results remain
+  filtered by their inflight id while retry ownership stays on the vNext path.
+- Near-quorum commit votes, commit-QC/cached-QC evidence, and small
+  fast-finality blocks now stay on the vNext worker path instead of toggling
+  consensus-critical validation back to inline execution while the worker path
+  is healthy.
+- Focused tests now cover near-tip vote evidence without proposal observation,
+  vNext worker ownership for near-quorum and small fast-finality validation,
+  stale commit-QC redrive, queue-full backpressure, configured fallback timing,
+  and stalled or disconnected inflight redrive. The inline validation helper is
+  retained only for focused unit tests.
 - Validation:
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib block_sync_update_ --features fastpq-gpu -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib vote_only --features fastpq-gpu -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib stale_frontier_with --features fastpq-gpu -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib vnext_worker --features fastpq-gpu -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo check -p iroha_core --lib`
+  - `rustfmt --edition 2024 crates/iroha_core/src/sumeragi/main_loop/commit.rs crates/iroha_core/src/sumeragi/main_loop/qc.rs crates/iroha_core/src/sumeragi/main_loop/validation.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib vnext_dispatch_validation_queues_worker_and_accepts_result -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib through_vnext -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib queue_full -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib commit_qc_keeps_fresh_inflight_validation_deferred_past_inline_fallback -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib commit_pipeline_keeps_deferred_validation_when_inflight_is_fresh -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib validation_allows_near_tip_commit_votes_without_proposal_evidence -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib validation_inline -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib commit_pipeline_inlines_validation -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib fresh_inflight_validation -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib validation_dispatches_near_tip_cached_commit_qc_to_workers -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib block_sync_update_tracks_missing_qc_for_unknown_frontier_vote_only_update -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib validation_allows -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib stale_view_async_commit_votes_for_known_pending_block_still_form_qc -- --nocapture`
+  - `git diff --check -- crates/iroha_core/src/sumeragi/main_loop/commit.rs crates/iroha_core/src/sumeragi/main_loop/qc.rs crates/iroha_core/src/sumeragi/main_loop/validation.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs status.md roadmap.md`
 
 ## 2026-05-09 Offline V2 issuer OpenAPI body auth
 
@@ -248,6 +239,18 @@ Last updated: 2026-05-09
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain --rerun-tasks` from `kotlin`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
   - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift`
+
+## 2026-05-09 Iroha config minimal snapshot refresh
+
+- Refreshed `minimal_config_snapshot` so the expected Sumeragi persistence
+  defaults use the current `5s` commit-inflight timeout.
+- Updated Sumeragi configuration examples to show
+  `commit_inflight_timeout_ms = 5000`, matching the actual default.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-config cargo test -p iroha_config --test fixtures minimal_config_snapshot -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-config cargo test -p iroha_config --test fixtures`
+  - `cargo fmt --all --check`
+  - `git diff --check`
 
 ## 2026-05-09 FASTPQ batched proof Poseidon and exact-frontier recovery
 

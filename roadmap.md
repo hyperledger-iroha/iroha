@@ -43,10 +43,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
   view-change certificate installation, block-sync certificate sidecar replay,
   and commit-persistence completion now enter the live reactor. Healthy
   validation remains on the vNext worker path, while stale, disconnected,
-  stalled, and expired frontier validation is superseded and validated inline
-  to keep the active frontier from waiting on dead worker ownership. The
-  broader block consensus shell still needs the remaining effect adapters
-  before the legacy cooperative commit sweep can be deleted.
+  stalled, and expired frontier validation is redriven through vNext instead
+  of falling back to production inline execution. The broader block consensus
+  shell still needs the remaining effect adapters before the legacy cooperative
+  commit sweep can be deleted.
 - Finish auditing chain-order hash and `rechain_seq` binding in deferred
   vote/QC caches, signer-tally/cache keys, and evidence replay paths used by
   the replacement shell. Vote/QC preimages, precommit signer history,
