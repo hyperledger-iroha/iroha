@@ -1224,10 +1224,24 @@ impl Actor {
                 }),
         );
         for (hash, old_view) in superseded {
-            let retain_payload = self
-                .pending
-                .pending_blocks
-                .get(&hash)
+            let pending = self.pending.pending_blocks.remove(&hash);
+            let inflight = if self
+                .subsystems
+                .commit
+                .inflight
+                .as_ref()
+                .is_some_and(|inflight| {
+                    inflight.block_hash == hash
+                        && inflight.pending.height == height
+                        && inflight.pending.view == old_view
+                }) {
+                self.subsystems.commit.inflight.take()
+            } else {
+                None
+            };
+            let retain_payload = pending
+                .as_ref()
+                .or_else(|| inflight.as_ref().map(|inflight| &inflight.pending))
                 .is_some_and(|pending| {
                     self.should_retain_superseded_contiguous_frontier_payload(
                         incoming_materialized_before_supersede,
@@ -1235,13 +1249,26 @@ impl Actor {
                         pending,
                     )
                 });
-            let pending = self.pending.pending_blocks.remove(&hash);
             let _ = self.supersede_validation_inflight(hash);
             self.pending.pending_fetch_requests.remove(&hash);
             self.pending.pending_block_body_requests.remove(&hash);
             self.clear_missing_block_request(&hash, MissingBlockClearReason::Obsolete);
             self.clear_missing_commit_qc_request(&hash, MissingBlockClearReason::Obsolete);
             self.clear_missing_block_view_change(&hash);
+            let pending = pending.or_else(|| {
+                inflight.map(|inflight| {
+                    debug!(
+                        height,
+                        incoming_view = view,
+                        superseded_view = old_view,
+                        incoming_block = %incoming_hash,
+                        superseded_block = %hash,
+                        commit_id = inflight.id,
+                        "detaching superseded contiguous-frontier commit inflight after stronger same-height evidence"
+                    );
+                    inflight.pending
+                })
+            });
             if retain_payload && let Some(mut pending) = pending {
                 if !pending.is_retired_same_height() {
                     pending.retire_same_height();

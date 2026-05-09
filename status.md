@@ -2,6 +2,44 @@
 
 Last updated: 2026-05-09
 
+## 2026-05-09 FASTPQ batched proof Poseidon and exact-frontier recovery
+
+- FASTPQ proof construction now routes independent Poseidon work through
+  mode-aware batched helpers instead of launching single-state GPU sponge work
+  on row hashes, LDE leaves, AIR trace/composition leaves, FRI leaves, Merkle
+  parent levels, and proof query paths. Long sequential sponge chains remain on
+  the deterministic CPU path.
+- The Metal row-hash API is used for row-major proof hashing when available,
+  with CPU parity sampling and ordered CPU fallback on backend errors or digest
+  mismatches. Domain-separated limb batches and trace Merkle pairs have the same
+  fail-closed parity gate.
+- Proof polynomial LDE materialization stays CPU-owned so CPU/GPU modes keep
+  byte-identical proof fixtures while GPU proof work is concentrated on
+  independent batched Poseidon calls.
+- Exact-frontier certified recovery now detaches a stale commit-inflight owner
+  when stronger same-height commit evidence arrives. Payload-only repair still
+  leaves the old inflight marker intact; late worker output for detached stale
+  work is ignored by the existing commit-result id/inflight checks.
+- Validation:
+  - `cargo test -p fastpq_prover poseidon --features fastpq-gpu -- --nocapture`
+  - `cargo test -p fastpq_prover proof --features fastpq-gpu -- --nocapture`
+  - `cargo test -p iroha_core --lib block_sync_update_commit_qc_bypasses_stale_commit_inflight_frontier_owner --features fastpq-gpu -- --nocapture`
+  - `cargo test -p iroha_core --lib sparse_exact_frontier_block_sync_bypasses_stale_commit_inflight_for_payload_repair --features fastpq-gpu -- --nocapture`
+  - `cargo test -p iroha_core --lib maybe_force_view_change_for_stalled_pending_forces_frontier_advance_after_repair_exhaustion_under_tx_backlog --features fastpq-gpu -- --nocapture`
+  - `cargo test -p iroha_core --lib commit_pipeline_arms_missing_commit_qc_recovery_for_stalled_local_vote --features fastpq-gpu -- --nocapture`
+  - `cargo test -p iroha_core known_block_commit_qc_recovery_requests_pending_block_fetch --features fastpq-gpu -- --nocapture`
+  - `cargo check -p iroha_core --features fastpq-gpu`
+  - `cargo check -p irohad --features fastpq-gpu`
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+- Attempted broad Sumeragi validation is not green yet:
+  `cargo test -p iroha_core sumeragi --features fastpq-gpu -- --nocapture`
+  still reports many vote/QC/topology regressions and aborts with a stack
+  overflow in
+  `plain_block_body_response_releases_dedup_for_active_missing_commit_qc_repair`.
+  No fresh 20k Izanami gate/profile was run for this entry.
+
 ## 2026-05-09 Sumeragi vNext durable certificate sidecars
 
 - Kura roster sidecars now persist vNext re-chain and view-change certificate
@@ -16,6 +54,11 @@ Last updated: 2026-05-09
   Kura sidecars, then merges live journal entries. Inbound updates still filter
   re-chain sidecars by exact height/view/block hash and view-change sidecars by
   target height/new view before replaying them into the reactor.
+- Vote and QC chain-order binding checks now lazily hydrate matching persisted
+  vNext certificate sidecars from Kura before comparing `chain_order_hash` and
+  `rechain_seq`, so restarted or catching-up actors can accept votes/QCs bound
+  to a durable re-chain certificate even when the in-memory reactor journal is
+  empty.
 - Validation:
   - `cargo test -p iroha_core --lib roster_sidecar_roundtrip_with_vnext_certificates -- --nocapture`
   - `cargo test -p iroha_core --lib roster_sidecar_rejects_vnext_rechain_certificate_mismatch -- --nocapture`
@@ -24,9 +67,32 @@ Last updated: 2026-05-09
   - `cargo test -p iroha_core --lib vnext_rechain_block_sync_sidecar_installs_chain_order -- --nocapture`
   - `cargo test -p iroha_core --lib vnext_block_sync_update_attaches_certificate_sidecars -- --nocapture`
   - `cargo test -p iroha_core --lib vnext_view_change_block_sync_sidecar_advances_live_view -- --nocapture`
+  - `cargo test -p iroha_core --lib vnext_vote_binding_hydrates_from_persisted_sidecar -- --nocapture`
+  - `cargo test -p iroha_core --lib vnext_qc_binding_hydrates_from_persisted_sidecar -- --nocapture`
   - `cargo test -p iroha_core --lib vnext -- --nocapture`
   - `cargo test -p iroha_core --lib block_sync_sidecar -- --nocapture`
   - `cargo test -p iroha_core --lib incoming_block_message_accepts_block_sync_update_with_new_evidence -- --nocapture`
+  - `cargo check -p iroha_core --lib`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+
+## 2026-05-09 FastPQ split FFT compile hygiene
+
+- The FastPQ split CPU/GPU FFT, IFFT, and LDE helpers now use scoped standard
+  threads for the CPU half while the current thread owns the GPU lane guard.
+  This preserves deterministic CPU fallback output and avoids moving
+  `MutexGuard` through Rayon worker closures during `iroha_core` builds.
+- Trace polynomial derivation now keeps coefficient IFFT on the CPU before
+  optional GPU LDE/hash stages, keeping the pending GPU lane available for the
+  later polynomial/hash work.
+- The FASTPQ Poseidon column GPU batch path now runs a cached parity self-test
+  before using the accelerator and falls back to CPU hashing on mismatch or
+  backend failure.
+- Validation:
+  - `cargo test -p fastpq_prover --lib split_matches_cpu_output_without_gpu -- --nocapture`
+  - `cargo test -p fastpq_prover --lib column_hashes -- --nocapture`
+  - `cargo test -p fastpq_prover --lib pending_lde -- --nocapture`
+  - `cargo test -p fastpq_prover --lib poseidon_gpu_hashes_match_cpu_when_backend_available --features fastpq-gpu -- --nocapture`
   - `cargo check -p iroha_core --lib`
   - `cargo fmt --all --check`
   - `git diff --check`

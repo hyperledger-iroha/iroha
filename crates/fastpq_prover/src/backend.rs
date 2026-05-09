@@ -24,7 +24,7 @@ use crate::{
     proof::{AirConstraintOpening, FriQueryOpening, FriRoundOpening, PublicIO},
     trace::{
         PoseidonPipelinePolicy, build_trace, column_index, derive_polynomial_data,
-        hash_columns_from_coefficients, hash_trace_merkle_pairs_batched, merkle_root,
+        hash_columns_from_coefficients, hash_trace_merkle_pairs_with_mode,
         merkle_root_with_first_level,
     },
 };
@@ -229,6 +229,14 @@ pub fn current_gpu_backend() -> Option<GpuBackend> {
         let _ = gpu_available();
     }
     GPU_BACKEND.get().and_then(|backend| *backend)
+}
+
+fn default_batch_execution_mode() -> ExecutionMode {
+    if current_gpu_backend().is_some() {
+        ExecutionMode::Gpu
+    } else {
+        ExecutionMode::Cpu
+    }
 }
 
 fn log_execution_resolution(requested: ExecutionMode, resolved: ExecutionMode) {
@@ -1016,6 +1024,14 @@ impl StarkBackend {
 /// # Errors
 /// Returns an error if hashing a chunk into the Merkle leaf domain fails.
 pub fn hash_lde_leaves(evaluations: &[u64], arity: u32) -> Result<Vec<u64>> {
+    hash_lde_leaves_with_mode(evaluations, arity, default_batch_execution_mode())
+}
+
+fn hash_lde_leaves_with_mode(
+    evaluations: &[u64],
+    arity: u32,
+    mode: ExecutionMode,
+) -> Result<Vec<u64>> {
     if evaluations.is_empty() {
         return Ok(Vec::new());
     }
@@ -1027,7 +1043,7 @@ pub fn hash_lde_leaves(evaluations: &[u64], arity: u32) -> Result<Vec<u64>> {
         limbs.extend(group.iter().copied());
         messages.push(limbs);
     }
-    hash_with_domain_limb_batches(LDE_LEAF_DOMAIN, &messages)
+    hash_with_domain_limb_batches(LDE_LEAF_DOMAIN, &messages, mode)
 }
 
 /// Hash one LDE leaf chunk using the same domain as [`hash_lde_leaves`].
@@ -1074,7 +1090,7 @@ pub fn hash_air_composition_leaf(index: usize, value: u64) -> Result<u64> {
 ///
 /// # Errors
 /// Returns an error if row hashing fails.
-pub fn hash_air_trace_rows(columns: &[Vec<u64>]) -> Result<Vec<u64>> {
+fn hash_air_trace_rows_with_mode(columns: &[Vec<u64>], mode: ExecutionMode) -> Result<Vec<u64>> {
     if columns.is_empty() {
         return Ok(Vec::new());
     }
@@ -1096,20 +1112,20 @@ pub fn hash_air_trace_rows(columns: &[Vec<u64>]) -> Result<Vec<u64>> {
         limbs.extend(row);
         messages.push(limbs);
     }
-    hash_with_domain_limb_batches(AIR_TRACE_LEAF_DOMAIN, &messages)
+    hash_with_domain_limb_batches(AIR_TRACE_LEAF_DOMAIN, &messages, mode)
 }
 
 /// Hash all AIR composition leaves.
 ///
 /// # Errors
 /// Returns an error if leaf hashing fails.
-pub fn hash_air_composition_leaves(values: &[u64]) -> Result<Vec<u64>> {
+fn hash_air_composition_leaves_with_mode(values: &[u64], mode: ExecutionMode) -> Result<Vec<u64>> {
     let mut messages = Vec::with_capacity(values.len());
     for (index, value) in values.iter().copied().enumerate() {
         let index = u64::try_from(index).map_err(|_| Error::QueryIndexOverflow { index })?;
         messages.push(vec![index, value]);
     }
-    hash_with_domain_limb_batches(AIR_COMPOSITION_LEAF_DOMAIN, &messages)
+    hash_with_domain_limb_batches(AIR_COMPOSITION_LEAF_DOMAIN, &messages, mode)
 }
 
 /// Evaluate the sampled FASTPQ AIR composition value for two adjacent rows.
@@ -1279,13 +1295,14 @@ fn air_row_at(columns: &[Vec<u64>], row_index: usize) -> Result<Vec<u64>> {
 ///
 /// # Errors
 /// Returns an error when any sampled index is outside the AIR domain.
-pub fn open_air_constraint_openings(
+fn open_air_constraint_openings_with_mode(
     columns: &[Vec<u64>],
     air_trace_leaves: &[u64],
     composition_values: &[u64],
     composition_leaves: &[u64],
     query_indices: &[usize],
     next_step: usize,
+    mode: ExecutionMode,
 ) -> Result<Vec<AirConstraintOpening>> {
     if columns.is_empty() {
         return Ok(Vec::new());
@@ -1297,13 +1314,13 @@ pub fn open_air_constraint_openings(
             len: row_count,
         });
     }
-    let row_paths = merkle_paths_for_leaf_indices(air_trace_leaves, query_indices)?;
+    let row_paths = merkle_paths_for_leaf_indices(air_trace_leaves, query_indices, mode)?;
     let next_indices: Vec<usize> = query_indices
         .iter()
         .map(|index| (index + next_step) % row_count)
         .collect();
-    let next_paths = merkle_paths_for_leaf_indices(air_trace_leaves, &next_indices)?;
-    let composition_paths = merkle_paths_for_leaf_indices(composition_leaves, query_indices)?;
+    let next_paths = merkle_paths_for_leaf_indices(air_trace_leaves, &next_indices, mode)?;
+    let composition_paths = merkle_paths_for_leaf_indices(composition_leaves, query_indices, mode)?;
 
     query_indices
         .iter()
@@ -1396,6 +1413,22 @@ pub fn merkle_paths_for_queries(
     arity: u32,
     evaluation_len: usize,
 ) -> Result<Vec<Vec<u64>>> {
+    merkle_paths_for_queries_with_mode(
+        leaves,
+        query_indices,
+        arity,
+        evaluation_len,
+        default_batch_execution_mode(),
+    )
+}
+
+fn merkle_paths_for_queries_with_mode(
+    leaves: &[u64],
+    query_indices: &[usize],
+    arity: u32,
+    evaluation_len: usize,
+    mode: ExecutionMode,
+) -> Result<Vec<Vec<u64>>> {
     if query_indices.is_empty() {
         return Ok(Vec::new());
     }
@@ -1406,7 +1439,7 @@ pub fn merkle_paths_for_queries(
         });
     }
     let chunk_size = lde_chunk_size(arity).max(1);
-    let levels = build_merkle_levels(leaves)?;
+    let levels = build_merkle_levels_with_mode(leaves, mode)?;
     let leaf_level = levels
         .first()
         .expect("non-empty levels for non-empty leaves");
@@ -1445,7 +1478,11 @@ pub fn merkle_paths_for_queries(
     Ok(paths)
 }
 
-fn merkle_paths_for_leaf_indices(leaves: &[u64], leaf_indices: &[usize]) -> Result<Vec<Vec<u64>>> {
+fn merkle_paths_for_leaf_indices(
+    leaves: &[u64],
+    leaf_indices: &[usize],
+    mode: ExecutionMode,
+) -> Result<Vec<Vec<u64>>> {
     if leaf_indices.is_empty() {
         return Ok(Vec::new());
     }
@@ -1455,7 +1492,7 @@ fn merkle_paths_for_leaf_indices(leaves: &[u64], leaf_indices: &[usize]) -> Resu
             len: 0,
         });
     }
-    let levels = build_merkle_levels(leaves)?;
+    let levels = build_merkle_levels_with_mode(leaves, mode)?;
     let leaf_count = levels
         .first()
         .expect("non-empty levels for non-empty leaves")
@@ -1508,7 +1545,7 @@ pub fn verify_merkle_path(root: u64, leaf: u64, leaf_index: usize, path: &[u64])
 }
 
 #[allow(clippy::unnecessary_wraps)]
-fn build_merkle_levels(leaves: &[u64]) -> Result<Vec<Vec<u64>>> {
+fn build_merkle_levels_with_mode(leaves: &[u64], mode: ExecutionMode) -> Result<Vec<Vec<u64>>> {
     if leaves.is_empty() {
         return Ok(Vec::new());
     }
@@ -1521,7 +1558,7 @@ fn build_merkle_levels(leaves: &[u64]) -> Result<Vec<Vec<u64>>> {
         }
         levels.push(current.clone());
         let pairs: Vec<[u64; 2]> = current.chunks(2).map(|pair| [pair[0], pair[1]]).collect();
-        let next = hash_trace_merkle_pairs_batched(&pairs);
+        let next = hash_trace_merkle_pairs_with_mode(&pairs, mode);
         if next.len() == 1 {
             levels.push(next.clone());
             break;
@@ -1529,6 +1566,15 @@ fn build_merkle_levels(leaves: &[u64]) -> Result<Vec<Vec<u64>>> {
         current = next;
     }
     Ok(levels)
+}
+
+fn merkle_root_with_mode(leaves: &[u64], mode: ExecutionMode) -> u64 {
+    let levels = build_merkle_levels_with_mode(leaves, mode).expect("Merkle levels are infallible");
+    levels
+        .last()
+        .and_then(|level| level.first())
+        .copied()
+        .unwrap_or(0)
 }
 
 fn merkle_node_hash(left: u64, right: u64) -> u64 {
@@ -1576,7 +1622,12 @@ pub fn compute_lookup_grand_product(
     poseidon::hash_field_elements_cpu(&running)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn hash_trace_rows(columns: &[Vec<u64>]) -> Vec<u64> {
+    hash_trace_rows_with_mode(columns, default_batch_execution_mode())
+}
+
+fn hash_trace_rows_with_mode(columns: &[Vec<u64>], mode: ExecutionMode) -> Vec<u64> {
     if columns.is_empty() {
         return Vec::new();
     }
@@ -1587,25 +1638,27 @@ pub fn hash_trace_rows(columns: &[Vec<u64>]) -> Vec<u64> {
         "LDE columns must have a consistent length"
     );
 
-    #[cfg(feature = "fastpq-gpu")]
-    if let Some(backend) = current_gpu_backend() {
-        match crate::gpu::poseidon_hash_rows(columns, backend) {
-            Ok(hashes) if hashes.len() == row_count => return hashes,
-            Ok(hashes) => {
-                tracing::warn!(
-                    target: "fastpq::poseidon",
-                    expected_rows = row_count,
-                    actual_rows = hashes.len(),
-                    "gpu Poseidon row hash returned an unexpected row count; falling back to CPU"
-                );
-            }
-            Err(error) => {
-                tracing::warn!(
-                    target: "fastpq::poseidon",
-                    backend = ?backend,
-                    %error,
-                    "gpu Poseidon row hash failed; falling back to CPU"
-                );
+    if mode == ExecutionMode::Gpu {
+        #[cfg(feature = "fastpq-gpu")]
+        if let Some(backend) = current_gpu_backend() {
+            match crate::gpu::poseidon_hash_rows(columns, backend) {
+                Ok(hashes) if hashes.len() == row_count => return hashes,
+                Ok(hashes) => {
+                    tracing::warn!(
+                        target: "fastpq::poseidon",
+                        expected_rows = row_count,
+                        actual_rows = hashes.len(),
+                        "gpu Poseidon row hash returned an unexpected row count; falling back to CPU"
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        target: "fastpq::poseidon",
+                        backend = ?backend,
+                        %error,
+                        "gpu Poseidon row hash failed; falling back to CPU"
+                    );
+                }
             }
         }
     }
@@ -1764,6 +1817,7 @@ fn fold_with_fri_opening_layers(
     arity: u32,
     max_reductions: u32,
     transcript: &mut Transcript,
+    mode: ExecutionMode,
 ) -> Result<(Vec<Vec<u64>>, Vec<u64>, Vec<u64>)> {
     if arity != 8 && arity != 16 {
         return Err(Error::FriArity(arity));
@@ -1783,8 +1837,8 @@ fn fold_with_fri_opening_layers(
 
     while current.len() > 1 && round < max_rounds {
         pad_to_arity(&mut current, arity_usize);
-        let leaves = hash_fri_leaves(round, &current, arity)?;
-        let root = merkle_root(&leaves);
+        let leaves = hash_fri_leaves_with_mode(round, &current, arity, mode)?;
+        let root = merkle_root_with_mode(&leaves, mode);
         transcript.append_fri_layer(round, root);
         roots.push(root);
         layer_values.push(current.clone());
@@ -1795,8 +1849,8 @@ fn fold_with_fri_opening_layers(
         round += 1;
     }
 
-    let leaves = hash_fri_leaves(round, &current, arity)?;
-    let final_root = merkle_root(&leaves);
+    let leaves = hash_fri_leaves_with_mode(round, &current, arity, mode)?;
+    let final_root = merkle_root_with_mode(&leaves, mode);
     transcript.append_fri_final(final_root);
     roots.push(final_root);
     layer_values.push(current);
@@ -1804,7 +1858,12 @@ fn fold_with_fri_opening_layers(
     Ok((layer_values, roots, betas))
 }
 
-fn hash_fri_leaves(round: usize, values: &[u64], arity: u32) -> Result<Vec<u64>> {
+fn hash_fri_leaves_with_mode(
+    round: usize,
+    values: &[u64],
+    arity: u32,
+    mode: ExecutionMode,
+) -> Result<Vec<u64>> {
     if values.is_empty() {
         return Ok(Vec::new());
     }
@@ -1820,13 +1879,14 @@ fn hash_fri_leaves(round: usize, values: &[u64], arity: u32) -> Result<Vec<u64>>
         limbs.extend(group.iter().copied());
         messages.push(limbs);
     }
-    hash_with_domain_limb_batches(FRI_LEAF_DOMAIN, &messages)
+    hash_with_domain_limb_batches(FRI_LEAF_DOMAIN, &messages, mode)
 }
 
 fn open_fri_query_chains(
     layer_values: &[Vec<u64>],
     query_indices: &[usize],
     arity: u32,
+    mode: ExecutionMode,
 ) -> Result<Vec<FriQueryOpening>> {
     if layer_values.is_empty() {
         return Ok(Vec::new());
@@ -1834,7 +1894,7 @@ fn open_fri_query_chains(
     let arity_usize = fri_chunk_size(arity).max(1);
     let mut round_leaves = Vec::with_capacity(layer_values.len());
     for (round, values) in layer_values.iter().enumerate() {
-        round_leaves.push(hash_fri_leaves(round, values, arity)?);
+        round_leaves.push(hash_fri_leaves_with_mode(round, values, arity, mode)?);
     }
 
     let mut openings = Vec::with_capacity(query_indices.len());
@@ -1859,7 +1919,7 @@ fn open_fri_query_chains(
                 .ok_or(Error::QueryMismatch { index: round })?;
             let end = start.saturating_add(arity_usize).min(values.len());
             let group = values[start..end].to_vec();
-            let paths = merkle_paths_for_leaf_indices(&round_leaves[round], &[leaf_index])?;
+            let paths = merkle_paths_for_leaf_indices(&round_leaves[round], &[leaf_index], mode)?;
             let folded_index = leaf_index;
             let folded_value = layer_values
                 .get(round + 1)
@@ -1900,6 +1960,7 @@ fn open_fri_query_chains(
         let final_paths = merkle_paths_for_leaf_indices(
             round_leaves.last().expect("final leaves"),
             &[final_leaf_index],
+            mode,
         )?;
         openings.push(FriQueryOpening {
             initial_index: initial_index_u32,
@@ -2065,16 +2126,17 @@ impl Backend for StarkBackend {
             merkle_root_with_first_level(column_digests.leaves(), column_digests.fused_parents());
 
         let lde_columns = polynomial_data.lde_columns();
-        let lde_rows = hash_trace_rows(lde_columns);
+        let lde_rows = hash_trace_rows_with_mode(lde_columns, resolved_mode);
         let lde_values = extend_row_hashes(&planner, resolved_mode, lde_rows, trace.padded_len);
         let lde_domain_size =
             u32::try_from(lde_values.len()).map_err(|_| Error::TraceLengthOverflow {
                 rows: lde_values.len(),
             })?;
-        let lde_hashes = hash_lde_leaves(&lde_values, self.config.params.fri.arity)?;
-        let lde_root = merkle_root(&lde_hashes);
-        let air_trace_leaves = hash_air_trace_rows(lde_columns)?;
-        let air_trace_root = merkle_root(&air_trace_leaves);
+        let lde_hashes =
+            hash_lde_leaves_with_mode(&lde_values, self.config.params.fri.arity, resolved_mode)?;
+        let lde_root = merkle_root_with_mode(&lde_hashes, resolved_mode);
+        let air_trace_leaves = hash_air_trace_rows_with_mode(lde_columns, resolved_mode)?;
+        let air_trace_root = merkle_root_with_mode(&air_trace_leaves, resolved_mode);
 
         let mut transcript = Transcript::initialise(
             public_io,
@@ -2106,8 +2168,9 @@ impl Backend for StarkBackend {
             .max(1);
         let air_composition_values =
             air_composition_values(&column_names, lde_columns, &alphas, next_step)?;
-        let air_composition_leaves = hash_air_composition_leaves(&air_composition_values)?;
-        let air_composition_root = merkle_root(&air_composition_leaves);
+        let air_composition_leaves =
+            hash_air_composition_leaves_with_mode(&air_composition_values, resolved_mode)?;
+        let air_composition_root = merkle_root_with_mode(&air_composition_leaves, resolved_mode);
         transcript.append_message(
             TRANSCRIPT_TAG_AIR_ROOTS,
             &[
@@ -2123,6 +2186,7 @@ impl Backend for StarkBackend {
             self.config.params.fri.arity,
             self.config.params.fri.max_reductions,
             &mut transcript,
+            resolved_mode,
         )?;
         let query_indices = sample_queries(
             lde_values.len(),
@@ -2132,24 +2196,27 @@ impl Backend for StarkBackend {
         let query_openings = open_queries(&lde_values, &query_indices)?;
         let query_chunks =
             open_query_chunks(&lde_values, &query_indices, self.config.params.fri.arity)?;
-        let query_paths = merkle_paths_for_queries(
+        let query_paths = merkle_paths_for_queries_with_mode(
             &lde_hashes,
             &query_indices,
             self.config.params.fri.arity,
             lde_values.len(),
+            resolved_mode,
         )?;
-        let air_openings = open_air_constraint_openings(
+        let air_openings = open_air_constraint_openings_with_mode(
             lde_columns,
             &air_trace_leaves,
             &air_composition_values,
             &air_composition_leaves,
             &query_indices,
             next_step,
+            resolved_mode,
         )?;
         let fri_query_openings = open_fri_query_chains(
             &fri_layer_values,
             &query_indices,
             self.config.params.fri.arity,
+            resolved_mode,
         )?;
 
         let trace_rows = u32::try_from(trace.rows)
@@ -2250,7 +2317,11 @@ fn hash_with_domain(domain: &[u8], values: &[u64]) -> Result<u64> {
     Ok(poseidon::hash_field_elements_cpu(&limbs))
 }
 
-fn hash_with_domain_limb_batches(domain: &[u8], messages: &[Vec<u64>]) -> Result<Vec<u64>> {
+fn hash_with_domain_limb_batches(
+    domain: &[u8],
+    messages: &[Vec<u64>],
+    mode: ExecutionMode,
+) -> Result<Vec<u64>> {
     if messages.is_empty() {
         return Ok(Vec::new());
     }
@@ -2258,7 +2329,7 @@ fn hash_with_domain_limb_batches(domain: &[u8], messages: &[Vec<u64>]) -> Result
         .iter()
         .map(|values| hash_with_domain_limbs(domain, values))
         .collect::<Result<Vec<_>>>()?;
-    Ok(hash_poseidon_limb_batches(&limbs))
+    Ok(hash_poseidon_limb_batches(&limbs, mode))
 }
 
 fn hash_with_domain_limbs(domain: &[u8], values: &[u64]) -> Result<Vec<u64>> {
@@ -2282,23 +2353,31 @@ fn hash_with_domain_limbs(domain: &[u8], values: &[u64]) -> Result<Vec<u64>> {
     Ok(limbs)
 }
 
-fn hash_poseidon_limb_batches(messages: &[Vec<u64>]) -> Vec<u64> {
+fn hash_poseidon_limb_batches(messages: &[Vec<u64>], mode: ExecutionMode) -> Vec<u64> {
     if messages.is_empty() {
         return Vec::new();
     }
     #[cfg(feature = "fastpq-gpu")]
-    {
+    if mode == ExecutionMode::Gpu {
         if let Some(batch) = crate::trace::PoseidonColumnBatch::from_limb_slices(messages) {
             if let Some(hashes) = crate::trace::hash_columns_gpu_batch(&batch) {
                 if hashes.len() == messages.len() {
-                    return hashes;
+                    if poseidon_limb_batch_matches_cpu_sample(messages, &hashes) {
+                        return hashes;
+                    }
+                    tracing::warn!(
+                        target: "fastpq::poseidon",
+                        count = messages.len(),
+                        "gpu Poseidon limb batch diverged from CPU parity sample; falling back to CPU"
+                    );
+                } else {
+                    tracing::warn!(
+                        target: "fastpq::poseidon",
+                        expected = messages.len(),
+                        actual = hashes.len(),
+                        "gpu Poseidon limb batch returned an unexpected count; falling back to CPU"
+                    );
                 }
-                tracing::warn!(
-                    target: "fastpq::poseidon",
-                    expected = messages.len(),
-                    actual = hashes.len(),
-                    "gpu Poseidon limb batch returned an unexpected count; falling back to CPU"
-                );
             }
         }
     }
@@ -2306,6 +2385,56 @@ fn hash_poseidon_limb_batches(messages: &[Vec<u64>]) -> Vec<u64> {
         .par_iter()
         .map(|limbs| poseidon::hash_field_elements_cpu(limbs))
         .collect()
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn poseidon_limb_batch_matches_cpu_sample(messages: &[Vec<u64>], hashes: &[u64]) -> bool {
+    if messages.len() != hashes.len() {
+        return false;
+    }
+    if messages.is_empty() {
+        return true;
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    let sample_indices = 0..messages.len();
+    #[cfg(not(any(test, debug_assertions)))]
+    let sample_indices = poseidon_limb_batch_sample_indices(messages.len());
+
+    for index in sample_indices {
+        let expected = poseidon::hash_field_elements_cpu(&messages[index]);
+        let actual = hashes[index];
+        if actual != expected {
+            tracing::warn!(
+                target: "fastpq::poseidon",
+                index,
+                actual,
+                expected,
+                limbs = messages[index].len(),
+                "gpu Poseidon limb batch parity mismatch"
+            );
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(all(feature = "fastpq-gpu", not(any(test, debug_assertions))))]
+fn poseidon_limb_batch_sample_indices(len: usize) -> Vec<usize> {
+    const SAMPLE_COUNT: usize = 16;
+    if len <= SAMPLE_COUNT {
+        return (0..len).collect();
+    }
+
+    let last = len - 1;
+    let mut indices = Vec::with_capacity(SAMPLE_COUNT);
+    for sample in 0..SAMPLE_COUNT {
+        let index = sample * last / (SAMPLE_COUNT - 1);
+        if indices.last().copied() != Some(index) {
+            indices.push(index);
+        }
+    }
+    indices
 }
 
 fn add_mod(a: u64, b: u64) -> u64 {
@@ -2330,7 +2459,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::{OperationKind, PublicInputs, StateTransition};
+    use crate::{OperationKind, PublicInputs, StateTransition, trace::merkle_root};
 
     fn sample_batch(rows: usize) -> TransitionBatch {
         let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
@@ -2430,8 +2559,28 @@ mod tests {
             (0u64..19).map(|offset| vec![offset, offset + 1]).collect(),
         ];
         for columns in cases {
-            assert_eq!(hash_trace_rows(&columns), hash_trace_rows_cpu(&columns));
+            assert_eq!(
+                hash_trace_rows_with_mode(&columns, ExecutionMode::Cpu),
+                hash_trace_rows_cpu(&columns)
+            );
+            assert_eq!(
+                hash_trace_rows_with_mode(&columns, ExecutionMode::Gpu),
+                hash_trace_rows_cpu(&columns)
+            );
         }
+    }
+
+    #[test]
+    fn lde_row_hashes_match_cpu_reference_for_trace_shape() {
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
+        let planner = crate::Planner::new(&params);
+        let trace = build_trace(&sample_batch(8)).expect("trace");
+        let mut data = crate::trace::derive_polynomial_data(&trace, &planner, ExecutionMode::Cpu);
+        let lde_columns = data.lde_columns();
+        assert_eq!(
+            hash_trace_rows_with_mode(lde_columns, ExecutionMode::Gpu),
+            hash_trace_rows_cpu(lde_columns)
+        );
     }
 
     #[test]
@@ -2442,11 +2591,16 @@ mod tests {
             vec![2u64, 3, u64::MAX],
             (0u64..17).collect(),
         ];
-        let batched = hash_with_domain_limb_batches(FRI_LEAF_DOMAIN, &messages).expect("batched");
+        let batched = hash_with_domain_limb_batches(FRI_LEAF_DOMAIN, &messages, ExecutionMode::Gpu)
+            .expect("batched");
         let expected = messages
             .iter()
             .map(|message| hash_with_domain(FRI_LEAF_DOMAIN, message).expect("scalar"))
             .collect::<Vec<_>>();
+        let cpu_batched =
+            hash_with_domain_limb_batches(FRI_LEAF_DOMAIN, &messages, ExecutionMode::Cpu)
+                .expect("cpu batched");
+        assert_eq!(cpu_batched, expected);
         assert_eq!(batched, expected);
     }
 

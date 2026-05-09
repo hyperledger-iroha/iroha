@@ -2663,6 +2663,11 @@ impl Actor {
             record_drop(super::status::VoteValidationDropReason::HighestQcMismatch);
             return false;
         }
+        self.hydrate_vnext_certificates_for_block_from_roster_sidecar(
+            vote.block_hash,
+            vote.height,
+            vote.view,
+        );
         let (expected_chain_order_hash, expected_rechain_seq) =
             self.vnext_chain_order_binding_for(vote.height, vote.view);
         if vote.chain_order_hash != expected_chain_order_hash

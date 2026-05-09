@@ -21789,6 +21789,50 @@ impl Actor {
         }
     }
 
+    pub(super) fn hydrate_vnext_certificates_for_block_from_roster_sidecar(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        let Some(sidecar) = self.kura.read_roster_metadata(height) else {
+            return false;
+        };
+        if sidecar.block_hash != block_hash || !sidecar.has_vnext_certificates() {
+            return false;
+        }
+        let rechain_certificates = sidecar
+            .vnext_rechain_certificates
+            .iter()
+            .filter(|certificate| {
+                vnext_rechain_certificate_matches_block(certificate, block_hash, height, view)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let view_change_certificates = sidecar
+            .vnext_view_change_certificates
+            .iter()
+            .filter(|certificate| {
+                vnext_view_change_certificate_matches_block(certificate, height, view)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if rechain_certificates.is_empty() && view_change_certificates.is_empty() {
+            return false;
+        }
+
+        debug!(
+            height,
+            view,
+            block = %block_hash,
+            rechain_certificates = rechain_certificates.len(),
+            view_change_certificates = view_change_certificates.len(),
+            "hydrating vNext certificates from persisted roster sidecar"
+        );
+        self.install_vnext_block_sync_sidecars(&rechain_certificates, &view_change_certificates);
+        true
+    }
+
     fn accept_vnext_rechain_vote(&mut self, vote: super::vnext::RechainVote) {
         let key = VNextRechainVoteKey::from(&vote);
         {

@@ -2902,6 +2902,37 @@ fn signed_vnext_view_change_certificate_for_actor(
     (certificate, chain_order)
 }
 
+fn resign_qc_with_chain_order_for_actor(
+    qc: &mut crate::sumeragi::consensus::Qc,
+    actor: &Actor,
+    key_pairs: &[KeyPair],
+    chain_order: &crate::sumeragi::vnext::ChainOrder,
+) {
+    qc.chain_order_hash = chain_order.hash();
+    qc.rechain_seq = chain_order.rechain_seq;
+    let signer_indices = signers_from_bitmap(&qc.aggregate.signers_bitmap, qc.validator_set.len());
+    let signer_topology = super::network_topology::Topology::new(qc.validator_set.clone());
+    let preimage = super::qc_bls_preimage(qc, &actor.common_config.chain, &qc.mode_tag);
+    let signatures = signer_indices
+        .iter()
+        .map(|index| {
+            let idx = usize::try_from(*index).expect("signer index fits usize");
+            let peer = signer_topology
+                .as_ref()
+                .get(idx)
+                .expect("signer present in QC validator set");
+            let keypair = keypair_for_peer(key_pairs, peer);
+            Signature::new(keypair.private_key(), &preimage)
+                .payload()
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+    let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    qc.aggregate.bls_aggregate_signature =
+        iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+            .expect("aggregate QC signatures");
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn block_message_vnext_rechain_certificate_installs_reactor_chain_order() {
     let mut harness = test_actor_harness(7).await;
@@ -3204,6 +3235,138 @@ async fn vnext_committed_block_persists_certificate_sidecars() {
     assert_eq!(
         update.vnext_view_change_certificates,
         vec![view_change_certificate]
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn vnext_vote_binding_hydrates_from_persisted_sidecar() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(5, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let height = {
+        let view = actor.state.view();
+        u64::try_from(view.height())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1)
+    };
+    let view = 0;
+    let block = sample_block(height, view, actor.state.latest_block_hash_fast());
+    let block_hash = block.hash();
+    actor.kura.store_block(block).expect("store block");
+    let (certificate, chain_order) = signed_vnext_rechain_certificate_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        view,
+        block_hash,
+    );
+    let mut sidecar = crate::kura::RosterSidecar::new(height, block_hash, None, None, None);
+    assert!(sidecar.merge_vnext_certificates(std::iter::once(certificate.clone()), []));
+    actor.kura.write_roster_metadata(&sidecar);
+    actor.vnext_reactors.clear();
+    actor.vnext_rechain_journal.clear();
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch: actor.epoch_for_height(height),
+        chain_order_hash: chain_order.hash(),
+        rechain_seq: chain_order.rechain_seq,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view_with_seed(
+        &mut vote,
+        &actor.common_config.chain,
+        &topology,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
+
+    actor.handle_vote(vote.clone());
+
+    assert!(
+        actor.vnext_rechain_journal.contains(&certificate),
+        "vote validation should hydrate the persisted re-chain certificate"
+    );
+    assert!(
+        actor.vote_log.contains_key(&vote_log_key_for_vote(&vote)),
+        "vote with persisted vNext chain-order binding should be accepted"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn vnext_qc_binding_hydrates_from_persisted_sidecar() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(5, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let height = {
+        let view = actor.state.view();
+        u64::try_from(view.height())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1)
+    };
+    let view = 0;
+    let block = sample_block(height, view, actor.state.latest_block_hash_fast());
+    let block_hash = block.hash();
+    actor.kura.store_block(block.clone()).expect("store block");
+    let (certificate, chain_order) = signed_vnext_rechain_certificate_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        view,
+        block_hash,
+    );
+    let mut sidecar = crate::kura::RosterSidecar::new(height, block_hash, None, None, None);
+    assert!(sidecar.merge_vnext_certificates(std::iter::once(certificate.clone()), []));
+    actor.kura.write_roster_metadata(&sidecar);
+    actor.vnext_reactors.clear();
+    actor.vnext_rechain_journal.clear();
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers: BTreeSet<ValidatorIndex> = (0..topology.as_ref().len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let mut qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        actor.epoch_for_height(height),
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    resign_qc_with_chain_order_for_actor(&mut qc, actor, &harness.key_pairs, &chain_order);
+    let qc_key = Actor::qc_tally_key(&qc);
+
+    actor.handle_qc(qc).expect("handle vNext-bound QC");
+
+    assert!(
+        actor.vnext_rechain_journal.contains(&certificate),
+        "QC validation should hydrate the persisted re-chain certificate"
+    );
+    assert!(
+        actor.qc_cache.contains_key(&qc_key) || actor.deferred_qcs.contains_key(&qc_key),
+        "QC with persisted vNext chain-order binding should pass binding validation"
     );
 
     harness.shutdown.send();

@@ -6,6 +6,11 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## FASTPQ GPU acceleration follow-ups
 
+- Prove the new batched proof Poseidon paths in a fresh release 20k Izanami
+  gate/profile. The local proof and Poseidon suites are green, but the
+  acceptance run still needs to confirm that row/domain batch hashing removes
+  sustained single-state Poseidon GPU hot spots while beating the latest
+  `61,622` strict-approved baseline.
 - Fix Metal/CUDA Poseidon Merkle parent-pair batch parity so the guarded
   FASTPQ trace Merkle-pair accelerator can enable on real GPU backends. Keep
   the scalar fallback active until the preflight passes.
@@ -29,9 +34,11 @@ Completed history lives in `status.md`. This file should only track unfinished w
   confirms the timeout cap fires but does not satisfy the production-cadence or
   throughput gates: strict approved ended at `12,388`, strict height `5`, queue
   depth `880,537`, and peer logs show active-pending recovery churn, missing-QC
-  block-sync repair, and height-skew validation rejection. Next work is to make
-  the height/frontier recovery path converge after the capped timeout instead
-  of rotating views around stale or ahead-of-frontier block evidence.
+  block-sync repair, and height-skew validation rejection. Exact-frontier
+  certified recovery now clears stale same-height commit-inflight ownership
+  while preserving payload-only repair semantics; next work is to make the
+  broader Sumeragi vote/QC/topology suite green again and then rerun the 20k
+  gate/profile.
 - Finish moving the remaining consensus-shell effects onto typed
   `sumeragi::vnext::ReactorEvent`/`ReactorEffect` adapters. vNext control
   frames, accepted body-backed proposals, DA/RBC availability handoffs, timeout
@@ -52,8 +59,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
   in-memory certificate journal, persists matching certificates into committed
   Kura roster sidecars, reloads those durable sidecars into outgoing
   `BlockSyncUpdate` payloads, and replays inbound sidecars before vote/QC
-  processing. The remaining open work is to broaden catch-up model and
-  integration coverage around the durable sidecar path.
+  processing. Vote/QC chain-order binding checks also hydrate matching durable
+  sidecars from Kura before rejecting a `chain_order_hash`/`rechain_seq`
+  mismatch. The remaining open work is to broaden catch-up model and
+  integration coverage around restarted-peer durable sidecar replay.
 - Add model and integration coverage for slow validation, queue saturation,
   malicious accusers, head failure during re-chain, NPoS stake-quorum
   quarantine edges, and DA/RBC loss during re-chain.

@@ -7,10 +7,10 @@
 //! coset.
 
 use core::convert::TryFrom;
-use std::sync::MutexGuard;
+use std::{sync::MutexGuard, thread};
 
 use fastpq_isi::StarkParameterSet;
-use rayon::{join, prelude::*};
+use rayon::prelude::*;
 use tracing::{debug, info, warn};
 
 use crate::{
@@ -319,22 +319,21 @@ impl Planner {
             trace_log,
             cpu_columns = cpu_slice.len(),
             gpu_columns = gpu_slice.len(),
-            "gpu lane busy; splitting fft workload across cpu/gpu"
+            "splitting fft workload across cpu/gpu"
         );
-        let ((), gpu_result) = join(
-            || self.fft_columns_cpu(cpu_slice, trace_len, trace_log),
-            || {
-                let guard = backend::acquire_gpu_lane();
-                let result = gpu::fft_columns(
-                    gpu_slice,
-                    trace_log,
-                    self.trace_domain(trace_log).generator,
-                    backend,
-                );
-                drop(guard);
-                result
-            },
-        );
+        let gpu_result = thread::scope(|scope| {
+            let cpu_handle = scope.spawn(|| self.fft_columns_cpu(cpu_slice, trace_len, trace_log));
+            let guard = backend::acquire_gpu_lane();
+            let result = gpu::fft_columns(
+                gpu_slice,
+                trace_log,
+                self.trace_domain(trace_log).generator,
+                backend,
+            );
+            drop(guard);
+            cpu_handle.join().expect("split FFT CPU worker panicked");
+            result
+        });
         if let Err(err) = gpu_result {
             warn!(
                 target: "fastpq::planner",
@@ -509,22 +508,21 @@ impl Planner {
             trace_log,
             cpu_columns = cpu_slice.len(),
             gpu_columns = gpu_slice.len(),
-            "gpu lane busy; splitting ifft workload across cpu/gpu"
+            "splitting ifft workload across cpu/gpu"
         );
-        let ((), gpu_result) = join(
-            || self.ifft_columns_cpu(cpu_slice, trace_len, trace_log),
-            || {
-                let guard = backend::acquire_gpu_lane();
-                let result = gpu::ifft_columns(
-                    gpu_slice,
-                    trace_log,
-                    self.trace_domain(trace_log).generator,
-                    backend,
-                );
-                drop(guard);
-                result
-            },
-        );
+        let gpu_result = thread::scope(|scope| {
+            let cpu_handle = scope.spawn(|| self.ifft_columns_cpu(cpu_slice, trace_len, trace_log));
+            let guard = backend::acquire_gpu_lane();
+            let result = gpu::ifft_columns(
+                gpu_slice,
+                trace_log,
+                self.trace_domain(trace_log).generator,
+                backend,
+            );
+            drop(guard);
+            cpu_handle.join().expect("split IFFT CPU worker panicked");
+            result
+        });
         if let Err(err) = gpu_result {
             warn!(
                 target: "fastpq::planner",
@@ -563,24 +561,25 @@ impl Planner {
             lde_log,
             cpu_columns,
             gpu_columns,
-            "gpu lane busy; splitting lde workload across cpu/gpu"
+            "splitting lde workload across cpu/gpu"
         );
-        let (cpu_part, gpu_result) = join(
-            || self.lde_columns(&coeffs[..split]),
-            || {
-                let guard = backend::acquire_gpu_lane();
-                let result = gpu::lde_columns(
-                    &coeffs[split..],
-                    trace_log,
-                    self.blowup_log,
-                    self.lde_domain(lde_log).generator,
-                    self.params.omega_coset,
-                    backend,
-                );
-                drop(guard);
-                result
-            },
-        );
+        let (cpu_part, gpu_result) = thread::scope(|scope| {
+            let cpu_handle = scope.spawn(|| self.lde_columns(&coeffs[..split]));
+            let guard = backend::acquire_gpu_lane();
+            let result = gpu::lde_columns(
+                &coeffs[split..],
+                trace_log,
+                self.blowup_log,
+                self.lde_domain(lde_log).generator,
+                self.params.omega_coset,
+                backend,
+            );
+            drop(guard);
+            (
+                cpu_handle.join().expect("split LDE CPU worker panicked"),
+                result,
+            )
+        });
         let gpu_part = match gpu_result {
             Ok(Some(columns)) => columns,
             Ok(None) => {
@@ -748,6 +747,7 @@ impl Planner {
                 parameter = self.params.name,
                 columns = coeffs.len(),
                 trace_len,
+                lde_log,
                 lde_len,
                 "no gpu backend detected; falling back to cpu lde"
             );

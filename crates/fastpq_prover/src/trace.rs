@@ -28,7 +28,7 @@ use crate::gpu;
 use crate::{
     Error, Result, StateTransition, TransitionBatch,
     backend::{self, ExecutionMode, PoseidonExecutionMode},
-    fft::{GpuLdeDispatch, Planner},
+    fft::Planner,
     gadgets::transfer::{self, TransferRowKey},
     pack_bytes, poseidon,
 };
@@ -59,6 +59,8 @@ static POSEIDON_PIPELINE_STATS: OnceLock<Mutex<PoseidonPipelineStats>> = OnceLoc
 static POSEIDON_MERKLE_GPU_DISABLED: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "fastpq-gpu")]
 static POSEIDON_MERKLE_GPU_SELF_TEST: OnceLock<bool> = OnceLock::new();
+#[cfg(feature = "fastpq-gpu")]
+static POSEIDON_COLUMN_GPU_SELF_TEST: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "fastpq-gpu")]
 const POSEIDON_MERKLE_GPU_MIN_PAIRS: usize = 512;
 
@@ -1315,6 +1317,10 @@ impl PoseidonColumnBatch {
 /// an execution error, allowing callers to fall back to the CPU sponge.
 pub fn hash_columns_gpu_batch(batch: &PoseidonColumnBatch) -> Option<Vec<u64>> {
     let backend = backend::current_gpu_backend()?;
+    if !poseidon_column_gpu_self_test(backend) {
+        record_poseidon_pipeline_fallback();
+        return None;
+    }
     if !batch.is_empty() {
         record_poseidon_pipeline_start(batch.columns(), 1);
     }
@@ -1336,6 +1342,48 @@ pub fn hash_columns_gpu_batch(batch: &PoseidonColumnBatch) -> Option<Vec<u64>> {
             None
         }
     }
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn poseidon_column_gpu_self_test(backend: backend::GpuBackend) -> bool {
+    *POSEIDON_COLUMN_GPU_SELF_TEST.get_or_init(|| {
+        let domains = [
+            "fastpq:v1:trace:column:selftest:a",
+            "fastpq:v1:trace:column:selftest:b",
+        ];
+        let columns = vec![vec![1u64, 2, 3, 4], vec![5u64, 6, 7, 8]];
+        let Some(batch) = PoseidonColumnBatch::from_domains_and_columns(&domains, &columns) else {
+            warn!(
+                target: "fastpq::poseidon",
+                "gpu poseidon column self-test could not build batch"
+            );
+            return false;
+        };
+        let expected =
+            hash_columns_cpu_batch_inputs(&domains, &columns).expect("self-test batch is valid");
+        match gpu::poseidon_hash_columns(&batch, backend) {
+            Ok(actual) if actual == expected => true,
+            Ok(actual) => {
+                warn!(
+                    target: "fastpq::poseidon",
+                    backend = ?backend,
+                    expected = ?expected,
+                    actual = ?actual,
+                    "gpu poseidon column self-test mismatch; falling back to cpu hashing"
+                );
+                false
+            }
+            Err(error) => {
+                warn!(
+                    target: "fastpq::poseidon",
+                    backend = ?backend,
+                    %error,
+                    "gpu poseidon column self-test failed; falling back to cpu hashing"
+                );
+                false
+            }
+        }
+    })
 }
 
 #[cfg(feature = "fastpq-gpu")]
@@ -1454,7 +1502,7 @@ pub fn column_hashes(trace: &Trace, params: &StarkParameterSet) -> Result<Column
         ExecutionMode::Cpu
     };
 
-    let coefficients = trace_coefficients(trace, &planner, mode);
+    let coefficients = trace_coefficients(trace, &planner, ExecutionMode::Cpu);
 
     Ok(hash_columns_from_coefficients(
         trace,
@@ -1600,65 +1648,15 @@ pub(crate) struct TracePolynomialData {
     transfer_plan: transfer::TransferGadgetPlan,
 }
 
-struct PendingLdeState {
-    dispatch: GpuLdeDispatch,
-    planner: Planner,
-}
-
 enum LdeColumnsState {
     Ready(Vec<Vec<u64>>),
-    Pending(Box<PendingLdeState>),
 }
 
 impl TracePolynomialData {
     pub(crate) fn lde_columns(&mut self) -> &Vec<Vec<u64>> {
-        if !matches!(self.lde_state, LdeColumnsState::Ready(_)) {
-            self.resolve_pending_lde();
-        }
         match &self.lde_state {
             LdeColumnsState::Ready(columns) => columns,
-            _ => unreachable!("pending state resolved before returning"),
         }
-    }
-
-    fn resolve_pending_lde(&mut self) {
-        let PendingLdeState { dispatch, planner } =
-            match std::mem::replace(&mut self.lde_state, LdeColumnsState::Ready(Vec::new())) {
-                LdeColumnsState::Pending(pending) => *pending,
-                LdeColumnsState::Ready(columns) => {
-                    self.lde_state = LdeColumnsState::Ready(columns);
-                    return;
-                }
-            };
-        #[cfg(test)]
-        let planner_for_check = planner.clone();
-        let columns = match dispatch.wait() {
-            Ok(Some(columns)) => columns,
-            Ok(None) => {
-                warn!(
-                    target: "fastpq::trace",
-                    "gpu lde pending dispatch yielded no columns; falling back to cpu"
-                );
-                planner.lde_columns(&self.coefficients)
-            }
-            Err(error) => {
-                warn!(
-                    target: "fastpq::trace",
-                    %error,
-                    "gpu lde pending dispatch failed; falling back to cpu"
-                );
-                planner.lde_columns(&self.coefficients)
-            }
-        };
-        #[cfg(test)]
-        {
-            let cpu_columns = planner_for_check.lde_columns(&self.coefficients);
-            assert_eq!(
-                cpu_columns, columns,
-                "lde gpu output diverged from cpu reference"
-            );
-        }
-        self.lde_state = LdeColumnsState::Ready(columns);
     }
 
     #[allow(dead_code)]
@@ -1674,26 +1672,17 @@ impl TracePolynomialData {
 pub(crate) fn derive_polynomial_data(
     trace: &Trace,
     planner: &Planner,
-    mode: ExecutionMode,
+    _mode: ExecutionMode,
 ) -> TracePolynomialData {
-    let coefficients = trace_coefficients(trace, planner, mode);
+    let coefficients = trace_coefficients(trace, planner, ExecutionMode::Cpu);
     let lde_state = if coefficients.is_empty() {
         LdeColumnsState::Ready(Vec::new())
     } else {
-        match mode {
-            ExecutionMode::Gpu => planner.lde_gpu_pending(&coefficients).map_or_else(
-                || LdeColumnsState::Ready(planner.lde_columns(&coefficients)),
-                |dispatch| {
-                    LdeColumnsState::Pending(Box::new(PendingLdeState {
-                        dispatch,
-                        planner: planner.clone(),
-                    }))
-                },
-            ),
-            ExecutionMode::Cpu | ExecutionMode::Auto => {
-                LdeColumnsState::Ready(planner.lde_columns(&coefficients))
-            }
-        }
+        // Proof LDE columns must be byte-identical across CPU and accelerator builds.
+        // Metal LDE remains available through the planner APIs, but proof construction
+        // materializes these columns on CPU and reserves GPU proof work for batched
+        // Poseidon paths with parity gates.
+        LdeColumnsState::Ready(planner.lde_columns(&coefficients))
     };
     TracePolynomialData {
         coefficients,
@@ -1761,9 +1750,23 @@ fn hash_trace_merkle_pairs_cpu(pairs: &[[u64; 2]]) -> Vec<u64> {
 }
 
 pub(crate) fn hash_trace_merkle_pairs_batched(pairs: &[[u64; 2]]) -> Vec<u64> {
+    let mode = if backend::current_gpu_backend().is_some() {
+        backend::ExecutionMode::Gpu
+    } else {
+        backend::ExecutionMode::Cpu
+    };
+    hash_trace_merkle_pairs_with_mode(pairs, mode)
+}
+
+pub(crate) fn hash_trace_merkle_pairs_with_mode(
+    pairs: &[[u64; 2]],
+    mode: backend::ExecutionMode,
+) -> Vec<u64> {
     #[cfg(feature = "fastpq-gpu")]
-    if let Some(hashes) = hash_trace_merkle_pairs_gpu(pairs) {
-        return hashes;
+    if mode == backend::ExecutionMode::Gpu {
+        if let Some(hashes) = hash_trace_merkle_pairs_gpu(pairs) {
+            return hashes;
+        }
     }
     #[cfg(feature = "fastpq-gpu")]
     record_poseidon_merkle_pair_cpu_batch(pairs.len());
@@ -1791,8 +1794,22 @@ fn hash_trace_merkle_pairs_gpu(pairs: &[[u64; 2]]) -> Option<Vec<u64>> {
     };
     match gpu::poseidon_hash_columns(&batch, backend) {
         Ok(result) => {
-            record_poseidon_merkle_pair_gpu_batch(pairs.len());
-            Some(result)
+            if result.len() == pairs.len()
+                && trace_merkle_pair_gpu_matches_cpu_sample(pairs, &result)
+            {
+                record_poseidon_merkle_pair_gpu_batch(pairs.len());
+                Some(result)
+            } else {
+                warn!(
+                    target: "fastpq::poseidon",
+                    backend = ?backend,
+                    pair_count = pairs.len(),
+                    actual = result.len(),
+                    "gpu trace Merkle Poseidon pair batch diverged from CPU parity sample; falling back"
+                );
+                record_poseidon_merkle_pair_fallback();
+                None
+            }
         }
         Err(error) => {
             disable_poseidon_merkle_gpu_with_warning(backend, pairs.len(), &error);
@@ -1800,6 +1817,57 @@ fn hash_trace_merkle_pairs_gpu(pairs: &[[u64; 2]]) -> Option<Vec<u64>> {
             None
         }
     }
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn trace_merkle_pair_gpu_matches_cpu_sample(pairs: &[[u64; 2]], hashes: &[u64]) -> bool {
+    if pairs.len() != hashes.len() {
+        return false;
+    }
+    if pairs.is_empty() {
+        return true;
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    let sample_indices = 0..pairs.len();
+    #[cfg(not(any(test, debug_assertions)))]
+    let sample_indices = trace_merkle_pair_sample_indices(pairs.len());
+
+    for index in sample_indices {
+        let expected = hash_field_with_domain_cpu(TRACE_NODE_DOMAIN, &pairs[index]);
+        let actual = hashes[index];
+        if actual != expected {
+            warn!(
+                target: "fastpq::poseidon",
+                index,
+                actual,
+                expected,
+                left = pairs[index][0],
+                right = pairs[index][1],
+                "gpu trace Merkle Poseidon pair parity mismatch"
+            );
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(all(feature = "fastpq-gpu", not(any(test, debug_assertions))))]
+fn trace_merkle_pair_sample_indices(len: usize) -> Vec<usize> {
+    const SAMPLE_COUNT: usize = 16;
+    if len <= SAMPLE_COUNT {
+        return (0..len).collect();
+    }
+
+    let last = len - 1;
+    let mut indices = Vec::with_capacity(SAMPLE_COUNT);
+    for sample in 0..SAMPLE_COUNT {
+        let index = sample * last / (SAMPLE_COUNT - 1);
+        if indices.last().copied() != Some(index) {
+            indices.push(index);
+        }
+    }
+    indices
 }
 
 #[cfg(feature = "fastpq-gpu")]
@@ -2437,54 +2505,17 @@ mod tests {
         assert_eq!(downgraded.cpu_label(), "cpu_fallback");
     }
 
-    fn sample_coefficients(planner: &Planner) -> Vec<Vec<u64>> {
+    #[test]
+    fn derive_polynomial_data_materializes_cpu_lde_for_gpu_mode() {
+        let params = CANONICAL_PARAMETER_SETS[0];
+        let planner = Planner::new(&params);
         let trace = build_trace(&sample_batch()).expect("build");
-        trace_coefficients(&trace, planner, ExecutionMode::Cpu)
-    }
-
-    #[test]
-    fn pending_lde_falls_back_when_gpu_declines() {
-        let params = CANONICAL_PARAMETER_SETS[0];
-        let planner = Planner::new(&params);
-        let coefficients = sample_coefficients(&planner);
+        let coefficients = trace_coefficients(&trace, &planner, ExecutionMode::Cpu);
         let expected = planner.lde_columns(&coefficients);
 
-        let dispatch = GpuLdeDispatch::from_ready(gpu::LdeDispatch::ready(None));
-        let pending = PendingLdeState {
-            dispatch,
-            planner: planner.clone(),
-        };
-        let mut data = TracePolynomialData {
-            coefficients: coefficients.clone(),
-            lde_state: LdeColumnsState::Pending(Box::new(pending)),
-            transfer_plan: transfer::TransferGadgetPlan::default(),
-        };
+        let mut data = derive_polynomial_data(&trace, &planner, ExecutionMode::Gpu);
 
-        assert_eq!(data.lde_columns(), &expected);
-    }
-
-    #[test]
-    fn pending_lde_recovers_from_gpu_error() {
-        let params = CANONICAL_PARAMETER_SETS[0];
-        let planner = Planner::new(&params);
-        let coefficients = sample_coefficients(&planner);
-        let expected = planner.lde_columns(&coefficients);
-
-        let error = gpu::GpuError::Execution {
-            backend: backend::GpuBackend::Cuda,
-            message: "simulated gpu failure".to_owned(),
-        };
-        let dispatch = GpuLdeDispatch::from_ready(gpu::LdeDispatch::from_error(error));
-        let pending = PendingLdeState {
-            dispatch,
-            planner: planner.clone(),
-        };
-        let mut data = TracePolynomialData {
-            coefficients: coefficients.clone(),
-            lde_state: LdeColumnsState::Pending(Box::new(pending)),
-            transfer_plan: transfer::TransferGadgetPlan::default(),
-        };
-
+        assert_eq!(data.coefficients, coefficients);
         assert_eq!(data.lde_columns(), &expected);
     }
 

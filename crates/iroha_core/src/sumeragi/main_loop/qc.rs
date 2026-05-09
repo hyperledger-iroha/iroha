@@ -5909,6 +5909,11 @@ impl Actor {
             );
             return Ok(());
         }
+        self.hydrate_vnext_certificates_for_block_from_roster_sidecar(
+            qc.subject_block_hash,
+            qc.height,
+            qc.view,
+        );
         let (expected_chain_order_hash, expected_rechain_seq) =
             self.vnext_chain_order_binding_for(qc.height, qc.view);
         if qc.chain_order_hash != expected_chain_order_hash
