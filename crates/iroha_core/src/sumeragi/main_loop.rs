@@ -24667,7 +24667,7 @@ impl Actor {
         let targets: Vec<_> = target_set.iter().cloned().collect();
 
         let roster = self.ensure_rbc_session_roster(key);
-        let has_missing_ready = !target_set.is_empty();
+        let has_missing_ready = !missing_ready_peers.is_empty();
         let mut ready_target_set = target_set;
         if !roster.is_empty() {
             let topology = super::network_topology::Topology::new(roster.clone());

@@ -38266,10 +38266,8 @@ async fn handle_qc_records_commit_qc_history() {
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
 
-    {
-        let _guard = status::commit_history_test_guard();
-        status::reset_commit_certs_for_tests();
-    }
+    let _history_guard = status::commit_history_test_guard();
+    status::reset_commit_certs_for_tests();
     let height = 2u64;
     let view = 0u64;
     let view_index = view;
