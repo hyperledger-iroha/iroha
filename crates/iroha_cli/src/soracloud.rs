@@ -23272,7 +23272,12 @@ mod tests {
         );
     }
 
+    static NODE_HARNESS_LOCK: Mutex<()> = Mutex::new(());
+
     fn run_node_harness(script_path: &Path) {
+        let _guard = NODE_HARNESS_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let output = Command::new("node")
             .arg(script_path)
             .output()
@@ -35659,6 +35664,7 @@ import path from "node:path";
 const SERVER_PATH = __SERVER_PATH__;
 const STATE_FILE = __STATE_FILE__;
 const REQUEST_TIMEOUT_MS = 15000;
+const REPLICA_LOGS_BY_PORT = new Map();
 
 function assert(condition, message) {
   if (!condition) {
@@ -35703,20 +35709,24 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function childExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
 async function waitForExit(child, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
-  while (child.exitCode === null && Date.now() < deadline) {
+  while (!childExited(child) && Date.now() < deadline) {
     await sleep(25);
   }
 }
 
 async function stopReplica(replica) {
-  if (!replica || !replica.child || replica.child.exitCode !== null) {
+  if (!replica || !replica.child || childExited(replica.child)) {
     return;
   }
   replica.child.kill("SIGTERM");
   await waitForExit(replica.child, 800);
-  if (replica.child.exitCode === null) {
+  if (!childExited(replica.child)) {
     replica.child.kill("SIGKILL");
     await waitForExit(replica.child, 1500);
   }
@@ -35729,7 +35739,7 @@ async function waitForListeningPort(replica) {
     if (match) {
       return Number(match[1]);
     }
-    if (replica.child.exitCode !== null) {
+    if (childExited(replica.child)) {
       throw new Error(`replica exited before listen: ${replica.logs()}`);
     }
     await sleep(25);
@@ -35740,7 +35750,9 @@ async function waitForListeningPort(replica) {
 async function waitForHealth(port, route) {
   for (let attempt = 0; attempt < 160; attempt += 1) {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}${route}`);
+      const response = await fetch(`http://127.0.0.1:${port}${route}`, {
+        headers: { connection: "close" }
+      });
       if (response.status === 200) {
         return;
       }
@@ -35758,7 +35770,7 @@ async function jsonRequest(port, method, route, body, headers = {}) {
     () => controller.abort(new Error(`${method} ${route} request timed out`)),
     REQUEST_TIMEOUT_MS
   );
-  const init = { method, headers: { ...headers } };
+  const init = { method, headers: { ...headers, connection: "close" } };
   if (body !== undefined) {
     init.headers["content-type"] = "application/json";
     init.body = JSON.stringify(body);
@@ -35767,6 +35779,11 @@ async function jsonRequest(port, method, route, body, headers = {}) {
   let response;
   try {
     response = await fetch(`http://127.0.0.1:${port}${route}`, init);
+  } catch (error) {
+    const logs = REPLICA_LOGS_BY_PORT.get(port)?.() ?? "<replica logs unavailable>";
+    throw new Error(
+      `${method} ${route} request failed on port ${port}: ${error?.stack ?? String(error)}\nreplica logs:\n${logs}`
+    );
   } finally {
     clearTimeout(timeout);
   }
@@ -35808,6 +35825,7 @@ async function main() {
 
   replicaA = startReplica(env);
   const portA = await waitForListeningPort(replicaA);
+  REPLICA_LOGS_BY_PORT.set(portA, replicaA.logs);
   await waitForHealth(portA, "/api/healthz");
 
   const challenge = await jsonRequest(portA, "POST", "/api/auth/challenge", {
@@ -35939,6 +35957,7 @@ async function main() {
 
   replicaB = startReplica(env);
   const portB = await waitForListeningPort(replicaB);
+  REPLICA_LOGS_BY_PORT.set(portB, replicaB.logs);
   await waitForHealth(portB, "/api/healthz");
   const sharedSession = await jsonRequest(
     portB,
