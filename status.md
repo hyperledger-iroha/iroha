@@ -2,6 +2,61 @@
 
 Last updated: 2026-05-10
 
+## 2026-05-10 Sumeragi commit-QC recovery and cert-only vote replay
+
+- Commit processing now tries to form a local commit QC from cached commit
+  votes before treating a known locally valid block as missing its commit QC.
+  This lets a peer that already has the block body and quorum votes persist the
+  certificate without waiting for another peer fetch round trip.
+- Commit-QC-only block-sync responses now also try to synthesize a direct
+  commit QC from cached votes when the responder already has the block body. If
+  the responder still cannot form the certificate, it replays cached commit
+  votes to the requester while keeping the cert-only request stashed for the
+  later QC.
+- 20k FASTPQ GPU gate evidence:
+  `dist/izanami-prebuilt-20k-fastpq-gpu-cert-vote-replay-120s-20260510-154724`
+  accepted and succeeded all `2,400,000` submissions with zero failures,
+  submit latency `p50=3ms`, `p95=29ms`, `p99=81ms`, `max=250ms`, strict
+  height `16`, strict approved `57,385`, peer height skew `2`, and peer
+  approval skew `8,192`. Missing-block fetches dropped to `105`, cert-only
+  known-block update requests matched `body_request=false` requests at `102`,
+  the cached-vote replay path fired `53` times, exact frontier body requests
+  were `7`, pending frontier redrives were `2`, commit-inflight timeout total
+  stayed `0`, and commit inflight ended inactive.
+- The queue still saturated (`843,109 / 2,400,000`), so the remaining 20k work
+  is queue drain and final height convergence under sustained ingress. The
+  commit-QC recovery changes moved the missing-QC pressure down without
+  reintroducing the large-block merge bottleneck.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-inflight cargo test -p iroha_core --lib commit_pipeline_forms_local_commit_qc_before_missing_commit_qc_recovery -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-inflight cargo test -p iroha_core --lib commit_pipeline_arms_missing_commit_qc_recovery_for_stalled_local_vote -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-inflight cargo test -p iroha_core --lib commit_qc_only_fetch_pending_block -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-inflight cargo clippy -p iroha_core --tests -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-20k-frontier-metadata-rbc-20260509-180500 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`
+  - The 120s 20k Izanami FASTPQ GPU gate above
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+
+## 2026-05-10 Sumeragi committed RBC repair suppression
+
+- Delivered RBC sessions whose block height is already at or below the local
+  committed tip no longer stay active for RBC rebroadcast or hot repair. This
+  prevents retained post-commit RBC state from repeatedly sending targeted
+  READY/INIT/body repair traffic or rebroadcasting DELIVER after the block has
+  already committed.
+- Delivered sessions that are still uncommitted remain eligible for the
+  existing frontier/body repair path, so pre-commit RBC convergence is
+  preserved.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib actor_next_tick_deadline_ignores_delivered_committed_rbc_session -- --nocapture`
+  - `cargo test -p iroha_core --lib rebroadcast_stalled_rbc_payloads_skips_deliver_for_committed_block -- --nocapture`
+  - `cargo test -p iroha_core --lib rebroadcast_stalled_rbc_payloads_skips_payload_after_delivery -- --nocapture`
+  - `cargo test -p iroha_core --lib delivered_rbc_session_at_committed_tip_is_not_rebroadcast_active -- --nocapture`
+  - `cargo test -p iroha_core --lib rebroadcast_stalled_rbc_payloads_repairs_ready_before_deliver_after_delivery -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_backlog_counts_delivered_session_without_ready_quorum -- --nocapture`
+  - `cargo check -p iroha_core --lib`
+
 ## 2026-05-10 Izanami proposal stale-window and block-cap tuning
 
 - Sumeragi proposal assembly now scales the stale-view guard by proposal
@@ -16,25 +71,28 @@ Last updated: 2026-05-10
   the 8,192 run tied the earlier approval count with worse latency/churn. The
   Izanami high-TPS stable profile therefore stays at the proven 4,096 block
   cap.
-- Final 20k FASTPQ GPU gate evidence:
-  `dist/izanami-prebuilt-20k-fastpq-gpu-low-contention-8192-block4096-fullbatchgrace-final-120s-20260510-140229`
+- Final-code 20k FASTPQ GPU gate evidence:
+  `dist/izanami-prebuilt-20k-fastpq-gpu-low-contention-8192-block4096-finalcode-120s-20260510-153218`
   accepted and succeeded all `2,400,000` submissions with zero failures,
-  submit latency `p50=3ms`, `p95=12ms`, `p99=72ms`, `max=201ms`, strict height
-  `17`, strict approved `61,495`, peer height skew `1`, and peer approval skew
-  `4,096`. The diagnostic grep found stale proposal aborts `0`, detached apply
-  fallback `0`, slow commit-stage timings `0`, and no `no proposal observed`
-  errors. The final Sumeragi digest reported view-change installs `0` and
-  commit-inflight timeout total `0`.
-- The queue still saturated (`873,313 / 2,400,000`) and the run ended with a
-  commit in flight at height `18`, so the remaining 20k work is still queue
-  drain and commit/QC cadence under sustained ingress, not the single-block
-  merge path or a larger block cap.
+  submit latency `p50=3ms`, `p95=20ms`, `p99=69ms`, `max=206ms`, strict height
+  `13`, strict approved `45,167`, peer height skew `2`, and peer approval skew
+  `8,192`. The diagnostic grep found stale proposal aborts `0`, detached apply
+  fallback `0`, slow commit-stage timings `0`, no `no proposal observed`
+  errors, and no `ERROR` log lines. The final Sumeragi digest reported
+  view-change installs `3`, all from `missing_qc`, and commit-inflight timeout
+  total `0`.
+- The queue still saturated (`852,277 / 2,400,000`) and missing-QC recovery
+  still drove view changes, so the remaining 20k work is commit-QC formation
+  and recovery cadence under sustained ingress, not proposal assembly, the
+  single-block merge path, or a larger block cap.
 - Validation:
   - `rustfmt --edition 2024 crates/iroha_core/src/sumeragi/main_loop/propose.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs crates/izanami/src/chaos.rs`
   - `rustfmt --edition 2024 --check crates/iroha_core/src/sumeragi/main_loop/propose.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs crates/izanami/src/chaos.rs`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-stable-workload cargo test -p iroha_core --lib proposal_assembly_stale_window_scales_for_large_batches -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-stable-workload cargo test -p iroha_core --lib stale_proposal_assembly_aborts_before_broadcast_and_requeues -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-stable-workload cargo test -p iroha_core --lib force_view_change_if_idle_defers_empty_frontier_missing_qc_under_tx_backlog_after_reacquire -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-stable-workload cargo test -p iroha_core --lib resilience_fast_paths_same_height_commit_votes_for_medium_rosters -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-stable-workload cargo test -p iroha_core --lib vote_validation_inbound_defers_then_dispatches -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-stable-workload cargo test -p izanami make_network_builder_applies_pipeline_time -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-20k-stable-low-contention-20260510 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`
   - The 120s 20k Izanami FASTPQ GPU gate above
@@ -244,14 +302,14 @@ Last updated: 2026-05-10
   - `cargo fmt --all --check`
   - `git diff --check`
   - `cargo test -p iroha_data_model instruction_registry`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-registry cargo test -p iroha_data_model instruction_registry`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-registry cargo test -p iroha_data_model registry`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-registry cargo test -p iroha_core --lib default_instruction_registry_entries_have_core_dispatch_handlers`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-registry cargo test -p iroha_core --lib oracle`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-registry cargo test -p iroha_core --test oracle`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-registry cargo test -p iroha_core --test social_viral_incentives`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-registry cargo test -p iroha_core --test confidential_params_registry` (compiled; no runnable tests under the active cfg)
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-registry cargo test -p iroha_core --lib smartcontracts::isi` compiles and runs the broad slice but still fails existing non-registry transfer/NFT/SNS/VPN tests that require separate fixture repair.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-dm cargo test -p iroha_data_model --lib registry`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-final cargo test -p iroha_core smartcontracts::isi` (passed; library slice: 814 tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-final cargo test -p iroha_core --lib default_instruction_registry_entries_have_core_dispatch_handlers`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-final cargo test -p iroha_core --lib oracle`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-final cargo test -p iroha_core --test oracle`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-final cargo test -p iroha_core --test social_viral_incentives`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-final cargo test -p iroha_core --test confidential_params_registry` (compiled; no runnable tests under the active cfg)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-final cargo test -p iroha_core --features zk-tests --test confidential_params_registry`
 
 ## 2026-05-10 Sumeragi vNext/Izanami 20k restart
 
@@ -319,16 +377,25 @@ Last updated: 2026-05-10
   the current canonical encodings changed.
 - Validation:
   - `cargo fmt --all`
+  - `cargo test -p iroha_data_model --features transparent_api`
+  - `cargo test -p iroha_config sumeragi`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo check -p iroha_core --lib`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_config sumeragi -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_data_model --features transparent_api set_transaction_results -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_data_model --features transparent_api payload_hydration -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_data_model --features transparent_api presigned_with_payload_does_not_hydrate -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_core --lib npos_qc_uses -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_core --lib qc_broadcast_targets_snapshot_roster -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_core --lib rebuild_qcs_from_cached_votes -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_core --lib conflicting_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_core --lib commit_pipeline_ -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_core --lib new_view_ -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_core --lib pacemaker_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_core --lib reschedule_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_core --lib vote_backed -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_core --lib deferred_ -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_core --lib commit_qc_redrives -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_core --lib commit_pipeline_redrives_ -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_core --lib vnext_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_core --lib vnext -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_core --lib chain_order -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_data_model --features transparent_api --test confidential_wallet_fixtures confidential_wallet_fixtures_are_stable -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_data_model --features transparent_api --test consensus_roundtrip regenerate_lane_commitment_fixtures -- --ignored --nocapture`
@@ -363,9 +430,14 @@ Last updated: 2026-05-10
   output-only instruction generation without a live node. The compiled `iroha`
   binary smoke suite now also exercises `iroha --output app soracles tx
   aggregate`, decodes stdout back into `AggregateOracleFeed`, and checks the
-  feed/slot/request/evidence fields.
+  feed/slot/request/evidence fields. The command-module tests now cover
+  output-safe construction for every Soracles tx builder and parse every
+  Soracles query subcommand without contacting a node. A broad workspace check
+  also caught and fixed the generic Mochi state-browser batch label matcher so
+  oracle feed, history, stats, dispute, change, and Twitter binding query
+  batches report stable labels on unexpected-batch errors.
 - Validation:
-  - `cargo fmt --all`
+  - `cargo fmt --all -- --check`
   - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo check -p iroha_data_model -p iroha_executor_data_model -p iroha_executor`
   - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo check -p iroha_core --lib`
   - `cargo check -p iroha_data_model -p iroha_executor_data_model -p iroha_executor -p iroha_core`
@@ -376,13 +448,14 @@ Last updated: 2026-05-10
   - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo test -p iroha_cli --test cli_smoke soracles_aggregate_output_emits_instruction_payload -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo test -p iroha_cli soracles -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo test -p iroha_cli --test cli_smoke -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo test -p iroha_cli`
+  - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo test -p mochi-core batch_label_handles_rwa_and_escrow_variants -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo check --workspace`
   - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo clippy -p iroha_data_model -p iroha_executor_data_model -p iroha_executor -p iroha_core -p iroha_cli --all-targets -- -D warnings`
   - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo clippy -p iroha_cli --test cli_smoke -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo clippy -p iroha_cli --all-targets -- -D warnings`
   - `cargo fmt -p iroha_cli -- --check` after the CLI smoke increment
   - `git diff --check`
-- Note: the latest workspace-wide `cargo fmt --all --check` is blocked by an
-  unrelated dirty `crates/iroha_core/src/sumeragi/main_loop/tests.rs` hunk that
-  rustfmt wants to reflow; it was left untouched to preserve non-Soracles work.
 
 ## 2026-05-09 Sumeragi vNext active-load validation guard
 

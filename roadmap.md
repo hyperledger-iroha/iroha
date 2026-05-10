@@ -29,21 +29,26 @@ Completed history lives in `status.md`. This file should only track unfinished w
 ## Sumeragi vNext consensus replacement
 
 - Keep reducing the remaining 20k Izanami queue-drain gap now that the
-  large-block merge bottleneck is no longer visible in the latest gates. The
-  2026-05-10 final 4,096-cap/full-batch stale-window rerun
-  `dist/izanami-prebuilt-20k-fastpq-gpu-low-contention-8192-block4096-fullbatchgrace-final-120s-20260510-140229`
+  large-block merge bottleneck is no longer visible and cert-only commit-QC
+  recovery can replay cached votes to requesters. The 2026-05-10
+  cert-vote-replay rerun
+  `dist/izanami-prebuilt-20k-fastpq-gpu-cert-vote-replay-120s-20260510-154724`
   accepted and succeeded all `2,400,000` submissions with zero failures,
-  reached strict height `17` / strict approved `61,495`, emitted no slow
-  commit-stage timing samples, had stale proposal aborts `0`, reported
-  view-change installs `0` and commit-inflight timeout total `0`, and kept
-  submit latency at `p50=3ms` / `p95=12ms`. The transaction queue still
-  saturated (`873,313 / 2,400,000`) and shutdown still caught a commit in
-  flight, so the open work is proposal/commit/QC cadence and queue drain under
-  sustained 20k ingress. The 8,192 and 16,384 block-cap experiments proved that
-  larger blocks are not the next fix on the 300ms pipeline. Rerun the clean 20k
-  gate after the next Sumeragi/QC cadence change and keep the simple-transfer
-  batch path guarded by exact trigger-filter matching so per-transaction
-  transcript, event, trigger, and rejection semantics remain intact.
+  reached strict height `16` / strict approved `57,385`, kept submit latency at
+  `p50=3ms` / `p95=29ms`, dropped missing-block fetches to `105`, replayed
+  cached commit votes on the cert-only path `53` times, and ended with
+  commit-inflight timeout total `0` and commit inflight inactive. The
+  transaction queue still saturated (`843,109 / 2,400,000`) and final peer
+  height/approval skew remained `2` / `8,192`, so the open work is queue drain
+  and final height convergence under sustained 20k ingress after missing-QC
+  pressure has been reduced. The 8,192 and 16,384 block-cap experiments proved
+  that larger blocks are not the next fix on the 300ms pipeline, and a
+  same-height commit-vote inbound bypass was tested but not retained after it
+  regressed the 20k gate. Rerun the clean 20k gate after the next
+  Sumeragi/QC-cadence or ingress-backpressure change and keep the
+  simple-transfer batch path guarded by exact trigger-filter matching so
+  per-transaction transcript, event, trigger, and rejection semantics remain
+  intact.
 - Keep hardening the actor-owned vNext round state now that the standalone
   runtime reactor boundary is gone. vNext control frames, body-backed proposal
   acceptance, DA/RBC availability handoffs, timeout ticks, validation worker

@@ -4050,6 +4050,36 @@ impl Actor {
                 && !pending.commit_qc_observed()
                 && !missing_local_data
                 && pending.validation_status == ValidationStatus::Valid
+                && self.pending_block_commit_votes_count(hash, pending_height, pending_view)
+                    >= min_votes_for_commit
+            {
+                self.try_form_qc_from_votes(
+                    crate::sumeragi::consensus::Phase::Commit,
+                    hash,
+                    pending_height,
+                    pending_view,
+                    vote_epoch,
+                    &topology,
+                );
+                if let Some(qc) =
+                    self.cached_commit_qc_for_block(hash, pending_height, pending_view)
+                {
+                    pending.note_commit_qc_observed(qc.epoch);
+                    debug!(
+                        height = pending_height,
+                        view = pending_view,
+                        block = %hash,
+                        epoch = qc.epoch,
+                        "commit pipeline formed local commit QC from cached votes before peer recovery"
+                    );
+                }
+            }
+
+            if enable_qc_pipeline
+                && pending.local_commit_vote_emitted()
+                && !pending.commit_qc_observed()
+                && !missing_local_data
+                && pending.validation_status == ValidationStatus::Valid
                 && pending_age >= fast_timeout
                 && pending_extends_tip(
                     pending_height,

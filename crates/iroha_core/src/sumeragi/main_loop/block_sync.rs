@@ -818,21 +818,62 @@ impl Actor {
     }
 
     fn direct_commit_qc_for_block(
-        &self,
+        &mut self,
         block: &SignedBlock,
     ) -> Option<crate::sumeragi::consensus::Qc> {
         let block_hash = block.hash();
         let height = block.header().height().get();
         let view = block.header().view_change_index();
-        self.cached_commit_qc_for_block(block_hash, height, view)
-            .or_else(|| {
-                let world = self.state.world_view();
-                crate::block_sync::BlockSynchronizer::block_sync_qc_for_world(
-                    &world,
-                    self.config.consensus_mode,
-                    block,
-                )
-            })
+        if let Some(qc) = self.cached_commit_qc_for_block(block_hash, height, view) {
+            return Some(qc);
+        }
+
+        {
+            let world = self.state.world_view();
+            if let Some(qc) = crate::block_sync::BlockSynchronizer::block_sync_qc_for_world(
+                &world,
+                self.config.consensus_mode,
+                block,
+            ) {
+                return Some(qc);
+            }
+        }
+
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+        let mut commit_topology =
+            self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+        if commit_topology.is_empty() {
+            commit_topology = self.effective_commit_topology();
+        }
+        if commit_topology.is_empty() {
+            return None;
+        }
+
+        let topology = super::network_topology::Topology::new(commit_topology);
+        if self.pending_block_commit_votes_count(block_hash, height, view)
+            < topology.min_votes_for_commit().max(1)
+        {
+            return None;
+        }
+
+        self.try_form_qc_from_votes(
+            crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            height,
+            view,
+            self.epoch_for_height(height),
+            &topology,
+        );
+        let formed = self.cached_commit_qc_for_block(block_hash, height, view);
+        if formed.is_some() {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "formed direct commit QC from cached votes for fetch response"
+            );
+        }
+        formed
     }
 
     fn direct_commit_qc_from_block_sync_update(
@@ -856,7 +897,7 @@ impl Actor {
     }
 
     fn direct_commit_qc_from_block_body_response(
-        &self,
+        &mut self,
         response: &super::message::BlockBodyResponse,
     ) -> Option<crate::sumeragi::consensus::Qc> {
         match &response.body {
@@ -923,6 +964,23 @@ impl Actor {
         let height = header.height().get();
         let view = header.view_change_index();
         let Some(qc) = self.direct_commit_qc_for_block(block) else {
+            let replayed_votes = self.rebroadcast_block_votes_to_targets(
+                crate::sumeragi::consensus::Phase::Commit,
+                block_hash,
+                height,
+                view,
+                std::slice::from_ref(&peer),
+            );
+            if replayed_votes > 0 {
+                info!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    peer = %peer,
+                    replayed_votes,
+                    "sending cached commit votes for commit-QC-only fetch response"
+                );
+            }
             debug!(
                 height,
                 view,

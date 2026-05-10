@@ -1218,7 +1218,9 @@ impl Actor {
                     && !owner_qc_observed
                     && !owner_pending_commit_qc_observed
                     && !local_vote_consensus_locked
-                    && (!competing_quorum_locked || new_view_qc_supersedes_owner)
+                    && (!competing_quorum_locked
+                        || new_view_qc_supersedes_owner
+                        || recovery_exhausted)
                     && !commit_inflight_live
                 {
                     self.frontier_slot = None;

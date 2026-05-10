@@ -805,6 +805,12 @@ fn batch_label(batch: &QueryOutputBatchBox) -> &'static str {
         QueryOutputBatchBox::BlockHeader(_) => "BlockHeader",
         QueryOutputBatchBox::BlockHeaderHash(_) => "BlockHeaderHash",
         QueryOutputBatchBox::ProofRecord(_) => "ProofRecord",
+        QueryOutputBatchBox::OracleFeedConfig(_) => "OracleFeedConfig",
+        QueryOutputBatchBox::OracleFeedEventRecord(_) => "OracleFeedEventRecord",
+        QueryOutputBatchBox::OracleProviderStatsRecord(_) => "OracleProviderStatsRecord",
+        QueryOutputBatchBox::OracleDispute(_) => "OracleDispute",
+        QueryOutputBatchBox::OracleChangeProposal(_) => "OracleChangeProposal",
+        QueryOutputBatchBox::TwitterBindingRecord(_) => "TwitterBindingRecord",
         QueryOutputBatchBox::AssetEscrowRecord(_) => "AssetEscrowRecord",
         QueryOutputBatchBox::AnonymousAssetEscrowRecord(_) => "AnonymousAssetEscrowRecord",
     }
@@ -1093,6 +1099,30 @@ mod tests {
         assert_eq!(
             batch_label(&QueryOutputBatchBox::AnonymousAssetEscrowRecord(Vec::new())),
             "AnonymousAssetEscrowRecord"
+        );
+        assert_eq!(
+            batch_label(&QueryOutputBatchBox::OracleFeedConfig(Vec::new())),
+            "OracleFeedConfig"
+        );
+        assert_eq!(
+            batch_label(&QueryOutputBatchBox::OracleFeedEventRecord(Vec::new())),
+            "OracleFeedEventRecord"
+        );
+        assert_eq!(
+            batch_label(&QueryOutputBatchBox::OracleProviderStatsRecord(Vec::new())),
+            "OracleProviderStatsRecord"
+        );
+        assert_eq!(
+            batch_label(&QueryOutputBatchBox::OracleDispute(Vec::new())),
+            "OracleDispute"
+        );
+        assert_eq!(
+            batch_label(&QueryOutputBatchBox::OracleChangeProposal(Vec::new())),
+            "OracleChangeProposal"
+        );
+        assert_eq!(
+            batch_label(&QueryOutputBatchBox::TwitterBindingRecord(Vec::new())),
+            "TwitterBindingRecord"
         );
         assert_eq!(
             batch_label(&QueryOutputBatchBox::RwaId(Vec::new())),
