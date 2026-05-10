@@ -36922,14 +36922,9 @@ impl Actor {
                     );
                     return false;
                 }
-                let nonleader_missing_qc_recovery_first = !self
-                    .local_is_round_leader(height, current_view)
-                    && self.frontier_recovery.as_ref().is_none_or(|state| {
-                        state.frontier_height != height || state.last_cause == "missing_qc"
-                    });
                 let empty_frontier_missing_qc_recovery_first = !proposal_seen
                     && matches!(direct_cause, ViewChangeCause::MissingQc)
-                    && (current_view == 0 || nonleader_missing_qc_recovery_first)
+                    && current_view == 0
                     && !self.exact_frontier_body_repair_active_at_height(height)
                     && !pre_reset_passive_frontier_slot_without_external_dependency
                     && !self.frontier_slot_passive_catchup_active_at_height(height);
