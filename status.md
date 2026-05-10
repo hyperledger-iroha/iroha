@@ -2,6 +2,20 @@
 
 Last updated: 2026-05-10
 
+## 2026-05-10 BLS admission aggregate precheck
+
+- `ValidBlock::validate` now runs BLS transaction signature micro-batch
+  prechecks during static validation, before duplicate-payload rejection, and
+  feeds those prechecked results into transaction admission. Height-1 BLS
+  transactions with aggregate-prechecked bad signatures are rejected instead of
+  slipping through the genesis transaction shortcut.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --test admission_batching --features bls,telemetry bls_ -- --nocapture`
+  - `cargo test -p iroha_core --test admission_batching --features bls,telemetry -- --nocapture`
+  - `cargo check -p iroha_core --features bls`
+  - `git diff --check`
+
 ## 2026-05-10 Sumeragi missing-QC recovery ordering
 
 - Empty contiguous-frontier `missing_qc` idle ticks now use the unified

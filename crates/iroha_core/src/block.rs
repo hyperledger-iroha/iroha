@@ -5709,6 +5709,236 @@ pub(crate) mod valid {
                 .collect()
         }
 
+        #[cfg(feature = "bls")]
+        #[allow(clippy::too_many_lines)]
+        fn precheck_bls_transaction_signatures(
+            signed_txs: &[&SignedTransaction],
+            prepared_txs: &[PreparedBlockTransaction],
+            cap: usize,
+            prechecked_signature_results: &mut [Option<Result<(), SignatureVerificationFail>>],
+            metrics: MetricsRef<'_>,
+            lane_id: LaneId,
+        ) {
+            #[derive(Clone)]
+            struct BlsItem {
+                idx: usize,
+                pk: iroha_crypto::PublicKey,
+                pk_bytes: Vec<u8>,
+                pop: Option<Vec<u8>>,
+                msg: [u8; 32],
+                sig: Vec<u8>,
+            }
+
+            static BLS_POP_KEY: LazyLock<iroha_data_model::name::Name> =
+                LazyLock::new(|| "bls_pop".parse().expect("valid metadata key"));
+            static BLS_POP_SMALL_KEY: LazyLock<iroha_data_model::name::Name> =
+                LazyLock::new(|| "bls_pop_small".parse().expect("valid metadata key"));
+
+            let mut all_normal_have_pop = true;
+            let mut all_small_have_pop = true;
+            let mut items_normal: Vec<BlsItem> = Vec::new();
+            let mut items_small: Vec<BlsItem> = Vec::new();
+            for (idx, (tx, prepared)) in signed_txs.iter().zip(prepared_txs.iter()).enumerate() {
+                let AccountController::Single(signatory) = tx.authority().controller() else {
+                    continue;
+                };
+                let small = match signatory.algorithm() {
+                    iroha_crypto::Algorithm::BlsNormal => false,
+                    iroha_crypto::Algorithm::BlsSmall => true,
+                    _ => continue,
+                };
+                let h = prepared.metadata.payload_hash;
+                let mut msg = [0_u8; 32];
+                msg.copy_from_slice(h.as_ref());
+                let sig = tx.signature().payload().payload().to_vec();
+                let mut pop = None;
+                if small {
+                    if let Some(pop_bytes) =
+                        bls_small_pop_from_metadata(tx.metadata(), &BLS_POP_SMALL_KEY)
+                    {
+                        if iroha_crypto::bls_small_pop_verify(signatory, &pop_bytes).is_ok() {
+                            pop = Some(pop_bytes);
+                        } else {
+                            all_small_have_pop = false;
+                        }
+                    } else {
+                        all_small_have_pop = false;
+                    }
+                } else if let Some(pop_bytes) = bls_pop_from_metadata(tx.metadata(), &BLS_POP_KEY) {
+                    if iroha_crypto::bls_normal_pop_verify(signatory, &pop_bytes).is_ok() {
+                        pop = Some(pop_bytes);
+                    } else {
+                        all_normal_have_pop = false;
+                    }
+                } else {
+                    all_normal_have_pop = false;
+                }
+                let item = BlsItem {
+                    idx,
+                    pk: signatory.clone(),
+                    pk_bytes: signatory.to_bytes().1.to_vec(),
+                    pop,
+                    msg,
+                    sig,
+                };
+                if small {
+                    items_small.push(item);
+                } else {
+                    items_normal.push(item);
+                }
+            }
+
+            #[cfg(feature = "telemetry")]
+            let mut same_msg_agg = 0_u64;
+            #[cfg(feature = "telemetry")]
+            let mut multi_msg_agg = 0_u64;
+            #[cfg(feature = "telemetry")]
+            let mut deterministic = 0_u64;
+
+            #[cfg(feature = "telemetry")]
+            let record_result = |same_message: bool, success: bool| {
+                if let Some(metrics) = metrics {
+                    metrics.inc_pipeline_sig_bls_result(lane_id, same_message, success);
+                }
+            };
+
+            let mut verify_set = |items: &[BlsItem], small: bool| {
+                if items.is_empty() {
+                    return;
+                }
+                let mut groups: BTreeMap<[u8; 32], Vec<&BlsItem>> = BTreeMap::new();
+                for item in items {
+                    groups.entry(item.msg).or_default().push(item);
+                }
+                let mut singletons: Vec<&BlsItem> = Vec::new();
+                for group in groups.values() {
+                    if group.len() == 1 {
+                        singletons.push(group[0]);
+                        continue;
+                    }
+                    let Some(pops) = group
+                        .iter()
+                        .map(|item| item.pop.as_ref().map(Vec::as_slice))
+                        .collect::<Option<Vec<_>>>()
+                    else {
+                        return;
+                    };
+                    let msg = group[0].msg.as_slice();
+                    let sigs: Vec<&[u8]> = group.iter().map(|item| item.sig.as_slice()).collect();
+                    let pks: Vec<&iroha_crypto::PublicKey> =
+                        group.iter().map(|item| &item.pk).collect();
+                    let ok = if small {
+                        iroha_crypto::bls_small_verify_aggregate_same_message(
+                            msg, &sigs, &pks, &pops,
+                        )
+                        .is_ok()
+                    } else {
+                        iroha_crypto::bls_normal_verify_aggregate_same_message(
+                            msg, &sigs, &pks, &pops,
+                        )
+                        .is_ok()
+                    };
+                    #[cfg(feature = "telemetry")]
+                    {
+                        same_msg_agg = same_msg_agg.saturating_add(1);
+                        record_result(true, ok);
+                    }
+                    if ok {
+                        for item in group {
+                            prechecked_signature_results[item.idx] = Some(Ok(()));
+                        }
+                    } else {
+                        for item in group {
+                            prechecked_signature_results[item.idx] = Some(
+                                crate::tx::AcceptedTransaction::signature_verification_result(
+                                    signed_txs[item.idx],
+                                ),
+                            );
+                        }
+                    }
+                }
+                if !singletons.is_empty() {
+                    let msgs: Vec<&[u8]> =
+                        singletons.iter().map(|item| item.msg.as_slice()).collect();
+                    let sigs: Vec<&[u8]> =
+                        singletons.iter().map(|item| item.sig.as_slice()).collect();
+                    let pks: Vec<&[u8]> = singletons
+                        .iter()
+                        .map(|item| item.pk_bytes.as_slice())
+                        .collect();
+                    let ok = if small {
+                        iroha_crypto::bls_small_verify_aggregate_multi_message(&msgs, &sigs, &pks)
+                            .is_ok()
+                    } else {
+                        iroha_crypto::bls_normal_verify_aggregate_multi_message(&msgs, &sigs, &pks)
+                            .is_ok()
+                    };
+                    #[cfg(feature = "telemetry")]
+                    {
+                        multi_msg_agg = multi_msg_agg.saturating_add(1);
+                        record_result(false, ok);
+                    }
+                    if ok {
+                        for item in singletons {
+                            prechecked_signature_results[item.idx] = Some(Ok(()));
+                        }
+                    } else {
+                        for item in singletons {
+                            prechecked_signature_results[item.idx] = Some(
+                                crate::tx::AcceptedTransaction::signature_verification_result(
+                                    signed_txs[item.idx],
+                                ),
+                            );
+                        }
+                    }
+                }
+            };
+
+            if cap > 0 {
+                if all_normal_have_pop {
+                    for chunk in items_normal.chunks(cap) {
+                        verify_set(chunk, false);
+                    }
+                } else {
+                    #[cfg(feature = "telemetry")]
+                    {
+                        deterministic = deterministic
+                            .saturating_add(u64::try_from(items_normal.len()).unwrap_or(u64::MAX));
+                    }
+                }
+                if all_small_have_pop {
+                    for chunk in items_small.chunks(cap) {
+                        verify_set(chunk, true);
+                    }
+                } else {
+                    #[cfg(feature = "telemetry")]
+                    {
+                        deterministic = deterministic
+                            .saturating_add(u64::try_from(items_small.len()).unwrap_or(u64::MAX));
+                    }
+                }
+            } else {
+                #[cfg(feature = "telemetry")]
+                {
+                    let item_count = items_normal.len().saturating_add(items_small.len());
+                    deterministic =
+                        deterministic.saturating_add(u64::try_from(item_count).unwrap_or(u64::MAX));
+                }
+            }
+
+            #[cfg(feature = "telemetry")]
+            if let Some(metrics) = metrics {
+                metrics.set_pipeline_sig_bls_counts(
+                    lane_id,
+                    same_msg_agg,
+                    multi_msg_agg,
+                    deterministic,
+                );
+            }
+            #[cfg(not(feature = "telemetry"))]
+            let _ = (metrics, lane_id);
+        }
+
         /// Static checks that do not require holding a state view.
         #[allow(
             clippy::too_many_arguments,
@@ -5755,6 +5985,19 @@ pub(crate) mod valid {
             if signed_txs.len() != prepared_txs.len() {
                 return Err(BlockValidationError::MerkleRootMismatch);
             }
+            let is_genesis_block = block.header().is_genesis();
+            let mut prechecked_signature_results: Vec<
+                Option<Result<(), SignatureVerificationFail>>,
+            > = vec![None; prepared_txs.len()];
+            #[cfg(feature = "bls")]
+            Self::precheck_bls_transaction_signatures(
+                &signed_txs,
+                prepared_txs,
+                pipeline_cfg.signature_batch_max_bls,
+                &mut prechecked_signature_results,
+                _metrics,
+                static_data.aggregate_lane,
+            );
             let mut seen_hashes: HashSet<HashOf<SignedTransaction>> =
                 HashSet::with_capacity(signed_txs.len());
             let mut seen_sealed_commitments =
@@ -5853,7 +6096,6 @@ pub(crate) mod valid {
 
             use rayon::prelude::*;
 
-            let is_genesis_block = block.header().is_genesis();
             let mut ed25519_prechecked = vec![false; prepared_txs.len()];
             if let Some(cached_stateless_ok) = cached_stateless_ok {
                 if cached_stateless_ok.len() != prepared_txs.len() {
@@ -5955,7 +6197,15 @@ pub(crate) mod valid {
                 (&SignedTransaction, &PreparedBlockTransaction),
             )|
              -> Option<BlockValidationError> {
+                let prechecked_signature_result = prechecked_signature_results
+                    .get(idx)
+                    .and_then(|result| result.as_ref().cloned());
                 if is_genesis_block {
+                    if let Some(Err(fail)) = prechecked_signature_result {
+                        return Some(BlockValidationError::TransactionAccept(
+                            AcceptTransactionFail::SignatureVerification(fail),
+                        ));
+                    }
                     return AcceptedTransaction::validate_genesis_with_now(
                         tx,
                         chain_id,
@@ -5970,6 +6220,30 @@ pub(crate) mod valid {
 
                 let replay_signature_result = trust_replay_tx_signatures.then_some(Ok(()));
                 let stateless = if let Some(prechecked_signature_result) = replay_signature_result {
+                    if crate::tx::is_heartbeat_transaction(tx) {
+                        AcceptedTransaction::validate_heartbeat_with_now_with_signature_result_and_prepared_metadata(
+                            tx,
+                            chain_id,
+                            max_clock_drift,
+                            tx_params,
+                            crypto_cfg.as_ref(),
+                            block_creation_time,
+                            Some(prechecked_signature_result),
+                            &prepared.metadata,
+                        )
+                    } else {
+                        AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
+                            tx,
+                            chain_id,
+                            max_clock_drift,
+                            tx_params,
+                            crypto_cfg.as_ref(),
+                            block_creation_time,
+                            Some(prechecked_signature_result),
+                            &prepared.metadata,
+                        )
+                    }
+                } else if let Some(prechecked_signature_result) = prechecked_signature_result {
                     if crate::tx::is_heartbeat_transaction(tx) {
                         AcceptedTransaction::validate_heartbeat_with_now_with_signature_result_and_prepared_metadata(
                             tx,
