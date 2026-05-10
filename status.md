@@ -1,6 +1,26 @@
 # Status
 
-Last updated: 2026-05-08
+Last updated: 2026-05-10
+
+## 2026-05-10 Sumeragi committed RBC repair suppression
+
+- Delivered RBC sessions whose block height is already at or below the local
+  committed tip no longer stay active for RBC rebroadcast or hot repair. This
+  prevents retained post-commit RBC state from repeatedly sending targeted
+  READY/INIT/body repair traffic or rebroadcasting DELIVER after the block has
+  already committed.
+- Delivered sessions that are still uncommitted remain eligible for the
+  existing frontier/body repair path, so pre-commit RBC convergence is
+  preserved.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib actor_next_tick_deadline_ignores_delivered_committed_rbc_session -- --nocapture`
+  - `cargo test -p iroha_core --lib rebroadcast_stalled_rbc_payloads_skips_deliver_for_committed_block -- --nocapture`
+  - `cargo test -p iroha_core --lib rebroadcast_stalled_rbc_payloads_skips_payload_after_delivery -- --nocapture`
+  - `cargo test -p iroha_core --lib delivered_rbc_session_at_committed_tip_is_not_rebroadcast_active -- --nocapture`
+  - `cargo test -p iroha_core --lib rebroadcast_stalled_rbc_payloads_repairs_ready_before_deliver_after_delivery -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_backlog_counts_delivered_session_without_ready_quorum -- --nocapture`
+  - `cargo check -p iroha_core --lib`
 
 ## 2026-05-08 Sumeragi idle RBC tick throttling
 

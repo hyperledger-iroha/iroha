@@ -3686,6 +3686,52 @@ async fn actor_next_tick_deadline_ignores_inactive_delivered_rbc_session() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn actor_next_tick_deadline_ignores_delivered_committed_rbc_session() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let tip_hash = seed_block_for_state(&actor.state, 2, genesis_hash);
+    let tip_block = actor
+        .kura
+        .get_block(nonzero!(2_usize))
+        .expect("tip block in Kura");
+    let key = Actor::session_key(&tip_hash, 2, 0);
+    let payload = super::proposals::block_payload_bytes(tip_block.as_ref());
+    let payload_hash = Hash::new(&payload);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        actor.epoch_for_height(key.1),
+    )
+    .expect("RBC session");
+    session.sent_ready = true;
+    session.test_set_block_header_and_signature(tip_block.as_ref());
+    session.test_set_delivered(true);
+
+    let roster = actor.effective_commit_topology();
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    let now = Instant::now();
+    assert!(
+        actor.rbc_next_due(now).is_none(),
+        "delivered RBC sessions for already committed blocks must not schedule repair ticks"
+    );
+    assert!(
+        actor.next_tick_deadline(now).is_none(),
+        "delivered committed RBC sessions should leave an otherwise idle actor asleep"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn observer_local_indices_are_none() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.role = NodeRole::Observer;
@@ -41233,7 +41279,7 @@ async fn rebroadcast_stalled_rbc_payloads_repairs_ready_before_deliver_after_del
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn rebroadcast_stalled_rbc_payloads_rebroadcasts_deliver_for_recent_committed_block() {
+async fn rebroadcast_stalled_rbc_payloads_skips_deliver_for_committed_block() {
     let mut harness = test_actor_harness(4).await;
     let background_log = attach_background_log(&mut harness.actor);
     let key = insert_active_pending_block(&mut harness.actor, 0);
@@ -41312,8 +41358,8 @@ async fn rebroadcast_stalled_rbc_payloads_rebroadcasts_deliver_for_recent_commit
         .actor
         .rebroadcast_stalled_rbc_payloads(Instant::now());
     assert!(
-        progress,
-        "expected deliver rebroadcast progress for recent committed block"
+        !progress,
+        "committed delivered RBC sessions must not drive repair progress"
     );
 
     let entries = take_background_log(&background_log);
@@ -41325,8 +41371,8 @@ async fn rebroadcast_stalled_rbc_payloads_rebroadcasts_deliver_for_recent_commit
         })
         .count();
     assert_eq!(
-        deliver_posts, 1,
-        "expected deliver rebroadcast for recent committed block"
+        deliver_posts, 0,
+        "committed delivered RBC sessions must not rebroadcast DELIVER"
     );
 
     harness.shutdown.send();
@@ -41410,8 +41456,8 @@ async fn rebroadcast_stalled_rbc_payloads_skips_payload_after_delivery() {
         .actor
         .rebroadcast_stalled_rbc_payloads(Instant::now());
     assert!(
-        progress,
-        "expected deliver rebroadcast progress for delivered session"
+        !progress,
+        "committed delivered sessions should stay passive"
     );
     assert!(
         !harness
@@ -41430,8 +41476,9 @@ async fn rebroadcast_stalled_rbc_payloads_skips_payload_after_delivery() {
             .da_rbc
             .rbc
             .deliver_rebroadcast_last_sent
-            .contains_key(&key),
-        "expected deliver rebroadcast timestamp"
+            .get(&key)
+            .is_none(),
+        "committed delivered sessions must not arm a DELIVER rebroadcast cooldown"
     );
 
     harness.shutdown.send();
@@ -146095,6 +146142,39 @@ async fn delivered_rbc_session_at_tip_height_ignores_non_tip_hash() {
     assert!(
         !actor.rbc_rebroadcast_active(key),
         "delivered RBC sessions at tip height should only stay active for the tip hash"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn delivered_rbc_session_at_committed_tip_is_not_rebroadcast_active() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let tip_block = sample_block(2, 0, Some(genesis_hash));
+    let tip_hash = tip_block.hash();
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(tip_hash);
+
+    let key = Actor::session_key(&tip_hash, 2, 0);
+    let mut session = RbcSession::test_new(
+        1,
+        Some(Hash::prehashed([0x45; 32])),
+        Some(Hash::prehashed([0x46; 32])),
+        0,
+    );
+    session.test_set_block_header_and_signature(&tip_block);
+    session.test_set_delivered(true);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    let roster = actor.effective_commit_topology();
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+
+    assert!(
+        !actor.rbc_rebroadcast_active(key),
+        "delivered RBC sessions for the committed tip should not stay active for repair"
     );
 
     harness.shutdown.send();

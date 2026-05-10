@@ -840,6 +840,14 @@ fn snapshot_has_space_directory_manifest_section(value: &json::Value) -> bool {
     )
 }
 
+fn snapshot_world_has_field(value: &json::Value, field: &str) -> bool {
+    matches!(
+        value,
+        json::Value::Object(map)
+            if matches!(map.get("world"), Some(json::Value::Object(world)) if world.contains_key(field))
+    )
+}
+
 fn decode_instruction_by_id<T>(instruction: &InstructionBox) -> Option<T>
 where
     T: DecodeAll + 'static,
@@ -1093,6 +1101,8 @@ fn try_read_snapshot_bundle(
     };
     let has_space_directory_manifest_section =
         snapshot_has_space_directory_manifest_section(&value);
+    let has_offline_note_v2_replay_keys =
+        snapshot_world_has_field(&value, "offline_note_v2_replay_keys");
     let seed = KuraSeed {
         kura: Arc::clone(kura),
         query_handle: live_query_store.clone(),
@@ -1123,6 +1133,9 @@ fn try_read_snapshot_bundle(
             snapshot_height,
             kura_height: block_count,
         });
+    }
+    if snapshot_height > 0 && !has_offline_note_v2_replay_keys {
+        return Err(TryReadError::MissingOfflineNoteV2ReplayKeys { snapshot_height });
     }
     for (idx, snapshot_block_hash) in snapshot_hashes.into_iter().enumerate() {
         let height = idx + 1;
@@ -1587,6 +1600,11 @@ pub enum TryReadError {
         /// Height recorded by the legacy snapshot.
         snapshot_height: usize,
     },
+    /// Snapshot at height `{snapshot_height}` is missing the durable Offline Note V2 replay-key section
+    MissingOfflineNoteV2ReplayKeys {
+        /// Height recorded by the legacy snapshot.
+        snapshot_height: usize,
+    },
     /// Failed to reconcile snapshot state with Kura while committing a block revert
     StateCommit(TransactionsBlockError),
 }
@@ -1796,6 +1814,26 @@ mod tests {
         payload.into_bytes()
     }
 
+    fn snapshot_bytes_without_world_field(state: &State, field: &str) -> Vec<u8> {
+        let mut payload = String::new();
+        serialize_state_snapshot(state, &mut payload, true);
+        let mut value: json::Value =
+            json::from_slice(payload.as_bytes()).expect("snapshot JSON should parse");
+        let json::Value::Object(root) = &mut value else {
+            panic!("snapshot root should be an object");
+        };
+        let Some(json::Value::Object(world)) = root.get_mut("world") else {
+            panic!("snapshot world should be an object");
+        };
+        assert!(
+            world.remove(field).is_some(),
+            "snapshot world field {field} should be present before removal"
+        );
+        let mut bytes = Vec::new();
+        json::to_writer(&mut bytes, &value).expect("write legacy snapshot JSON");
+        bytes
+    }
+
     fn write_snapshot_bundle_from_bytes(
         store_dir: &std::path::Path,
         bytes: &[u8],
@@ -1903,6 +1941,10 @@ mod tests {
         assert!(
             snapshot_has_space_directory_manifest_section(&snapshot_value),
             "new snapshots must carry a Space Directory manifest section"
+        );
+        assert!(
+            snapshot_world_has_field(&snapshot_value, "offline_note_v2_replay_keys"),
+            "new snapshots must carry Offline Note V2 replay keys"
         );
 
         let snapshot_state = try_read_snapshot(
@@ -2012,6 +2054,41 @@ mod tests {
         .expect("legacy snapshot without Space Directory history should remain readable");
 
         assert_eq!(snapshot_state.view().height(), 1);
+    }
+
+    #[test]
+    async fn legacy_snapshot_missing_offline_note_v2_replay_keys_is_rejected() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = state_factory_with_kura(Arc::clone(&kura));
+        let block = signed_block_with_transaction(accepted_log_transaction("legacy"));
+        store_block_and_mark_state_height(&mut state, &kura, block);
+        let key_pair = KeyPair::random();
+        let legacy_bytes =
+            snapshot_bytes_without_world_field(&state, "offline_note_v2_replay_keys");
+
+        write_snapshot_bundle_from_bytes(&store_dir, &legacy_bytes, &key_pair);
+
+        let result = try_read_snapshot(
+            &store_dir,
+            &kura,
+            LiveQueryStore::start_test,
+            BlockCount(state.view().height()),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::new(<_>::default(), true),
+        );
+
+        match result {
+            Err(TryReadError::MissingOfflineNoteV2ReplayKeys { snapshot_height }) => {
+                assert_eq!(snapshot_height, 1);
+            }
+            Err(err) => panic!("unexpected snapshot read error: {err:?}"),
+            Ok(_) => panic!("legacy snapshot missing Offline Note V2 replay keys must be rejected"),
+        }
     }
 
     #[test]

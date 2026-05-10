@@ -8759,6 +8759,9 @@ impl Actor {
         }
         let block_height = block_header.height().get();
         let tip_height_u64 = u64::try_from(tip_height).unwrap_or(u64::MAX);
+        if session.delivered && block_height <= tip_height_u64 {
+            return false;
+        }
         let extends_tip = pending_extends_tip(
             block_height,
             block_header.prev_block_hash(),
@@ -8768,12 +8771,6 @@ impl Actor {
         let matches_tip =
             tip_hash.is_some_and(|hash| hash == key.0) && block_height == tip_height_u64;
         if extends_tip || matches_tip {
-            return true;
-        }
-        if session.delivered
-            && self.kura.get_block_height_by_hash(key.0).is_some()
-            && key.1.saturating_add(2) >= tip_height_u64
-        {
             return true;
         }
         false
@@ -8826,6 +8823,16 @@ impl Actor {
     }
 
     fn suppress_rbc_hot_repair(&self, key: super::rbc_store::SessionKey) -> bool {
+        if self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .is_some_and(|session| self.rbc_delivered_session_committed(key, session))
+        {
+            return true;
+        }
         if self.has_local_pending_candidate_for_rbc_key(key)
             || self.block_payload_available_locally(key.0)
         {
@@ -8836,6 +8843,14 @@ impl Actor {
             return true;
         }
         true
+    }
+
+    fn rbc_delivered_session_committed(
+        &self,
+        key: super::rbc_store::SessionKey,
+        session: &RbcSession,
+    ) -> bool {
+        session.delivered && key.1 <= self.committed_height_snapshot()
     }
 
     fn allow_exact_frontier_recovered_rbc_chunk_repair(
@@ -22881,6 +22896,9 @@ impl Actor {
         let authoritative_ready_repair = session.sent_ready
             && !session.ready_signatures.is_empty()
             && self.rbc_session_has_authoritative_payload_for_progress(key, session);
+        if self.rbc_delivered_session_committed(key, session) {
+            return false;
+        }
         // Keep unknown contiguous-frontier sessions passive until local DELIVER lands; before then
         // the frontier owner / missing-block fetch path is responsible for body repair. Once the
         // local peer has authoritative payload and READY evidence, targeted READY repair is needed
@@ -24378,6 +24396,7 @@ impl Actor {
             .map(|entry| entry.sender)
             .collect();
         let deliver_sender = deliver.sender;
+        let delivered_committed = self.rbc_delivered_session_committed(key, &session);
         let ready_repair_sent = self.rescue_rbc_missing_ready_peers(
             key,
             &session,
@@ -24402,6 +24421,20 @@ impl Actor {
             if let Some(telemetry) = telemetry_ref {
                 telemetry.inc_rbc_deliver_broadcasts();
             }
+        }
+
+        if delivered_committed {
+            debug!(
+                height = key.1,
+                view = key.2,
+                block = %key.0,
+                local_peer = %self.common_config.peer.id(),
+                ready = ready_count,
+                deliver_sender,
+                senders = ?ready_senders,
+                "suppressing RBC DELIVER rebroadcast after block is already committed"
+            );
+            return Ok(());
         }
 
         iroha_logger::info!(
