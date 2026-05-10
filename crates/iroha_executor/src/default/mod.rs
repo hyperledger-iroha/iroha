@@ -32,8 +32,8 @@ use iroha_smart_contract::data_model::{
     isi::{
         ActivatePublicLaneValidator, ApprovePinManifest, BindManifestAlias,
         CompleteReplicationOrder, ExitPublicLaneValidator, IssueReplicationOrder,
-        RecordCapacityTelemetry, RecordReplicationReceipt, RegisterCapacityDeclaration,
-        RegisterCapacityDispute, RegisterPeerWithPop, RegisterPinManifest, RegisterProviderOwner,
+        RecordCapacityTelemetry, RegisterCapacityDeclaration, RegisterCapacityDispute,
+        RegisterPeerWithPop, RegisterPinManifest, RegisterProviderOwner,
         RegisterPublicLaneValidator, RemoveAssetKeyValue, RetirePinManifest, SetAssetKeyValue,
         SetLaneRelayEmergencyValidators, SetPricingSchedule, UnregisterProviderOwner,
         UpsertProviderCredit,
@@ -334,10 +334,6 @@ impl InstructionDispatch for InstructionBox {
             sorafs::visit_complete_replication_order(executor, isi);
             return;
         }
-        if let Some(isi) = any.downcast_ref::<RecordReplicationReceipt>() {
-            sorafs::visit_record_replication_receipt(executor, isi);
-            return;
-        }
         if let Some(isi) = any.downcast_ref::<RecordBridgeReceipt>() {
             bridge::visit_record_bridge_receipt(executor, isi);
             return;
@@ -613,23 +609,6 @@ pub mod sorafs {
         }
 
         deny!(executor, "Can't complete SoraFS replication order");
-    }
-
-    /// Record a replication receipt when permitted.
-    pub fn visit_record_replication_receipt<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &RecordReplicationReceipt,
-    ) {
-        if executor.context().curr_block.is_genesis() {
-            execute!(executor, isi);
-        }
-        if CanCompleteSorafsReplicationOrder
-            .is_owned_by(&executor.context().authority, executor.host())
-        {
-            execute!(executor, isi);
-        }
-
-        deny!(executor, "Can't record SoraFS replication receipt");
     }
 
     /// Register or update the owner binding for a `SoraFS` provider when permitted.
@@ -926,6 +905,12 @@ pub mod domain {
             | AnyPermission::CanRegisterSorafsProviderOwner(_)
             | AnyPermission::CanUnregisterSorafsProviderOwner(_)
             | AnyPermission::CanIngestSoranetPrivacy(_)
+            | AnyPermission::CanRegisterOracleFeed(_)
+            | AnyPermission::CanProposeOracleChange(_)
+            | AnyPermission::CanVoteOracleChangeStage(_)
+            | AnyPermission::CanRollbackOracleChange(_)
+            | AnyPermission::CanResolveOracleDispute(_)
+            | AnyPermission::CanManageTwitterBindings(_)
             | AnyPermission::CanPublishSpaceDirectoryManifest(_) => false,
         }
     }
@@ -1209,6 +1194,12 @@ pub mod account {
             | AnyPermission::CanRegisterSorafsProviderOwner(_)
             | AnyPermission::CanUnregisterSorafsProviderOwner(_)
             | AnyPermission::CanIngestSoranetPrivacy(_)
+            | AnyPermission::CanRegisterOracleFeed(_)
+            | AnyPermission::CanProposeOracleChange(_)
+            | AnyPermission::CanVoteOracleChangeStage(_)
+            | AnyPermission::CanRollbackOracleChange(_)
+            | AnyPermission::CanResolveOracleDispute(_)
+            | AnyPermission::CanManageTwitterBindings(_)
             | AnyPermission::CanPublishSpaceDirectoryManifest(_) => false,
         }
     }
@@ -1437,6 +1428,12 @@ pub mod asset_definition {
             | AnyPermission::CanRegisterSorafsProviderOwner(_)
             | AnyPermission::CanUnregisterSorafsProviderOwner(_)
             | AnyPermission::CanIngestSoranetPrivacy(_)
+            | AnyPermission::CanRegisterOracleFeed(_)
+            | AnyPermission::CanProposeOracleChange(_)
+            | AnyPermission::CanVoteOracleChangeStage(_)
+            | AnyPermission::CanRollbackOracleChange(_)
+            | AnyPermission::CanResolveOracleDispute(_)
+            | AnyPermission::CanManageTwitterBindings(_)
             | AnyPermission::CanPublishSpaceDirectoryManifest(_)
             | AnyPermission::CanUseFeeSponsor(_) => false,
         }
@@ -2615,6 +2612,12 @@ pub mod trigger {
             | AnyPermission::CanRegisterSorafsProviderOwner(_)
             | AnyPermission::CanUnregisterSorafsProviderOwner(_)
             | AnyPermission::CanIngestSoranetPrivacy(_)
+            | AnyPermission::CanRegisterOracleFeed(_)
+            | AnyPermission::CanProposeOracleChange(_)
+            | AnyPermission::CanVoteOracleChangeStage(_)
+            | AnyPermission::CanRollbackOracleChange(_)
+            | AnyPermission::CanResolveOracleDispute(_)
+            | AnyPermission::CanManageTwitterBindings(_)
             | AnyPermission::CanPublishSpaceDirectoryManifest(_)
             | AnyPermission::CanUseFeeSponsor(_) => false,
         }
@@ -2843,9 +2846,9 @@ mod sorafs_permission_tests {
         block::BlockHeader,
         isi::sorafs::{
             ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder, IssueReplicationOrder,
-            RecordCapacityTelemetry, RecordReplicationReceipt, RegisterCapacityDeclaration,
-            RegisterCapacityDispute, RegisterPinManifest, RegisterProviderOwner, RetirePinManifest,
-            SetPricingSchedule, UnregisterProviderOwner, UpsertProviderCredit,
+            RecordCapacityTelemetry, RegisterCapacityDeclaration, RegisterCapacityDispute,
+            RegisterPinManifest, RegisterProviderOwner, RetirePinManifest, SetPricingSchedule,
+            UnregisterProviderOwner, UpsertProviderCredit,
         },
         metadata::Metadata,
         permission::Permission as PermissionObject,
@@ -2857,7 +2860,7 @@ mod sorafs_permission_tests {
             },
             pin_registry::{
                 ChunkerProfileHandle, ManifestAliasBinding, ManifestDigest, PinPolicy,
-                ReplicationOrderId, ReplicationReceiptStatus,
+                ReplicationOrderId,
             },
             prelude::StorageClass,
             pricing::{PricingScheduleRecord, ProviderCreditRecord},
@@ -3108,16 +3111,6 @@ mod sorafs_permission_tests {
         CompleteReplicationOrder::new(ReplicationOrderId::new([0x11; 32]), 3)
     }
 
-    fn record_replication_receipt() -> RecordReplicationReceipt {
-        RecordReplicationReceipt::new(
-            ReplicationOrderId::new([0x11; 32]),
-            sample_provider_id(),
-            ReplicationReceiptStatus::Accepted,
-            0,
-            None,
-        )
-    }
-
     fn set_pricing_schedule() -> SetPricingSchedule {
         SetPricingSchedule::new(PricingScheduleRecord::launch_default())
     }
@@ -3222,13 +3215,6 @@ mod sorafs_permission_tests {
         complete_replication_order(),
         CanCompleteSorafsReplicationOrder,
         sorafs::visit_complete_replication_order
-    );
-
-    sorafs_permission_case!(
-        record_replication_receipt_requires_permission,
-        record_replication_receipt(),
-        CanCompleteSorafsReplicationOrder,
-        sorafs::visit_record_replication_receipt
     );
 
     sorafs_permission_case!(

@@ -120,6 +120,30 @@ fn wire(msg: BlockMessage) -> BlockMessageWire {
     BlockMessageWire::new(msg)
 }
 
+fn execute_commit_work_on_test_stack(
+    state: Arc<State>,
+    kura: Arc<Kura>,
+    chain_id: ChainId,
+    genesis_account: AccountId,
+    work: commit::CommitWork,
+) -> (commit::CommitOutcome, commit::CommitStageTimings) {
+    let join_handle = crate::sumeragi::sumeragi_thread_builder("sumeragi-commit-test-inline")
+        .spawn(move || {
+            commit::execute_commit_work(
+                state.as_ref(),
+                kura.as_ref(),
+                &chain_id,
+                &genesis_account,
+                work,
+            )
+        })
+        .expect("failed to spawn test commit worker thread");
+    match join_handle.join() {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
 fn default_vote_log_key(
     phase: Phase,
     height: u64,
@@ -401,6 +425,30 @@ fn insert_validated_pending(actor: &mut Actor, block: SignedBlock) -> HashOf<Blo
     block_hash
 }
 
+fn validated_roots_for_actor_block(
+    actor: &mut Actor,
+    block: SignedBlock,
+    topology: &super::network_topology::Topology,
+) -> super::StateRoots {
+    let height = block.header().height().get();
+    let view = block.header().view_change_index();
+    let mut validation_topology = topology.clone();
+    actor
+        .leader_index_for(&mut validation_topology, height, view)
+        .expect("validation topology should align");
+    let mut voting_block = None;
+    super::validate_block_for_voting(
+        block,
+        &mut validation_topology,
+        &actor.common_config.chain,
+        &actor.genesis_account,
+        actor.state.as_ref(),
+        &mut voting_block,
+    )
+    .expect("test block should validate before voting")
+    .expect("test block should produce execution roots")
+}
+
 fn insert_test_vote_with_roster(
     actor: &mut Actor,
     vote: crate::sumeragi::consensus::Vote,
@@ -441,10 +489,15 @@ fn seed_commit_votes_for_block_with_roster(
 ) -> usize {
     let topology = super::network_topology::Topology::new(roster.to_vec());
     let epoch = actor.epoch_for_height(height);
-    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology =
         super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
-    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view_idx);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
+        height,
+        view_idx,
+        consensus_mode,
+        &signature_topology,
+    );
 
     for peer in signature_topology
         .as_ref()
@@ -475,6 +528,7 @@ fn seed_commit_votes_for_block_with_roster(
             signer,
             bls_sig: Vec::new(),
         };
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
         let signature = Signature::new(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
@@ -495,10 +549,15 @@ fn seed_verified_commit_votes_for_block_with_roster(
 ) -> usize {
     let topology = super::network_topology::Topology::new(roster.to_vec());
     let epoch = actor.epoch_for_height(height);
-    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology =
         super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
-    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view_idx);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
+        height,
+        view_idx,
+        consensus_mode,
+        &signature_topology,
+    );
 
     let mut seeded = 0usize;
     for peer in signature_topology
@@ -530,6 +589,7 @@ fn seed_verified_commit_votes_for_block_with_roster(
             signer,
             bls_sig: Vec::new(),
         };
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
         let signature = Signature::new(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
@@ -599,10 +659,15 @@ fn seed_remote_commit_votes_for_block(
 ) -> usize {
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let epoch = actor.epoch_for_height(height);
-    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology =
         super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
-    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view_idx);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
+        height,
+        view_idx,
+        consensus_mode,
+        &signature_topology,
+    );
     let local_signer = actor
         .local_validator_index_for_topology(&signature_topology)
         .expect("local signer in topology");
@@ -631,6 +696,7 @@ fn seed_remote_commit_votes_for_block(
             signer,
             bls_sig: Vec::new(),
         };
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
         let signature = Signature::new(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
@@ -996,6 +1062,69 @@ fn prf_seed_for_chain(chain: &ChainId) -> [u8; 32] {
     <[u8; 32]>::from(hash)
 }
 
+fn default_permissioned_chain_order_binding_for_topology(
+    height: u64,
+    view: u64,
+    epoch: u64,
+    topology: &super::network_topology::Topology,
+    mode_tag: &str,
+    prf_seed: Option<[u8; 32]>,
+) -> Option<(Hash, u64)> {
+    if mode_tag != super::PERMISSIONED_TAG {
+        return None;
+    }
+
+    let signature_topology = super::topology_for_view(topology, height, view, mode_tag, prf_seed);
+    let ordered_validators = signature_topology.as_ref().to_vec();
+    if ordered_validators.is_empty() {
+        return None;
+    }
+    let required = super::network_topology::Topology::new(ordered_validators.clone())
+        .min_votes_for_commit()
+        .max(1);
+    let critical_prefix_len = u16::try_from(required).ok()?;
+    let chain_order = super::vnext::ChainOrder::new(
+        height,
+        view,
+        epoch,
+        0,
+        ordered_validators,
+        critical_prefix_len,
+        critical_prefix_len,
+    )
+    .ok()?;
+    Some((chain_order.hash(), chain_order.rechain_seq))
+}
+
+fn bind_default_permissioned_vote_to_topology_chain_order(
+    vote: &mut crate::sumeragi::consensus::Vote,
+    topology: &super::network_topology::Topology,
+    mode_tag: &str,
+    prf_seed: Option<[u8; 32]>,
+) {
+    if mode_tag != super::PERMISSIONED_TAG
+        || vote.chain_order_hash != crate::sumeragi::consensus::default_chain_order_hash()
+        || vote.rechain_seq != 0
+    {
+        return;
+    }
+
+    let Some((chain_order_hash, rechain_seq)) =
+        default_permissioned_chain_order_binding_for_topology(
+            vote.height,
+            vote.view,
+            vote.epoch,
+            topology,
+            mode_tag,
+            prf_seed,
+        )
+    else {
+        return;
+    };
+    vote.chain_order_hash = chain_order_hash;
+    vote.rechain_seq = rechain_seq;
+}
+
 fn sign_vote_for_view_with_seed(
     vote: &mut crate::sumeragi::consensus::Vote,
     chain: &ChainId,
@@ -1004,6 +1133,7 @@ fn sign_vote_for_view_with_seed(
     mode_tag: &str,
     prf_seed: Option<[u8; 32]>,
 ) {
+    bind_default_permissioned_vote_to_topology_chain_order(vote, topology, mode_tag, prf_seed);
     let rotated = super::topology_for_view(topology, vote.height, vote.view, mode_tag, prf_seed);
     let signer_idx = usize::try_from(vote.signer).expect("signer fits usize");
     let peer = rotated
@@ -1017,6 +1147,28 @@ fn sign_vote_for_view_with_seed(
     let preimage = super::vote_preimage(chain, mode_tag, vote);
     let sig = Signature::new(kp.private_key(), &preimage);
     vote.bls_sig = sig.payload().to_vec();
+}
+
+fn bind_vote_to_actor_chain_order(vote: &mut crate::sumeragi::consensus::Vote, actor: &Actor) {
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_vote(vote);
+    vote.chain_order_hash = chain_order_hash;
+    vote.rechain_seq = rechain_seq;
+}
+
+fn bind_vote_to_signature_topology_chain_order(
+    vote: &mut crate::sumeragi::consensus::Vote,
+    actor: &Actor,
+    signature_topology: &super::network_topology::Topology,
+) {
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(vote.height);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
+        vote.height,
+        vote.view,
+        consensus_mode,
+        signature_topology,
+    );
+    vote.chain_order_hash = chain_order_hash;
+    vote.rechain_seq = rechain_seq;
 }
 
 fn sign_vote_for_canonical_signer(
@@ -1140,6 +1292,39 @@ fn aggregate_signature_for_signers_with_highest(
     topology: &super::network_topology::Topology,
     keypairs: &[KeyPair],
 ) -> Vec<u8> {
+    aggregate_signature_for_signers_with_highest_and_chain_order(
+        chain,
+        mode_tag,
+        phase,
+        block_hash,
+        height,
+        view,
+        epoch,
+        crate::sumeragi::consensus::default_chain_order_hash(),
+        0,
+        highest_qc,
+        signers,
+        topology,
+        keypairs,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn aggregate_signature_for_signers_with_highest_and_chain_order(
+    chain: &ChainId,
+    mode_tag: &str,
+    phase: Phase,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    epoch: u64,
+    chain_order_hash: Hash,
+    rechain_seq: u64,
+    highest_qc: Option<QcHeaderRef>,
+    signers: &BTreeSet<ValidatorIndex>,
+    topology: &super::network_topology::Topology,
+    keypairs: &[KeyPair],
+) -> Vec<u8> {
     if signers.is_empty() {
         return Vec::new();
     }
@@ -1156,8 +1341,8 @@ fn aggregate_signature_for_signers_with_highest(
         height,
         view,
         epoch,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
+        chain_order_hash,
+        rechain_seq,
         mode_tag: mode_tag.to_string(),
         highest_qc,
         validator_set_hash: HashOf::new(&validator_set),
@@ -1221,6 +1406,40 @@ fn aggregate_signature_for_bitmap_with_highest(
     let signers = signers_from_bitmap(signers_bitmap, topology.as_ref().len());
     aggregate_signature_for_signers_with_highest(
         chain, mode_tag, phase, block_hash, height, view, epoch, highest_qc, &signers, topology,
+        keypairs,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn aggregate_signature_for_bitmap_with_highest_and_chain_order(
+    chain: &ChainId,
+    mode_tag: &str,
+    phase: Phase,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    epoch: u64,
+    chain_order_hash: Hash,
+    rechain_seq: u64,
+    highest_qc: Option<QcHeaderRef>,
+    signers_bitmap: &[u8],
+    topology: &super::network_topology::Topology,
+    keypairs: &[KeyPair],
+) -> Vec<u8> {
+    let signers = signers_from_bitmap(signers_bitmap, topology.as_ref().len());
+    aggregate_signature_for_signers_with_highest_and_chain_order(
+        chain,
+        mode_tag,
+        phase,
+        block_hash,
+        height,
+        view,
+        epoch,
+        chain_order_hash,
+        rechain_seq,
+        highest_qc,
+        &signers,
+        topology,
         keypairs,
     )
 }
@@ -1317,6 +1536,58 @@ fn aggregate_vote_signature_for_bitmap(
     aggregate_vote_signature_for_signers(
         chain, mode_tag, block_hash, height, view, epoch, &signers, topology, keypairs,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn aggregate_vote_signature_for_bitmap_with_chain_order(
+    chain: &ChainId,
+    mode_tag: &str,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    epoch: u64,
+    chain_order_hash: Hash,
+    rechain_seq: u64,
+    signers_bitmap: &[u8],
+    topology: &super::network_topology::Topology,
+    keypairs: &[KeyPair],
+) -> Vec<u8> {
+    let signers = signers_from_bitmap(signers_bitmap, topology.as_ref().len());
+    if signers.is_empty() {
+        return Vec::new();
+    }
+    let zero_root = Hash::prehashed([0u8; 32]);
+    let vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_root,
+        post_state_root: zero_root,
+        height,
+        view,
+        epoch,
+        chain_order_hash,
+        rechain_seq,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let preimage = super::vote_preimage(chain, mode_tag, &vote);
+    let mut signatures = Vec::with_capacity(signers.len());
+    for signer in signers {
+        let idx = usize::try_from(signer).expect("signer fits usize");
+        let peer = topology
+            .as_ref()
+            .get(idx)
+            .expect("signer present in topology");
+        let kp = keypairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("matching keypair for signer");
+        let sig = Signature::new(kp.private_key(), &preimage);
+        signatures.push(sig.payload().to_vec());
+    }
+    let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
+    iroha_crypto::bls_normal_aggregate_signatures(&sig_refs).expect("aggregate succeeds")
 }
 
 fn sample_bls_topology(count: usize) -> (Vec<KeyPair>, super::network_topology::Topology) {
@@ -2024,6 +2295,21 @@ fn test_sumeragi_config() -> SumeragiConfig {
             fast_finality_inline_validation_max_transactions:
                 iroha_config::parameters::defaults::sumeragi::
                     VALIDATION_FAST_FINALITY_INLINE_MAX_TRANSACTIONS,
+            validation_stall_da_per_entrypoint_floor: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::
+                    VALIDATION_STALL_DA_PER_ENTRYPOINT_FLOOR_MS,
+            ),
+            validation_stall_inline_fallback_multiplier:
+                iroha_config::parameters::defaults::sumeragi::
+                    VALIDATION_STALL_INLINE_FALLBACK_MULTIPLIER,
+            validation_stall_ema_multiplier:
+                iroha_config::parameters::defaults::sumeragi::VALIDATION_STALL_EMA_MULTIPLIER,
+            validation_stall_non_da_cap: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::VALIDATION_STALL_NON_DA_CAP_MS,
+            ),
+            validation_stall_da_cap: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::VALIDATION_STALL_DA_CAP_MS,
+            ),
             qc_verify_worker_threads:
                 iroha_config::parameters::defaults::sumeragi::QC_VERIFY_WORKER_THREADS,
             qc_verify_work_queue_cap:
@@ -2767,144 +3053,6 @@ async fn vnext_quorum_policy_uses_npos_stake_snapshot() {
     );
 }
 
-fn signed_vnext_rechain_certificate_for_actor(
-    actor: &Actor,
-    key_pairs: &[KeyPair],
-    height: u64,
-    view: u64,
-    block_hash: HashOf<BlockHeader>,
-) -> (
-    crate::sumeragi::vnext::RechainCertificate,
-    crate::sumeragi::vnext::ChainOrder,
-) {
-    let epoch = actor.epoch_for_height(height);
-    let roster = actor.effective_commit_topology();
-    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
-    let topology = super::network_topology::Topology::new(roster);
-    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
-    let roster = signature_topology.as_ref().to_vec();
-    let quorum = actor
-        .vnext_quorum_policy(consensus_mode, &roster)
-        .expect("vNext quorum");
-    let critical_prefix_len = quorum
-        .smallest_satisfying_prefix_len(&roster)
-        .expect("vNext quorum has satisfying prefix");
-    let order = crate::sumeragi::vnext::ChainOrder::new(
-        height,
-        view,
-        epoch,
-        0,
-        roster.clone(),
-        critical_prefix_len,
-        critical_prefix_len,
-    )
-    .expect("base chain order");
-    let mut suspect = crate::sumeragi::vnext::Suspect::unsigned(
-        crate::sumeragi::vnext::SlotId {
-            height,
-            view,
-            epoch,
-            block_hash,
-        },
-        roster[1].clone(),
-        roster[2].clone(),
-        crate::sumeragi::vnext::MissedObligation::AckValidation,
-        &order,
-        900,
-    );
-    suspect
-        .sign(
-            &actor.common_config.chain,
-            mode_tag,
-            keypair_for_peer(key_pairs, &roster[1]).private_key(),
-        )
-        .expect("sign suspicion");
-    let mut certificate = order
-        .rechain_after_suspect(suspect, &quorum)
-        .expect("re-chain certificate body");
-    let signer_roster = certificate.new_order.critical_path().to_vec();
-    let signer_count = usize::from(
-        quorum
-            .smallest_satisfying_prefix_len(&signer_roster)
-            .expect("new order satisfies quorum"),
-    );
-    let signer_indices = (0..signer_count).collect::<Vec<_>>();
-    certificate.signer_bitmap =
-        crate::sumeragi::vnext::build_signer_bitmap(&signer_indices, signer_roster.len())
-            .expect("signer bitmap");
-    let preimage = certificate
-        .signing_preimage(&actor.common_config.chain, mode_tag)
-        .expect("certificate preimage");
-    let signatures = signer_indices
-        .iter()
-        .map(|index| {
-            let peer = &signer_roster[*index];
-            let keypair = keypair_for_peer(key_pairs, peer);
-            Signature::new(keypair.private_key(), &preimage)
-                .payload()
-                .to_vec()
-        })
-        .collect::<Vec<_>>();
-    let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    certificate.aggregate_signature =
-        iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
-            .expect("aggregate vNext re-chain certificate signatures");
-    let expected_order = certificate.new_order.clone();
-    (certificate, expected_order)
-}
-
-fn signed_vnext_view_change_certificate_for_actor(
-    actor: &Actor,
-    key_pairs: &[KeyPair],
-    highest_slot: crate::sumeragi::vnext::SlotId,
-    new_view: u64,
-) -> (
-    crate::sumeragi::vnext::ViewChangeCertificate,
-    crate::sumeragi::vnext::ChainOrder,
-) {
-    let height = highest_slot.height;
-    let (chain_order, quorum) = actor
-        .active_vnext_chain_order_and_quorum_for(height, new_view)
-        .expect("vNext chain order for new view");
-    let signer_roster = chain_order.critical_path().to_vec();
-    let signer_count = usize::from(
-        quorum
-            .smallest_satisfying_prefix_len(&signer_roster)
-            .expect("new-view order satisfies quorum"),
-    );
-    let signer_indices = (0..signer_count).collect::<Vec<_>>();
-    let mut certificate = crate::sumeragi::vnext::ViewChangeCertificate {
-        new_view,
-        highest_slot: Some(highest_slot),
-        chain_order_hash: chain_order.hash(),
-        signer_bitmap: crate::sumeragi::vnext::build_signer_bitmap(
-            &signer_indices,
-            signer_roster.len(),
-        )
-        .expect("signer bitmap"),
-        aggregate_signature: Vec::new(),
-    };
-    let (_, mode_tag, _) = actor.consensus_context_for_height(height);
-    let preimage = certificate
-        .signing_preimage(&actor.common_config.chain, mode_tag)
-        .expect("view-change certificate preimage");
-    let signatures = signer_indices
-        .iter()
-        .map(|index| {
-            let peer = &signer_roster[*index];
-            let keypair = keypair_for_peer(key_pairs, peer);
-            Signature::new(keypair.private_key(), &preimage)
-                .payload()
-                .to_vec()
-        })
-        .collect::<Vec<_>>();
-    let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    certificate.aggregate_signature =
-        iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
-            .expect("aggregate vNext view-change certificate signatures");
-    (certificate, chain_order)
-}
-
 fn resign_qc_with_chain_order_for_actor(
     qc: &mut crate::sumeragi::consensus::Qc,
     actor: &Actor,
@@ -2937,951 +3085,6 @@ fn resign_qc_with_chain_order_for_actor(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn block_message_vnext_rechain_certificate_installs_reactor_chain_order() {
-    let mut harness = test_actor_harness(7).await;
-    let height = {
-        let view = harness.actor.state.view();
-        u64::try_from(view.height())
-            .unwrap_or(u64::MAX)
-            .saturating_add(1)
-    };
-    let view = 0;
-    let epoch = harness.actor.epoch_for_height(height);
-    let block_hash = pending_session_key(height).0;
-    let roster = harness.actor.effective_commit_topology();
-    let (_, mode_tag, prf_seed) = harness.actor.consensus_context_for_height(height);
-    let topology = super::network_topology::Topology::new(roster);
-    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
-    let roster = signature_topology.as_ref().to_vec();
-    let quorum = harness
-        .actor
-        .vnext_quorum_policy(ConsensusMode::Permissioned, &roster)
-        .expect("permissioned vNext quorum");
-    let critical_prefix_len = quorum
-        .smallest_satisfying_prefix_len(&roster)
-        .expect("permissioned quorum has satisfying prefix");
-    let order = crate::sumeragi::vnext::ChainOrder::new(
-        height,
-        view,
-        epoch,
-        0,
-        roster.clone(),
-        critical_prefix_len,
-        critical_prefix_len,
-    )
-    .expect("base chain order");
-    let mut suspect = crate::sumeragi::vnext::Suspect::unsigned(
-        crate::sumeragi::vnext::SlotId {
-            height,
-            view,
-            epoch,
-            block_hash,
-        },
-        roster[1].clone(),
-        roster[2].clone(),
-        crate::sumeragi::vnext::MissedObligation::AckValidation,
-        &order,
-        900,
-    );
-    let accuser_keypair = harness
-        .key_pairs
-        .iter()
-        .find(|keypair| keypair.public_key() == roster[1].public_key())
-        .expect("accuser keypair");
-    suspect
-        .sign(
-            &harness.actor.common_config.chain,
-            mode_tag,
-            accuser_keypair.private_key(),
-        )
-        .expect("sign suspicion");
-    let mut certificate = order
-        .rechain_after_suspect(suspect, &quorum)
-        .expect("re-chain certificate body");
-    let signer_roster = certificate.new_order.critical_path().to_vec();
-    let signer_count = usize::from(
-        quorum
-            .smallest_satisfying_prefix_len(&signer_roster)
-            .expect("new order satisfies quorum"),
-    );
-    let signer_indices = (0..signer_count).collect::<Vec<_>>();
-    certificate.signer_bitmap =
-        crate::sumeragi::vnext::build_signer_bitmap(&signer_indices, signer_roster.len())
-            .expect("signer bitmap");
-    let preimage = certificate
-        .signing_preimage(&harness.actor.common_config.chain, mode_tag)
-        .expect("certificate preimage");
-    let signatures = signer_indices
-        .iter()
-        .map(|index| {
-            let peer = &signer_roster[*index];
-            let keypair = harness
-                .key_pairs
-                .iter()
-                .find(|keypair| keypair.public_key() == peer.public_key())
-                .expect("signer keypair");
-            Signature::new(keypair.private_key(), &preimage)
-                .payload()
-                .to_vec()
-        })
-        .collect::<Vec<_>>();
-    let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    certificate.aggregate_signature =
-        iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
-            .expect("aggregate vNext re-chain certificate signatures");
-    let expected_order = certificate.new_order.clone();
-
-    harness
-        .actor
-        .on_block_message(crate::sumeragi::InboundBlockMessage::new(
-            BlockMessage::VNext(
-                crate::sumeragi::vnext::ConsensusMessage::RechainCertificate(certificate),
-            ),
-            None,
-        ))
-        .expect("vNext re-chain certificate handled");
-
-    let reactor = harness
-        .actor
-        .vnext_reactors
-        .get(&(height, view))
-        .expect("vNext reactor created for certificate");
-    assert_eq!(reactor.chain_order, expected_order);
-    assert_eq!(harness.actor.vnext_rechain_journal.len(), 1);
-    assert_eq!(
-        harness
-            .actor
-            .vnext_rechain_journal
-            .back()
-            .expect("journaled certificate")
-            .new_order,
-        expected_order
-    );
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn vnext_rechain_block_sync_sidecar_installs_chain_order() {
-    let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da.enabled = true;
-    let mut harness = test_actor_harness_with_config(5, consensus_cfg, None).await;
-    let actor = &mut harness.actor;
-    let height = {
-        let view = actor.state.view();
-        u64::try_from(view.height())
-            .unwrap_or(u64::MAX)
-            .saturating_add(1)
-    };
-    let view = 0;
-    let block = sample_block(height, view, actor.state.latest_block_hash_fast());
-    let (certificate, expected_order) = signed_vnext_rechain_certificate_for_actor(
-        actor,
-        &harness.key_pairs,
-        height,
-        view,
-        block.hash(),
-    );
-
-    actor.install_vnext_block_sync_sidecars(std::slice::from_ref(&certificate), &[]);
-    actor.install_vnext_block_sync_sidecars(std::slice::from_ref(&certificate), &[]);
-
-    let reactor = actor
-        .vnext_reactors
-        .get(&(height, view))
-        .expect("vNext reactor created for block-sync sidecar");
-    assert_eq!(reactor.chain_order, expected_order);
-    assert_eq!(
-        actor
-            .vnext_rechain_journal
-            .iter()
-            .filter(|entry| *entry == &certificate)
-            .count(),
-        1,
-        "duplicate block-sync sidecars should not duplicate the journal"
-    );
-
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn vnext_block_sync_update_attaches_certificate_sidecars() {
-    let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da.enabled = true;
-    let mut harness = test_actor_harness_with_config(5, consensus_cfg, None).await;
-    let actor = &mut harness.actor;
-    let height = {
-        let view = actor.state.view();
-        u64::try_from(view.height())
-            .unwrap_or(u64::MAX)
-            .saturating_add(1)
-    };
-    let epoch = actor.epoch_for_height(height);
-    let parent = actor.state.latest_block_hash_fast();
-    let rechain_block = sample_block(height, 0, parent);
-    let (rechain_certificate, _) = signed_vnext_rechain_certificate_for_actor(
-        actor,
-        &harness.key_pairs,
-        height,
-        0,
-        rechain_block.hash(),
-    );
-    let highest_slot = crate::sumeragi::vnext::SlotId {
-        height,
-        view: 0,
-        epoch,
-        block_hash: rechain_block.hash(),
-    };
-    let (view_change_certificate, _) =
-        signed_vnext_view_change_certificate_for_actor(actor, &harness.key_pairs, highest_slot, 1);
-    actor
-        .vnext_rechain_journal
-        .push_back(rechain_certificate.clone());
-    actor
-        .vnext_view_change_journal
-        .push_back(view_change_certificate.clone());
-
-    let mut rechain_update = super::message::BlockSyncUpdate::from(&rechain_block);
-    actor.attach_vnext_certificates_to_block_sync_update(&mut rechain_update);
-    assert_eq!(
-        rechain_update.vnext_rechain_certificates,
-        vec![rechain_certificate.clone()]
-    );
-    assert!(rechain_update.vnext_view_change_certificates.is_empty());
-
-    let other_parent = Some(HashOf::<BlockHeader>::from_untyped_unchecked(
-        Hash::prehashed([0x5A; 32]),
-    ));
-    let other_block_same_height_view = sample_block(height, 0, other_parent);
-    let mut other_update = super::message::BlockSyncUpdate::from(&other_block_same_height_view);
-    actor.attach_vnext_certificates_to_block_sync_update(&mut other_update);
-    assert!(
-        other_update.vnext_rechain_certificates.is_empty(),
-        "re-chain sidecars should be exact-block scoped"
-    );
-
-    let view_block = sample_block(height, 1, parent);
-    let mut view_update = super::message::BlockSyncUpdate::from(&view_block);
-    actor.attach_vnext_certificates_to_block_sync_update(&mut view_update);
-    assert!(view_update.vnext_rechain_certificates.is_empty());
-    assert_eq!(
-        view_update.vnext_view_change_certificates,
-        vec![view_change_certificate]
-    );
-
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn vnext_committed_block_persists_certificate_sidecars() {
-    let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da.enabled = true;
-    let mut harness = test_actor_harness_with_config(5, consensus_cfg, None).await;
-    let actor = &mut harness.actor;
-    let height = {
-        let view = actor.state.view();
-        u64::try_from(view.height())
-            .unwrap_or(u64::MAX)
-            .saturating_add(1)
-    };
-    let parent = actor.state.latest_block_hash_fast();
-    let committed_block = sample_block(height, 1, parent);
-    let old_view_block = sample_block(height, 0, parent);
-    let (rechain_certificate, _) = signed_vnext_rechain_certificate_for_actor(
-        actor,
-        &harness.key_pairs,
-        height,
-        1,
-        committed_block.hash(),
-    );
-    let highest_slot = crate::sumeragi::vnext::SlotId {
-        height,
-        view: 0,
-        epoch: actor.epoch_for_height(height),
-        block_hash: old_view_block.hash(),
-    };
-    let (view_change_certificate, _) =
-        signed_vnext_view_change_certificate_for_actor(actor, &harness.key_pairs, highest_slot, 1);
-    actor
-        .vnext_rechain_journal
-        .push_back(rechain_certificate.clone());
-    actor
-        .vnext_view_change_journal
-        .push_back(view_change_certificate.clone());
-
-    actor.persist_vnext_certificates_for_committed_block(&committed_block);
-
-    let sidecar = actor
-        .kura
-        .read_roster_metadata(height)
-        .expect("vNext certificate sidecar persisted");
-    assert_eq!(
-        sidecar.vnext_rechain_certificates,
-        vec![rechain_certificate.clone()]
-    );
-    assert_eq!(
-        sidecar.vnext_view_change_certificates,
-        vec![view_change_certificate.clone()]
-    );
-
-    let update = super::block_sync_update_with_roster(
-        &committed_block,
-        actor.state.as_ref(),
-        actor.kura.as_ref(),
-        actor.config.consensus_mode,
-        actor.common_config.trusted_peers.value(),
-        actor.common_config.peer.id(),
-        &actor.roster_validation_cache,
-    );
-    assert_eq!(update.vnext_rechain_certificates, vec![rechain_certificate]);
-    assert_eq!(
-        update.vnext_view_change_certificates,
-        vec![view_change_certificate]
-    );
-
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn vnext_vote_binding_hydrates_from_persisted_sidecar() {
-    let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da.enabled = true;
-    let mut harness = test_actor_harness_with_config(5, consensus_cfg, None).await;
-    let actor = &mut harness.actor;
-    let height = {
-        let view = actor.state.view();
-        u64::try_from(view.height())
-            .unwrap_or(u64::MAX)
-            .saturating_add(1)
-    };
-    let view = 0;
-    let block = sample_block(height, view, actor.state.latest_block_hash_fast());
-    let block_hash = block.hash();
-    actor.kura.store_block(block).expect("store block");
-    let (certificate, chain_order) = signed_vnext_rechain_certificate_for_actor(
-        actor,
-        &harness.key_pairs,
-        height,
-        view,
-        block_hash,
-    );
-    let mut sidecar = crate::kura::RosterSidecar::new(height, block_hash, None, None, None);
-    assert!(sidecar.merge_vnext_certificates(std::iter::once(certificate.clone()), []));
-    actor.kura.write_roster_metadata(&sidecar);
-    actor.vnext_reactors.clear();
-    actor.vnext_rechain_journal.clear();
-
-    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
-    let mut vote = crate::sumeragi::consensus::Vote {
-        phase: Phase::Commit,
-        block_hash,
-        parent_state_root: zero_state_root(),
-        post_state_root: zero_state_root(),
-        height,
-        view,
-        epoch: actor.epoch_for_height(height),
-        chain_order_hash: chain_order.hash(),
-        rechain_seq: chain_order.rechain_seq,
-        highest_qc: None,
-        signer: 0,
-        bls_sig: Vec::new(),
-    };
-    sign_vote_for_view_with_seed(
-        &mut vote,
-        &actor.common_config.chain,
-        &topology,
-        &harness.key_pairs,
-        mode_tag,
-        prf_seed,
-    );
-
-    actor.handle_vote(vote.clone());
-
-    assert!(
-        actor.vnext_rechain_journal.contains(&certificate),
-        "vote validation should hydrate the persisted re-chain certificate"
-    );
-    assert!(
-        actor.vote_log.contains_key(&vote_log_key_for_vote(&vote)),
-        "vote with persisted vNext chain-order binding should be accepted"
-    );
-
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn vnext_qc_binding_hydrates_from_persisted_sidecar() {
-    let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da.enabled = true;
-    let mut harness = test_actor_harness_with_config(5, consensus_cfg, None).await;
-    let actor = &mut harness.actor;
-    let height = {
-        let view = actor.state.view();
-        u64::try_from(view.height())
-            .unwrap_or(u64::MAX)
-            .saturating_add(1)
-    };
-    let view = 0;
-    let block = sample_block(height, view, actor.state.latest_block_hash_fast());
-    let block_hash = block.hash();
-    actor.kura.store_block(block.clone()).expect("store block");
-    let (certificate, chain_order) = signed_vnext_rechain_certificate_for_actor(
-        actor,
-        &harness.key_pairs,
-        height,
-        view,
-        block_hash,
-    );
-    let mut sidecar = crate::kura::RosterSidecar::new(height, block_hash, None, None, None);
-    assert!(sidecar.merge_vnext_certificates(std::iter::once(certificate.clone()), []));
-    actor.kura.write_roster_metadata(&sidecar);
-    actor.vnext_reactors.clear();
-    actor.vnext_rechain_journal.clear();
-
-    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let signers: BTreeSet<ValidatorIndex> = (0..topology.as_ref().len())
-        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
-        .collect();
-    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let mut qc = qc_with_bitmap(
-        &actor.common_config.chain,
-        block_hash,
-        height,
-        view,
-        actor.epoch_for_height(height),
-        signers_bitmap,
-        Phase::Commit,
-        &topology,
-        &harness.key_pairs,
-    );
-    resign_qc_with_chain_order_for_actor(&mut qc, actor, &harness.key_pairs, &chain_order);
-    let qc_key = Actor::qc_tally_key(&qc);
-
-    actor.handle_qc(qc).expect("handle vNext-bound QC");
-
-    assert!(
-        actor.vnext_rechain_journal.contains(&certificate),
-        "QC validation should hydrate the persisted re-chain certificate"
-    );
-    assert!(
-        actor.qc_cache.contains_key(&qc_key) || actor.deferred_qcs.contains_key(&qc_key),
-        "QC with persisted vNext chain-order binding should pass binding validation"
-    );
-
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn vnext_view_change_block_sync_sidecar_advances_live_view() {
-    let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da.enabled = true;
-    consensus_cfg.resilience.enabled = true;
-    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
-    let actor = &mut harness.actor;
-    let height = {
-        let view = actor.state.view();
-        u64::try_from(view.height())
-            .unwrap_or(u64::MAX)
-            .saturating_add(1)
-    };
-    let old_view = 0;
-    let new_view = 1;
-    let block = sample_block(height, old_view, actor.state.latest_block_hash_fast());
-    let highest_slot = crate::sumeragi::vnext::SlotId {
-        height,
-        view: old_view,
-        epoch: actor.epoch_for_height(height),
-        block_hash: block.hash(),
-    };
-    let (certificate, chain_order) = signed_vnext_view_change_certificate_for_actor(
-        actor,
-        &harness.key_pairs,
-        highest_slot,
-        new_view,
-    );
-
-    actor.install_vnext_block_sync_sidecars(&[], std::slice::from_ref(&certificate));
-
-    assert_eq!(
-        actor
-            .vnext_view_change_journal
-            .back()
-            .expect("view-change sidecar journaled"),
-        &certificate
-    );
-    assert_eq!(actor.phase_tracker.current_view(height), Some(new_view));
-    let reactor = actor
-        .vnext_reactors
-        .get(&(height, new_view))
-        .expect("vNext reactor created for view-change sidecar");
-    assert_eq!(reactor.chain_order.hash(), chain_order.hash());
-
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn tick_drives_vnext_validation_timeout_recovery() {
-    let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da.enabled = true;
-    consensus_cfg.vnext.suspicion_timeout = Duration::from_millis(10);
-    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
-    let height = {
-        let view = harness.actor.state.view();
-        u64::try_from(view.height())
-            .unwrap_or(u64::MAX)
-            .saturating_add(1)
-    };
-    let view = 0;
-    let epoch = harness.actor.epoch_for_height(height);
-    let block_hash = pending_session_key(height).0;
-    let roster = harness.actor.effective_commit_topology();
-    let (_, mode_tag, prf_seed) = harness.actor.consensus_context_for_height(height);
-    let topology = super::network_topology::Topology::new(roster);
-    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
-    let roster = signature_topology.as_ref().to_vec();
-    let quorum = harness
-        .actor
-        .vnext_quorum_policy(ConsensusMode::Permissioned, &roster)
-        .expect("permissioned vNext quorum");
-    let critical_prefix_len = quorum
-        .smallest_satisfying_prefix_len(&roster)
-        .expect("permissioned quorum has satisfying prefix");
-    let order = crate::sumeragi::vnext::ChainOrder::new(
-        height,
-        view,
-        epoch,
-        0,
-        roster,
-        critical_prefix_len,
-        critical_prefix_len,
-    )
-    .expect("base chain order");
-    let config = crate::sumeragi::vnext::PerformanceFaultConfig::from(&harness.actor.config.vnext);
-    let slot = crate::sumeragi::vnext::SlotId {
-        height,
-        view,
-        epoch,
-        block_hash,
-    };
-    let started_at_ms = 1_000;
-    let mut reactor = crate::sumeragi::vnext::Reactor::new(order, quorum, config);
-    assert!(
-        reactor
-            .handle_event(crate::sumeragi::vnext::ReactorEvent::ProposalAccepted {
-                slot,
-                payload_hash: Hash::prehashed([0xA5; Hash::LENGTH]),
-            })
-            .is_empty()
-    );
-    assert!(
-        reactor
-            .handle_event(crate::sumeragi::vnext::ReactorEvent::AvailabilityReady { slot })
-            .is_empty()
-    );
-    let dispatch = reactor.handle_event(crate::sumeragi::vnext::ReactorEvent::ValidationNeeded {
-        slot,
-        now_ms: started_at_ms,
-    });
-    let [
-        crate::sumeragi::vnext::ReactorEffect::DispatchValidation {
-            slot: dispatch_slot,
-            id,
-            generation,
-        },
-    ] = dispatch.as_slice()
-    else {
-        panic!("expected validation dispatch effect, got {dispatch:?}");
-    };
-    assert_eq!(*dispatch_slot, slot);
-    assert!(
-        reactor
-            .handle_event(
-                crate::sumeragi::vnext::ReactorEvent::ValidationWorkerStarted {
-                    slot,
-                    id: *id,
-                    generation: *generation,
-                    started_at_ms,
-                },
-            )
-            .is_empty()
-    );
-    harness.actor.vnext_reactors.insert((height, view), reactor);
-    harness.actor.subsystems.validation.inflight.insert(
-        block_hash,
-        super::ValidationInFlight {
-            id: *id,
-            started_at: Instant::now(),
-            frontier_generation: None,
-        },
-    );
-    harness.actor.subsystems.validation.vnext_inflight.insert(
-        block_hash,
-        super::VNextValidationInFlight {
-            slot,
-            generation: *generation,
-        },
-    );
-
-    let deadline_anchor = Instant::now();
-    let next_due = harness
-        .actor
-        .vnext_reactor_next_due(deadline_anchor)
-        .expect("running validation should schedule a vNext tick");
-    assert!(
-        next_due <= deadline_anchor,
-        "already-overdue vNext validation should request an immediate tick"
-    );
-
-    assert!(
-        harness
-            .actor
-            .tick_vnext_reactors(started_at_ms + config.suspicion_timeout_ms),
-        "vNext tick should emit timeout recovery progress"
-    );
-    let reactor = harness
-        .actor
-        .vnext_reactors
-        .get(&(height, view))
-        .expect("vNext reactor remains installed");
-    let reactor_slot = reactor.slot(block_hash).expect("vNext slot tracked");
-    let crate::sumeragi::vnext::SlotState::Recovering {
-        block_hash: Some(recovered_hash),
-    } = &reactor_slot.slot_state
-    else {
-        panic!(
-            "expected vNext slot to enter recovery, got {:?}",
-            reactor_slot.slot_state
-        );
-    };
-    assert_eq!(*recovered_hash, block_hash);
-    assert!(
-        !harness
-            .actor
-            .subsystems
-            .validation
-            .inflight
-            .contains_key(&block_hash),
-        "vNext recovery should detach stale legacy worker ownership"
-    );
-    assert!(
-        !harness
-            .actor
-            .subsystems
-            .validation
-            .vnext_inflight
-            .contains_key(&block_hash),
-        "vNext recovery should detach stale vNext worker ownership"
-    );
-    assert!(
-        harness
-            .actor
-            .phase_tracker
-            .current_view(height)
-            .unwrap_or(0)
-            > view,
-        "vNext recovery should request a live view change"
-    );
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn vnext_require_view_change_drives_live_view_change() {
-    let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da.enabled = true;
-    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
-    let height = {
-        let view = harness.actor.state.view();
-        u64::try_from(view.height())
-            .unwrap_or(u64::MAX)
-            .saturating_add(1)
-    };
-    let local_peer = harness.actor.common_config.peer.id().clone();
-    let view = (0..8)
-        .find(|candidate_view| {
-            harness
-                .actor
-                .active_vnext_chain_order_and_quorum_for(height, candidate_view + 1)
-                .is_some_and(|(order, _)| {
-                    order.critical_path().iter().any(|peer| peer == &local_peer)
-                })
-        })
-        .expect("local peer signs a nearby vNext view-change vote");
-    let epoch = harness.actor.epoch_for_height(height);
-    let block_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xBC; Hash::LENGTH]));
-    let slot = crate::sumeragi::vnext::SlotId {
-        height,
-        view,
-        epoch,
-        block_hash,
-    };
-    harness.actor.subsystems.validation.inflight.insert(
-        block_hash,
-        super::ValidationInFlight {
-            id: 7,
-            started_at: Instant::now(),
-            frontier_generation: None,
-        },
-    );
-    harness.actor.subsystems.validation.vnext_inflight.insert(
-        block_hash,
-        super::VNextValidationInFlight {
-            slot,
-            generation: 11,
-        },
-    );
-    harness
-        .actor
-        .subsystems
-        .validation
-        .superseded_results
-        .insert(block_hash, 7);
-    let background_log = attach_background_log(&mut harness.actor);
-
-    harness.actor.apply_vnext_effects(vec![
-        crate::sumeragi::vnext::ReactorEffect::RequireViewChange {
-            slot,
-            reason_label: "rechain_would_weaken_quorum".to_owned(),
-        },
-    ]);
-
-    assert!(
-        harness
-            .actor
-            .phase_tracker
-            .current_view(height)
-            .unwrap_or(0)
-            > view,
-        "vNext required view change should advance the live Sumeragi view"
-    );
-    assert!(
-        !harness
-            .actor
-            .subsystems
-            .validation
-            .inflight
-            .contains_key(&block_hash),
-        "required view change should detach stale legacy worker ownership"
-    );
-    assert!(
-        !harness
-            .actor
-            .subsystems
-            .validation
-            .vnext_inflight
-            .contains_key(&block_hash),
-        "required view change should detach stale vNext worker ownership"
-    );
-    assert!(
-        !harness
-            .actor
-            .subsystems
-            .validation
-            .superseded_results
-            .contains_key(&block_hash),
-        "required view change should clear stale validation generations"
-    );
-    assert!(
-        harness
-            .actor
-            .vnext_view_change_votes
-            .values()
-            .any(|votes| votes.contains_key(&local_peer)),
-        "required view change should count the locally signed vNext view-change vote"
-    );
-    let entries = take_background_log(&background_log);
-    assert!(
-        entries.iter().any(|entry| {
-            entry.kind == super::BackgroundRequestLogKind::Broadcast
-                && entry.msg_kind == Some("VNext")
-        }),
-        "required view change should broadcast the local vNext view-change vote"
-    );
-
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn vnext_rechain_votes_aggregate_certificate() {
-    let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da.enabled = true;
-    let mut harness = test_actor_harness_with_config(5, consensus_cfg, None).await;
-    let actor = &mut harness.actor;
-    let height = {
-        let view = actor.state.view();
-        u64::try_from(view.height())
-            .unwrap_or(u64::MAX)
-            .saturating_add(1)
-    };
-    let view = 0;
-    let epoch = actor.epoch_for_height(height);
-    let block_hash = pending_session_key(height).0;
-    let roster = actor.effective_commit_topology();
-    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
-    let topology = super::network_topology::Topology::new(roster);
-    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
-    let roster = signature_topology.as_ref().to_vec();
-    let quorum = actor
-        .vnext_quorum_policy(ConsensusMode::Permissioned, &roster)
-        .expect("permissioned vNext quorum");
-    let critical_prefix_len = quorum
-        .smallest_satisfying_prefix_len(&roster)
-        .expect("permissioned quorum has satisfying prefix");
-    let order = crate::sumeragi::vnext::ChainOrder::new(
-        height,
-        view,
-        epoch,
-        0,
-        roster.clone(),
-        critical_prefix_len,
-        critical_prefix_len,
-    )
-    .expect("base chain order");
-    let mut suspect = crate::sumeragi::vnext::Suspect::unsigned(
-        crate::sumeragi::vnext::SlotId {
-            height,
-            view,
-            epoch,
-            block_hash,
-        },
-        roster[1].clone(),
-        roster[2].clone(),
-        crate::sumeragi::vnext::MissedObligation::AckValidation,
-        &order,
-        900,
-    );
-    suspect
-        .sign(
-            &actor.common_config.chain,
-            mode_tag,
-            keypair_for_peer(&harness.key_pairs, &roster[1]).private_key(),
-        )
-        .expect("sign suspicion");
-    let certificate = order
-        .rechain_after_suspect(suspect, &quorum)
-        .expect("re-chain certificate body");
-    let signer_roster = certificate.new_order.critical_path().to_vec();
-    let signer_count = usize::from(
-        quorum
-            .smallest_satisfying_prefix_len(&signer_roster)
-            .expect("new order satisfies quorum"),
-    );
-    let background_log = attach_background_log(actor);
-    for signer in signer_roster.iter().take(signer_count) {
-        let mut vote = crate::sumeragi::vnext::RechainVote::unsigned(&certificate, signer.clone());
-        vote.sign(
-            &actor.common_config.chain,
-            mode_tag,
-            keypair_for_peer(&harness.key_pairs, signer).private_key(),
-        )
-        .expect("sign re-chain vote");
-        actor.apply_vnext_effects(vec![
-            crate::sumeragi::vnext::ReactorEffect::AcceptRechainVote { vote },
-        ]);
-    }
-
-    assert!(
-        actor.vnext_rechain_votes.is_empty(),
-        "aggregated re-chain votes should leave no live cache entry"
-    );
-    let installed = actor
-        .vnext_rechain_journal
-        .back()
-        .expect("aggregated re-chain certificate journaled");
-    assert_eq!(installed.new_order, certificate.new_order);
-    assert!(!installed.signer_bitmap.is_empty());
-    assert!(!installed.aggregate_signature.is_empty());
-    let entries = take_background_log(&background_log);
-    assert!(
-        entries.iter().any(|entry| {
-            entry.kind == super::BackgroundRequestLogKind::Broadcast
-                && entry.msg_kind == Some("VNext")
-        }),
-        "aggregated re-chain certificate should be broadcast"
-    );
-
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn vnext_view_change_votes_aggregate_certificate_and_advance_view() {
-    let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da.enabled = true;
-    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
-    let actor = &mut harness.actor;
-    let height = {
-        let view = actor.state.view();
-        u64::try_from(view.height())
-            .unwrap_or(u64::MAX)
-            .saturating_add(1)
-    };
-    let new_view = 1;
-    let (chain_order, quorum) = actor
-        .active_vnext_chain_order_and_quorum_for(height, new_view)
-        .expect("vNext chain order for new view");
-    let signer_roster = chain_order.critical_path().to_vec();
-    let signer_count = usize::from(
-        quorum
-            .smallest_satisfying_prefix_len(&signer_roster)
-            .expect("new-view order satisfies quorum"),
-    );
-    let certificate = crate::sumeragi::vnext::ViewChangeCertificate {
-        new_view,
-        highest_slot: None,
-        chain_order_hash: chain_order.hash(),
-        signer_bitmap: Vec::new(),
-        aggregate_signature: Vec::new(),
-    };
-    let (_, mode_tag, _) = actor.consensus_context_for_height(height);
-    let background_log = attach_background_log(actor);
-    for signer in signer_roster.iter().take(signer_count) {
-        let mut vote =
-            crate::sumeragi::vnext::ViewChangeVote::unsigned(&certificate, signer.clone());
-        vote.sign(
-            &actor.common_config.chain,
-            mode_tag,
-            keypair_for_peer(&harness.key_pairs, signer).private_key(),
-        )
-        .expect("sign view-change vote");
-        actor.apply_vnext_effects(vec![
-            crate::sumeragi::vnext::ReactorEffect::AcceptViewChangeVote { vote },
-        ]);
-    }
-
-    assert!(
-        actor.vnext_view_change_votes.is_empty(),
-        "aggregated view-change votes should leave no live cache entry"
-    );
-    let installed = actor
-        .vnext_view_change_journal
-        .back()
-        .expect("aggregated view-change certificate journaled");
-    assert_eq!(installed.new_view, new_view);
-    assert_eq!(installed.chain_order_hash, chain_order.hash());
-    assert!(!installed.signer_bitmap.is_empty());
-    assert!(!installed.aggregate_signature.is_empty());
-    assert_eq!(actor.phase_tracker.current_view(height), Some(new_view));
-    let entries = take_background_log(&background_log);
-    assert!(
-        entries.iter().any(|entry| {
-            entry.kind == super::BackgroundRequestLogKind::Broadcast
-                && entry.msg_kind == Some("VNext")
-        }),
-        "aggregated view-change certificate should be broadcast"
-    );
-
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
 async fn vnext_dispatch_validation_queues_worker_and_accepts_result() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -3893,89 +3096,59 @@ async fn vnext_dispatch_validation_queues_worker_and_accepts_result() {
         .unwrap_or(u64::MAX)
         .saturating_add(1);
     let view = 0;
-    let epoch = actor.epoch_for_height(height);
     let parent = actor.state.latest_block_hash_fast();
     let block = sample_block(height, view, parent);
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     actor.pending.pending_blocks.insert(
         block_hash,
-        PendingBlock::new(block, payload_hash, height, view),
+        PendingBlock::new(block.clone(), payload_hash, height, view),
     );
 
-    let roster = actor.effective_commit_topology();
-    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
-    let topology = super::network_topology::Topology::new(roster);
-    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
-    let roster = signature_topology.as_ref().to_vec();
-    let quorum = actor
-        .vnext_quorum_policy(ConsensusMode::Permissioned, &roster)
-        .expect("permissioned vNext quorum");
-    let critical_prefix_len = quorum
-        .smallest_satisfying_prefix_len(&roster)
-        .expect("permissioned quorum has satisfying prefix");
-    let order = crate::sumeragi::vnext::ChainOrder::new(
-        height,
-        view,
-        epoch,
-        0,
-        roster,
-        critical_prefix_len,
-        critical_prefix_len,
-    )
-    .expect("base chain order");
-    let config = crate::sumeragi::vnext::PerformanceFaultConfig::from(&actor.config.vnext);
-    let slot = crate::sumeragi::vnext::SlotId {
-        height,
-        view,
-        epoch,
-        block_hash,
-    };
-    let mut reactor = crate::sumeragi::vnext::Reactor::new(order, quorum, config);
-    assert!(
-        reactor
-            .handle_event(crate::sumeragi::vnext::ReactorEvent::ProposalAccepted {
-                slot,
-                payload_hash,
-            })
-            .is_empty()
-    );
-    assert!(
-        reactor
-            .handle_event(crate::sumeragi::vnext::ReactorEvent::AvailabilityReady { slot })
-            .is_empty()
-    );
-    let dispatch = reactor
-        .handle_event(crate::sumeragi::vnext::ReactorEvent::ValidationNeeded { slot, now_ms: 10 });
-    let [
-        crate::sumeragi::vnext::ReactorEffect::DispatchValidation {
-            slot: dispatch_slot,
-            id,
-            generation,
-        },
-    ] = dispatch.as_slice()
-    else {
-        panic!("expected validation dispatch effect, got {dispatch:?}");
-    };
-    assert_eq!(*dispatch_slot, slot);
-    let id = *id;
-    let generation = *generation;
-    actor.vnext_reactors.insert((height, view), reactor);
+    let stale_progress_at =
+        Instant::now() - actor.commit_quorum_timeout() - Duration::from_millis(1);
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&block_hash)
+        .expect("pending block before vNext dispatch")
+        .touch_progress(stale_progress_at);
 
     let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
     let (result_tx, result_rx) = mpsc::sync_channel::<super::validation::ValidationResult>(1);
     actor.subsystems.validation.work_txs = vec![work_tx];
     actor.subsystems.validation.result_rx = Some(result_rx);
 
-    actor.apply_vnext_effects(dispatch);
+    assert!(
+        actor.drive_vnext_validation_for_pending(block_hash, height, view, payload_hash),
+        "vNext validation adapter should dispatch worker validation"
+    );
 
     let queued_work = work_rx
         .try_recv()
         .expect("vNext dispatch should queue validation work");
+    let id = queued_work.id;
+    let (slot, generation) = actor
+        .subsystems
+        .validation
+        .vnext_inflight
+        .get(&block_hash)
+        .map(|inflight| (inflight.slot, inflight.generation))
+        .expect("vNext inflight marker installed");
     assert_eq!(queued_work.id, id);
     assert_eq!(queued_work.hash, block_hash);
     assert_eq!(queued_work.height, height);
     assert_eq!(queued_work.view, view);
+    let progress_age_after_dispatch = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending block after vNext dispatch")
+        .progress_age(Instant::now());
+    assert!(
+        progress_age_after_dispatch < Duration::from_secs(1),
+        "vNext validation dispatch should refresh pending progress; age was {progress_age_after_dispatch:?}"
+    );
     assert_eq!(
         actor
             .subsystems
@@ -3985,13 +3158,13 @@ async fn vnext_dispatch_validation_queues_worker_and_accepts_result() {
             .map(|inflight| (inflight.slot, inflight.generation)),
         Some((slot, generation))
     );
-    let reactor_slot = actor
-        .vnext_reactors
+    let round_slot = actor
+        .vnext_rounds
         .get(&(height, view))
-        .and_then(|reactor| reactor.slot(block_hash))
+        .and_then(|round| round.slot(block_hash))
         .expect("vNext slot tracked after worker start");
     assert!(matches!(
-        reactor_slot.validation,
+        round_slot.validation,
         crate::sumeragi::vnext::ValidationState::Running {
             id: running_id,
             generation: running_generation,
@@ -4018,18 +3191,18 @@ async fn vnext_dispatch_validation_queues_worker_and_accepts_result() {
         actor.poll_validation_results(),
         "vNext worker result should be processed"
     );
-    let reactor_slot = actor
-        .vnext_reactors
+    let round_slot = actor
+        .vnext_rounds
         .get(&(height, view))
-        .and_then(|reactor| reactor.slot(block_hash))
+        .and_then(|round| round.slot(block_hash))
         .expect("vNext slot tracked after worker result");
     assert!(matches!(
-        reactor_slot.slot_state,
+        round_slot.slot_state,
         crate::sumeragi::vnext::SlotState::Prepared { block_hash: prepared }
             if prepared == block_hash
     ));
     assert!(matches!(
-        reactor_slot.validation,
+        round_slot.validation,
         crate::sumeragi::vnext::ValidationState::Valid { .. }
     ));
     let pending = actor
@@ -4070,7 +3243,7 @@ async fn vnext_reject_validation_aborts_slot_and_removes_pending() {
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     actor.pending.pending_blocks.insert(
         block_hash,
-        PendingBlock::new(block, payload_hash, height, view),
+        PendingBlock::new(block.clone(), payload_hash, height, view),
     );
 
     let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
@@ -4110,13 +3283,13 @@ async fn vnext_reject_validation_aborts_slot_and_removes_pending() {
         actor.poll_validation_results(),
         "vNext worker rejection should be processed"
     );
-    let reactor_slot = actor
-        .vnext_reactors
+    let round_slot = actor
+        .vnext_rounds
         .get(&(height, view))
-        .and_then(|reactor| reactor.slot(block_hash))
+        .and_then(|round| round.slot(block_hash))
         .expect("vNext slot retained after rejection");
     assert!(matches!(
-        reactor_slot.slot_state,
+        round_slot.slot_state,
         crate::sumeragi::vnext::SlotState::Aborted { .. }
     ));
     assert_eq!(slot.block_hash, block_hash);
@@ -4137,7 +3310,7 @@ async fn vnext_reject_validation_aborts_slot_and_removes_pending() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn vnext_commit_persisted_marks_reactor_slot_committed() {
+async fn vnext_commit_persisted_marks_round_slot_committed() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
@@ -4152,15 +3325,15 @@ async fn vnext_commit_persisted_marks_reactor_slot_committed() {
 
     assert!(
         actor.drive_vnext_commit_persisted_for_block(block_hash, height, view),
-        "commit-persisted adapter should install or update a vNext reactor"
+        "commit-persisted adapter should install or update vNext round"
     );
-    let reactor_slot = actor
-        .vnext_reactors
+    let round_slot = actor
+        .vnext_rounds
         .get(&(height, view))
-        .and_then(|reactor| reactor.slot(block_hash))
+        .and_then(|round| round.slot(block_hash))
         .expect("vNext commit slot tracked");
     assert!(matches!(
-        reactor_slot.slot_state,
+        round_slot.slot_state,
         crate::sumeragi::vnext::SlotState::Committed { block_hash: committed }
             if committed == block_hash
     ));
@@ -4169,7 +3342,7 @@ async fn vnext_commit_persisted_marks_reactor_slot_committed() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn vnext_proposal_accepted_marks_reactor_slot_proposed() {
+async fn vnext_proposal_accepted_marks_round_slot_proposed() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
@@ -4185,15 +3358,15 @@ async fn vnext_proposal_accepted_marks_reactor_slot_proposed() {
 
     assert!(
         actor.drive_vnext_proposal_accepted_for_block(block_hash, height, view, payload_hash),
-        "proposal adapter should install or update a vNext reactor"
+        "proposal adapter should install or update vNext round"
     );
-    let reactor_slot = actor
-        .vnext_reactors
+    let round_slot = actor
+        .vnext_rounds
         .get(&(height, view))
-        .and_then(|reactor| reactor.slot(block_hash))
+        .and_then(|round| round.slot(block_hash))
         .expect("vNext proposal slot tracked");
     assert!(matches!(
-        reactor_slot.slot_state,
+        round_slot.slot_state,
         crate::sumeragi::vnext::SlotState::Proposed {
             block_hash: proposed,
             payload_hash: observed,
@@ -4204,7 +3377,7 @@ async fn vnext_proposal_accepted_marks_reactor_slot_proposed() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn vnext_availability_ready_marks_reactor_slot_awaiting_validation() {
+async fn vnext_availability_ready_marks_round_slot_awaiting_validation() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
@@ -4219,15 +3392,15 @@ async fn vnext_availability_ready_marks_reactor_slot_awaiting_validation() {
 
     assert!(
         actor.drive_vnext_availability_ready_for_block(block_hash, height, view),
-        "availability adapter should install or update a vNext reactor"
+        "availability adapter should install or update vNext round"
     );
-    let reactor_slot = actor
-        .vnext_reactors
+    let round_slot = actor
+        .vnext_rounds
         .get(&(height, view))
-        .and_then(|reactor| reactor.slot(block_hash))
+        .and_then(|round| round.slot(block_hash))
         .expect("vNext availability slot tracked");
     assert!(matches!(
-        reactor_slot.slot_state,
+        round_slot.slot_state,
         crate::sumeragi::vnext::SlotState::AwaitingValidation { block_hash: tracked }
             if tracked == block_hash
     ));
@@ -6968,6 +6141,9 @@ async fn vote_verify_worker_records_vote_after_async_check() {
     let topology_peers = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(topology_peers);
     let chain_id = actor.chain_id.clone();
+    let epoch = actor.epoch_for_height(height);
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view);
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x66; Hash::LENGTH]));
 
@@ -6978,14 +6154,21 @@ async fn vote_verify_worker_records_vote_after_async_check() {
         post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
         height,
         view,
-        epoch: 0,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
+        epoch,
+        chain_order_hash,
+        rechain_seq,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(&mut vote, &chain_id, &topology, &harness.key_pairs);
+    sign_vote_for_view_with_seed(
+        &mut vote,
+        &chain_id,
+        &topology,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
 
     actor.handle_vote(vote.clone());
 
@@ -7041,6 +6224,9 @@ async fn vote_signature_cache_skips_async_dispatch() {
     let topology_peers = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(topology_peers);
     let chain_id = actor.chain_id.clone();
+    let epoch = actor.epoch_for_height(height);
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view);
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x77; Hash::LENGTH]));
 
@@ -7051,14 +6237,21 @@ async fn vote_signature_cache_skips_async_dispatch() {
         post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
         height,
         view,
-        epoch: 0,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
+        epoch,
+        chain_order_hash,
+        rechain_seq,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(&mut vote, &chain_id, &topology, &harness.key_pairs);
+    sign_vote_for_view_with_seed(
+        &mut vote,
+        &chain_id,
+        &topology,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
 
     actor
         .subsystems
@@ -7414,6 +6607,7 @@ async fn vote_inbound_fast_paths_active_new_view_when_pending_validation_full() 
     let topology = super::network_topology::Topology::new(
         actor.roster_for_live_vote_with_mode(height, consensus_mode),
     );
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
     let mut new_view_vote = crate::sumeragi::consensus::Vote {
         phase: Phase::NewView,
         block_hash: committed_qc.subject_block_hash,
@@ -7428,6 +6622,7 @@ async fn vote_inbound_fast_paths_active_new_view_when_pending_validation_full() 
         signer: 1,
         bls_sig: Vec::new(),
     };
+    bind_vote_to_signature_topology_chain_order(&mut new_view_vote, actor, &signature_topology);
     sign_vote_for_view_with_seed(
         &mut new_view_vote,
         &actor.common_config.chain,
@@ -9597,7 +8792,7 @@ async fn rbc_roster_for_session_uses_active_topology_when_payload_known_same_epo
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     actor.pending.pending_blocks.insert(
         block_hash,
-        PendingBlock::new(block, payload_hash, height, view),
+        PendingBlock::new(block.clone(), payload_hash, height, view),
     );
 
     assert_eq!(
@@ -14815,7 +14010,10 @@ async fn block_sync_update_known_block_records_commit_qc() {
         );
     }
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
+    let (chain_order, _) = actor
+        .active_vnext_chain_order_and_quorum_for(height, view)
+        .expect("vNext chain order for commit QC");
+    let mut qc = qc_with_bitmap(
         &actor.common_config.chain,
         block_hash,
         height,
@@ -14826,6 +14024,7 @@ async fn block_sync_update_known_block_records_commit_qc() {
         &topology,
         &harness.key_pairs,
     );
+    resign_qc_with_chain_order_for_actor(&mut qc, actor, &harness.key_pairs, &chain_order);
     let checkpoint = ValidatorSetCheckpoint::new(
         height,
         view,
@@ -14901,7 +14100,10 @@ async fn block_sync_update_known_block_reuses_commit_roster_snapshot() {
         );
     }
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
+    let (chain_order, _) = actor
+        .active_vnext_chain_order_and_quorum_for(height, view)
+        .expect("vNext chain order for commit QC");
+    let mut qc = qc_with_bitmap(
         &actor.common_config.chain,
         block_hash,
         height,
@@ -14912,6 +14114,7 @@ async fn block_sync_update_known_block_reuses_commit_roster_snapshot() {
         &topology,
         &harness.key_pairs,
     );
+    resign_qc_with_chain_order_for_actor(&mut qc, actor, &harness.key_pairs, &chain_order);
     let checkpoint = ValidatorSetCheckpoint::new(
         height,
         view,
@@ -14988,8 +14191,8 @@ async fn block_sync_update_known_block_skips_redundant_cached_qc_replay() {
         );
     }
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -15093,8 +14296,8 @@ async fn known_block_qc_non_extending_drop_skips_verify_dispatch() {
         );
     }
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -15321,8 +14524,8 @@ async fn block_sync_update_known_block_revalidates_qc_on_hash_mismatch() {
         );
     }
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -15789,7 +14992,7 @@ async fn block_sync_update_known_block_applies_commit_qc_to_pending() {
     }
     let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
     let epoch = actor.epoch_for_height(block_height);
-    let mut qc = qc_with_bitmap(
+    let qc = qc_with_bitmap(
         &actor.common_config.chain,
         block_hash,
         block_height,
@@ -15800,10 +15003,6 @@ async fn block_sync_update_known_block_applies_commit_qc_to_pending() {
         &topology,
         &harness.key_pairs,
     );
-    let (chain_order, _) = actor
-        .active_vnext_chain_order_and_quorum_for(block_height, view)
-        .expect("active vNext chain order");
-    resign_qc_with_chain_order_for_actor(&mut qc, actor, &harness.key_pairs, &chain_order);
     let roster_cache =
         roster_cache_for_state(actor.state.as_ref(), actor.config.npos.epoch_length_blocks);
     let mut update = super::block_sync_update_with_roster(
@@ -16809,8 +16008,8 @@ async fn qc_bearing_block_body_response_sends_direct_qc_companion() {
         .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -16885,8 +16084,8 @@ async fn plain_block_body_response_sends_direct_qc_companion_from_commit_history
         .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -17714,6 +16913,7 @@ async fn fetch_block_body_response_for_committed_block_preserves_commit_sidecars
 
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_block_body_response_rehydrates_commit_qc_from_precommit_signer_history() {
+    let _history_guard = status::commit_history_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     status::reset_precommit_signer_history_for_tests();
@@ -17806,8 +17006,8 @@ async fn fetch_block_body_sends_plain_fallback_before_sidecar_response() {
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
     let epoch = actor.epoch_for_height(height);
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -18954,7 +18154,7 @@ async fn block_body_response_block_created_uses_deferred_commit_qc_for_same_heig
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
     let epoch = actor.epoch_for_height(height);
-    let qc = qc_with_bitmap(
+    let mut qc = qc_with_bitmap(
         &actor.common_config.chain,
         repair_hash,
         height,
@@ -18965,6 +18165,7 @@ async fn block_body_response_block_created_uses_deferred_commit_qc_for_same_heig
         &topology,
         &harness.key_pairs,
     );
+    bind_qc_to_actor_chain_order(&mut qc, actor, &harness.key_pairs);
     let qc_key = Actor::qc_tally_key(&qc);
     actor.deferred_missing_payload_qcs.insert(
         qc_key,
@@ -22490,8 +21691,10 @@ async fn quorum_reschedule_near_quorum_rebroadcasts_votes_block_sync_and_block_c
         min_votes_for_commit >= 2,
         "test requires at least two votes for quorum"
     );
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
     let local_peer_id = actor.common_config.peer.id().clone();
-    let non_local_signers: Vec<usize> = topology
+    let non_local_signers: Vec<usize> = signature_topology
         .as_ref()
         .iter()
         .enumerate()
@@ -22505,7 +21708,7 @@ async fn quorum_reschedule_near_quorum_rebroadcasts_votes_block_sync_and_block_c
 
     for signer_idx in non_local_signers.into_iter().take(near_quorum_votes) {
         let signer = ValidatorIndex::try_from(signer_idx).expect("signer fits u32");
-        let vote = crate::sumeragi::consensus::Vote {
+        let mut vote = crate::sumeragi::consensus::Vote {
             phase: Phase::Commit,
             block_hash,
             parent_state_root: zero_state_root(),
@@ -22519,10 +21722,8 @@ async fn quorum_reschedule_near_quorum_rebroadcasts_votes_block_sync_and_block_c
             signer,
             bls_sig: Vec::new(),
         };
-        actor.vote_log.insert(
-            default_vote_log_key(Phase::Commit, height, view, epoch, signer),
-            vote,
-        );
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
+        actor.vote_log.insert(vote_log_key_for_vote(&vote), vote);
     }
 
     let pending = PendingBlock::new(block, payload_hash, height, view);
@@ -23019,6 +22220,7 @@ async fn quorum_reschedule_near_quorum_replays_votes_without_hydration_on_repeat
             signer,
             bls_sig: Vec::new(),
         };
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
         let signature = Signature::new(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
@@ -23348,8 +22550,8 @@ async fn quorum_reschedule_keeps_cached_commit_qc_on_drop() {
         .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, commit_topology.len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         0,
@@ -23577,6 +22779,12 @@ async fn commit_pipeline_defers_valid_pending_without_proposal_evidence() {
     actor.pending.pending_blocks.insert(block_hash, pending);
 
     actor.process_commit_candidates();
+    for _ in 0..16 {
+        if actor.poll_commit_results() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
 
     assert!(
         actor.subsystems.commit.inflight.is_none(),
@@ -23768,6 +22976,8 @@ async fn drain_commit_results_reports_stage_timings() {
         kura_store_ms: Some(7),
         state_apply_ms: Some(11),
         state_commit_ms: Some(13),
+        validation: None,
+        used_prevalidated_artifact: false,
     };
     result_tx
         .send(commit::CommitResult {
@@ -24077,6 +23287,12 @@ async fn commit_pipeline_qc_rebuild_cooldown_uses_chain_block_time() {
     actor.last_qc_rebuild = last_rebuild;
 
     actor.process_commit_candidates();
+    for _ in 0..16 {
+        if actor.poll_commit_results() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
 
     assert!(
         actor.last_qc_rebuild > last_rebuild,
@@ -24774,24 +23990,18 @@ async fn commit_pipeline_uses_commit_qc_roster_for_validation() {
     }
     let signers_bitmap = super::build_signers_bitmap(&signers, history_roster.len());
     let topology = super::network_topology::Topology::new(history_roster.clone());
-    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view);
-    let bls_aggregate_signature = aggregate_signature_for_bitmap(
-        &actor.common_config.chain,
-        mode_tag,
-        Phase::Commit,
-        block_hash,
+    let roots = validated_roots_for_actor_block(actor, block.clone(), &topology);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
         height,
         view,
-        0,
-        &signers_bitmap,
-        &topology,
-        &harness.key_pairs,
+        ConsensusMode::Permissioned,
+        &signature_topology,
     );
-    let commit_qc = Qc {
+    let mut commit_qc = Qc {
         phase: Phase::Commit,
         subject_block_hash: block_hash,
-        parent_state_root: zero_state_root(),
-        post_state_root: zero_state_root(),
+        parent_state_root: roots.parent_state_root,
+        post_state_root: roots.post_state_root,
         height,
         view,
         epoch: 0,
@@ -24804,16 +24014,17 @@ async fn commit_pipeline_uses_commit_qc_roster_for_validation() {
         validator_set: history_roster,
         aggregate: QcAggregate {
             signers_bitmap,
-            bls_aggregate_signature,
+            bls_aggregate_signature: Vec::new(),
         },
     };
+    resign_qc_for_actor(&mut commit_qc, actor, &harness.key_pairs);
     status::record_commit_qc(commit_qc);
 
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let mut pending = PendingBlock::new(block, payload_hash, height, view);
     pending.validation_status = ValidationStatus::Valid;
-    pending.parent_state_root = Some(zero_state_root());
-    pending.post_state_root = Some(zero_state_root());
+    pending.parent_state_root = Some(roots.parent_state_root);
+    pending.post_state_root = Some(roots.post_state_root);
     actor.pending.pending_blocks.insert(block_hash, pending);
     actor.note_proposal_seen(height, view, payload_hash);
     actor.pending.last_commit_pipeline_run = Instant::now() - Duration::from_secs(10);
@@ -24957,13 +24168,15 @@ fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
                 );
                 let block_hash = block.hash();
                 let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+                let roster = vec![actor.common_config.peer.id().clone()];
+                let topology = super::network_topology::Topology::new(roster.clone());
+                let roots = validated_roots_for_actor_block(actor, block.clone(), &topology);
                 let mut pending = PendingBlock::new(block, payload_hash, height, view);
                 pending.validation_status = ValidationStatus::Valid;
-                pending.parent_state_root = Some(zero_state_root());
-                pending.post_state_root = Some(zero_state_root());
+                pending.parent_state_root = Some(roots.parent_state_root);
+                pending.post_state_root = Some(roots.post_state_root);
                 actor.pending.pending_blocks.insert(block_hash, pending);
 
-                let roster = vec![actor.common_config.peer.id().clone()];
                 let signers_bitmap = vec![0b0000_0001];
                 let chain = actor.common_config.chain.clone();
                 let (chain_order_hash, rechain_seq) =
@@ -24971,8 +24184,8 @@ fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
                 let mut vote = crate::sumeragi::consensus::Vote {
                     phase: Phase::Commit,
                     block_hash,
-                    parent_state_root: zero_state_root(),
-                    post_state_root: zero_state_root(),
+                    parent_state_root: roots.parent_state_root,
+                    post_state_root: roots.post_state_root,
                     height,
                     view,
                     epoch: 0,
@@ -24995,8 +24208,8 @@ fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
                 let commit_qc = Qc {
                     phase: Phase::Commit,
                     subject_block_hash: block_hash,
-                    parent_state_root: zero_state_root(),
-                    post_state_root: zero_state_root(),
+                    parent_state_root: roots.parent_state_root,
+                    post_state_root: roots.post_state_root,
                     height,
                     view,
                     epoch: 0,
@@ -25012,10 +24225,12 @@ fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
                         bls_aggregate_signature,
                     },
                 };
-                let checkpoint = ValidatorSetCheckpoint::new(
+                let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
                     height,
                     view,
                     block_hash,
+                    chain_order_hash,
+                    rechain_seq,
                     commit_qc.parent_state_root,
                     commit_qc.post_state_root,
                     roster.clone(),
@@ -25131,8 +24346,8 @@ fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
                 let qc = Qc {
                     phase: Phase::Commit,
                     subject_block_hash: block_hash,
-                    parent_state_root: zero_state_root(),
-                    post_state_root: zero_state_root(),
+                    parent_state_root: roots.parent_state_root,
+                    post_state_root: roots.post_state_root,
                     height,
                     view,
                     epoch: 0,
@@ -25167,7 +24382,7 @@ fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
                     None,
                     PERMISSIONED_TAG,
                     None,
-                    None,
+                    Some(true),
                 );
                 assert!(validation.is_ok(), "QC validation failed: {validation:?}");
                 let pending_hashes: BTreeSet<_> =
@@ -25395,6 +24610,7 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
         &deferred_topology,
         &harness.key_pairs,
     );
+    let deferred_vote_key = vote_log_key_for_vote(&deferred_vote);
     let before = actor.vote_log.len();
     actor.handle_vote(deferred_vote);
     assert_eq!(
@@ -25545,13 +24761,7 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
         "commit outcome should be applied"
     );
     assert!(
-        actor.vote_log.contains_key(&default_vote_log_key(
-            Phase::Commit,
-            deferred_height,
-            view,
-            deferred_epoch,
-            0,
-        )),
+        actor.vote_log.contains_key(&deferred_vote_key),
         "deferred vote should be recorded after commit advances roster"
     );
     assert!(
@@ -25890,11 +25100,11 @@ async fn commit_outcome_seeds_genesis_commit_roster_after_commit() {
         allow_signature_index_recovery: false,
         events_sender: actor.events_sender.clone(),
     };
-    let (outcome, timings) = commit::execute_commit_work(
-        actor.state.as_ref(),
-        actor.kura.as_ref(),
-        &actor.common_config.chain,
-        &actor.genesis_account,
+    let (outcome, timings) = execute_commit_work_on_test_stack(
+        Arc::clone(&actor.state),
+        Arc::clone(&actor.kura),
+        actor.common_config.chain.clone(),
+        actor.genesis_account.clone(),
         work,
     );
     let (
@@ -26100,14 +25310,8 @@ async fn commit_outcome_kickstarts_next_proposal_and_records_round_gap() {
         })
         .expect("send commit result");
 
-    assert!(
-        actor.poll_commit_results(),
-        "commit outcome should be applied"
-    );
-    assert_eq!(
-        u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX),
-        height
-    );
+    let commit_applied = actor.poll_commit_results();
+    let committed_height = u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX);
     let next_height = height.saturating_add(1);
     let cached_after_commit = actor
         .subsystems
@@ -26115,26 +25319,36 @@ async fn commit_outcome_kickstarts_next_proposal_and_records_round_gap() {
         .proposal_cache
         .get_proposal(next_height, 0)
         .is_some();
-    let backpressure = actor.proposal_backpressure();
+    let backpressure_deferred = actor.proposal_backpressure().should_defer();
+    let proposal_ready = cached_after_commit || actor.on_pacemaker_propose_ready(Instant::now());
+    let cached_after_ready = actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .get_proposal(next_height, 0)
+        .is_some();
+    let snapshot = super::status::snapshot().round_gap;
+    let commit_qc_recorded = super::status::commit_qc_history()
+        .into_iter()
+        .any(|qc| qc == commit_qc);
+
+    harness.shutdown.send();
+    super::status::reset_commit_certs_for_tests();
+
+    assert!(commit_applied, "commit outcome should be applied");
+    assert_eq!(committed_height, height);
     assert!(
-        cached_after_commit || !backpressure.should_defer(),
+        cached_after_commit || !backpressure_deferred,
         "durable commit should either leave the pacemaker unblocked or already cache the next proposal"
     );
     assert!(
-        cached_after_commit || actor.on_pacemaker_propose_ready(Instant::now()),
+        proposal_ready,
         "next proposal should already be cached or buildable immediately after head publication"
     );
     assert!(
-        actor
-            .subsystems
-            .propose
-            .proposal_cache
-            .get_proposal(next_height, 0)
-            .is_some(),
+        cached_after_ready,
         "next proposal should be assembled as soon as the durable local commit unblocks the pacemaker"
     );
-
-    let snapshot = super::status::snapshot().round_gap;
     assert!(
         snapshot.last_deliver_to_state_commit_ms >= 2,
         "DELIVER-to-state-commit gap should be recorded from the real commit path"
@@ -26152,14 +25366,9 @@ async fn commit_outcome_kickstarts_next_proposal_and_records_round_gap() {
         snapshot.last_deliver_to_next_propose_ms
     );
     assert!(
-        super::status::commit_qc_history()
-            .into_iter()
-            .any(|qc| qc == commit_qc),
+        commit_qc_recorded,
         "commit outcome should record the commit QC after pacemaker unblock"
     );
-
-    harness.shutdown.send();
-    super::status::reset_commit_certs_for_tests();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -26462,11 +25671,11 @@ async fn successful_commit_keeps_latest_block_aligned_with_committed_height() {
         allow_signature_index_recovery: false,
         events_sender: actor.events_sender.clone(),
     };
-    let (outcome, timings) = commit::execute_commit_work(
-        actor.state.as_ref(),
-        actor.kura.as_ref(),
-        &actor.common_config.chain,
-        &actor.genesis_account,
+    let (outcome, timings) = execute_commit_work_on_test_stack(
+        Arc::clone(&actor.state),
+        Arc::clone(&actor.kura),
+        actor.common_config.chain.clone(),
+        actor.genesis_account.clone(),
         work,
     );
     result_tx
@@ -26650,11 +25859,11 @@ async fn cached_future_proposal_does_not_immediately_timeout_after_parent_commit
         allow_signature_index_recovery: false,
         events_sender: actor.events_sender.clone(),
     };
-    let (outcome, timings) = commit::execute_commit_work(
-        actor.state.as_ref(),
-        actor.kura.as_ref(),
-        &actor.common_config.chain,
-        &actor.genesis_account,
+    let (outcome, timings) = execute_commit_work_on_test_stack(
+        Arc::clone(&actor.state),
+        Arc::clone(&actor.kura),
+        actor.common_config.chain.clone(),
+        actor.genesis_account.clone(),
         work,
     );
     result_tx
@@ -26768,17 +25977,18 @@ async fn finalize_pending_block_commits_retired_same_height_without_conflicting_
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let epoch = actor.epoch_for_height(height);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let roots = validated_roots_for_actor_block(actor, block.clone(), &topology);
     let mut pending = PendingBlock::new(block.clone(), payload_hash, height, 0);
     pending.validation_status = ValidationStatus::Valid;
-    pending.parent_state_root = Some(zero_state_root());
-    pending.post_state_root = Some(zero_state_root());
+    pending.parent_state_root = Some(roots.parent_state_root);
+    pending.post_state_root = Some(roots.post_state_root);
     pending.retire_same_height();
     pending.note_commit_qc_observed(epoch);
     pending.commit_qc_epoch = Some(epoch);
 
-    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let mut qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         0,
@@ -26788,18 +25998,10 @@ async fn finalize_pending_block_commits_retired_same_height_without_conflicting_
         &topology,
         &harness.key_pairs,
     );
-    actor.qc_cache.insert(
-        (
-            Phase::Commit,
-            block_hash,
-            height,
-            0,
-            epoch,
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0,
-        ),
-        qc,
-    );
+    qc.parent_state_root = roots.parent_state_root;
+    qc.post_state_root = roots.post_state_root;
+    resign_qc_for_actor(&mut qc, actor, &harness.key_pairs);
+    actor.qc_cache.insert(Actor::qc_tally_key(&qc), qc);
 
     let lock = QcHeaderRef {
         phase: Phase::Commit,
@@ -26842,6 +26044,8 @@ async fn commit_pipeline_recovery_includes_certified_aborted_pending_block() {
         .unwrap_or(u64::MAX)
         .saturating_add(1);
     let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, 0, Some(genesis_hash));
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let roots = validated_roots_for_actor_block(actor, block.clone(), &topology);
     let block_hash = insert_validated_pending(actor, block);
     let epoch = actor.epoch_for_height(height);
 
@@ -26853,35 +26057,27 @@ async fn commit_pipeline_recovery_includes_certified_aborted_pending_block() {
             .expect("pending block inserted");
         pending.mark_aborted();
         pending.validation_status = ValidationStatus::Valid;
-        pending.parent_state_root = Some(zero_state_root());
-        pending.post_state_root = Some(zero_state_root());
+        pending.parent_state_root = Some(roots.parent_state_root);
+        pending.post_state_root = Some(roots.post_state_root);
         pending.note_commit_qc_observed(epoch);
         pending.commit_qc_epoch = Some(epoch);
     }
 
-    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    actor.qc_cache.insert(
-        (
-            Phase::Commit,
-            block_hash,
-            height,
-            0,
-            epoch,
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0,
-        ),
-        qc_with_bitmap(
-            &actor.common_config.chain,
-            block_hash,
-            height,
-            0,
-            epoch,
-            vec![0b0000_1111],
-            Phase::Commit,
-            &topology,
-            &harness.key_pairs,
-        ),
+    let mut qc = qc_with_bitmap_for_actor(
+        actor,
+        block_hash,
+        height,
+        0,
+        epoch,
+        vec![0b0000_1111],
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
     );
+    qc.parent_state_root = roots.parent_state_root;
+    qc.post_state_root = roots.post_state_root;
+    resign_qc_for_actor(&mut qc, actor, &harness.key_pairs);
+    actor.qc_cache.insert(Actor::qc_tally_key(&qc), qc);
 
     assert_eq!(
         actor.commit_candidate_blocks_len(false),
@@ -26932,6 +26128,9 @@ async fn commit_pipeline_keeps_certified_recovery_candidate_eligible_with_active
         certified_view,
         Some(genesis_hash),
     );
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let certified_roots =
+        validated_roots_for_actor_block(actor, certified_block.clone(), &topology);
     let certified_hash = insert_validated_pending(actor, certified_block);
     let active_block = nonempty_block_for_actor(
         actor,
@@ -26953,8 +26152,8 @@ async fn commit_pipeline_keeps_certified_recovery_candidate_eligible_with_active
         pending.note_commit_qc_observed(epoch);
         pending.commit_qc_epoch = Some(epoch);
         pending.validation_status = ValidationStatus::Valid;
-        pending.parent_state_root = Some(zero_state_root());
-        pending.post_state_root = Some(zero_state_root());
+        pending.parent_state_root = Some(certified_roots.parent_state_root);
+        pending.post_state_root = Some(certified_roots.post_state_root);
     }
     {
         let pending = actor
@@ -26968,29 +26167,21 @@ async fn commit_pipeline_keeps_certified_recovery_candidate_eligible_with_active
         pending.post_state_root = Some(zero_state_root());
     }
 
-    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    actor.qc_cache.insert(
-        (
-            Phase::Commit,
-            certified_hash,
-            height,
-            certified_view,
-            epoch,
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0,
-        ),
-        qc_with_bitmap(
-            &actor.common_config.chain,
-            certified_hash,
-            height,
-            certified_view,
-            epoch,
-            vec![0b0000_1111],
-            Phase::Commit,
-            &topology,
-            &harness.key_pairs,
-        ),
+    let mut qc = qc_with_bitmap_for_actor(
+        actor,
+        certified_hash,
+        height,
+        certified_view,
+        epoch,
+        vec![0b0000_1111],
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
     );
+    qc.parent_state_root = certified_roots.parent_state_root;
+    qc.post_state_root = certified_roots.post_state_root;
+    resign_qc_for_actor(&mut qc, actor, &harness.key_pairs);
+    actor.qc_cache.insert(Actor::qc_tally_key(&qc), qc);
 
     let tip_height = actor.state.committed_height();
     let tip_hash = actor.state.latest_block_hash_fast();
@@ -27174,37 +26365,31 @@ async fn finalize_pending_block_skips_frontier_reanchor_when_next_height_payload
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let epoch = actor.epoch_for_height(height);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let roots = validated_roots_for_actor_block(actor, block.clone(), &topology);
     let mut pending = PendingBlock::new(block.clone(), payload_hash, height, 0);
     pending.validation_status = ValidationStatus::Valid;
-    pending.parent_state_root = Some(zero_state_root());
-    pending.post_state_root = Some(zero_state_root());
+    pending.parent_state_root = Some(roots.parent_state_root);
+    pending.post_state_root = Some(roots.post_state_root);
     pending.retire_same_height();
     pending.note_commit_qc_observed(epoch);
     pending.commit_qc_epoch = Some(epoch);
 
-    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    actor.qc_cache.insert(
-        (
-            Phase::Commit,
-            block_hash,
-            height,
-            0,
-            epoch,
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0,
-        ),
-        qc_with_bitmap(
-            &actor.common_config.chain,
-            block_hash,
-            height,
-            0,
-            epoch,
-            vec![0b0000_1111],
-            Phase::Commit,
-            &topology,
-            &harness.key_pairs,
-        ),
+    let mut qc = qc_with_bitmap_for_actor(
+        actor,
+        block_hash,
+        height,
+        0,
+        epoch,
+        vec![0b0000_1111],
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
     );
+    qc.parent_state_root = roots.parent_state_root;
+    qc.post_state_root = roots.post_state_root;
+    resign_qc_for_actor(&mut qc, actor, &harness.key_pairs);
+    actor.qc_cache.insert(Actor::qc_tally_key(&qc), qc);
 
     let frontier_height = height.saturating_add(1);
     let frontier_block = nonempty_block_for_actor(
@@ -27218,28 +26403,20 @@ async fn finalize_pending_block_skips_frontier_reanchor_when_next_height_payload
     let future_height = frontier_height.saturating_add(1);
     let future_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xF2; Hash::LENGTH]));
-    actor.qc_cache.insert(
-        (
-            Phase::Commit,
-            future_hash,
-            future_height,
-            0,
-            actor.epoch_for_height(future_height),
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0,
-        ),
-        qc_with_bitmap(
-            &actor.common_config.chain,
-            future_hash,
-            future_height,
-            0,
-            actor.epoch_for_height(future_height),
-            vec![0b0000_1111],
-            Phase::Commit,
-            &topology,
-            &harness.key_pairs,
-        ),
+    let future_qc = qc_with_bitmap_for_actor(
+        actor,
+        future_hash,
+        future_height,
+        0,
+        actor.epoch_for_height(future_height),
+        vec![0b0000_1111],
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
     );
+    actor
+        .qc_cache
+        .insert(Actor::qc_tally_key(&future_qc), future_qc);
 
     let lock = QcHeaderRef {
         phase: Phase::Commit,
@@ -27400,16 +26577,18 @@ async fn finalize_pending_block_commits_retired_same_height_with_conflicting_loc
 
     let canonical_hash = canonical_block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&canonical_block));
+    let canonical_roots =
+        validated_roots_for_actor_block(actor, canonical_block.clone(), &topology);
     let mut pending = PendingBlock::new(canonical_block.clone(), payload_hash, height, 0);
     pending.validation_status = ValidationStatus::Valid;
-    pending.parent_state_root = Some(zero_state_root());
-    pending.post_state_root = Some(zero_state_root());
+    pending.parent_state_root = Some(canonical_roots.parent_state_root);
+    pending.post_state_root = Some(canonical_roots.post_state_root);
     pending.retire_same_height();
     pending.note_commit_qc_observed(epoch);
     pending.commit_qc_epoch = Some(epoch);
 
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let mut qc = qc_with_bitmap_for_actor(
+        actor,
         canonical_hash,
         height,
         0,
@@ -27419,18 +26598,10 @@ async fn finalize_pending_block_commits_retired_same_height_with_conflicting_loc
         &topology,
         &harness.key_pairs,
     );
-    actor.qc_cache.insert(
-        (
-            Phase::Commit,
-            canonical_hash,
-            height,
-            0,
-            epoch,
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0,
-        ),
-        qc,
-    );
+    qc.parent_state_root = canonical_roots.parent_state_root;
+    qc.post_state_root = canonical_roots.post_state_root;
+    resign_qc_for_actor(&mut qc, actor, &harness.key_pairs);
+    actor.qc_cache.insert(Actor::qc_tally_key(&qc), qc);
 
     let lock = QcHeaderRef {
         phase: Phase::Commit,
@@ -27888,11 +27059,11 @@ async fn late_successful_commit_result_after_timeout_is_applied() {
         "timeout should leave the matching inflight marker in place"
     );
 
-    let (outcome, timings) = commit::execute_commit_work(
-        actor.state.as_ref(),
-        actor.kura.as_ref(),
-        &actor.common_config.chain,
-        &actor.genesis_account,
+    let (outcome, timings) = execute_commit_work_on_test_stack(
+        Arc::clone(&actor.state),
+        Arc::clone(&actor.kura),
+        actor.common_config.chain.clone(),
+        actor.genesis_account.clone(),
         work,
     );
     match &outcome {
@@ -32288,8 +31459,14 @@ async fn known_block_commit_qc_recovery_routes_frontier_fetch_through_exact_bloc
     let view = 0_u64;
     let block =
         nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
-    let block_hash = insert_validated_pending(actor, block);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let pending = PendingBlock::new(block, payload_hash, height, view);
     let targets = actor.effective_commit_topology();
+    assert!(
+        !actor.frontier_block_materialized_locally(block_hash),
+        "test setup should leave the payload body unavailable locally"
+    );
 
     let _ = take_background_log(&background_log);
     assert!(
@@ -32298,7 +31475,7 @@ async fn known_block_commit_qc_recovery_routes_frontier_fetch_through_exact_bloc
             height,
             view,
             &targets,
-            None,
+            Some(&pending),
             "test_known_block_exact_frontier_commit_qc_recovery",
         ),
         "frontier known-block commit-QC recovery should arm exact block-body repair"
@@ -32314,18 +31491,15 @@ async fn known_block_commit_qc_recovery_routes_frontier_fetch_through_exact_bloc
     );
     assert!(
         !slot.body_present,
-        "frontier known-block recovery should wait for exact-body repair even when the payload is already local"
+        "frontier known-block recovery should wait for exact-body repair when the payload is not local"
     );
-    let expected_retry_floor = actor.targeted_payload_rescue_cooldown();
     let request = actor
         .pending
         .missing_commit_qc_requests
         .get(&block_hash)
         .expect("frontier known-block recovery should track the missing commit-QC request");
-    assert!(
-        request.retry_window >= expected_retry_floor,
-        "local-payload commit-QC repair should stay on payload-repair cadence"
-    );
+    assert_eq!(request.height, height);
+    assert_eq!(request.view, view);
     assert!(
         take_background_log(&background_log)
             .into_iter()
@@ -32364,6 +31538,149 @@ async fn known_block_commit_qc_recovery_routes_frontier_fetch_through_exact_bloc
             .iter()
             .any(|entry| entry.msg_kind == Some("FetchBlockBody")),
         "frontier known-block recovery should use FetchBlockBody once ingress grace expires"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn known_block_commit_qc_recovery_uses_cert_only_fetch_for_local_payload() {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = insert_validated_pending(actor, block);
+    let targets = actor.effective_commit_topology();
+    assert!(
+        actor.frontier_block_materialized_locally(block_hash),
+        "test setup should materialize the local payload body"
+    );
+
+    let before = super::status::snapshot();
+    let _ = take_background_log(&background_log);
+    assert!(
+        actor.maybe_request_known_block_commit_qc_recovery(
+            block_hash,
+            height,
+            view,
+            &targets,
+            None,
+            "test_known_block_commit_qc_only_recovery",
+        ),
+        "local-payload commit-QC recovery should send a peer cert fetch"
+    );
+    let after = super::status::snapshot();
+
+    assert!(
+        actor
+            .frontier_slot
+            .as_ref()
+            .map_or(true, |slot| slot.block_hash != block_hash),
+        "local-payload commit-QC recovery should not arm exact body repair for the same block"
+    );
+    let request = actor
+        .pending
+        .missing_commit_qc_requests
+        .get(&block_hash)
+        .expect("local-payload commit-QC recovery should track the missing commit-QC request");
+    assert!(
+        request.retry_window >= actor.targeted_payload_rescue_cooldown(),
+        "local-payload commit-QC recovery should retain the targeted rescue cadence"
+    );
+    assert_eq!(
+        after.missing_block_fetch_total,
+        before.missing_block_fetch_total.saturating_add(1),
+        "local-payload commit-QC recovery should record one missing-block fetch attempt"
+    );
+
+    assert!(
+        after.missing_block_fetch_last_targets > 0,
+        "local-payload commit-QC recovery should target remote peers"
+    );
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.msg_kind != Some("FetchBlockBody")),
+        "local-payload commit-QC recovery should not request a block body"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn known_block_commit_qc_recovery_treats_valid_pending_override_as_local_payload() {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block.clone(), payload_hash, height, view);
+    pending.validation_status = ValidationStatus::Valid;
+    let targets = actor.effective_commit_topology();
+    assert!(
+        !actor.frontier_block_materialized_locally(block_hash),
+        "test setup should leave the override payload outside actor-owned storage"
+    );
+
+    let before = super::status::snapshot();
+    let _ = take_background_log(&background_log);
+    assert!(
+        actor.maybe_request_known_block_commit_qc_recovery(
+            block_hash,
+            height,
+            view,
+            &targets,
+            Some(&pending),
+            "test_known_block_pending_override_commit_qc_only_recovery",
+        ),
+        "valid pending overrides should request missing commit-QC recovery directly"
+    );
+    let after = super::status::snapshot();
+
+    assert!(
+        actor
+            .frontier_slot
+            .as_ref()
+            .map_or(true, |slot| slot.block_hash != block_hash),
+        "valid pending overrides should not arm exact body repair for the same block"
+    );
+    let request = actor
+        .pending
+        .missing_commit_qc_requests
+        .get(&block_hash)
+        .expect("valid pending override should track the missing commit-QC request");
+    assert!(
+        request.retry_window >= actor.targeted_payload_rescue_cooldown(),
+        "valid pending override should use the local-payload retry cadence"
+    );
+    assert_eq!(
+        after.missing_block_fetch_total,
+        before.missing_block_fetch_total.saturating_add(1),
+        "valid pending override should record one missing-block fetch attempt"
+    );
+    assert!(
+        take_background_log(&background_log)
+            .into_iter()
+            .all(|entry| entry.msg_kind != Some("FetchBlockBody")),
+        "valid pending override should not request a block body"
     );
 
     harness.shutdown.send();
@@ -32557,18 +31874,18 @@ async fn known_block_commit_qc_recovery_retry_reissues_fetch_for_local_payload()
             None,
             "test_known_block_exact_frontier_commit_qc_stall",
         ),
-        "frontier known-block recovery should seed exact block-body repair before the stall window elapses"
+        "local-payload commit-QC recovery should seed a peer cert fetch before the stall window elapses"
     );
     let after_first = super::status::snapshot();
 
+    let stale_window = actor
+        .frontier_slot_lag_window()
+        .checked_mul(2)
+        .unwrap_or_else(|| actor.frontier_slot_lag_window())
+        .max(actor.targeted_payload_rescue_cooldown())
+        .saturating_add(Duration::from_millis(1));
     let stale_at = Instant::now()
-        .checked_sub(
-            actor
-                .frontier_slot_lag_window()
-                .checked_mul(2)
-                .unwrap_or_else(|| actor.frontier_slot_lag_window())
-                .saturating_add(Duration::from_millis(1)),
-        )
+        .checked_sub(stale_window)
         .unwrap_or_else(Instant::now);
     actor
         .pending
@@ -32587,7 +31904,7 @@ async fn known_block_commit_qc_recovery_retry_reissues_fetch_for_local_payload()
         .missing_commit_qc_requests
         .get_mut(&block_hash)
         .expect("known-block commit-QC request retained")
-        .last_dependency_progress = Instant::now();
+        .last_dependency_progress = stale_at;
 
     assert!(
         actor.retry_known_block_commit_qc_requests(Instant::now(), None),
@@ -32595,7 +31912,7 @@ async fn known_block_commit_qc_recovery_retry_reissues_fetch_for_local_payload()
     );
     let after_retry = super::status::snapshot();
     assert!(
-        actor.frontier_slot.as_ref().is_some_and(|slot| {
+        actor.frontier_slot.as_ref().map_or(true, |slot| {
             !matches!(
                 slot.mode,
                 super::FrontierSlotMode::DeepCatchup | super::FrontierSlotMode::PassiveCatchup
@@ -32612,12 +31929,24 @@ async fn known_block_commit_qc_recovery_retry_reissues_fetch_for_local_payload()
         after_retry.missing_block_fetch_last_targets > 0,
         "local-payload commit-QC retries should target remote peers"
     );
+    assert!(
+        actor
+            .range_pull_escalation_cooldowns
+            .keys()
+            .all(|(_, _, cooldown_height, reason)| {
+                *cooldown_height != height || *reason != "frontier_stall_reset_fallback"
+            }),
+        "local-payload commit-QC retries should not spend fallback frontier reanchor budget"
+    );
 
     harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn known_block_commit_qc_stall_uses_fallback_reanchor_when_primary_is_in_cooldown() {
+async fn known_block_commit_qc_stall_keeps_local_payload_out_of_fallback_reanchor_when_primary_is_in_cooldown()
+ {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -32639,17 +31968,18 @@ async fn known_block_commit_qc_stall_uses_fallback_reanchor_when_primary_is_in_c
             None,
             "test_known_block_exact_frontier_commit_qc_fallback_seed",
         ),
-        "frontier known-block recovery should seed exact block-body repair before stall fallback"
+        "local-payload commit-QC recovery should seed a peer cert fetch before stall fallback"
     );
+    let after_first = super::status::snapshot();
 
+    let stale_window = actor
+        .frontier_slot_lag_window()
+        .checked_mul(2)
+        .unwrap_or_else(|| actor.frontier_slot_lag_window())
+        .max(actor.targeted_payload_rescue_cooldown())
+        .saturating_add(Duration::from_millis(1));
     let stale_at = Instant::now()
-        .checked_sub(
-            actor
-                .frontier_slot_lag_window()
-                .checked_mul(2)
-                .unwrap_or_else(|| actor.frontier_slot_lag_window())
-                .saturating_add(Duration::from_millis(1)),
-        )
+        .checked_sub(stale_window)
         .unwrap_or_else(Instant::now);
     let request = actor
         .pending
@@ -32672,23 +32002,31 @@ async fn known_block_commit_qc_stall_uses_fallback_reanchor_when_primary_is_in_c
 
     assert!(
         actor.retry_known_block_commit_qc_requests(Instant::now(), None),
-        "stalled known-block commit-QC recovery should still make progress when the primary reanchor is in cooldown"
+        "stalled known-block commit-QC recovery should still reissue a cert fetch when the primary reanchor is in cooldown"
     );
+    let after_retry = super::status::snapshot();
     assert!(
         actor
             .range_pull_escalation_cooldowns
             .keys()
-            .any(|(_, _, cooldown_height, reason)| {
-                *cooldown_height == height && *reason == "frontier_stall_reset_fallback"
+            .all(|(_, _, cooldown_height, reason)| {
+                *cooldown_height != height || *reason != "frontier_stall_reset_fallback"
             }),
-        "stalled known-block commit-QC recovery should spend the fallback reanchor budget when the primary budget is unavailable"
+        "local-payload commit-QC recovery should not spend fallback reanchor budget"
     );
     assert!(
-        actor
-            .frontier_slot
-            .as_ref()
-            .is_some_and(|slot| matches!(slot.mode, super::FrontierSlotMode::PassiveCatchup)),
-        "fallback reanchor should hand same-height ownership to passive catch-up"
+        actor.frontier_slot.as_ref().map_or(true, |slot| {
+            !matches!(
+                slot.mode,
+                super::FrontierSlotMode::DeepCatchup | super::FrontierSlotMode::PassiveCatchup
+            )
+        }),
+        "local-payload commit-QC recovery should stay out of frontier catch-up"
+    );
+    assert_eq!(
+        after_retry.missing_block_fetch_total,
+        after_first.missing_block_fetch_total.saturating_add(1),
+        "local-payload commit-QC recovery should record the cert-fetch retry"
     );
 
     harness.shutdown.send();
@@ -33618,6 +32956,9 @@ async fn qc_broadcast_targets_snapshot_roster() {
     snapshot_roster.retain(|peer| peer != &removed_peer);
 
     let topology = super::network_topology::Topology::new(snapshot_roster.clone());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology =
+        super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
     let epoch = actor.epoch_for_height(height);
     for signer in 0..snapshot_roster.len() {
         let mut vote = crate::sumeragi::consensus::Vote {
@@ -33634,13 +32975,14 @@ async fn qc_broadcast_targets_snapshot_roster() {
             signer: u32::try_from(signer).expect("signer fits u32"),
             bls_sig: Vec::new(),
         };
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         sign_vote_for_canonical_signer(
             &mut vote,
             &actor.common_config.chain,
             &topology,
             &harness.key_pairs,
         );
-        actor.vote_log.insert(vote_log_key_for_vote(&vote), vote);
+        insert_test_vote_with_roster(actor, vote, &snapshot_roster);
     }
 
     let _ = take_background_log(&background_log);
@@ -33773,6 +33115,7 @@ async fn materialize_qc_for_header_aggregates_votes() {
     let view = 0;
     let epoch = actor.epoch_for_height(height);
     let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
 
     for signer_idx in 0..required {
         let mut vote = crate::sumeragi::consensus::Vote {
@@ -33789,6 +33132,7 @@ async fn materialize_qc_for_header_aggregates_votes() {
             signer: u32::try_from(signer_idx).expect("signer index fits u32"),
             bls_sig: Vec::new(),
         };
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         sign_vote_for_view_with_seed(
             &mut vote,
             &chain,
@@ -33965,7 +33309,20 @@ async fn rebuild_qcs_from_cached_votes_uses_snapshot_roster() {
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, snapshot_roster.len());
     let epoch = actor.epoch_for_height(height);
-    let commit_qc = qc_with_bitmap(
+    let signature_topology = super::topology_for_view(
+        &topology,
+        height,
+        view,
+        super::PERMISSIONED_TAG,
+        Some(prf_seed_for_chain(&actor.common_config.chain)),
+    );
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
+        height,
+        view,
+        ConsensusMode::Permissioned,
+        &signature_topology,
+    );
+    let mut commit_qc = qc_with_bitmap(
         &actor.common_config.chain,
         block_hash,
         height,
@@ -33976,21 +33333,28 @@ async fn rebuild_qcs_from_cached_votes_uses_snapshot_roster() {
         &topology,
         &harness.key_pairs,
     );
-    let checkpoint_signature = aggregate_vote_signature_for_bitmap(
+    commit_qc.chain_order_hash = chain_order_hash;
+    commit_qc.rechain_seq = rechain_seq;
+    resign_qc_for_actor(&mut commit_qc, actor, &harness.key_pairs);
+    let checkpoint_signature = aggregate_vote_signature_for_bitmap_with_chain_order(
         &actor.common_config.chain,
         PERMISSIONED_TAG,
         block_hash,
         height,
         view,
         epoch,
+        chain_order_hash,
+        rechain_seq,
         &signers_bitmap,
         &topology,
         &harness.key_pairs,
     );
-    let checkpoint = ValidatorSetCheckpoint::new(
+    let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
         height,
         view,
         block_hash,
+        chain_order_hash,
+        rechain_seq,
         commit_qc.parent_state_root,
         commit_qc.post_state_root,
         snapshot_roster.clone(),
@@ -34035,13 +33399,6 @@ async fn rebuild_qcs_from_cached_votes_uses_snapshot_roster() {
         actor.vote_log.insert(vote_log_key_for_vote(&vote), vote);
     }
 
-    let signature_topology = super::topology_for_view(
-        &super::network_topology::Topology::new(commit_topology.clone()),
-        height,
-        view,
-        super::PERMISSIONED_TAG,
-        Some(prf_seed_for_chain(&actor.common_config.chain)),
-    );
     let valid_signers = actor.qc_signers_for_votes(
         Phase::Commit,
         block_hash,
@@ -34064,8 +33421,8 @@ async fn rebuild_qcs_from_cached_votes_uses_snapshot_roster() {
         height,
         view,
         epoch,
-        crate::sumeragi::consensus::default_chain_order_hash(),
-        0,
+        chain_order_hash,
+        rechain_seq,
     );
     let qc = actor
         .qc_cache
@@ -34255,7 +33612,19 @@ async fn rebuild_qcs_from_cached_votes_uses_new_view_roster_for_new_view_phase()
         "test requires NewView roster selection to differ from generic vote replay"
     );
 
-    let new_view_topology = super::network_topology::Topology::new(new_view_roster.clone());
+    let expected_new_view_roster =
+        super::roster::canonicalize_roster_for_mode(new_view_roster, ConsensusMode::Permissioned);
+    let new_view_topology =
+        super::network_topology::Topology::new(expected_new_view_roster.clone());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology =
+        super::topology_for_view(&new_view_topology, height, view, mode_tag, prf_seed);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
+        height,
+        view,
+        ConsensusMode::Permissioned,
+        &signature_topology,
+    );
     let highest_qc = QcHeaderRef {
         phase: Phase::Commit,
         subject_block_hash: target_parent_hash,
@@ -34272,17 +33641,19 @@ async fn rebuild_qcs_from_cached_votes_uses_new_view_roster_for_new_view_phase()
             height,
             view,
             epoch,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
+            chain_order_hash,
+            rechain_seq,
             highest_qc: Some(highest_qc),
             signer: u32::try_from(signer).expect("signer fits u32"),
             bls_sig: Vec::new(),
         };
-        sign_vote_for_view(
+        sign_vote_for_view_with_seed(
             &mut vote,
             &actor.common_config.chain,
             &new_view_topology,
             &harness.key_pairs,
+            mode_tag,
+            prf_seed,
         );
         actor.vote_log.insert(vote_log_key_for_vote(&vote), vote);
     }
@@ -34297,12 +33668,12 @@ async fn rebuild_qcs_from_cached_votes_uses_new_view_roster_for_new_view_phase()
             height,
             view,
             epoch,
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0,
+            chain_order_hash,
+            rechain_seq,
         ))
         .expect("NewView QC rebuilt from cached votes");
     assert_eq!(
-        rebuilt.validator_set, new_view_roster,
+        rebuilt.validator_set, expected_new_view_roster,
         "NewView QC rebuild must use the NewView roster path instead of generic vote replay"
     );
 
@@ -34389,6 +33760,9 @@ async fn rebuild_qcs_from_cached_votes_skips_npos_candidates_without_stake_quoru
         signer: 0,
         bls_sig: Vec::new(),
     };
+    bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
+    let chain_order_hash = vote.chain_order_hash;
+    let rechain_seq = vote.rechain_seq;
     sign_vote_for_view_with_seed(
         &mut vote,
         &actor.common_config.chain,
@@ -34435,8 +33809,8 @@ async fn rebuild_qcs_from_cached_votes_skips_npos_candidates_without_stake_quoru
         height,
         view,
         epoch,
-        crate::sumeragi::consensus::default_chain_order_hash(),
-        0,
+        chain_order_hash,
+        rechain_seq,
     );
     assert!(
         !actor.qc_cache.contains_key(&key),
@@ -34480,10 +33854,9 @@ async fn precommit_qc_advances_locked_qc_when_block_known() {
     });
     super::status::set_locked_qc(1, 0, Some(block1.hash()));
 
-    let chain = actor.common_config.chain.clone();
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let qc = qc_with_bitmap(
-        &chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block2.hash(),
         2,
         0,
@@ -35097,6 +34470,14 @@ async fn try_form_qc_from_votes_skips_when_conflicts_locked_chain() {
     let required = topology.min_votes_for_commit();
     let height = 2;
     let view = 0;
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
+        height,
+        view,
+        consensus_mode,
+        &signature_topology,
+    );
 
     for signer_idx in 0..required {
         let mut vote = crate::sumeragi::consensus::Vote {
@@ -35113,7 +34494,15 @@ async fn try_form_qc_from_votes_skips_when_conflicts_locked_chain() {
             signer: u32::try_from(signer_idx).expect("signer index fits u32"),
             bls_sig: Vec::new(),
         };
-        sign_vote_for_view(&mut vote, &chain, &topology, &harness.key_pairs);
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
+        sign_vote_for_view_with_seed(
+            &mut vote,
+            &chain,
+            &topology,
+            &harness.key_pairs,
+            mode_tag,
+            prf_seed,
+        );
         actor.handle_vote(vote);
     }
 
@@ -35124,8 +34513,8 @@ async fn try_form_qc_from_votes_skips_when_conflicts_locked_chain() {
             height,
             view,
             epoch,
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0
+            chain_order_hash,
+            rechain_seq
         )),
         "conflicting precommit QC should not be aggregated"
     );
@@ -35167,6 +34556,14 @@ async fn try_form_qc_from_votes_allows_newer_view_lock_override() {
     let required = topology.min_votes_for_commit();
     let height = 2;
     let view = 2;
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
+        height,
+        view,
+        consensus_mode,
+        &signature_topology,
+    );
 
     for signer_idx in 0..required {
         let mut vote = crate::sumeragi::consensus::Vote {
@@ -35183,7 +34580,15 @@ async fn try_form_qc_from_votes_allows_newer_view_lock_override() {
             signer: u32::try_from(signer_idx).expect("signer index fits u32"),
             bls_sig: Vec::new(),
         };
-        sign_vote_for_view(&mut vote, &chain, &topology, &harness.key_pairs);
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
+        sign_vote_for_view_with_seed(
+            &mut vote,
+            &chain,
+            &topology,
+            &harness.key_pairs,
+            mode_tag,
+            prf_seed,
+        );
         actor.handle_vote(vote);
     }
 
@@ -35194,8 +34599,8 @@ async fn try_form_qc_from_votes_allows_newer_view_lock_override() {
             height,
             view,
             epoch,
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0
+            chain_order_hash,
+            rechain_seq
         )),
         "newer-view conflicting precommit QC should aggregate via lock override"
     );
@@ -35224,6 +34629,14 @@ async fn try_form_qc_from_votes_keeps_commit_qc_when_higher_new_view_quorum_exis
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let chain = actor.common_config.chain.clone();
     let required = topology.min_votes_for_commit();
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
+        height,
+        view,
+        consensus_mode,
+        &signature_topology,
+    );
 
     let highest_qc = QcHeaderRef {
         phase: Phase::Commit,
@@ -35258,7 +34671,15 @@ async fn try_form_qc_from_votes_keeps_commit_qc_when_higher_new_view_quorum_exis
             signer: u32::try_from(signer_idx).expect("signer index fits u32"),
             bls_sig: Vec::new(),
         };
-        sign_vote_for_view(&mut vote, &chain, &topology, &harness.key_pairs);
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
+        sign_vote_for_view_with_seed(
+            &mut vote,
+            &chain,
+            &topology,
+            &harness.key_pairs,
+            mode_tag,
+            prf_seed,
+        );
         actor.handle_vote(vote);
     }
 
@@ -35269,8 +34690,8 @@ async fn try_form_qc_from_votes_keeps_commit_qc_when_higher_new_view_quorum_exis
             height,
             view,
             epoch,
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0
+            chain_order_hash,
+            rechain_seq
         )),
         "commit QC must still form when higher NEW_VIEW quorum exists"
     );
@@ -35496,6 +34917,12 @@ async fn npos_qc_uses_active_validator_roster_for_stake_quorum() {
     );
     let topology = super::network_topology::Topology::new(active_topology.clone());
     let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
+        height,
+        view,
+        consensus_mode,
+        &signature_topology,
+    );
     let mut signer_indices = Vec::new();
     for (idx, _) in signature_topology.as_ref().iter().enumerate() {
         signer_indices.push(u32::try_from(idx).expect("signer index fits u32"));
@@ -35521,6 +34948,7 @@ async fn npos_qc_uses_active_validator_roster_for_stake_quorum() {
             signer,
             bls_sig: Vec::new(),
         };
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         sign_vote_for_view_with_seed(
             &mut vote,
             &chain,
@@ -35529,10 +34957,7 @@ async fn npos_qc_uses_active_validator_roster_for_stake_quorum() {
             mode_tag,
             prf_seed,
         );
-        actor.vote_log.insert(
-            default_vote_log_key(Phase::Commit, height, view, epoch, signer),
-            vote,
-        );
+        actor.vote_log.insert(vote_log_key_for_vote(&vote), vote);
     }
 
     let signers = actor.qc_signers_for_votes(
@@ -35564,8 +34989,8 @@ async fn npos_qc_uses_active_validator_roster_for_stake_quorum() {
         height,
         view,
         epoch,
-        crate::sumeragi::consensus::default_chain_order_hash(),
-        0,
+        chain_order_hash,
+        rechain_seq,
     );
     assert!(
         actor.qc_cache.contains_key(&key) || actor.deferred_qcs.contains_key(&key),
@@ -35597,14 +35022,21 @@ async fn npos_qc_uses_pending_activation_roster_for_stake_quorum() {
     );
     let commit_topology = actor.effective_commit_topology();
     assert!(commit_topology.len() >= 4, "test requires 4 trusted peers");
-    let topology = super::network_topology::Topology::new(commit_topology.clone());
     let pending_roster = super::roster::canonicalize_roster_for_mode(
         vec![commit_topology[0].clone(), commit_topology[1].clone()],
         consensus_mode,
     );
     actor.pending_roster_activation = Some((height, pending_roster.clone()));
 
-    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let pending_topology = super::network_topology::Topology::new(pending_roster.clone());
+    let signature_topology =
+        super::topology_for_view(&pending_topology, height, view, mode_tag, prf_seed);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
+        height,
+        view,
+        consensus_mode,
+        &signature_topology,
+    );
     let block_signer_peer = pending_roster
         .first()
         .expect("pending activation roster must have a signer");
@@ -35666,10 +35098,11 @@ async fn npos_qc_uses_pending_activation_roster_for_stake_quorum() {
             signer,
             bls_sig: Vec::new(),
         };
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         sign_vote_for_view_with_seed(
             &mut vote,
             &chain,
-            &topology,
+            &pending_topology,
             &harness.key_pairs,
             mode_tag,
             prf_seed,
@@ -35697,7 +35130,8 @@ async fn npos_qc_uses_pending_activation_roster_for_stake_quorum() {
     );
 
     let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
-    let observed_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let observed_topology =
+        super::topology_for_view(&pending_topology, height, view, mode_tag, prf_seed);
     let observed_roster = super::roster::canonicalize_roster_for_mode(
         actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode),
         consensus_mode,
@@ -35715,7 +35149,7 @@ async fn npos_qc_uses_pending_activation_roster_for_stake_quorum() {
     );
 
     actor.locked_qc = None;
-    actor.try_form_qc_from_votes(phase, block_hash, height, view, epoch, &topology);
+    actor.try_form_qc_from_votes(phase, block_hash, height, view, epoch, &pending_topology);
 
     let key = (
         phase,
@@ -35723,8 +35157,8 @@ async fn npos_qc_uses_pending_activation_roster_for_stake_quorum() {
         height,
         view,
         epoch,
-        crate::sumeragi::consensus::default_chain_order_hash(),
-        0,
+        chain_order_hash,
+        rechain_seq,
     );
     let qc = actor.qc_cache.get(&key).expect(
         "QC should aggregate when signers satisfy stake quorum over pending activation roster",
@@ -36011,6 +35445,7 @@ async fn handle_vote_defers_until_roster_available() {
         bls_sig: Vec::new(),
     };
     sign_vote_for_view(&mut vote, &chain, &topology, &harness.key_pairs);
+    let replayed_vote_key = vote_log_key_for_vote(&vote);
 
     let before = actor.vote_log.len();
     actor.handle_vote(vote);
@@ -36027,9 +35462,7 @@ async fn handle_vote_defers_until_roster_available() {
     actor.cache_vote_roster(block_hash, height, view, topology.as_ref().to_vec());
 
     assert!(
-        actor
-            .vote_log
-            .contains_key(&default_vote_log_key(Phase::Commit, height, view, epoch, 0)),
+        actor.vote_log.contains_key(&replayed_vote_key),
         "deferred vote should be replayed once roster is cached"
     );
     assert!(
@@ -36124,6 +35557,7 @@ async fn deferred_votes_replay_after_commit_roster_history_arrives() {
         bls_sig: Vec::new(),
     };
     sign_vote_for_view(&mut vote, &chain, &topology, &harness.key_pairs);
+    let replayed_vote_key = vote_log_key_for_vote(&vote);
 
     let before = actor.vote_log.len();
     actor.handle_vote(vote);
@@ -36180,9 +35614,7 @@ async fn deferred_votes_replay_after_commit_roster_history_arrives() {
     let replayed = actor.try_replay_deferred_votes();
     assert!(replayed, "expected deferred votes to replay");
     assert!(
-        actor
-            .vote_log
-            .contains_key(&default_vote_log_key(Phase::Commit, height, view, epoch, 0)),
+        actor.vote_log.contains_key(&replayed_vote_key),
         "deferred vote should be recorded after roster resolution"
     );
     assert!(
@@ -36267,38 +35699,19 @@ async fn deferred_qcs_replay_after_commit_roster_history_arrives() {
     let signers_bitmap = super::build_signers_bitmap(&signers, expected_roster.len());
     let topology = super::network_topology::Topology::new(expected_roster.clone());
     let expected_epoch = actor.epoch_for_height(5);
-    let bls_aggregate_signature = aggregate_signature_for_bitmap(
-        &actor.common_config.chain,
-        PERMISSIONED_TAG,
-        Phase::Commit,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         hash_height5,
         5,
         0,
         expected_epoch,
-        &signers_bitmap,
+        signers_bitmap,
+        Phase::Commit,
         &topology,
         &harness.key_pairs,
     );
-    let qc = Qc {
-        phase: Phase::Commit,
-        subject_block_hash: hash_height5,
-        parent_state_root: zero_state_root(),
-        post_state_root: zero_state_root(),
-        height: 5,
-        view: 0,
-        epoch: expected_epoch,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&expected_roster),
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set: expected_roster.clone(),
-        aggregate: QcAggregate {
-            signers_bitmap,
-            bls_aggregate_signature,
-        },
-    };
+    let qc_chain_order_hash = qc.chain_order_hash;
+    let qc_rechain_seq = qc.rechain_seq;
 
     actor.handle_qc(qc.clone()).expect("qc handled");
     assert!(
@@ -36308,8 +35721,8 @@ async fn deferred_qcs_replay_after_commit_roster_history_arrives() {
             5,
             0,
             expected_epoch,
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0
+            qc_chain_order_hash,
+            qc_rechain_seq
         )),
         "QC should be deferred until roster history is available"
     );
@@ -36320,8 +35733,8 @@ async fn deferred_qcs_replay_after_commit_roster_history_arrives() {
             5,
             0,
             expected_epoch,
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0
+            qc_chain_order_hash,
+            qc_rechain_seq
         )),
         "deferred QC should not be cached yet"
     );
@@ -36387,46 +35800,31 @@ async fn deferred_qcs_replay_after_commit_roster_history_arrives() {
         5,
         0,
         expected_epoch,
-        crate::sumeragi::consensus::default_chain_order_hash(),
-        0,
+        qc_chain_order_hash,
+        qc_rechain_seq,
     );
-    if let Some(deferred_qc) = actor.deferred_qcs.get_mut(&deferred_key) {
-        if deferred_qc.validator_set != derived_roster {
-            let mut replay_signers = BTreeSet::new();
-            for idx in 0..derived_roster.len() {
-                replay_signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
-            }
-            let replay_bitmap = super::build_signers_bitmap(&replay_signers, derived_roster.len());
-            let replay_topology = super::network_topology::Topology::new(derived_roster.clone());
-            let replay_signature = aggregate_signature_for_bitmap(
-                &actor.common_config.chain,
-                PERMISSIONED_TAG,
-                Phase::Commit,
-                hash_height5,
-                5,
-                0,
-                expected_epoch,
-                &replay_bitmap,
-                &replay_topology,
-                &harness.key_pairs,
-            );
-            deferred_qc.validator_set_hash = HashOf::new(&derived_roster);
-            deferred_qc.validator_set = derived_roster.clone();
-            deferred_qc.aggregate.signers_bitmap = replay_bitmap;
-            deferred_qc.aggregate.bls_aggregate_signature = replay_signature;
+    let mut replay_qc_key = deferred_key;
+    if let Some(mut deferred_qc) = actor.deferred_qcs.remove(&deferred_key) {
+        let mut replay_signers = BTreeSet::new();
+        for idx in 0..derived_roster.len() {
+            replay_signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
         }
+        let replay_bitmap = super::build_signers_bitmap(&replay_signers, derived_roster.len());
+        deferred_qc.validator_set_hash = HashOf::new(&derived_roster);
+        deferred_qc.validator_set = derived_roster.clone();
+        deferred_qc.aggregate.signers_bitmap = replay_bitmap;
+        bind_qc_to_actor_chain_order(&mut deferred_qc, actor, &harness.key_pairs);
+        replay_qc_key = Actor::qc_tally_key(&deferred_qc);
+        if replay_qc_key != deferred_key
+            && let Some(state) = actor.deferred_qc_roster_state.remove(&deferred_key)
+        {
+            actor.deferred_qc_roster_state.insert(replay_qc_key, state);
+        }
+        actor.deferred_qcs.insert(replay_qc_key, deferred_qc);
     }
     let replayed = actor.try_replay_deferred_qcs();
     assert!(replayed, "expected deferred QCs to replay");
-    let qc_key = (
-        Phase::Commit,
-        hash_height5,
-        5,
-        0,
-        expected_epoch,
-        crate::sumeragi::consensus::default_chain_order_hash(),
-        0,
-    );
+    let qc_key = replay_qc_key;
     let qc_cached = actor.qc_cache.contains_key(&qc_key);
     let pending_snapshot = actor.pending.pending_blocks.get(&hash_height5);
     let pending_commit_seen = pending_snapshot.is_some_and(|pending| pending.commit_qc_observed());
@@ -38020,6 +37418,7 @@ async fn handle_precommit_vote_uses_roster_snapshot_after_topology_change() {
         signer: signer_idx,
         bls_sig: Vec::new(),
     };
+    bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     sign_vote_for_view(
         &mut vote,
         &actor.common_config.chain,
@@ -38197,8 +37596,8 @@ async fn handle_qc_uses_roster_snapshot_after_topology_change() {
     }
     assert_eq!(signers.len(), 3, "need quorum signers for QC");
     let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -38208,19 +37607,12 @@ async fn handle_qc_uses_roster_snapshot_after_topology_change() {
         &topology,
         &harness.key_pairs,
     );
+    let qc_key = Actor::qc_tally_key(&qc);
 
     actor.handle_qc(qc).expect("handle qc");
 
     assert!(
-        actor.qc_cache.contains_key(&(
-            Phase::Commit,
-            block_hash,
-            height,
-            view,
-            0,
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0
-        )),
+        actor.qc_cache.contains_key(&qc_key),
         "QC should use the persisted roster after topology change"
     );
 
@@ -38262,8 +37654,8 @@ async fn handle_qc_records_commit_qc_history() {
         "need quorum signers for commit certificate"
     );
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -38348,8 +37740,8 @@ async fn handle_qc_records_commit_roster_for_unknown_block() {
         );
     }
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -38398,8 +37790,8 @@ async fn handle_qc_rehydrates_aborted_pending_payload_for_commit_repair() {
         signers.insert(ValidatorIndex::try_from(idx).expect("validator index fits"));
     }
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -38460,8 +37852,8 @@ async fn handle_qc_records_commit_qc_for_committed_block() {
         );
     }
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -38619,8 +38011,8 @@ async fn handle_qc_marks_pending_with_commit_qc() {
         );
     }
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -38648,7 +38040,7 @@ async fn handle_qc_marks_pending_with_commit_qc() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn handle_qc_validates_pending_block_on_commit_qc() {
+async fn handle_qc_marks_pending_block_for_vnext_commit_qc_validation() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -38695,6 +38087,16 @@ async fn handle_qc_validates_pending_block_on_commit_qc() {
     );
 
     let topology = super::network_topology::Topology::new(commit_topology);
+    let seeded = seed_commit_votes_for_block_with_roster(
+        actor,
+        &harness.key_pairs,
+        block_hash,
+        height,
+        view,
+        topology.as_ref(),
+        topology.as_ref().len(),
+    );
+    assert_eq!(seeded, topology.as_ref().len());
     let signers: BTreeSet<ValidatorIndex> = (0..topology.as_ref().len())
         .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
@@ -38710,12 +38112,31 @@ async fn handle_qc_validates_pending_block_on_commit_qc() {
         &topology,
         &harness.key_pairs,
     );
-
     actor.handle_qc(qc).expect("handle qc");
 
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending block retained after commit QC");
     assert!(
-        actor.block_known_for_lock(block_hash),
-        "commit QC should validate pending block when payload is present"
+        pending_after.commit_qc_observed(),
+        "commit QC should mark the pending block for commit-stage validation"
+    );
+    assert!(
+        actor
+            .qc_cache
+            .values()
+            .any(|cached| cached.subject_block_hash == block_hash),
+        "validated commit QC should be cached"
+    );
+    assert!(
+        actor.vnext_rounds.contains_key(&(height, view)),
+        "commit QC should leave frontier progress tracked by vNext"
+    );
+    assert!(
+        !actor.block_known_for_lock(block_hash),
+        "commit QC should not make the block lock-visible before validation completes"
     );
 
     harness.shutdown.send();
@@ -38767,13 +38188,23 @@ async fn handle_qc_supersedes_validation_inflight_on_commit_qc() {
         super::ValidationInFlight {
             id: 7,
             started_at: Instant::now()
-                .checked_sub(Duration::from_millis(25))
+                .checked_sub(actor.validation_worker_stall_timeout() + Duration::from_millis(1))
                 .unwrap_or_else(Instant::now),
             frontier_generation: None,
         },
     );
 
     let topology = super::network_topology::Topology::new(commit_topology);
+    let seeded = seed_commit_votes_for_block_with_roster(
+        actor,
+        &harness.key_pairs,
+        block_hash,
+        height,
+        view,
+        topology.as_ref(),
+        topology.as_ref().len(),
+    );
+    assert_eq!(seeded, topology.as_ref().len());
     let signers: BTreeSet<ValidatorIndex> = (0..topology.as_ref().len())
         .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
@@ -38789,20 +38220,39 @@ async fn handle_qc_supersedes_validation_inflight_on_commit_qc() {
         &topology,
         &harness.key_pairs,
     );
-
     actor.handle_qc(qc).expect("handle qc");
 
     assert!(
-        !actor
+        actor
             .subsystems
             .validation
             .inflight
-            .contains_key(&block_hash),
+            .get(&block_hash)
+            .is_none(),
         "commit QC should supersede stale validation inflight"
     );
     assert!(
-        actor.block_known_for_lock(block_hash),
-        "commit QC should make the near-tip block locally available for lock handling"
+        actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .is_some_and(PendingBlock::commit_qc_observed),
+        "commit QC should mark the pending block for commit-stage validation"
+    );
+    assert!(
+        actor
+            .qc_cache
+            .values()
+            .any(|cached| cached.subject_block_hash == block_hash),
+        "validated commit QC should be cached"
+    );
+    assert!(
+        actor.vnext_rounds.contains_key(&(height, view)),
+        "commit QC should keep frontier progress tracked by vNext"
+    );
+    assert!(
+        !actor.block_known_for_lock(block_hash),
+        "commit QC should not make the block lock-visible before validation completes"
     );
 
     harness.shutdown.send();
@@ -38832,6 +38282,7 @@ async fn handle_precommit_vote_accepts_stale_view_when_block_pending() {
     let chain = actor.common_config.chain.clone();
     let keypair = actor.common_config.key_pair.clone();
     let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view);
     let mut vote = crate::sumeragi::consensus::Vote {
         phase: Phase::Commit,
         block_hash,
@@ -38840,8 +38291,8 @@ async fn handle_precommit_vote_accepts_stale_view_when_block_pending() {
         height,
         view,
         epoch: actor.epoch_for_height(height),
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
+        chain_order_hash,
+        rechain_seq,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -38891,6 +38342,7 @@ async fn handle_precommit_vote_accepts_stale_view_when_block_unknown_with_da() {
     let chain = actor.common_config.chain.clone();
     let keypair = actor.common_config.key_pair.clone();
     let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, view);
     let mut vote = crate::sumeragi::consensus::Vote {
         phase: Phase::Commit,
         block_hash,
@@ -38899,8 +38351,8 @@ async fn handle_precommit_vote_accepts_stale_view_when_block_unknown_with_da() {
         height,
         view,
         epoch: actor.epoch_for_height(height),
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
+        chain_order_hash,
+        rechain_seq,
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
@@ -39488,8 +38940,8 @@ async fn handle_qc_accepts_stale_precommit_qc_for_unknown_block() {
         .map(|idx| ValidatorIndex::try_from(idx).expect("index"))
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, signature_topology.as_ref().len());
-    let qc = qc_with_view_bitmap(
-        &actor.chain_id,
+    let qc = qc_with_view_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         stale_view,
@@ -39500,18 +38952,11 @@ async fn handle_qc_accepts_stale_precommit_qc_for_unknown_block() {
         &topology,
         &harness.key_pairs,
     );
+    let qc_key = Actor::qc_tally_key(&qc);
 
     actor.handle_qc(qc).expect("precommit qc");
     assert!(
-        actor.qc_cache.contains_key(&(
-            Phase::Commit,
-            block_hash,
-            height,
-            stale_view,
-            0,
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0
-        )),
+        actor.qc_cache.contains_key(&qc_key),
         "precommit QC should be cached for stale view"
     );
 
@@ -39550,8 +38995,8 @@ async fn block_created_applies_cached_precommit_qc() {
     }
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
     let epoch = actor.epoch_for_height(height);
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -39561,17 +39006,16 @@ async fn block_created_applies_cached_precommit_qc() {
         &topology,
         &harness.key_pairs,
     );
+    let qc_key = Actor::qc_tally_key(&qc);
+    let expected_binding = actor.vnext_chain_order_binding_for_qc(&qc);
+    assert_eq!(
+        (qc.chain_order_hash, qc.rechain_seq),
+        expected_binding,
+        "test QC must use the actor's expected chain-order binding"
+    );
     actor.handle_qc(qc).expect("handle qc");
     assert!(
-        actor.qc_cache.contains_key(&(
-            Phase::Commit,
-            block_hash,
-            height,
-            view,
-            epoch,
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0
-        )),
+        actor.qc_cache.contains_key(&qc_key),
         "precommit QC should be cached for unknown block"
     );
     assert!(
@@ -39588,6 +39032,22 @@ async fn block_created_applies_cached_precommit_qc() {
             None,
         )
         .expect("block created");
+
+    assert!(
+        actor.locked_qc.is_none(),
+        "lock must remain unset until the cached-QC block is validated"
+    );
+    assert!(
+        actor.highest_qc.is_none(),
+        "highest QC must remain unset until the cached-QC block is validated"
+    );
+
+    let commit_topology = actor.effective_commit_topology();
+    let outcome = actor.validate_pending_block_for_voting_inline(block_hash, &commit_topology);
+    assert!(
+        matches!(outcome, ValidationGateOutcome::Valid),
+        "validation should replay the cached precommit QC"
+    );
 
     let locked = actor.locked_qc.expect("locked QC should be updated");
     assert_eq!(locked.subject_block_hash, block_hash);
@@ -39633,8 +39093,8 @@ async fn block_created_replays_cached_prepare_qc() {
     }
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
     let epoch = actor.epoch_for_height(height);
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -39644,18 +39104,17 @@ async fn block_created_replays_cached_prepare_qc() {
         &topology,
         &harness.key_pairs,
     );
+    let qc_key = Actor::qc_tally_key(&qc);
     actor.handle_qc(qc).expect("handle qc");
     assert!(
-        actor.qc_cache.contains_key(&(
-            Phase::Prepare,
-            block_hash,
-            height,
-            view,
-            epoch,
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0
-        )),
-        "prepare QC should be cached for unknown block"
+        actor.qc_cache.contains_key(&qc_key),
+        "prepare QC should be cached for unknown block; key={qc_key:?}, cache_keys={:?}, deferred_missing_keys={:?}, deferred_roster_keys={:?}",
+        actor.qc_cache.keys().collect::<Vec<_>>(),
+        actor
+            .deferred_missing_payload_qcs
+            .keys()
+            .collect::<Vec<_>>(),
+        actor.deferred_qcs.keys().collect::<Vec<_>>()
     );
     assert!(
         actor.highest_qc.is_none(),
@@ -39715,8 +39174,8 @@ async fn handle_qc_missing_block_fetch_uses_aggressive_topology_for_commit_qc() 
         })
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, signature_topology.as_ref().len());
-    let qc = qc_with_view_bitmap(
-        &actor.chain_id,
+    let qc = qc_with_view_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -52810,8 +52269,8 @@ async fn commit_qc_revives_aborted_pending_block() {
         .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, commit_topology.len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         0,
@@ -52879,8 +52338,8 @@ async fn commit_qc_keeps_retired_same_height_pending_inactive() {
         .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, commit_topology.len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         1,
@@ -53036,6 +52495,7 @@ async fn commit_qc_for_retired_branch_survives_non_signer_same_height_vote_evide
         signer: 2,
         bls_sig: Vec::new(),
     };
+    bind_vote_to_actor_chain_order(&mut later_vote, actor);
     sign_vote_for_canonical_signer(
         &mut later_vote,
         &actor.common_config.chain,
@@ -53051,8 +52511,8 @@ async fn commit_qc_for_retired_branch_survives_non_signer_same_height_vote_evide
         .map(ValidatorIndex::from)
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&qc_signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         canonical_hash,
         height,
         canonical_view,
@@ -53062,6 +52522,7 @@ async fn commit_qc_for_retired_branch_survives_non_signer_same_height_vote_evide
         &topology,
         &harness.key_pairs,
     );
+    let qc_key = Actor::qc_tally_key(&qc);
 
     actor
         .handle_qc(qc)
@@ -53081,15 +52542,7 @@ async fn commit_qc_for_retired_branch_survives_non_signer_same_height_vote_evide
         "commit QC should still be recorded when only a non-signer voted another branch"
     );
     assert!(
-        actor.qc_cache.contains_key(&(
-            Phase::Commit,
-            canonical_hash,
-            height,
-            canonical_view,
-            epoch,
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0
-        )),
+        actor.qc_cache.contains_key(&qc_key),
         "accepted commit QC should remain cached for later finalize/sync work"
     );
 
@@ -54078,7 +53531,11 @@ fn heartbeat_block_for_state_changes_block_hash_when_signer_changes() {
     assert_ne!(first_block.hash(), second_block.hash());
 }
 
-fn state_with_peers_and_keys(peers: &[PeerId], keys: &[KeyPair]) -> State {
+fn state_with_peer_roster_and_consensus_keys(
+    peers: &[PeerId],
+    key_peers: &[PeerId],
+    keys: &[KeyPair],
+) -> State {
     let world = World::default();
     {
         let mut block = world.block();
@@ -54086,12 +53543,20 @@ fn state_with_peers_and_keys(peers: &[PeerId], keys: &[KeyPair]) -> State {
         for pid in peers {
             let _ = vec.push(pid.clone());
         }
-        insert_consensus_keys_for_peers(&mut block, peers, keys);
+        insert_consensus_keys_for_peers(&mut block, key_peers, keys);
         block.commit();
     }
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     State::new(world, kura, query)
+}
+
+fn state_with_peers_and_keys(peers: &[PeerId], keys: &[KeyPair]) -> State {
+    state_with_peer_roster_and_consensus_keys(peers, peers, keys)
+}
+
+fn state_with_consensus_keys(peers: &[PeerId], keys: &[KeyPair]) -> State {
+    state_with_peer_roster_and_consensus_keys(&[], peers, keys)
 }
 
 fn insert_consensus_keys_for_peers(
@@ -54224,8 +53689,8 @@ fn persistent_kura_for_tests() -> (Arc<Kura>, tempfile::TempDir) {
 
 #[test]
 fn active_topology_falls_back_to_world_peers() {
-    let (me_peer, me_pop, _kp) = bls_peer("127.0.0.1:7070");
-    let (other_peer, other_pop, _kp) = bls_peer("127.0.0.1:7071");
+    let (me_peer, me_pop, me_kp) = bls_peer("127.0.0.1:7070");
+    let (other_peer, other_pop, other_kp) = bls_peer("127.0.0.1:7071");
     let me_id = me_peer.id().clone();
     let other_id = other_peer.id().clone();
 
@@ -54234,7 +53699,7 @@ fn active_topology_falls_back_to_world_peers() {
     pops.insert(other_peer.id().public_key().clone(), other_pop);
 
     let trusted = trusted_with_pops(me_peer.clone(), vec![other_peer.clone()], pops);
-    let state = state_with_peers(vec![me_id.clone(), other_id.clone()]);
+    let state = state_with_peers_and_keys(&[me_id.clone(), other_id.clone()], &[me_kp, other_kp]);
     let view = state.view();
 
     let roster = derive_active_topology(&view, &trusted, &me_id);
@@ -54245,9 +53710,9 @@ fn active_topology_falls_back_to_world_peers() {
 
 #[test]
 fn active_topology_prefers_commit_topology() {
-    let (me_peer, me_pop, _kp) = bls_peer("127.0.0.1:7070");
-    let (other_peer, other_pop, _kp) = bls_peer("127.0.0.1:7071");
-    let (extra_peer, extra_pop, _kp) = bls_peer("127.0.0.1:7072");
+    let (me_peer, me_pop, me_kp) = bls_peer("127.0.0.1:7070");
+    let (other_peer, other_pop, other_kp) = bls_peer("127.0.0.1:7071");
+    let (extra_peer, extra_pop, extra_kp) = bls_peer("127.0.0.1:7072");
     let me_id = me_peer.id().clone();
     let other_id = other_peer.id().clone();
     let extra_id = extra_peer.id().clone();
@@ -54262,7 +53727,10 @@ fn active_topology_prefers_commit_topology() {
         vec![other_peer.clone(), extra_peer.clone()],
         pops,
     );
-    let state = state_with_peers(vec![me_id.clone(), other_id.clone(), extra_id.clone()]);
+    let state = state_with_peers_and_keys(
+        &[me_id.clone(), other_id.clone(), extra_id.clone()],
+        &[me_kp, other_kp, extra_kp],
+    );
     {
         let mut block = state.commit_topology.block();
         {
@@ -54282,8 +53750,8 @@ fn active_topology_prefers_commit_topology() {
 
 #[test]
 fn active_topology_excludes_self_when_missing_from_world() {
-    let (me_peer, me_pop, _kp) = bls_peer("127.0.0.1:7070");
-    let (other_peer, other_pop, _kp) = bls_peer("127.0.0.1:7071");
+    let (me_peer, me_pop, _me_kp) = bls_peer("127.0.0.1:7070");
+    let (other_peer, other_pop, other_kp) = bls_peer("127.0.0.1:7071");
     let me_id = me_peer.id().clone();
     let other_id = other_peer.id().clone();
 
@@ -54291,7 +53759,7 @@ fn active_topology_excludes_self_when_missing_from_world() {
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     pops.insert(other_peer.id().public_key().clone(), other_pop);
     let trusted = trusted_with_pops(me_peer.clone(), vec![other_peer.clone()], pops);
-    let state = state_with_peers(vec![other_id.clone()]);
+    let state = state_with_peers_and_keys(std::slice::from_ref(&other_id), &[other_kp]);
     let view = state.view();
 
     let roster = derive_active_topology(&view, &trusted, &me_id);
@@ -54302,10 +53770,10 @@ fn active_topology_excludes_self_when_missing_from_world() {
 #[test]
 #[allow(clippy::similar_names)]
 fn active_topology_does_not_insert_self_when_missing_from_baseline_with_pops() {
-    let (me_peer, me_pop, _kp) = bls_peer("127.0.0.1:7070");
-    let (peer_a, pop_a, _kp_a) = bls_peer("127.0.0.1:7071");
-    let (peer_b, _pop_b, _kp_b) = bls_peer("127.0.0.1:7072");
-    let (peer_c, _pop_c, _kp_c) = bls_peer("127.0.0.1:7073");
+    let (me_peer, me_pop, _me_kp) = bls_peer("127.0.0.1:7070");
+    let (peer_a, pop_a, peer_a_kp) = bls_peer("127.0.0.1:7071");
+    let (peer_b, _pop_b, peer_b_kp) = bls_peer("127.0.0.1:7072");
+    let (peer_c, _pop_c, peer_c_kp) = bls_peer("127.0.0.1:7073");
     let me_id = me_peer.id().clone();
     let peer_a_id = peer_a.id().clone();
     let peer_b_id = peer_b.id().clone();
@@ -54320,11 +53788,10 @@ fn active_topology_does_not_insert_self_when_missing_from_baseline_with_pops() {
         vec![peer_a.clone(), peer_b.clone(), peer_c.clone()],
         pops,
     );
-    let state = state_with_peers(vec![
-        peer_a_id.clone(),
-        peer_b_id.clone(),
-        peer_c_id.clone(),
-    ]);
+    let state = state_with_peers_and_keys(
+        &[peer_a_id.clone(), peer_b_id.clone(), peer_c_id.clone()],
+        &[peer_a_kp, peer_b_kp, peer_c_kp],
+    );
     let view = state.view();
 
     let roster = derive_active_topology(&view, &trusted, &me_id);
@@ -54336,8 +53803,8 @@ fn active_topology_does_not_insert_self_when_missing_from_baseline_with_pops() {
 
 #[test]
 fn active_topology_falls_back_to_commit_topology() {
-    let (me_peer, me_pop, _kp) = bls_peer("127.0.0.1:7070");
-    let (other_peer, other_pop, _kp) = bls_peer("127.0.0.1:7071");
+    let (me_peer, me_pop, me_kp) = bls_peer("127.0.0.1:7070");
+    let (other_peer, other_pop, other_kp) = bls_peer("127.0.0.1:7071");
     let me_id = me_peer.id().clone();
     let other_id = other_peer.id().clone();
 
@@ -54345,7 +53812,7 @@ fn active_topology_falls_back_to_commit_topology() {
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     pops.insert(other_peer.id().public_key().clone(), other_pop);
     let trusted = trusted_with_pops(me_peer.clone(), vec![other_peer.clone()], pops);
-    let state = state_with_peers(Vec::new());
+    let state = state_with_consensus_keys(&[me_id.clone(), other_id.clone()], &[me_kp, other_kp]);
     {
         let mut block = state.commit_topology.block();
         {
@@ -54364,17 +53831,20 @@ fn active_topology_falls_back_to_commit_topology() {
 
 #[test]
 fn active_topology_preserves_quorum_when_pops_missing() {
-    let (me_peer, me_pop, _kp) = bls_peer("127.0.0.1:7072");
-    let (peer_a, _pop_a, _kp_a) = bls_peer("127.0.0.1:7073");
-    let (peer_b, _pop_b, _kp_b) = bls_peer("127.0.0.1:7074");
+    let (me_peer, me_pop, me_kp) = bls_peer("127.0.0.1:7072");
+    let (peer_a, _pop_a, peer_a_kp) = bls_peer("127.0.0.1:7073");
+    let (peer_b, _pop_b, peer_b_kp) = bls_peer("127.0.0.1:7074");
     let mut pops = BTreeMap::new();
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), vec![peer_a.clone(), peer_b.clone()], pops);
-    let state = state_with_peers(vec![
-        me_peer.id().clone(),
-        peer_a.id().clone(),
-        peer_b.id().clone(),
-    ]);
+    let state = state_with_peers_and_keys(
+        &[
+            me_peer.id().clone(),
+            peer_a.id().clone(),
+            peer_b.id().clone(),
+        ],
+        &[me_kp, peer_a_kp, peer_b_kp],
+    );
     let view = state.view();
 
     let roster = derive_active_topology(&view, &trusted, me_peer.id());
@@ -63753,8 +63223,8 @@ fn synthesize_commit_qc_uses_precommit_signers_when_history_missing() {
 
 #[test]
 fn active_topology_preserves_quorum_with_incomplete_pop_map() {
-    let (me_peer, me_pop, _kp) = bls_peer("127.0.0.1:7070");
-    let (other_peer, _other_pop, _kp) = bls_peer("127.0.0.1:7071");
+    let (me_peer, me_pop, me_kp) = bls_peer("127.0.0.1:7070");
+    let (other_peer, _other_pop, other_kp) = bls_peer("127.0.0.1:7071");
     let me_id = me_peer.id().clone();
     let other_id = other_peer.id().clone();
 
@@ -63762,7 +63232,7 @@ fn active_topology_preserves_quorum_with_incomplete_pop_map() {
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     // omit other's PoP to ensure it is filtered when pops are present
     let trusted = trusted_with_pops(me_peer.clone(), vec![other_peer.clone()], pops);
-    let state = state_with_peers(vec![me_id.clone(), other_id.clone()]);
+    let state = state_with_peers_and_keys(&[me_id.clone(), other_id.clone()], &[me_kp, other_kp]);
     let view = state.view();
 
     let roster = derive_active_topology(&view, &trusted, &me_id);
@@ -63776,8 +63246,8 @@ fn active_topology_preserves_quorum_with_incomplete_pop_map() {
 
 #[test]
 fn local_validator_index_tracks_active_topology_order() {
-    let (first_peer, first_pop, _kp) = bls_peer("127.0.0.1:7070");
-    let (me_peer, me_pop, _kp) = bls_peer("127.0.0.1:7071");
+    let (first_peer, first_pop, first_kp) = bls_peer("127.0.0.1:7070");
+    let (me_peer, me_pop, me_kp) = bls_peer("127.0.0.1:7071");
     let first_id = first_peer.id().clone();
     let me_id = me_peer.id().clone();
 
@@ -63786,7 +63256,7 @@ fn local_validator_index_tracks_active_topology_order() {
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), vec![first_peer.clone()], pops);
     // World peers intentionally start with the non-self peer to ensure sorting is applied.
-    let state = state_with_peers(vec![first_id.clone(), me_id.clone()]);
+    let state = state_with_peers_and_keys(&[first_id.clone(), me_id.clone()], &[first_kp, me_kp]);
     let view = state.view();
 
     let roster = derive_active_topology(&view, &trusted, &me_id);
@@ -63805,8 +63275,8 @@ fn local_validator_index_tracks_active_topology_order() {
 
 #[test]
 fn active_topology_uses_trusted_when_roster_empty() {
-    let (me_peer, me_pop, _kp) = bls_peer("127.0.0.1:7070");
-    let (other_peer, other_pop, _kp) = bls_peer("127.0.0.1:7071");
+    let (me_peer, me_pop, me_kp) = bls_peer("127.0.0.1:7070");
+    let (other_peer, other_pop, other_kp) = bls_peer("127.0.0.1:7071");
     let me_id = me_peer.id().clone();
     let other_id = other_peer.id().clone();
 
@@ -63814,7 +63284,7 @@ fn active_topology_uses_trusted_when_roster_empty() {
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     pops.insert(other_peer.id().public_key().clone(), other_pop);
     let trusted = trusted_with_pops(me_peer.clone(), vec![other_peer.clone()], pops);
-    let state = state_with_peers(Vec::new());
+    let state = state_with_consensus_keys(&[me_id.clone(), other_id.clone()], &[me_kp, other_kp]);
     let view = state.view();
 
     let roster = derive_active_topology(&view, &trusted, &me_id);
@@ -63826,7 +63296,7 @@ fn active_topology_uses_trusted_when_roster_empty() {
 
 #[test]
 fn active_topology_drops_trusted_peers_without_pop() {
-    let (me_peer, me_pop, _kp) = bls_peer("127.0.0.1:7070");
+    let (me_peer, me_pop, me_kp) = bls_peer("127.0.0.1:7070");
     let other_peer = {
         let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::new(kp.public_key().clone());
@@ -63840,7 +63310,7 @@ fn active_topology_drops_trusted_peers_without_pop() {
     // NOTE: deliberately omit PoP for other_id
     let trusted = trusted_with_pops(me_peer.clone(), vec![other_peer.clone()], pops);
     // Empty world/commit to force trusted fallback path.
-    let state = state_with_peers(Vec::new());
+    let state = state_with_consensus_keys(std::slice::from_ref(&me_id), &[me_kp]);
     let view = state.view();
 
     let roster = derive_active_topology(&view, &trusted, &me_id);
@@ -63850,7 +63320,7 @@ fn active_topology_drops_trusted_peers_without_pop() {
 
 #[test]
 fn active_topology_drops_non_bls_identities() {
-    let (me_peer, me_pop, _kp) = bls_peer("127.0.0.1:7070");
+    let (me_peer, me_pop, me_kp) = bls_peer("127.0.0.1:7070");
     let me_id = me_peer.id().clone();
 
     let non_bls_peer = {
@@ -63864,7 +63334,11 @@ fn active_topology_drops_non_bls_identities() {
     let mut pops = BTreeMap::new();
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), vec![non_bls_peer.clone()], pops);
-    let state = state_with_peers(vec![me_id.clone(), non_bls_id]);
+    let state = state_with_peer_roster_and_consensus_keys(
+        &[me_id.clone(), non_bls_id],
+        std::slice::from_ref(&me_id),
+        &[me_kp],
+    );
     let view = state.view();
 
     let roster = derive_active_topology(&view, &trusted, &me_id);
@@ -82201,18 +81675,26 @@ async fn trigger_view_change_uses_commit_qc_roster_for_new_view_vote() {
         .phase_tracker
         .current_view(3)
         .expect("view should advance");
-    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(3);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(3);
     let topology = super::network_topology::Topology::new(expected_roster);
     let signature_topology = super::topology_for_view(&topology, 3, next_view, mode_tag, prf_seed);
     let local_idx = actor
         .local_validator_index_for_topology(&signature_topology)
         .expect("local peer should be in derived topology");
-    let key = default_vote_log_key(
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
+        3,
+        next_view,
+        consensus_mode,
+        &signature_topology,
+    );
+    let key = (
         Phase::NewView,
         3,
         next_view,
         actor.epoch_for_height(3),
         local_idx,
+        chain_order_hash,
+        rechain_seq,
     );
     let vote = actor
         .vote_log
@@ -86710,7 +86192,7 @@ async fn force_view_change_if_idle_arms_nonleader_empty_frontier_recovery_after_
     let base_roster = actor.effective_commit_topology();
     let committed_height = actor.state.view().height() as u64;
     let height = committed_height.saturating_add(1);
-    let current_view = 0_u64;
+    let roster_search_view = 0_u64;
     let roster = (0..64_u64)
         .scan(base_roster.clone(), |candidate, extra_idx| {
             if extra_idx > 0 {
@@ -86723,14 +86205,19 @@ async fn force_view_change_if_idle_arms_nonleader_empty_frontier_recovery_after_
                     candidate.push(peer.id().clone());
                 }
             }
-            let mut signature_topology = super::network_topology::Topology::new(candidate.clone());
+            let candidate_roster = super::roster::canonicalize_roster_for_mode(
+                candidate.clone(),
+                ConsensusMode::Permissioned,
+            );
+            let mut signature_topology =
+                super::network_topology::Topology::new(candidate_roster.clone());
             let leader_index = actor
-                .leader_index_for(&mut signature_topology, height, current_view)
+                .leader_index_for(&mut signature_topology, height, roster_search_view)
                 .expect("leader index");
             let local_signature_pos = signature_topology
                 .position(local_peer.public_key())
                 .expect("local position");
-            Some((local_signature_pos != leader_index).then(|| candidate.clone()))
+            Some((local_signature_pos != leader_index).then_some(candidate_roster))
         })
         .flatten()
         .next()
@@ -86740,6 +86227,20 @@ async fn force_view_change_if_idle_arms_nonleader_empty_frontier_recovery_after_
         topo_block.mutate_vec(|vec| *vec = roster.clone());
         topo_block.commit();
     }
+    let current_view = (roster_search_view..roster_search_view.saturating_add(64))
+        .find(|candidate_view| {
+            let mut signature_topology =
+                super::network_topology::Topology::new(actor.effective_commit_topology());
+            let Ok(leader_index) =
+                actor.leader_index_for(&mut signature_topology, height, *candidate_view)
+            else {
+                return false;
+            };
+            signature_topology
+                .position(local_peer.public_key())
+                .is_some_and(|local_signature_pos| local_signature_pos != leader_index)
+        })
+        .expect("find tracked view where local peer is a non-leader");
 
     let committed_qc = actor.latest_committed_qc().expect("committed qc");
     actor.highest_qc = Some(committed_qc);
@@ -88171,6 +87672,99 @@ async fn maybe_force_view_change_for_stalled_pending_defers_during_validation_in
     assert!(
         actor.maybe_force_view_change_for_stalled_pending(later),
         "validation inflight should still recover deterministically after the recovery timeout"
+    );
+    assert_eq!(
+        actor.subsystems.propose.forced_view_after_timeout,
+        Some((height, view_idx.saturating_add(1)))
+    );
+
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maybe_force_view_change_for_stalled_pending_honors_fresh_validation_worker_floor_under_tx_backlog()
+ {
+    use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let committed_height = view.height() as u64;
+    let height = committed_height.saturating_add(1);
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let view_idx = 0_u64;
+    let txs = (0..1_024)
+        .map(|idx| sample_log_transaction_with_message_len(idx + 1))
+        .collect();
+    let block = block_with_txs(height, view_idx, parent, txs);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let now = Instant::now();
+    let active_ceiling = actor.active_block_production_gap_ceiling();
+    let stalled_age = active_ceiling.saturating_add(Duration::from_millis(1));
+    let stalled_at = now.checked_sub(stalled_age).unwrap_or(now);
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.touch_progress(stalled_at);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.note_proposal_seen(height, view_idx, payload_hash);
+    actor
+        .phase_tracker
+        .on_view_change(height, view_idx, stalled_at);
+    actor.subsystems.validation.inflight.insert(
+        block_hash,
+        super::ValidationInFlight {
+            id: 23,
+            started_at: stalled_at,
+            frontier_generation: None,
+        },
+    );
+    let (work_tx, _work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    let (_result_tx, result_rx) = mpsc::sync_channel::<super::validation::ValidationResult>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+    actor.subsystems.validation.result_rx = Some(result_rx);
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let validation_floor = actor.validation_worker_stall_timeout_for(block_hash);
+    assert!(
+        validation_floor > active_ceiling,
+        "large DA block validation should outlive the active-load production ceiling"
+    );
+    assert!(
+        !actor.maybe_force_view_change_for_stalled_pending(now),
+        "fresh validation work should prevent active tx backlog from forcing a view change at the production ceiling"
+    );
+    assert_eq!(
+        actor.subsystems.propose.forced_view_after_timeout, None,
+        "forced-view marker should stay clear while validation is inside its worker stall window"
+    );
+
+    let later = now
+        .checked_add(
+            validation_floor
+                .saturating_sub(stalled_age)
+                .saturating_add(Duration::from_millis(2)),
+        )
+        .unwrap_or(now);
+    assert!(
+        actor.maybe_force_view_change_for_stalled_pending(later),
+        "active-pending recovery should still rotate after the validation worker stall window expires"
     );
     assert_eq!(
         actor.subsystems.propose.forced_view_after_timeout,
@@ -90112,6 +89706,115 @@ async fn force_view_change_if_idle_defers_proposal_gap_with_backlog_until_availa
     );
 
     super::status::record_worker_queue_drain(super::status::WorkerQueueKind::BlockPayload, 1);
+    super::status::reset_worker_loop_snapshot_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_defers_empty_frontier_missing_qc_under_tx_backlog_after_reacquire()
+ {
+    use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    let _view_guard = super::status::view_change_cause_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
+    actor.config.recovery.rotate_after_reacquire_exhausted = true;
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 2u64;
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let start = now
+        .checked_sub(timeout.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+    actor.subsystems.propose.last_missing_qc_reacquire_attempt = Some((height, current_view));
+
+    assert!(
+        !actor.slot_has_round_liveness(height, current_view),
+        "test setup should leave the frontier without a proposal"
+    );
+    assert!(
+        actor.pending.pending_blocks.is_empty(),
+        "test setup should exercise the empty-frontier path"
+    );
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "empty-frontier missing_qc should defer once the reacquire attempt already ran and tx backlog remains active"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view),
+        "bounded deferral should hold the current view"
+    );
+    assert_eq!(
+        super::status::snapshot()
+            .view_change_causes
+            .missing_qc_total,
+        0,
+        "deferral should not record a missing_qc rotation"
+    );
+
+    let rotate_at = now
+        .checked_add(
+            actor
+                .recovery_missing_qc_reacquire_window()
+                .saturating_add(Duration::from_millis(2)),
+        )
+        .unwrap_or(now);
+    actor.subsystems.propose.last_pacemaker_attempt = Some(rotate_at);
+    assert!(
+        actor.force_view_change_if_idle(rotate_at),
+        "empty-frontier missing_qc should still rotate after the bounded reacquire window expires"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view.saturating_add(1))
+    );
+    assert_eq!(
+        super::status::snapshot()
+            .view_change_causes
+            .missing_qc_total,
+        1,
+        "exactly one missing_qc rotation should be recorded after the window expires"
+    );
+
     super::status::reset_worker_loop_snapshot_for_tests();
     super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
@@ -94146,6 +93849,7 @@ async fn proposal_does_not_yield_recovery_exhausted_owner_with_prepare_qc() {
 async fn pacemaker_assembles_after_hard_stale_active_tip_owner_without_qc_lock() {
     use std::borrow::Cow;
 
+    let _commit_history_guard = isolate_commit_history_state();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -96842,6 +96546,8 @@ async fn qc_signers_for_votes_revalidates_on_roster_hash_mismatch() {
         signer: 0,
         bls_sig: Vec::new(),
     };
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     sign_vote_for_view_with_seed(
         &mut vote,
         &chain,
@@ -96851,7 +96557,6 @@ async fn qc_signers_for_votes_revalidates_on_roster_hash_mismatch() {
         prf_seed,
     );
 
-    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
     let key = vote_log_key_for_vote(&vote);
     let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
     let membership_hash = HashOf::new(&super::roster::canonicalize_roster_for_mode(
@@ -96968,6 +96673,7 @@ async fn qc_signers_for_votes_uses_mode_aware_membership_hash_for_rotated_views(
         signer: 0,
         bls_sig: Vec::new(),
     };
+    bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     sign_vote_for_view_with_seed(
         &mut vote,
         &chain,
@@ -97045,6 +96751,8 @@ async fn qc_signers_for_votes_skips_membership_hash_mismatch() {
         signer: 0,
         bls_sig: Vec::new(),
     };
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     sign_vote_for_view_with_seed(
         &mut vote,
         &chain,
@@ -97054,7 +96762,6 @@ async fn qc_signers_for_votes_skips_membership_hash_mismatch() {
         prf_seed,
     );
 
-    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
     let key = vote_log_key_for_vote(&vote);
     let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
     let mismatched_roster = vec![PeerId::new(
@@ -97151,6 +96858,11 @@ async fn qc_signers_for_votes_keeps_lower_view_vote_after_higher_view_vote() {
     )
     .expect("canonical signer maps to view index");
     vote_low.signer = u32::try_from(view_idx_low).expect("view index fits u32");
+    bind_vote_to_signature_topology_chain_order(
+        &mut vote_low,
+        actor,
+        &canonical_signature_topology_low,
+    );
     sign_vote_for_view_with_seed(
         &mut vote_low,
         &chain,
@@ -97188,6 +96900,11 @@ async fn qc_signers_for_votes_keeps_lower_view_vote_after_higher_view_vote() {
     )
     .expect("canonical signer maps to view index");
     vote_high.signer = u32::try_from(view_idx_high).expect("view index fits u32");
+    bind_vote_to_signature_topology_chain_order(
+        &mut vote_high,
+        actor,
+        &canonical_signature_topology_high,
+    );
     sign_vote_for_view_with_seed(
         &mut vote_high,
         &chain,
@@ -97200,7 +96917,7 @@ async fn qc_signers_for_votes_keeps_lower_view_vote_after_higher_view_vote() {
     for vote in [&vote_low, &vote_high] {
         let key = vote_log_key_for_vote(&vote);
         let signature_topology =
-            super::topology_for_view(&topology, height, vote.view, mode_tag, prf_seed);
+            super::topology_for_view(&canonical_topology, height, vote.view, mode_tag, prf_seed);
         let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
         let membership_hash = HashOf::new(&super::roster::canonicalize_roster_for_mode(
             signature_topology.as_ref().to_vec(),
@@ -97216,30 +96933,26 @@ async fn qc_signers_for_votes_keeps_lower_view_vote_after_higher_view_vote() {
         );
     }
 
-    let signature_topology_low =
-        super::topology_for_view(&topology, height, vote_low.view, mode_tag, prf_seed);
     let signers_low = actor.qc_signers_for_votes(
         Phase::Commit,
         block_hash_low,
         height,
         vote_low.view,
         epoch,
-        &signature_topology_low,
+        &canonical_signature_topology_low,
     );
     assert!(
         signers_low.contains(&vote_low.signer),
         "lower-view vote should remain eligible for QC once validated"
     );
 
-    let signature_topology_high =
-        super::topology_for_view(&topology, height, vote_high.view, mode_tag, prf_seed);
     let signers_high = actor.qc_signers_for_votes(
         Phase::Commit,
         block_hash_high,
         height,
         vote_high.view,
         epoch,
-        &signature_topology_high,
+        &canonical_signature_topology_high,
     );
     assert!(
         signers_high.contains(&vote_high.signer),
@@ -97291,6 +97004,9 @@ async fn qc_signers_for_votes_does_not_ignore_lower_view_vote_from_other_peer() 
         signer: 0,
         bls_sig: Vec::new(),
     };
+    let signature_topology_low =
+        super::topology_for_view(&topology, height, vote_low.view, mode_tag, prf_seed);
+    bind_vote_to_signature_topology_chain_order(&mut vote_low, actor, &signature_topology_low);
     sign_vote_for_view_with_seed(
         &mut vote_low,
         &chain,
@@ -97314,6 +97030,9 @@ async fn qc_signers_for_votes_does_not_ignore_lower_view_vote_from_other_peer() 
         signer: 0,
         bls_sig: Vec::new(),
     };
+    let signature_topology_high =
+        super::topology_for_view(&topology, height, vote_high.view, mode_tag, prf_seed);
+    bind_vote_to_signature_topology_chain_order(&mut vote_high, actor, &signature_topology_high);
     sign_vote_for_view_with_seed(
         &mut vote_high,
         &chain,
@@ -97323,10 +97042,6 @@ async fn qc_signers_for_votes_does_not_ignore_lower_view_vote_from_other_peer() 
         prf_seed,
     );
 
-    let signature_topology_low =
-        super::topology_for_view(&topology, height, vote_low.view, mode_tag, prf_seed);
-    let signature_topology_high =
-        super::topology_for_view(&topology, height, vote_high.view, mode_tag, prf_seed);
     let idx = usize::try_from(vote_low.signer).expect("signer fits usize");
     let peer_low = signature_topology_low
         .as_ref()
@@ -97528,6 +97243,7 @@ async fn try_form_qc_from_votes_rejects_cross_view_conflicting_commit_quorums() 
 async fn validate_and_record_vote_rejects_cross_view_conflicting_commit_vote_for_same_signer() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    actor.config.resilience.enabled = false;
 
     let chain = actor.common_config.chain.clone();
     let height = u64::try_from(actor.state.view().height())
@@ -97568,6 +97284,7 @@ async fn validate_and_record_vote_rejects_cross_view_conflicting_commit_vote_for
     )
     .expect("canonical signer maps to view index");
     vote_low.signer = u32::try_from(signer_idx_low).expect("signer index fits u32");
+    bind_vote_to_signature_topology_chain_order(&mut vote_low, actor, &signature_topology_low);
     sign_vote_for_view_with_seed(
         &mut vote_low,
         &chain,
@@ -97602,6 +97319,7 @@ async fn validate_and_record_vote_rejects_cross_view_conflicting_commit_vote_for
     )
     .expect("canonical signer maps to view index");
     vote_high.signer = u32::try_from(signer_idx_high).expect("signer index fits u32");
+    bind_vote_to_signature_topology_chain_order(&mut vote_high, actor, &signature_topology_high);
     sign_vote_for_view_with_seed(
         &mut vote_high,
         &chain,
@@ -97716,6 +97434,7 @@ async fn validate_and_record_vote_rejects_non_new_view_highest_qc() {
 async fn validate_and_record_vote_rejects_cross_view_conflicting_prepare_vote_for_same_signer() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    actor.config.resilience.enabled = false;
 
     let chain = actor.common_config.chain.clone();
     let height = u64::try_from(actor.state.view().height())
@@ -97756,6 +97475,7 @@ async fn validate_and_record_vote_rejects_cross_view_conflicting_prepare_vote_fo
     )
     .expect("canonical signer maps to view index");
     vote_low.signer = u32::try_from(signer_idx_low).expect("signer index fits u32");
+    bind_vote_to_signature_topology_chain_order(&mut vote_low, actor, &signature_topology_low);
     sign_vote_for_view_with_seed(
         &mut vote_low,
         &chain,
@@ -97790,6 +97510,7 @@ async fn validate_and_record_vote_rejects_cross_view_conflicting_prepare_vote_fo
     )
     .expect("canonical signer maps to view index");
     vote_high.signer = u32::try_from(signer_idx_high).expect("signer index fits u32");
+    bind_vote_to_signature_topology_chain_order(&mut vote_high, actor, &signature_topology_high);
     sign_vote_for_view_with_seed(
         &mut vote_high,
         &chain,
@@ -97875,6 +97596,8 @@ async fn validate_and_record_vote_rejects_same_view_conflicting_commit_vote_and_
         signer: 0,
         bls_sig: Vec::new(),
     };
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    bind_vote_to_signature_topology_chain_order(&mut vote_a, actor, &signature_topology);
     sign_vote_for_view_with_seed(
         &mut vote_a,
         &chain,
@@ -97886,6 +97609,7 @@ async fn validate_and_record_vote_rejects_same_view_conflicting_commit_vote_and_
     let mut vote_b = vote_a.clone();
     vote_b.block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x82; Hash::LENGTH]));
+    bind_vote_to_signature_topology_chain_order(&mut vote_b, actor, &signature_topology);
     sign_vote_for_view_with_seed(
         &mut vote_b,
         &chain,
@@ -97895,7 +97619,6 @@ async fn validate_and_record_vote_rejects_same_view_conflicting_commit_vote_and_
         prf_seed,
     );
 
-    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
     let evidence_context = crate::sumeragi::EvidenceValidationContext {
         topology: &topology,
         chain_id: &chain,
@@ -97950,16 +97673,16 @@ async fn split_view_conflicting_commit_votes_cannot_form_second_quorum() {
     insert_validated_pending(actor, block_low.clone());
     insert_validated_pending(actor, block_high.clone());
 
-    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let topology =
+        super::network_topology::Topology::new(super::roster::canonicalize_roster_for_mode(
+            actor.effective_commit_topology(),
+            ConsensusMode::Permissioned,
+        ));
     let required = topology.min_votes_for_commit();
     let chain = actor.common_config.chain.clone();
-    let signature_topology_low = super::topology_for_view(
-        &topology,
-        height,
-        view_low,
-        actor.mode_tag(),
-        actor.npos_prf_seed(),
-    );
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology_low =
+        super::topology_for_view(&topology, height, view_low, mode_tag, prf_seed);
     let local_signer = actor
         .local_validator_index_for_topology(&signature_topology_low)
         .expect("local signer should be present in the low-view topology");
@@ -98002,6 +97725,7 @@ async fn split_view_conflicting_commit_votes_cannot_form_second_quorum() {
             signer: u32::try_from(signer).expect("signer index fits u32"),
             bls_sig: Vec::new(),
         };
+        bind_vote_to_signature_topology_chain_order(&mut vote_low, actor, &signature_topology_low);
         sign_vote_for_canonical_signer(&mut vote_low, &chain, &topology, &harness.key_pairs);
         actor.handle_vote(vote_low);
         quorum_canonical_signers.push(signer);
@@ -98024,7 +97748,7 @@ async fn split_view_conflicting_commit_votes_cannot_form_second_quorum() {
         "first branch should still collect a full quorum of honest commit votes"
     );
     let signers_bitmap = super::build_signers_bitmap(&signers_low, topology.as_ref().len());
-    let low_qc = qc_with_bitmap(
+    let mut low_qc = qc_with_bitmap(
         &chain,
         block_low.hash(),
         height,
@@ -98035,18 +97759,9 @@ async fn split_view_conflicting_commit_votes_cannot_form_second_quorum() {
         &topology,
         &harness.key_pairs,
     );
-    actor.qc_cache.insert(
-        (
-            Phase::Commit,
-            block_low.hash(),
-            height,
-            view_low,
-            epoch,
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0,
-        ),
-        low_qc,
-    );
+    bind_qc_to_actor_chain_order(&mut low_qc, actor, &harness.key_pairs);
+    let low_qc_key = Actor::qc_tally_key(&low_qc);
+    actor.qc_cache.insert(low_qc_key, low_qc);
 
     let local_high_rejected = actor.emit_precommit_vote(
         block_high.hash(),
@@ -98081,6 +97796,13 @@ async fn split_view_conflicting_commit_votes_cannot_form_second_quorum() {
             signer: u32::try_from(signer).expect("signer index fits u32"),
             bls_sig: Vec::new(),
         };
+        let signature_topology_high =
+            super::topology_for_view(&topology, height, view_high, mode_tag, prf_seed);
+        bind_vote_to_signature_topology_chain_order(
+            &mut vote_high,
+            actor,
+            &signature_topology_high,
+        );
         sign_vote_for_canonical_signer(&mut vote_high, &chain, &topology, &harness.key_pairs);
         actor.handle_vote(vote_high);
     }
@@ -98115,17 +97837,18 @@ async fn split_view_conflicting_commit_votes_cannot_form_second_quorum() {
         "reused signer peers must not record a conflicting higher-view commit branch"
     );
     assert!(
-        actor.qc_cache.contains_key(&(
-            Phase::Commit,
-            block_low.hash(),
-            height,
-            view_low,
-            epoch,
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0
-        )),
+        actor.qc_cache.contains_key(&low_qc_key),
         "the first branch should still aggregate a commit QC"
     );
+    let signature_topology_high =
+        super::topology_for_view(&topology, height, view_high, mode_tag, prf_seed);
+    let (high_chain_order_hash, high_rechain_seq) = actor
+        .vnext_chain_order_binding_for_signature_topology(
+            height,
+            view_high,
+            consensus_mode,
+            &signature_topology_high,
+        );
     assert!(
         !actor.qc_cache.contains_key(&(
             Phase::Commit,
@@ -98133,8 +97856,8 @@ async fn split_view_conflicting_commit_votes_cannot_form_second_quorum() {
             height,
             view_high,
             epoch,
-            crate::sumeragi::consensus::default_chain_order_hash(),
-            0
+            high_chain_order_hash,
+            high_rechain_seq
         )),
         "a second conflicting commit QC must not form from the same honest signer set"
     );
@@ -98501,6 +98224,103 @@ fn qc_with_bitmap(
     )
 }
 
+fn bind_qc_to_actor_chain_order(
+    qc: &mut crate::sumeragi::consensus::Qc,
+    actor: &Actor,
+    keypairs: &[KeyPair],
+) {
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_qc(qc);
+    qc.chain_order_hash = chain_order_hash;
+    qc.rechain_seq = rechain_seq;
+    resign_qc_for_actor(qc, actor, keypairs);
+}
+
+fn resign_qc_for_actor(
+    qc: &mut crate::sumeragi::consensus::Qc,
+    actor: &Actor,
+    keypairs: &[KeyPair],
+) {
+    let topology = super::network_topology::Topology::new(qc.validator_set.clone());
+    let signers = signers_from_bitmap(&qc.aggregate.signers_bitmap, topology.as_ref().len());
+    if signers.is_empty() {
+        qc.aggregate.bls_aggregate_signature.clear();
+        return;
+    }
+    let preimage = super::qc_bls_preimage(qc, &actor.common_config.chain, &qc.mode_tag);
+    let mut signatures = Vec::with_capacity(signers.len());
+    for signer in signers {
+        let idx = usize::try_from(signer).expect("signer fits usize");
+        let peer = topology
+            .as_ref()
+            .get(idx)
+            .expect("signer present in QC topology");
+        let kp = keypairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("matching keypair for signer");
+        let sig = Signature::new(kp.private_key(), &preimage);
+        signatures.push(sig.payload().to_vec());
+    }
+    let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
+    qc.aggregate.bls_aggregate_signature =
+        iroha_crypto::bls_normal_aggregate_signatures(&sig_refs).expect("aggregate succeeds");
+}
+
+fn qc_with_bitmap_for_actor(
+    actor: &Actor,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    epoch: u64,
+    signers_bitmap: Vec<u8>,
+    phase: Phase,
+    topology: &super::network_topology::Topology,
+    keypairs: &[KeyPair],
+) -> crate::sumeragi::consensus::Qc {
+    let mut qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap,
+        phase,
+        topology,
+        keypairs,
+    );
+    bind_qc_to_actor_chain_order(&mut qc, actor, keypairs);
+    qc
+}
+
+#[allow(clippy::too_many_arguments)]
+fn qc_with_view_bitmap_for_actor(
+    actor: &Actor,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    epoch: u64,
+    signers_bitmap: &[u8],
+    phase: Phase,
+    signature_topology: &super::network_topology::Topology,
+    canonical_topology: &super::network_topology::Topology,
+    keypairs: &[KeyPair],
+) -> crate::sumeragi::consensus::Qc {
+    let mut qc = qc_with_view_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap,
+        phase,
+        signature_topology,
+        canonical_topology,
+        keypairs,
+    );
+    bind_qc_to_actor_chain_order(&mut qc, actor, keypairs);
+    qc
+}
+
 #[allow(clippy::too_many_arguments)]
 fn qc_with_bitmap_and_highest(
     chain: &ChainId,
@@ -98519,7 +98339,17 @@ fn qc_with_bitmap_and_highest(
         ConsensusMode::Permissioned,
     );
     let canonical_topology = super::network_topology::Topology::new(canonical_roster);
-    let aggregate_sig = aggregate_signature_for_bitmap_with_highest(
+    let prf_seed = Some(prf_seed_for_chain(chain));
+    let (chain_order_hash, rechain_seq) = default_permissioned_chain_order_binding_for_topology(
+        height,
+        view,
+        epoch,
+        &canonical_topology,
+        super::PERMISSIONED_TAG,
+        prf_seed,
+    )
+    .unwrap_or_else(|| (crate::sumeragi::consensus::default_chain_order_hash(), 0));
+    let aggregate_sig = aggregate_signature_for_bitmap_with_highest_and_chain_order(
         chain,
         super::PERMISSIONED_TAG,
         phase,
@@ -98527,6 +98357,8 @@ fn qc_with_bitmap_and_highest(
         height,
         view,
         epoch,
+        chain_order_hash,
+        rechain_seq,
         highest_qc,
         &signers_bitmap,
         &canonical_topology,
@@ -98540,8 +98372,8 @@ fn qc_with_bitmap_and_highest(
         height,
         view,
         epoch,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
+        chain_order_hash,
+        rechain_seq,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc,
         validator_set_hash: HashOf::new(&canonical_topology.as_ref().to_vec()),
@@ -98552,6 +98384,35 @@ fn qc_with_bitmap_and_highest(
             bls_aggregate_signature: aggregate_sig,
         },
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn qc_with_bitmap_and_highest_for_actor(
+    actor: &Actor,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    epoch: u64,
+    signers_bitmap: Vec<u8>,
+    phase: Phase,
+    highest_qc: Option<QcHeaderRef>,
+    topology: &super::network_topology::Topology,
+    keypairs: &[KeyPair],
+) -> crate::sumeragi::consensus::Qc {
+    let mut qc = qc_with_bitmap_and_highest(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap,
+        phase,
+        highest_qc,
+        topology,
+        keypairs,
+    );
+    bind_qc_to_actor_chain_order(&mut qc, actor, keypairs);
+    qc
 }
 
 fn cache_prepare_qc_for_block(
@@ -98797,10 +98658,7 @@ fn validate_qc_against_votes_rejects_new_view_missing_highest_qc() {
     };
     sign_vote_for_view(&mut vote, &chain, &topology, &keypairs);
     let mut vote_log = BTreeMap::new();
-    vote_log.insert(
-        default_vote_log_key(Phase::NewView, height, view, epoch, signer),
-        vote,
-    );
+    vote_log.insert(vote_log_key_for_vote(&vote), vote);
 
     let qc = qc_with_bitmap(
         &chain,
@@ -98872,10 +98730,7 @@ fn validate_qc_against_votes_rejects_new_view_highest_hash_mismatch() {
     };
     sign_vote_for_view(&mut vote, &chain, &topology, &keypairs);
     let mut vote_log = BTreeMap::new();
-    vote_log.insert(
-        default_vote_log_key(Phase::NewView, height, view, epoch, signer),
-        vote,
-    );
+    vote_log.insert(vote_log_key_for_vote(&vote), vote);
 
     let qc = qc_with_bitmap_and_highest(
         &chain,
@@ -98955,10 +98810,7 @@ fn validate_qc_against_votes_accepts_new_view_prepare_highest() {
     };
     sign_vote_for_view(&mut vote, &chain, &topology, &keypairs);
     let mut vote_log = BTreeMap::new();
-    vote_log.insert(
-        default_vote_log_key(Phase::NewView, height, view, epoch, signer),
-        vote,
-    );
+    vote_log.insert(vote_log_key_for_vote(&vote), vote);
 
     let qc = qc_with_bitmap_and_highest(
         &chain,
@@ -99032,10 +98884,7 @@ fn validate_qc_against_votes_rejects_new_view_vote_highest_mismatch() {
     };
     sign_vote_for_view(&mut vote, &chain, &topology, &keypairs);
     let mut vote_log = BTreeMap::new();
-    vote_log.insert(
-        default_vote_log_key(Phase::NewView, height, view, epoch, signer),
-        vote,
-    );
+    vote_log.insert(vote_log_key_for_vote(&vote), vote);
 
     let qc = qc_with_bitmap_and_highest(
         &chain,
@@ -99086,8 +98935,8 @@ async fn handle_qc_accepts_new_view_prepare_highest_next_height() {
         epoch: highest_epoch,
         phase: Phase::Prepare,
     };
-    let qc = qc_with_bitmap_and_highest(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_and_highest_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -100131,11 +99980,17 @@ async fn new_view_votes_use_commit_qc_history_for_height() {
         bls_sig: Vec::new(),
     };
     let topology = super::network_topology::Topology::new(derived_roster);
-    sign_vote_for_view(
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(vote.height);
+    let signature_topology =
+        super::topology_for_view(&topology, vote.height, vote.view, mode_tag, prf_seed);
+    bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
+    sign_vote_for_view_with_seed(
         &mut vote,
         &actor.common_config.chain,
         &topology,
         &harness.key_pairs,
+        mode_tag,
+        prf_seed,
     );
 
     actor.handle_vote(vote.clone());
@@ -100177,6 +100032,7 @@ async fn new_view_tracker_counts_local_with_rotated_indices() {
     };
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let local_idx = actor
         .local_validator_index_for_topology(&topology)
         .expect("local peer in topology");
@@ -100184,20 +100040,15 @@ async fn new_view_tracker_counts_local_with_rotated_indices() {
     let max_view = u64::try_from(topology.as_ref().len()).unwrap_or(u64::MAX);
     let view = (1..=max_view)
         .find(|candidate_view| {
-            let rotated = super::topology_for_view(
-                &topology,
-                height,
-                *candidate_view,
-                PERMISSIONED_TAG,
-                None,
-            );
+            let rotated =
+                super::topology_for_view(&topology, height, *candidate_view, mode_tag, prf_seed);
             rotated
                 .as_ref()
                 .get(signer_idx)
                 .is_some_and(|peer| peer != actor.common_config.peer.id())
         })
         .unwrap_or(1);
-    let rotated = super::topology_for_view(&topology, height, view, PERMISSIONED_TAG, None);
+    let rotated = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
     let rotated_peer = rotated
         .as_ref()
         .get(signer_idx)
@@ -100222,11 +100073,14 @@ async fn new_view_tracker_counts_local_with_rotated_indices() {
         signer: local_idx,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(
+    bind_vote_to_signature_topology_chain_order(&mut vote, actor, &rotated);
+    sign_vote_for_view_with_seed(
         &mut vote,
         &actor.common_config.chain,
         &topology,
         &harness.key_pairs,
+        mode_tag,
+        prf_seed,
     );
     actor.handle_vote(vote);
 
@@ -100400,8 +100254,8 @@ async fn new_view_vote_accepts_prepare_highest_next_height() {
     let epoch = actor.epoch_for_height(height);
     let highest_epoch = actor.epoch_for_height(highest_height);
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let signature_topology =
-        super::topology_for_view(&topology, height, view, PERMISSIONED_TAG, None);
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
     let signer = actor
         .local_validator_index_for_topology(&signature_topology)
         .expect("local peer in topology");
@@ -100424,15 +100278,18 @@ async fn new_view_vote_accepts_prepare_highest_next_height() {
         signer,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(
+    bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
+    sign_vote_for_view_with_seed(
         &mut vote,
         &actor.common_config.chain,
         &topology,
         &harness.key_pairs,
+        mode_tag,
+        prf_seed,
     );
+    let key = vote_log_key_for_vote(&vote);
     actor.handle_vote(vote);
 
-    let key = default_vote_log_key(Phase::NewView, height, view, epoch, signer);
     assert!(
         actor.vote_log.contains_key(&key),
         "prepare highest should be recorded"
@@ -100602,8 +100459,9 @@ async fn stale_new_view_vote_updates_highest_qc_without_tracking() {
     actor.highest_qc = None;
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology =
-        super::topology_for_view(&topology, height, stale_view, PERMISSIONED_TAG, None);
+        super::topology_for_view(&topology, height, stale_view, mode_tag, prf_seed);
     let signer = actor
         .local_validator_index_for_topology(&signature_topology)
         .expect("local peer in topology");
@@ -100622,11 +100480,14 @@ async fn stale_new_view_vote_updates_highest_qc_without_tracking() {
         signer,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(
+    bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
+    sign_vote_for_view_with_seed(
         &mut vote,
         &actor.common_config.chain,
         &topology,
         &harness.key_pairs,
+        mode_tag,
+        prf_seed,
     );
     actor.handle_vote(vote);
 
@@ -100734,9 +100595,15 @@ async fn stale_new_view_votes_still_form_qc_after_local_view_advance() {
         "the timed-out view should retain the already-emitted local NEW_VIEW vote"
     );
 
-    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology =
         super::topology_for_view(&topology, height, stale_view, mode_tag, prf_seed);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
+        height,
+        stale_view,
+        consensus_mode,
+        &signature_topology,
+    );
     let local_signer = actor
         .local_validator_index_for_topology(&signature_topology)
         .expect("local peer in stale-view topology");
@@ -100761,8 +100628,8 @@ async fn stale_new_view_votes_still_form_qc_after_local_view_advance() {
         height,
         stale_view,
         epoch,
-        crate::sumeragi::consensus::default_chain_order_hash(),
-        0,
+        chain_order_hash,
+        rechain_seq,
     );
 
     for signer in remote_signers {
@@ -100774,8 +100641,8 @@ async fn stale_new_view_votes_still_form_qc_after_local_view_advance() {
             height,
             view: stale_view,
             epoch,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
+            chain_order_hash,
+            rechain_seq,
             highest_qc: Some(highest_qc),
             signer,
             bls_sig: Vec::new(),
@@ -100848,9 +100715,15 @@ async fn future_new_view_votes_still_form_qc_when_local_view_lags() {
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let epoch = actor.epoch_for_height(height);
-    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology =
         super::topology_for_view(&topology, height, far_view, mode_tag, prf_seed);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
+        height,
+        far_view,
+        consensus_mode,
+        &signature_topology,
+    );
     let local_signer = actor
         .local_validator_index_for_topology(&signature_topology)
         .expect("local peer in far-view topology");
@@ -100875,8 +100748,8 @@ async fn future_new_view_votes_still_form_qc_when_local_view_lags() {
         height,
         far_view,
         epoch,
-        crate::sumeragi::consensus::default_chain_order_hash(),
-        0,
+        chain_order_hash,
+        rechain_seq,
     );
 
     for signer in remote_signers {
@@ -100888,8 +100761,8 @@ async fn future_new_view_votes_still_form_qc_when_local_view_lags() {
             height,
             view: far_view,
             epoch,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
+            chain_order_hash,
+            rechain_seq,
             highest_qc: Some(highest_qc),
             signer,
             bls_sig: Vec::new(),
@@ -100970,9 +100843,15 @@ async fn future_new_view_commit_quorum_advances_local_view_and_emits_vote() {
     actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology =
         super::topology_for_view(&topology, height, future_view, mode_tag, prf_seed);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
+        height,
+        future_view,
+        consensus_mode,
+        &signature_topology,
+    );
     let local_peer = actor.common_config.peer.id().clone();
     let remote_signers: Vec<_> = signature_topology
         .as_ref()
@@ -100999,8 +100878,8 @@ async fn future_new_view_commit_quorum_advances_local_view_and_emits_vote() {
             height,
             view: future_view,
             epoch,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
+            chain_order_hash,
+            rechain_seq,
             highest_qc: Some(highest_qc),
             signer: remote_signer,
             bls_sig: Vec::new(),
@@ -104342,12 +104221,13 @@ async fn handle_vote_uses_height_prf_seed() {
         signer,
         bls_sig: Vec::new(),
     };
+    bind_vote_to_actor_chain_order(&mut vote, actor);
     let preimage = super::vote_preimage(&actor.common_config.chain, super::NPOS_TAG, &vote);
     let signature = Signature::new(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
+    let key = vote_log_key_for_vote(&vote);
 
     actor.handle_vote(vote);
-    let key = default_vote_log_key(Phase::Prepare, height, view, epoch, signer);
     assert!(actor.vote_log.contains_key(&key), "vote should be recorded");
     harness.shutdown.send();
 }
@@ -104433,6 +104313,24 @@ async fn inbound_vote_processes_committed_epoch_rollover_before_validation() {
         signer,
         bls_sig: Vec::new(),
     };
+    let quorum = actor
+        .vnext_quorum_policy(ConsensusMode::Npos, fresh_signature_topology.as_ref())
+        .expect("NPoS vNext quorum");
+    let critical_prefix_len = quorum
+        .smallest_satisfying_prefix_len(fresh_signature_topology.as_ref())
+        .expect("fresh topology satisfies quorum");
+    let chain_order = crate::sumeragi::vnext::ChainOrder::new(
+        height,
+        view,
+        epoch,
+        0,
+        fresh_signature_topology.as_ref().to_vec(),
+        critical_prefix_len,
+        critical_prefix_len,
+    )
+    .expect("fresh vNext chain order");
+    vote.chain_order_hash = chain_order.hash();
+    vote.rechain_seq = chain_order.rechain_seq;
     sign_vote_for_view_with_seed(
         &mut vote,
         &actor.common_config.chain,
@@ -104461,6 +104359,7 @@ async fn inbound_vote_processes_committed_epoch_rollover_before_validation() {
         .is_ok(),
         "vote is valid once the actor advances to the next epoch seed"
     );
+    let key = vote_log_key_for_vote(&vote);
 
     actor
         .on_block_message(crate::sumeragi::InboundBlockMessage::new(
@@ -104472,7 +104371,6 @@ async fn inbound_vote_processes_committed_epoch_rollover_before_validation() {
     assert_eq!(actor.last_committed_height, 1);
     let (_, _, fresh_seed) = actor.consensus_context_for_height(height);
     assert_eq!(fresh_seed, Some(canonical_seed_epoch1));
-    let key = default_vote_log_key(Phase::NewView, height, view, epoch, signer);
     assert!(
         actor.vote_log.contains_key(&key),
         "inbound vote should be recorded after committed epoch catch-up"
@@ -104552,12 +104450,13 @@ async fn handle_vote_uses_activation_height_mode_tag() {
         signer,
         bls_sig: Vec::new(),
     };
+    bind_vote_to_actor_chain_order(&mut vote, actor);
     let preimage = super::vote_preimage(&actor.common_config.chain, super::NPOS_TAG, &vote);
     let signature = Signature::new(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
+    let key = vote_log_key_for_vote(&vote);
 
     actor.handle_vote(vote);
-    let key = default_vote_log_key(Phase::Prepare, height, view, epoch, signer);
     assert!(
         actor.vote_log.contains_key(&key),
         "vote should be recorded using the activation height mode tag"
@@ -104730,7 +104629,7 @@ async fn handle_qc_uses_height_prf_seed() {
     let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
     let aggregate_sig =
         iroha_crypto::bls_normal_aggregate_signatures(&sig_refs).expect("aggregate succeeds");
-    let qc = crate::sumeragi::consensus::Qc {
+    let mut qc = crate::sumeragi::consensus::Qc {
         phase: Phase::Commit,
         subject_block_hash: block_hash,
         parent_state_root: zero_state_root(),
@@ -104750,18 +104649,11 @@ async fn handle_qc_uses_height_prf_seed() {
             bls_aggregate_signature: aggregate_sig,
         },
     };
+    bind_qc_to_actor_chain_order(&mut qc, actor, &harness.key_pairs);
+    let qc_key = Actor::qc_tally_key(&qc);
 
     actor.handle_qc(qc.clone()).expect("handle_qc");
-    let key = (
-        qc.phase,
-        qc.subject_block_hash,
-        qc.height,
-        qc.view,
-        qc.epoch,
-        crate::sumeragi::consensus::default_chain_order_hash(),
-        0,
-    );
-    assert!(actor.qc_cache.contains_key(&key), "QC should be cached");
+    assert!(actor.qc_cache.contains_key(&qc_key), "QC should be cached");
     harness.shutdown.send();
 }
 
@@ -104888,7 +104780,7 @@ async fn handle_qc_uses_activation_height_mode_tag() {
     let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
     let aggregate_sig =
         iroha_crypto::bls_normal_aggregate_signatures(&sig_refs).expect("aggregate succeeds");
-    let qc = crate::sumeragi::consensus::Qc {
+    let mut qc = crate::sumeragi::consensus::Qc {
         phase: Phase::Commit,
         subject_block_hash: block_hash,
         parent_state_root: zero_state_root(),
@@ -104908,6 +104800,7 @@ async fn handle_qc_uses_activation_height_mode_tag() {
             bls_aggregate_signature: aggregate_sig,
         },
     };
+    bind_qc_to_actor_chain_order(&mut qc, actor, &harness.key_pairs);
 
     let stake_snapshot = {
         let view = actor.state.view();
@@ -104952,15 +104845,7 @@ async fn handle_qc_uses_activation_height_mode_tag() {
     );
 
     actor.handle_qc(qc.clone()).expect("handle_qc");
-    let key = (
-        qc.phase,
-        qc.subject_block_hash,
-        qc.height,
-        qc.view,
-        qc.epoch,
-        crate::sumeragi::consensus::default_chain_order_hash(),
-        0,
-    );
+    let key = Actor::qc_tally_key(&qc);
     assert!(
         actor.qc_cache.contains_key(&key),
         "QC should be cached using the activation height mode tag"
@@ -106226,18 +106111,22 @@ async fn pacemaker_uses_locked_qc_when_selected_highest_qc_regresses() {
         proposed,
         "pacemaker should continue with the locked QC when the selected highest QC regresses"
     );
+    let pending = actor
+        .pending
+        .pending_blocks
+        .values()
+        .find(|pending| pending.height == height && pending.view == view && !pending.aborted)
+        .expect("pacemaker should create a pending block for the locked-QC branch");
     assert_eq!(
-        actor.highest_qc.map(|qc| qc.height).unwrap_or_default(),
-        height,
-        "successful proposal assembly should advance highest QC to the newly assembled block"
+        pending.block.header().prev_block_hash(),
+        Some(locked_qc.subject_block_hash),
+        "proposal assembly should build on the locked QC when the selected highest QC regresses"
     );
     assert!(
         actor
-            .pending
-            .pending_blocks
-            .values()
-            .any(|pending| pending.height == height && pending.view == view && !pending.aborted),
-        "pacemaker should create a pending block for the locked-QC branch"
+            .highest_qc
+            .is_some_and(|qc| qc.height >= locked_qc.height),
+        "deferred validation must not regress highest QC below the lock"
     );
 
     super::status::set_locked_qc(0, 0, None);
@@ -108070,6 +107959,7 @@ async fn pacemaker_skips_proposal_when_only_inflight_transactions() {
 async fn pacemaker_allows_proposal_with_low_online_peers_after_prior_success() {
     use std::borrow::Cow;
 
+    let _commit_history_guard = isolate_commit_history_state();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -108377,6 +108267,7 @@ async fn pacemaker_assembles_fresh_proposal_after_missing_qc_view_advance_with_s
  {
     use std::borrow::Cow;
 
+    let _commit_history_guard = isolate_commit_history_state();
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
@@ -108480,6 +108371,9 @@ async fn pacemaker_assembles_fresh_proposal_after_missing_qc_view_advance_with_s
 async fn pacemaker_bootstraps_missing_qc_frontier_from_committed_qc_without_new_view_quorum() {
     use std::borrow::Cow;
 
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -108552,6 +108446,7 @@ async fn pacemaker_bootstraps_missing_qc_frontier_from_committed_qc_without_new_
         "missing-QC recovery should populate the proposal slot so voters can converge"
     );
 
+    super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
 
@@ -108756,6 +108651,7 @@ async fn pacemaker_bootstraps_missing_qc_frontier_after_proposal_ingress_goes_st
 async fn pacemaker_bootstraps_frontier_from_committed_qc_when_liveness_slot_was_not_retained() {
     use std::borrow::Cow;
 
+    let _commit_history_guard = isolate_commit_history_state();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -109712,6 +109608,14 @@ async fn pacemaker_defers_reproposal_after_missing_qc_view_advance_with_live_fro
         None,
         None,
     ));
+    actor.subsystems.validation.inflight.insert(
+        block_hash,
+        super::ValidationInFlight {
+            id: 7,
+            started_at: now,
+            frontier_generation: None,
+        },
+    );
 
     actor.trigger_view_change_with_cause(tracked_height, 0, super::ViewChangeCause::MissingQc);
 
@@ -109725,8 +109629,10 @@ async fn pacemaker_defers_reproposal_after_missing_qc_view_advance_with_live_fro
         "view churn must preserve the live old-view frontier owner"
     );
     assert!(
-        actor.slot_has_proposal_evidence(tracked_height, 1),
-        "a live old-view frontier owner should carry proposal evidence into the later-view exact-slot repair state"
+        actor
+            .frontier_slot_live_local_owner_for_round(tracked_height, 1)
+            .is_some(),
+        "a live old-view frontier owner should remain the later-view repair owner"
     );
     assert!(
         actor.slot_has_round_liveness(tracked_height, 1),
@@ -110393,6 +110299,7 @@ async fn fresh_proposal_defers_when_split_same_height_votes_make_new_branch_non_
             signer,
             bls_sig: Vec::new(),
         };
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
         let signature = Signature::new(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
@@ -110956,6 +110863,7 @@ async fn remote_precommit_allows_new_view_qc_to_supersede_raw_same_height_signer
         signer,
         bls_sig: Vec::new(),
     };
+    bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     sign_vote_for_view_with_seed(
         &mut vote,
         &actor.common_config.chain,
@@ -113187,6 +113095,7 @@ async fn pacemaker_defers_proposal_when_precommit_votes_in_prior_epoch() {
 async fn pacemaker_allows_proposal_with_unknown_precommit_votes() {
     use std::borrow::Cow;
 
+    let _commit_history_guard = isolate_commit_history_state();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -114312,6 +114221,9 @@ async fn npos_commit_qc_roster_roll_forward_canonicalizes_order() {
 #[tokio::test(flavor = "current_thread")]
 async fn pacemaker_uses_active_roster_when_commit_qc_roster_excludes_local() {
     use std::borrow::Cow;
+    let _history_guard = status::commit_history_test_guard();
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -114420,6 +114332,8 @@ async fn pacemaker_uses_active_roster_when_commit_qc_roster_excludes_local() {
         "proposal should be assembled using the active roster"
     );
 
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
     harness.shutdown.send();
 }
 
@@ -114723,6 +114637,7 @@ async fn handle_vote_uses_cached_roster_for_frontier_commit_vote_validation() {
         signer,
         bls_sig: Vec::new(),
     };
+    bind_vote_to_signature_topology_chain_order(&mut vote, actor, &cached_signature_topology);
     sign_vote_for_view_with_seed(
         &mut vote,
         &actor.common_config.chain,
@@ -119604,6 +119519,15 @@ async fn block_created_stores_pending_without_commit_quorum() {
             signer: u32::try_from(signer).expect("signer fits u32"),
             bls_sig: Vec::new(),
         };
+        let (chain_order_hash, rechain_seq) = actor
+            .vnext_chain_order_binding_for_signature_topology(
+                height,
+                view,
+                consensus_mode,
+                &signature_topology,
+            );
+        vote.chain_order_hash = chain_order_hash;
+        vote.rechain_seq = rechain_seq;
         sign_vote_for_view_with_seed(
             &mut vote,
             &actor.common_config.chain,
@@ -119686,6 +119610,7 @@ async fn block_created_rebuilds_qc_with_snapshot_roster() {
     let SnapshotRosterBlockCreatedSetup {
         snapshot_roster,
         topology,
+        signature_topology,
         consensus_mode,
         mode_tag,
         prf_seed,
@@ -119710,6 +119635,15 @@ async fn block_created_rebuilds_qc_with_snapshot_roster() {
             signer: u32::try_from(signer).expect("signer fits u32"),
             bls_sig: Vec::new(),
         };
+        let (chain_order_hash, rechain_seq) = actor
+            .vnext_chain_order_binding_for_signature_topology(
+                height,
+                view,
+                consensus_mode,
+                &signature_topology,
+            );
+        vote.chain_order_hash = chain_order_hash;
+        vote.rechain_seq = rechain_seq;
         sign_vote_for_view_with_seed(
             &mut vote,
             &actor.common_config.chain,
@@ -122954,8 +122888,8 @@ async fn commit_qc_conflicting_known_frontier_block_supersedes_live_owner() {
         .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         conflicting_hash,
         height,
         conflicting_view,
@@ -123059,8 +122993,8 @@ async fn commit_qc_conflicting_unknown_frontier_block_supersedes_live_owner_and_
         .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         conflicting_hash,
         height,
         conflicting_view,
@@ -123173,8 +123107,8 @@ async fn commit_qc_conflicting_unknown_lower_view_frontier_block_supersedes_live
         .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         conflicting_hash,
         height,
         conflicting_view,
@@ -123281,7 +123215,7 @@ async fn commit_qc_bootstraps_from_embedded_roster_when_cached_roster_is_stale()
         .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
+    let mut qc = qc_with_bitmap(
         &actor.common_config.chain,
         block_hash,
         height,
@@ -123292,6 +123226,7 @@ async fn commit_qc_bootstraps_from_embedded_roster_when_cached_roster_is_stale()
         &topology,
         &harness.key_pairs,
     );
+    bind_qc_to_actor_chain_order(&mut qc, actor, &harness.key_pairs);
     let qc_key = Actor::qc_tally_key(&qc);
 
     actor.handle_qc(qc).expect("handle commit QC");
@@ -125753,8 +125688,8 @@ async fn commit_qc_rehydrates_deferred_local_payload_after_missing_highest_qc_re
         .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -125817,8 +125752,8 @@ async fn frontier_block_sync_commit_qc_recovers_deferred_missing_payload_qc() {
         .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -125908,8 +125843,8 @@ async fn frontier_block_sync_commit_qc_replays_deferred_missing_payload_qc_when_
         .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -125966,15 +125901,7 @@ async fn frontier_block_sync_commit_qc_replays_deferred_missing_payload_qc_when_
         qc.validator_set_hash_version,
         None,
     );
-    let cache_key = (
-        Phase::Commit,
-        block_hash,
-        height,
-        view,
-        epoch,
-        crate::sumeragi::consensus::default_chain_order_hash(),
-        0,
-    );
+    let cache_key = qc_key;
     let mut update = super::message::BlockSyncUpdate::from(&block);
     update.commit_qc = Some(qc);
     update.validator_checkpoint = Some(checkpoint);
@@ -126019,8 +125946,8 @@ async fn frontier_block_sync_checkpoint_only_replays_deferred_missing_payload_qc
         .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -126065,10 +125992,12 @@ async fn frontier_block_sync_checkpoint_only_replays_deferred_missing_payload_qc
         timeout_reported: false,
     });
 
-    let checkpoint = ValidatorSetCheckpoint::new(
+    let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
         qc.height,
         qc.view,
         qc.subject_block_hash,
+        qc.chain_order_hash,
+        qc.rechain_seq,
         qc.parent_state_root,
         qc.post_state_root,
         qc.validator_set.clone(),
@@ -126077,15 +126006,7 @@ async fn frontier_block_sync_checkpoint_only_replays_deferred_missing_payload_qc
         qc.validator_set_hash_version,
         None,
     );
-    let cache_key = (
-        Phase::Commit,
-        block_hash,
-        height,
-        view,
-        epoch,
-        crate::sumeragi::consensus::default_chain_order_hash(),
-        0,
-    );
+    let cache_key = qc_key;
     let mut update = super::message::BlockSyncUpdate::from(&block);
     update.commit_qc = None;
     update.validator_checkpoint = Some(checkpoint);
@@ -126131,8 +126052,8 @@ async fn frontier_block_sync_checkpoint_only_rejects_uncertified_sidecar_when_bl
         .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -126177,10 +126098,12 @@ async fn frontier_block_sync_checkpoint_only_rejects_uncertified_sidecar_when_bl
         timeout_reported: false,
     });
 
-    let mut checkpoint = ValidatorSetCheckpoint::new(
+    let mut checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
         qc.height,
         qc.view,
         qc.subject_block_hash,
+        qc.chain_order_hash,
+        qc.rechain_seq,
         qc.parent_state_root,
         qc.post_state_root,
         qc.validator_set.clone(),
@@ -127429,7 +127352,7 @@ async fn validation_dispatches_non_near_quorum_commit_votes_to_workers() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn validation_gate_routes_proposal_worker_path_through_vnext_reactor() {
+async fn validation_gate_routes_proposal_worker_path_through_vnext_round() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.da.enabled = true;
     consensus_cfg
@@ -127478,18 +127401,18 @@ async fn validation_gate_routes_proposal_worker_path_through_vnext_reactor() {
             .contains_key(&block_hash),
         "vNext worker ownership should be recorded with the inflight work"
     );
-    let reactor_slot = actor
-        .vnext_reactors
+    let round_slot = actor
+        .vnext_rounds
         .get(&(height, view))
-        .and_then(|reactor| reactor.slot(block_hash))
-        .expect("vNext reactor should track the validation slot");
+        .and_then(|round| round.slot(block_hash))
+        .expect("vNext round should track the validation slot");
     assert!(matches!(
-        reactor_slot.slot_state,
+        round_slot.slot_state,
         crate::sumeragi::vnext::SlotState::AwaitingValidation { block_hash: tracked }
             if tracked == block_hash
     ));
     assert!(matches!(
-        reactor_slot.validation,
+        round_slot.validation,
         crate::sumeragi::vnext::ValidationState::Running { .. }
     ));
 
@@ -128130,6 +128053,105 @@ async fn commit_qc_redrives_stale_inflight_validation_through_vnext() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn commit_qc_redrives_stalled_vnext_owned_validation_through_vnext() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+    actor.note_proposal_seen(height, view, payload_hash);
+
+    let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    let (_result_tx, result_rx) = mpsc::sync_channel::<super::validation::ValidationResult>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+    actor.subsystems.validation.result_rx = Some(result_rx);
+    assert!(
+        actor.drive_vnext_validation_for_pending(block_hash, height, view, payload_hash),
+        "vNext validation should own the pending block"
+    );
+    let first_work = work_rx
+        .try_recv()
+        .expect("vNext validation should queue initial worker work");
+    let stall_timeout = actor.validation_worker_stall_timeout();
+    {
+        let inflight = actor
+            .subsystems
+            .validation
+            .inflight
+            .get_mut(&block_hash)
+            .expect("vNext validation should install an inflight marker");
+        assert_eq!(first_work.id, inflight.id);
+        inflight.started_at = Instant::now() - stall_timeout - Duration::from_millis(1);
+    }
+
+    let commit_topology = actor.effective_commit_topology();
+    let qc = commit_qc_for_block(
+        actor,
+        &harness.key_pairs,
+        block_hash,
+        height,
+        view,
+        &commit_topology,
+    );
+    actor.qc_cache.insert(
+        (
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            qc.epoch,
+            crate::sumeragi::consensus::default_chain_order_hash(),
+            0,
+        ),
+        qc.clone(),
+    );
+
+    assert!(
+        !actor.maybe_validate_pending_for_commit_qc(&qc, &commit_topology),
+        "stalled vNext-owned validation should redrive through vNext and remain deferred"
+    );
+    let replacement = work_rx
+        .try_recv()
+        .expect("stalled vNext-owned commit-QC validation should enqueue replacement work");
+    assert_eq!(replacement.hash, block_hash);
+    assert_ne!(
+        replacement.id, first_work.id,
+        "commit-QC redrive should allocate a new vNext worker id"
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .validation
+            .inflight
+            .get(&block_hash)
+            .map(|inflight| inflight.id),
+        Some(replacement.id),
+        "redriven commit-QC validation should install a fresh inflight marker"
+    );
+    assert!(
+        actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "redriven commit-QC validation should remain vNext-owned"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn validation_dispatches_near_tip_cached_commit_qc_to_workers() {
     let _qc_guard = super::status::qc_status_test_guard();
     let _history_guard = super::status::commit_history_test_guard();
@@ -128162,19 +128184,34 @@ async fn validation_dispatches_near_tip_cached_commit_qc_to_workers() {
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     actor.pending.pending_blocks.insert(
         block_hash,
-        PendingBlock::new(block, payload_hash, height, view),
+        PendingBlock::new(block.clone(), payload_hash, height, view),
     );
 
     let commit_topology = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(commit_topology.clone());
+    let mut validation_topology = topology.clone();
+    actor
+        .leader_index_for(&mut validation_topology, height, view)
+        .expect("validation topology should align");
+    let mut voting_block = None;
+    let worker_roots = super::validate_block_for_voting(
+        block,
+        &mut validation_topology,
+        &actor.common_config.chain,
+        &actor.genesis_account,
+        actor.state.as_ref(),
+        &mut voting_block,
+    )
+    .expect("worker fixture block should validate")
+    .expect("worker fixture block should produce execution roots");
     let required = topology.min_votes_for_commit().max(1);
     let signers: BTreeSet<_> = (0..required)
         .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, commit_topology.len());
     let epoch = actor.epoch_for_height(height);
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let mut qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -128184,6 +128221,9 @@ async fn validation_dispatches_near_tip_cached_commit_qc_to_workers() {
         &topology,
         &harness.key_pairs,
     );
+    qc.parent_state_root = worker_roots.parent_state_root;
+    qc.post_state_root = worker_roots.post_state_root;
+    resign_qc_for_actor(&mut qc, actor, &harness.key_pairs);
     actor.cache_block_sync_qc_for_unknown_block(
         qc,
         block_hash,
@@ -128272,20 +128312,35 @@ async fn validation_inline_replays_cached_precommit_qc_after_block_becomes_valid
         nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
-    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    let mut pending = PendingBlock::new(block.clone(), payload_hash, height, view);
     let epoch = actor.epoch_for_height(height);
     pending.note_commit_qc_observed(epoch);
     actor.pending.pending_blocks.insert(block_hash, pending);
 
     let commit_topology = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(commit_topology.clone());
+    let mut validation_topology = topology.clone();
+    actor
+        .leader_index_for(&mut validation_topology, height, view)
+        .expect("validation topology should align");
+    let mut voting_block = None;
+    let worker_roots = super::validate_block_for_voting(
+        block,
+        &mut validation_topology,
+        &actor.common_config.chain,
+        &actor.genesis_account,
+        actor.state.as_ref(),
+        &mut voting_block,
+    )
+    .expect("worker fixture block should validate")
+    .expect("worker fixture block should produce execution roots");
     let required = topology.min_votes_for_commit().max(1);
     let signers: BTreeSet<_> = (0..required)
         .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, commit_topology.len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let mut qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -128295,6 +128350,9 @@ async fn validation_inline_replays_cached_precommit_qc_after_block_becomes_valid
         &topology,
         &harness.key_pairs,
     );
+    qc.parent_state_root = worker_roots.parent_state_root;
+    qc.post_state_root = worker_roots.post_state_root;
+    resign_qc_for_actor(&mut qc, actor, &harness.key_pairs);
     actor.cache_block_sync_qc_for_unknown_block(
         qc,
         block_hash,
@@ -128330,6 +128388,7 @@ async fn validation_inline_replays_cached_precommit_qc_after_block_becomes_valid
         Some(height),
         "replayed cached QC should advance highest QC to the validated block"
     );
+    actor.process_commit_candidates();
     assert_eq!(
         u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX),
         height,
@@ -128381,20 +128440,35 @@ async fn validation_worker_result_replays_cached_precommit_qc_after_block_become
         nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
-    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    let mut pending = PendingBlock::new(block.clone(), payload_hash, height, view);
     let epoch = actor.epoch_for_height(height);
     pending.note_commit_qc_observed(epoch);
     actor.pending.pending_blocks.insert(block_hash, pending);
 
     let commit_topology = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(commit_topology.clone());
+    let mut validation_topology = topology.clone();
+    actor
+        .leader_index_for(&mut validation_topology, height, view)
+        .expect("validation topology should align");
+    let mut voting_block = None;
+    let worker_roots = super::validate_block_for_voting(
+        block,
+        &mut validation_topology,
+        &actor.common_config.chain,
+        &actor.genesis_account,
+        actor.state.as_ref(),
+        &mut voting_block,
+    )
+    .expect("worker fixture block should validate")
+    .expect("worker fixture block should produce execution roots");
     let required = topology.min_votes_for_commit().max(1);
     let signers: BTreeSet<_> = (0..required)
         .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
     let signers_bitmap = super::build_signers_bitmap(&signers, commit_topology.len());
-    let qc = qc_with_bitmap(
-        &actor.common_config.chain,
+    let mut qc = qc_with_bitmap_for_actor(
+        actor,
         block_hash,
         height,
         view,
@@ -128404,6 +128478,9 @@ async fn validation_worker_result_replays_cached_precommit_qc_after_block_become
         &topology,
         &harness.key_pairs,
     );
+    qc.parent_state_root = worker_roots.parent_state_root;
+    qc.post_state_root = worker_roots.post_state_root;
+    resign_qc_for_actor(&mut qc, actor, &harness.key_pairs);
     actor.cache_block_sync_qc_for_unknown_block(
         qc,
         block_hash,
@@ -128438,10 +128515,7 @@ async fn validation_worker_result_replays_cached_precommit_qc_after_block_become
             frontier_generation: None,
             commit_topology: commit_topology.clone(),
             duration: Duration::from_millis(25),
-            outcome: Ok(Some(super::StateRoots {
-                parent_state_root: zero_state_root(),
-                post_state_root: zero_state_root(),
-            })),
+            outcome: Ok(Some(worker_roots)),
         })
         .expect("send validation result");
 
@@ -128459,6 +128533,7 @@ async fn validation_worker_result_replays_cached_precommit_qc_after_block_become
         Some(height),
         "worker validation success should advance highest QC"
     );
+    actor.process_commit_candidates();
     assert_eq!(
         u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX),
         height,
@@ -128556,6 +128631,10 @@ async fn validation_records_state_roots_for_valid_block() {
     let view_u64 = block.header().view_change_index();
     let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
     let commit_topology = actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+    let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    let (result_tx, result_rx) = mpsc::sync_channel::<super::validation::ValidationResult>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+    actor.subsystems.validation.result_rx = Some(result_rx);
 
     actor.pending.pending_blocks.insert(
         block_hash,
@@ -128565,22 +128644,40 @@ async fn validation_records_state_roots_for_valid_block() {
 
     let outcome = actor.validate_pending_block_for_voting(block_hash, &commit_topology);
     assert!(
-        matches!(outcome, ValidationGateOutcome::Valid),
-        "valid pending block should pass validation, got {outcome:?}"
+        matches!(outcome, ValidationGateOutcome::Deferred),
+        "worker-routed valid pending block should defer until the vNext result arrives, got {outcome:?}"
+    );
+    let queued_work = work_rx
+        .try_recv()
+        .expect("valid pending block should queue vNext validation work");
+    assert_eq!(queued_work.hash, block_hash);
+    result_tx
+        .send(super::validation::ValidationResult {
+            id: queued_work.id,
+            hash: block_hash,
+            height,
+            view: view_u64,
+            frontier_generation: queued_work.frontier_generation,
+            commit_topology: queued_work.commit_topology,
+            duration: Duration::from_millis(3),
+            outcome: Ok(Some(super::StateRoots {
+                parent_state_root: zero_state_root(),
+                post_state_root: zero_state_root(),
+            })),
+        })
+        .expect("send validation result");
+    assert!(
+        actor.poll_validation_results(),
+        "vNext validation result should be processed"
     );
     let pending = actor
         .pending
         .pending_blocks
         .get(&block_hash)
         .expect("pending block retained after validation");
-    assert!(
-        pending.parent_state_root.is_some(),
-        "validation should record parent state root"
-    );
-    assert!(
-        pending.post_state_root.is_some(),
-        "validation should record post state root"
-    );
+    assert_eq!(pending.validation_status, ValidationStatus::Valid);
+    assert_eq!(pending.parent_state_root, Some(zero_state_root()));
+    assert_eq!(pending.post_state_root, Some(zero_state_root()));
 
     harness.shutdown.send();
 }
@@ -132616,17 +132713,33 @@ fn validate_block_for_voting_records_timings() {
         "execution tx timing must cover tx sub-stages"
     );
     let execution_tx_apply_detail_ms = timings_ok
-        .execution_tx_apply_prep_ms
+        .execution_tx_apply_setup_ms
+        .saturating_add(timings_ok.execution_tx_apply_layer_build_ms)
+        .saturating_add(timings_ok.execution_tx_apply_prep_ms)
         .saturating_add(timings_ok.execution_tx_apply_detached_ms)
         .saturating_add(timings_ok.execution_tx_apply_merge_ms)
         .saturating_add(timings_ok.execution_tx_apply_fallback_ms)
         .saturating_add(timings_ok.execution_tx_apply_quarantine_ms)
         .saturating_add(timings_ok.execution_tx_apply_sequential_ms)
+        .saturating_add(timings_ok.execution_tx_apply_results_ms)
+        .saturating_add(timings_ok.execution_tx_apply_other_ms)
         .saturating_add(timings_ok.execution_tx_time_triggers_ms)
         .saturating_add(timings_ok.execution_tx_finalize_ms);
     assert!(
         timings_ok.execution_tx_apply_ms >= execution_tx_apply_detail_ms,
         "execution tx apply timing must cover apply sub-stages"
+    );
+    let execution_tx_finalize_detail_ms = timings_ok
+        .execution_tx_finalize_digest_submit_ms
+        .saturating_add(timings_ok.execution_tx_finalize_dataspaces_ms)
+        .saturating_add(timings_ok.execution_tx_finalize_tx_set_ms)
+        .saturating_add(timings_ok.execution_tx_finalize_transcripts_ms)
+        .saturating_add(timings_ok.execution_tx_finalize_axt_ms)
+        .saturating_add(timings_ok.execution_tx_finalize_set_results_ms)
+        .saturating_add(timings_ok.execution_tx_finalize_other_ms);
+    assert!(
+        timings_ok.execution_tx_finalize_ms >= execution_tx_finalize_detail_ms,
+        "execution tx finalize timing must cover finalize sub-stages"
     );
     let execution_detail_ms = timings_ok
         .execution_da_indexes_ms
@@ -132663,14 +132776,26 @@ fn validate_block_for_voting_records_timings() {
         .saturating_add(timings_bad.execution_tx_schedule_ms)
         .saturating_add(timings_bad.execution_tx_apply_ms);
     let execution_bad_apply_detail_ms = timings_bad
-        .execution_tx_apply_prep_ms
+        .execution_tx_apply_setup_ms
+        .saturating_add(timings_bad.execution_tx_apply_layer_build_ms)
+        .saturating_add(timings_bad.execution_tx_apply_prep_ms)
         .saturating_add(timings_bad.execution_tx_apply_detached_ms)
         .saturating_add(timings_bad.execution_tx_apply_merge_ms)
         .saturating_add(timings_bad.execution_tx_apply_fallback_ms)
         .saturating_add(timings_bad.execution_tx_apply_quarantine_ms)
         .saturating_add(timings_bad.execution_tx_apply_sequential_ms)
+        .saturating_add(timings_bad.execution_tx_apply_results_ms)
+        .saturating_add(timings_bad.execution_tx_apply_other_ms)
         .saturating_add(timings_bad.execution_tx_time_triggers_ms)
         .saturating_add(timings_bad.execution_tx_finalize_ms);
+    let execution_bad_finalize_detail_ms = timings_bad
+        .execution_tx_finalize_digest_submit_ms
+        .saturating_add(timings_bad.execution_tx_finalize_dataspaces_ms)
+        .saturating_add(timings_bad.execution_tx_finalize_tx_set_ms)
+        .saturating_add(timings_bad.execution_tx_finalize_transcripts_ms)
+        .saturating_add(timings_bad.execution_tx_finalize_axt_ms)
+        .saturating_add(timings_bad.execution_tx_finalize_set_results_ms)
+        .saturating_add(timings_bad.execution_tx_finalize_other_ms);
     let execution_bad_detail_ms = timings_bad
         .execution_da_indexes_ms
         .saturating_add(timings_bad.execution_state_block_ms)
@@ -132689,6 +132814,10 @@ fn validate_block_for_voting_records_timings() {
     assert_eq!(
         execution_bad_apply_detail_ms, 0,
         "stateless failures should not record execution tx apply sub-stages"
+    );
+    assert_eq!(
+        execution_bad_finalize_detail_ms, 0,
+        "stateless failures should not record execution tx finalize sub-stages"
     );
 }
 
@@ -133287,6 +133416,12 @@ fn validate_qc_against_votes_rejects_signature_from_wrong_signer_key() {
     } else {
         &kp0
     };
+    bind_default_permissioned_vote_to_topology_chain_order(
+        &mut mismatched_vote,
+        &topology,
+        super::PERMISSIONED_TAG,
+        prf_seed,
+    );
     let bad_preimage = super::vote_preimage(&chain, super::PERMISSIONED_TAG, &mismatched_vote);
     let bad_sig = Signature::new(wrong_kp.private_key(), &bad_preimage);
     mismatched_vote.bls_sig = bad_sig.payload().to_vec();
@@ -133855,40 +133990,21 @@ fn validate_qc_against_votes_rejects_replayed_roster_with_new_keys() {
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x61; Hash::LENGTH]));
     let validator_set = old_topology.as_ref().to_vec();
-    let qc = crate::sumeragi::consensus::Qc {
-        phase: crate::sumeragi::consensus::Phase::Commit,
-        subject_block_hash: block_hash,
-        parent_state_root: zero_state_root(),
-        post_state_root: zero_state_root(),
-        height: 3,
-        view: 1,
-        epoch: 0,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: super::PERMISSIONED_TAG.to_string(),
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&validator_set),
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set,
-        aggregate: crate::sumeragi::consensus::QcAggregate {
-            signers_bitmap: vec![0b0000_0011],
-            bls_aggregate_signature: aggregate_signature_for_bitmap(
-                &chain,
-                super::PERMISSIONED_TAG,
-                crate::sumeragi::consensus::Phase::Commit,
-                block_hash,
-                3,
-                1,
-                0,
-                &[0b0000_0011],
-                &old_topology,
-                &[old0.clone(), old1.clone()],
-            ),
-        },
-    };
 
     let mut vote_log = BTreeMap::new();
     let keypairs = [old0.clone(), old1.clone()];
+    let qc = qc_with_bitmap(
+        &chain,
+        block_hash,
+        3,
+        1,
+        0,
+        vec![0b0000_0011],
+        crate::sumeragi::consensus::Phase::Commit,
+        &old_topology,
+        &keypairs,
+    );
+    assert_eq!(qc.validator_set, validator_set);
     for signer in [0u32, 1u32] {
         let mut vote = crate::sumeragi::consensus::Vote {
             phase: crate::sumeragi::consensus::Phase::Commit,
@@ -134107,39 +134223,17 @@ fn validate_qc_against_votes_rotates_topology_for_view() {
 
     let mut signers_bitmap = vec![0u8; topology.as_ref().len().div_ceil(8)];
     signers_bitmap[0] = 0b11;
-    let aggregate = aggregate_signature_for_bitmap(
+    let qc = qc_with_bitmap(
         &chain,
-        super::PERMISSIONED_TAG,
-        crate::sumeragi::consensus::Phase::Commit,
         block_hash,
         2,
         1,
         0,
-        &signers_bitmap,
+        signers_bitmap,
+        crate::sumeragi::consensus::Phase::Commit,
         &topology,
         &keypairs,
     );
-    let validator_set = topology.as_ref().to_vec();
-    let qc = crate::sumeragi::consensus::Qc {
-        phase: crate::sumeragi::consensus::Phase::Commit,
-        subject_block_hash: block_hash,
-        parent_state_root: zero_state_root(),
-        post_state_root: zero_state_root(),
-        height: 2,
-        view: 1,
-        epoch: 0,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: super::PERMISSIONED_TAG.to_string(),
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&validator_set),
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set,
-        aggregate: crate::sumeragi::consensus::QcAggregate {
-            signers_bitmap,
-            bls_aggregate_signature: aggregate,
-        },
-    };
 
     let mut vote_log = BTreeMap::new();
     vote_log.insert(vote_log_key_for_vote(&vote_leader), vote_leader);
@@ -137885,6 +137979,30 @@ fn fast_commit_gas_cap_skips_when_commit_time_is_high() {
 }
 
 #[test]
+fn proposal_assembly_stale_window_scales_for_large_batches() {
+    let base = Duration::from_millis(400);
+
+    assert_eq!(Actor::proposal_assembly_stale_window(base, 1), base);
+    assert_eq!(Actor::proposal_assembly_stale_window(base, 4_095), base);
+    assert_eq!(
+        Actor::proposal_assembly_stale_window(base, 4_096),
+        base.saturating_mul(2)
+    );
+    assert_eq!(
+        Actor::proposal_assembly_stale_window(base, 4_097),
+        base.saturating_mul(3)
+    );
+    assert_eq!(
+        Actor::proposal_assembly_stale_window(base, 16_384),
+        base.saturating_mul(4)
+    );
+    assert_eq!(
+        Actor::proposal_assembly_stale_window(base, 100_000),
+        base.saturating_mul(4)
+    );
+}
+
+#[test]
 fn proposal_gas_cost_matches_isi_metering() {
     use iroha_data_model::transaction::Executable;
 
@@ -139292,7 +139410,7 @@ async fn stake_quorum_timeout_skips_noop_reschedule_with_full_signer_set() {
             continue;
         }
         let signer = ValidatorIndex::try_from(signer_idx).expect("signer fits u32");
-        let vote = crate::sumeragi::consensus::Vote {
+        let mut vote = crate::sumeragi::consensus::Vote {
             phase: Phase::Commit,
             block_hash,
             parent_state_root: zero_state_root(),
@@ -139306,7 +139424,8 @@ async fn stake_quorum_timeout_skips_noop_reschedule_with_full_signer_set() {
             signer,
             bls_sig: Vec::new(),
         };
-        let key = default_vote_log_key(Phase::Commit, height, view_idx, epoch, signer);
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
+        let key = vote_log_key_for_vote(&vote);
         actor.vote_log.insert(key, vote);
         actor.vote_validation_cache.insert(
             key,
@@ -140404,6 +140523,7 @@ async fn reschedule_defers_vote_backed_quorum_timeout_while_validation_inflight(
         signer,
         bls_sig: Vec::new(),
     };
+    bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
     let signature = Signature::new(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
@@ -141091,6 +141211,7 @@ async fn reschedule_defers_near_commit_quorum_while_rbc_chunks_arrive() {
             signer,
             bls_sig: Vec::new(),
         };
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
         let signature = Signature::new(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
@@ -141210,6 +141331,7 @@ async fn reschedule_defers_near_commit_quorum_while_block_queue_backlogged() {
             signer,
             bls_sig: Vec::new(),
         };
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
         let signature = Signature::new(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
@@ -141329,6 +141451,7 @@ async fn reschedule_defers_near_commit_quorum_with_recent_progress_without_backl
             signer,
             bls_sig: Vec::new(),
         };
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
         let signature = Signature::new(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
@@ -141516,6 +141639,7 @@ async fn reschedule_uses_reduced_timeout_for_near_quorum_missing_payload() {
             signer,
             bls_sig: Vec::new(),
         };
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
         let signature = Signature::new(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
@@ -141545,7 +141669,8 @@ async fn reschedule_uses_reduced_timeout_for_near_quorum_missing_payload() {
     let near_quorum_recent_progress_grace =
         super::saturating_mul_duration(actor.rebroadcast_cooldown(), 4)
             .max(Duration::from_millis(500));
-    let stale_progress_age = near_quorum_recent_progress_grace + Duration::from_millis(1);
+    let stale_progress_age =
+        near_quorum_recent_progress_grace.max(near_timeout) + Duration::from_millis(1);
     assert!(
         pending_age < quorum_timeout,
         "test requires pending age inside full quorum timeout window"
@@ -141630,6 +141755,7 @@ async fn reschedule_near_quorum_reduced_timeout_is_suppressed_by_queue_backlog()
             signer,
             bls_sig: Vec::new(),
         };
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
         let signature = Signature::new(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
@@ -142069,6 +142195,7 @@ async fn reschedule_ignores_vote_backed_quorum_timeout_rbc_queue_backlog() {
         signer,
         bls_sig: Vec::new(),
     };
+    bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
     let signature = Signature::new(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
@@ -142183,6 +142310,7 @@ async fn reschedule_skips_vote_backed_quorum_timeout_while_progress_is_recent() 
         signer,
         bls_sig: Vec::new(),
     };
+    bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
     let signature = Signature::new(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
@@ -142276,6 +142404,7 @@ async fn reschedule_rearms_repeated_vote_backed_quorum_timeout_at_terminal_heigh
         signer,
         bls_sig: Vec::new(),
     };
+    bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
     let signature = Signature::new(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
@@ -142412,6 +142541,7 @@ async fn reschedule_preemptively_retransmits_single_vote_frontier_once_fast_wind
         signer,
         bls_sig: Vec::new(),
     };
+    bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
     let signature = Signature::new(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
@@ -142544,6 +142674,7 @@ async fn reschedule_single_vote_frontier_retransmits_before_full_quorum_timeout(
         signer,
         bls_sig: Vec::new(),
     };
+    bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
     let signature = Signature::new(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
@@ -142677,6 +142808,7 @@ async fn reschedule_vote_backed_frontier_retransmits_block_created_to_missing_vo
         signer,
         bls_sig: Vec::new(),
     };
+    bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
     let signature = Signature::new(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
@@ -142839,6 +142971,7 @@ async fn reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_w
         signer,
         bls_sig: Vec::new(),
     };
+    bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
     let signature = Signature::new(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
@@ -143006,6 +143139,7 @@ async fn reschedule_skips_vote_backed_retransmit_while_same_height_rbc_sender_ac
         signer,
         bls_sig: Vec::new(),
     };
+    bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
     let signature = Signature::new(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
@@ -143416,6 +143550,7 @@ async fn reschedule_defers_vote_backed_quorum_timeout_while_vote_queue_backlogge
         signer,
         bls_sig: Vec::new(),
     };
+    bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
     let signature = Signature::new(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
@@ -144296,6 +144431,43 @@ async fn da_commit_validation_inline_fallback_timeout_has_750ms_floor() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn da_validation_worker_stall_timeout_scales_with_pending_block_size() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0_u64;
+    let txs = (0..640)
+        .map(|idx| sample_log_transaction_with_message_len(idx + 1))
+        .collect();
+    let block = block_with_txs(height, view, Some(parent_hash), txs);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+
+    let generic_timeout = actor.validation_worker_stall_timeout();
+    let block_timeout = actor.validation_worker_stall_timeout_for(block_hash);
+    assert!(
+        block_timeout > generic_timeout,
+        "large DA blocks should receive a larger worker-stall window"
+    );
+    assert!(
+        block_timeout >= Duration::from_millis(10_240),
+        "640 txs should scale the DA validation stall floor to at least 10240ms"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn commit_pipeline_keeps_validation_backpressured_after_fast_timeout_when_worker_queue_full()
 {
     use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
@@ -144390,13 +144562,13 @@ async fn commit_pipeline_keeps_validation_backpressured_after_fast_timeout_when_
             .contains_key(&block_hash),
         "queue-full vNext validation should not register worker ownership without a dispatch"
     );
-    let reactor_slot = actor
-        .vnext_reactors
+    let round_slot = actor
+        .vnext_rounds
         .get(&(height, view))
-        .and_then(|reactor| reactor.slot(block_hash))
-        .expect("vNext reactor should retain the backpressured validation slot");
+        .and_then(|round| round.slot(block_hash))
+        .expect("vNext round should retain the backpressured validation slot");
     assert!(matches!(
-        reactor_slot.validation,
+        round_slot.validation,
         crate::sumeragi::vnext::ValidationState::Backpressured { .. }
     ));
 
@@ -144497,13 +144669,13 @@ async fn commit_pipeline_ignores_queue_full_inline_cutover_for_vnext_runtime() {
             .contains_key(&block_hash),
         "queue-full fallback should not register worker ownership without a dispatch"
     );
-    let reactor_slot = actor
-        .vnext_reactors
+    let round_slot = actor
+        .vnext_rounds
         .get(&(height, view))
-        .and_then(|reactor| reactor.slot(block_hash))
-        .expect("vNext reactor should retain the backpressured queue-full validation slot");
+        .and_then(|round| round.slot(block_hash))
+        .expect("vNext round should retain the backpressured queue-full validation slot");
     assert!(matches!(
-        reactor_slot.validation,
+        round_slot.validation,
         crate::sumeragi::vnext::ValidationState::Backpressured { .. }
     ));
 
@@ -144694,13 +144866,13 @@ async fn commit_pipeline_keeps_backpressure_when_configured_queue_full_cutover_e
             .contains_key(&block_hash),
         "configured queue-full fallback should not register worker ownership without a dispatch"
     );
-    let reactor_slot = actor
-        .vnext_reactors
+    let round_slot = actor
+        .vnext_rounds
         .get(&(height, view))
-        .and_then(|reactor| reactor.slot(block_hash))
-        .expect("vNext reactor should retain the configured queue-full validation slot");
+        .and_then(|round| round.slot(block_hash))
+        .expect("vNext round should retain the configured queue-full validation slot");
     assert!(matches!(
-        reactor_slot.validation,
+        round_slot.validation,
         crate::sumeragi::vnext::ValidationState::Backpressured { .. }
     ));
 
@@ -145162,13 +145334,13 @@ async fn commit_pipeline_keeps_vnext_owned_validation_deferred_past_inline_fallb
             .contains_key(&block_hash),
         "vNext ownership should remain while the worker result is pending"
     );
-    let reactor_slot = actor
-        .vnext_reactors
+    let round_slot = actor
+        .vnext_rounds
         .get(&(height, view))
-        .and_then(|reactor| reactor.slot(block_hash))
+        .and_then(|round| round.slot(block_hash))
         .expect("vNext slot should remain tracked");
     assert!(matches!(
-        reactor_slot.validation,
+        round_slot.validation,
         crate::sumeragi::vnext::ValidationState::Running {
             id: running_id,
             ..
@@ -145186,6 +145358,304 @@ async fn commit_pipeline_keeps_vnext_owned_validation_deferred_past_inline_fallb
     );
     assert!(pending_after.parent_state_root.is_none());
     assert!(pending_after.post_state_root.is_none());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_redrives_stalled_vnext_owned_validation() {
+    use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(1500)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1500)));
+        block.commit();
+    }
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let inline_fallback_timeout = actor.commit_validation_inline_fallback_timeout();
+    let stall_timeout = actor.validation_worker_stall_timeout();
+
+    let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    let (_result_tx, result_rx) = mpsc::sync_channel::<super::validation::ValidationResult>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+    actor.subsystems.validation.result_rx = Some(result_rx);
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    pending.note_commit_qc_observed(actor.epoch_for_height(height));
+    pending.inserted_at = Instant::now() - inline_fallback_timeout - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.note_proposal_seen(height, view, payload_hash);
+
+    assert!(
+        actor.drive_vnext_validation_for_pending(block_hash, height, view, payload_hash),
+        "vNext validation should own the pending block"
+    );
+    let first_work = work_rx
+        .try_recv()
+        .expect("vNext validation should queue initial worker work");
+    {
+        let inflight = actor
+            .subsystems
+            .validation
+            .inflight
+            .get_mut(&block_hash)
+            .expect("vNext validation should install an inflight marker");
+        assert_eq!(first_work.id, inflight.id);
+        inflight.started_at = Instant::now() - stall_timeout - Duration::from_millis(1);
+    }
+
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
+
+    let replacement = work_rx
+        .try_recv()
+        .expect("stalled vNext-owned validation should enqueue replacement work");
+    assert_eq!(replacement.hash, block_hash);
+    assert_ne!(
+        replacement.id, first_work.id,
+        "redrive should allocate a new vNext worker id"
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .validation
+            .inflight
+            .get(&block_hash)
+            .map(|inflight| inflight.id),
+        Some(replacement.id),
+        "replacement work should own the active inflight marker"
+    );
+    assert!(
+        actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "replacement validation should remain vNext-owned"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained while replacement validation runs");
+    assert_eq!(pending_after.validation_status, ValidationStatus::Pending);
+    assert!(pending_after.parent_state_root.is_none());
+    assert!(pending_after.post_state_root.is_none());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_keeps_recovering_vnext_slot_deferred_without_redrive() {
+    use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(1500)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1500)));
+        block.commit();
+    }
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let inline_fallback_timeout = actor.commit_validation_inline_fallback_timeout();
+
+    let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    let (_result_tx, result_rx) = mpsc::sync_channel::<super::validation::ValidationResult>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+    actor.subsystems.validation.result_rx = Some(result_rx);
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    pending.note_commit_qc_observed(actor.epoch_for_height(height));
+    pending.inserted_at = Instant::now() - inline_fallback_timeout - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.note_proposal_seen(height, view, payload_hash);
+
+    assert!(
+        actor.drive_vnext_validation_for_pending(block_hash, height, view, payload_hash),
+        "vNext validation should own the pending block"
+    );
+    let first_work = work_rx
+        .try_recv()
+        .expect("vNext validation should queue initial worker work");
+    {
+        let round_slot = actor
+            .vnext_rounds
+            .get_mut(&(height, view))
+            .and_then(|round| round.slots.get_mut(&block_hash))
+            .expect("vNext round should track the pending slot");
+        assert!(matches!(
+            &round_slot.validation,
+            crate::sumeragi::vnext::ValidationState::Running { id, .. } if *id == first_work.id
+        ));
+        round_slot.slot_state = crate::sumeragi::vnext::SlotState::Recovering {
+            block_hash: Some(block_hash),
+        };
+    }
+    actor.subsystems.validation.inflight.remove(&block_hash);
+    actor
+        .subsystems
+        .validation
+        .vnext_inflight
+        .remove(&block_hash);
+
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
+
+    assert!(
+        matches!(work_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "recovering vNext slots should not enqueue duplicate validation work"
+    );
+    let round_slot = actor
+        .vnext_rounds
+        .get(&(height, view))
+        .and_then(|round| round.slot(block_hash))
+        .expect("vNext round should retain the recovering slot");
+    assert!(matches!(
+        &round_slot.slot_state,
+        crate::sumeragi::vnext::SlotState::Recovering {
+            block_hash: Some(recovered)
+        } if *recovered == block_hash
+    ));
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained while vNext recovery owns the slot");
+    assert_eq!(pending_after.validation_status, ValidationStatus::Pending);
+    assert!(pending_after.parent_state_root.is_none());
+    assert!(pending_after.post_state_root.is_none());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_redrives_stale_vnext_backpressure_when_worker_lane_recovers() {
+    use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(1500)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1500)));
+        block.commit();
+    }
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let inline_fallback_timeout = actor.commit_validation_inline_fallback_timeout();
+
+    let (full_tx, _full_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(0);
+    let (_result_tx, result_rx) = mpsc::sync_channel::<super::validation::ValidationResult>(1);
+    actor.subsystems.validation.work_txs = vec![full_tx];
+    actor.subsystems.validation.result_rx = Some(result_rx);
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    pending.note_commit_qc_observed(actor.epoch_for_height(height));
+    pending.inserted_at = Instant::now() - inline_fallback_timeout - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.note_proposal_seen(height, view, payload_hash);
+
+    assert!(
+        actor.drive_vnext_validation_for_pending(block_hash, height, view, payload_hash),
+        "vNext validation should track the backpressured pending block"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&block_hash),
+        "queue-full vNext dispatch should not install an inflight marker"
+    );
+    {
+        let round_slot = actor
+            .vnext_rounds
+            .get_mut(&(height, view))
+            .and_then(|round| round.slots.get_mut(&block_hash))
+            .expect("vNext round should track the backpressured slot");
+        round_slot.validation =
+            crate::sumeragi::vnext::ValidationState::Backpressured { since_ms: 0 };
+    }
+
+    let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
+
+    let replacement = work_rx
+        .try_recv()
+        .expect("stale vNext backpressure should enqueue worker work once a lane recovers");
+    assert_eq!(replacement.hash, block_hash);
+    assert_eq!(
+        actor
+            .subsystems
+            .validation
+            .inflight
+            .get(&block_hash)
+            .map(|inflight| inflight.id),
+        Some(replacement.id),
+        "replacement work should install an inflight marker"
+    );
+    assert!(
+        actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "replacement validation should be vNext-owned"
+    );
+    let round_slot = actor
+        .vnext_rounds
+        .get(&(height, view))
+        .and_then(|round| round.slot(block_hash))
+        .expect("vNext round should still track the slot");
+    assert!(matches!(
+        round_slot.validation,
+        crate::sumeragi::vnext::ValidationState::Running { id, .. } if id == replacement.id
+    ));
 
     harness.shutdown.send();
 }
@@ -146877,11 +147347,13 @@ fn block_payload_bytes_ignores_results_and_extra_signatures() {
         .iter()
         .map(SignedTransaction::hash_as_entrypoint)
         .collect();
-    block.set_transaction_results(
-        Vec::new(),
-        &entry_hashes,
-        vec![TransactionResultInner::Ok(DataTriggerSequence::new())],
-    );
+    block
+        .set_transaction_results(
+            Vec::new(),
+            &entry_hashes,
+            vec![TransactionResultInner::Ok(DataTriggerSequence::new())],
+        )
+        .expect("test block entrypoint hash should match payload");
 
     let updated = super::proposals::block_payload_bytes(&block);
     assert_eq!(baseline, updated);
@@ -147102,6 +147574,9 @@ async fn conflicting_vote_does_not_override_first() {
         signer: 0,
         bls_sig: Vec::new(),
     };
+    let signature_topology_a =
+        super::topology_for_view(&topology_a, height, view, mode_tag, prf_seed);
+    bind_vote_to_signature_topology_chain_order(&mut vote_a, actor, &signature_topology_a);
     sign_vote_for_view_with_seed(
         &mut vote_a,
         &chain_id,
@@ -147144,6 +147619,9 @@ async fn conflicting_vote_does_not_override_first() {
         signer: 0,
         bls_sig: Vec::new(),
     };
+    let signature_topology_b =
+        super::topology_for_view(&topology_b, height, view, mode_tag, prf_seed);
+    bind_vote_to_signature_topology_chain_order(&mut vote_b, actor, &signature_topology_b);
     sign_vote_for_view_with_seed(
         &mut vote_b,
         &chain_id,
@@ -147154,13 +147632,7 @@ async fn conflicting_vote_does_not_override_first() {
     );
     actor.handle_vote(vote_b);
 
-    let key = default_vote_log_key(
-        crate::sumeragi::consensus::Phase::Commit,
-        height,
-        view,
-        epoch,
-        0,
-    );
+    let key = vote_log_key_for_vote(&vote_a);
     let stored = actor.vote_log.get(&key).expect("vote recorded");
     assert_eq!(
         stored.block_hash, block_hash_a,
@@ -147181,7 +147653,7 @@ async fn conflicting_commit_vote_across_views_is_dropped_for_same_signer_peer() 
     let height = committed_height.saturating_add(1);
     let epoch = actor.current_epoch();
     let chain_id = actor.chain_id.clone();
-    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
 
     let block_hash_a =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC1; Hash::LENGTH]));
@@ -147206,7 +147678,18 @@ async fn conflicting_commit_vote_across_views_is_dropped_for_same_signer_peer() 
         signer: 0,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_canonical_signer(&mut vote_a, &chain_id, &topology, &harness.key_pairs);
+    let signature_topology_a =
+        super::topology_for_view(&topology, height, vote_a.view, mode_tag, prf_seed);
+    bind_vote_to_signature_topology_chain_order(&mut vote_a, actor, &signature_topology_a);
+    sign_vote_for_canonical_signer_with_seed(
+        &mut vote_a,
+        &chain_id,
+        &topology,
+        &harness.key_pairs,
+        consensus_mode,
+        mode_tag,
+        prf_seed,
+    );
     actor.handle_vote(vote_a.clone());
 
     let mut vote_b = crate::sumeragi::consensus::Vote {
@@ -147223,7 +147706,18 @@ async fn conflicting_commit_vote_across_views_is_dropped_for_same_signer_peer() 
         signer: 0,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_canonical_signer(&mut vote_b, &chain_id, &topology, &harness.key_pairs);
+    let signature_topology_b =
+        super::topology_for_view(&topology, height, vote_b.view, mode_tag, prf_seed);
+    bind_vote_to_signature_topology_chain_order(&mut vote_b, actor, &signature_topology_b);
+    sign_vote_for_canonical_signer_with_seed(
+        &mut vote_b,
+        &chain_id,
+        &topology,
+        &harness.key_pairs,
+        consensus_mode,
+        mode_tag,
+        prf_seed,
+    );
     actor.handle_vote(vote_b.clone());
     while actor.poll_vote_verify_results() {}
 
@@ -147272,7 +147766,7 @@ async fn conflicting_commit_vote_across_views_defers_until_new_view_context() {
     let height = committed_qc.height.saturating_add(1);
     let epoch = actor.epoch_for_height(height);
     let chain_id = actor.chain_id.clone();
-    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
 
     let block_hash_a =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD1; Hash::LENGTH]));
@@ -147297,7 +147791,18 @@ async fn conflicting_commit_vote_across_views_defers_until_new_view_context() {
         signer: 0,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_canonical_signer(&mut vote_a, &chain_id, &topology, &harness.key_pairs);
+    let signature_topology_a =
+        super::topology_for_view(&topology, height, vote_a.view, mode_tag, prf_seed);
+    bind_vote_to_signature_topology_chain_order(&mut vote_a, actor, &signature_topology_a);
+    sign_vote_for_canonical_signer_with_seed(
+        &mut vote_a,
+        &chain_id,
+        &topology,
+        &harness.key_pairs,
+        consensus_mode,
+        mode_tag,
+        prf_seed,
+    );
     actor.handle_vote(vote_a);
 
     let mut vote_b = crate::sumeragi::consensus::Vote {
@@ -147314,7 +147819,18 @@ async fn conflicting_commit_vote_across_views_defers_until_new_view_context() {
         signer: 0,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_canonical_signer(&mut vote_b, &chain_id, &topology, &harness.key_pairs);
+    let signature_topology_b =
+        super::topology_for_view(&topology, height, vote_b.view, mode_tag, prf_seed);
+    bind_vote_to_signature_topology_chain_order(&mut vote_b, actor, &signature_topology_b);
+    sign_vote_for_canonical_signer_with_seed(
+        &mut vote_b,
+        &chain_id,
+        &topology,
+        &harness.key_pairs,
+        consensus_mode,
+        mode_tag,
+        prf_seed,
+    );
     actor.handle_vote(vote_b);
     while actor.poll_vote_verify_results() {}
 
@@ -147415,6 +147931,12 @@ async fn commit_qc_uses_exec_roots_from_view_votes() {
     let topology = super::network_topology::Topology::new(commit_roster);
 
     let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
+        height,
+        view,
+        consensus_mode,
+        &signature_topology,
+    );
     let required = signature_topology.min_votes_for_commit().max(1);
     let parent_state_root = Hash::prehashed([0x11; 32]);
     let post_state_root = Hash::prehashed([0x22; 32]);
@@ -147433,8 +147955,8 @@ async fn commit_qc_uses_exec_roots_from_view_votes() {
             height,
             view,
             epoch,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
+            chain_order_hash,
+            rechain_seq,
             highest_qc: None,
             signer: ValidatorIndex::try_from(idx).expect("signer index fits"),
             bls_sig: Vec::new(),
@@ -147456,8 +147978,8 @@ async fn commit_qc_uses_exec_roots_from_view_votes() {
         height,
         view,
         epoch,
-        crate::sumeragi::consensus::default_chain_order_hash(),
-        0,
+        chain_order_hash,
+        rechain_seq,
     );
     let qc = actor
         .qc_cache
@@ -148929,6 +149451,7 @@ async fn block_sync_update_commit_qc_supersedes_stale_same_height_frontier_owner
 
 #[tokio::test(flavor = "current_thread")]
 async fn block_sync_update_commit_qc_bypasses_stale_commit_inflight_frontier_owner() {
+    let _guard = super::status::qc_status_test_guard();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -150577,7 +151100,11 @@ async fn state_commit_failure_after_kura_store_keeps_partial_head_hidden() {
     let world = World::with([genesis_domain], [genesis_account], []);
     let isolated_kura = Arc::new(Kura::blank_kura_for_testing());
     let query_handle = LiveQueryStore::start_test();
-    let isolated_state = State::new_for_testing(world, Arc::clone(&isolated_kura), query_handle);
+    let isolated_state = Arc::new(State::new_for_testing(
+        world,
+        Arc::clone(&isolated_kura),
+        query_handle,
+    ));
     let chain_id = isolated_state.view().chain_id().clone();
     let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
         .with_instructions([Log::new(
@@ -150592,11 +151119,11 @@ async fn state_commit_failure_after_kura_store_keeps_partial_head_hidden() {
     let commit_topology = actor.effective_commit_topology();
 
     let (events_sender, _events_rx) = tokio::sync::broadcast::channel(4);
-    let (outcome, _timings) = commit::execute_commit_work(
-        &isolated_state,
-        isolated_kura.as_ref(),
-        &chain_id,
-        &genesis_account_id,
+    let (outcome, _timings) = execute_commit_work_on_test_stack(
+        Arc::clone(&isolated_state),
+        Arc::clone(&isolated_kura),
+        chain_id.clone(),
+        genesis_account_id.clone(),
         commit::CommitWork {
             id: 77,
             block: block.clone(),
@@ -150738,11 +151265,11 @@ async fn state_commit_height_mismatch_drops_stale_pending_when_state_advanced() 
         None,
     );
     let committed_tip_hash = committed_tip.hash();
-    let (outcome, _timings) = commit::execute_commit_work(
-        actor.state.as_ref(),
-        actor.kura.as_ref(),
-        &actor.common_config.chain,
-        &actor.genesis_account,
+    let (outcome, _timings) = execute_commit_work_on_test_stack(
+        Arc::clone(&actor.state),
+        Arc::clone(&actor.kura),
+        actor.common_config.chain.clone(),
+        actor.genesis_account.clone(),
         commit::CommitWork {
             id: 79,
             block: committed_tip,

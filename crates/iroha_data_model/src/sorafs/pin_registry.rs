@@ -3,7 +3,6 @@ use iroha_schema::IntoSchema;
 use mv::json::JsonKeyCodec;
 use norito::codec::{Decode, Encode};
 
-use super::capacity::ProviderId;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{account::AccountId, metadata::Metadata};
@@ -400,45 +399,6 @@ impl ReplicationOrderStatus {
     #[must_use]
     pub const fn is_pending(&self) -> bool {
         matches!(self, Self::Pending)
-    }
-}
-
-/// Status reported by a storage provider for an issued order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
-pub enum ReplicationReceiptStatus {
-    /// Provider accepted the assignment and is ingesting the manifest.
-    Accepted,
-    /// Provider completed ingestion and `PoR` sampling.
-    Completed,
-    /// Provider rejected the assignment (capacity issues, policy mismatch, etc.).
-    Rejected,
-}
-
-/// Provider acknowledgement persisted by the registry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct ReplicationReceiptRecord {
-    /// Provider responding to the order.
-    pub provider: ProviderId,
-    /// Reported status for the replication attempt.
-    pub status: ReplicationReceiptStatus,
-    /// Unix timestamp (seconds) when the status was recorded.
-    pub timestamp: u64,
-    /// Optional digest of the `PoR` sample bundle.
-    #[cfg_attr(
-        feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
-    )]
-    pub por_sample_digest: Option<[u8; 32]>,
-}
-
-impl ReplicationReceiptRecord {
-    /// Returns true when the receipt reports a completed replication.
-    #[must_use]
-    pub const fn is_completed(&self) -> bool {
-        matches!(self.status, ReplicationReceiptStatus::Completed)
     }
 }
 

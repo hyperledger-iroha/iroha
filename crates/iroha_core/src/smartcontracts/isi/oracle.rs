@@ -29,8 +29,10 @@ use iroha_data_model::{
         OraclePenaltyKind, OracleProviderKey, OracleProviderStats, OracleReward,
         TwitterBindingAttestation, TwitterBindingRecord,
     },
+    permission::{Permission as DataPermission, Permissions},
     prelude::*,
 };
+use iroha_executor_data_model::permission::oracle as oracle_permission;
 use iroha_primitives::numeric::Numeric;
 
 use super::prelude::*;
@@ -45,6 +47,54 @@ fn aggregation_err(err: &iroha_data_model::oracle::OracleAggregationError) -> Er
 
 fn signature_err(message: impl Into<String>) -> Error {
     Error::InvalidParameter(InvalidParameterError::SmartContract(message.into()))
+}
+
+fn has_permission_in_set(permissions: Option<&Permissions>, required: &DataPermission) -> bool {
+    permissions.is_some_and(|permissions| permissions.contains(required))
+}
+
+fn has_permission(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    required: &DataPermission,
+) -> bool {
+    if has_permission_in_set(
+        state_transaction.world.account_permissions.get(authority),
+        required,
+    ) {
+        return true;
+    }
+
+    let role_ids: Vec<_> = state_transaction
+        .world
+        .account_roles_iter(authority)
+        .cloned()
+        .collect();
+    for role_id in role_ids {
+        if let Some(role) = state_transaction.world.roles.get(&role_id)
+            && role.permissions().any(|permission| permission == required)
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn require_permission(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    required: impl Into<DataPermission>,
+    permission_name: &'static str,
+) -> Result<(), Error> {
+    let required = required.into();
+    if has_permission(state_transaction, authority, &required) {
+        Ok(())
+    } else {
+        Err(signature_err(format!(
+            "authority `{authority}` does not have `{permission_name}`"
+        )))
+    }
 }
 
 fn ensure_provider_allowed(
@@ -109,6 +159,7 @@ fn ensure_binding_matches_history(
     let found = history.into_iter().rev().any(|record| {
         record.event.feed_config_version == attestation.feed_config_version
             && record.event.slot == attestation.slot
+            && record.event.request_hash == attestation.request_hash
             && matches!(
                 record.event.outcome,
                 FeedEventOutcome::Success(ref success) if success.value == expected_value
@@ -126,9 +177,75 @@ fn ensure_binding_matches_history(
     }
 }
 
+fn retained_history_event<'world>(
+    world: &'world WorldTransaction<'_, '_>,
+    feed_id: &FeedId,
+    feed_config_version: FeedConfigVersion,
+    slot: FeedSlot,
+    request_hash: Hash,
+) -> Option<&'world FeedEventRecord> {
+    world.oracle_history.get(feed_id)?.iter().find(|record| {
+        record.event.feed_config_version == feed_config_version
+            && record.event.slot == slot
+            && record.event.request_hash == request_hash
+    })
+}
+
+fn latest_retained_slot(world: &WorldTransaction<'_, '_>, feed_id: &FeedId) -> Option<FeedSlot> {
+    world
+        .oracle_history
+        .get(feed_id)
+        .and_then(|history| history.iter().map(|record| record.event.slot).max())
+}
+
+fn ensure_window_fresh_and_unprocessed(
+    world: &WorldTransaction<'_, '_>,
+    config: &iroha_data_model::oracle::FeedConfig,
+    slot: FeedSlot,
+    request_hash: Hash,
+) -> Result<(), Error> {
+    if retained_history_event(
+        world,
+        &config.feed_id,
+        config.feed_config_version,
+        slot,
+        request_hash,
+    )
+    .is_some()
+    {
+        return Err(aggregation_err(
+            &iroha_data_model::oracle::OracleAggregationError::ProcessedWindow {
+                feed_id: config.feed_id.clone(),
+                feed_config_version: config.feed_config_version,
+                slot,
+                request_hash,
+            },
+        ));
+    }
+
+    if let Some(latest_slot) = latest_retained_slot(world, &config.feed_id)
+        && latest_slot > slot
+        && latest_slot.saturating_sub(slot) > config.replay_window_slots.get()
+    {
+        return Err(aggregation_err(
+            &iroha_data_model::oracle::OracleAggregationError::StaleWindow {
+                feed_id: config.feed_id.clone(),
+                feed_config_version: config.feed_config_version,
+                slot,
+                request_hash,
+                latest_slot,
+                replay_window_slots: config.replay_window_slots.get(),
+            },
+        ));
+    }
+
+    Ok(())
+}
+
 fn validate_feed_registration(
     feed: &iroha_data_model::oracle::FeedConfig,
     world: &WorldTransaction<'_, '_>,
+    history_depth: NonZeroUsize,
 ) -> Result<(), Error> {
     // Enforce provider uniqueness and reasonable caps.
     let mut providers = BTreeSet::new();
@@ -146,6 +263,18 @@ fn validate_feed_registration(
             feed.feed_id.as_str()
         )));
     }
+    if feed.min_signers == 0 {
+        return Err(signature_err(format!(
+            "feed `{}` must require at least one signer",
+            feed.feed_id.as_str()
+        )));
+    }
+    if feed.committee_size == 0 {
+        return Err(signature_err(format!(
+            "feed `{}` must have a non-zero committee size",
+            feed.feed_id.as_str()
+        )));
+    }
     if providers.len() > usize::from(feed.max_observers) {
         return Err(signature_err(format!(
             "feed `{}` allows {}/{} observers",
@@ -154,12 +283,44 @@ fn validate_feed_registration(
             feed.max_observers
         )));
     }
-    if usize::from(feed.min_signers) > providers.len() {
+    if feed.committee_size > feed.max_observers {
         return Err(signature_err(format!(
-            "feed `{}` min_signers {} exceeds providers {}",
+            "feed `{}` committee_size {} exceeds max_observers {}",
+            feed.feed_id.as_str(),
+            feed.committee_size,
+            feed.max_observers
+        )));
+    }
+    if usize::from(feed.committee_size) > providers.len() {
+        return Err(signature_err(format!(
+            "feed `{}` committee_size {} exceeds providers {}",
+            feed.feed_id.as_str(),
+            feed.committee_size,
+            providers.len()
+        )));
+    }
+    if feed.min_signers > feed.committee_size {
+        return Err(signature_err(format!(
+            "feed `{}` min_signers {} exceeds committee_size {}",
             feed.feed_id.as_str(),
             feed.min_signers,
-            providers.len()
+            feed.committee_size
+        )));
+    }
+    if feed.max_error_rate_bps > 10_000 {
+        return Err(signature_err(format!(
+            "feed `{}` max_error_rate_bps {} exceeds 10000",
+            feed.feed_id.as_str(),
+            feed.max_error_rate_bps
+        )));
+    }
+    let replay_window = usize::try_from(feed.replay_window_slots.get()).unwrap_or(usize::MAX);
+    if replay_window > history_depth.get() {
+        return Err(signature_err(format!(
+            "feed `{}` replay_window_slots {} exceeds retained history depth {}",
+            feed.feed_id.as_str(),
+            feed.replay_window_slots.get(),
+            history_depth.get()
         )));
     }
 
@@ -517,6 +678,62 @@ fn apply_economics_for_slot(
     Ok(())
 }
 
+fn ensure_dispute_anchors_to_history(
+    world: &WorldTransaction<'_, '_>,
+    config: &iroha_data_model::oracle::FeedConfig,
+    slot: FeedSlot,
+    request_hash: Hash,
+    target: &AccountId,
+    evidence_hashes: &[Hash],
+) -> Result<(), Error> {
+    if evidence_hashes.is_empty() {
+        return Err(signature_err("oracle dispute evidence must not be empty"));
+    }
+
+    let record = retained_history_event(
+        world,
+        &config.feed_id,
+        config.feed_config_version,
+        slot,
+        request_hash,
+    )
+    .ok_or_else(|| {
+        signature_err(format!(
+            "no retained oracle feed event for feed `{}` version {} slot {} request {}",
+            config.feed_id.as_str(),
+            config.feed_config_version.0,
+            slot,
+            request_hash
+        ))
+    })?;
+
+    if let Some(latest_slot) = latest_retained_slot(world, &config.feed_id)
+        && latest_slot > slot
+        && latest_slot.saturating_sub(slot) > config.dispute_window_slots.get()
+    {
+        return Err(signature_err(format!(
+            "dispute for feed `{}` slot {} is outside dispute window {} from latest retained slot {}",
+            config.feed_id.as_str(),
+            slot,
+            config.dispute_window_slots.get(),
+            latest_slot
+        )));
+    }
+
+    if let FeedEventOutcome::Success(success) = &record.event.outcome
+        && !success
+            .entries
+            .iter()
+            .any(|entry| &entry.oracle_id == target)
+    {
+        return Err(signature_err(format!(
+            "target provider `{target}` did not contribute to the disputed successful event"
+        )));
+    }
+
+    Ok(())
+}
+
 fn derive_dispute_id(
     feed_id: &FeedId,
     slot: FeedSlot,
@@ -540,12 +757,23 @@ impl Execute for RegisterOracleFeed {
     #[allow(clippy::too_many_lines)]
     fn execute(
         self,
-        _authority: &AccountId,
+        authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let feed = self.feed;
 
-        validate_feed_registration(&feed, &state_transaction.world)?;
+        require_permission(
+            state_transaction,
+            authority,
+            oracle_permission::CanRegisterOracleFeed,
+            "CanRegisterOracleFeed",
+        )?;
+
+        validate_feed_registration(
+            &feed,
+            &state_transaction.world,
+            state_transaction.oracle.history_depth,
+        )?;
 
         // Persist the new configuration.
         state_transaction
@@ -585,6 +813,12 @@ impl Execute for SubmitOracleObservation {
             })?;
 
         ensure_provider_allowed(&config, provider)?;
+        ensure_window_fresh_and_unprocessed(
+            &state_transaction.world,
+            &config,
+            observation.body.slot,
+            observation.body.request_hash,
+        )?;
 
         // Verify the provider signature over the observation payload.
         let signatory = provider.controller().single_signatory().ok_or_else(|| {
@@ -658,6 +892,12 @@ impl Execute for AggregateOracleFeed {
             })?;
 
         ensure_provider_allowed(&config, authority)?;
+        ensure_window_fresh_and_unprocessed(
+            &state_transaction.world,
+            &config,
+            self.slot,
+            self.request_hash,
+        )?;
 
         let key = ObservationWindowKey::new(
             self.feed_id.clone(),
@@ -668,8 +908,16 @@ impl Execute for AggregateOracleFeed {
         let window = state_transaction
             .world
             .oracle_observations
-            .remove(key.clone())
-            .unwrap_or_else(|| ObservationWindow::new(&key));
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| {
+                aggregation_err(
+                    &iroha_data_model::oracle::OracleAggregationError::InsufficientQuorum {
+                        required: config.min_signers,
+                        provided: 0,
+                    },
+                )
+            })?;
 
         let observations = window.into_sorted();
         #[cfg(feature = "telemetry")]
@@ -682,6 +930,8 @@ impl Execute for AggregateOracleFeed {
             &observations,
         )
         .map_err(|err| aggregation_err(&err))?;
+
+        state_transaction.world.oracle_observations.remove(key);
 
         let record = FeedEventRecord {
             event: output.into_feed_event(),
@@ -753,6 +1003,15 @@ impl Execute for OpenOracleDispute {
 
         ensure_provider_allowed(config, &self.target)?;
 
+        ensure_dispute_anchors_to_history(
+            &state_transaction.world,
+            config,
+            self.slot,
+            self.request_hash,
+            &self.target,
+            &self.evidence_hashes,
+        )?;
+
         let economics = state_transaction.oracle.economics.clone();
         let bond_amount = self
             .bond
@@ -764,13 +1023,6 @@ impl Execute for OpenOracleDispute {
             economics.dispute_bond_asset.clone(),
             economics.slash_receiver.clone(),
         );
-
-        state_transaction
-            .world
-            .withdraw_numeric_asset(&challenger_asset, &bond_amount)?;
-        state_transaction
-            .world
-            .deposit_numeric_asset(&escrow_asset, &bond_amount)?;
 
         let dispute_id = derive_dispute_id(
             &self.feed_id,
@@ -790,6 +1042,13 @@ impl Execute for OpenOracleDispute {
                 dispute_id.0
             )));
         }
+
+        state_transaction
+            .world
+            .withdraw_numeric_asset(&challenger_asset, &bond_amount)?;
+        state_transaction
+            .world
+            .deposit_numeric_asset(&escrow_asset, &bond_amount)?;
 
         let dispute = OracleDispute {
             id: dispute_id,
@@ -931,9 +1190,16 @@ fn move_from_escrow(
 impl Execute for ResolveOracleDispute {
     fn execute(
         self,
-        _authority: &AccountId,
+        authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        require_permission(
+            state_transaction,
+            authority,
+            oracle_permission::CanResolveOracleDispute,
+            "CanResolveOracleDispute",
+        )?;
+
         let Some(mut dispute) = state_transaction
             .world
             .oracle_disputes
@@ -1015,7 +1281,18 @@ impl Execute for ProposeOracleChange {
             )));
         }
 
-        validate_feed_registration(&self.feed, &state_transaction.world)?;
+        require_permission(
+            state_transaction,
+            authority,
+            oracle_permission::CanProposeOracleChange,
+            "CanProposeOracleChange",
+        )?;
+
+        validate_feed_registration(
+            &self.feed,
+            &state_transaction.world,
+            state_transaction.oracle.history_depth,
+        )?;
         let created_at = state_transaction.block_height();
         let mut proposal = OracleChangeProposal {
             id: self.change_id,
@@ -1093,7 +1370,11 @@ fn enact_change(
     state_transaction: &mut StateTransaction<'_, '_>,
     proposal: &OracleChangeProposal,
 ) -> Result<(), Error> {
-    validate_feed_registration(&proposal.feed, &state_transaction.world)?;
+    validate_feed_registration(
+        &proposal.feed,
+        &state_transaction.world,
+        state_transaction.oracle.history_depth,
+    )?;
     state_transaction
         .world
         .oracle_feeds
@@ -1108,6 +1389,13 @@ impl Execute for VoteOracleChangeStage {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        require_permission(
+            state_transaction,
+            authority,
+            oracle_permission::CanVoteOracleChangeStage { stage: self.stage },
+            "CanVoteOracleChangeStage",
+        )?;
+
         let Some(mut proposal) = state_transaction
             .world
             .oracle_changes
@@ -1131,9 +1419,25 @@ impl Execute for VoteOracleChangeStage {
         if proposal.stages.is_empty() {
             proposal.stages = seed_change_stages(now, &state_transaction.oracle.governance);
         }
+        let active_stage = proposal
+            .current_stage()
+            .map(|stage| stage.stage)
+            .ok_or_else(|| signature_err("oracle change has no active stage"))?;
+        if self.stage != active_stage {
+            let direction = if self.stage.order() < active_stage.order() {
+                "past"
+            } else {
+                "future"
+            };
+            return Err(signature_err(format!(
+                "cannot vote {direction} oracle change stage {:?}; active stage is {:?}",
+                self.stage, active_stage
+            )));
+        }
+
         start_stage_if_needed(
             &mut proposal,
-            self.stage,
+            active_stage,
             now,
             &state_transaction.oracle.governance,
         );
@@ -1177,9 +1481,6 @@ impl Execute for VoteOracleChangeStage {
                     stage_rec.completed_at = Some(now);
                     if let Some(next) = stage_rec.stage.next() {
                         next_stage = Some(next);
-                        if matches!(next, OracleChangeStage::Enactment) {
-                            should_enact = true;
-                        }
                     } else {
                         should_enact = true;
                     }
@@ -1258,19 +1559,78 @@ impl Execute for VoteOracleChangeStage {
 pub mod query {
     use eyre::Result;
     use iroha_data_model::{
-        oracle::TwitterBindingRecord,
+        events::data::oracle::FeedEventRecord,
+        oracle::{
+            FeedConfig, OracleChangeProposal, OracleDispute, OracleProviderStats,
+            OracleProviderStatsRecord, TwitterBindingRecord,
+        },
         query::{
+            dsl::CompoundPredicate,
+            dsl_fast::EvaluatePredicate,
             error::{FindError, QueryExecutionFail as Error},
-            oracle::prelude::FindTwitterBindingByHash,
+            oracle::prelude::{
+                FindOracleChangeById, FindOracleChanges, FindOracleDisputeById, FindOracleDisputes,
+                FindOracleDisputesByFeedId, FindOracleFeedById, FindOracleFeeds,
+                FindOracleHistoryByFeedId, FindOracleProviderStatsByFeedId,
+                FindOracleProviderStatsByKey, FindTwitterBindingByHash, FindTwitterBindingsByUaid,
+            },
         },
     };
     use iroha_telemetry::metrics;
     use mv::storage::StorageReadOnly;
 
     use crate::{
-        smartcontracts::ValidSingularQuery,
+        smartcontracts::{ValidQuery, ValidSingularQuery},
         state::{StateReadOnly, WorldReadOnly},
     };
+
+    impl ValidSingularQuery for FindOracleFeedById {
+        #[metrics(+"find_oracle_feed_by_id")]
+        fn execute(&self, state_ro: &impl StateReadOnly) -> Result<FeedConfig, Error> {
+            state_ro
+                .world()
+                .oracle_feeds()
+                .get(&self.feed_id)
+                .cloned()
+                .ok_or_else(|| Error::Find(FindError::OracleFeed(self.feed_id.clone())))
+        }
+    }
+
+    impl ValidSingularQuery for FindOracleDisputeById {
+        #[metrics(+"find_oracle_dispute_by_id")]
+        fn execute(&self, state_ro: &impl StateReadOnly) -> Result<OracleDispute, Error> {
+            state_ro
+                .world()
+                .oracle_disputes()
+                .get(&self.dispute_id)
+                .cloned()
+                .ok_or_else(|| Error::Find(FindError::OracleDispute(self.dispute_id)))
+        }
+    }
+
+    impl ValidSingularQuery for FindOracleChangeById {
+        #[metrics(+"find_oracle_change_by_id")]
+        fn execute(&self, state_ro: &impl StateReadOnly) -> Result<OracleChangeProposal, Error> {
+            state_ro
+                .world()
+                .oracle_changes()
+                .get(&self.change_id)
+                .cloned()
+                .ok_or_else(|| Error::Find(FindError::OracleChange(self.change_id)))
+        }
+    }
+
+    impl ValidSingularQuery for FindOracleProviderStatsByKey {
+        #[metrics(+"find_oracle_provider_stats_by_key")]
+        fn execute(&self, state_ro: &impl StateReadOnly) -> Result<OracleProviderStats, Error> {
+            state_ro
+                .world()
+                .oracle_provider_stats()
+                .get(&self.key)
+                .copied()
+                .ok_or_else(|| Error::Find(FindError::OracleProviderStats(self.key.clone())))
+        }
+    }
 
     impl ValidSingularQuery for FindTwitterBindingByHash {
         #[metrics(+"find_twitter_binding_by_hash")]
@@ -1283,6 +1643,145 @@ pub mod query {
                 .ok_or_else(|| Error::Find(FindError::TwitterBinding(self.binding_hash.clone())))
         }
     }
+
+    impl ValidQuery for FindOracleFeeds {
+        #[metrics(+"find_oracle_feeds")]
+        fn execute(
+            self,
+            filter: CompoundPredicate<FeedConfig>,
+            state_ro: &impl StateReadOnly,
+        ) -> Result<impl Iterator<Item = FeedConfig>, Error> {
+            let items = state_ro
+                .world()
+                .oracle_feeds()
+                .iter()
+                .map(|(_, feed)| feed.clone())
+                .filter(move |feed| filter.applies(feed))
+                .collect::<Vec<_>>();
+            Ok(items.into_iter())
+        }
+    }
+
+    impl ValidQuery for FindOracleHistoryByFeedId {
+        #[metrics(+"find_oracle_history_by_feed_id")]
+        fn execute(
+            self,
+            filter: CompoundPredicate<FeedEventRecord>,
+            state_ro: &impl StateReadOnly,
+        ) -> Result<impl Iterator<Item = FeedEventRecord>, Error> {
+            let items = state_ro
+                .world()
+                .oracle_history()
+                .get(&self.feed_id)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(move |record| filter.applies(record))
+                .collect::<Vec<_>>();
+            Ok(items.into_iter())
+        }
+    }
+
+    impl ValidQuery for FindOracleProviderStatsByFeedId {
+        #[metrics(+"find_oracle_provider_stats_by_feed_id")]
+        fn execute(
+            self,
+            filter: CompoundPredicate<OracleProviderStatsRecord>,
+            state_ro: &impl StateReadOnly,
+        ) -> Result<impl Iterator<Item = OracleProviderStatsRecord>, Error> {
+            let feed_id = self.feed_id;
+            let items = state_ro
+                .world()
+                .oracle_provider_stats()
+                .iter()
+                .filter_map(|(key, stats)| {
+                    (key.feed_id == feed_id).then(|| OracleProviderStatsRecord {
+                        key: key.clone(),
+                        stats: *stats,
+                    })
+                })
+                .filter(move |record| filter.applies(record))
+                .collect::<Vec<_>>();
+            Ok(items.into_iter())
+        }
+    }
+
+    impl ValidQuery for FindOracleDisputes {
+        #[metrics(+"find_oracle_disputes")]
+        fn execute(
+            self,
+            filter: CompoundPredicate<OracleDispute>,
+            state_ro: &impl StateReadOnly,
+        ) -> Result<impl Iterator<Item = OracleDispute>, Error> {
+            let items = state_ro
+                .world()
+                .oracle_disputes()
+                .iter()
+                .map(|(_, dispute)| dispute.clone())
+                .filter(move |dispute| filter.applies(dispute))
+                .collect::<Vec<_>>();
+            Ok(items.into_iter())
+        }
+    }
+
+    impl ValidQuery for FindOracleDisputesByFeedId {
+        #[metrics(+"find_oracle_disputes_by_feed_id")]
+        fn execute(
+            self,
+            filter: CompoundPredicate<OracleDispute>,
+            state_ro: &impl StateReadOnly,
+        ) -> Result<impl Iterator<Item = OracleDispute>, Error> {
+            let feed_id = self.feed_id;
+            let items = state_ro
+                .world()
+                .oracle_disputes()
+                .iter()
+                .filter_map(|(_, dispute)| (dispute.feed_id == feed_id).then(|| dispute.clone()))
+                .filter(move |dispute| filter.applies(dispute))
+                .collect::<Vec<_>>();
+            Ok(items.into_iter())
+        }
+    }
+
+    impl ValidQuery for FindOracleChanges {
+        #[metrics(+"find_oracle_changes")]
+        fn execute(
+            self,
+            filter: CompoundPredicate<OracleChangeProposal>,
+            state_ro: &impl StateReadOnly,
+        ) -> Result<impl Iterator<Item = OracleChangeProposal>, Error> {
+            let items = state_ro
+                .world()
+                .oracle_changes()
+                .iter()
+                .map(|(_, change)| change.clone())
+                .filter(move |change| filter.applies(change))
+                .collect::<Vec<_>>();
+            Ok(items.into_iter())
+        }
+    }
+
+    impl ValidQuery for FindTwitterBindingsByUaid {
+        #[metrics(+"find_twitter_bindings_by_uaid")]
+        fn execute(
+            self,
+            filter: CompoundPredicate<TwitterBindingRecord>,
+            state_ro: &impl StateReadOnly,
+        ) -> Result<impl Iterator<Item = TwitterBindingRecord>, Error> {
+            let digests = state_ro
+                .world()
+                .twitter_bindings_by_uaid()
+                .get(&self.uaid)
+                .cloned()
+                .unwrap_or_default();
+            let items = digests
+                .into_iter()
+                .filter_map(|digest| state_ro.world().twitter_bindings().get(&digest).cloned())
+                .filter(move |record| filter.applies(record))
+                .collect::<Vec<_>>();
+            Ok(items.into_iter())
+        }
+    }
 }
 
 impl Execute for RecordTwitterBinding {
@@ -1291,6 +1790,13 @@ impl Execute for RecordTwitterBinding {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        require_permission(
+            state_transaction,
+            authority,
+            oracle_permission::CanManageTwitterBindings,
+            "CanManageTwitterBindings",
+        )?;
+
         let RecordTwitterBinding {
             attestation,
             feed_id,
@@ -1411,6 +1917,13 @@ impl Execute for RevokeTwitterBinding {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        require_permission(
+            state_transaction,
+            authority,
+            oracle_permission::CanManageTwitterBindings,
+            "CanManageTwitterBindings",
+        )?;
+
         let cfg = &state_transaction.oracle.twitter_binding;
         let feed_id = expected_twitter_feed_id(cfg);
         let feed_config = state_transaction
@@ -1470,9 +1983,16 @@ impl Execute for RevokeTwitterBinding {
 impl Execute for RollbackOracleChange {
     fn execute(
         self,
-        _authority: &AccountId,
+        authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        require_permission(
+            state_transaction,
+            authority,
+            oracle_permission::CanRollbackOracleChange,
+            "CanRollbackOracleChange",
+        )?;
+
         let Some(mut proposal) = state_transaction
             .world
             .oracle_changes
@@ -1497,6 +2017,19 @@ impl Execute for RollbackOracleChange {
             .stage
             .or_else(|| proposal.current_stage().map(|stage| stage.stage))
             .unwrap_or(OracleChangeStage::Enactment);
+        if let Some(active_stage) = proposal.current_stage().map(|stage| stage.stage)
+            && target_stage != active_stage
+        {
+            let direction = if target_stage.order() < active_stage.order() {
+                "past"
+            } else {
+                "future"
+            };
+            return Err(signature_err(format!(
+                "cannot roll back {direction} oracle change stage {:?}; active stage is {:?}",
+                target_stage, active_stage
+            )));
+        }
 
         if let Some(record) = proposal
             .stages

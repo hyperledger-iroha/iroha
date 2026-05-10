@@ -1240,6 +1240,11 @@ fn minimal_config_snapshot() {
                     validation_result_queue_cap: 0,
                     validation_queue_full_inline_cutover_divisor: 2,
                     fast_finality_inline_validation_max_transactions: 16,
+                    validation_stall_da_per_entrypoint_floor: 16ms,
+                    validation_stall_inline_fallback_multiplier: 6,
+                    validation_stall_ema_multiplier: 3,
+                    validation_stall_non_da_cap: 15s,
+                    validation_stall_da_cap: 90s,
                     qc_verify_worker_threads: 0,
                     qc_verify_work_queue_cap: 0,
                     qc_verify_result_queue_cap: 0,
@@ -4148,6 +4153,65 @@ fn da_timeout_multiplier_validation_propagates() {
     assert_contains!(
         message,
         "sumeragi.advanced.da.availability_timeout_multiplier must be greater than zero"
+    );
+}
+
+#[test]
+fn sumeragi_worker_validation_stall_tuning_env_overrides_parse() {
+    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
+    use iroha_config_base::{env::MockEnv, read::ConfigReader};
+
+    let env = MockEnv::new()
+        .set("SUMERAGI_VALIDATION_STALL_DA_PER_ENTRYPOINT_FLOOR_MS", "31")
+        .set("SUMERAGI_VALIDATION_STALL_INLINE_FALLBACK_MULTIPLIER", "7")
+        .set("SUMERAGI_VALIDATION_STALL_EMA_MULTIPLIER", "5")
+        .set("SUMERAGI_VALIDATION_STALL_NON_DA_CAP_MS", "17000")
+        .set("SUMERAGI_VALIDATION_STALL_DA_CAP_MS", "91000");
+    let cfg: Actual = ConfigReader::new()
+        .with_env(env)
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<User>()
+        .expect("read user config with env")
+        .parse()
+        .expect("actual config with worker stall env");
+
+    assert_eq!(
+        cfg.sumeragi.worker.validation_stall_da_per_entrypoint_floor,
+        Duration::from_millis(31)
+    );
+    assert_eq!(
+        cfg.sumeragi
+            .worker
+            .validation_stall_inline_fallback_multiplier,
+        7
+    );
+    assert_eq!(cfg.sumeragi.worker.validation_stall_ema_multiplier, 5);
+    assert_eq!(
+        cfg.sumeragi.worker.validation_stall_non_da_cap,
+        Duration::from_millis(17_000)
+    );
+    assert_eq!(
+        cfg.sumeragi.worker.validation_stall_da_cap,
+        Duration::from_millis(91_000)
+    );
+}
+
+#[test]
+fn sumeragi_worker_validation_stall_tuning_rejects_zero() {
+    let env = MockEnv::new().set("SUMERAGI_VALIDATION_STALL_EMA_MULTIPLIER", "0");
+    let report = ConfigReader::new()
+        .with_env(env)
+        .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+        .expect("user config should load")
+        .read_and_complete::<UserConfig>()
+        .expect("user config view")
+        .parse()
+        .expect_err("parse should fail for invalid validation stall tuning");
+    let message = format!("{report:?}");
+    assert_contains!(
+        message,
+        "sumeragi.advanced.worker.validation_stall_* values must be greater than zero"
     );
 }
 

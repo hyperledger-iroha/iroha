@@ -178,6 +178,11 @@ impl_into_box! {
 
 impl crate::seal::Instruction for RepoInstructionBox {}
 
+impl RepoInstructionBox {
+    /// Stable Norito wire identifier for boxed repo instructions.
+    pub const WIRE_ID: &'static str = "iroha.repo";
+}
+
 fn repo_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
@@ -558,21 +563,22 @@ mod tests {
             std::any::type_name::<RepoInstructionBox>(),
             RepoInstructionBox::Initiate(repo_instruction()),
         );
-        assert_registry_decodes(
-            &registry,
+        for value in [
+            RepoInstructionBox::Initiate(repo_instruction()),
+            RepoInstructionBox::Reverse(reverse_repo_instruction()),
+            RepoInstructionBox::MarginCall(RepoMarginCallIsi::new(agreement_id())),
+        ] {
+            assert_registry_decodes(&registry, RepoInstructionBox::WIRE_ID, value);
+        }
+        for name in [
             std::any::type_name::<RepoIsi>(),
-            repo_instruction(),
-        );
-        assert_registry_decodes(&registry, RepoIsi::WIRE_ID, repo_instruction());
-        assert_registry_decodes(
-            &registry,
             std::any::type_name::<ReverseRepoIsi>(),
-            reverse_repo_instruction(),
-        );
-        assert_registry_decodes(
-            &registry,
+            std::any::type_name::<RepoMarginCallIsi>(),
+            RepoIsi::WIRE_ID,
             ReverseRepoIsi::WIRE_ID,
-            reverse_repo_instruction(),
-        );
+            RepoMarginCallIsi::WIRE_ID,
+        ] {
+            assert!(!registry.contains(name), "{name} must remain boxed-only");
+        }
     }
 }

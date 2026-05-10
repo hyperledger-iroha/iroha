@@ -13867,6 +13867,22 @@ fn canonicalize_query_batch_box(
             canonicalize_variant!(items, BlockHeaderHash)
         }
         QueryOutputBatchBox::ProofRecord(items) => canonicalize_variant!(items, ProofRecord),
+        QueryOutputBatchBox::OracleFeedConfig(items) => {
+            canonicalize_variant!(items, OracleFeedConfig)
+        }
+        QueryOutputBatchBox::OracleFeedEventRecord(items) => {
+            canonicalize_variant!(items, OracleFeedEventRecord)
+        }
+        QueryOutputBatchBox::OracleProviderStatsRecord(items) => {
+            canonicalize_variant!(items, OracleProviderStatsRecord)
+        }
+        QueryOutputBatchBox::OracleDispute(items) => canonicalize_variant!(items, OracleDispute),
+        QueryOutputBatchBox::OracleChangeProposal(items) => {
+            canonicalize_variant!(items, OracleChangeProposal)
+        }
+        QueryOutputBatchBox::TwitterBindingRecord(items) => {
+            canonicalize_variant!(items, TwitterBindingRecord)
+        }
         QueryOutputBatchBox::AssetEscrowRecord(items) => {
             canonicalize_variant!(items, AssetEscrowRecord)
         }
@@ -44426,11 +44442,13 @@ pub(crate) mod tests_runtime_handlers {
         );
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
         let entry_hashes = [entry_hash];
-        block.set_transaction_results(
-            Vec::new(),
-            &entry_hashes,
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-        );
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &entry_hashes,
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            )
+            .expect("test block entrypoint hash should match payload");
         (block, entry_hash)
     }
 
@@ -44462,11 +44480,13 @@ pub(crate) mod tests_runtime_handlers {
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
         block.set_external_entrypoints(vec![entrypoint]);
         let entry_hashes = [entry_hash];
-        block.set_transaction_results(
-            Vec::new(),
-            &entry_hashes,
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-        );
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &entry_hashes,
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            )
+            .expect("test block entrypoint hash should match payload");
         (block, entry_hash)
     }
 
@@ -45835,11 +45855,13 @@ pub(crate) mod tests_runtime_handlers {
             .first()
             .expect("tx")
             .hash_as_entrypoint()];
-        block.set_transaction_results(
-            Vec::new(),
-            &entry_hashes,
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-        );
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &entry_hashes,
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            )
+            .expect("test block entrypoint hash should match payload");
         let result_root = block
             .header()
             .result_merkle_root()
@@ -45894,11 +45916,13 @@ pub(crate) mod tests_runtime_handlers {
             .first()
             .expect("tx")
             .hash_as_entrypoint()];
-        block.set_transaction_results(
-            Vec::new(),
-            &entry_hashes,
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-        );
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &entry_hashes,
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            )
+            .expect("test block entrypoint hash should match payload");
         let expected_root = block
             .header()
             .result_merkle_root()
@@ -45974,11 +45998,13 @@ pub(crate) mod tests_runtime_handlers {
             .first()
             .expect("tx")
             .hash_as_entrypoint()];
-        block.set_transaction_results(
-            Vec::new(),
-            &entry_hashes,
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-        );
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &entry_hashes,
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            )
+            .expect("test block entrypoint hash should match payload");
         let expected_root = block
             .header()
             .result_merkle_root()
@@ -46081,11 +46107,13 @@ pub(crate) mod tests_runtime_handlers {
             .first()
             .expect("tx")
             .hash_as_entrypoint()];
-        block.set_transaction_results(
-            Vec::new(),
-            &entry_hashes,
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-        );
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &entry_hashes,
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            )
+            .expect("test block entrypoint hash should match payload");
         block.set_sccp_commitment_root(Some(sccp_commitment_root));
         let expected_root = block
             .header()
@@ -46141,11 +46169,13 @@ pub(crate) mod tests_runtime_handlers {
             SignatureOf::from_hash(keypair.private_key(), header.hash()),
         );
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-        block.set_transaction_results(
-            Vec::new(),
-            &[entry_hash],
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-        );
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &[entry_hash],
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            )
+            .expect("test block entrypoint hash should match payload");
         let messages = iroha_core::bridge::collect_sccp_messages_from_signed_block(&block);
         let commitment_root =
             iroha_core::bridge::sccp_commitment_root_from_messages(&messages).expect("root");

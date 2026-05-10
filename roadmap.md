@@ -1,8 +1,19 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-05-09
+Last updated: 2026-05-10
 
 Completed history lives in `status.md`. This file should only track unfinished work.
+
+## Soracles follow-ups
+
+- Add the off-chain/runtime leader scheduler and pacemaker automation for
+  provider fetches and manual aggregate replacement. The MVP keeps deterministic
+  committee/leader derivation and quorum checks, but does not yet schedule
+  leaders at runtime.
+- Add provider rating weights and governance-driven reputation adjustments once
+  enough provider stats are available from live feed history. Current
+  aggregation remains equal-weight median/percentile with deterministic
+  provider counters.
 
 ## FASTPQ GPU acceleration follow-ups
 
@@ -17,36 +28,31 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Sumeragi vNext consensus replacement
 
-- Fix the active-load exact-frontier recovery regression exposed by the 20k
-  Izanami reruns. After the 2026-05-09 FASTPQ GPU fallback cleanup, the 120s
-  gate
-  `dist/izanami-prebuilt-20k-fastpq-gpu-bn254-128seq-rowguard-120s-20260509-163329`
-  accepted all `2,400,000` submissions with zero submit/prebuild failures and
-  no GPU fallback/parity warnings, but still stalled at strict height `3`,
-  strict approved `4,361`, queue depth `708,637`, and a saturated transaction
-  queue. The 90s sampled profile
-  `dist/izanami-profile-20k-fastpq-gpu-clean-sampled-90s-20260509-163714`
-  reproduced strict height `3`, strict approved `4,279`, queue depth
-  `653,043`, and quorum-timeout/backpressure churn. The 2026-05-09 model pass
-  now covers exact-frontier vote-only placeholders, active vNext
-  chain-order-bound vote/QC fixtures, and the broad `block_sync_update_` unit
-  sweep. The remaining acceptance step is a fresh Izanami run proving
-  same-height commit-QC/body recovery can commit the known frontier, advance the
-  view with quorum evidence, or clear stale local ownership under active load
-  without re-entering repeated no-QC repair loops.
-- Finish moving the remaining consensus-shell effects onto typed
-  `sumeragi::vnext::ReactorEvent`/`ReactorEffect` adapters. vNext control
-  frames, accepted body-backed proposals, DA/RBC availability handoffs, timeout
-  ticks, validation worker dispatch/start/result, the proposal-backed
-  validation gate, validation accept/reject/defer effects,
-  validation/re-chain recovery effects, re-chain/view-change vote aggregation,
-  view-change certificate installation, block-sync certificate sidecar replay,
-  and commit-persistence completion now enter the live reactor. Healthy
-  validation remains on the vNext worker path, while stale, disconnected,
-  stalled, and expired frontier validation is redriven through vNext instead
-  of falling back to production inline execution. The broader block consensus
-  shell still needs the remaining effect adapters before the legacy cooperative
-  commit sweep can be deleted.
+- Keep reducing the remaining 20k Izanami queue-drain gap now that the
+  large-block merge bottleneck is no longer visible in the latest gates. The
+  2026-05-10 final 4,096-cap/full-batch stale-window rerun
+  `dist/izanami-prebuilt-20k-fastpq-gpu-low-contention-8192-block4096-fullbatchgrace-final-120s-20260510-140229`
+  accepted and succeeded all `2,400,000` submissions with zero failures,
+  reached strict height `17` / strict approved `61,495`, emitted no slow
+  commit-stage timing samples, had stale proposal aborts `0`, reported
+  view-change installs `0` and commit-inflight timeout total `0`, and kept
+  submit latency at `p50=3ms` / `p95=12ms`. The transaction queue still
+  saturated (`873,313 / 2,400,000`) and shutdown still caught a commit in
+  flight, so the open work is proposal/commit/QC cadence and queue drain under
+  sustained 20k ingress. The 8,192 and 16,384 block-cap experiments proved that
+  larger blocks are not the next fix on the 300ms pipeline. Rerun the clean 20k
+  gate after the next Sumeragi/QC cadence change and keep the simple-transfer
+  batch path guarded by exact trigger-filter matching so per-transaction
+  transcript, event, trigger, and rejection semantics remain intact.
+- Keep hardening the actor-owned vNext round state now that the standalone
+  runtime reactor boundary is gone. vNext control frames, body-backed proposal
+  acceptance, DA/RBC availability handoffs, timeout ticks, validation worker
+  dispatch/start/result, proposal-backed validation gates, validation
+  accept/reject/defer handling, re-chain/view-change aggregation, sidecar
+  replay, and commit-persistence completion now run directly through `Actor`.
+  The remaining work is to delete any legacy cooperative commit sweep paths
+  that become redundant once the actor-owned vNext state has equivalent model
+  and integration coverage.
 - Finish auditing chain-order hash and `rechain_seq` binding in deferred
   vote/QC caches, signer-tally/cache keys, and evidence replay paths used by
   the replacement shell. Vote/QC preimages, precommit signer history,
@@ -921,35 +927,40 @@ Completed history lives in `status.md`. This file should only track unfinished w
     evidence, not a bottleneck profile: the host had neither `sample` nor
     `perf`, and the 2.4M prebuilt-buffer run consumed nearly all WSL2 memory.
     Individual instruction payload slice paths are now in place for `Log`,
-    `RecordSccpMessage`, transfer instructions, transfer batches, mint/burn
-    asset and trigger instructions, key-value metadata instructions,
-    Grant/Revoke permission changes, account signatory/quorum changes, the
-    stable core SetParameter/trigger/upgrade/custom ISIs, Register/Unregister
-    instructions and boxes, asset-definition alias/balance-policy instructions,
-    asset transfer-control instructions, account alias binding/lease
-    instructions, contract-alias instructions, account-recovery instructions,
-    RAM-LFE program-policy instructions, hidden-identifier instructions,
-    consensus-key lifecycle instructions, domain-endorsement instructions,
-    verifying-key instructions, Offline V2 note instructions, verified Nexus
-    lane-relay/fee-budget instructions, RWA/repo/settlement stable boxes,
+    `RecordSccpMessage`, the canonical grouped instruction boxes
+    (`RegisterBox`, `UnregisterBox`, `MintBox`, `BurnBox`, `TransferBox`,
+    `SetKeyValueBox`, `RemoveKeyValueBox`, `GrantBox`, `RevokeBox`,
+    `RwaInstructionBox`, `RepoInstructionBox`, and `SettlementInstructionBox`),
+    transfer batches, account signatory/quorum changes, the stable core
+    SetParameter/trigger/upgrade/custom ISIs, asset-definition
+    alias/balance-policy instructions, asset transfer-control instructions,
+    account alias binding/lease instructions, contract-alias instructions,
+    account-recovery instructions, RAM-LFE program-policy instructions,
+    hidden-identifier instructions, consensus-key lifecycle instructions,
+    domain-endorsement instructions, verifying-key instructions, Offline V2
+    note instructions, verified Nexus lane-relay/fee-budget instructions,
     native and anonymous asset escrow lifecycle instructions, Musubi
     package-registry instructions, smart-contract-code
     manifest/instance/bytecode instructions, the Space Directory manifest
-    lifecycle instructions, SoraFS pin/capacity/replication/provider-owner
-    instructions, oracle feed/observation/dispute/governance/Twitter binding
-    instructions, bridge proof/receipt/SCCP instructions, Ministry citizen-agenda
-    proposal submission, social Twitter reward/escrow instructions, registered
-    public-lane staking instructions, invalid-instruction placeholders, SoraNet
-    VPN lease open/settle/refund instructions, runtime-upgrade ISIs, SNS name
-    ISIs, ZK proof/confidential/election ISIs, Kaigi session/relay ISIs, and
-    governance proposal/ballot/citizen ISIs, Soracloud service lifecycle,
-    host/placement, agent, model/training, rollout, runtime-state, mailbox, and
-    receipt ISIs, `RegisterPeerWithPop`, and Nexus emergency-validator override
-    ISIs via an opt-in registry constructor. No default registry instruction
-    remains on the generic instruction decoder path. Remaining targets are
-    broader allocation/memmove churn around transaction admission material, and
-    a sampled 30s profile plus clean 120s gate on a profiler-equipped host after
-    the next scalar admission-decode pass.
+    lifecycle instructions, SoraFS pin/capacity/replication/provider-owner plus
+    pricing/credit instructions, oracle feed/observation/dispute/governance/
+    Twitter binding instructions, bridge proof/receipt/SCCP instructions,
+    Ministry citizen-agenda proposal submission, social Twitter reward/escrow
+    instructions, registered public-lane staking instructions, invalid-
+    instruction placeholders, SoraNet VPN lease open/settle/refund instructions,
+    runtime-upgrade ISIs, SNS name ISIs, ZK proof/confidential/election ISIs,
+    Kaigi session/relay ISIs, governance proposal/ballot/citizen ISIs,
+    Soracloud service lifecycle, host/placement, agent, model/training,
+    rollout, runtime-state, mailbox, and receipt ISIs, and Nexus
+    emergency-validator override ISIs via an opt-in registry constructor. The
+    default registry no longer exposes direct grouped generic wire forms such
+    as `Register<Domain>`, concrete mint/burn/transfer variants,
+    `Grant<Permission, Account>`, `RepoIsi`, or `DvpIsi`; canonical clients use
+    the grouped boxes. Remaining targets are the standalone entries that still
+    use the generic constructor, broader allocation/memmove churn around
+    transaction admission material, and a sampled 30s profile plus clean 120s
+    gate on a profiler-equipped host after the next scalar admission-decode
+    pass.
   - Keep the FASTPQ BN254 Metal path validation separate from scalar profiling:
     after installing the Apple Metal toolchain, run the Metal parity tests and a
     `fastpq-gpu` 30s/120s comparison with `--fastpq-poseidon-mode gpu`.

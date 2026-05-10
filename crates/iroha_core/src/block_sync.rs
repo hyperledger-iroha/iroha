@@ -6094,7 +6094,7 @@ pub mod message {
             query::store::LiveQueryStore,
             state::{State, World},
             sumeragi::{
-                message::BlockMessage, test_sumeragi_handle, test_sumeragi_handle_with_payload_cap,
+                message::BlockMessage, test_sumeragi_handle, test_sumeragi_handle_with_rbc_cap,
             },
         };
 
@@ -6107,7 +6107,7 @@ pub mod message {
                 .expect("tokio runtime");
 
             runtime.block_on(async {
-                let (sumeragi, block_payload_rx) = test_sumeragi_handle_with_payload_cap(0, 0);
+                let (sumeragi, rbc_chunk_rx) = test_sumeragi_handle_with_rbc_cap(0, 0);
                 let kura = Kura::blank_kura_for_testing();
                 let state = Arc::new(State::new_for_testing(
                     World::new(),
@@ -6179,7 +6179,7 @@ pub mod message {
                     unblock_rx
                         .recv_timeout(Duration::from_secs(30))
                         .expect("unblock signal");
-                    block_payload_rx
+                    rbc_chunk_rx
                         .recv_timeout(Duration::from_secs(10))
                         .expect("expected block sync update");
                 });
@@ -6305,7 +6305,7 @@ pub mod message {
                 .expect("tokio runtime");
 
             runtime.block_on(async {
-                let (sumeragi, block_payload_rx) = test_sumeragi_handle_with_payload_cap(1, 0);
+                let (sumeragi, rbc_chunk_rx) = test_sumeragi_handle_with_rbc_cap(1, 0);
                 let kura = Kura::blank_kura_for_testing();
                 let state = Arc::new(State::new_for_testing(
                     World::new(),
@@ -6433,7 +6433,7 @@ pub mod message {
                         .allow_response(&sender_peer_id, Instant::now()),
                     "direct recovery response permits must not mutate the proactive gossip tracker"
                 );
-                let queued = block_payload_rx
+                let queued = rbc_chunk_rx
                     .try_recv()
                     .expect("direct recovery permit should allow one block-sync update");
                 let BlockMessage::BlockSyncUpdate(update) = queued.message() else {
@@ -6451,7 +6451,7 @@ pub mod message {
                 .expect("tokio runtime");
 
             runtime.block_on(async {
-                let (sumeragi, block_payload_rx) = test_sumeragi_handle_with_payload_cap(1, 0);
+                let (sumeragi, rbc_chunk_rx) = test_sumeragi_handle_with_rbc_cap(1, 0);
                 let kura = Kura::blank_kura_for_testing();
                 let state = Arc::new(State::new_for_testing(
                     World::new(),
@@ -6573,7 +6573,7 @@ pub mod message {
 
                 decoded.handle_message(&mut block_sync).await;
 
-                let queued = block_payload_rx
+                let queued = rbc_chunk_rx
                     .try_recv()
                     .expect("share blocks should enqueue a block sync update");
                 let BlockMessage::BlockSyncUpdate(update) = queued.message() else {

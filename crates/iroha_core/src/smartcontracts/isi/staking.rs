@@ -1809,6 +1809,10 @@ mod tests {
         .unpack(|_| {})
     }
 
+    fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
+        state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
+    }
+
     fn block_header_with_height(height: u64) -> iroha_data_model::block::BlockHeader {
         let mut header = new_block().as_ref().header();
         header.set_height(NonZeroU64::new(height).expect("non-zero height"));
@@ -4771,6 +4775,7 @@ mod tests {
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
+        seed_test_call_hash(&mut stx, 0xD1);
 
         let (_sink, validator, reward_asset, asset_def_id) =
             configure_reward_fixture(&mut stx, LaneId::new(0), 1_000);
@@ -4881,6 +4886,7 @@ mod tests {
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
+        seed_test_call_hash(&mut stx, 0xD2);
 
         let (_sink, validator, reward_asset, _asset_def_id) =
             configure_reward_fixture(&mut stx, LaneId::new(12), 200);

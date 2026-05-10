@@ -5,7 +5,6 @@ use crate::sorafs::{
     },
     pin_registry::{
         ChunkerProfileHandle, ManifestAliasBinding, ManifestDigest, PinPolicy, ReplicationOrderId,
-        ReplicationReceiptStatus,
     },
     pricing::{PricingScheduleRecord, ProviderCreditRecord},
 };
@@ -149,28 +148,6 @@ pub struct CompleteReplicationOrder {
 }
 
 impl crate::seal::Instruction for CompleteReplicationOrder {}
-
-isi! {
-    /// Record a provider replication receipt for an order.
-pub struct RecordReplicationReceipt {
-    /// Identifier of the replication order.
-    pub order_id: ReplicationOrderId,
-        /// Provider reporting replication progress.
-        pub provider: ProviderId,
-        /// Reported status outcome.
-        pub status: ReplicationReceiptStatus,
-        /// Unix timestamp (seconds) when the receipt was recorded.
-        pub timestamp: u64,
-        /// Optional digest of the `PoR` sample bundle.
-        #[cfg_attr(
-            feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes::option")
-        )]
-        pub por_sample_digest: Option<[u8; 32]>,
-    }
-}
-
-impl crate::seal::Instruction for RecordReplicationReceipt {}
 
 isi! {
     /// Register or update the owner binding for a `SoraFS` provider.
@@ -341,26 +318,6 @@ impl CompleteReplicationOrder {
     }
 }
 
-impl RecordReplicationReceipt {
-    /// Create a new `RecordReplicationReceipt` instruction.
-    #[must_use]
-    pub fn new(
-        order_id: ReplicationOrderId,
-        provider: ProviderId,
-        status: ReplicationReceiptStatus,
-        timestamp: u64,
-        por_sample_digest: Option<[u8; 32]>,
-    ) -> Self {
-        Self {
-            order_id,
-            provider,
-            status,
-            timestamp,
-            por_sample_digest,
-        }
-    }
-}
-
 impl SetPricingSchedule {
     /// Create a new `SetPricingSchedule` instruction.
     #[must_use]
@@ -475,14 +432,6 @@ impl_sorafs_decode_from_slice!(IssueReplicationOrder {
 impl_sorafs_decode_from_slice!(CompleteReplicationOrder {
     order_id: ReplicationOrderId,
     completion_epoch: u64,
-});
-
-impl_sorafs_decode_from_slice!(RecordReplicationReceipt {
-    order_id: ReplicationOrderId,
-    provider: ProviderId,
-    status: ReplicationReceiptStatus,
-    timestamp: u64,
-    por_sample_digest: Option<[u8; 32]>,
 });
 
 impl_sorafs_decode_from_slice!(RegisterProviderOwner {
@@ -717,13 +666,6 @@ mod tests {
             90,
         ));
         assert_slice_roundtrip(CompleteReplicationOrder::new(order_id(), 88));
-        assert_slice_roundtrip(RecordReplicationReceipt::new(
-            order_id(),
-            provider(0x35),
-            ReplicationReceiptStatus::Completed,
-            1_700_000_000,
-            Some([0x36; 32]),
-        ));
         assert_slice_roundtrip(RegisterProviderOwner::new(provider(0x35), owner()));
         assert_slice_roundtrip(UnregisterProviderOwner::new(provider(0x35)));
         assert_slice_roundtrip(SetPricingSchedule::new(

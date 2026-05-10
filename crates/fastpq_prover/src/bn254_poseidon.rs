@@ -46,7 +46,7 @@ impl Bn254PoseidonBatchSlice {
 
 static BN254_POSEIDON_GPU_DISABLED: AtomicBool = AtomicBool::new(false);
 static BN254_POSEIDON_SELF_TEST: OnceLock<bool> = OnceLock::new();
-const BN254_POSEIDON_MAX_GPU_BATCH_SLICES: usize = 128;
+const BN254_POSEIDON_MAX_GPU_BATCH_SLICES: usize = 4_096;
 
 /// Try to hash flattened BN254 Poseidon word batches with the configured GPU backend.
 ///
@@ -74,18 +74,12 @@ enum PendingBn254PoseidonWordBatchInner {
     Ready(Vec<[u8; 32]>),
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     Metal(crate::metal::PendingBn254PoseidonWords),
+    Chunked(Vec<PendingBn254PoseidonWordBatch>),
 }
 
 impl PendingBn254PoseidonWordBatch {
     /// Wait for completion and return digest bytes, or `None` when the GPU path failed.
     #[must_use]
-    #[cfg_attr(
-        not(all(feature = "fastpq-gpu", target_os = "macos")),
-        expect(
-            clippy::unnecessary_wraps,
-            reason = "the public wait API stays fallible because Metal submissions can fail after being accepted"
-        )
-    )]
     pub fn wait(self) -> Option<Vec<[u8; 32]>> {
         match self.inner {
             PendingBn254PoseidonWordBatchInner::Ready(result) => Some(result),
@@ -102,6 +96,13 @@ impl PendingBn254PoseidonWordBatch {
                     None
                 }
             },
+            PendingBn254PoseidonWordBatchInner::Chunked(pending_chunks) => {
+                let mut result = Vec::new();
+                for pending in pending_chunks {
+                    result.extend(pending.wait()?);
+                }
+                Some(result)
+            }
         }
     }
 }
@@ -145,14 +146,15 @@ fn try_submit_bn254_poseidon_word_batches_chunked(
     words: &[u64],
     slices: &[Bn254PoseidonBatchSlice],
 ) -> Option<PendingBn254PoseidonWordBatch> {
-    let mut result = Vec::with_capacity(slices.len());
+    let mut pending_chunks =
+        Vec::with_capacity(slices.len().div_ceil(BN254_POSEIDON_MAX_GPU_BATCH_SLICES));
     for slice_chunk in slices.chunks(BN254_POSEIDON_MAX_GPU_BATCH_SLICES) {
         let (chunk_words, chunk_slices) = compact_bn254_poseidon_slice_chunk(words, slice_chunk)?;
         let chunk = try_submit_bn254_poseidon_word_batches_impl(&chunk_words, &chunk_slices)?;
-        result.extend(chunk.wait()?);
+        pending_chunks.push(chunk);
     }
     Some(PendingBn254PoseidonWordBatch {
-        inner: PendingBn254PoseidonWordBatchInner::Ready(result),
+        inner: PendingBn254PoseidonWordBatchInner::Chunked(pending_chunks),
     })
 }
 
@@ -502,6 +504,14 @@ mod tests {
         assert!(compact_bn254_poseidon_slice_chunk(&words, &slices).is_none());
     }
 
+    #[test]
+    fn direct_gpu_batch_limit_covers_izanami_block_shape() {
+        assert!(
+            BN254_POSEIDON_MAX_GPU_BATCH_SLICES >= 4_096,
+            "4096-transfer blocks should submit as one GPU batch"
+        );
+    }
+
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     #[test]
     fn metal_bn254_poseidon_word_batch_matches_cpu_self_test_cases() {
@@ -553,11 +563,25 @@ mod tests {
 
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     #[test]
-    fn public_gpu_bn254_poseidon_word_batches_chunk_large_izanami_shape() {
+    fn public_gpu_bn254_poseidon_word_batches_handle_large_izanami_shape() {
         if !metal_backend_selected() {
             return;
         }
         let (words, slices) = generated_fixed_word_batch(4_096, 30);
+        let actual = try_hash_bn254_poseidon_word_batches(&words, &slices)
+            .expect("Metal BN254 Poseidon word batch should run");
+        let expected = expected_bn254_poseidon_word_hashes(&words, &slices);
+        assert_eq!(actual, expected);
+    }
+
+    #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+    #[test]
+    fn public_gpu_bn254_poseidon_word_batches_chunk_above_direct_limit() {
+        if !metal_backend_selected() {
+            return;
+        }
+        let (words, slices) =
+            generated_fixed_word_batch(BN254_POSEIDON_MAX_GPU_BATCH_SLICES + 1, 30);
         let actual = try_hash_bn254_poseidon_word_batches(&words, &slices)
             .expect("chunked Metal BN254 Poseidon word batch should run");
         let expected = expected_bn254_poseidon_word_hashes(&words, &slices);

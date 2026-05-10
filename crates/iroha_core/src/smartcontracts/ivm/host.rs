@@ -10861,9 +10861,12 @@ mod pointer_abi_tests {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(10_000);
         let mut host = CoreHost::new(fixture_account("alice"));
-        // Pick a syscall number outside allowed/known ranges
-        let res = host.syscall(0x99, &mut vm);
-        assert!(matches!(res, Err(ivm::VMError::UnknownSyscall(0x99))));
+        const UNKNOWN_SYSCALL: u32 = 0xE1;
+        let res = host.syscall(UNKNOWN_SYSCALL, &mut vm);
+        assert!(matches!(
+            res,
+            Err(ivm::VMError::UnknownSyscall(number)) if number == UNKNOWN_SYSCALL
+        ));
     }
 
     #[test]
@@ -11055,6 +11058,10 @@ mod tests {
     pub(super) fn store_tlv(vm: &mut IVM, ty: PointerType, payload: &[u8]) -> u64 {
         let tlv = make_tlv(ty as u16, payload);
         vm.alloc_input_tlv(&tlv).expect("allocate TLV input")
+    }
+
+    fn seed_test_call_hash(tx: &mut StateTransaction<'_, '_>, byte: u8) {
+        tx.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
     }
 
     fn fixture_domain_id() -> DomainId {
@@ -13210,6 +13217,7 @@ seiyaku AliasPayout {{
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xA1);
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), paynet);
@@ -13258,6 +13266,7 @@ seiyaku AliasPayout {{
             .expect("next block height");
         let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xA2);
         iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
             replacement_account_id.clone(),
             alias,
@@ -13297,6 +13306,7 @@ seiyaku AliasPayout {{
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xA3);
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.apply();
@@ -13333,6 +13343,7 @@ seiyaku AliasPayout {{
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xA4);
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world_mut_for_testing().add_account_permission(
@@ -13380,6 +13391,7 @@ seiyaku AliasPayout {{
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xB1);
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world_mut_for_testing().add_account_permission(
@@ -13462,6 +13474,7 @@ seiyaku AliasPayout {{
         let mut tx = block.transaction();
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        seed_test_call_hash(&mut tx, 0xC1);
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias.clone(),
             authority.clone(),
@@ -13597,6 +13610,7 @@ seiyaku AliasPayout {{
         let mut tx = block.transaction();
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        seed_test_call_hash(&mut tx, 0xC2);
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias.clone(),
             authority.clone(),
@@ -13696,6 +13710,7 @@ seiyaku AliasPayout {{
         let mut tx = block.transaction();
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        seed_test_call_hash(&mut tx, 0xC3);
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias.clone(),
             authority.clone(),
@@ -13783,13 +13798,20 @@ seiyaku Callee {
             Json::new(()),
         );
         let gas = result.expect("call_contract syscall should succeed");
-        assert_eq!(gas, 0);
         assert!(durable_state_overlay.is_empty());
         let tlv = vm
             .memory
             .validate_tlv(vm.register(10))
             .expect("returned NoritoBytes tlv");
         assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let expected_gas = ivm::gas::syscall_byte_gas(
+            ivm::gas::G_CALL_CONTRACT,
+            callee_contract.as_ref().as_bytes().len()
+                + "value".len()
+                + norito_blob(&Json::new(())).len(),
+            tlv.payload.len(),
+        );
+        assert_eq!(gas, expected_gas);
         let value: i64 = norito::decode_from_bytes(tlv.payload).expect("decode int return");
         assert_eq!(value, 42);
     }
@@ -14453,6 +14475,7 @@ seiyaku AliasPayout {
             .expect("next block height");
         let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xB2);
         iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
             replacement_account.clone(),
             alias,
@@ -14531,6 +14554,7 @@ seiyaku AliasPayout {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xB3);
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), paynet);
@@ -14723,6 +14747,7 @@ seiyaku AliasPayout {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xB4);
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         let alias = AccountAlias::new(
@@ -15223,6 +15248,7 @@ seiyaku AliasPayout {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xD1);
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         let alias = AccountAlias::new(
@@ -15546,6 +15572,7 @@ seiyaku AliasPayout {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xD2);
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         let alias = AccountAlias::new(
@@ -15696,6 +15723,7 @@ seiyaku AliasPayout {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xD3);
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         let alias = AccountAlias::new(
@@ -15846,6 +15874,7 @@ seiyaku AliasPayout {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xD4);
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         let alias = AccountAlias::new(
@@ -15980,6 +16009,7 @@ seiyaku AliasPayout {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xD5);
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         let alias = AccountAlias::new(
@@ -16114,6 +16144,7 @@ seiyaku AliasPayout {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xD6);
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         let alias = AccountAlias::new(
@@ -16428,6 +16459,7 @@ seiyaku AliasPayout {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0xD7);
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         let alias = AccountAlias::new(

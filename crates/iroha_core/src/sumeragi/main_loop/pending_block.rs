@@ -98,6 +98,7 @@ pub(super) struct PendingBlock {
     pub(super) last_quorum_reschedule: Option<Instant>,
     last_quorum_reschedule_vote_count: usize,
     pub(super) last_precommit_rebroadcast: Option<Instant>,
+    last_validation_redrive: Option<Instant>,
     last_commit_evidence_replay: Option<CommitEvidenceReplayState>,
     /// Timestamp of the latest availability/vote progress for quorum timeout gating.
     last_progress: Instant,
@@ -131,6 +132,7 @@ impl PendingBlock {
             last_quorum_reschedule: None,
             last_quorum_reschedule_vote_count: 0,
             last_precommit_rebroadcast: None,
+            last_validation_redrive: None,
             last_commit_evidence_replay: None,
             last_progress: now,
         }
@@ -212,6 +214,7 @@ impl PendingBlock {
             self.validation_status = ValidationStatus::Pending;
             self.validated_commit_artifact = None;
             self.last_precommit_rebroadcast = None;
+            self.last_validation_redrive = None;
             self.last_quorum_reschedule = None;
             self.last_quorum_reschedule_vote_count = 0;
             self.aborted = false;
@@ -247,6 +250,7 @@ impl PendingBlock {
             self.validation_status = ValidationStatus::Pending;
             self.validated_commit_artifact = None;
             self.last_precommit_rebroadcast = None;
+            self.last_validation_redrive = None;
             self.last_quorum_reschedule = None;
             self.last_quorum_reschedule_vote_count = 0;
             self.aborted = false;
@@ -279,6 +283,7 @@ impl PendingBlock {
         self.last_gate_satisfied = None;
         self.reset_kura_retry();
         self.last_precommit_rebroadcast = None;
+        self.last_validation_redrive = None;
         self.last_quorum_reschedule = None;
         self.last_quorum_reschedule_vote_count = 0;
         self.parent_state_root = None;
@@ -309,6 +314,7 @@ impl PendingBlock {
         self.last_gate_satisfied = None;
         self.reset_kura_retry();
         self.last_precommit_rebroadcast = None;
+        self.last_validation_redrive = None;
         self.last_quorum_reschedule = None;
         self.last_quorum_reschedule_vote_count = 0;
         self.parent_state_root = None;
@@ -437,6 +443,7 @@ impl PendingBlock {
         self.last_gate = None;
         self.last_gate_satisfied = None;
         self.last_precommit_rebroadcast = None;
+        self.last_validation_redrive = None;
         self.last_commit_evidence_replay = None;
         self.last_quorum_reschedule = None;
         self.last_quorum_reschedule_vote_count = 0;
@@ -452,6 +459,7 @@ impl PendingBlock {
         self.last_gate_satisfied = None;
         self.reset_commit_stage();
         self.last_precommit_rebroadcast = None;
+        self.last_validation_redrive = None;
         self.parent_state_root = None;
         self.post_state_root = None;
         self.validated_commit_artifact = None;
@@ -477,6 +485,7 @@ impl PendingBlock {
         self.last_gate = None;
         self.last_gate_satisfied = None;
         self.last_precommit_rebroadcast = None;
+        self.last_validation_redrive = None;
         self.last_commit_evidence_replay = None;
         self.last_quorum_reschedule = None;
         self.last_quorum_reschedule_vote_count = 0;
@@ -591,6 +600,7 @@ impl PendingBlock {
         self.last_progress = now;
         self.last_quorum_reschedule = None;
         self.last_quorum_reschedule_vote_count = 0;
+        self.last_validation_redrive = None;
     }
 
     pub(super) fn precommit_rebroadcast_due(&self, now: Instant, cooldown: Duration) -> bool {
@@ -600,6 +610,15 @@ impl PendingBlock {
 
     pub(super) fn mark_precommit_rebroadcast(&mut self, now: Instant) {
         self.last_precommit_rebroadcast = Some(now);
+    }
+
+    pub(super) fn validation_redrive_due(&self, now: Instant, cooldown: Duration) -> bool {
+        self.last_validation_redrive
+            .is_none_or(|last| now.saturating_duration_since(last) >= cooldown)
+    }
+
+    pub(super) fn mark_validation_redrive(&mut self, now: Instant) {
+        self.last_validation_redrive = Some(now);
     }
 }
 
@@ -804,6 +823,7 @@ mod tests {
         pending.kura_persisted = true;
         pending.note_local_commit_vote_emitted();
         pending.last_quorum_reschedule = Some(Instant::now());
+        pending.mark_validation_redrive(Instant::now());
         pending.mark_aborted();
 
         pending.revive_after_abort(sample_block(1), Hash::prehashed([0x22; Hash::LENGTH]), 1, 0);
@@ -813,6 +833,7 @@ mod tests {
         assert!(pending.validated_commit_artifact.is_none());
         assert!(pending.kura_persisted);
         assert!(pending.last_quorum_reschedule.is_none());
+        assert!(pending.last_validation_redrive.is_none());
         assert_eq!(pending.commit_stage, PendingCommitStage::AwaitingLocalVote);
     }
 
@@ -934,12 +955,27 @@ mod tests {
         pending.inserted_at = stale_progress;
         pending.touch_progress(stale_progress);
         pending.mark_quorum_reschedule(stale_progress);
+        pending.mark_validation_redrive(stale_progress);
 
         pending.refresh_activation_window(now);
 
         assert_eq!(pending.inserted_at, now);
         assert_eq!(pending.progress_age(now), Duration::ZERO);
         assert!(pending.last_quorum_reschedule.is_none());
+        assert!(pending.last_validation_redrive.is_none());
+    }
+
+    #[test]
+    fn validation_redrive_uses_cooldown() {
+        let mut pending =
+            PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
+        let now = Instant::now();
+        let cooldown = Duration::from_millis(10);
+
+        assert!(pending.validation_redrive_due(now, cooldown));
+        pending.mark_validation_redrive(now);
+        assert!(!pending.validation_redrive_due(now + Duration::from_millis(9), cooldown));
+        assert!(pending.validation_redrive_due(now + Duration::from_millis(10), cooldown));
     }
 
     #[test]

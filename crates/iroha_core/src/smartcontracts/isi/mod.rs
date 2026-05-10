@@ -160,6 +160,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::soradns::SetDirectoryRotationPolicy>,
     dispatch_instruction::<iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest>,
     dispatch_instruction::<iroha_data_model::isi::space_directory::RevokeSpaceDirectoryManifest>,
+    dispatch_instruction::<iroha_data_model::isi::space_directory::ExpireSpaceDirectoryManifest>,
     dispatch_instruction::<iroha_data_model::isi::domain_link::SetAccountAliasBinding>,
     dispatch_instruction::<iroha_data_model::isi::domain_link::SetPrimaryAccountAlias>,
     dispatch_instruction::<iroha_data_model::isi::account_recovery::ReplaceAccountController>,
@@ -264,6 +265,14 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::oracle::RegisterOracleFeed>,
     dispatch_instruction::<iroha_data_model::isi::oracle::SubmitOracleObservation>,
     dispatch_instruction::<iroha_data_model::isi::oracle::AggregateOracleFeed>,
+    dispatch_instruction::<iroha_data_model::isi::oracle::OpenOracleDispute>,
+    dispatch_instruction::<iroha_data_model::isi::oracle::ResolveOracleDispute>,
+    dispatch_instruction::<iroha_data_model::isi::oracle::ProposeOracleChange>,
+    dispatch_instruction::<iroha_data_model::isi::oracle::VoteOracleChangeStage>,
+    dispatch_instruction::<iroha_data_model::isi::oracle::RollbackOracleChange>,
+    dispatch_instruction::<iroha_data_model::isi::oracle::RecordTwitterBinding>,
+    dispatch_instruction::<iroha_data_model::isi::oracle::RevokeTwitterBinding>,
+    dispatch_instruction::<iroha_data_model::isi::staking::RebindPublicLaneValidatorPeer>,
     dispatch_instruction::<iroha_data_model::isi::staking::ActivatePublicLaneValidator>,
     dispatch_instruction::<iroha_data_model::isi::staking::ExitPublicLaneValidator>,
     dispatch_instruction::<iroha_data_model::isi::nexus::SetLaneRelayEmergencyValidators>,
@@ -276,6 +285,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::staking::SlashPublicLaneValidator>,
     dispatch_instruction::<iroha_data_model::isi::staking::CancelConsensusEvidencePenalty>,
     dispatch_instruction::<iroha_data_model::isi::staking::RecordPublicLaneRewards>,
+    dispatch_instruction::<iroha_data_model::isi::staking::ClaimPublicLaneRewards>,
     dispatch_instruction::<iroha_data_model::isi::settlement::SettlementInstructionBox>,
     dispatch_instruction::<iroha_data_model::isi::settlement::DvpIsi>,
     dispatch_instruction::<iroha_data_model::isi::settlement::PvpIsi>,
@@ -284,6 +294,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes>,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::ActivateContractInstance>,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::DeactivateContractInstance>,
+    dispatch_instruction::<iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes>,
     dispatch_instruction::<verifying_keys::RegisterVerifyingKey>,
     dispatch_instruction::<verifying_keys::UpdateVerifyingKey>,
     dispatch_instruction::<zk::RegisterZkAsset>,
@@ -353,6 +364,49 @@ pub(crate) fn execute_borrowed_instruction(
 
     // If we reach here, the instruction type is unknown or unregistered
     Err(Error::from("Unknown instruction type"))
+}
+
+#[cfg(test)]
+mod registry_dispatch_tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+
+    fn handler_table_source() -> &'static str {
+        include_str!("mod.rs")
+            .split("const INSTRUCTION_HANDLERS")
+            .nth(1)
+            .and_then(|tail| tail.split("];").next())
+            .expect("handler table source")
+    }
+
+    fn has_dispatch_handler(handler_table: &str, type_name: &str) -> bool {
+        let leaf = type_name
+            .rsplit("::")
+            .next()
+            .expect("type name has at least one segment");
+        let imported = format!("::<{leaf}");
+        let qualified = format!("::{leaf}");
+
+        handler_table.contains(&imported) || handler_table.contains(&qualified)
+    }
+
+    #[test]
+    fn default_instruction_registry_entries_have_core_dispatch_handlers() {
+        let registry = iroha_data_model::isi::registry::default();
+        let handler_table = handler_table_source();
+        let custom_instruction = std::any::type_name::<CustomInstruction>();
+        let missing = registry
+            .names()
+            .filter(|name| *name != custom_instruction)
+            .filter(|name| !has_dispatch_handler(handler_table, name))
+            .collect::<BTreeSet<_>>();
+
+        assert!(
+            missing.is_empty(),
+            "default registry entries missing core dispatch handlers: {missing:?}"
+        );
+    }
 }
 
 impl Execute for InstructionBox {

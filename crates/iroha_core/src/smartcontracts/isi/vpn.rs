@@ -542,7 +542,7 @@ mod tests {
             client_account_id,
             operator_account_id: AccountId::new(operator_key.public_key().clone()),
             metering_public_key: key_pair.public_key().clone(),
-            asset_definition: "xor#universal.universal".parse().expect("asset id"),
+            asset_definition: xor_asset_definition_id(),
             lease_fee: tariff.lease_fee_numeric(),
             lease_fee_nanos: tariff.lease_fee_nanos,
             custody_account_id: AccountId::new(KeyPair::random().public_key().clone()),

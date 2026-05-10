@@ -2,11 +2,11 @@
 use crate::isi::governance;
 use crate::{
     isi::{
-        InstructionRegistry, RegisterPeerWithPop, account_alias_lease, account_recovery,
-        asset_alias, asset_transfer_control, bridge, consensus_keys, contract_alias, domain_link,
-        endorsement, escrow, identifier, kaigi, ministry, musubi, nexus, offline, oracle, ram_lfe,
-        repo, runtime_upgrade, rwa, settlement, smart_contract_code, sns, social, soracloud,
-        sorafs, space_directory,
+        InstructionRegistry, account_alias_lease, account_recovery, asset_alias,
+        asset_transfer_control, bridge, confidential, consensus_keys, content, contract_alias,
+        domain_link, endorsement, escrow, identifier, kaigi, ministry, musubi, nexus, offline,
+        oracle, ram_lfe, repo, runtime_upgrade, rwa, settlement, smart_contract_code, sns, social,
+        soracloud, soradns, sorafs, space_directory,
         transparent::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
@@ -21,32 +21,10 @@ type Registrar = fn(InstructionRegistry) -> InstructionRegistry;
 
 /// Built-in instruction registrations that make up the default registry used by Iroha.
 const ALL_REGISTRARS: &[Registrar] = &[
-    InstructionRegistry::register_slice::<RegisterPeerWithPop>,
-    InstructionRegistry::register_slice::<Register<Domain>>,
-    InstructionRegistry::register_slice::<Register<Account>>,
-    InstructionRegistry::register_slice::<Register<AssetDefinition>>,
-    InstructionRegistry::register_slice::<Register<Nft>>,
-    InstructionRegistry::register_slice::<Register<Role>>,
-    InstructionRegistry::register_slice::<Register<Trigger>>,
     InstructionRegistry::register_slice::<RegisterBox>,
-    InstructionRegistry::register_slice::<Unregister<Peer>>,
-    InstructionRegistry::register_slice::<Unregister<Domain>>,
-    InstructionRegistry::register_slice::<Unregister<Account>>,
-    InstructionRegistry::register_slice::<Unregister<AssetDefinition>>,
-    InstructionRegistry::register_slice::<Unregister<Nft>>,
-    InstructionRegistry::register_slice::<Unregister<Role>>,
-    InstructionRegistry::register_slice::<Unregister<Trigger>>,
     InstructionRegistry::register_slice::<UnregisterBox>,
-    InstructionRegistry::register_slice::<Mint<Numeric, Asset>>,
-    InstructionRegistry::register_slice::<Mint<u32, Trigger>>,
     InstructionRegistry::register_slice::<MintBox>,
-    InstructionRegistry::register_slice::<Burn<Numeric, Asset>>,
-    InstructionRegistry::register_slice::<Burn<u32, Trigger>>,
     InstructionRegistry::register_slice::<BurnBox>,
-    InstructionRegistry::register_slice::<Transfer<Account, DomainId, Account>>,
-    InstructionRegistry::register_slice::<Transfer<Account, AssetDefinitionId, Account>>,
-    InstructionRegistry::register_slice::<Transfer<Asset, Numeric, Account>>,
-    InstructionRegistry::register_slice::<Transfer<Account, NftId, Account>>,
     InstructionRegistry::register_slice::<TransferAssetBatch>,
     InstructionRegistry::register_slice::<TransferBox>,
     InstructionRegistry::register_slice::<asset_transfer_control::SetAssetTransferFreeze>,
@@ -54,36 +32,16 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<asset_transfer_control::SetAssetTransferControl>,
     InstructionRegistry::register_slice::<rwa::RwaInstructionBox>,
     InstructionRegistry::register_slice::<repo::RepoInstructionBox>,
-    InstructionRegistry::register_slice::<repo::RepoIsi>,
-    InstructionRegistry::register_slice::<repo::ReverseRepoIsi>,
     InstructionRegistry::register_slice::<settlement::SettlementInstructionBox>,
-    InstructionRegistry::register_slice::<settlement::DvpIsi>,
-    InstructionRegistry::register_slice::<settlement::PvpIsi>,
     InstructionRegistry::register_slice::<SetParameter>,
-    InstructionRegistry::register_slice::<SetKeyValue<Domain>>,
-    InstructionRegistry::register_slice::<SetKeyValue<Account>>,
-    InstructionRegistry::register_slice::<SetKeyValue<AssetDefinition>>,
-    InstructionRegistry::register_slice::<SetKeyValue<Nft>>,
-    InstructionRegistry::register_slice::<SetKeyValue<Trigger>>,
     InstructionRegistry::register_slice::<SetKeyValueBox>,
     InstructionRegistry::register_slice::<AddSignatory>,
     InstructionRegistry::register_slice::<RemoveSignatory>,
     InstructionRegistry::register_slice::<SetAccountQuorum>,
     InstructionRegistry::register_slice::<SetAssetKeyValue>,
-    InstructionRegistry::register_slice::<RemoveKeyValue<Domain>>,
-    InstructionRegistry::register_slice::<RemoveKeyValue<Account>>,
-    InstructionRegistry::register_slice::<RemoveKeyValue<AssetDefinition>>,
-    InstructionRegistry::register_slice::<RemoveKeyValue<Nft>>,
-    InstructionRegistry::register_slice::<RemoveKeyValue<Trigger>>,
     InstructionRegistry::register_slice::<RemoveKeyValueBox>,
     InstructionRegistry::register_slice::<RemoveAssetKeyValue>,
-    InstructionRegistry::register_slice::<Grant<Permission, Account>>,
-    InstructionRegistry::register_slice::<Grant<RoleId, Account>>,
-    InstructionRegistry::register_slice::<Grant<Permission, Role>>,
     InstructionRegistry::register_slice::<GrantBox>,
-    InstructionRegistry::register_slice::<Revoke<Permission, Account>>,
-    InstructionRegistry::register_slice::<Revoke<RoleId, Account>>,
-    InstructionRegistry::register_slice::<Revoke<Permission, Role>>,
     InstructionRegistry::register_slice::<RevokeBox>,
     InstructionRegistry::register_slice::<offline::IssueOfflineNoteV2>,
     InstructionRegistry::register_slice::<offline::RedeemOfflineNoteV2>,
@@ -93,7 +51,13 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<crate::isi::staking::RebindPublicLaneValidatorPeer>,
     InstructionRegistry::register_slice::<crate::isi::staking::ActivatePublicLaneValidator>,
     InstructionRegistry::register_slice::<crate::isi::staking::ExitPublicLaneValidator>,
+    InstructionRegistry::register::<crate::isi::staking::BondPublicLaneStake>,
+    InstructionRegistry::register::<crate::isi::staking::SchedulePublicLaneUnbond>,
+    InstructionRegistry::register::<crate::isi::staking::FinalizePublicLaneUnbond>,
+    InstructionRegistry::register::<crate::isi::staking::SlashPublicLaneValidator>,
     InstructionRegistry::register_slice::<crate::isi::staking::CancelConsensusEvidencePenalty>,
+    InstructionRegistry::register::<crate::isi::staking::RecordPublicLaneRewards>,
+    InstructionRegistry::register::<crate::isi::staking::ClaimPublicLaneRewards>,
     InstructionRegistry::register_slice::<nexus::SetLaneRelayEmergencyValidators>,
     InstructionRegistry::register_slice::<nexus::RegisterVerifiedLaneRelay>,
     InstructionRegistry::register_slice::<nexus::RegisterVerifiedNexusFeeBudget>,
@@ -234,6 +198,17 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<sorafs::CompleteReplicationOrder>,
     InstructionRegistry::register_slice::<sorafs::RegisterProviderOwner>,
     InstructionRegistry::register_slice::<sorafs::UnregisterProviderOwner>,
+    InstructionRegistry::register_slice::<sorafs::SetPricingSchedule>,
+    InstructionRegistry::register_slice::<sorafs::UpsertProviderCredit>,
+    InstructionRegistry::register::<content::PublishContentBundle>,
+    InstructionRegistry::register::<content::RetireContentBundle>,
+    InstructionRegistry::register::<soradns::SubmitDirectoryDraft>,
+    InstructionRegistry::register::<soradns::PublishDirectory>,
+    InstructionRegistry::register::<soradns::RevokeResolver>,
+    InstructionRegistry::register::<soradns::UnrevokeResolver>,
+    InstructionRegistry::register::<soradns::AddReleaseSigner>,
+    InstructionRegistry::register::<soradns::RemoveReleaseSigner>,
+    InstructionRegistry::register::<soradns::SetDirectoryRotationPolicy>,
     InstructionRegistry::register_slice::<space_directory::PublishSpaceDirectoryManifest>,
     InstructionRegistry::register_slice::<space_directory::RevokeSpaceDirectoryManifest>,
     InstructionRegistry::register_slice::<space_directory::ExpireSpaceDirectoryManifest>,
@@ -264,6 +239,10 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<bridge::SubmitBridgeProof>,
     InstructionRegistry::register_slice::<bridge::RecordBridgeReceipt>,
     InstructionRegistry::register_slice::<bridge::RecordSccpMessage>,
+    InstructionRegistry::register::<confidential::PublishPedersenParams>,
+    InstructionRegistry::register::<confidential::SetPedersenParamsLifecycle>,
+    InstructionRegistry::register::<confidential::PublishPoseidonParams>,
+    InstructionRegistry::register::<confidential::SetPoseidonParamsLifecycle>,
     InstructionRegistry::register_slice::<ministry::SubmitAgendaProposal>,
     #[cfg(feature = "governance")]
     InstructionRegistry::register_slice::<governance::ProposeDeployContract>,
@@ -335,11 +314,11 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     registry = registry.register_with_id_slice::<TransferAssetBatch>(TransferAssetBatch::WIRE_ID);
     registry =
         registry.register_with_id_slice::<rwa::RwaInstructionBox>(rwa::RwaInstructionBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<repo::RepoIsi>(repo::RepoIsi::WIRE_ID);
-    registry =
-        registry.register_with_id_slice::<repo::ReverseRepoIsi>(repo::ReverseRepoIsi::WIRE_ID);
-    registry = registry.register_with_id_slice::<settlement::DvpIsi>(settlement::DvpIsi::WIRE_ID);
-    registry = registry.register_with_id_slice::<settlement::PvpIsi>(settlement::PvpIsi::WIRE_ID);
+    registry = registry
+        .register_with_id_slice::<repo::RepoInstructionBox>(repo::RepoInstructionBox::WIRE_ID);
+    registry = registry.register_with_id_slice::<settlement::SettlementInstructionBox>(
+        settlement::SettlementInstructionBox::WIRE_ID,
+    );
     registry = registry.register_with_id_slice::<zk::ScheduleConfidentialPolicyTransition>(
         "zk::ScheduleConfidentialPolicyTransition",
     );
@@ -640,6 +619,55 @@ fn with_runtime_upgrade_stable_ids(mut registry: InstructionRegistry) -> Instruc
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
+
+    fn account(seed: u8) -> AccountId {
+        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    fn domain_id() -> DomainId {
+        DomainId::try_new("wonderland", "universal").expect("domain id")
+    }
+
+    fn asset_definition_id() -> AssetDefinitionId {
+        AssetDefinitionId::new(domain_id(), "rose".parse().expect("asset name"))
+    }
+
+    fn asset_id() -> AssetId {
+        AssetId::of(asset_definition_id(), account(0xA1))
+    }
+
+    fn trigger_id() -> TriggerId {
+        "registry_tick".parse().expect("trigger id")
+    }
+
+    fn role_id() -> RoleId {
+        "registry_auditor".parse().expect("role id")
+    }
+
+    fn assert_default_registry_decodes<T>(value: T)
+    where
+        T: crate::isi::Instruction
+            + norito::codec::Encode
+            + 'static
+            + norito::core::NoritoSerialize,
+        for<'de> T: norito::core::NoritoDeserialize<'de>,
+    {
+        let registry = default();
+        let wire_id = registry
+            .wire_id(std::any::type_name::<T>())
+            .unwrap_or_else(|| std::any::type_name::<T>());
+        let (payload, flags) = norito::codec::encode_with_header_flags(&value);
+        let framed = norito::core::frame_bare_with_header_flags::<T>(&payload, flags)
+            .expect("frame instruction payload");
+        let decoded = registry
+            .decode(wire_id, &framed)
+            .expect("registered instruction")
+            .expect("decode instruction");
+
+        assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
+    }
 
     #[test]
     fn default_registry_registers_public_lane_validator() {
@@ -663,6 +691,194 @@ mod tests {
         assert!(registry.contains(std::any::type_name::<
             crate::isi::kaigi::ReportKaigiRelayHealth,
         >()));
+    }
+
+    #[test]
+    fn instruction_registry_excludes_direct_grouped_variants() {
+        let registry = default();
+        let removed_type_names = [
+            std::any::type_name::<crate::isi::register::RegisterPeerWithPop>(),
+            std::any::type_name::<Register<Domain>>(),
+            std::any::type_name::<Register<Account>>(),
+            std::any::type_name::<Register<AssetDefinition>>(),
+            std::any::type_name::<Register<Nft>>(),
+            std::any::type_name::<Register<Role>>(),
+            std::any::type_name::<Register<Trigger>>(),
+            std::any::type_name::<Unregister<Peer>>(),
+            std::any::type_name::<Unregister<Domain>>(),
+            std::any::type_name::<Unregister<Account>>(),
+            std::any::type_name::<Unregister<AssetDefinition>>(),
+            std::any::type_name::<Unregister<Nft>>(),
+            std::any::type_name::<Unregister<Role>>(),
+            std::any::type_name::<Unregister<Trigger>>(),
+            std::any::type_name::<Mint<Numeric, Asset>>(),
+            std::any::type_name::<Mint<u32, Trigger>>(),
+            std::any::type_name::<Burn<Numeric, Asset>>(),
+            std::any::type_name::<Burn<u32, Trigger>>(),
+            std::any::type_name::<Transfer<Account, DomainId, Account>>(),
+            std::any::type_name::<Transfer<Account, AssetDefinitionId, Account>>(),
+            std::any::type_name::<Transfer<Asset, Numeric, Account>>(),
+            std::any::type_name::<Transfer<Account, NftId, Account>>(),
+            std::any::type_name::<SetKeyValue<Domain>>(),
+            std::any::type_name::<SetKeyValue<Account>>(),
+            std::any::type_name::<SetKeyValue<AssetDefinition>>(),
+            std::any::type_name::<SetKeyValue<Nft>>(),
+            std::any::type_name::<SetKeyValue<Trigger>>(),
+            std::any::type_name::<RemoveKeyValue<Domain>>(),
+            std::any::type_name::<RemoveKeyValue<Account>>(),
+            std::any::type_name::<RemoveKeyValue<AssetDefinition>>(),
+            std::any::type_name::<RemoveKeyValue<Nft>>(),
+            std::any::type_name::<RemoveKeyValue<Trigger>>(),
+            std::any::type_name::<Grant<Permission, Account>>(),
+            std::any::type_name::<Grant<RoleId, Account>>(),
+            std::any::type_name::<Grant<Permission, Role>>(),
+            std::any::type_name::<Revoke<Permission, Account>>(),
+            std::any::type_name::<Revoke<RoleId, Account>>(),
+            std::any::type_name::<Revoke<Permission, Role>>(),
+            std::any::type_name::<repo::RepoIsi>(),
+            std::any::type_name::<repo::ReverseRepoIsi>(),
+            std::any::type_name::<repo::RepoMarginCallIsi>(),
+            std::any::type_name::<settlement::DvpIsi>(),
+            std::any::type_name::<settlement::PvpIsi>(),
+        ];
+
+        for name in removed_type_names {
+            assert!(
+                !registry.contains(name),
+                "{name} must not be in default registry"
+            );
+        }
+
+        let removed_wire_ids = [
+            repo::RepoIsi::WIRE_ID,
+            repo::ReverseRepoIsi::WIRE_ID,
+            repo::RepoMarginCallIsi::WIRE_ID,
+            settlement::DvpIsi::WIRE_ID,
+            settlement::PvpIsi::WIRE_ID,
+        ];
+        for wire_id in removed_wire_ids {
+            assert!(
+                !registry.contains(wire_id),
+                "{wire_id} must not be in default registry"
+            );
+        }
+    }
+
+    #[test]
+    fn instruction_registry_decodes_boxed_stable_ids() {
+        assert_default_registry_decodes(RegisterBox::Domain(Register::domain(Domain::new(
+            domain_id(),
+        ))));
+        assert_default_registry_decodes(UnregisterBox::Domain(Unregister::domain(domain_id())));
+        assert_default_registry_decodes(MintBox::Asset(Mint::asset_numeric(7_u32, asset_id())));
+        assert_default_registry_decodes(BurnBox::TriggerRepetitions(Burn::trigger_repetitions(
+            2,
+            trigger_id(),
+        )));
+        assert_default_registry_decodes(TransferBox::Asset(Transfer::asset_numeric(
+            asset_id(),
+            3_u32,
+            account(0xA2),
+        )));
+        assert_default_registry_decodes(SetKeyValueBox::Domain(SetKeyValue::domain(
+            domain_id(),
+            "color".parse().expect("metadata key"),
+            iroha_primitives::json::Json::new("blue"),
+        )));
+        assert_default_registry_decodes(RemoveKeyValueBox::Domain(RemoveKeyValue::domain(
+            domain_id(),
+            "color".parse().expect("metadata key"),
+        )));
+        assert_default_registry_decodes(GrantBox::Role(Grant::account_role(
+            role_id(),
+            account(0xA3),
+        )));
+        assert_default_registry_decodes(RevokeBox::Role(Revoke::account_role(
+            role_id(),
+            account(0xA3),
+        )));
+
+        let registry = default();
+        assert!(registry.contains(rwa::RwaInstructionBox::WIRE_ID));
+        assert!(registry.contains(repo::RepoInstructionBox::WIRE_ID));
+        assert!(registry.contains(settlement::SettlementInstructionBox::WIRE_ID));
+    }
+
+    #[test]
+    fn instruction_registry_registers_and_decodes_standalone_surface() {
+        let registry = default();
+        let expected = [
+            std::any::type_name::<content::PublishContentBundle>(),
+            std::any::type_name::<content::RetireContentBundle>(),
+            std::any::type_name::<soradns::SubmitDirectoryDraft>(),
+            std::any::type_name::<soradns::PublishDirectory>(),
+            std::any::type_name::<soradns::RevokeResolver>(),
+            std::any::type_name::<soradns::UnrevokeResolver>(),
+            std::any::type_name::<soradns::AddReleaseSigner>(),
+            std::any::type_name::<soradns::RemoveReleaseSigner>(),
+            std::any::type_name::<soradns::SetDirectoryRotationPolicy>(),
+            std::any::type_name::<confidential::PublishPedersenParams>(),
+            std::any::type_name::<confidential::SetPedersenParamsLifecycle>(),
+            std::any::type_name::<confidential::PublishPoseidonParams>(),
+            std::any::type_name::<confidential::SetPoseidonParamsLifecycle>(),
+            std::any::type_name::<sorafs::SetPricingSchedule>(),
+            std::any::type_name::<sorafs::UpsertProviderCredit>(),
+            std::any::type_name::<crate::isi::staking::BondPublicLaneStake>(),
+            std::any::type_name::<crate::isi::staking::SchedulePublicLaneUnbond>(),
+            std::any::type_name::<crate::isi::staking::FinalizePublicLaneUnbond>(),
+            std::any::type_name::<crate::isi::staking::SlashPublicLaneValidator>(),
+            std::any::type_name::<crate::isi::staking::RecordPublicLaneRewards>(),
+            std::any::type_name::<crate::isi::staking::ClaimPublicLaneRewards>(),
+        ];
+        for name in expected {
+            assert!(
+                registry.contains(name),
+                "{name} missing from default registry"
+            );
+        }
+
+        assert_default_registry_decodes(content::PublishContentBundle {
+            bundle_id: Hash::new(b"content-bundle"),
+            tarball: b"tar".to_vec(),
+            expires_at_height: None,
+            manifest: None,
+        });
+        assert_default_registry_decodes(soradns::PublishDirectory {
+            directory_id: [0xD1; 32],
+            expected_prev: None,
+        });
+        assert_default_registry_decodes(confidential::PublishPedersenParams {
+            params: crate::confidential::PedersenParams {
+                params_id: crate::confidential::ConfidentialParamsId::new(7),
+                generators_hash: [0x11; 32],
+                constants_hash: [0x22; 32],
+                metadata_uri_cid: None,
+                params_cid: None,
+                activation_height: Some(1),
+                withdraw_height: None,
+                status: crate::confidential::ConfidentialStatus::Active,
+            },
+        });
+        assert_default_registry_decodes(sorafs::SetPricingSchedule::new(
+            crate::sorafs::pricing::PricingScheduleRecord::launch_default(),
+        ));
+        assert_default_registry_decodes(sorafs::UpsertProviderCredit::new(
+            crate::sorafs::pricing::ProviderCreditRecord::new(
+                crate::sorafs::capacity::ProviderId::new([0xC1; 32]),
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                Metadata::default(),
+            ),
+        ));
+        assert_default_registry_decodes(crate::isi::staking::ClaimPublicLaneRewards {
+            lane_id: crate::nexus::LaneId::SINGLE,
+            account: account(0xA4),
+            upto_epoch: Some(9),
+        });
     }
 
     #[cfg(feature = "governance")]

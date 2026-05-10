@@ -14461,10 +14461,12 @@ pub mod isi {
             });
             stx.world.settlement_ledgers.insert(settlement_id, ledger);
 
-            let mut feed = iroha_data_model::oracle::kits::price_xor_usd().feed_config;
+            let kit = iroha_data_model::oracle::kits::price_xor_usd();
+            let mut feed = kit.feed_config;
             feed.providers = vec![account_id.clone()];
             let feed_id = feed.feed_id.clone();
             let feed_config_version = feed.feed_config_version;
+            let request_hash = kit.connector_request.request_hash();
             stx.world.oracle_feeds.insert(feed_id.clone(), feed);
             stx.world.oracle_history.insert(
                 feed_id.clone(),
@@ -14473,6 +14475,7 @@ pub mod isi {
                         feed_id,
                         feed_config_version,
                         slot: 1,
+                        request_hash,
                         outcome: iroha_data_model::oracle::FeedEventOutcome::Success(
                             iroha_data_model::oracle::FeedSuccess {
                                 value: iroha_data_model::oracle::ObservationValue::new(1_000, 2),

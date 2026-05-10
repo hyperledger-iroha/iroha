@@ -10211,6 +10211,10 @@ impl<T> Default for SortedUniqueVec<T> {
 }
 
 impl<T: Ord> SortedUniqueVec<T> {
+    fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
     fn insert(&mut self, value: T) -> bool {
         match self.inner.binary_search(&value) {
             Ok(_) => false,
@@ -10335,6 +10339,10 @@ pub struct DetachedStateTransactionDelta {
     asset_add_qtys: Vec<iroha_primitives::numeric::Numeric>,
     asset_sub_ids: Vec<iroha_data_model::asset::AssetId>,
     asset_sub_qtys: Vec<iroha_primitives::numeric::Numeric>,
+    // SoA: transparent numeric asset transfers.
+    asset_transfer_source_ids: Vec<iroha_data_model::asset::AssetId>,
+    asset_transfer_destination_accounts: Vec<iroha_data_model::account::AccountId>,
+    asset_transfer_amounts: Vec<iroha_primitives::numeric::Numeric>,
     /// Event replay script describing the per-operation ordering for asset changes.
     asset_event_script: Vec<AssetEventScriptEntry>,
     // SoA: total supply deltas per asset definition
@@ -10429,6 +10437,20 @@ pub struct DetachedStateTransactionDelta {
     exec_by_call: Vec<iroha_data_model::events::execute_trigger::ExecuteTriggerEvent>,
 }
 
+#[derive(Default, Debug, Clone)]
+/// Transaction context needed when replaying a detached delta into a live block.
+pub(crate) struct DetachedMergeContext {
+    /// Hash used as the transaction call hash while recording per-transaction data.
+    pub(crate) tx_call_hash: Option<iroha_crypto::Hash>,
+    /// Canonical signed transaction hash for state paths that need the current transaction.
+    pub(crate) current_tx_hash:
+        Option<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>,
+    /// Lane used by the transaction currently being merged.
+    pub(crate) current_lane_id: Option<iroha_data_model::nexus::LaneId>,
+    /// Dataspace used by the transaction currently being merged.
+    pub(crate) current_dataspace_id: Option<iroha_data_model::nexus::DataSpaceId>,
+}
+
 fn aggregate_numeric<K>(ids: &[K], qtys: &[Numeric]) -> Vec<(K, Numeric)>
 where
     K: Ord + Clone,
@@ -10498,6 +10520,107 @@ fn gather_set_keyed<E: Ord + Clone>(entities: &[E], key_ids: &[NameId]) -> Vec<(
 // stable iteration order when the overlay is merged back into the live state.
 
 impl DetachedStateTransactionDelta {
+    pub(crate) fn single_transfer_delta(
+        &self,
+    ) -> Option<(
+        iroha_data_model::asset::AssetId,
+        iroha_data_model::account::AccountId,
+        iroha_primitives::numeric::Numeric,
+    )> {
+        let transfer_only = self.asset_transfer_source_ids.len() == 1
+            && self.asset_transfer_destination_accounts.len() == 1
+            && self.asset_transfer_amounts.len() == 1
+            && self.asset_add_ids.is_empty()
+            && self.asset_add_qtys.is_empty()
+            && self.asset_sub_ids.is_empty()
+            && self.asset_sub_qtys.is_empty()
+            && self.asset_event_script.is_empty()
+            && self.asset_def_add_ids.is_empty()
+            && self.asset_def_add_qtys.is_empty()
+            && self.asset_def_sub_ids.is_empty()
+            && self.asset_def_sub_qtys.is_empty()
+            && self.flip_mintable_to_not.is_empty()
+            && self.account_kv_set_accounts.is_empty()
+            && self.account_kv_set_key_ids.is_empty()
+            && self.account_kv_set_vals.is_empty()
+            && self.account_kv_del_accounts.is_empty()
+            && self.account_kv_del_key_ids.is_empty()
+            && self.domain_kv_set_domains.is_empty()
+            && self.domain_kv_set_key_ids.is_empty()
+            && self.domain_kv_set_vals.is_empty()
+            && self.domain_kv_del_domains.is_empty()
+            && self.domain_kv_del_key_ids.is_empty()
+            && self.nft_create.is_empty()
+            && self.nft_delete.is_empty()
+            && self.nft_kv_set_ids.is_empty()
+            && self.nft_kv_set_key_ids.is_empty()
+            && self.nft_kv_set_vals.is_empty()
+            && self.nft_kv_del_ids.is_empty()
+            && self.nft_kv_del_key_ids.is_empty()
+            && self.nft_transfer.is_empty()
+            && self.domain_owner_transfer.is_empty()
+            && self.asset_def_owner_transfer.is_empty()
+            && self.asset_def_kv_set_ids.is_empty()
+            && self.asset_def_kv_set_key_ids.is_empty()
+            && self.asset_def_kv_set_vals.is_empty()
+            && self.asset_def_kv_del_ids.is_empty()
+            && self.asset_def_kv_del_key_ids.is_empty()
+            && self.perm_ops.is_empty()
+            && self.role_ops.is_empty()
+            && self.role_perm_ops.is_empty()
+            && self.permission_ops.is_empty()
+            && self.peer_adds.is_empty()
+            && self.peer_removes.is_empty()
+            && self.param_updates.is_empty()
+            && self.exec_by_call.is_empty();
+        transfer_only.then(|| {
+            (
+                self.asset_transfer_source_ids[0].clone(),
+                self.asset_transfer_destination_accounts[0].clone(),
+                self.asset_transfer_amounts[0].clone(),
+            )
+        })
+    }
+
+    /// Return true when this transfer can use the simple batch merge path.
+    pub(crate) fn supports_uncontrolled_single_transfer_batch(
+        &self,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> bool {
+        let Some((source_id, destination, amount)) = self.single_transfer_delta() else {
+            return false;
+        };
+        let destination_id = AssetId::new(source_id.definition().clone(), destination.clone());
+        let transfer_events = [
+            data_pre::DataEvent::from(data_pre::AssetEvent::Removed(data_pre::AssetChanged {
+                asset: source_id.clone(),
+                amount: amount.clone(),
+            })),
+            data_pre::DataEvent::from(data_pre::AssetEvent::Added(data_pre::AssetChanged {
+                asset: destination_id.clone(),
+                amount: amount.clone(),
+            })),
+        ];
+
+        state_transaction.world.account(&destination).is_ok()
+            && state_transaction.world.assets().get(&destination_id).is_some()
+            && crate::smartcontracts::isi::asset::isi::prepare_outbound_asset_transfer_control_update(
+                state_transaction,
+                &source_id,
+                &amount,
+            )
+            .is_ok_and(|update| update.is_none())
+            && !state_transaction
+                .world
+                .triggers
+                .data_triggers()
+                .iter()
+                .filter(|(_, action)| {
+                    !action.repeats.is_depleted() && trigger_is_enabled(action.metadata())
+                })
+                .any(|(_, action)| transfer_events.iter().any(|event| action.filter.matches(event)))
+    }
+
     /// Record an addition to an account's numeric asset balance.
     pub fn add_asset_add(
         &mut self,
@@ -10525,6 +10648,17 @@ impl DetachedStateTransactionDelta {
             idx.try_into()
                 .expect("detached asset event script exceeded u32::MAX"),
         ));
+    }
+    /// Record a source-signed transparent numeric asset transfer.
+    pub fn transfer_asset(
+        &mut self,
+        source_id: iroha_data_model::asset::AssetId,
+        destination: iroha_data_model::account::AccountId,
+        amount: iroha_primitives::numeric::Numeric,
+    ) {
+        self.asset_transfer_source_ids.push(source_id);
+        self.asset_transfer_destination_accounts.push(destination);
+        self.asset_transfer_amounts.push(amount);
     }
     /// Record an increase in total supply for an asset definition.
     pub fn add_total_add(
@@ -11115,6 +11249,84 @@ impl DetachedStateTransactionDelta {
         state_block: &mut StateBlock<'_>,
         authority: &iroha_data_model::account::AccountId,
     ) -> TransactionResultInner {
+        self.merge_into_with_context(state_block, authority, DetachedMergeContext::default())
+    }
+
+    /// Merge a single transparent numeric transfer into an existing transaction overlay.
+    ///
+    /// Returns `None` when the delta is not exactly one transparent transfer.
+    ///
+    /// # Errors
+    /// Returns a transaction rejection when transfer validation or trigger execution fails.
+    pub(crate) fn merge_single_transfer_into_transaction(
+        &self,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &iroha_data_model::account::AccountId,
+    ) -> Option<TransactionResultInner> {
+        let (source_id, destination, amount) = self.single_transfer_delta()?;
+        Some(
+            crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
+                state_transaction,
+                authority,
+                source_id,
+                destination,
+                amount,
+            )
+            .map_err(ValidationFail::InstructionFailed)
+            .map_err(iroha_data_model::transaction::error::TransactionRejectionReason::Validation)
+            .and_then(|()| state_transaction.execute_data_triggers_dfs(authority)),
+        )
+    }
+
+    /// Merge a batchable transparent transfer into an existing transaction overlay.
+    ///
+    /// Returns `None` when the delta is not exactly one transparent transfer.
+    ///
+    /// # Errors
+    /// Returns a transaction rejection when transfer validation or trigger execution fails.
+    pub(crate) fn merge_uncontrolled_single_transfer_into_transaction(
+        &self,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &iroha_data_model::account::AccountId,
+    ) -> Option<TransactionResultInner> {
+        let (source_id, destination, amount) = self.single_transfer_delta()?;
+        Some(
+            crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer_uncontrolled_batch(
+                state_transaction,
+                authority,
+                source_id,
+                destination,
+                amount,
+            )
+            .map_err(ValidationFail::InstructionFailed)
+            .map_err(iroha_data_model::transaction::error::TransactionRejectionReason::Validation)
+            .and_then(|applied| {
+                if applied {
+                    state_transaction.execute_data_triggers_dfs(authority)
+                } else {
+                    Err(
+                        iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                            ValidationFail::NotPermitted(
+                                "detached transfer is not eligible for batch merge".to_owned(),
+                            ),
+                        ),
+                    )
+                }
+            }),
+        )
+    }
+
+    /// Merge the recorded changes into the live `StateBlock` with transaction context.
+    ///
+    /// # Errors
+    /// Returns a `ValidationFail` when applying an instruction fails validation or invariants.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn merge_into_with_context(
+        self,
+        state_block: &mut StateBlock<'_>,
+        authority: &iroha_data_model::account::AccountId,
+        context: DetachedMergeContext,
+    ) -> TransactionResultInner {
         // Parallel-apply relies on this merge path to mirror sequential semantics for
         // supported ISIs. Tests exercise the same operations through both paths to
         // guarantee identical validation and event emission; extend cautiously and keep
@@ -11129,7 +11341,42 @@ impl DetachedStateTransactionDelta {
             },
             transaction::error::TransactionRejectionReason,
         };
+
+        if let Some((source_id, destination, amount)) = self.single_transfer_delta() {
+            let mut stx = state_block.transaction();
+            stx.tx_call_hash = context.tx_call_hash;
+            stx.current_tx_hash = context.current_tx_hash;
+            stx.current_lane_id = context.current_lane_id;
+            stx.current_dataspace_id = context.current_dataspace_id;
+            if let Some(dataspace_id) = context.current_dataspace_id {
+                stx.world.current_dataspace_id = Some(dataspace_id);
+            }
+            let trigger_sequence =
+                crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
+                    &mut stx,
+                    authority,
+                    source_id,
+                    destination,
+                    amount,
+                )
+                .map_err(ValidationFail::InstructionFailed)
+                .map_err(TransactionRejectionReason::Validation)
+                .and_then(|()| {
+                    let trigger_sequence = stx.execute_data_triggers_dfs(authority)?;
+                    stx.apply();
+                    Ok(trigger_sequence)
+                })?;
+            return Ok(trigger_sequence);
+        }
+
         let mut stx = state_block.transaction();
+        stx.tx_call_hash = context.tx_call_hash;
+        stx.current_tx_hash = context.current_tx_hash;
+        stx.current_lane_id = context.current_lane_id;
+        stx.current_dataspace_id = context.current_dataspace_id;
+        if let Some(dataspace_id) = context.current_dataspace_id {
+            stx.world.current_dataspace_id = Some(dataspace_id);
+        }
         let result: Result<(), iroha_data_model::ValidationFail> = (|| {
             let asset_adds = aggregate_numeric(&self.asset_add_ids, &self.asset_add_qtys);
             let asset_subs = aggregate_numeric(&self.asset_sub_ids, &self.asset_sub_qtys);
@@ -11205,6 +11452,30 @@ impl DetachedStateTransactionDelta {
                         iroha_data_model::ValidationFail::NotPermitted(format!("{e:?}"))
                     })?;
                 }
+            }
+
+            // Apply transparent transfers through the same asset module path as sequential ISI
+            // execution so policy gates, events, and FASTPQ transcripts stay identical.
+            for ((source_id, destination), amount) in self
+                .asset_transfer_source_ids
+                .iter()
+                .zip(self.asset_transfer_destination_accounts.iter())
+                .zip(self.asset_transfer_amounts.iter())
+            {
+                if source_id.account() != authority {
+                    return Err(iroha_data_model::ValidationFail::NotPermitted(
+                        "Can't transfer asset: source asset owner must sign the transaction"
+                            .to_owned(),
+                    ));
+                }
+                crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
+                    &mut stx,
+                    authority,
+                    source_id.clone(),
+                    destination.clone(),
+                    amount.clone(),
+                )
+                .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
             }
 
             // Apply asset subtractions (aggregated per id)
@@ -23969,6 +24240,11 @@ impl<'state> StateBlock<'state> {
         self.committed_fragments > 0
     }
 
+    /// Add committed fragments folded into an already-applied transaction overlay.
+    pub(crate) fn add_committed_fragments(&mut self, additional: usize) {
+        self.committed_fragments = self.committed_fragments.saturating_add(additional);
+    }
+
     fn sumeragi_da_enabled(&self) -> bool {
         let params = self.state_ref.world.parameters.view();
         params.get().sumeragi().da_enabled()
@@ -26092,11 +26368,10 @@ mod transfer_transcript_tests {
         let expected_poseidon = crate::fastpq::poseidon_preimage_digest(&delta, &call_hash);
         tx.record_transfer_transcript(&ALICE_ID, delta)
             .expect("record transcript");
-        assert!(
-            tx.pending_transfer_transcripts[0]
-                .poseidon_preimage_digest
-                .is_none(),
-            "single-delta transfer transcript digest should be deferred until block drain"
+        assert_eq!(
+            tx.pending_transfer_transcripts[0].poseidon_preimage_digest,
+            Some(expected_poseidon),
+            "single-delta transfer transcript digest should be computed while recording"
         );
         tx.apply();
         let transcripts = block.drain_transfer_transcripts();
@@ -26222,6 +26497,369 @@ mod transfer_transcript_tests {
             crate::fastpq::authority_digest(&ALICE_ID)
         );
         assert!(transcript.poseidon_preimage_digest.is_none());
+    }
+
+    #[test]
+    fn transfer_transcripts_batch_flushes_each_recorded_transaction_hash() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new(World::default(), Arc::clone(&kura), query);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let call_hash_a = iroha_crypto::Hash::prehashed([2_u8; iroha_crypto::Hash::LENGTH]);
+        let call_hash_b = iroha_crypto::Hash::prehashed([3_u8; iroha_crypto::Hash::LENGTH]);
+        let asset_definition: iroha_data_model::asset::AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
+        let delta_a = TransferDeltaTranscript {
+            from_account: (*ALICE_ID).clone(),
+            to_account: (*BOB_ID).clone(),
+            asset_definition: asset_definition.clone(),
+            amount: Numeric::from(10_u32),
+            from_balance_before: Numeric::from(100_u32),
+            from_balance_after: Numeric::from(90_u32),
+            to_balance_before: Numeric::from(0_u32),
+            to_balance_after: Numeric::from(10_u32),
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+        };
+        let delta_b = TransferDeltaTranscript {
+            from_account: (*BOB_ID).clone(),
+            to_account: (*ALICE_ID).clone(),
+            asset_definition,
+            amount: Numeric::from(5_u32),
+            from_balance_before: Numeric::from(10_u32),
+            from_balance_after: Numeric::from(5_u32),
+            to_balance_before: Numeric::from(90_u32),
+            to_balance_after: Numeric::from(95_u32),
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+        };
+        tx.tx_call_hash = Some(call_hash_a);
+        tx.record_transfer_transcript(&ALICE_ID, delta_a.clone())
+            .expect("record first transcript");
+        tx.tx_call_hash = Some(call_hash_b);
+        tx.record_transfer_transcript(&BOB_ID, delta_b.clone())
+            .expect("record second transcript");
+        tx.tx_call_hash = None;
+        tx.apply();
+
+        let transcripts = block.drain_transfer_transcripts();
+        assert_eq!(transcripts.len(), 2);
+        assert_eq!(
+            transcripts
+                .get(&call_hash_a)
+                .expect("first hash transcript")[0]
+                .deltas,
+            vec![delta_a]
+        );
+        assert_eq!(
+            transcripts
+                .get(&call_hash_b)
+                .expect("second hash transcript")[0]
+                .deltas,
+            vec![delta_b]
+        );
+    }
+
+    #[test]
+    fn detached_asset_transfer_matches_sequential_transcript_and_events() {
+        use crate::smartcontracts::Execute as _;
+        use iroha_data_model::isi::Transfer;
+
+        fn build_transfer_world(receiver_asset_balance: Option<u32>) -> (World, AssetId, AssetId) {
+            let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+            let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
+            let asset_definition_id =
+                AssetDefinitionId::new(domain_id, "rose".parse().expect("asset name"));
+            let asset_definition = {
+                let __asset_definition_id = asset_definition_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&ALICE_ID);
+            let alice_asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
+            let bob_asset_id = AssetId::new(asset_definition_id, BOB_ID.clone());
+            let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::from(10_u32));
+            let mut assets = vec![alice_asset];
+            if let Some(balance) = receiver_asset_balance {
+                assets.push(Asset::new(bob_asset_id.clone(), Numeric::from(balance)));
+            }
+            let world = World::with_assets(
+                [domain],
+                [alice_account, bob_account],
+                [asset_definition],
+                assets,
+                [],
+            );
+            (world, alice_asset_id, bob_asset_id)
+        }
+
+        fn numeric_balance(state: &State, asset_id: &AssetId) -> Numeric {
+            state
+                .view()
+                .world()
+                .assets()
+                .get(asset_id)
+                .map(|value| value.clone().into_inner())
+                .unwrap_or_else(Numeric::zero)
+        }
+
+        let call_hash = iroha_crypto::Hash::prehashed([7_u8; iroha_crypto::Hash::LENGTH]);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+
+        let (world_seq, alice_asset_id, bob_asset_id) = build_transfer_world(None);
+        let kura_seq = Kura::blank_kura_for_testing();
+        let query_seq = crate::query::store::LiveQueryStore::start_test();
+        let state_seq = State::new(world_seq, Arc::clone(&kura_seq), query_seq);
+        let mut block_seq = state_seq.block(header);
+        {
+            let mut tx = block_seq.transaction();
+            tx.tx_call_hash = Some(call_hash);
+            Transfer::asset_numeric(alice_asset_id.clone(), 3_u32, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut tx)
+                .expect("sequential transfer");
+            tx.apply();
+        }
+        let events_seq = block_seq.world.take_external_events();
+        let transcripts_seq = block_seq.drain_transfer_transcripts();
+        block_seq.commit().expect("commit sequential block");
+
+        let (world_det, _, _) = build_transfer_world(None);
+        let kura_det = Kura::blank_kura_for_testing();
+        let query_det = crate::query::store::LiveQueryStore::start_test();
+        let state_det = State::new(world_det, Arc::clone(&kura_det), query_det);
+        let mut block_det = state_det.block(header);
+        let instruction: InstructionBox =
+            Transfer::asset_numeric(alice_asset_id.clone(), 3_u32, BOB_ID.clone()).into();
+        let mut delta = DetachedStateTransactionDelta::default();
+        crate::executor::execute_instruction_detached(&ALICE_ID, &instruction, &mut delta)
+            .expect("detached transfer should be recorded");
+        let delta_for_existing_transaction = delta.clone();
+        delta
+            .merge_into_with_context(
+                &mut block_det,
+                &ALICE_ID,
+                DetachedMergeContext {
+                    tx_call_hash: Some(call_hash),
+                    current_tx_hash: None,
+                    current_lane_id: None,
+                    current_dataspace_id: None,
+                },
+            )
+            .expect("detached transfer merge");
+        let events_det = block_det.world.take_external_events();
+        let transcripts_det = block_det.drain_transfer_transcripts();
+        block_det.commit().expect("commit detached block");
+
+        let (world_existing_tx, _, _) = build_transfer_world(None);
+        let kura_existing_tx = Kura::blank_kura_for_testing();
+        let query_existing_tx = crate::query::store::LiveQueryStore::start_test();
+        let state_existing_tx = State::new(
+            world_existing_tx,
+            Arc::clone(&kura_existing_tx),
+            query_existing_tx,
+        );
+        let mut block_existing_tx = state_existing_tx.block(header);
+        {
+            let mut tx = block_existing_tx.transaction();
+            tx.tx_call_hash = Some(call_hash);
+            delta_for_existing_transaction
+                .merge_single_transfer_into_transaction(&mut tx, &ALICE_ID)
+                .expect("detached delta should be a single transfer")
+                .expect("detached transfer merge into existing transaction");
+            tx.apply();
+        }
+        let events_existing_tx = block_existing_tx.world.take_external_events();
+        let transcripts_existing_tx = block_existing_tx.drain_transfer_transcripts();
+        block_existing_tx
+            .commit()
+            .expect("commit existing-transaction detached block");
+
+        let second_call_hash = iroha_crypto::Hash::prehashed([8_u8; iroha_crypto::Hash::LENGTH]);
+        let (world_batch, _, _) = build_transfer_world(None);
+        let kura_batch = Kura::blank_kura_for_testing();
+        let query_batch = crate::query::store::LiveQueryStore::start_test();
+        let state_batch = State::new(world_batch, Arc::clone(&kura_batch), query_batch);
+        let mut block_batch = state_batch.block(header);
+        let mut first_delta = DetachedStateTransactionDelta::default();
+        let first_instruction: InstructionBox =
+            Transfer::asset_numeric(alice_asset_id.clone(), 3_u32, BOB_ID.clone()).into();
+        crate::executor::execute_instruction_detached(
+            &ALICE_ID,
+            &first_instruction,
+            &mut first_delta,
+        )
+        .expect("first detached transfer should be recorded");
+        let mut second_delta = DetachedStateTransactionDelta::default();
+        let second_instruction: InstructionBox =
+            Transfer::asset_numeric(alice_asset_id.clone(), 2_u32, BOB_ID.clone()).into();
+        crate::executor::execute_instruction_detached(
+            &ALICE_ID,
+            &second_instruction,
+            &mut second_delta,
+        )
+        .expect("second detached transfer should be recorded");
+        {
+            let mut tx = block_batch.transaction();
+            tx.tx_call_hash = Some(call_hash);
+            first_delta
+                .merge_uncontrolled_single_transfer_into_transaction(&mut tx, &ALICE_ID)
+                .expect("first delta should be a single transfer")
+                .expect("first batch transfer merge");
+            tx.tx_call_hash = Some(second_call_hash);
+            second_delta
+                .merge_uncontrolled_single_transfer_into_transaction(&mut tx, &ALICE_ID)
+                .expect("second delta should be a single transfer")
+                .expect("second batch transfer merge");
+            tx.tx_call_hash = None;
+            tx.apply();
+        }
+        block_batch.add_committed_fragments(1);
+        assert_eq!(block_batch.committed_fragment_count(), 2);
+        let events_batch = block_batch.world.take_external_events();
+        let transcripts_batch = block_batch.drain_transfer_transcripts();
+        block_batch.commit().expect("commit batch detached block");
+
+        assert_eq!(events_seq, events_det);
+        assert_eq!(events_seq, events_existing_tx);
+        assert_eq!(transcripts_seq, transcripts_det);
+        assert_eq!(transcripts_seq, transcripts_existing_tx);
+        assert_eq!(
+            transcripts_seq.get(&call_hash),
+            transcripts_batch.get(&call_hash)
+        );
+        assert!(
+            transcripts_batch.contains_key(&second_call_hash),
+            "second batch transfer should keep its own transaction call hash"
+        );
+        assert!(
+            events_batch.len() > events_seq.len(),
+            "two-transfer batch should preserve both transfers' event stream"
+        );
+
+        let (world_batch_guard, _, _) = build_transfer_world(Some(0));
+        let kura_batch_guard = Kura::blank_kura_for_testing();
+        let query_batch_guard = crate::query::store::LiveQueryStore::start_test();
+        let state_batch_guard = State::new(
+            world_batch_guard,
+            Arc::clone(&kura_batch_guard),
+            query_batch_guard,
+        );
+        let mut block_batch_guard = state_batch_guard.block(header);
+        let mut batch_guard_tx = block_batch_guard.transaction();
+        assert!(
+            first_delta.supports_uncontrolled_single_transfer_batch(&batch_guard_tx),
+            "preseeded receiver assets without matching data triggers should batch"
+        );
+
+        let executable = iroha_data_model::transaction::Executable::Instructions(
+            iroha_primitives::const_vec::ConstVec::from(Vec::<InstructionBox>::new()),
+        );
+        let nonmatching_action =
+            crate::smartcontracts::triggers::specialized::SpecializedAction::new(
+                executable.clone(),
+                Repeats::Indefinitely,
+                ALICE_ID.clone(),
+                data_pre::DataEventFilter::Configuration(data_pre::ConfigurationEventFilter::new()),
+            );
+        batch_guard_tx
+            .world
+            .triggers
+            .add_data_trigger(
+                crate::smartcontracts::triggers::specialized::SpecializedTrigger::new(
+                    "nonmatching_transfer_batch_guard"
+                        .parse()
+                        .expect("trigger id"),
+                    nonmatching_action,
+                ),
+            )
+            .expect("add nonmatching data trigger");
+        assert!(
+            first_delta.supports_uncontrolled_single_transfer_batch(&batch_guard_tx),
+            "unrelated data triggers should not disable transfer batching"
+        );
+
+        let matching_action = crate::smartcontracts::triggers::specialized::SpecializedAction::new(
+            executable,
+            Repeats::Indefinitely,
+            ALICE_ID.clone(),
+            data_pre::DataEventFilter::Asset(data_pre::AssetEventFilter::new()),
+        );
+        batch_guard_tx
+            .world
+            .triggers
+            .add_data_trigger(
+                crate::smartcontracts::triggers::specialized::SpecializedTrigger::new(
+                    "matching_transfer_batch_guard".parse().expect("trigger id"),
+                    matching_action,
+                ),
+            )
+            .expect("add matching data trigger");
+        assert!(
+            !first_delta.supports_uncontrolled_single_transfer_batch(&batch_guard_tx),
+            "matching asset data triggers should keep per-transaction semantics"
+        );
+        drop(batch_guard_tx);
+
+        assert_eq!(
+            numeric_balance(&state_det, &alice_asset_id),
+            Numeric::from(7_u32)
+        );
+        assert_eq!(
+            numeric_balance(&state_det, &bob_asset_id),
+            Numeric::from(3_u32)
+        );
+        assert_eq!(
+            numeric_balance(&state_existing_tx, &alice_asset_id),
+            Numeric::from(7_u32)
+        );
+        assert_eq!(
+            numeric_balance(&state_existing_tx, &bob_asset_id),
+            Numeric::from(3_u32)
+        );
+        assert_eq!(
+            numeric_balance(&state_batch, &alice_asset_id),
+            Numeric::from(5_u32)
+        );
+        assert_eq!(
+            numeric_balance(&state_batch, &bob_asset_id),
+            Numeric::from(5_u32)
+        );
+        assert_eq!(
+            numeric_balance(&state_seq, &alice_asset_id),
+            numeric_balance(&state_det, &alice_asset_id)
+        );
+        assert_eq!(
+            numeric_balance(&state_seq, &bob_asset_id),
+            numeric_balance(&state_det, &bob_asset_id)
+        );
+        assert_eq!(
+            numeric_balance(&state_seq, &alice_asset_id),
+            numeric_balance(&state_existing_tx, &alice_asset_id)
+        );
+        assert_eq!(
+            numeric_balance(&state_seq, &bob_asset_id),
+            numeric_balance(&state_existing_tx, &bob_asset_id)
+        );
+        let transcript = transcripts_det
+            .get(&call_hash)
+            .and_then(|entry| entry.first())
+            .expect("detached transfer transcript recorded");
+        let transfer_delta = transcript
+            .deltas
+            .first()
+            .expect("single transfer delta recorded");
+        assert_eq!(transfer_delta.from_balance_before, Numeric::from(10_u32));
+        assert_eq!(transfer_delta.from_balance_after, Numeric::from(7_u32));
+        assert_eq!(transfer_delta.to_balance_before, Numeric::zero());
+        assert_eq!(transfer_delta.to_balance_after, Numeric::from(3_u32));
+        assert!(transcript.poseidon_preimage_digest.is_some());
     }
 }
 
@@ -26507,13 +27145,15 @@ mod block_proof_tests {
             SignatureOf::from_hash(keypair.private_key(), header.hash()),
         );
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-        block.set_transaction_results(
-            Vec::new(),
-            &[entry_hash],
-            vec![TransactionResultInner::Ok(
-                crate::trigger::DataTriggerSequence::default(),
-            )],
-        );
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &[entry_hash],
+                vec![TransactionResultInner::Ok(
+                    crate::trigger::DataTriggerSequence::default(),
+                )],
+            )
+            .expect("test block entrypoint hash should match payload");
 
         let block_arc = Arc::new(block);
         kura.store_block(Arc::clone(&block_arc))
@@ -28257,7 +28897,9 @@ mod replay_validation_tests {
         let bad_result: TransactionResultInner = Err(TransactionRejectionReason::Validation(
             ValidationFail::NotPermitted("forced mismatch".to_owned()),
         ));
-        signed_block2.set_transaction_results(Vec::new(), &entry_hashes, vec![bad_result]);
+        signed_block2
+            .set_transaction_results(Vec::new(), &entry_hashes, vec![bad_result])
+            .expect("test block entrypoint hash should match payload");
         let block2_hash = signed_block2.hash();
         kura.store_block(Arc::new(signed_block2))
             .expect("store mismatched block");
@@ -29980,11 +30622,15 @@ impl StateTransaction<'_, '_> {
             )
         })?;
         let authority_digest = crate::fastpq::authority_digest(authority);
+        let poseidon_preimage_digest = match deltas.as_slice() {
+            [delta] => Some(crate::fastpq::poseidon_preimage_digest(delta, &batch_hash)),
+            _ => None,
+        };
         let transcript = TransferTranscript {
             batch_hash,
             deltas: core::mem::take(&mut deltas),
             authority_digest,
-            poseidon_preimage_digest: None,
+            poseidon_preimage_digest,
         };
         crate::sumeragi::witness::record_fastpq_transcript(&transcript);
         self.pending_transfer_transcripts.push(transcript);
@@ -34851,18 +35497,20 @@ mod tests {
         );
         let mut block = SignedBlock::presigned(signature, header, Vec::<SignedTransaction>::new());
         block.set_external_entrypoints(vec![sealed_entrypoint]);
-        block.set_transaction_results(
-            vec![time_trigger],
-            &[sealed_hash, time_hash],
-            vec![
-                TransactionResultInner::Ok(
-                    iroha_data_model::trigger::DataTriggerSequence::default(),
-                ),
-                TransactionResultInner::Ok(
-                    iroha_data_model::trigger::DataTriggerSequence::default(),
-                ),
-            ],
-        );
+        block
+            .set_transaction_results(
+                vec![time_trigger],
+                &[sealed_hash, time_hash],
+                vec![
+                    TransactionResultInner::Ok(
+                        iroha_data_model::trigger::DataTriggerSequence::default(),
+                    ),
+                    TransactionResultInner::Ok(
+                        iroha_data_model::trigger::DataTriggerSequence::default(),
+                    ),
+                ],
+            )
+            .expect("sealed entrypoint hashes should match payload");
         let block_arc = Arc::new(block);
         kura.store_block(Arc::clone(&block_arc))
             .expect("store block");
@@ -43438,14 +44086,16 @@ mod tests {
                 .into();
             let entry_hashes: Vec<HashOf<TransactionEntrypoint>> = Vec::new();
             let results: Vec<TransactionResultInner> = Vec::new();
-            block.set_transaction_results_with_transcripts(
-                Vec::new(),
-                &entry_hashes,
-                results,
-                BTreeMap::new(),
-                vec![envelope],
-                Some(snapshot),
-            );
+            block
+                .set_transaction_results_with_transcripts(
+                    Vec::new(),
+                    &entry_hashes,
+                    results,
+                    BTreeMap::new(),
+                    vec![envelope],
+                    Some(snapshot),
+                )
+                .expect("empty test block should attach AXT envelope results");
             block
         }
 
@@ -43460,14 +44110,17 @@ mod tests {
             let mut committed = valid.commit_unchecked().unpack(|_| {});
             let entry_hashes: Vec<HashOf<TransactionEntrypoint>> = Vec::new();
             let results: Vec<TransactionResultInner> = Vec::new();
-            committed.as_mut().set_transaction_results_with_transcripts(
-                Vec::new(),
-                &entry_hashes,
-                results,
-                BTreeMap::new(),
-                vec![envelope],
-                Some(snapshot),
-            );
+            committed
+                .as_mut()
+                .set_transaction_results_with_transcripts(
+                    Vec::new(),
+                    &entry_hashes,
+                    results,
+                    BTreeMap::new(),
+                    vec![envelope],
+                    Some(snapshot),
+                )
+                .expect("empty committed test block should attach AXT envelope results");
             let env_len = committed
                 .as_ref()
                 .axt_envelopes()

@@ -6,6 +6,7 @@ mod norito_rpc_harness;
 
 use axum::http::{StatusCode, header::RETRY_AFTER};
 use iroha_config::parameters::actual::NoritoRpcStage;
+use iroha_torii_shared::ErrorEnvelope;
 use norito_rpc_harness::NoritoRpcHarness;
 
 const ERROR_HEADER: &str = "x-iroha-error-code";
@@ -73,6 +74,16 @@ async fn response_text(resp: axum::response::Response) -> String {
     String::from_utf8(body.to_vec()).expect("response text")
 }
 
+async fn response_error_envelope(resp: axum::response::Response) -> ErrorEnvelope {
+    use http_body_util::BodyExt;
+
+    let body = BodyExt::collect(resp.into_body())
+        .await
+        .expect("collect body")
+        .to_bytes();
+    norito::decode_from_bytes(&body).expect("decode error envelope")
+}
+
 fn assert_versioned_decode_rejection_without_panic(text: &str) {
     assert!(
         text.contains("Could not decode versioned request"),
@@ -81,6 +92,21 @@ fn assert_versioned_decode_rejection_without_panic(text: &str) {
     assert!(
         !text.contains("panic during decode"),
         "unexpected decode panic response: {text}"
+    );
+}
+
+fn assert_transaction_decode_rejection_without_panic(envelope: &ErrorEnvelope) {
+    assert_eq!(envelope.code(), "invalid_transaction_payload");
+    assert!(
+        envelope
+            .message()
+            .contains("transaction payload could not be decoded"),
+        "unexpected error envelope: {envelope:?}"
+    );
+    assert!(
+        !envelope.message().contains("panic during decode"),
+        "unexpected decode panic response: {}",
+        envelope.message()
     );
 }
 
@@ -252,7 +278,6 @@ async fn norito_transaction_rejects_invalid_signature_without_decode_panic() {
 async fn public_transaction_route_rejects_internal_entrypoint_payload() {
     use axum::body::Body;
     use axum::http::{Request, header::CONTENT_TYPE};
-    use http_body_util::BodyExt;
     use iroha_torii_shared::uri;
     use tower::ServiceExt as _;
 
@@ -278,26 +303,14 @@ async fn public_transaction_route_rejects_internal_entrypoint_payload() {
         .expect("response");
 
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    let body = BodyExt::collect(resp.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    let text = String::from_utf8(body.to_vec()).expect("response text");
-    assert!(
-        text.contains("Could not decode versioned request"),
-        "unexpected error body: {text}"
-    );
-    assert!(
-        !text.contains("panic during decode"),
-        "unexpected decode panic response: {text}"
-    );
+    let envelope = response_error_envelope(resp).await;
+    assert_transaction_decode_rejection_without_panic(&envelope);
 }
 
 #[tokio::test]
 async fn public_transaction_route_rejects_bare_signed_transaction_payload() {
     use axum::body::Body;
     use axum::http::{Request, header::CONTENT_TYPE};
-    use http_body_util::BodyExt;
     use iroha_torii_shared::uri;
     use tower::ServiceExt as _;
 
@@ -323,26 +336,14 @@ async fn public_transaction_route_rejects_bare_signed_transaction_payload() {
         .expect("response");
 
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    let body = BodyExt::collect(resp.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    let text = String::from_utf8(body.to_vec()).expect("response text");
-    assert!(
-        text.contains("Could not decode versioned request"),
-        "unexpected error body: {text}"
-    );
-    assert!(
-        !text.contains("panic during decode"),
-        "unexpected decode panic response: {text}"
-    );
+    let envelope = response_error_envelope(resp).await;
+    assert_transaction_decode_rejection_without_panic(&envelope);
 }
 
 #[tokio::test]
 async fn public_transaction_route_rejects_unsupported_version_without_decode_panic() {
     use axum::body::Body;
     use axum::http::{Request, header::CONTENT_TYPE};
-    use http_body_util::BodyExt;
     use iroha_torii_shared::uri;
     use tower::ServiceExt as _;
 
@@ -368,22 +369,12 @@ async fn public_transaction_route_rejects_unsupported_version_without_decode_pan
         .expect("response");
 
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    let body = BodyExt::collect(resp.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    let text = String::from_utf8(body.to_vec()).expect("response text");
+    let envelope = response_error_envelope(resp).await;
+    assert_transaction_decode_rejection_without_panic(&envelope);
     assert!(
-        text.contains("Could not decode versioned request"),
-        "unexpected error body: {text}"
-    );
-    assert!(
-        text.contains("version") || text.contains("Version"),
-        "version failure should be visible in response: {text}"
-    );
-    assert!(
-        !text.contains("panic during decode"),
-        "unexpected decode panic response: {text}"
+        envelope.message().contains("version") || envelope.message().contains("Version"),
+        "version failure should be visible in response: {}",
+        envelope.message()
     );
 }
 
@@ -394,8 +385,8 @@ async fn public_transaction_route_rejects_empty_body_without_decode_panic() {
     let resp = post_ga_norito(uri::TRANSACTION, Vec::new()).await;
 
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    let text = response_text(resp).await;
-    assert_versioned_decode_rejection_without_panic(&text);
+    let envelope = response_error_envelope(resp).await;
+    assert_transaction_decode_rejection_without_panic(&envelope);
 }
 
 #[tokio::test]
@@ -405,8 +396,8 @@ async fn public_transaction_route_rejects_version_only_body_without_decode_panic
     let resp = post_ga_norito(uri::TRANSACTION, vec![1_u8]).await;
 
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    let text = response_text(resp).await;
-    assert_versioned_decode_rejection_without_panic(&text);
+    let envelope = response_error_envelope(resp).await;
+    assert_transaction_decode_rejection_without_panic(&envelope);
 }
 
 #[tokio::test]

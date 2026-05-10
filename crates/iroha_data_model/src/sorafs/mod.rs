@@ -56,8 +56,7 @@ pub mod prelude {
         pin_registry::{
             ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
             ManifestDigest, PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderId,
-            ReplicationOrderRecord, ReplicationOrderStatus, ReplicationReceiptRecord,
-            ReplicationReceiptStatus, StorageClass,
+            ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
         },
         pricing::{
             CollateralPolicy, CommitmentDiscountTier, CreditPolicy, DiscountSchedule,

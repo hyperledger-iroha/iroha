@@ -618,9 +618,9 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
             })
             .collect();
 
-        builder = builder
-            .next_transaction()
-            .set_topology(topology_entries.clone());
+        // Expand the topology into HSM-bound peer registrations here instead of
+        // `GenesisBuilder::set_topology`, which emits plain registrations.
+        builder = builder.next_transaction();
 
         for peer_id in &topology_vec {
             let pop_bytes = pop_map
@@ -634,10 +634,7 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
             };
             let register =
                 RegisterPeerWithPop::new(peer_id.clone(), pop_bytes).with_hsm(hsm_binding);
-            let instruction =
-                <RegisterPeerWithPop as iroha_data_model::isi::Instruction>::into_instruction_box(
-                    Box::new(register),
-                );
+            let instruction = InstructionBox::from(register);
             builder = builder.append_instruction(instruction);
         }
 
@@ -994,7 +991,9 @@ fn rebuild_block_from_parts(
     working.set_da_commitments(da_commitments.clone());
     working.set_da_proof_policies(da_proof_policies.clone());
     working.set_da_pin_intents(da_pin_intents.clone());
-    working.set_transaction_results(time_triggers.clone(), &hashes, results.clone());
+    working
+        .set_transaction_results(time_triggers.clone(), &hashes, results.clone())
+        .expect("genesis result hashes should match payload");
     let signature = iroha_data_model::block::BlockSignature::new(
         signer_index,
         SignatureOf::from_hash(genesis_key_pair.private_key(), working.hash()),
@@ -1008,7 +1007,9 @@ fn rebuild_block_from_parts(
     rebuilt.set_da_commitments(da_commitments);
     rebuilt.set_da_proof_policies(da_proof_policies);
     rebuilt.set_da_pin_intents(da_pin_intents);
-    rebuilt.set_transaction_results(time_triggers, &hashes, results);
+    rebuilt
+        .set_transaction_results(time_triggers, &hashes, results)
+        .expect("genesis result hashes should match payload");
     rebuilt
 }
 
@@ -1017,8 +1018,7 @@ mod tests {
     use iroha_core::state::StateReadOnly;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        asset::AssetDefinition, domain::Domain, isi::register::RegisterPeerWithPop,
-        parameter::system::SumeragiParameters,
+        asset::AssetDefinition, domain::Domain, parameter::system::SumeragiParameters,
     };
     use norito::codec::Decode;
 
@@ -1668,7 +1668,7 @@ mod tests {
 
     #[test]
     fn genesis_registers_peers_with_pop() {
-        use iroha_data_model::transaction::Executable;
+        use iroha_data_model::{isi::RegisterBox, transaction::Executable};
 
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::new(bls.public_key().clone());
@@ -1684,7 +1684,9 @@ mod tests {
             match tx.instructions() {
                 Executable::Instructions(isi) => {
                     for instr in isi {
-                        if let Some(isi) = instr.as_any().downcast_ref::<RegisterPeerWithPop>() {
+                        if let Some(RegisterBox::Peer(isi)) =
+                            instr.as_any().downcast_ref::<RegisterBox>()
+                        {
                             register_pop += 1;
                             if isi.hsm.is_some() {
                                 hsm_bound += 1;

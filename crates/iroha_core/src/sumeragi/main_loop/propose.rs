@@ -14,6 +14,9 @@ use iroha_data_model::consensus::{
 use iroha_data_model::events::EventFilter;
 use iroha_data_model::prelude::Repeats;
 
+const PROPOSAL_STALE_WINDOW_TX_QUANTUM: usize = 4_096;
+const PROPOSAL_STALE_WINDOW_MAX_MULTIPLIER: u32 = 4;
+
 pub(super) fn resolve_prev_block_for_proposal(
     proposal_height: u64,
     highest_qc: &crate::sumeragi::consensus::QcHeaderRef,
@@ -599,6 +602,18 @@ impl Actor {
         }
         let capped = base_limit.get().min(cap.get());
         Some(NonZeroU64::new(capped).expect("non-zero by construction"))
+    }
+
+    pub(super) fn proposal_assembly_stale_window(base: Duration, tx_count: usize) -> Duration {
+        let batches = tx_count.saturating_add(PROPOSAL_STALE_WINDOW_TX_QUANTUM - 1)
+            / PROPOSAL_STALE_WINDOW_TX_QUANTUM;
+        let full_batch_grace = usize::from(tx_count >= PROPOSAL_STALE_WINDOW_TX_QUANTUM);
+        let multiplier = batches
+            .saturating_add(full_batch_grace)
+            .max(1)
+            .min(PROPOSAL_STALE_WINDOW_MAX_MULTIPLIER as usize);
+        let multiplier = u32::try_from(multiplier).expect("proposal stale multiplier fits u32");
+        base.saturating_mul(multiplier)
     }
 
     pub(super) fn is_ivm_heavy_transaction(
@@ -2063,29 +2078,28 @@ impl Actor {
         let queue_len_after_pop = self.queue.queued_len();
         let mut internal_work = if transactions.is_empty() {
             let work = self.internal_proposal_work(proposal_height, prev_block.as_deref());
-            if !work.has_work() {
-                if allow_recovery_heartbeat {
-                    let heartbeat = self.build_recovery_heartbeat_transaction(proposal_height)?;
-                    let encoded_len = heartbeat.encoded_len();
-                    transactions.push(heartbeat);
-                    routing_decisions.push(RoutingDecision::default());
-                    tx_sizes.push(encoded_len);
-                    info!(
-                        height = proposal_height,
-                        view,
-                        queue_len = queue_len_after_pop,
-                        "injecting recovery heartbeat transaction for empty leader queue"
-                    );
-                    None
-                } else {
-                    info!(
-                        height,
-                        view,
-                        queue_len = queue_len_after_pop,
-                        "skipping empty proposal; empty blocks are disallowed"
-                    );
-                    return Ok(false);
-                }
+            if allow_recovery_heartbeat {
+                let heartbeat = self.build_recovery_heartbeat_transaction(proposal_height)?;
+                let encoded_len = heartbeat.encoded_len();
+                transactions.push(heartbeat);
+                routing_decisions.push(RoutingDecision::default());
+                tx_sizes.push(encoded_len);
+                info!(
+                    height = proposal_height,
+                    view,
+                    queue_len = queue_len_after_pop,
+                    internal_work = work.has_work(),
+                    "injecting recovery heartbeat transaction for empty leader queue"
+                );
+                work.has_work().then_some(work)
+            } else if !work.has_work() {
+                info!(
+                    height,
+                    view,
+                    queue_len = queue_len_after_pop,
+                    "skipping empty proposal; empty blocks are disallowed"
+                );
+                return Ok(false);
             } else {
                 Some(work)
             }
@@ -2679,9 +2693,13 @@ impl Actor {
             };
 
             let elapsed = now.elapsed();
-            let stale_window = self
+            let base_stale_window = self
                 .quorum_timeout(da_enabled)
                 .max(Duration::from_millis(1));
+            let stale_window = Self::proposal_assembly_stale_window(
+                base_stale_window,
+                transactions_for_plan.len(),
+            );
             if elapsed >= stale_window {
                 self.subsystems
                     .propose
@@ -2695,6 +2713,7 @@ impl Actor {
                     height = proposal_height,
                     view,
                     elapsed_ms = elapsed.as_millis(),
+                    base_stale_window_ms = base_stale_window.as_millis(),
                     stale_window_ms = stale_window.as_millis(),
                     tx_count = transactions_for_plan.len(),
                     block_hash = %block_hash,

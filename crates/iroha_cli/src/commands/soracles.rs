@@ -12,12 +12,20 @@ use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::{
     events::data::oracle::FeedEventRecord,
-    oracle::{FeedConfigVersion, FeedEventOutcome, FeedId, FeedSlot, OracleRejectionCode},
-    prelude::Hash,
+    isi::{InstructionBox, oracle as oracle_isi},
+    nexus::UniversalAccountId,
+    oracle::{
+        FeedConfig, FeedConfigVersion, FeedEventOutcome, FeedId, FeedSlot, KeyedHash,
+        Observation, OracleChangeClass, OracleChangeId, OracleChangeStage, OracleDisputeId,
+        OracleDisputeOutcome, OracleProviderKey, OracleRejectionCode, TwitterBindingAttestation,
+    },
+    prelude::{Hash, QueryBuilderExt},
+    query::oracle::prelude as oracle_query,
 };
+use iroha_primitives::numeric::Numeric;
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
-    json::{self, Value},
+    json::{self, JsonDeserializeOwned, Value},
 };
 
 use crate::cli_output::print_with_optional_text;
@@ -25,6 +33,12 @@ use crate::{Run, RunContext};
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Build and submit oracle transactions.
+    #[command(subcommand)]
+    Tx(TxCommand),
+    /// Run oracle queries.
+    #[command(subcommand)]
+    Query(QueryCommand),
     /// Build an audit bundle containing oracle feed events and evidence files.
     Bundle(Bundle),
     /// Show the oracle rejection/error catalog for SDK parity.
@@ -95,6 +109,266 @@ pub struct GcArgs {
 pub enum CatalogFormat {
     Json,
     Markdown,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TxCommand {
+    /// Register an oracle feed from a Norito JSON feed config file.
+    Register(RegisterTx),
+    /// Submit a provider-signed observation from a Norito JSON file.
+    Submit(SubmitTx),
+    /// Aggregate a feed window.
+    Aggregate(AggregateTx),
+    /// Open an oracle dispute anchored to retained feed history.
+    #[command(name = "open-dispute")]
+    OpenDispute(OpenDisputeTx),
+    /// Resolve an oracle dispute.
+    #[command(name = "resolve-dispute")]
+    ResolveDispute(ResolveDisputeTx),
+    /// Propose an oracle feed change.
+    #[command(name = "propose-change")]
+    ProposeChange(ProposeChangeTx),
+    /// Vote in the active stage of an oracle feed change.
+    #[command(name = "vote-change-stage")]
+    VoteChangeStage(VoteChangeStageTx),
+    /// Roll back the active stage of an oracle feed change.
+    #[command(name = "rollback-change")]
+    RollbackChange(RollbackChangeTx),
+    /// Record a Twitter binding attestation.
+    #[command(name = "record-twitter-binding")]
+    RecordTwitterBinding(RecordTwitterBindingTx),
+    /// Revoke a Twitter binding.
+    #[command(name = "revoke-twitter-binding")]
+    RevokeTwitterBinding(RevokeTwitterBindingTx),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum QueryCommand {
+    /// List all registered oracle feeds.
+    Feeds,
+    /// Fetch one oracle feed.
+    Feed(FeedQuery),
+    /// List retained feed history.
+    History(FeedQuery),
+    /// List provider stats for a feed or fetch one provider stats record.
+    #[command(name = "provider-stats")]
+    ProviderStats(ProviderStatsQuery),
+    /// List oracle disputes, optionally filtered by feed id.
+    Disputes(DisputesQuery),
+    /// Fetch one oracle dispute.
+    Dispute(DisputeQuery),
+    /// List oracle changes.
+    Changes,
+    /// Fetch one oracle change.
+    Change(ChangeQuery),
+    /// List Twitter bindings by UAID from a Norito JSON UAID file.
+    #[command(name = "twitter-bindings")]
+    TwitterBindings(TwitterBindingsQuery),
+}
+
+#[derive(Args, Debug)]
+pub struct RegisterTx {
+    /// Norito JSON file containing `FeedConfig`.
+    #[arg(long, value_name = "PATH")]
+    feed_json: PathBuf,
+}
+
+#[derive(Args, Debug)]
+pub struct SubmitTx {
+    /// Norito JSON file containing `Observation`.
+    #[arg(long, value_name = "PATH")]
+    observation_json: PathBuf,
+}
+
+#[derive(Args, Debug)]
+pub struct AggregateTx {
+    /// Feed identifier.
+    #[arg(long)]
+    feed_id: FeedId,
+    /// Slot to aggregate.
+    #[arg(long)]
+    slot: FeedSlot,
+    /// Request hash for the window.
+    #[arg(long)]
+    request_hash: Hash,
+    /// Evidence hashes to anchor on the resulting feed event.
+    #[arg(long = "evidence-hash")]
+    evidence_hashes: Vec<Hash>,
+}
+
+#[derive(Args, Debug)]
+pub struct OpenDisputeTx {
+    /// Feed identifier.
+    #[arg(long)]
+    feed_id: FeedId,
+    /// Disputed slot.
+    #[arg(long)]
+    slot: FeedSlot,
+    /// Request hash for the disputed window.
+    #[arg(long)]
+    request_hash: Hash,
+    /// Provider being challenged.
+    #[arg(long)]
+    target: String,
+    /// Optional bond amount; defaults to oracle economics config.
+    #[arg(long)]
+    bond: Option<Numeric>,
+    /// Evidence hashes backing the dispute.
+    #[arg(long = "evidence-hash")]
+    evidence_hashes: Vec<Hash>,
+    /// Human-readable reason for the dispute.
+    #[arg(long, default_value = "")]
+    reason: String,
+}
+
+#[derive(Args, Debug)]
+pub struct ResolveDisputeTx {
+    /// Dispute identifier.
+    #[arg(long)]
+    dispute_id: u64,
+    /// Resolution outcome.
+    #[arg(long, value_enum)]
+    outcome: DisputeOutcomeArg,
+    /// Optional notes retained by clients/auditors.
+    #[arg(long, default_value = "")]
+    notes: String,
+}
+
+#[derive(Args, Debug)]
+pub struct ProposeChangeTx {
+    /// Change id hash.
+    #[arg(long)]
+    change_id: Hash,
+    /// Norito JSON file containing proposed `FeedConfig`.
+    #[arg(long, value_name = "PATH")]
+    feed_json: PathBuf,
+    /// Governance class for the proposal.
+    #[arg(long, value_enum)]
+    class: ChangeClassArg,
+    /// Hash of the off-chain change manifest.
+    #[arg(long)]
+    payload_hash: Hash,
+    /// Evidence hashes attached to intake.
+    #[arg(long = "evidence-hash")]
+    evidence_hashes: Vec<Hash>,
+}
+
+#[derive(Args, Debug)]
+pub struct VoteChangeStageTx {
+    /// Change id hash.
+    #[arg(long)]
+    change_id: Hash,
+    /// Stage being voted. Must be the active stage.
+    #[arg(long, value_enum)]
+    stage: ChangeStageArg,
+    /// Approve the stage; pass `false` to reject.
+    #[arg(long, default_value_t = true)]
+    approve: bool,
+    /// Evidence hashes attached to this stage vote.
+    #[arg(long = "evidence-hash")]
+    evidence_hashes: Vec<Hash>,
+}
+
+#[derive(Args, Debug)]
+pub struct RollbackChangeTx {
+    /// Change id hash.
+    #[arg(long)]
+    change_id: Hash,
+    /// Optional stage to roll back. If omitted, rolls back the active stage.
+    #[arg(long, value_enum)]
+    stage: Option<ChangeStageArg>,
+    /// Human-readable rollback reason.
+    #[arg(long)]
+    reason: String,
+}
+
+#[derive(Args, Debug)]
+pub struct RecordTwitterBindingTx {
+    /// Norito JSON file containing `TwitterBindingAttestation`.
+    #[arg(long, value_name = "PATH")]
+    attestation_json: PathBuf,
+    /// Feed identifier for the binding feed.
+    #[arg(long)]
+    feed_id: FeedId,
+}
+
+#[derive(Args, Debug)]
+pub struct RevokeTwitterBindingTx {
+    /// Norito JSON file containing the keyed binding hash.
+    #[arg(long, value_name = "PATH")]
+    binding_hash_json: PathBuf,
+    /// Human-readable revocation reason.
+    #[arg(long, default_value = "")]
+    reason: String,
+}
+
+#[derive(Args, Debug)]
+pub struct FeedQuery {
+    /// Feed identifier.
+    #[arg(long)]
+    feed_id: FeedId,
+}
+
+#[derive(Args, Debug)]
+pub struct ProviderStatsQuery {
+    /// Feed identifier.
+    #[arg(long)]
+    feed_id: FeedId,
+    /// Optional provider account id for a singular lookup.
+    #[arg(long)]
+    provider: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct DisputesQuery {
+    /// Optional feed identifier filter.
+    #[arg(long)]
+    feed_id: Option<FeedId>,
+}
+
+#[derive(Args, Debug)]
+pub struct DisputeQuery {
+    /// Dispute identifier.
+    #[arg(long)]
+    dispute_id: u64,
+}
+
+#[derive(Args, Debug)]
+pub struct ChangeQuery {
+    /// Change id hash.
+    #[arg(long)]
+    change_id: Hash,
+}
+
+#[derive(Args, Debug)]
+pub struct TwitterBindingsQuery {
+    /// Norito JSON file containing `UniversalAccountId`.
+    #[arg(long, value_name = "PATH")]
+    uaid_json: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum DisputeOutcomeArg {
+    Upheld,
+    Reduced,
+    Frivolous,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum ChangeClassArg {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum ChangeStageArg {
+    Intake,
+    RulesCommittee,
+    CopReview,
+    TechnicalAudit,
+    PolicyJury,
+    Enactment,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -228,9 +502,206 @@ impl CatalogEntry {
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
+            Command::Tx(cmd) => cmd.run(context),
+            Command::Query(cmd) => cmd.run(context),
             Command::Bundle(cmd) => cmd.run(context),
             Command::Catalog(cmd) => cmd.run(context),
             Command::Gc(cmd) => cmd.run(context),
+        }
+    }
+}
+
+impl From<DisputeOutcomeArg> for OracleDisputeOutcome {
+    fn from(value: DisputeOutcomeArg) -> Self {
+        match value {
+            DisputeOutcomeArg::Upheld => Self::Upheld,
+            DisputeOutcomeArg::Reduced => Self::Reduced,
+            DisputeOutcomeArg::Frivolous => Self::Frivolous,
+        }
+    }
+}
+
+impl From<ChangeClassArg> for OracleChangeClass {
+    fn from(value: ChangeClassArg) -> Self {
+        match value {
+            ChangeClassArg::Low => Self::Low,
+            ChangeClassArg::Medium => Self::Medium,
+            ChangeClassArg::High => Self::High,
+        }
+    }
+}
+
+impl From<ChangeStageArg> for OracleChangeStage {
+    fn from(value: ChangeStageArg) -> Self {
+        match value {
+            ChangeStageArg::Intake => Self::Intake,
+            ChangeStageArg::RulesCommittee => Self::RulesCommittee,
+            ChangeStageArg::CopReview => Self::CopReview,
+            ChangeStageArg::TechnicalAudit => Self::TechnicalAudit,
+            ChangeStageArg::PolicyJury => Self::PolicyJury,
+            ChangeStageArg::Enactment => Self::Enactment,
+        }
+    }
+}
+
+impl Run for TxCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let instruction = match self {
+            Self::Register(args) => {
+                let feed: FeedConfig = load_json_file(&args.feed_json)?;
+                InstructionBox::from(oracle_isi::RegisterOracleFeed { feed })
+            }
+            Self::Submit(args) => {
+                let observation: Observation = load_json_file(&args.observation_json)?;
+                InstructionBox::from(oracle_isi::SubmitOracleObservation { observation })
+            }
+            Self::Aggregate(args) => InstructionBox::from(oracle_isi::AggregateOracleFeed {
+                feed_id: args.feed_id,
+                slot: args.slot,
+                request_hash: args.request_hash,
+                evidence_hashes: args.evidence_hashes,
+            }),
+            Self::OpenDispute(args) => {
+                let target = crate::resolve_account_id(context, &args.target)?;
+                InstructionBox::from(oracle_isi::OpenOracleDispute {
+                    feed_id: args.feed_id,
+                    slot: args.slot,
+                    request_hash: args.request_hash,
+                    target,
+                    bond: args.bond,
+                    evidence_hashes: args.evidence_hashes,
+                    reason: args.reason,
+                })
+            }
+            Self::ResolveDispute(args) => InstructionBox::from(oracle_isi::ResolveOracleDispute {
+                dispute_id: OracleDisputeId(args.dispute_id),
+                outcome: args.outcome.into(),
+                notes: args.notes,
+            }),
+            Self::ProposeChange(args) => {
+                let feed: FeedConfig = load_json_file(&args.feed_json)?;
+                InstructionBox::from(oracle_isi::ProposeOracleChange {
+                    change_id: OracleChangeId(args.change_id),
+                    feed,
+                    class: args.class.into(),
+                    payload_hash: args.payload_hash,
+                    evidence_hashes: args.evidence_hashes,
+                })
+            }
+            Self::VoteChangeStage(args) => {
+                InstructionBox::from(oracle_isi::VoteOracleChangeStage {
+                    change_id: OracleChangeId(args.change_id),
+                    stage: args.stage.into(),
+                    approve: args.approve,
+                    evidence_hashes: args.evidence_hashes,
+                })
+            }
+            Self::RollbackChange(args) => InstructionBox::from(oracle_isi::RollbackOracleChange {
+                change_id: OracleChangeId(args.change_id),
+                stage: args.stage.map(Into::into),
+                reason: args.reason,
+            }),
+            Self::RecordTwitterBinding(args) => {
+                let attestation: TwitterBindingAttestation =
+                    load_json_file(&args.attestation_json)?;
+                InstructionBox::from(oracle_isi::RecordTwitterBinding {
+                    attestation,
+                    feed_id: args.feed_id,
+                })
+            }
+            Self::RevokeTwitterBinding(args) => {
+                let binding_hash: KeyedHash = load_json_file(&args.binding_hash_json)?;
+                InstructionBox::from(oracle_isi::RevokeTwitterBinding {
+                    binding_hash,
+                    reason: args.reason,
+                })
+            }
+        };
+
+        context.finish(vec![instruction])
+    }
+}
+
+impl Run for QueryCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let client = context.client_from_config();
+        match self {
+            Self::Feeds => {
+                let feeds = client
+                    .query(oracle_query::FindOracleFeeds)
+                    .execute_all()?;
+                context.print_data(&feeds)
+            }
+            Self::Feed(args) => {
+                let feed =
+                    client.query_single(oracle_query::FindOracleFeedById::new(args.feed_id))?;
+                context.print_data(&feed)
+            }
+            Self::History(args) => {
+                let history = client
+                    .query(oracle_query::FindOracleHistoryByFeedId::new(
+                        args.feed_id,
+                    ))
+                    .execute_all()?;
+                context.print_data(&history)
+            }
+            Self::ProviderStats(args) => {
+                if let Some(provider) = args.provider {
+                    let provider = crate::resolve_account_id(context, &provider)?;
+                    let stats = client.query_single(
+                        oracle_query::FindOracleProviderStatsByKey::new(OracleProviderKey::new(
+                            args.feed_id,
+                            provider,
+                        )),
+                    )?;
+                    context.print_data(&stats)
+                } else {
+                    let stats = client
+                        .query(oracle_query::FindOracleProviderStatsByFeedId::new(
+                            args.feed_id,
+                        ))
+                        .execute_all()?;
+                    context.print_data(&stats)
+                }
+            }
+            Self::Disputes(args) => {
+                if let Some(feed_id) = args.feed_id {
+                    let disputes = client
+                        .query(oracle_query::FindOracleDisputesByFeedId::new(feed_id))
+                        .execute_all()?;
+                    context.print_data(&disputes)
+                } else {
+                    let disputes = client
+                        .query(oracle_query::FindOracleDisputes)
+                        .execute_all()?;
+                    context.print_data(&disputes)
+                }
+            }
+            Self::Dispute(args) => {
+                let dispute = client.query_single(oracle_query::FindOracleDisputeById::new(
+                    OracleDisputeId(args.dispute_id),
+                ))?;
+                context.print_data(&dispute)
+            }
+            Self::Changes => {
+                let changes = client
+                    .query(oracle_query::FindOracleChanges)
+                    .execute_all()?;
+                context.print_data(&changes)
+            }
+            Self::Change(args) => {
+                let change = client.query_single(oracle_query::FindOracleChangeById::new(
+                    OracleChangeId(args.change_id),
+                ))?;
+                context.print_data(&change)
+            }
+            Self::TwitterBindings(args) => {
+                let uaid: UniversalAccountId = load_json_file(&args.uaid_json)?;
+                let bindings = client
+                    .query(oracle_query::FindTwitterBindingsByUaid::new(uaid))
+                    .execute_all()?;
+                context.print_data(&bindings)
+            }
         }
     }
 }
@@ -529,6 +1000,14 @@ fn load_feed_events(path: &Path) -> Result<Vec<FeedEventRecord>> {
             Ok(vec![record])
         }
     }
+}
+
+fn load_json_file<T>(path: &Path) -> Result<T>
+where
+    T: JsonDeserializeOwned,
+{
+    let bytes = fs::read(path).wrap_err_with(|| format!("failed to read {}", path.display()))?;
+    json::from_slice(&bytes).wrap_err_with(|| format!("failed to parse {}", path.display()))
 }
 
 fn ingest_path(
@@ -848,9 +1327,11 @@ mod tests {
     use iroha::data_model::account::AccountId;
     use iroha::data_model::oracle::{
         FeedEvent, FeedSuccess, ObservationBody, ObservationValue, ReportEntry,
+        TwitterBindingStatus,
     };
     use iroha_crypto::HashOf;
     use iroha_i18n::{Bundle as I18nBundle, Language, Localizer};
+    use clap::Parser;
     use std::fmt::Display;
     use tempfile::TempDir;
 
@@ -859,6 +1340,7 @@ mod tests {
         printed: Vec<String>,
         config: iroha::config::Config,
         i18n: Localizer,
+        output_instructions: bool,
     }
 
     impl TestContext {
@@ -868,7 +1350,13 @@ mod tests {
                 printed: Vec::new(),
                 config: crate::fallback_config(),
                 i18n: Localizer::new(I18nBundle::Cli, Language::English),
+                output_instructions: false,
             }
+        }
+
+        fn with_output_instructions(mut self) -> Self {
+            self.output_instructions = true;
+            self
         }
     }
 
@@ -886,7 +1374,7 @@ mod tests {
         }
 
         fn output_instructions(&self) -> bool {
-            false
+            self.output_instructions
         }
 
         fn i18n(&self) -> &Localizer {
@@ -919,6 +1407,267 @@ mod tests {
         AccountId::new(signatory)
     }
 
+    fn write_json_file<T>(dir: &TempDir, name: &str, value: &T) -> PathBuf
+    where
+        T: norito::json::JsonSerialize + ?Sized,
+    {
+        let path = dir.path().join(name);
+        let rendered = json::to_json_pretty(value).expect("render json fixture");
+        std::fs::write(&path, rendered).expect("write json fixture");
+        path
+    }
+
+    fn sample_twitter_attestation() -> TwitterBindingAttestation {
+        TwitterBindingAttestation {
+            binding_hash: KeyedHash::new(
+                "pepper-social-v1",
+                b"test-pepper",
+                b"twitter-user-123",
+            ),
+            uaid: UniversalAccountId::from_hash(Hash::new(b"cli-uaid")),
+            status: TwitterBindingStatus::Following,
+            tweet_id: Some("tweet-123".to_string()),
+            challenge_hash: Some(Hash::new(b"twitter-challenge")),
+            expires_at_ms: 1_700_600_000_000,
+            observed_at_ms: 1_700_000_000_000,
+            request_hash: Hash::new(b"twitter-request"),
+            slot: 42,
+            feed_config_version: FeedConfigVersion(1),
+        }
+    }
+
+    #[derive(Parser, Debug)]
+    struct SoraclesHarness {
+        #[command(subcommand)]
+        command: Command,
+    }
+
+    #[test]
+    fn parses_tx_and_query_subcommands() {
+        let request_hash = Hash::new(b"cli-request").to_string();
+        let parsed = SoraclesHarness::try_parse_from([
+            "soracles",
+            "tx",
+            "aggregate",
+            "--feed-id",
+            "xor_usd",
+            "--slot",
+            "42",
+            "--request-hash",
+            request_hash.as_str(),
+        ])
+        .expect("parse aggregate tx");
+        match parsed.command {
+            Command::Tx(TxCommand::Aggregate(args)) => {
+                assert_eq!(args.slot, 42);
+                assert_eq!(args.feed_id.as_str(), "xor_usd");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let provider = test_oracle_account_id().to_string();
+        let parsed = SoraclesHarness::try_parse_from([
+            "soracles",
+            "query",
+            "provider-stats",
+            "--feed-id",
+            "xor_usd",
+            "--provider",
+            provider.as_str(),
+        ])
+        .expect("parse provider stats query");
+        match parsed.command {
+            Command::Query(QueryCommand::ProviderStats(args)) => {
+                assert_eq!(args.feed_id.as_str(), "xor_usd");
+                assert_eq!(args.provider.as_deref(), Some(provider.as_str()));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_all_query_subcommands_without_live_node() {
+        let provider = test_oracle_account_id().to_string();
+        let change_id = Hash::new(b"query-change").to_string();
+        let uaid_path = "/tmp/uaid.json";
+
+        let parse_query = |argv: Vec<&str>| {
+            let parsed = SoraclesHarness::try_parse_from(argv).expect("parse query command");
+            match parsed.command {
+                Command::Query(cmd) => cmd,
+                other => panic!("unexpected top-level command: {other:?}"),
+            }
+        };
+
+        assert!(matches!(
+            parse_query(vec!["soracles", "query", "feeds"]),
+            QueryCommand::Feeds
+        ));
+        match parse_query(vec!["soracles", "query", "feed", "--feed-id", "xor_usd"]) {
+            QueryCommand::Feed(args) => assert_eq!(args.feed_id.as_str(), "xor_usd"),
+            other => panic!("unexpected command: {other:?}"),
+        }
+        match parse_query(vec!["soracles", "query", "history", "--feed-id", "xor_usd"]) {
+            QueryCommand::History(args) => assert_eq!(args.feed_id.as_str(), "xor_usd"),
+            other => panic!("unexpected command: {other:?}"),
+        }
+        match parse_query(vec!["soracles", "query", "provider-stats", "--feed-id", "xor_usd"]) {
+            QueryCommand::ProviderStats(args) => {
+                assert_eq!(args.feed_id.as_str(), "xor_usd");
+                assert!(args.provider.is_none());
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+        match parse_query(vec![
+            "soracles",
+            "query",
+            "provider-stats",
+            "--feed-id",
+            "xor_usd",
+            "--provider",
+            provider.as_str(),
+        ]) {
+            QueryCommand::ProviderStats(args) => {
+                assert_eq!(args.feed_id.as_str(), "xor_usd");
+                assert_eq!(args.provider.as_deref(), Some(provider.as_str()));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+        match parse_query(vec!["soracles", "query", "disputes"]) {
+            QueryCommand::Disputes(args) => assert!(args.feed_id.is_none()),
+            other => panic!("unexpected command: {other:?}"),
+        }
+        match parse_query(vec!["soracles", "query", "disputes", "--feed-id", "xor_usd"]) {
+            QueryCommand::Disputes(args) => {
+                assert_eq!(args.feed_id.expect("feed filter").as_str(), "xor_usd");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+        match parse_query(vec!["soracles", "query", "dispute", "--dispute-id", "7"]) {
+            QueryCommand::Dispute(args) => assert_eq!(args.dispute_id, 7),
+            other => panic!("unexpected command: {other:?}"),
+        }
+        assert!(matches!(
+            parse_query(vec!["soracles", "query", "changes"]),
+            QueryCommand::Changes
+        ));
+        match parse_query(vec![
+            "soracles",
+            "query",
+            "change",
+            "--change-id",
+            change_id.as_str(),
+        ]) {
+            QueryCommand::Change(args) => assert_eq!(args.change_id.to_string(), change_id),
+            other => panic!("unexpected command: {other:?}"),
+        }
+        match parse_query(vec![
+            "soracles",
+            "query",
+            "twitter-bindings",
+            "--uaid-json",
+            uaid_path,
+        ]) {
+            QueryCommand::TwitterBindings(args) => {
+                assert_eq!(args.uaid_json, PathBuf::from(uaid_path));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tx_aggregate_generates_output_instruction_without_live_node() {
+        let mut ctx =
+            TestContext::new(crate::CliOutputFormat::Json).with_output_instructions();
+        TxCommand::Aggregate(AggregateTx {
+            feed_id: "xor_usd".parse().expect("feed id"),
+            slot: 42,
+            request_hash: Hash::new(b"cli-output-request"),
+            evidence_hashes: vec![Hash::new(b"cli-evidence")],
+        })
+        .run(&mut ctx)
+        .expect("generate aggregate instruction");
+    }
+
+    #[test]
+    fn tx_commands_generate_output_instructions_without_live_node() {
+        let tmp = TempDir::new().expect("tmpdir");
+        let kit = iroha::data_model::oracle::kits::price_xor_usd();
+        let feed_path = write_json_file(&tmp, "feed.json", &kit.feed_config);
+        let observation_path =
+            write_json_file(&tmp, "observation.json", &kit.observations[0]);
+        let attestation = sample_twitter_attestation();
+        let attestation_path = write_json_file(&tmp, "attestation.json", &attestation);
+        let binding_hash_path =
+            write_json_file(&tmp, "binding_hash.json", &attestation.binding_hash);
+        let feed_id: FeedId = "xor_usd".parse().expect("feed id");
+        let target = test_oracle_account_id().to_string();
+        let change_id = Hash::new(b"cli-change");
+
+        let commands = vec![
+            TxCommand::Register(RegisterTx {
+                feed_json: feed_path.clone(),
+            }),
+            TxCommand::Submit(SubmitTx {
+                observation_json: observation_path,
+            }),
+            TxCommand::Aggregate(AggregateTx {
+                feed_id: feed_id.clone(),
+                slot: 42,
+                request_hash: Hash::new(b"aggregate-request"),
+                evidence_hashes: vec![Hash::new(b"aggregate-evidence")],
+            }),
+            TxCommand::OpenDispute(OpenDisputeTx {
+                feed_id: feed_id.clone(),
+                slot: 42,
+                request_hash: Hash::new(b"dispute-request"),
+                target,
+                bond: Some(Numeric::from(1_u32)),
+                evidence_hashes: vec![Hash::new(b"dispute-evidence")],
+                reason: "bad observation".to_string(),
+            }),
+            TxCommand::ResolveDispute(ResolveDisputeTx {
+                dispute_id: 7,
+                outcome: DisputeOutcomeArg::Upheld,
+                notes: "resolved".to_string(),
+            }),
+            TxCommand::ProposeChange(ProposeChangeTx {
+                change_id,
+                feed_json: feed_path,
+                class: ChangeClassArg::Low,
+                payload_hash: Hash::new(b"change-payload"),
+                evidence_hashes: vec![Hash::new(b"change-evidence")],
+            }),
+            TxCommand::VoteChangeStage(VoteChangeStageTx {
+                change_id,
+                stage: ChangeStageArg::Intake,
+                approve: true,
+                evidence_hashes: vec![Hash::new(b"vote-evidence")],
+            }),
+            TxCommand::RollbackChange(RollbackChangeTx {
+                change_id,
+                stage: Some(ChangeStageArg::Intake),
+                reason: "rollback".to_string(),
+            }),
+            TxCommand::RecordTwitterBinding(RecordTwitterBindingTx {
+                attestation_json: attestation_path,
+                feed_id,
+            }),
+            TxCommand::RevokeTwitterBinding(RevokeTwitterBindingTx {
+                binding_hash_json: binding_hash_path,
+                reason: "stale".to_string(),
+            }),
+        ];
+
+        for command in commands {
+            let mut ctx =
+                TestContext::new(crate::CliOutputFormat::Json).with_output_instructions();
+            command
+                .run(&mut ctx)
+                .expect("generate output instruction without live node");
+        }
+    }
+
     #[test]
     fn builds_bundle_and_marks_missing_hashes() {
         let tmp = TempDir::new().expect("tmpdir");
@@ -936,6 +1685,7 @@ mod tests {
                 feed_id: feed_id.clone(),
                 feed_config_version: FeedConfigVersion(1),
                 slot: 42,
+                request_hash: Hash::new(b"request"),
                 outcome: FeedEventOutcome::Success(FeedSuccess {
                     value: ObservationValue::new(1_000, 2),
                     entries: vec![ReportEntry {
@@ -1069,6 +1819,7 @@ mod tests {
                 feed_id,
                 feed_config_version: FeedConfigVersion(1),
                 slot: 42,
+                request_hash: Hash::new(b"request"),
                 outcome: FeedEventOutcome::Success(FeedSuccess {
                     value: ObservationValue::new(1_000, 2),
                     entries: vec![ReportEntry {

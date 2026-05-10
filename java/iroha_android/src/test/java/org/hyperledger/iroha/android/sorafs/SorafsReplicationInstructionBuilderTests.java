@@ -5,7 +5,6 @@ import java.util.Base64;
 import java.util.Map;
 import org.hyperledger.iroha.android.model.instructions.CompleteReplicationOrderInstruction;
 import org.hyperledger.iroha.android.model.instructions.IssueReplicationOrderInstruction;
-import org.hyperledger.iroha.android.model.instructions.RecordReplicationReceiptInstruction;
 
 /** Ensures the replication order builders emit the expected argument schema. */
 public final class SorafsReplicationInstructionBuilderTests {
@@ -14,8 +13,6 @@ public final class SorafsReplicationInstructionBuilderTests {
 
   private static final String ORDER_ID =
       "44b3b7c174c8e9c044b3b7c174c8e9c044b3b7c174c8e9c044b3b7c174c8e9c0";
-  private static final String PROVIDER_ID =
-      "51fdb0bf4c6a79ce51fdb0bf4c6a79ce51fdb0bf4c6a79ce51fdb0bf4c6a79ce";
 
   public static void main(final String[] args) {
     testIssueReplicationOrder();
@@ -23,10 +20,8 @@ public final class SorafsReplicationInstructionBuilderTests {
     testIssueReplicationOrderRejectsNegativeEpoch();
     testCompleteReplicationOrder();
     testCompleteReplicationOrderRejectsNegativeEpoch();
-    testRecordReplicationReceipt();
-    testRecordReplicationReceiptRejectsNegativeTimestamp();
     System.out.println(
-        "[IrohaAndroid] SorafsReplicationInstructionBuilderTests passed (issue/complete/receipt).");
+        "[IrohaAndroid] SorafsReplicationInstructionBuilderTests passed (issue/complete).");
   }
 
   private static void testIssueReplicationOrder() {
@@ -114,36 +109,4 @@ public final class SorafsReplicationInstructionBuilderTests {
     assert threw : "Expected negative completion epoch to throw";
   }
 
-  private static void testRecordReplicationReceipt() {
-    final RecordReplicationReceiptInstruction instruction =
-        RecordReplicationReceiptInstruction.builder()
-            .setOrderIdHex(ORDER_ID)
-            .setProviderIdHex(PROVIDER_ID)
-            .setStatus(RecordReplicationReceiptInstruction.Status.ACCEPTED)
-            .setTimestamp(1_717_171_111L)
-            .setPorSampleDigestHex("aabbccdd")
-            .build();
-    final Map<String, String> args = instruction.toArguments();
-    assert "RecordReplicationReceipt".equals(args.get("action")) : "action mismatch";
-    assert PROVIDER_ID.equals(args.get("provider_id_hex")) : "provider id mismatch";
-    assert "Accepted".equals(args.get("status")) : "status mismatch";
-    assert "aabbccdd".equals(args.get("por_sample_digest_hex")) : "por digest mismatch";
-    assert instruction.timestamp() == 1_717_171_111L : "timestamp mismatch";
-    assert instruction.status() == RecordReplicationReceiptInstruction.Status.ACCEPTED
-        : "status mismatch";
-  }
-
-  private static void testRecordReplicationReceiptRejectsNegativeTimestamp() {
-    boolean threw = false;
-    try {
-      RecordReplicationReceiptInstruction.builder()
-          .setOrderIdHex(ORDER_ID)
-          .setProviderIdHex(PROVIDER_ID)
-          .setStatus(RecordReplicationReceiptInstruction.Status.ACCEPTED)
-          .setTimestamp(-1);
-    } catch (final IllegalArgumentException ex) {
-      threw = true;
-    }
-    assert threw : "Expected negative timestamp to throw";
-  }
 }

@@ -2811,6 +2811,7 @@ impl Actor {
                                 expected_header.result_merkle_root = None;
                                 if payload.header == expected_header {
                                     payload.header = block_header;
+                                    payload.hydrate_legacy_transaction_cache_from_entrypoints();
                                     let block = SignedBlock::presigned_with_payload(
                                         leader_signature,
                                         payload,

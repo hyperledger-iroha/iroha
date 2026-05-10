@@ -78,6 +78,25 @@ pub(super) enum ValidationInflightInlineReason {
     },
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(super) enum VNextValidationRedriveReason {
+    OrphanedQueued,
+    OrphanedRunning,
+    StalledRunning,
+    Backpressured,
+}
+
+impl VNextValidationRedriveReason {
+    fn label(self) -> &'static str {
+        match self {
+            Self::OrphanedQueued => "orphaned_queued",
+            Self::OrphanedRunning => "orphaned_running",
+            Self::StalledRunning => "stalled_running",
+            Self::Backpressured => "backpressured",
+        }
+    }
+}
+
 pub(super) fn spawn_validation_workers(
     state: Arc<State>,
     chain_id: ChainId,
@@ -255,7 +274,7 @@ impl Actor {
         hash: HashOf<BlockHeader>,
         height: u64,
         view: u64,
-        commit_topology: &[PeerId],
+        _commit_topology: &[PeerId],
         source: &'static str,
     ) {
         if !self.block_known_for_lock(hash) {
@@ -297,8 +316,14 @@ impl Actor {
             })
             .is_some();
         if commit_ready {
-            let _ = self.rehydrate_pending_from_kura_for_qc(&qc);
-            self.apply_commit_qc(&qc, commit_topology, hash, height, view);
+            if let Some(pending) = self.pending.pending_blocks.get_mut(&hash) {
+                pending.note_commit_qc_observed(qc.epoch);
+            }
+            self.request_commit_pipeline_for_pending(
+                hash,
+                super::status::RoundEventCauseTrace::QcReceived,
+                None,
+            );
             debug!(
                 height,
                 view,
@@ -382,18 +407,92 @@ impl Actor {
             .map(|inflight| Instant::now().saturating_duration_since(inflight.started_at))
     }
 
+    #[cfg(test)]
     pub(super) fn validation_worker_stall_timeout(&self) -> Duration {
-        const STALL_TIMEOUT_CAP: Duration = Duration::from_secs(15);
+        self.validation_worker_stall_timeout_with_floor(Duration::ZERO)
+    }
 
-        let inline_floor =
-            super::saturating_mul_duration(self.commit_validation_inline_fallback_timeout(), 6);
+    pub(super) fn validation_worker_stall_timeout_for(
+        &self,
+        hash: HashOf<BlockHeader>,
+    ) -> Duration {
+        let tx_scaled_floor = self
+            .runtime_da_enabled()
+            .then(|| {
+                self.pending
+                    .pending_blocks
+                    .get(&hash)
+                    .map(|pending| pending.block.external_entrypoints_cloned().len())
+            })
+            .flatten()
+            .map(|tx_count| {
+                let tx_count = u64::try_from(tx_count).unwrap_or(u64::MAX);
+                let floor_ms = u64::try_from(
+                    self.config
+                        .worker
+                        .validation_stall_da_per_entrypoint_floor
+                        .as_millis(),
+                )
+                .unwrap_or(u64::MAX);
+                Duration::from_millis(tx_count.saturating_mul(floor_ms))
+            })
+            .unwrap_or(Duration::ZERO);
+
+        self.validation_worker_stall_timeout_with_floor(tx_scaled_floor)
+    }
+
+    pub(super) fn validation_inflight_fresh_timeout_floor(
+        &self,
+        hash: HashOf<BlockHeader>,
+        height: u64,
+        now: Instant,
+    ) -> Option<Duration> {
+        let inflight = self.subsystems.validation.inflight.get(&hash)?;
+        let vnext_owned = self
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&hash);
+        if !vnext_owned
+            && (self.subsystems.validation.result_rx.is_none()
+                || self.subsystems.validation.work_txs.is_empty())
+        {
+            return None;
+        }
+        if let Some(frontier_generation) = inflight.frontier_generation
+            && !self.frontier_owner_generation_matches(height, hash, frontier_generation)
+        {
+            return None;
+        }
+        let stall_timeout = self.validation_worker_stall_timeout_for(hash);
+        (now.saturating_duration_since(inflight.started_at) < stall_timeout)
+            .then_some(stall_timeout)
+    }
+
+    fn validation_worker_stall_timeout_with_floor(&self, extra_floor: Duration) -> Duration {
+        let inline_floor = super::saturating_mul_duration(
+            self.commit_validation_inline_fallback_timeout(),
+            self.config
+                .worker
+                .validation_stall_inline_fallback_multiplier,
+        );
         let ema_floor = self
             .subsystems
             .validation
             .duration_ema
-            .map(|ema| super::saturating_mul_duration(ema, 3))
+            .map(|ema| {
+                super::saturating_mul_duration(
+                    ema,
+                    self.config.worker.validation_stall_ema_multiplier,
+                )
+            })
             .unwrap_or(Duration::ZERO);
-        inline_floor.max(ema_floor).min(STALL_TIMEOUT_CAP)
+        let cap = if self.runtime_da_enabled() {
+            self.config.worker.validation_stall_da_cap
+        } else {
+            self.config.worker.validation_stall_non_da_cap
+        };
+        inline_floor.max(ema_floor).max(extra_floor).min(cap)
     }
 
     pub(super) fn validation_duration_ema(&self) -> Option<Duration> {
@@ -411,9 +510,9 @@ impl Actor {
             .vnext_inflight
             .contains_key(&hash)
             || self
-                .vnext_reactors
+                .vnext_rounds
                 .get(&(height, view))
-                .and_then(|reactor| reactor.slot(hash))
+                .and_then(|round| round.slot(hash))
                 .is_some_and(|slot| {
                     matches!(
                         slot.validation,
@@ -449,11 +548,108 @@ impl Actor {
             });
         }
         let elapsed = Instant::now().saturating_duration_since(inflight.started_at);
-        let stall_timeout = self.validation_worker_stall_timeout();
+        let stall_timeout = self.validation_worker_stall_timeout_for(hash);
         (elapsed >= stall_timeout).then_some(ValidationInflightInlineReason::Stalled {
             elapsed,
             stall_timeout,
         })
+    }
+
+    pub(super) fn vnext_validation_redrive_reason(
+        &self,
+        hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> Option<VNextValidationRedriveReason> {
+        let round_slot = self
+            .vnext_rounds
+            .get(&(height, view))
+            .and_then(|round| round.slot(hash))?;
+
+        match round_slot.slot_state {
+            super::vnext::SlotState::Recovering { .. }
+            | super::vnext::SlotState::Aborted { .. }
+            | super::vnext::SlotState::Committed { .. } => return None,
+            super::vnext::SlotState::Idle
+            | super::vnext::SlotState::Proposed { .. }
+            | super::vnext::SlotState::AwaitingAvailability { .. }
+            | super::vnext::SlotState::AwaitingValidation { .. }
+            | super::vnext::SlotState::Prepared { .. } => {}
+        }
+
+        let has_inflight = self.subsystems.validation.inflight.contains_key(&hash);
+        let has_vnext_inflight = self
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&hash);
+        match round_slot.validation {
+            super::vnext::ValidationState::Queued { queued_at_ms, .. } => {
+                let retry_ms =
+                    u64::try_from(self.commit_validation_inline_fallback_timeout().as_millis())
+                        .unwrap_or(u64::MAX);
+                (Self::vnext_now_ms().saturating_sub(queued_at_ms) >= retry_ms)
+                    .then_some(VNextValidationRedriveReason::OrphanedQueued)
+            }
+            super::vnext::ValidationState::Running { .. } => {
+                if !has_inflight || !has_vnext_inflight {
+                    Some(VNextValidationRedriveReason::OrphanedRunning)
+                } else {
+                    self.validation_inflight_inline_reason(hash, height)
+                        .map(|_| VNextValidationRedriveReason::StalledRunning)
+                }
+            }
+            super::vnext::ValidationState::Backpressured { since_ms } => {
+                let retry_ms =
+                    u64::try_from(self.commit_validation_inline_fallback_timeout().as_millis())
+                        .unwrap_or(u64::MAX);
+                (Self::vnext_now_ms().saturating_sub(since_ms) >= retry_ms)
+                    .then_some(VNextValidationRedriveReason::Backpressured)
+            }
+            super::vnext::ValidationState::Unqueued
+            | super::vnext::ValidationState::Valid { .. }
+            | super::vnext::ValidationState::Invalid { .. } => None,
+        }
+    }
+
+    pub(super) fn redrive_stale_vnext_validation_for_pending(
+        &mut self,
+        hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        payload_hash: Hash,
+        trigger: &'static str,
+    ) -> bool {
+        let Some(reason) = self.vnext_validation_redrive_reason(hash, height, view) else {
+            return false;
+        };
+
+        let Some(slot) = self
+            .vnext_rounds
+            .get(&(height, view))
+            .and_then(|round| round.slot(hash))
+            .map(|slot| slot.slot)
+        else {
+            return false;
+        };
+
+        if self.subsystems.validation.inflight.contains_key(&hash) {
+            let _ = self.supersede_validation_inflight(hash);
+        } else {
+            self.subsystems.validation.vnext_inflight.remove(&hash);
+        }
+
+        let _ = self.mark_vnext_validation_deferred(slot);
+
+        warn!(
+            height,
+            view,
+            block = %hash,
+            reason = reason.label(),
+            trigger,
+            "redriving stale vNext-owned pending validation"
+        );
+        self.drive_vnext_validation_for_pending(hash, height, view, payload_hash)
     }
 
     /// Validate a pending block (stateless + stateful) before sending any votes.
@@ -489,14 +685,24 @@ impl Actor {
         commit_topology: &[PeerId],
         dispatch: ValidationDispatch,
     ) -> ValidationGateOutcome {
-        if self
+        if let Some((height, view, payload_hash)) = self
             .pending
             .pending_blocks
             .get(&hash)
-            .is_some_and(|pending| {
-                self.vnext_validation_owns_block(hash, pending.height, pending.view)
-            })
+            .map(|pending| (pending.height, pending.view, pending.payload_hash))
+            && self.vnext_validation_owns_block(hash, height, view)
         {
+            if dispatch.try_worker()
+                && self.redrive_stale_vnext_validation_for_pending(
+                    hash,
+                    height,
+                    view,
+                    payload_hash,
+                    "validation_gate",
+                )
+            {
+                return ValidationGateOutcome::Deferred;
+            }
             debug!(
                 block = %hash,
                 "deferring legacy validation while vNext owns validation"
@@ -1177,15 +1383,7 @@ impl Actor {
                                 }
                                 ValidationGateOutcome::Deferred => {
                                     if let Some((slot, _result)) = vnext_result.take() {
-                                        let effects = self.handle_vnext_worker_event(
-                                            slot,
-                                            super::vnext::ReactorEvent::ValidationDeferred {
-                                                slot,
-                                                reason_label: validation_reject_reason_label(&err)
-                                                    .to_owned(),
-                                            },
-                                        );
-                                        self.apply_vnext_effects(effects);
+                                        let _ = self.mark_vnext_validation_deferred(slot);
                                     }
                                     self.request_commit_pipeline();
                                 }
@@ -1260,9 +1458,9 @@ impl Actor {
         self.pending.pending_blocks.insert(slot.block_hash, pending);
 
         let commit_topology = self
-            .vnext_reactors
+            .vnext_rounds
             .get(&(slot.height, slot.view))
-            .map(|reactor| reactor.chain_order.ordered_validators.clone())
+            .map(|round| round.chain_order.ordered_validators.clone())
             .unwrap_or_else(|| self.effective_commit_topology());
         self.replay_cached_precommit_qc_for_valid_block(
             slot.block_hash,

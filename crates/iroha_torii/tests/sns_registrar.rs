@@ -2,10 +2,7 @@
 #![cfg(feature = "app_api")]
 //! Integration tests exercising the SNS registrar API surface.
 
-use std::{
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::sync::Arc;
 
 use axum::{
     Router,
@@ -26,13 +23,14 @@ use iroha_data_model::{
     peer::PeerId,
     sns::{
         DOMAIN_NAME_SUFFIX_ID, FreezeNameRequestV1, GovernanceHookV1, NameControllerV1,
-        NameRecordV1, NameSelectorV1, NameStatus, PaymentProofV1, RegisterNameRequestV1,
-        RegisterNameResponseV1, RenewNameRequestV1, TransferNameRequestV1,
-        UpdateControllersRequestV1, fixtures,
+        NameFrozenStateV1, NameRecordV1, NameSelectorV1, NameStatus, PaymentProofV1,
+        RegisterNameRequestV1, RenewNameRequestV1, TransferNameRequestV1,
+        UpdateControllersRequestV1,
     },
 };
 use iroha_primitives::json::Json;
 use iroha_torii::{Torii, test_utils};
+use norito::{codec::Encode as _, json::JsonSerialize};
 use tokio::sync::broadcast;
 use tower::util::ServiceExt as _;
 
@@ -44,16 +42,38 @@ type TestMetrics = Arc<iroha_telemetry::metrics::Metrics>;
 #[cfg(not(feature = "telemetry"))]
 type TestMetrics = ();
 
+struct SeededDomainRecord {
+    literal: String,
+    status: NameStatus,
+}
+
 fn test_router() -> Router {
     #[cfg(feature = "telemetry")]
     let metrics = torii_fixtures::shared_metrics();
     #[cfg(not(feature = "telemetry"))]
     let metrics = ();
 
-    test_router_with_metrics(metrics)
+    test_router_with_metrics_and_domain_records(metrics, Vec::new())
 }
 
+fn test_router_with_domain_records(records: Vec<SeededDomainRecord>) -> Router {
+    #[cfg(feature = "telemetry")]
+    let metrics = torii_fixtures::shared_metrics();
+    #[cfg(not(feature = "telemetry"))]
+    let metrics = ();
+
+    test_router_with_metrics_and_domain_records(metrics, records)
+}
+
+#[cfg(feature = "telemetry")]
 fn test_router_with_metrics(metrics: TestMetrics) -> Router {
+    test_router_with_metrics_and_domain_records(metrics, Vec::new())
+}
+
+fn test_router_with_metrics_and_domain_records(
+    metrics: TestMetrics,
+    records: Vec<SeededDomainRecord>,
+) -> Router {
     #[cfg(not(feature = "telemetry"))]
     let _ = metrics;
 
@@ -64,6 +84,9 @@ fn test_router_with_metrics(metrics: TestMetrics) -> Router {
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let mut world = World::default();
     torii_fixtures::seed_peer(&mut world, local_peer_id.clone());
+    for record in records {
+        seed_domain_name_record(&mut world, record);
+    }
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = broadcast::channel(1).0;
@@ -151,6 +174,35 @@ fn controller_for(owner: &AccountId) -> NameControllerV1 {
     NameControllerV1::account(&address)
 }
 
+fn seeded_domain_record(label: &str, status: NameStatus) -> SeededDomainRecord {
+    SeededDomainRecord {
+        literal: domain_literal(label),
+        status,
+    }
+}
+
+fn seed_domain_name_record(world: &mut World, seeded: SeededDomainRecord) {
+    let owner = sample_owner();
+    let selector =
+        NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, seeded.literal).expect("domain selector");
+    let mut record = NameRecordV1::new(
+        selector.clone(),
+        owner.clone(),
+        vec![controller_for(&owner)],
+        0,
+        0,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        Metadata::default(),
+    );
+    record.status = seeded.status;
+    world.smart_contract_state_mut_for_testing().insert(
+        iroha_core::sns::record_storage_key(&selector),
+        record.encode(),
+    );
+}
+
 const DEFAULT_SNS_LEASE_PAYMENT_AMOUNT: u64 = 500_000_000;
 
 fn build_payment_with_amount(payer: AccountId, amount: u64) -> PaymentProofV1 {
@@ -188,23 +240,63 @@ fn build_register_request() -> RegisterNameRequestV1 {
     build_register_request_with("makoto", &owner)
 }
 
-async fn register_name(app: &Router, payload: RegisterNameRequestV1) -> RegisterNameResponseV1 {
-    let body = norito::json::to_vec(&payload).expect("serialize register payload");
-    let resp = app
-        .clone()
+async fn request_json<T: JsonSerialize + ?Sized>(
+    app: &Router,
+    method: &str,
+    uri: impl AsRef<str>,
+    payload: &T,
+) -> axum::response::Response {
+    let body = norito::json::to_vec(payload).expect("serialize json payload");
+    app.clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/sns/names")
-                .method("POST")
+                .uri(uri.as_ref())
+                .method(method)
                 .header("content-type", "application/json")
                 .body(Body::from(body))
                 .unwrap(),
         )
         .await
-        .expect("register response");
-    assert_eq!(resp.status(), StatusCode::CREATED);
+        .expect("json response")
+}
+
+async fn get(app: &Router, uri: impl AsRef<str>) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .uri(uri.as_ref())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("get response")
+}
+
+async fn post_register_name(
+    app: &Router,
+    payload: &RegisterNameRequestV1,
+) -> axum::response::Response {
+    request_json(app, "POST", "/v1/sns/names", payload).await
+}
+
+async fn response_text(resp: axum::response::Response) -> String {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    norito::json::from_slice(&bytes).expect("register response json")
+    String::from_utf8(bytes.to_vec()).expect("response body should be utf-8")
+}
+
+async fn assert_direct_mutation_disabled(resp: axum::response::Response, op: &str) {
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = response_text(resp).await;
+    assert!(
+        body.contains(&format!(
+            "SNS {op} must be submitted as a consensus transaction"
+        )),
+        "unexpected SNS mutation rejection body: {body}"
+    );
+    assert!(
+        body.contains("direct Torii WSV mutation is disabled"),
+        "SNS mutation rejection should explain why direct mutation is unavailable: {body}"
+    );
 }
 
 fn domain_name_path(label: &str) -> String {
@@ -216,201 +308,36 @@ fn domain_literal(label: &str) -> String {
 }
 
 #[tokio::test]
-async fn sns_register_and_fetch_round_trip() {
+async fn sns_register_route_rejects_direct_wsv_mutation() {
     let app = test_router();
     let payload = build_register_request();
-    let register_response = register_name(&app, payload).await;
-    assert_eq!(
-        register_response.name_record.selector.normalized_label(),
-        domain_literal("makoto")
-    );
-    assert!(matches!(
-        register_response.name_record.status,
-        NameStatus::Active
-    ));
+    let resp = post_register_name(&app, &payload).await;
+    assert_direct_mutation_disabled(resp, "register_name").await;
+}
 
-    let record_resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(domain_name_path("makoto"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+#[tokio::test]
+async fn sns_fetch_seeded_record_and_policy_round_trip() {
+    let app =
+        test_router_with_domain_records(vec![seeded_domain_record("makoto", NameStatus::Active)]);
+
+    let record_resp = get(&app, domain_name_path("makoto")).await;
     assert_eq!(record_resp.status(), StatusCode::OK);
+    let record: NameRecordV1 =
+        norito::json::from_slice(&record_resp.into_body().collect().await.unwrap().to_bytes())
+            .expect("decode record");
+    assert_eq!(record.selector.normalized_label(), domain_literal("makoto"));
+    assert!(matches!(record.status, NameStatus::Active));
 
-    let policy_resp = app
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/sns/policies/{DOMAIN_NAME_SUFFIX_ID}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let policy_resp = get(&app, format!("/v1/sns/policies/{DOMAIN_NAME_SUFFIX_ID}")).await;
     assert_eq!(policy_resp.status(), StatusCode::OK);
 }
 
 #[tokio::test]
-async fn sns_registration_canonicalizes_noncanonical_domain_payload() {
-    let app = test_router();
-    let owner = sample_owner();
-    let payload = RegisterNameRequestV1 {
-        selector: NameSelectorV1 {
-            version: NameSelectorV1::VERSION,
-            suffix_id: DOMAIN_NAME_SUFFIX_ID,
-            label: "MiXeD.Universal".to_owned(),
-        },
-        owner: owner.clone(),
-        controllers: vec![controller_for(&owner)],
-        term_years: 1,
-        pricing_class_hint: Some(0),
-        payment: build_payment_with(owner),
-        governance: None,
-        metadata: Metadata::default(),
-    };
-
-    let register_response = register_name(&app, payload).await;
-    assert_eq!(
-        register_response.name_record.selector.normalized_label(),
-        "mixed.universal"
-    );
-}
-
-#[tokio::test]
-async fn sns_registration_rejects_bare_domain_literal() {
-    let app = test_router();
-    let owner = sample_owner();
-    let payload = RegisterNameRequestV1 {
-        selector: NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, "bare-domain").expect("selector"),
-        owner: owner.clone(),
-        controllers: vec![controller_for(&owner)],
-        term_years: 1,
-        pricing_class_hint: Some(0),
-        payment: build_payment_with(owner),
-        governance: None,
-        metadata: Metadata::default(),
-    };
-    let body = norito::json::to_vec(&payload).expect("serialize register payload");
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sns/names")
-                .method("POST")
-                .header("content-type", "application/json")
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .expect("register response");
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn sns_registration_rejects_unknown_suffix_id() {
-    let app = test_router();
-    let owner = sample_owner();
-    let payload = RegisterNameRequestV1 {
-        selector: NameSelectorV1 {
-            version: NameSelectorV1::VERSION,
-            suffix_id: 0xFFFF,
-            label: "unknown".to_owned(),
-        },
-        owner: owner.clone(),
-        controllers: vec![controller_for(&owner)],
-        term_years: 1,
-        pricing_class_hint: Some(0),
-        payment: build_payment_with(owner),
-        governance: None,
-        metadata: Metadata::default(),
-    };
-    let body = norito::json::to_vec(&payload).expect("serialize register payload");
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sns/names")
-                .method("POST")
-                .header("content-type", "application/json")
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .expect("register response");
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn sns_duplicate_registration_returns_conflict() {
-    let app = test_router();
-    let owner = sample_owner();
-    register_name(&app, build_register_request_with("duplicate", &owner)).await;
-
-    let payload = build_register_request_with("duplicate", &owner);
-    let body = norito::json::to_vec(&payload).expect("serialize register payload");
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sns/names")
-                .method("POST")
-                .header("content-type", "application/json")
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .expect("register response");
-    assert_eq!(resp.status(), StatusCode::CONFLICT);
-}
-
-#[tokio::test]
-async fn sns_fetch_rejects_bare_domain_literal() {
-    let app = test_router();
-    let owner = sample_owner();
-    register_name(&app, build_register_request_with("lookupcanon", &owner)).await;
-
-    let record_resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sns/names/domain/lookupcanon")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(record_resp.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn sns_fetch_missing_name_returns_not_found() {
-    let app = test_router();
-    let record_resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sns/names/domain/missing.universal")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(record_resp.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
 async fn sns_fetch_accepts_noncanonical_domain_path_literal() {
-    let app = test_router();
-    let owner = sample_owner();
-    register_name(&app, build_register_request_with("casepath", &owner)).await;
+    let app =
+        test_router_with_domain_records(vec![seeded_domain_record("casepath", NameStatus::Active)]);
 
-    let record_resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sns/names/domain/CASEPATH.UNIVERSAL")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let record_resp = get(&app, "/v1/sns/names/domain/CASEPATH.UNIVERSAL").await;
     assert_eq!(record_resp.status(), StatusCode::OK);
     let record: NameRecordV1 =
         norito::json::from_slice(&record_resp.into_body().collect().await.unwrap().to_bytes())
@@ -419,537 +346,148 @@ async fn sns_fetch_accepts_noncanonical_domain_path_literal() {
 }
 
 #[tokio::test]
+async fn sns_fetch_returns_seeded_frozen_status() {
+    let app = test_router_with_domain_records(vec![seeded_domain_record(
+        "frozen",
+        NameStatus::Frozen(NameFrozenStateV1 {
+            reason: "audit".into(),
+            until_ms: u64::MAX,
+        }),
+    )]);
+
+    let record_resp = get(&app, domain_name_path("frozen")).await;
+    assert_eq!(record_resp.status(), StatusCode::OK);
+    let record: NameRecordV1 =
+        norito::json::from_slice(&record_resp.into_body().collect().await.unwrap().to_bytes())
+            .expect("decode record");
+    assert!(matches!(record.status, NameStatus::Frozen(_)));
+}
+
+#[tokio::test]
+async fn sns_fetch_rejects_bare_domain_literal() {
+    let app = test_router();
+    let record_resp = get(&app, "/v1/sns/names/domain/lookupcanon").await;
+    assert_eq!(record_resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn sns_fetch_missing_name_returns_not_found() {
+    let app = test_router();
+    let record_resp = get(&app, "/v1/sns/names/domain/missing.universal").await;
+    assert_eq!(record_resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn sns_fetch_rejects_unknown_namespace() {
     let app = test_router();
-    let record_resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sns/names/not-a-namespace/casepath.universal")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let record_resp = get(&app, "/v1/sns/names/not-a-namespace/casepath.universal").await;
     assert_eq!(record_resp.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
 async fn sns_missing_policy_returns_not_found() {
     let app = test_router();
-    let policy_resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sns/policies/65535")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let policy_resp = get(&app, "/v1/sns/policies/65535").await;
     assert_eq!(policy_resp.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
-async fn sns_update_controllers_rejects_empty_list() {
+async fn sns_mutation_routes_reject_direct_wsv_mutation() {
     let app = test_router();
     let owner = sample_owner();
-    register_name(
-        &app,
-        build_register_request_with("emptycontrollers", &owner),
-    )
-    .await;
-
-    let payload = UpdateControllersRequestV1 {
-        controllers: Vec::new(),
-    };
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!(
-                    "{}/controllers",
-                    domain_name_path("emptycontrollers")
-                ))
-                .method("POST")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    norito::json::to_vec(&payload).expect("serialize controllers"),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn sns_update_controllers_missing_name_returns_not_found() {
-    let app = test_router();
-    let owner = sample_owner();
-    let payload = UpdateControllersRequestV1 {
-        controllers: vec![controller_for(&owner)],
-    };
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sns/names/domain/missing.universal/controllers")
-                .method("POST")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    norito::json::to_vec(&payload).expect("serialize controllers"),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn sns_renew_missing_name_returns_not_found() {
-    let app = test_router();
-    let owner = sample_owner();
-    let payload = RenewNameRequestV1 {
-        term_years: 1,
-        payment: build_payment_with(owner),
-    };
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sns/names/domain/missing.universal/renew")
-                .method("POST")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    norito::json::to_vec(&payload).expect("serialize renew"),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn sns_transfer_missing_name_returns_not_found() {
-    let app = test_router();
-    let payload = TransferNameRequestV1 {
-        new_owner: secondary_owner(),
-        governance: GovernanceHookV1 {
-            proposal_id: "proposal-missing-transfer".into(),
-            council_vote_hash: Json::from("council-hash"),
-            dao_vote_hash: Json::from("dao-hash"),
-            steward_ack: Json::from("steward-ack"),
-            guardian_clearance: None,
-        },
-    };
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sns/names/domain/missing.universal/transfer")
-                .method("POST")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    norito::json::to_vec(&payload).expect("serialize transfer"),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn sns_freeze_missing_name_returns_not_found() {
-    let app = test_router();
-    let payload = FreezeNameRequestV1 {
-        reason: "missing-name".into(),
-        until_ms: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
-            .saturating_add(60_000)
-            .try_into()
-            .unwrap_or(u64::MAX),
-        guardian_ticket: Json::from("ticket"),
-    };
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sns/names/domain/missing.universal/freeze")
-                .method("POST")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    norito::json::to_vec(&payload).expect("serialize freeze"),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn sns_unfreeze_active_name_returns_conflict() {
-    let app = test_router();
-    let owner = sample_owner();
-    register_name(&app, build_register_request_with("alreadyactive", &owner)).await;
-
-    let payload = GovernanceHookV1 {
-        proposal_id: "proposal-active-unfreeze".into(),
-        council_vote_hash: Json::from("council-hash"),
-        dao_vote_hash: Json::from("dao-hash"),
-        steward_ack: Json::from("steward-ack"),
-        guardian_clearance: Some(Json::from("guardian")),
-    };
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sns/names/domain/alreadyactive.universal/freeze")
-                .method("DELETE")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    norito::json::to_vec(&payload).expect("serialize unfreeze"),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::CONFLICT);
-}
-
-#[tokio::test]
-async fn sns_unfreeze_missing_name_returns_not_found() {
-    let app = test_router();
-    let payload = GovernanceHookV1 {
-        proposal_id: "proposal-missing-unfreeze".into(),
-        council_vote_hash: Json::from("council-hash"),
-        dao_vote_hash: Json::from("dao-hash"),
-        steward_ack: Json::from("steward-ack"),
-        guardian_clearance: Some(Json::from("guardian")),
-    };
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sns/names/domain/missing.universal/freeze")
-                .method("DELETE")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    norito::json::to_vec(&payload).expect("serialize unfreeze"),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-}
-
-#[cfg(feature = "telemetry")]
-#[tokio::test]
-async fn sns_register_emits_status_metric() {
-    let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-    let app = test_router_with_metrics(Arc::clone(&metrics));
-    let counter = metrics
-        .sns_registrar_status_total
-        .with_label_values(&["ok", "domain"]);
-    let before = counter.get();
-
-    let _ = register_name(&app, build_register_request()).await;
-
-    let after = counter.get();
-    assert_eq!(
-        after,
-        before + 1,
-        "successful registration should increment sns_registrar_status_total{{result=\"ok\",suffix=\"domain\"}}"
-    );
-}
-
-#[tokio::test]
-#[allow(clippy::too_many_lines)]
-async fn sns_renew_transfer_and_freeze_flow() {
-    let app = test_router();
-    let owner = sample_owner();
-    let register_response = register_name(&app, build_register_request_with("flow", &owner)).await;
-    let initial_expiry = register_response.name_record.expires_at_ms;
 
     let renew = RenewNameRequestV1 {
         term_years: 1,
         payment: build_payment_with(owner.clone()),
     };
-    let renew_resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("{}/renew", domain_name_path("flow")))
-                .method("POST")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    norito::json::to_vec(&renew).expect("serialize renew"),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(renew_resp.status(), StatusCode::OK);
-    let renewed: NameRecordV1 =
-        norito::json::from_slice(&renew_resp.into_body().collect().await.unwrap().to_bytes())
-            .expect("decode renew");
-    assert!(
-        renewed.expires_at_ms > initial_expiry,
-        "renewal must extend expiry"
-    );
+    let renew_resp = request_json(
+        &app,
+        "POST",
+        "/v1/sns/names/domain/missing.universal/renew",
+        &renew,
+    )
+    .await;
+    assert_direct_mutation_disabled(renew_resp, "renew_name").await;
 
-    let new_owner = secondary_owner();
     let transfer = TransferNameRequestV1 {
-        new_owner: new_owner.clone(),
+        new_owner: secondary_owner(),
         governance: GovernanceHookV1 {
-            proposal_id: "proposal-1".into(),
+            proposal_id: "proposal-transfer".into(),
             council_vote_hash: Json::from("council-hash"),
             dao_vote_hash: Json::from("dao-hash"),
             steward_ack: Json::from("steward-ack"),
             guardian_clearance: None,
         },
     };
-    let transfer_resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("{}/transfer", domain_name_path("flow")))
-                .method("POST")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    norito::json::to_vec(&transfer).expect("serialize transfer"),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(transfer_resp.status(), StatusCode::OK);
-    let transferred: NameRecordV1 = norito::json::from_slice(
-        &transfer_resp
-            .into_body()
-            .collect()
-            .await
-            .unwrap()
-            .to_bytes(),
+    let transfer_resp = request_json(
+        &app,
+        "POST",
+        "/v1/sns/names/domain/missing.universal/transfer",
+        &transfer,
     )
-    .expect("decode transfer");
-    assert_eq!(transferred.owner, new_owner);
+    .await;
+    assert_direct_mutation_disabled(transfer_resp, "transfer_name").await;
 
-    let freeze_req = FreezeNameRequestV1 {
-        reason: "court-order".into(),
-        until_ms: transferred.expires_at_ms + 1_000,
+    let controllers = UpdateControllersRequestV1 {
+        controllers: vec![controller_for(&owner)],
+    };
+    let controllers_resp = request_json(
+        &app,
+        "POST",
+        "/v1/sns/names/domain/missing.universal/controllers",
+        &controllers,
+    )
+    .await;
+    assert_direct_mutation_disabled(controllers_resp, "update_name_controllers").await;
+
+    let freeze = FreezeNameRequestV1 {
+        reason: "missing-name".into(),
+        until_ms: u64::MAX,
         guardian_ticket: Json::from("ticket"),
     };
-    let freeze_resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("{}/freeze", domain_name_path("flow")))
-                .method("POST")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    norito::json::to_vec(&freeze_req).expect("serialize freeze"),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(freeze_resp.status(), StatusCode::OK);
-    let frozen: NameRecordV1 =
-        norito::json::from_slice(&freeze_resp.into_body().collect().await.unwrap().to_bytes())
-            .expect("decode freeze");
-    assert!(matches!(frozen.status, NameStatus::Frozen(_)));
+    let freeze_resp = request_json(
+        &app,
+        "POST",
+        "/v1/sns/names/domain/missing.universal/freeze",
+        &freeze,
+    )
+    .await;
+    assert_direct_mutation_disabled(freeze_resp, "freeze_name").await;
 
     let unfreeze = GovernanceHookV1 {
-        proposal_id: "proposal-1".into(),
+        proposal_id: "proposal-unfreeze".into(),
         council_vote_hash: Json::from("council-hash"),
         dao_vote_hash: Json::from("dao-hash"),
         steward_ack: Json::from("steward-ack"),
         guardian_clearance: Some(Json::from("guardian")),
     };
-    let unfreeze_resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("{}/freeze", domain_name_path("flow")))
-                .method("DELETE")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    norito::json::to_vec(&unfreeze).expect("serialize unfreeze"),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(unfreeze_resp.status(), StatusCode::OK);
-    let unfrozen: NameRecordV1 = norito::json::from_slice(
-        &unfreeze_resp
-            .into_body()
-            .collect()
-            .await
-            .unwrap()
-            .to_bytes(),
+    let unfreeze_resp = request_json(
+        &app,
+        "DELETE",
+        "/v1/sns/names/domain/missing.universal/freeze",
+        &unfreeze,
     )
-    .expect("decode unfreeze");
-    assert!(matches!(unfrozen.status, NameStatus::Active));
-    assert_eq!(unfrozen.owner, new_owner);
+    .await;
+    assert_direct_mutation_disabled(unfreeze_resp, "unfreeze_name").await;
 }
 
+#[cfg(feature = "telemetry")]
 #[tokio::test]
-async fn sns_transfer_rejected_while_frozen() {
-    let app = test_router();
-    let owner = sample_owner();
-    register_name(&app, build_register_request_with("frozenxfer", &owner)).await;
+async fn sns_register_rejection_emits_error_status_metric() {
+    let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+    let app = test_router_with_metrics(Arc::clone(&metrics));
+    let counter = metrics
+        .sns_registrar_status_total
+        .with_label_values(&["error", "domain"]);
+    let before = counter.get();
 
-    let freeze_req = FreezeNameRequestV1 {
-        reason: "audit".into(),
-        until_ms: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
-            .saturating_add(60_000)
-            .try_into()
-            .unwrap_or(u64::MAX),
-        guardian_ticket: Json::from("ticket"),
-    };
-    let freeze_resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("{}/freeze", domain_name_path("frozenxfer")))
-                .method("POST")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    norito::json::to_vec(&freeze_req).expect("serialize freeze"),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(freeze_resp.status(), StatusCode::OK);
+    let resp = post_register_name(&app, &build_register_request()).await;
+    assert_direct_mutation_disabled(resp, "register_name").await;
 
-    let transfer = TransferNameRequestV1 {
-        new_owner: secondary_owner(),
-        governance: GovernanceHookV1 {
-            proposal_id: "proposal-2".into(),
-            council_vote_hash: Json::from("council-hash"),
-            dao_vote_hash: Json::from("dao-hash"),
-            steward_ack: Json::from("steward-ack"),
-            guardian_clearance: None,
-        },
-    };
-    let transfer_resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("{}/transfer", domain_name_path("frozenxfer")))
-                .method("POST")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    norito::json::to_vec(&transfer).expect("serialize transfer"),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(transfer_resp.status(), StatusCode::CONFLICT);
-
-    let record_resp = app
-        .oneshot(
-            Request::builder()
-                .uri(domain_name_path("frozenxfer"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(record_resp.status(), StatusCode::OK);
-    let record: NameRecordV1 =
-        norito::json::from_slice(&record_resp.into_body().collect().await.unwrap().to_bytes())
-            .expect("decode record");
-    assert!(
-        matches!(record.status, NameStatus::Frozen(_)),
-        "record should stay frozen after transfer attempt"
+    let after = counter.get();
+    assert_eq!(
+        after,
+        before + 1,
+        "rejected registration should increment sns_registrar_status_total{{result=\"error\",suffix=\"domain\"}}"
     );
-}
-
-#[tokio::test]
-async fn sns_reserved_label_requires_steward() {
-    let app = test_router();
-    let reserved_owner = sample_owner();
-    let reserved_attempt = build_register_request_with("treasury", &reserved_owner);
-    let body = norito::json::to_vec(&reserved_attempt).expect("serialize reserved attempt");
-    let conflict_resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sns/names")
-                .method("POST")
-                .header("content-type", "application/json")
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(conflict_resp.status(), StatusCode::CONFLICT);
-
-    let steward = fixtures::steward_account();
-    let success = register_name(&app, build_register_request_with("treasury", &steward)).await;
-    assert_eq!(success.name_record.owner, steward);
-}
-
-#[tokio::test]
-async fn sns_update_controllers_round_trip() {
-    let app = test_router();
-    let owner = sample_owner();
-    register_name(&app, build_register_request_with("controllers", &owner)).await;
-    let secondary = secondary_owner();
-    let payload = UpdateControllersRequestV1 {
-        controllers: vec![controller_for(&owner), controller_for(&secondary)],
-    };
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("{}/controllers", domain_name_path("controllers")))
-                .method("POST")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    norito::json::to_vec(&payload).expect("serialize controllers"),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let updated: NameRecordV1 =
-        norito::json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes())
-            .expect("decode controllers");
-    assert_eq!(updated.controllers, payload.controllers);
-}
-
-#[tokio::test]
-async fn sns_registration_rejects_insufficient_payment() {
-    let app = test_router();
-    let owner = sample_owner();
-    let mut payload = build_register_request_with("underpay", &owner);
-    payload.payment = build_payment_with_amount(owner.clone(), 1);
-    let body = norito::json::to_vec(&payload).expect("serialize register payload");
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sns/names")
-                .method("POST")
-                .header("content-type", "application/json")
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .expect("register response");
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }

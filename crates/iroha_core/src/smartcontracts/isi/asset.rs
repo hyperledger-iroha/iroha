@@ -76,6 +76,86 @@ pub mod isi {
             Ok(())
         }
 
+        fn precheck_numeric_asset_transfer_delta_exact(
+            &self,
+            source_id: &AssetId,
+            destination_id: &AssetId,
+            amount: &Numeric,
+        ) -> Result<TransferDeltaTranscript, Error> {
+            let source_current = self
+                .assets
+                .get(source_id)
+                .ok_or_else(|| FindError::Asset(source_id.clone().into()))?
+                .as_ref()
+                .clone();
+            ensure_non_negative(&source_current)?;
+            let from_balance_after = source_current
+                .clone()
+                .checked_sub(amount.clone())
+                .ok_or(MathError::NotEnoughQuantity)?;
+            if from_balance_after.mantissa().is_negative() {
+                return Err(MathError::NotEnoughQuantity.into());
+            }
+
+            self.asset_definition(destination_id.definition())?;
+            self.account(destination_id.account())?;
+            let to_balance_before = if source_id == destination_id {
+                from_balance_after.clone()
+            } else {
+                self.assets
+                    .get(destination_id)
+                    .map(|value| value.as_ref().clone())
+                    .unwrap_or_else(Numeric::zero)
+            };
+            ensure_non_negative(&to_balance_before)?;
+            let to_balance_after = to_balance_before
+                .clone()
+                .checked_add(amount.clone())
+                .ok_or(MathError::Overflow)?;
+            ensure_non_negative(&to_balance_after)?;
+
+            Ok(TransferDeltaTranscript {
+                from_account: source_id.account().clone(),
+                to_account: destination_id.account().clone(),
+                asset_definition: source_id.definition().clone(),
+                amount: amount.clone(),
+                from_balance_before: source_current,
+                from_balance_after,
+                to_balance_before,
+                to_balance_after,
+                from_smt_witness: TransferSmtWitness::default(),
+                to_smt_witness: TransferSmtWitness::default(),
+            })
+        }
+
+        fn apply_prechecked_numeric_asset_transfer_delta_exact(
+            &mut self,
+            source_id: &AssetId,
+            destination_id: &AssetId,
+            delta: &TransferDeltaTranscript,
+        ) -> Result<(), Error> {
+            {
+                let asset = self
+                    .assets
+                    .get_mut(source_id)
+                    .ok_or_else(|| FindError::Asset(source_id.clone().into()))?;
+                **asset = delta.from_balance_after.clone();
+            }
+            if delta.from_balance_after.is_zero() {
+                assert!(self.remove_asset_and_metadata(source_id).is_some());
+            }
+
+            {
+                let dst = self.asset_or_insert_exact(destination_id, Numeric::zero())?;
+                **dst = delta.to_balance_after.clone();
+            }
+            if !delta.to_balance_after.is_zero() {
+                self.track_nonzero_asset_holder(destination_id);
+            }
+
+            Ok(())
+        }
+
         /// Increase a numeric asset balance, creating it if missing.
         /// Does not emit events; callers remain responsible for event emission.
         pub(crate) fn deposit_numeric_asset(
@@ -879,6 +959,45 @@ pub mod isi {
                 delta,
             })
         }
+
+        fn apply_uncontrolled(
+            self,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<AppliedNumericTransfer, Error> {
+            debug_assert!(
+                self.control_update.is_none(),
+                "batch transfer fast path does not persist transfer-control usage updates",
+            );
+            debug_assert!(
+                self.numeric_spec.check(&self.amount).is_ok(),
+                "prepared numeric transfer amount must still satisfy cached spec",
+            );
+            debug_assert_eq!(
+                self.normalized_amount,
+                normalized_numeric_to_u64(&self.amount, self.normalized_scale),
+                "prepared numeric transfer normalization must be stable",
+            );
+            let delta = state_transaction
+                .world
+                .precheck_numeric_asset_transfer_delta_exact(
+                    &self.source_id,
+                    &self.destination_id,
+                    &self.amount,
+                )?;
+            state_transaction
+                .world
+                .apply_prechecked_numeric_asset_transfer_delta_exact(
+                    &self.source_id,
+                    &self.destination_id,
+                    &delta,
+                )?;
+            Ok(AppliedNumericTransfer {
+                source_id: self.event_source_id,
+                destination_id: self.event_destination_id,
+                amount: self.amount,
+                delta,
+            })
+        }
     }
 
     /// Validate policy gates for a transparent numeric asset balance movement.
@@ -1202,39 +1321,101 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let source_id = self.source().clone();
-            let destination_id =
-                AssetId::new(source_id.definition().clone(), self.destination().clone());
-            let amount = self.object().clone();
-            let plan = PreparedNumericTransferPlan::prepare_user(
+            execute_user_numeric_asset_transfer(
                 state_transaction,
                 authority,
-                source_id,
-                destination_id,
-                amount,
-            )?;
-            let applied = plan.apply(state_transaction)?;
-            state_transaction.record_transfer_transcript(authority, applied.delta)?;
-
-            #[allow(clippy::float_arithmetic)]
-            #[cfg(feature = "telemetry")]
-            state_transaction
-                .telemetry
-                .observe_tx_amount(applied.amount.clone().to_f64());
-
-            state_transaction.world.emit_events([
-                AssetEvent::Removed(AssetChanged {
-                    asset: applied.source_id,
-                    amount: applied.amount.clone(),
-                }),
-                AssetEvent::Added(AssetChanged {
-                    asset: applied.destination_id,
-                    amount: applied.amount,
-                }),
-            ]);
-
-            Ok(())
+                self.source().clone(),
+                self.destination().clone(),
+                self.object().clone(),
+            )
         }
+    }
+
+    /// Apply a user-authorized transparent numeric asset transfer.
+    pub(crate) fn execute_user_numeric_asset_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        source_id: AssetId,
+        destination: AccountId,
+        amount: Numeric,
+    ) -> Result<(), Error> {
+        let destination_id = AssetId::new(source_id.definition().clone(), destination);
+        let plan = PreparedNumericTransferPlan::prepare_user(
+            state_transaction,
+            authority,
+            source_id,
+            destination_id,
+            amount,
+        )?;
+        let applied = plan.apply(state_transaction)?;
+        state_transaction.record_transfer_transcript(authority, applied.delta)?;
+
+        #[allow(clippy::float_arithmetic)]
+        #[cfg(feature = "telemetry")]
+        state_transaction
+            .telemetry
+            .observe_tx_amount(applied.amount.clone().to_f64());
+
+        state_transaction.world.emit_events([
+            AssetEvent::Removed(AssetChanged {
+                asset: applied.source_id,
+                amount: applied.amount.clone(),
+            }),
+            AssetEvent::Added(AssetChanged {
+                asset: applied.destination_id,
+                amount: applied.amount,
+            }),
+        ]);
+
+        Ok(())
+    }
+
+    /// Apply a user-authorized transparent numeric transfer on the simple batch path.
+    ///
+    /// Returns `Ok(false)` when the transfer needs the full per-transaction merge path.
+    pub(crate) fn execute_user_numeric_asset_transfer_uncontrolled_batch(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        source_id: AssetId,
+        destination: AccountId,
+        amount: Numeric,
+    ) -> Result<bool, Error> {
+        if state_transaction.world.account(&destination).is_err() {
+            return Ok(false);
+        }
+
+        let destination_id = AssetId::new(source_id.definition().clone(), destination);
+        let plan = PreparedNumericTransferPlan::prepare_user(
+            state_transaction,
+            authority,
+            source_id,
+            destination_id,
+            amount,
+        )?;
+        if plan.control_update.is_some() {
+            return Ok(false);
+        }
+        let applied = plan.apply_uncontrolled(state_transaction)?;
+        state_transaction.record_transfer_transcript(authority, applied.delta)?;
+
+        #[allow(clippy::float_arithmetic)]
+        #[cfg(feature = "telemetry")]
+        state_transaction
+            .telemetry
+            .observe_tx_amount(applied.amount.clone().to_f64());
+
+        state_transaction.world.emit_events([
+            AssetEvent::Removed(AssetChanged {
+                asset: applied.source_id,
+                amount: applied.amount.clone(),
+            }),
+            AssetEvent::Added(AssetChanged {
+                asset: applied.destination_id,
+                amount: applied.amount,
+            }),
+        ]);
+
+        Ok(true)
     }
 
     impl Execute for SetAssetTransferFreeze {
@@ -2553,6 +2734,7 @@ pub mod query {
     mod tests {
         use std::collections::{BTreeMap, BTreeSet};
 
+        use iroha_crypto::Hash;
         use iroha_data_model::account::{
             NewAccount,
             rekey::{AccountAlias, AccountAliasDomain},
@@ -2578,7 +2760,7 @@ pub mod query {
             kura::Kura,
             query::store::LiveQueryStore,
             smartcontracts::{ValidQuery, isi::asset::isi::ensure_non_negative},
-            state::{State, World},
+            state::{State, StateTransaction, World},
         };
 
         fn build_account_in_domain(account_id: &AccountId, _domain_id: &DomainId) -> Account {
@@ -2593,6 +2775,10 @@ pub mod query {
             AssetDefinition::numeric(__asset_definition_id.clone())
                 .with_name(__asset_definition_id.name().to_string())
                 .build(owner)
+        }
+
+        fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
+            state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
         }
 
         fn build_asset_transfer_control_test_state(
@@ -3103,6 +3289,7 @@ pub mod query {
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx, 0xB1);
 
             let key: Name = "tag".parse().expect("metadata key");
             let value = Json::from(norito::json!("seed"));
@@ -3245,6 +3432,7 @@ pub mod query {
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 86_400_000, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx, 0xB2);
 
             SetAssetTransferControl::new(
                 ALICE_ID.clone(),
@@ -4086,6 +4274,7 @@ pub mod query {
             let mut stx = block.transaction();
             stx.current_dataspace_id = Some(source_dataspace);
             stx.world.current_dataspace_id = Some(source_dataspace);
+            seed_test_call_hash(&mut stx, 0xB3);
 
             Transfer::asset_numeric(
                 AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
@@ -4274,6 +4463,7 @@ pub mod query {
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx, 0xB4);
             Transfer::asset_numeric(source_asset_id, 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect("one matching allowed domain membership should authorize transfer");

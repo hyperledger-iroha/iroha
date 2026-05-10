@@ -4,11 +4,12 @@
 
 # Soracles — Validator-Backed Oracle Layer
 
-This document captures the canonical schemas and deterministic scheduling rules
-for the validator-operated oracle layer. It completes roadmap items OR-1
-through OR-3, OR-6, and OR-12 by pinning Norito/JSON layouts, committee/leader
-derivation, connector hashing/cadence/PII redaction, and the replay surface for
-gossip.
+This document captures the canonical schemas and operator-facing MVP rules for
+the validator-operated oracle layer. It completes roadmap items OR-1 through
+OR-3, OR-6, OR-8, and OR-12 by pinning Norito/JSON layouts, committee/leader
+derivation, connector hashing/cadence/PII redaction, typed management
+permissions, query surfaces, and replay/idempotency guards. Runtime leader
+scheduling and automated off-chain pacemaking remain future work.
 
 - **Code reference:** `crates/iroha_data_model/src/oracle/mod.rs`
 - **Fixtures:** `fixtures/oracle/*.json`
@@ -47,7 +48,8 @@ gossip.
   - `ReportEntry` — `{oracle_id, observation_hash, value, outlier}`.
   - Hash/signature helpers: `ReportBody::hash()` and `Report::hash()`.
 - `FeedEventOutcome` — `Success { value, entries } | Error { code } | Missing`,
-  emitted as `FeedEvent` `{feed_id, feed_config_version, slot, outcome}`.
+  emitted as `FeedEvent`
+  `{feed_id, feed_config_version, slot, request_hash, outcome}`.
 
 ### Connector requests (OR-6)
 - Canonical schema: `{feed_id, feed_config_version, slot, connector_id/version,
@@ -169,15 +171,69 @@ Validations include:
   `validate_report_caps`).
 - Outlier marking via `OutlierPolicy::Mad` or `OutlierPolicy::Absolute`; median
   or percentile aggregation via `AggregationRule`.
+- Quorum-first safety: success requires at least `min_signers` value
+  observations after filtering, and error outcomes require at least
+  `min_signers` matching error observations. Manual aggregation with no retained
+  observations is rejected as insufficient quorum instead of fabricating a
+  `Missing` event.
+- Error-rate guard: error observations must remain within
+  `max_error_rate_bps`, unless the feed intentionally configures a higher
+  threshold.
 
 Errors surface as `OracleAggregationError` to wire into on-chain admission
-paths. When all observations are errors (with the same code), the outcome is
-`FeedEventOutcome::Error`; when no observations arrive, the outcome is
-`FeedEventOutcome::Missing`.
+paths, with explicit rejection codes for insufficient quorum, already processed
+windows, stale replay windows, and error-rate violations.
 
 Host consumers: `iroha_core::oracle::OracleAggregator` and
 `ObservationAdmission` wrap the same helpers for on-node validation, replay
 guards, and report/outcome generation.
+
+## On-Chain Operations
+
+Oracle management is permissioned with typed tokens under
+`iroha_executor_data_model::permission::oracle`:
+
+- `CanRegisterOracleFeed`
+- `CanProposeOracleChange`
+- `CanVoteOracleChangeStage { stage }`
+- `CanRollbackOracleChange`
+- `CanResolveOracleDispute`
+- `CanManageTwitterBindings`
+
+Feed registration validates duplicate providers, non-zero quorum and committee
+sizes, `min_signers <= committee_size <= providers.len()`, observer caps,
+`max_error_rate_bps <= 10000`, monotonic versions, and replay windows no larger
+than retained history. Observation submission and aggregation remain gated by
+configured provider membership.
+
+Replay/idempotency is indexed by retained feed history. Submits and manual
+aggregates are rejected when the exact `(feed_id, version, slot, request_hash)`
+window has already been processed, or when the slot falls outside the feed's
+`replay_window_slots` relative to the latest retained event.
+
+Disputes are public but must include evidence and must anchor to a retained feed
+event with the exact feed/version/slot/request hash. Successful-event disputes
+also require the target provider to appear in the retained report entries, and
+all disputes must be fresh under `dispute_window_slots`. Resolution requires
+`CanResolveOracleDispute`.
+
+The CLI exposes operator transaction builders under `iroha soracles tx`:
+`register`, `submit`, `aggregate`, `open-dispute`, `resolve-dispute`,
+`propose-change`, `vote-change-stage`, `rollback-change`,
+`record-twitter-binding`, and `revoke-twitter-binding`. Complex payloads are
+read as Norito JSON files.
+
+Query APIs cover:
+
+- Singular: `FindOracleFeedById`, `FindOracleDisputeById`,
+  `FindOracleChangeById`, `FindOracleProviderStatsByKey`.
+- Iterable: `FindOracleFeeds`, `FindOracleHistoryByFeedId`,
+  `FindOracleProviderStatsByFeedId`, `FindOracleDisputes`,
+  `FindOracleDisputesByFeedId`, `FindOracleChanges`,
+  `FindTwitterBindingsByUaid`.
+
+The CLI mirrors these as `iroha soracles query
+feeds|feed|history|provider-stats|disputes|dispute|changes|change|twitter-bindings`.
 
 ## Committee and Leader Selection (OR-2)
 
@@ -295,6 +351,9 @@ Additional caps (value length, error-rate thresholds) are carried in
 - Events: `ChangeProposed` advertises the new change + payload hash; every vote
   or auto-rollback emits `ChangeStageUpdated` with approvals/rejections and the
   current status so dashboards can track quorum and deadline failures.
-- Enactment applies the proposed `FeedConfig` once the policy jury stage reaches
-  quorum; missed SLAs or explicit rollbacks mark the change as `Failed` while
+- Votes only apply to the active stage; future and past stage jumps are
+  rejected, and every vote requires a permission scoped to that stage.
+- Enactment is an explicit final stage. Once it reaches quorum, the proposed
+  `FeedConfig` is validated with the same registration rules and written
+  on-chain. Missed SLAs or explicit rollbacks mark the change as `Failed` while
   preserving evidence hashes for audit.

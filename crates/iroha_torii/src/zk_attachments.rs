@@ -764,6 +764,7 @@ fn run_sanitizer_subprocess(
     timeout: Duration,
 ) -> Result<SanitizerOutcome, SanitizeError> {
     let exe = sanitizer_executable()?;
+    validate_sanitizer_executable(&exe)?;
     let request_bytes = norito::to_bytes(&request).map_err(|err| {
         SanitizeError::new(
             SanitizeRejectReason::Sandbox,
@@ -867,6 +868,25 @@ fn run_sanitizer_subprocess(
     }
 
     result
+}
+
+fn validate_sanitizer_executable(exe: &Path) -> Result<(), SanitizeError> {
+    let metadata = fs::metadata(exe).map_err(|err| {
+        SanitizeError::new(
+            SanitizeRejectReason::Sandbox,
+            format!("attachment sanitizer spawn failed: {err}"),
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(SanitizeError::new(
+            SanitizeRejectReason::Sandbox,
+            format!(
+                "attachment sanitizer spawn failed: {} is not a file",
+                exe.display()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn decode_sanitizer_response_bytes(stdout_bytes: &[u8]) -> Result<SanitizerOutcome, SanitizeError> {
@@ -981,6 +1001,8 @@ fn sandboxed_sanitizer_command_for_search_path(
 (deny default)
 (allow process*)
 (allow file-read*)
+(allow mach-lookup)
+(allow sysctl-read)
 (deny network*)"#;
             let mut cmd = Command::new(sandbox_exec);
             cmd.arg("-p")
@@ -2262,6 +2284,21 @@ mod tests {
     }
 
     #[test]
+    fn validate_sanitizer_executable_rejects_missing_or_non_file_path() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let missing = temp.path().join("missing-sanitizer");
+        let err =
+            super::validate_sanitizer_executable(&missing).expect_err("missing path rejected");
+        assert_eq!(err.reason, SanitizeRejectReason::Sandbox);
+        assert!(err.message.contains("attachment sanitizer spawn failed"));
+
+        let err =
+            super::validate_sanitizer_executable(temp.path()).expect_err("directory path rejected");
+        assert_eq!(err.reason, SanitizeRejectReason::Sandbox);
+        assert!(err.message.contains("is not a file"));
+    }
+
+    #[test]
     fn direct_sanitizer_command_sets_required_env() {
         let exe = PathBuf::from("attachment_sanitizer");
         let cmd = super::direct_sanitizer_command(&exe, "4096");
@@ -2317,7 +2354,9 @@ mod tests {
         assert!(
             args.get(1)
                 .and_then(|arg| arg.to_str())
-                .is_some_and(|profile| profile.contains("(deny network*)"))
+                .is_some_and(|profile| profile.contains("(deny network*)")
+                    && profile.contains("(allow mach-lookup)")
+                    && profile.contains("(allow sysctl-read)"))
         );
         assert_eq!(args.last().copied(), Some(exe.as_os_str()));
 

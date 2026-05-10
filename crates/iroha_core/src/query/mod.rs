@@ -205,16 +205,8 @@ pub fn insert_proof_record_for_test(
     mut rec: iroha_data_model::proof::ProofRecord,
 ) {
     rec.id = id;
-    let height = next_test_block_height();
-    let height_u64 = u64::try_from(usize::from(height)).expect("height fits in u64");
-    let header = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(height_u64).expect("height non-zero"),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let (height, height_u64) = next_height_for_state(state);
+    let header = iroha_data_model::block::BlockHeader::new(height_u64, None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.world.insert_proof_record(rec);
@@ -222,7 +214,42 @@ pub fn insert_proof_record_for_test(
     block
         .transactions
         .insert_block(std::collections::HashSet::new(), height);
-    let _ = block.commit();
+    block.commit().expect("commit test proof record block");
+}
+
+/// Insert proof TLV tags directly into WSV indexes for tests.
+pub fn insert_proof_tags_for_test(
+    state: &mut crate::state::State,
+    id: iroha_data_model::proof::ProofId,
+    mut tags: Vec<[u8; 4]>,
+) {
+    tags.sort_unstable();
+    tags.dedup();
+
+    let (height, height_u64) = next_height_for_state(state);
+    let header = iroha_data_model::block::BlockHeader::new(height_u64, None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    stx.world.proof_tags.insert(id.clone(), tags.clone());
+    for tag in tags {
+        let tag_slice: &[u8] = &tag;
+        let mut ids = stx
+            .world
+            .proofs_by_tag
+            .get(tag_slice)
+            .cloned()
+            .unwrap_or_default();
+        if !ids.iter().any(|existing| existing == &id) {
+            ids.push(id.clone());
+            ids.sort();
+        }
+        stx.world.proofs_by_tag.insert(tag, ids);
+    }
+    stx.apply();
+    block
+        .transactions
+        .insert_block(std::collections::HashSet::new(), height);
+    block.commit().expect("commit test proof tag block");
 }
 
 /// Insert a governance proposal record for tests.

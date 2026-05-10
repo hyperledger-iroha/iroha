@@ -1,6 +1,6 @@
 {
-  "advert_body_digest_hex": "14d61861b2a7edc4acb4eb66de105edbac96ad03aeb774f2d1e70ab7be378110",
+  "advert_body_digest_hex": "a28ca7581b51a71970196ffe542d64f905f84036f55f091fca91219f2656f490",
   "council_signature_count": 1,
-  "envelope_digest_hex": "49a04ef708e0ac41e9c1a0dd7c44d5f264470425c5686cb6a00645d4d7374afc",
-  "proposal_digest_hex": "2bc1b6aa4269d8a1201064a935efedbe0b92dd29ad4de10b38507081ccc2d076"
+  "envelope_digest_hex": "80b9f9285062bee7cc2d9b5f29948cbfd26c1cbfea274b6937f9e2f2279defbf",
+  "proposal_digest_hex": "75ae7423ac495a9417be3b7a3ec3ef641a51632fbfa46833a3c68b43c9d1025a"
 }

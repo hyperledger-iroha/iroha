@@ -792,7 +792,9 @@ mod tests {
             std::iter::repeat_with(|| TransactionResultInner::Ok(DataTriggerSequence::default()))
                 .take(entry_hashes.len())
                 .collect();
-        block.set_transaction_results(Vec::new(), &entry_hashes, results);
+        block
+            .set_transaction_results(Vec::new(), &entry_hashes, results)
+            .expect("test block entrypoint hashes should match payload");
         block
     }
 
@@ -831,11 +833,13 @@ mod tests {
         );
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
         let entry_hashes = [entry_hash];
-        block.set_transaction_results(
-            Vec::new(),
-            &entry_hashes,
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-        );
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &entry_hashes,
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            )
+            .expect("test block entrypoint hashes should match payload");
         (block, decoded_payloads)
     }
 

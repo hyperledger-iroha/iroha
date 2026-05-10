@@ -5644,6 +5644,36 @@ pub struct SumeragiWorker {
         default = "defaults::sumeragi::VALIDATION_FAST_FINALITY_INLINE_MAX_TRANSACTIONS"
     )]
     pub fast_finality_inline_validation_max_transactions: usize,
+    /// DA-mode per-external-entrypoint validation stall floor (ms).
+    #[config(
+        env = "SUMERAGI_VALIDATION_STALL_DA_PER_ENTRYPOINT_FLOOR_MS",
+        default = "defaults::sumeragi::VALIDATION_STALL_DA_PER_ENTRYPOINT_FLOOR_MS"
+    )]
+    pub validation_stall_da_per_entrypoint_floor_ms: u64,
+    /// Multiplier applied to inline fallback timeout when deriving worker stall timeout.
+    #[config(
+        env = "SUMERAGI_VALIDATION_STALL_INLINE_FALLBACK_MULTIPLIER",
+        default = "defaults::sumeragi::VALIDATION_STALL_INLINE_FALLBACK_MULTIPLIER"
+    )]
+    pub validation_stall_inline_fallback_multiplier: u32,
+    /// Multiplier applied to validation duration EMA when deriving worker stall timeout.
+    #[config(
+        env = "SUMERAGI_VALIDATION_STALL_EMA_MULTIPLIER",
+        default = "defaults::sumeragi::VALIDATION_STALL_EMA_MULTIPLIER"
+    )]
+    pub validation_stall_ema_multiplier: u32,
+    /// Non-DA cap for validation worker stall timeout (ms).
+    #[config(
+        env = "SUMERAGI_VALIDATION_STALL_NON_DA_CAP_MS",
+        default = "defaults::sumeragi::VALIDATION_STALL_NON_DA_CAP_MS"
+    )]
+    pub validation_stall_non_da_cap_ms: u64,
+    /// DA cap for validation worker stall timeout (ms).
+    #[config(
+        env = "SUMERAGI_VALIDATION_STALL_DA_CAP_MS",
+        default = "defaults::sumeragi::VALIDATION_STALL_DA_CAP_MS"
+    )]
+    pub validation_stall_da_cap_ms: u64,
     /// QC verify worker threads (0 = auto).
     #[config(
         env = "SUMERAGI_QC_VERIFY_WORKER_THREADS",
@@ -7039,6 +7069,19 @@ impl Sumeragi {
         } else {
             true
         };
+        let validation_stall_tuning_ok = if worker.validation_stall_da_per_entrypoint_floor_ms == 0
+            || worker.validation_stall_inline_fallback_multiplier == 0
+            || worker.validation_stall_ema_multiplier == 0
+            || worker.validation_stall_non_da_cap_ms == 0
+            || worker.validation_stall_da_cap_ms == 0
+        {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.advanced.worker.validation_stall_* values must be greater than zero",
+            ));
+            false
+        } else {
+            true
+        };
         let vote_burst_cap_ok = if worker.vote_burst_cap_with_payload_backlog == 0 {
             emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
                 "sumeragi.advanced.worker.vote_burst_cap_with_payload_backlog must be greater than zero",
@@ -7437,6 +7480,7 @@ impl Sumeragi {
             && validation_result_queue_ok
             && validation_queue_full_inline_cutover_divisor_ok
             && validation_pending_cap_ok
+            && validation_stall_tuning_ok
             && vote_burst_cap_ok
             && urgent_da_streak_ok
             && pacemaker_backoff_ok
@@ -7595,6 +7639,18 @@ impl Sumeragi {
                     .validation_queue_full_inline_cutover_divisor,
                 fast_finality_inline_validation_max_transactions: worker
                     .fast_finality_inline_validation_max_transactions,
+                validation_stall_da_per_entrypoint_floor: std::time::Duration::from_millis(
+                    worker.validation_stall_da_per_entrypoint_floor_ms,
+                ),
+                validation_stall_inline_fallback_multiplier: worker
+                    .validation_stall_inline_fallback_multiplier,
+                validation_stall_ema_multiplier: worker.validation_stall_ema_multiplier,
+                validation_stall_non_da_cap: std::time::Duration::from_millis(
+                    worker.validation_stall_non_da_cap_ms,
+                ),
+                validation_stall_da_cap: std::time::Duration::from_millis(
+                    worker.validation_stall_da_cap_ms,
+                ),
                 qc_verify_worker_threads: worker.qc_verify_worker_threads,
                 qc_verify_work_queue_cap: worker.qc_verify_work_queue_cap,
                 qc_verify_result_queue_cap: worker.qc_verify_result_queue_cap,

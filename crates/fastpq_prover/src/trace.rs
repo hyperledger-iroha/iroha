@@ -1991,8 +1991,10 @@ mod tests {
     use super::*;
     use crate::{
         ExecutionMode, OperationKind, PoseidonExecutionMode, PublicInputs, StateTransition,
-        TransitionBatch, backend, gadgets::transfer, gpu,
+        TransitionBatch, gadgets::transfer,
     };
+    #[cfg(feature = "fastpq-gpu")]
+    use crate::{backend, gpu};
 
     fn sample_batch() -> TransitionBatch {
         let transcript = sample_transfer_transcript();

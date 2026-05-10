@@ -25,8 +25,10 @@ use iroha_data_model::{
         ObservationOutcome, TWITTER_FOLLOW_FEED_ID, TwitterBindingAttestation,
         TwitterBindingStatus,
     },
+    permission::Permission,
     prelude::*,
 };
+use iroha_executor_data_model::permission::oracle as oracle_permission;
 use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
@@ -150,6 +152,42 @@ fn twitter_binding_observation(
     Observation { body, signature }
 }
 
+fn grant_permission(world: &mut World, account: &AccountId, permission: impl Into<Permission>) {
+    let permission = permission.into();
+    let mut permissions = {
+        let permissions = world.account_permissions_mut_for_testing().view();
+        permissions.get(account).cloned().unwrap_or_default()
+    };
+    permissions.insert(permission);
+    world
+        .account_permissions_mut_for_testing()
+        .insert(account.clone(), permissions);
+}
+
+fn grant_oracle_operator_permissions(world: &mut World, account: &AccountId) {
+    use iroha_data_model::oracle::OracleChangeStage;
+
+    grant_permission(world, account, oracle_permission::CanRegisterOracleFeed);
+    grant_permission(world, account, oracle_permission::CanProposeOracleChange);
+    grant_permission(world, account, oracle_permission::CanRollbackOracleChange);
+    grant_permission(world, account, oracle_permission::CanResolveOracleDispute);
+    grant_permission(world, account, oracle_permission::CanManageTwitterBindings);
+    for stage in [
+        OracleChangeStage::Intake,
+        OracleChangeStage::RulesCommittee,
+        OracleChangeStage::CopReview,
+        OracleChangeStage::TechnicalAudit,
+        OracleChangeStage::PolicyJury,
+        OracleChangeStage::Enactment,
+    ] {
+        grant_permission(
+            world,
+            account,
+            oracle_permission::CanVoteOracleChangeStage { stage },
+        );
+    }
+}
+
 fn social_world_with_provider(
     def_id: &AssetDefinitionId,
     uaid: UniversalAccountId,
@@ -222,7 +260,7 @@ fn social_world_with_owner(
         Numeric::zero(),
     );
 
-    World::with_assets(
+    let mut world = World::with_assets(
         [wonderland, validators, sora],
         [
             alice_account,
@@ -239,7 +277,9 @@ fn social_world_with_owner(
             oracle_slash_asset,
         ],
         [],
-    )
+    );
+    grant_oracle_operator_permissions(&mut world, provider);
+    world
 }
 
 #[derive(Clone, Copy)]

@@ -112,6 +112,7 @@ fn price_reference_fixtures_are_canonical() {
         feed_id: feed_config.feed_id.clone(),
         feed_config_version: feed_config.feed_config_version,
         slot: observation_a.body.slot,
+        request_hash,
         outcome: aggregation.outcome.clone(),
     };
 
@@ -183,6 +184,7 @@ fn follow_reference_fixtures_are_canonical() {
         feed_id: feed_config.feed_id.clone(),
         feed_config_version: feed_config.feed_config_version,
         slot: observation_a.body.slot,
+        request_hash,
         outcome: aggregation.outcome.clone(),
     };
 
@@ -233,6 +235,7 @@ fn regenerate_follow_reference_fixtures() {
         feed_id: price_feed_config.feed_id.clone(),
         feed_config_version: price_feed_config.feed_config_version,
         slot: price_observation_a.body.slot,
+        request_hash: price_request_hash,
         outcome: price_aggregation.outcome.clone(),
     };
 
@@ -292,6 +295,7 @@ fn regenerate_follow_reference_fixtures() {
         feed_id: feed_config.feed_id.clone(),
         feed_config_version: feed_config.feed_config_version,
         slot: observation_a.body.slot,
+        request_hash,
         outcome: aggregation.outcome.clone(),
     };
 

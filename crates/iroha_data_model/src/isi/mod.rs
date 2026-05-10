@@ -950,6 +950,16 @@ impl From<crate::prelude::CompleteReplicationOrder> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::prelude::SetPricingSchedule> for InstructionBox {
+    fn from(i: crate::prelude::SetPricingSchedule) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::prelude::UpsertProviderCredit> for InstructionBox {
+    fn from(i: crate::prelude::UpsertProviderCredit) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::space_directory::PublishSpaceDirectoryManifest> for InstructionBox {
     fn from(i: crate::isi::space_directory::PublishSpaceDirectoryManifest) -> Self {
         InstructionBox(Box::new(i))
@@ -1116,6 +1126,18 @@ impl From<crate::isi::oracle::AggregateOracleFeed> for InstructionBox {
     }
 }
 
+impl From<crate::isi::oracle::OpenOracleDispute> for InstructionBox {
+    fn from(i: crate::isi::oracle::OpenOracleDispute) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::oracle::ResolveOracleDispute> for InstructionBox {
+    fn from(i: crate::isi::oracle::ResolveOracleDispute) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::oracle::ProposeOracleChange> for InstructionBox {
     fn from(i: crate::isi::oracle::ProposeOracleChange) -> Self {
         InstructionBox(Box::new(i))
@@ -1145,6 +1167,44 @@ impl From<crate::isi::oracle::RevokeTwitterBinding> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+
+// Allow direct boxing of SoraDNS resolver-directory instructions.
+impl From<crate::isi::soradns::SubmitDirectoryDraft> for InstructionBox {
+    fn from(i: crate::isi::soradns::SubmitDirectoryDraft) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::soradns::PublishDirectory> for InstructionBox {
+    fn from(i: crate::isi::soradns::PublishDirectory) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::soradns::RevokeResolver> for InstructionBox {
+    fn from(i: crate::isi::soradns::RevokeResolver) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::soradns::UnrevokeResolver> for InstructionBox {
+    fn from(i: crate::isi::soradns::UnrevokeResolver) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::soradns::AddReleaseSigner> for InstructionBox {
+    fn from(i: crate::isi::soradns::AddReleaseSigner) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::soradns::RemoveReleaseSigner> for InstructionBox {
+    fn from(i: crate::isi::soradns::RemoveReleaseSigner) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::soradns::SetDirectoryRotationPolicy> for InstructionBox {
+    fn from(i: crate::isi::soradns::SetDirectoryRotationPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 // Allow direct boxing of public lane staking instructions.
 impl From<crate::isi::staking::RegisterPublicLaneValidator> for InstructionBox {
     fn from(i: crate::isi::staking::RegisterPublicLaneValidator) -> Self {
@@ -3604,8 +3664,9 @@ pub mod error {
 pub mod prelude {
     pub use super::{
         AggregateOracleFeed, Burn, BurnBox, CustomInstruction, ExecuteTrigger, Grant, GrantBox,
-        Instruction, InstructionBox, Log, Mint, MintBox, ProposeOracleChange, Register,
-        RegisterBox, RegisterOracleFeed, RemoveKeyValue, RemoveKeyValueBox, Revoke, RevokeBox,
+        Instruction, InstructionBox, Log, Mint, MintBox, OpenOracleDispute, ProposeOracleChange,
+        RecordTwitterBinding, Register, RegisterBox, RegisterOracleFeed, RemoveKeyValue,
+        RemoveKeyValueBox, ResolveOracleDispute, Revoke, RevokeBox, RevokeTwitterBinding,
         RollbackOracleChange, SetKeyValue, SetKeyValueBox, SetParameter, SubmitOracleObservation,
         Transfer, TransferAssetBatch, TransferAssetBatchEntry, TransferBox, Unregister,
         UnregisterBox, Upgrade, VoteOracleChangeStage,
@@ -3675,13 +3736,18 @@ pub mod prelude {
         sorafs::{
             ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder, IssueReplicationOrder,
             RecordCapacityTelemetry, RegisterCapacityDeclaration, RegisterCapacityDispute,
-            RegisterPinManifest, RetirePinManifest,
+            RegisterPinManifest, RetirePinManifest, SetPricingSchedule, UpsertProviderCredit,
         },
         space_directory::{
             ExpireSpaceDirectoryManifest, PublishSpaceDirectoryManifest,
             RevokeSpaceDirectoryManifest,
         },
-        staking::{ActivatePublicLaneValidator, ExitPublicLaneValidator},
+        staking::{
+            ActivatePublicLaneValidator, BondPublicLaneStake, CancelConsensusEvidencePenalty,
+            ClaimPublicLaneRewards, ExitPublicLaneValidator, FinalizePublicLaneUnbond,
+            RebindPublicLaneValidatorPeer, RecordPublicLaneRewards, RegisterPublicLaneValidator,
+            SchedulePublicLaneUnbond, SlashPublicLaneValidator,
+        },
         vpn::{OpenVpnLeaseEscrow, RefundExpiredVpnLease, SettleVpnLease},
     };
 }

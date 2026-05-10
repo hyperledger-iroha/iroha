@@ -2882,7 +2882,9 @@ impl Network {
                 .iter()
                 .map(iroha_data_model::transaction::SignedTransaction::hash_as_entrypoint)
                 .collect::<Vec<_>>();
-            working.set_transaction_results(Vec::new(), &hashes, Vec::new());
+            working
+                .set_transaction_results(Vec::new(), &hashes, Vec::new())
+                .expect("genesis placeholder hashes should match payload");
 
             let sig = iroha_data_model::block::BlockSignature::new(
                 signer_index,
@@ -2896,7 +2898,9 @@ impl Network {
             rebuilt.set_da_commitments(cached_genesis.0.da_commitments().cloned());
             rebuilt.set_da_proof_policies(cached_genesis.0.da_proof_policies().cloned());
             rebuilt.set_da_pin_intents(cached_genesis.0.da_pin_intents().cloned());
-            rebuilt.set_transaction_results(Vec::new(), &hashes, Vec::new());
+            rebuilt
+                .set_transaction_results(Vec::new(), &hashes, Vec::new())
+                .expect("genesis placeholder hashes should match payload");
             let mut augmented = GenesisBlock(rebuilt);
 
             let genesis_account_id = AccountId::new(self.genesis_key_pair.public_key().clone());

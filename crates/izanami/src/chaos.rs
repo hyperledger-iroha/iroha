@@ -82,6 +82,7 @@ const IZANAMI_TORII_DISABLED_RATE_LIMIT: i64 = 0;
 const IZANAMI_PREBUILT_SUBMIT_BATCH_SIZE: usize = 32;
 const IZANAMI_HIGH_TPS_ACCOUNT_THRESHOLD: f64 = 1_000.0;
 const IZANAMI_HIGH_TPS_ACCOUNT_COUNT: usize = 4_096;
+const IZANAMI_HIGH_TPS_STABLE_ACCOUNT_COUNT: usize = 8_192;
 const IZANAMI_TRANSACTION_GOSSIP_PERIOD_MS: i64 = 250;
 const IZANAMI_TRANSACTION_GOSSIP_SIZE: i64 = 1024;
 const IZANAMI_TRANSACTION_GOSSIP_RESEND_TICKS: i64 = 1;
@@ -2634,7 +2635,12 @@ fn log_effective_consensus_soak_overrides(config: &ChaosConfig) {
 fn workload_account_count(config: &ChaosConfig) -> usize {
     let baseline = config.peer_count.saturating_mul(3).max(6);
     if config.tps >= IZANAMI_HIGH_TPS_ACCOUNT_THRESHOLD || config.prebuild_tx_buffer > baseline {
-        baseline.max(IZANAMI_HIGH_TPS_ACCOUNT_COUNT)
+        let high_tps_floor = if matches!(config.workload_profile, WorkloadProfile::Stable) {
+            IZANAMI_HIGH_TPS_STABLE_ACCOUNT_COUNT
+        } else {
+            IZANAMI_HIGH_TPS_ACCOUNT_COUNT
+        };
+        baseline.max(high_tps_floor)
     } else {
         baseline
     }
@@ -4277,8 +4283,8 @@ impl IzanamiRunner {
                     if stop.load(Ordering::Relaxed) {
                         break;
                     }
-                    let plan = match workload.next_plan(&mut prebuild_rng).await {
-                        Ok(plan) => plan,
+                    let (order, plan) = match workload.next_ordered_plan(&mut prebuild_rng).await {
+                        Ok(ordered_plan) => ordered_plan,
                         Err(err) => {
                             metrics.record_prebuilt_tx_build_failure();
                             warn!(
@@ -4323,7 +4329,11 @@ impl IzanamiRunner {
                     if next_index >= buffer_capacity as u64 {
                         break;
                     }
-                    let prepared = PreparedTransactionSubmission { plan, payload };
+                    let prepared = PreparedTransactionSubmission {
+                        order,
+                        plan,
+                        payload,
+                    };
                     if tx.send(prepared).await.is_err() {
                         break;
                     }
@@ -4359,6 +4369,7 @@ impl IzanamiRunner {
         for handle in handles {
             let _ = handle.await;
         }
+        prepared.sort_by_key(|submission| submission.order);
 
         if prepared.len() < buffer_capacity {
             warn!(
@@ -6310,6 +6321,7 @@ struct SubmissionAuditCandidate {
 }
 
 struct PreparedTransactionSubmission {
+    order: u64,
     plan: TransactionPlan,
     payload: PreparedTransactionPayload,
 }
@@ -6717,7 +6729,7 @@ async fn submit_prebuilt_plan(
     run_control: &RunControl,
     confirmation_audit_wait_options: &TransactionWaitOptions,
 ) {
-    let PreparedTransactionSubmission { plan, payload } = prepared;
+    let PreparedTransactionSubmission { plan, payload, .. } = prepared;
     let signer = plan.signer.clone();
     let plan_label = plan.label;
     let expect_success = plan.expect_success;
@@ -9969,8 +9981,14 @@ mod tests {
         assert_eq!(effective_network_queue_capacity(&config), 2_400_000);
         assert_eq!(
             workload_account_count(&config),
+            IZANAMI_HIGH_TPS_STABLE_ACCOUNT_COUNT
+        );
+        config.workload_profile = WorkloadProfile::Chaos;
+        assert_eq!(
+            workload_account_count(&config),
             IZANAMI_HIGH_TPS_ACCOUNT_COUNT
         );
+        config.workload_profile = WorkloadProfile::Stable;
         config.shutdown_drain_timeout = Duration::from_secs(120);
         assert_eq!(
             effective_ingress_request_timeout(&config),
@@ -9995,7 +10013,7 @@ mod tests {
         );
         assert_eq!(
             workload_account_count(&config),
-            IZANAMI_HIGH_TPS_ACCOUNT_COUNT
+            IZANAMI_HIGH_TPS_STABLE_ACCOUNT_COUNT
         );
         assert_eq!(
             effective_ingress_request_timeout(&config),

@@ -4661,6 +4661,16 @@ pub struct SumeragiWorker {
     pub validation_queue_full_inline_cutover_divisor: u32,
     /// Maximum transaction count for inline validation of fast-finality blocks.
     pub fast_finality_inline_validation_max_transactions: usize,
+    /// DA-mode per-external-entrypoint validation stall floor.
+    pub validation_stall_da_per_entrypoint_floor: Duration,
+    /// Multiplier applied to inline fallback timeout when deriving worker stall timeout.
+    pub validation_stall_inline_fallback_multiplier: u32,
+    /// Multiplier applied to validation duration EMA when deriving worker stall timeout.
+    pub validation_stall_ema_multiplier: u32,
+    /// Non-DA cap for validation worker stall timeout.
+    pub validation_stall_non_da_cap: Duration,
+    /// DA cap for validation worker stall timeout.
+    pub validation_stall_da_cap: Duration,
     /// QC verify worker threads.
     pub qc_verify_worker_threads: usize,
     /// QC verify work queue capacity per worker.

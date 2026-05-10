@@ -4174,8 +4174,17 @@ impl Actor {
                 .cloned()
                 .collect();
             for qc in cached_qcs {
+                let qc_key = Self::qc_tally_key(&qc);
+                let cached = self.qc_cache.remove(&qc_key);
                 if let Err(err) = self.handle_qc(qc) {
                     warn!(?err, "failed to replay cached QC after block payload");
+                    if let Some(cached) = cached {
+                        self.qc_cache.insert(qc_key, cached);
+                    }
+                } else if !self.qc_cache.contains_key(&qc_key)
+                    && let Some(cached) = cached
+                {
+                    self.qc_cache.insert(qc_key, cached);
                 }
             }
             let _ = self.try_replay_deferred_qcs();

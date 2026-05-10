@@ -235,12 +235,7 @@ pub(crate) fn execute_instruction_detached(
             TransferBox::Asset(t) => {
                 let src = t.source.clone();
                 let qty = t.object.clone();
-                let dst = iroha_data_model::asset::AssetId::of(
-                    src.definition().clone(),
-                    t.destination.clone(),
-                );
-                delta.add_asset_sub(src, qty.clone());
-                delta.add_asset_add(dst, qty);
+                delta.transfer_asset(src, t.destination.clone(), qty);
             }
             TransferBox::Domain(t) => {
                 delta.transfer_domain(t.object.clone(), t.source.clone(), t.destination.clone());
@@ -6448,6 +6443,7 @@ mod tests {
         };
 
         let mut stx = block.transaction();
+        stx.tx_call_hash = Some(Hash::prehashed([0xE6; Hash::LENGTH]));
         executor
             .execute_instruction_with_contract_runtime_context(
                 &mut stx,

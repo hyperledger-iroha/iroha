@@ -67,6 +67,80 @@ pub(super) struct CommitStageTimings {
     pub(super) kura_store_ms: Option<u64>,
     pub(super) state_apply_ms: Option<u64>,
     pub(super) state_commit_ms: Option<u64>,
+    pub(super) validation: Option<crate::block::valid::ValidationTimings>,
+    pub(super) used_prevalidated_artifact: bool,
+}
+
+impl CommitStageTimings {
+    fn has_recorded_stages(self) -> bool {
+        self.qc_verify_ms.is_some()
+            || self.persist_ms.is_some()
+            || self.kura_store_ms.is_some()
+            || self.state_apply_ms.is_some()
+            || self.state_commit_ms.is_some()
+            || self.validation.is_some()
+            || self.used_prevalidated_artifact
+    }
+
+    fn blocking_total_ms(self) -> Option<u64> {
+        [self.qc_verify_ms, self.persist_ms]
+            .into_iter()
+            .flatten()
+            .fold(None, |total: Option<u64>, ms| {
+                Some(total.unwrap_or_default().saturating_add(ms))
+            })
+    }
+
+    fn max_observed_stage_ms(self) -> Option<u64> {
+        let validation = self.validation;
+        [
+            self.qc_verify_ms,
+            self.persist_ms,
+            self.kura_store_ms,
+            self.state_apply_ms,
+            self.state_commit_ms,
+            validation.map(|timings| timings.total_ms),
+            validation.map(|timings| timings.stateless_ms),
+            validation.map(|timings| timings.execution_ms),
+            validation.map(|timings| timings.execution_tx_ms),
+            validation.map(|timings| timings.execution_tx_apply_ms),
+            validation.map(|timings| timings.execution_tx_finalize_ms),
+        ]
+        .into_iter()
+        .flatten()
+        .max()
+    }
+}
+
+fn trusted_prevalidated_commit_artifact(
+    artifact: Option<ValidatedCommitArtifact>,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    commit_qc: Option<&crate::sumeragi::consensus::Qc>,
+) -> Option<ValidatedCommitArtifact> {
+    let artifact = artifact?;
+    if artifact.block_hash != block_hash || artifact.height != height || artifact.view != view {
+        return None;
+    }
+    let commit_qc = commit_qc?;
+    (commit_qc.subject_block_hash == block_hash
+        && commit_qc.height == height
+        && commit_qc.view == view
+        && matches!(commit_qc.phase, crate::sumeragi::consensus::Phase::Commit)
+        && commit_qc.parent_state_root == artifact.parent_state_root
+        && commit_qc.post_state_root == artifact.post_state_root)
+        .then_some(artifact)
+}
+
+fn prevalidated_roots_match_witness(
+    artifact: ValidatedCommitArtifact,
+    witness: Option<&ExecWitness>,
+) -> bool {
+    witness.is_some_and(|witness| {
+        parent_state_from_witness(witness) == artifact.parent_state_root
+            && post_state_from_witness(witness) == artifact.post_state_root
+    })
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -137,6 +211,19 @@ impl CommitPipelineTimings {
 
 fn duration_to_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+fn commit_stage_timings_exceed_threshold(timings: CommitStageTimings, threshold: Duration) -> bool {
+    if threshold.is_zero() {
+        return false;
+    }
+    let threshold_ms = duration_to_ms(threshold);
+    timings
+        .blocking_total_ms()
+        .is_some_and(|total| total >= threshold_ms)
+        || timings
+            .max_observed_stage_ms()
+            .is_some_and(|stage| stage >= threshold_ms)
 }
 
 fn commit_pipeline_sample_from_timings(
@@ -338,26 +425,80 @@ pub(super) fn execute_commit_work(
         block = %block_hash,
         "commit work start"
     );
+    let prevalidated_artifact = trusted_prevalidated_commit_artifact(
+        validated_commit_artifact,
+        block_hash,
+        block_height,
+        block_view,
+        commit_qc.as_ref(),
+    );
     let qc_start = Instant::now();
     log_stage_start("validate_block");
-    let validate_block = |candidate: SignedBlock,
-                          candidate_topology: &super::network_topology::Topology,
-                          voting_block: &mut Option<crate::sumeragi::VotingBlock>,
-                          pipeline_events: &mut Vec<PipelineEventBox>| {
-        ValidBlock::validate_keep_voting_block_with_events(
-            candidate,
-            candidate_topology,
+    let validate_block =
+        |candidate: SignedBlock,
+         candidate_topology: &super::network_topology::Topology,
+         voting_block: &mut Option<crate::sumeragi::VotingBlock>,
+         pipeline_events: &mut Vec<PipelineEventBox>,
+         validation_timings: &mut crate::block::valid::ValidationTimings| {
+            ValidBlock::validate_keep_voting_block_with_events_and_timing(
+                candidate,
+                candidate_topology,
+                chain_id,
+                genesis_account,
+                &time_source,
+                state,
+                voting_block,
+                false,
+                validation_timings,
+                |event| pipeline_events.push(event),
+            )
+            .unpack(|event| pipeline_events.push(event))
+        };
+    let mut validation_timings = crate::block::valid::ValidationTimings::new();
+    let full_validation_block = prevalidated_artifact.map(|_| block.clone());
+    let mut result = if prevalidated_artifact.is_some() {
+        ValidBlock::validate_prevalidated_commit_keep_voting_block_with_events_and_timing(
+            block,
+            &topology,
             chain_id,
             genesis_account,
             &time_source,
             state,
-            voting_block,
-            false,
+            &mut voting_block,
+            &mut validation_timings,
             |event| pipeline_events.push(event),
         )
         .unpack(|event| pipeline_events.push(event))
+    } else {
+        validate_block(
+            block,
+            &topology,
+            &mut voting_block,
+            &mut pipeline_events,
+            &mut validation_timings,
+        )
     };
-    let mut result = validate_block(block, &topology, &mut voting_block, &mut pipeline_events);
+    let mut used_prevalidated_artifact = prevalidated_artifact.is_some() && result.is_ok();
+    if prevalidated_artifact.is_some() && result.is_err() {
+        warn!(
+            commit_id = id,
+            height = block_height,
+            view = block_view,
+            block = %block_hash,
+            "prevalidated commit execution rejected; retrying full commit validation"
+        );
+        pipeline_events.clear();
+        voting_block = None;
+        validation_timings = crate::block::valid::ValidationTimings::new();
+        result = validate_block(
+            full_validation_block.expect("prevalidated path kept original block"),
+            &topology,
+            &mut voting_block,
+            &mut pipeline_events,
+            &mut validation_timings,
+        );
+        used_prevalidated_artifact = false;
+    }
     let original_failed_block = result
         .as_ref()
         .err()
@@ -396,11 +537,13 @@ pub(super) fn execute_commit_work(
                         );
                         pipeline_events.clear();
                         voting_block = None;
+                        validation_timings = crate::block::valid::ValidationTimings::new();
                         result = validate_block(
                             recovered,
                             &topology,
                             &mut voting_block,
                             &mut pipeline_events,
+                            &mut validation_timings,
                         );
                     }
                     Err(remap_err) => {
@@ -427,11 +570,13 @@ pub(super) fn execute_commit_work(
 
                         pipeline_events.clear();
                         voting_block = None;
+                        validation_timings = crate::block::valid::ValidationTimings::new();
                         let mut attempt = validate_block(
                             failed_block.clone(),
                             &rotated_topology,
                             &mut voting_block,
                             &mut pipeline_events,
+                            &mut validation_timings,
                         );
                         let needs_remap = matches!(
                             &attempt,
@@ -457,11 +602,13 @@ pub(super) fn execute_commit_work(
                             {
                                 pipeline_events.clear();
                                 voting_block = None;
+                                validation_timings = crate::block::valid::ValidationTimings::new();
                                 attempt = validate_block(
                                     remapped,
                                     &rotated_topology,
                                     &mut voting_block,
                                     &mut pipeline_events,
+                                    &mut validation_timings,
                                 );
                             }
                         }
@@ -484,22 +631,52 @@ pub(super) fn execute_commit_work(
         }
     }
     log_stage_end("validate_block", qc_start);
-    let result = result.and_then(|(valid_block, state_block)| {
+    timings.validation = Some(validation_timings);
+    timings.used_prevalidated_artifact = used_prevalidated_artifact;
+    let result = result.and_then(|(valid_block, mut state_block)| {
+        let exec_witness = state_block.take_exec_witness();
+        let fastpq_witness_context = state_block.take_fastpq_witness_context();
+        if let Some(artifact) = prevalidated_artifact
+            && !prevalidated_roots_match_witness(artifact, exec_witness.as_ref())
+        {
+            warn!(
+                commit_id = id,
+                height = block_height,
+                view = block_view,
+                block = %block_hash,
+                expected_parent_state_root = %artifact.parent_state_root,
+                expected_post_state_root = %artifact.post_state_root,
+                actual_parent_state_root = ?exec_witness.as_ref().map(parent_state_from_witness),
+                actual_post_state_root = ?exec_witness.as_ref().map(post_state_from_witness),
+                "prevalidated commit execution roots do not match validation artifact"
+            );
+            return Err((
+                Box::new(valid_block.into()),
+                Box::new(BlockValidationError::ExecutionContextInvalid(
+                    "prevalidated commit execution roots mismatch".to_owned(),
+                )),
+            ));
+        }
         log_stage_start("commit_with_certificate");
         let commit_start = Instant::now();
         let commit_result = valid_block.commit_with_certificate();
         let commit_result = commit_result
             .unpack(|event| pipeline_events.push(event))
-            .map(|committed_block| (committed_block, state_block))
+            .map(|committed_block| {
+                (
+                    committed_block,
+                    state_block,
+                    exec_witness,
+                    fastpq_witness_context,
+                )
+            })
             .map_err(|(failed_block, err)| (Box::new((*failed_block).into()), err));
         log_stage_end("commit_with_certificate", commit_start);
         commit_result
     });
     timings.qc_verify_ms = Some(to_ms(qc_start.elapsed()));
     match result {
-        Ok((committed_block, mut state_block)) => {
-            let exec_witness = state_block.take_exec_witness();
-            let fastpq_witness_context = state_block.take_fastpq_witness_context();
+        Ok((committed_block, mut state_block, exec_witness, fastpq_witness_context)) => {
             let persist_start = Instant::now();
             let pipeline_events = pipeline_events;
             let _validated_commit_artifact = validated_commit_artifact.or_else(|| {
@@ -623,6 +800,30 @@ pub(super) fn execute_commit_work(
             },
             timings,
         ),
+    }
+}
+
+fn execute_commit_work_on_dedicated_stack(
+    state: Arc<State>,
+    kura: Arc<Kura>,
+    chain_id: ChainId,
+    genesis_account: AccountId,
+    work: CommitWork,
+) -> (CommitOutcome, CommitStageTimings) {
+    let join_handle = crate::sumeragi::sumeragi_thread_builder("sumeragi-commit-inline")
+        .spawn(move || {
+            execute_commit_work(
+                state.as_ref(),
+                kura.as_ref(),
+                &chain_id,
+                &genesis_account,
+                work,
+            )
+        })
+        .expect("failed to spawn inline sumeragi commit thread");
+    match join_handle.join() {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
     }
 }
 
@@ -1091,11 +1292,11 @@ impl Actor {
             inflight.block_hash,
         );
         self.subsystems.commit.inflight = Some(inflight);
-        let (outcome, timings) = execute_commit_work(
-            self.state.as_ref(),
-            self.kura.as_ref(),
-            &self.common_config.chain,
-            &self.genesis_account,
+        let (outcome, timings) = execute_commit_work_on_dedicated_stack(
+            Arc::clone(&self.state),
+            Arc::clone(&self.kura),
+            self.common_config.chain.clone(),
+            self.genesis_account.clone(),
             work,
         );
         let inflight = self
@@ -1182,11 +1383,11 @@ impl Actor {
                             allow_signature_index_recovery,
                             events_sender: self.events_sender.clone(),
                         };
-                        let (outcome, timings) = execute_commit_work(
-                            self.state.as_ref(),
-                            self.kura.as_ref(),
-                            &self.common_config.chain,
-                            &self.genesis_account,
+                        let (outcome, timings) = execute_commit_work_on_dedicated_stack(
+                            Arc::clone(&self.state),
+                            Arc::clone(&self.kura),
+                            self.common_config.chain.clone(),
+                            self.genesis_account.clone(),
                             work,
                         );
                         let committed = self.apply_commit_outcome(inflight, outcome, timings);
@@ -1292,6 +1493,7 @@ impl Actor {
         } = inflight;
         let pending_height = pending.height;
         let pending_view = pending.view;
+        let pending_tx_count = pending.block.external_transactions().len();
         let now = Instant::now();
         let da_enabled = self.runtime_da_enabled();
         let mut block_hash_to_clean = None;
@@ -1367,23 +1569,160 @@ impl Actor {
                     .observe_commit_stage_ms(crate::telemetry::CommitStage::Persist, ms);
             }
         }
-        if timings.qc_verify_ms.is_some()
-            || timings.persist_ms.is_some()
-            || timings.kura_store_ms.is_some()
-            || timings.state_apply_ms.is_some()
-            || timings.state_commit_ms.is_some()
-        {
-            debug!(
-                height = pending_height,
-                view = pending_view,
-                block = %block_hash,
-                qc_verify_ms = ?timings.qc_verify_ms,
-                kura_store_ms = ?timings.kura_store_ms,
-                state_apply_ms = ?timings.state_apply_ms,
-                state_commit_ms = ?timings.state_commit_ms,
-                persist_ms = ?timings.persist_ms,
-                "commit stage timings"
-            );
+        if timings.has_recorded_stages() {
+            let blocking_total_ms = timings.blocking_total_ms();
+            let max_observed_stage_ms = timings.max_observed_stage_ms();
+            let validation = timings.validation;
+            if commit_stage_timings_exceed_threshold(
+                timings,
+                self.config.persistence.commit_inflight_timeout,
+            ) {
+                info!(
+                    height = pending_height,
+                    view = pending_view,
+                    block = %block_hash,
+                    tx_count = pending_tx_count,
+                    blocking_total_ms = ?blocking_total_ms,
+                    max_observed_stage_ms = ?max_observed_stage_ms,
+                    qc_verify_ms = ?timings.qc_verify_ms,
+                    kura_store_ms = ?timings.kura_store_ms,
+                    state_apply_ms = ?timings.state_apply_ms,
+                    state_commit_ms = ?timings.state_commit_ms,
+                    persist_ms = ?timings.persist_ms,
+                    validation_total_ms = validation.map(|timings| timings.total_ms),
+                    validation_stateless_ms = validation.map(|timings| timings.stateless_ms),
+                    validation_execution_ms = validation.map(|timings| timings.execution_ms),
+                    validation_execution_tx_ms =
+                        validation.map(|timings| timings.execution_tx_ms),
+                    validation_execution_tx_signature_batch_ms =
+                        validation.map(|timings| timings.execution_tx_signature_batch_ms),
+                    validation_execution_tx_stateless_ms =
+                        validation.map(|timings| timings.execution_tx_stateless_ms),
+                    validation_execution_tx_access_ms =
+                        validation.map(|timings| timings.execution_tx_access_ms),
+                    validation_execution_tx_overlay_ms =
+                        validation.map(|timings| timings.execution_tx_overlay_ms),
+                    validation_execution_tx_dag_ms =
+                        validation.map(|timings| timings.execution_tx_dag_ms),
+                    validation_execution_tx_schedule_ms =
+                        validation.map(|timings| timings.execution_tx_schedule_ms),
+                    validation_execution_tx_apply_ms =
+                        validation.map(|timings| timings.execution_tx_apply_ms),
+                    validation_execution_tx_apply_setup_ms =
+                        validation.map(|timings| timings.execution_tx_apply_setup_ms),
+                    validation_execution_tx_apply_layer_build_ms =
+                        validation.map(|timings| timings.execution_tx_apply_layer_build_ms),
+                    validation_execution_tx_apply_prep_ms =
+                        validation.map(|timings| timings.execution_tx_apply_prep_ms),
+                    validation_execution_tx_apply_detached_ms =
+                        validation.map(|timings| timings.execution_tx_apply_detached_ms),
+                    validation_execution_tx_apply_merge_ms =
+                        validation.map(|timings| timings.execution_tx_apply_merge_ms),
+                    validation_execution_tx_apply_fallback_ms =
+                        validation.map(|timings| timings.execution_tx_apply_fallback_ms),
+                    validation_execution_tx_apply_quarantine_ms =
+                        validation.map(|timings| timings.execution_tx_apply_quarantine_ms),
+                    validation_execution_tx_apply_sequential_ms =
+                        validation.map(|timings| timings.execution_tx_apply_sequential_ms),
+                    validation_execution_tx_apply_results_ms =
+                        validation.map(|timings| timings.execution_tx_apply_results_ms),
+                    validation_execution_tx_apply_other_ms =
+                        validation.map(|timings| timings.execution_tx_apply_other_ms),
+                    validation_execution_tx_time_triggers_ms =
+                        validation.map(|timings| timings.execution_tx_time_triggers_ms),
+                    validation_execution_tx_finalize_ms =
+                        validation.map(|timings| timings.execution_tx_finalize_ms),
+                    validation_execution_tx_finalize_digest_submit_ms =
+                        validation.map(|timings| timings.execution_tx_finalize_digest_submit_ms),
+                    validation_execution_tx_finalize_dataspaces_ms =
+                        validation.map(|timings| timings.execution_tx_finalize_dataspaces_ms),
+                    validation_execution_tx_finalize_tx_set_ms =
+                        validation.map(|timings| timings.execution_tx_finalize_tx_set_ms),
+                    validation_execution_tx_finalize_transcripts_ms =
+                        validation.map(|timings| timings.execution_tx_finalize_transcripts_ms),
+                    validation_execution_tx_finalize_axt_ms =
+                        validation.map(|timings| timings.execution_tx_finalize_axt_ms),
+                    validation_execution_tx_finalize_set_results_ms =
+                        validation.map(|timings| timings.execution_tx_finalize_set_results_ms),
+                    validation_execution_tx_finalize_other_ms =
+                        validation.map(|timings| timings.execution_tx_finalize_other_ms),
+                    commit_inflight_timeout_ms =
+                        self.config.persistence.commit_inflight_timeout.as_millis(),
+                    "slow commit stage timings"
+                );
+            } else {
+                debug!(
+                    height = pending_height,
+                    view = pending_view,
+                    block = %block_hash,
+                    tx_count = pending_tx_count,
+                    blocking_total_ms = ?blocking_total_ms,
+                    max_observed_stage_ms = ?max_observed_stage_ms,
+                    qc_verify_ms = ?timings.qc_verify_ms,
+                    kura_store_ms = ?timings.kura_store_ms,
+                    state_apply_ms = ?timings.state_apply_ms,
+                    state_commit_ms = ?timings.state_commit_ms,
+                    persist_ms = ?timings.persist_ms,
+                    validation_total_ms = validation.map(|timings| timings.total_ms),
+                    validation_stateless_ms = validation.map(|timings| timings.stateless_ms),
+                    validation_execution_ms = validation.map(|timings| timings.execution_ms),
+                    validation_execution_tx_ms =
+                        validation.map(|timings| timings.execution_tx_ms),
+                    validation_execution_tx_signature_batch_ms =
+                        validation.map(|timings| timings.execution_tx_signature_batch_ms),
+                    validation_execution_tx_stateless_ms =
+                        validation.map(|timings| timings.execution_tx_stateless_ms),
+                    validation_execution_tx_access_ms =
+                        validation.map(|timings| timings.execution_tx_access_ms),
+                    validation_execution_tx_overlay_ms =
+                        validation.map(|timings| timings.execution_tx_overlay_ms),
+                    validation_execution_tx_dag_ms =
+                        validation.map(|timings| timings.execution_tx_dag_ms),
+                    validation_execution_tx_schedule_ms =
+                        validation.map(|timings| timings.execution_tx_schedule_ms),
+                    validation_execution_tx_apply_ms =
+                        validation.map(|timings| timings.execution_tx_apply_ms),
+                    validation_execution_tx_apply_setup_ms =
+                        validation.map(|timings| timings.execution_tx_apply_setup_ms),
+                    validation_execution_tx_apply_layer_build_ms =
+                        validation.map(|timings| timings.execution_tx_apply_layer_build_ms),
+                    validation_execution_tx_apply_prep_ms =
+                        validation.map(|timings| timings.execution_tx_apply_prep_ms),
+                    validation_execution_tx_apply_detached_ms =
+                        validation.map(|timings| timings.execution_tx_apply_detached_ms),
+                    validation_execution_tx_apply_merge_ms =
+                        validation.map(|timings| timings.execution_tx_apply_merge_ms),
+                    validation_execution_tx_apply_fallback_ms =
+                        validation.map(|timings| timings.execution_tx_apply_fallback_ms),
+                    validation_execution_tx_apply_quarantine_ms =
+                        validation.map(|timings| timings.execution_tx_apply_quarantine_ms),
+                    validation_execution_tx_apply_sequential_ms =
+                        validation.map(|timings| timings.execution_tx_apply_sequential_ms),
+                    validation_execution_tx_apply_results_ms =
+                        validation.map(|timings| timings.execution_tx_apply_results_ms),
+                    validation_execution_tx_apply_other_ms =
+                        validation.map(|timings| timings.execution_tx_apply_other_ms),
+                    validation_execution_tx_time_triggers_ms =
+                        validation.map(|timings| timings.execution_tx_time_triggers_ms),
+                    validation_execution_tx_finalize_ms =
+                        validation.map(|timings| timings.execution_tx_finalize_ms),
+                    validation_execution_tx_finalize_digest_submit_ms =
+                        validation.map(|timings| timings.execution_tx_finalize_digest_submit_ms),
+                    validation_execution_tx_finalize_dataspaces_ms =
+                        validation.map(|timings| timings.execution_tx_finalize_dataspaces_ms),
+                    validation_execution_tx_finalize_tx_set_ms =
+                        validation.map(|timings| timings.execution_tx_finalize_tx_set_ms),
+                    validation_execution_tx_finalize_transcripts_ms =
+                        validation.map(|timings| timings.execution_tx_finalize_transcripts_ms),
+                    validation_execution_tx_finalize_axt_ms =
+                        validation.map(|timings| timings.execution_tx_finalize_axt_ms),
+                    validation_execution_tx_finalize_set_results_ms =
+                        validation.map(|timings| timings.execution_tx_finalize_set_results_ms),
+                    validation_execution_tx_finalize_other_ms =
+                        validation.map(|timings| timings.execution_tx_finalize_other_ms),
+                    "commit stage timings"
+                );
+            }
         }
 
         match outcome {
@@ -3212,32 +3551,58 @@ impl Actor {
                                 "vNext-owned frontier validation exceeded legacy inline fallback timeout; keeping validation deferred"
                             );
                         } else {
-                            warn!(
-                                height = pending_height_snapshot,
-                                view = pending_view_snapshot,
-                                block = %hash,
-                                pending_age_ms = pending_age.as_millis(),
-                                inline_fallback_timeout_ms = inline_fallback_timeout.as_millis(),
-                                "pending frontier validation exceeded legacy inline fallback timeout; redriving validation through vNext"
-                            );
-                            if let Some((height, view, payload_hash)) =
-                                self.pending.pending_blocks.get(&hash).map(|pending| {
-                                    (pending.height, pending.view, pending.payload_hash)
+                            let redrive_now = Instant::now();
+                            if let Some((height, view, payload_hash, should_redrive)) =
+                                self.pending.pending_blocks.get_mut(&hash).map(|pending| {
+                                    let should_redrive = pending.validation_redrive_due(
+                                        redrive_now,
+                                        inline_fallback_timeout,
+                                    );
+                                    if should_redrive {
+                                        pending.mark_validation_redrive(redrive_now);
+                                    }
+                                    (
+                                        pending.height,
+                                        pending.view,
+                                        pending.payload_hash,
+                                        should_redrive,
+                                    )
                                 })
                             {
-                                debug!(
-                                    height,
-                                    view,
-                                    block = %hash,
-                                    reason = "commit_pipeline_queue_full_redrive",
-                                    "redriving pending validation through vNext"
-                                );
-                                let _ = self.drive_vnext_validation_for_pending(
-                                    hash,
-                                    height,
-                                    view,
-                                    payload_hash,
-                                );
+                                if !should_redrive {
+                                    debug!(
+                                        height,
+                                        view,
+                                        block = %hash,
+                                        pending_age_ms = pending_age.as_millis(),
+                                        inline_fallback_timeout_ms =
+                                            inline_fallback_timeout.as_millis(),
+                                        "pending frontier validation redrive is cooling down"
+                                    );
+                                } else {
+                                    warn!(
+                                        height = pending_height_snapshot,
+                                        view = pending_view_snapshot,
+                                        block = %hash,
+                                        pending_age_ms = pending_age.as_millis(),
+                                        inline_fallback_timeout_ms =
+                                            inline_fallback_timeout.as_millis(),
+                                        "pending frontier validation exceeded legacy inline fallback timeout; redriving validation through vNext"
+                                    );
+                                    debug!(
+                                        height,
+                                        view,
+                                        block = %hash,
+                                        reason = "commit_pipeline_queue_full_redrive",
+                                        "redriving pending validation through vNext"
+                                    );
+                                    let _ = self.drive_vnext_validation_for_pending(
+                                        hash,
+                                        height,
+                                        view,
+                                        payload_hash,
+                                    );
+                                }
                             }
                         }
                     }
@@ -4196,11 +4561,14 @@ impl Actor {
         }
 
         let now = Instant::now();
-        let payload_materialized_locally = self.frontier_block_materialized_locally(block_hash);
-        let recovery_tracked_before_decision = self
-            .pending
-            .missing_commit_qc_requests
-            .contains_key(&block_hash);
+        let payload_materialized_locally = pending_override.is_some_and(|pending| {
+            pending.block.hash() == block_hash
+                && pending.height == height
+                && pending.view == view
+                && pending.validation_status == ValidationStatus::Valid
+                && !pending.is_retry_aborted()
+        }) || self
+            .frontier_block_materialized_locally(block_hash);
         let mut request_stalled = false;
         if height == self.committed_height_snapshot().saturating_add(1) {
             let stall_window = self.frontier_slot_lag_window();
@@ -4220,7 +4588,7 @@ impl Actor {
             let lag_window_expired =
                 !payload_materialized_locally && self.frontier_slot_lag_window_expired(height, now);
             let catchup_stalled =
-                dependency_stalled || (!payload_materialized_locally && dwell_stalled);
+                !payload_materialized_locally && (dependency_stalled || dwell_stalled);
             let mut catchup_advance = FrontierRecoveryAdvance::None;
             if catchup_stalled || lag_window_expired {
                 catchup_advance = self.handle_frontier_slot_event(
@@ -4235,21 +4603,6 @@ impl Actor {
                 && self.request_range_pull_from_anchor(height, "frontier_stall_reset_fallback", now)
             {
                 catchup_advance = FrontierRecoveryAdvance::CatchUp;
-            }
-            if payload_materialized_locally
-                && request_stalled
-                && matches!(catchup_advance, FrontierRecoveryAdvance::CatchUp)
-            {
-                info!(
-                    height,
-                    view,
-                    block = %block_hash,
-                    request_stalled,
-                    catchup_advance = ?catchup_advance,
-                    trigger,
-                    "routing known-block commit-QC recovery through frontier stall-reset catch-up"
-                );
-                return true;
             }
             if !payload_materialized_locally
                 && (self.frontier_slot_allows_deep_catchup(height, "frontier_stall_reset")
@@ -4328,7 +4681,7 @@ impl Actor {
                 target_kind,
             } => {
                 if height == self.committed_height_snapshot().saturating_add(1)
-                    && (!payload_materialized_locally || !recovery_tracked_before_decision)
+                    && !payload_materialized_locally
                     && !request_stalled
                     && self.try_route_missing_block_through_exact_frontier_slot(
                         block_hash, height, view, &targets,
@@ -6695,6 +7048,13 @@ impl Actor {
         } else {
             None
         };
+        let (chain_order_hash, rechain_seq) = self
+            .vnext_chain_order_binding_for_signature_topology(
+                qc.height,
+                qc.view,
+                consensus_mode,
+                &signature_topology,
+            );
         let rebuilt = self.build_qc_from_signers(
             QcBuildContext {
                 phase: qc.phase,
@@ -6702,6 +7062,8 @@ impl Actor {
                 height: qc.height,
                 view: qc.view,
                 epoch: qc.epoch,
+                chain_order_hash,
+                rechain_seq,
                 mode_tag: mode_tag.to_string(),
                 highest_qc: None,
             },
@@ -8085,6 +8447,45 @@ mod tests {
     // Use a conservative timeout to avoid flakiness in wake/result channel assertions.
     const COMMIT_WORKER_TIMEOUT: Duration = Duration::from_secs(60);
 
+    #[test]
+    fn commit_stage_timings_threshold_uses_clear_latency_helpers() {
+        let timings = CommitStageTimings {
+            qc_verify_ms: Some(3_000),
+            persist_ms: Some(2_100),
+            kura_store_ms: Some(100),
+            state_apply_ms: Some(1_000),
+            state_commit_ms: Some(1_000),
+            validation: None,
+            used_prevalidated_artifact: false,
+        };
+
+        assert_eq!(timings.blocking_total_ms(), Some(5_100));
+        assert_eq!(timings.max_observed_stage_ms(), Some(3_000));
+        assert!(commit_stage_timings_exceed_threshold(
+            timings,
+            Duration::from_secs(5)
+        ));
+        assert!(!commit_stage_timings_exceed_threshold(
+            timings,
+            Duration::from_secs(6)
+        ));
+        assert!(!commit_stage_timings_exceed_threshold(
+            timings,
+            Duration::ZERO
+        ));
+
+        let slow_stage = CommitStageTimings {
+            state_apply_ms: Some(6_000),
+            ..CommitStageTimings::default()
+        };
+        assert_eq!(slow_stage.blocking_total_ms(), None);
+        assert_eq!(slow_stage.max_observed_stage_ms(), Some(6_000));
+        assert!(commit_stage_timings_exceed_threshold(
+            slow_stage,
+            Duration::from_secs(5)
+        ));
+    }
+
     struct CommitFixture {
         genesis_key: KeyPair,
         genesis_account_id: AccountId,
@@ -8647,6 +9048,87 @@ mod tests {
         assert_eq!(
             lengths_after, lengths_before,
             "retrying an already durable block must not append duplicate bytes"
+        );
+    }
+
+    #[test]
+    fn execute_commit_work_uses_trusted_validated_commit_artifact() {
+        let fixture = commit_fixture_with_kura(Kura::blank_kura_for_testing());
+        let block = genesis_log_block(
+            &fixture.chain_id,
+            &fixture.genesis_account_id,
+            &fixture.genesis_key,
+            "prevalidated commit artifact",
+        );
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let mut state_block = fixture.state.block(block.header());
+        let _valid = crate::block::ValidBlock::validate_unchecked(block.clone(), &mut state_block)
+            .unpack(|_| {});
+        let exec_witness = state_block
+            .take_exec_witness()
+            .expect("validation captures execution witness");
+        let artifact = ValidatedCommitArtifact {
+            block_hash,
+            height,
+            view,
+            parent_state_root: parent_state_from_witness(&exec_witness),
+            post_state_root: post_state_from_witness(&exec_witness),
+        };
+        drop(state_block);
+
+        let consensus_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let topology = vec![PeerId::new(consensus_key.public_key().clone())];
+        let signers_bitmap = vec![0b0000_0001];
+        let keypairs = vec![consensus_key];
+        let qc = crate::sumeragi::consensus::Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: artifact.parent_state_root,
+            post_state_root: artifact.post_state_root,
+            height,
+            view,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: super::super::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&topology),
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: topology.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                bls_aggregate_signature: aggregate_signature_for_bitmap(
+                    &fixture.chain_id,
+                    super::super::PERMISSIONED_TAG,
+                    crate::sumeragi::consensus::Phase::Commit,
+                    block_hash,
+                    height,
+                    view,
+                    0,
+                    &signers_bitmap,
+                    &keypairs,
+                ),
+                signers_bitmap,
+            },
+        };
+        let mut work = commit_work(5, block, topology);
+        work.validated_commit_artifact = Some(artifact);
+        work.commit_qc = Some(qc);
+
+        let (outcome, timings) = execute_commit_work_on_sumeragi_thread(
+            &fixture.state,
+            fixture.kura.as_ref(),
+            &fixture.chain_id,
+            &fixture.genesis_account_id,
+            work,
+        );
+        let CommitOutcome::Success { .. } = outcome else {
+            panic!("expected commit success");
+        };
+        assert!(
+            timings.used_prevalidated_artifact,
+            "matching artifact and commit QC roots should use the prevalidated commit path"
         );
     }
 

@@ -3,18 +3,17 @@
 #![cfg(feature = "app_api")]
 #![allow(clippy::too_many_lines)]
 
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use axum::{Router, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_config::parameters::defaults;
 use iroha_core::{
     kura::Kura,
-    query::store::LiveQueryStore,
+    query::{insert_proof_tags_for_test, store::LiveQueryStore},
     state::{State, World},
 };
 use iroha_data_model::proof::{ProofId, ProofRecord, ProofStatus};
-use nonzero_ext::nonzero;
 use tower::ServiceExt as _;
 
 #[tokio::test]
@@ -22,71 +21,53 @@ async fn proofs_list_and_count_with_filters() {
     // Build minimal state
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::new(), kura, query);
+    let mut state = State::new_for_testing(World::new(), kura, query);
 
-    // Seed two proofs under the same backend; assign tags for one
+    // Seed proofs through the helper so derived indexes such as proofs_by_status stay consistent.
     let backend = "halo2/ipa";
-    {
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut stx = block.transaction();
-        let id1 = ProofId {
-            backend: backend.into(),
-            proof_hash: [0x01; 32],
-        };
-        let rec1 = ProofRecord {
-            id: id1.clone(),
-            vk_ref: None,
-            vk_commitment: None,
-            status: ProofStatus::Verified,
-            verified_at_height: Some(1),
-            bridge: None,
-        };
-        stx.world.proofs_mut_for_testing().insert(id1.clone(), rec1);
-        // Tag index for id1
-        stx.world
-            .proof_tags_mut_for_testing()
-            .insert(id1.clone(), vec![*b"PROF", *b"I10P"]);
-        stx.world
-            .proofs_by_tag_mut_for_testing()
-            .insert(*b"PROF", vec![id1.clone()]);
-        stx.world
-            .proofs_by_tag_mut_for_testing()
-            .insert(*b"I10P", vec![id1.clone()]);
+    let id1 = ProofId {
+        backend: backend.into(),
+        proof_hash: [0x01; 32],
+    };
+    let rec1 = ProofRecord {
+        id: id1.clone(),
+        vk_ref: None,
+        vk_commitment: None,
+        status: ProofStatus::Verified,
+        verified_at_height: Some(1),
+        bridge: None,
+    };
+    iroha_core::query::insert_proof_record_for_test(&mut state, id1.clone(), rec1);
 
-        let id2 = ProofId {
-            backend: backend.into(),
-            proof_hash: [0x02; 32],
-        };
-        let rec2 = ProofRecord {
-            id: id2.clone(),
-            vk_ref: None,
-            vk_commitment: None,
-            status: ProofStatus::Rejected,
-            verified_at_height: Some(2),
-            bridge: None,
-        };
-        stx.world.proofs_mut_for_testing().insert(id2.clone(), rec2);
-        let id3 = ProofId {
-            backend: backend.into(),
-            proof_hash: [0x03; 32],
-        };
-        let rec3 = ProofRecord {
-            id: id3.clone(),
-            vk_ref: None,
-            vk_commitment: None,
-            status: ProofStatus::Submitted,
-            verified_at_height: None,
-            bridge: None,
-        };
-        stx.world.proofs_mut_for_testing().insert(id3.clone(), rec3);
-        stx.apply();
-        block
-            .transactions
-            .insert_block(HashSet::new(), nonzero!(1_usize));
-        let _ = block.commit();
-    }
+    let id2 = ProofId {
+        backend: backend.into(),
+        proof_hash: [0x02; 32],
+    };
+    let rec2 = ProofRecord {
+        id: id2.clone(),
+        vk_ref: None,
+        vk_commitment: None,
+        status: ProofStatus::Rejected,
+        verified_at_height: Some(2),
+        bridge: None,
+    };
+    iroha_core::query::insert_proof_record_for_test(&mut state, id2, rec2);
+
+    let id3 = ProofId {
+        backend: backend.into(),
+        proof_hash: [0x03; 32],
+    };
+    let rec3 = ProofRecord {
+        id: id3.clone(),
+        vk_ref: None,
+        vk_commitment: None,
+        status: ProofStatus::Submitted,
+        verified_at_height: None,
+        bridge: None,
+    };
+    iroha_core::query::insert_proof_record_for_test(&mut state, id3, rec3);
+
+    insert_proof_tags_for_test(&mut state, id1.clone(), vec![*b"PROF", *b"I10P"]);
 
     let state = Arc::new(state);
     let limits = iroha_torii::ProofApiLimits::default();

@@ -2867,6 +2867,16 @@ pub mod sumeragi {
     pub const VALIDATION_QUEUE_FULL_INLINE_CUTOVER_DIVISOR: u32 = 2;
     /// Maximum transaction count for inline validation of fast-finality blocks.
     pub const VALIDATION_FAST_FINALITY_INLINE_MAX_TRANSACTIONS: usize = 16;
+    /// DA-mode per-external-entrypoint validation stall floor (milliseconds).
+    pub const VALIDATION_STALL_DA_PER_ENTRYPOINT_FLOOR_MS: u64 = 16;
+    /// Multiplier applied to inline fallback timeout when deriving worker stall timeout.
+    pub const VALIDATION_STALL_INLINE_FALLBACK_MULTIPLIER: u32 = 6;
+    /// Multiplier applied to validation duration EMA when deriving worker stall timeout.
+    pub const VALIDATION_STALL_EMA_MULTIPLIER: u32 = 3;
+    /// Non-DA cap for validation worker stall timeout (milliseconds).
+    pub const VALIDATION_STALL_NON_DA_CAP_MS: u64 = 15_000;
+    /// DA cap for validation worker stall timeout (milliseconds).
+    pub const VALIDATION_STALL_DA_CAP_MS: u64 = 90_000;
     /// QC verify worker threads (0 = auto).
     pub const QC_VERIFY_WORKER_THREADS: usize = 0;
     /// QC verify work queue capacity per worker (0 = auto).

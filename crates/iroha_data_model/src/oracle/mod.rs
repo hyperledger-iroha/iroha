@@ -1148,6 +1148,8 @@ pub struct FeedEvent {
     pub feed_config_version: FeedConfigVersion,
     /// Slot index.
     pub slot: FeedSlot,
+    /// Canonical request hash for the processed window.
+    pub request_hash: Hash,
     /// Aggregation outcome.
     pub outcome: FeedEventOutcome,
 }
@@ -1271,6 +1273,19 @@ impl OracleProviderStats {
     pub fn record_slash(&mut self) {
         self.slashes = self.slashes.saturating_add(1);
     }
+}
+
+/// Query record carrying a provider key together with its aggregate counters.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct OracleProviderStatsRecord {
+    /// Feed/provider key identifying the counters.
+    pub key: OracleProviderKey,
+    /// Aggregate counters for the provider.
+    pub stats: OracleProviderStats,
 }
 
 /// Identifier for an oracle dispute.
@@ -1691,6 +1706,7 @@ impl AggregationOutput {
             feed_id: self.report.feed_id.clone(),
             feed_config_version: self.report.feed_config_version,
             slot: self.report.slot,
+            request_hash: self.report.request_hash,
             outcome: self.outcome,
         }
     }
@@ -1757,6 +1773,60 @@ pub enum OracleAggregationError {
     /// Outlier filtering rejected all values.
     #[error("no inlier values after outlier filtering")]
     NoInliers,
+    /// Not enough observations reached quorum for the requested outcome.
+    #[error("insufficient oracle quorum: required {required}, provided {provided}")]
+    InsufficientQuorum {
+        /// Required observations for quorum.
+        required: u16,
+        /// Observations available for the attempted outcome.
+        provided: usize,
+    },
+    /// The feed/version/slot/request window was already processed.
+    #[error(
+        "oracle window already processed: feed `{feed_id}` version {} slot {slot} request {request_hash}",
+        feed_config_version.0
+    )]
+    ProcessedWindow {
+        /// Feed identifier.
+        feed_id: FeedId,
+        /// Feed configuration version.
+        feed_config_version: FeedConfigVersion,
+        /// Slot index.
+        slot: FeedSlot,
+        /// Request hash.
+        request_hash: Hash,
+    },
+    /// The requested window is older than the feed replay window.
+    #[error(
+        "stale oracle window: feed `{feed_id}` version {} slot {slot} request {request_hash}, latest slot {latest_slot}, replay window {replay_window_slots}",
+        feed_config_version.0
+    )]
+    StaleWindow {
+        /// Feed identifier.
+        feed_id: FeedId,
+        /// Feed configuration version.
+        feed_config_version: FeedConfigVersion,
+        /// Slot index.
+        slot: FeedSlot,
+        /// Request hash.
+        request_hash: Hash,
+        /// Latest retained processed slot for this feed.
+        latest_slot: FeedSlot,
+        /// Replay window length in slots.
+        replay_window_slots: u64,
+    },
+    /// Error observations exceeded the feed error-rate budget.
+    #[error(
+        "oracle error rate exceeded: errors {errors}, observations {observations}, max {max_error_rate_bps} bps"
+    )]
+    ErrorRateExceeded {
+        /// Error observations in the window.
+        errors: usize,
+        /// Total observations in the window.
+        observations: usize,
+        /// Maximum tolerated error rate in basis points.
+        max_error_rate_bps: u16,
+    },
 }
 
 /// Stable rejection codes for oracle aggregation failures.
@@ -1792,6 +1862,14 @@ pub enum OracleRejectionCode {
     AggregationValueTooLong,
     /// Outlier filtering rejected all values.
     AggregationNoInliers,
+    /// Not enough observations reached quorum.
+    AggregationInsufficientQuorum,
+    /// Window was already processed.
+    AggregationProcessedWindow,
+    /// Window is older than the configured replay window.
+    AggregationStaleWindow,
+    /// Error observations exceeded the configured error-rate budget.
+    AggregationErrorRateExceeded,
 }
 
 impl OracleRejectionCode {
@@ -1814,6 +1892,10 @@ impl OracleRejectionCode {
             Self::AggregationMismatchedScale => "oracle_agg_mismatched_scale",
             Self::AggregationValueTooLong => "oracle_agg_value_too_long",
             Self::AggregationNoInliers => "oracle_agg_no_inliers",
+            Self::AggregationInsufficientQuorum => "oracle_agg_insufficient_quorum",
+            Self::AggregationProcessedWindow => "oracle_agg_processed_window",
+            Self::AggregationStaleWindow => "oracle_agg_stale_window",
+            Self::AggregationErrorRateExceeded => "oracle_agg_error_rate_exceeded",
         }
     }
 
@@ -1856,6 +1938,18 @@ impl OracleRejectionCode {
             Self::AggregationNoInliers => {
                 "outlier filtering rejected all observations for the slot"
             }
+            Self::AggregationInsufficientQuorum => {
+                "not enough matching oracle observations reached quorum"
+            }
+            Self::AggregationProcessedWindow => {
+                "the feed/version/slot/request window was already processed"
+            }
+            Self::AggregationStaleWindow => {
+                "the feed/version/slot/request window is outside the replay window"
+            }
+            Self::AggregationErrorRateExceeded => {
+                "connector error observations exceeded the configured error-rate budget"
+            }
         }
     }
 
@@ -1877,7 +1971,11 @@ impl OracleRejectionCode {
             | Self::AggregationTooManyObservations
             | Self::AggregationMismatchedScale
             | Self::AggregationValueTooLong
-            | Self::AggregationNoInliers => "aggregation",
+            | Self::AggregationNoInliers
+            | Self::AggregationInsufficientQuorum
+            | Self::AggregationProcessedWindow
+            | Self::AggregationStaleWindow
+            | Self::AggregationErrorRateExceeded => "aggregation",
         }
     }
 
@@ -1900,6 +1998,10 @@ impl OracleRejectionCode {
             Self::AggregationMismatchedScale,
             Self::AggregationValueTooLong,
             Self::AggregationNoInliers,
+            Self::AggregationInsufficientQuorum,
+            Self::AggregationProcessedWindow,
+            Self::AggregationStaleWindow,
+            Self::AggregationErrorRateExceeded,
         ]
     }
 }
@@ -1922,6 +2024,12 @@ impl From<&OracleAggregationError> for OracleRejectionCode {
             OracleAggregationError::MismatchedScale { .. } => Self::AggregationMismatchedScale,
             OracleAggregationError::ValueTooLong { .. } => Self::AggregationValueTooLong,
             OracleAggregationError::NoInliers => Self::AggregationNoInliers,
+            OracleAggregationError::InsufficientQuorum { .. } => {
+                Self::AggregationInsufficientQuorum
+            }
+            OracleAggregationError::ProcessedWindow { .. } => Self::AggregationProcessedWindow,
+            OracleAggregationError::StaleWindow { .. } => Self::AggregationStaleWindow,
+            OracleAggregationError::ErrorRateExceeded { .. } => Self::AggregationErrorRateExceeded,
         }
     }
 }
@@ -2038,8 +2146,21 @@ pub fn aggregate_observations(
         }
     }
 
-    if values.is_empty() {
+    let observation_count = values.len().saturating_add(errors.len());
+    if observation_count > 0
+        && u128::from(errors.len() as u64) * 10_000
+            > u128::from(observation_count as u64) * u128::from(config.max_error_rate_bps)
+    {
+        return Err(OracleAggregationError::ErrorRateExceeded {
+            errors: errors.len(),
+            observations: observation_count,
+            max_error_rate_bps: config.max_error_rate_bps,
+        });
+    }
+
+    if values.len() < usize::from(config.min_signers) {
         if let Some(code) = errors.first().copied()
+            && errors.len() >= usize::from(config.min_signers)
             && errors.iter().all(|candidate| *candidate == code)
         {
             let empty_report = ReportBody {
@@ -2056,17 +2177,10 @@ pub fn aggregate_observations(
             });
         }
 
-        let empty_report = ReportBody {
-            feed_id: config.feed_id.clone(),
-            feed_config_version: config.feed_config_version,
-            slot,
-            request_hash,
-            entries: Vec::new(),
-            submitter,
-        };
-        return Ok(AggregationOutput {
-            report: empty_report,
-            outcome: FeedEventOutcome::Missing,
+        let provided = values.len().max(errors.len());
+        return Err(OracleAggregationError::InsufficientQuorum {
+            required: config.min_signers,
+            provided,
         });
     }
 
@@ -2126,8 +2240,11 @@ pub fn aggregate_observations(
         .filter_map(|((_, mantissa, _), inlier)| inlier.then_some(*mantissa))
         .collect();
 
-    if inlier_values.is_empty() {
-        return Err(OracleAggregationError::NoInliers);
+    if inlier_values.len() < usize::from(config.min_signers) {
+        return Err(OracleAggregationError::InsufficientQuorum {
+            required: config.min_signers,
+            provided: inlier_values.len(),
+        });
     }
 
     inlier_values.sort_unstable();
@@ -3015,13 +3132,14 @@ mod tests {
         );
         assert!(matches!(
             all_outliers,
-            Err(OracleAggregationError::NoInliers)
+            Err(OracleAggregationError::InsufficientQuorum { .. })
         ));
     }
 
     #[test]
     fn aggregation_handles_errors_and_missing() {
-        let config = sample_feed_config();
+        let mut config = sample_feed_config();
+        config.max_error_rate_bps = 10_000;
         let request_hash = sample_request_hash();
         let providers = sample_providers();
         let errors_only = aggregate_observations(
@@ -3045,8 +3163,11 @@ mod tests {
         assert!(errors_only.report.entries.is_empty());
 
         let missing = aggregate_observations(&config, 10, request_hash, providers[0].clone(), &[])
-            .expect("empty observations produce missing");
-        assert!(matches!(missing.outcome, FeedEventOutcome::Missing));
+            .expect_err("empty observations cannot satisfy quorum");
+        assert!(matches!(
+            missing,
+            OracleAggregationError::InsufficientQuorum { .. }
+        ));
     }
 
     #[test]
@@ -3101,7 +3222,10 @@ mod tests {
             &[first, mismatched],
         )
         .expect_err("mixed UAID hashes should be rejected");
-        assert!(matches!(err, OracleAggregationError::NoInliers));
+        assert!(matches!(
+            err,
+            OracleAggregationError::InsufficientQuorum { .. }
+        ));
     }
 
     #[test]

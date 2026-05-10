@@ -1,6 +1,448 @@
 # Status
 
-Last updated: 2026-05-09
+Last updated: 2026-05-10
+
+## 2026-05-10 Izanami proposal stale-window and block-cap tuning
+
+- Sumeragi proposal assembly now scales the stale-view guard by proposal
+  fullness: small proposals still use the base quorum timeout, a full
+  4,096-transaction proposal gets one extra quorum window for shared-host
+  scheduling jitter, and larger proposal experiments remain capped at four
+  windows. The one-transaction stale-proposal regression still aborts and
+  requeues before broadcast.
+- The 8,192 and 16,384 max-transaction experiments did not improve the 20k
+  gate. The 16,384 run no longer self-aborted after the larger-batch grace, but
+  regressed into multi-second validation/merge waits and commit-inflight churn;
+  the 8,192 run tied the earlier approval count with worse latency/churn. The
+  Izanami high-TPS stable profile therefore stays at the proven 4,096 block
+  cap.
+- Final 20k FASTPQ GPU gate evidence:
+  `dist/izanami-prebuilt-20k-fastpq-gpu-low-contention-8192-block4096-fullbatchgrace-final-120s-20260510-140229`
+  accepted and succeeded all `2,400,000` submissions with zero failures,
+  submit latency `p50=3ms`, `p95=12ms`, `p99=72ms`, `max=201ms`, strict height
+  `17`, strict approved `61,495`, peer height skew `1`, and peer approval skew
+  `4,096`. The diagnostic grep found stale proposal aborts `0`, detached apply
+  fallback `0`, slow commit-stage timings `0`, and no `no proposal observed`
+  errors. The final Sumeragi digest reported view-change installs `0` and
+  commit-inflight timeout total `0`.
+- The queue still saturated (`873,313 / 2,400,000`) and the run ended with a
+  commit in flight at height `18`, so the remaining 20k work is still queue
+  drain and commit/QC cadence under sustained ingress, not the single-block
+  merge path or a larger block cap.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/sumeragi/main_loop/propose.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs crates/izanami/src/chaos.rs`
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/sumeragi/main_loop/propose.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs crates/izanami/src/chaos.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-stable-workload cargo test -p iroha_core --lib proposal_assembly_stale_window_scales_for_large_batches -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-stable-workload cargo test -p iroha_core --lib stale_proposal_assembly_aborts_before_broadcast_and_requeues -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-stable-workload cargo test -p iroha_core --lib force_view_change_if_idle_defers_empty_frontier_missing_qc_under_tx_backlog_after_reacquire -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-stable-workload cargo test -p izanami make_network_builder_applies_pipeline_time -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-20k-stable-low-contention-20260510 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`
+  - The 120s 20k Izanami FASTPQ GPU gate above
+  - `git diff --check`
+
+## 2026-05-10 Izanami simple-transfer batch merge gate
+
+- The detached single-transfer merge fast path now has a block-level simple
+  transfer batch path for preseeded receiver assets. Eligibility checks the
+  exact transfer data events against enabled data-trigger filters, so unrelated
+  data triggers no longer disable the batch path while matching asset/account
+  triggers still keep the per-transaction merge semantics.
+- The transfer transcript regression now also covers batch eligibility for
+  no-trigger, unrelated-trigger, and matching asset-trigger cases, while the
+  batched merge still preserves per-transaction FASTPQ transcript buckets and
+  event streams.
+- 20k FASTPQ GPU gate evidence:
+  `dist/izanami-prebuilt-20k-fastpq-gpu-batch-triggerguard-120s-20260510-121922`
+  accepted and succeeded all `2,400,000` submissions with zero failures,
+  submit latency `p50=3ms`, `p95=30ms`, `p99=80ms`, `max=210ms`, strict
+  height `16`, strict approved `57,378`, and peer height/approval skew `0`.
+  The run emitted no slow commit-stage timing samples, reported
+  commit-inflight timeout total `0`, and ended with commit inflight inactive.
+  The queue still saturated (`869,733 / 2,400,000`), so the remaining 20k work
+  is proposal/QC cadence and queue drain, not the previous multi-second
+  transfer merge sample.
+- Recovery counters from the same gate stayed on the intended paths:
+  cert-only known-block update requests `91`, matching `body_request=false`
+  requests `91`, exact frontier body requests `25`, pending frontier redrives
+  `633`, and no known-block frontier-stall catch-up or exact-body repair
+  routes were observed by the diagnostic grep.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-inflight cargo test -p iroha_core --lib detached_asset_transfer_matches_sequential_transcript_and_events -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-inflight cargo clippy -p iroha_core --tests -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-20k-frontier-metadata-rbc-20260509-180500 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`
+  - 120s 20k Izanami FASTPQ GPU gate above
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+
+## 2026-05-10 Izanami ordered stable transfer fast-merge reruns
+
+- Izanami prebuilt transaction warmup now preserves `WorkloadEngine`
+  generation order when concurrent prebuild workers finish out of order. This
+  keeps the stable workload's deterministic sender/receiver transfer pairs in
+  block order instead of reintroducing avoidable merge conflicts through channel
+  receive order.
+- Stable high-TPS runs now seed at least `8,192` workload accounts. That is
+  enough for one disjoint sender/receiver pair per 4096-transfer block while
+  avoiding the extra state size from the earlier `16,384` account floor.
+- Detached single-transfer merge now uses a dedicated fast path for deltas that
+  contain exactly one transparent numeric transfer and no other operations. It
+  still replays through the same asset policy, FASTPQ transcript, event, and
+  trigger machinery as sequential execution.
+- 20k FASTPQ GPU gate evidence:
+  - Ordered-only stable rerun
+    `dist/izanami-prebuilt-20k-fastpq-gpu-low-contention-ordered-120s-20260510-104110`
+    accepted and succeeded all `2,400,000` submissions, but reached only
+    strict height `6` / strict approved `16,428`; fallback was `0`, while
+    slow samples averaged `validation_execution_tx_apply_merge_ms=6,874ms`.
+  - Adding the transfer fast path with the `16,384` account floor
+    `dist/izanami-prebuilt-20k-fastpq-gpu-low-contention-fastmerge-120s-20260510-111651`
+    reached strict height `9` / strict approved `28,713`, with merge average
+    down to `4,777ms`.
+  - The latest `8,192` account fast-merge gate
+    `dist/izanami-prebuilt-20k-fastpq-gpu-low-contention-8192-fastmerge-120s-20260510-113031`
+    accepted and succeeded all `2,400,000` submissions with zero failures,
+    submit latency `p50=3ms`, `p95=40ms`, `p99=95ms`, `max=337ms`, strict
+    height `12`, strict approved `41,190`, and peer height/approval skew `0`.
+    Slow samples dropped to `7`; merge still averaged `4,211ms`, detached
+    execution averaged `288ms`, fallback and digest-submit were both `0`, and
+    the final queue remained saturated (`852,390 / 2,400,000`).
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-stable-workload cargo test -p izanami ordered_plan_sequence_preserves_stable_transfer_pair_order -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-stable-workload cargo test -p izanami stable_transfer_plan_uses_disjoint_sender_receiver_halves -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-stable-workload cargo test -p izanami prebuilt_stress_queue_capacity_scales_to_buffer -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-stable-workload cargo test -p iroha_core detached_asset_transfer_matches_sequential_transcript_and_events -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-20k-stable-low-contention-20260510 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`
+  - The three 120s 20k Izanami gates listed above
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/state.rs crates/izanami/src/chaos.rs crates/izanami/src/instructions.rs`
+  - `git diff --check`
+
+## 2026-05-10 Sumeragi detached transfer/cert-only recovery gate
+
+- Source-signed transparent numeric asset transfers now have a detached apply
+  path for the large-block validator hot path. The executor records transfers
+  as transfer deltas, merge replays them through the same asset policy,
+  transcript, event, and trigger machinery as sequential ISI execution, and
+  block validation enables the path only for non-genesis, single-instruction
+  transfers where the source account is the transaction authority.
+- Detached merge now receives transaction context (`tx_call_hash`, signed
+  transaction hash, lane, and dataspace) so FASTPQ transfer transcripts from
+  detached execution match sequential execution. The new regression compares
+  sequential and detached transfer transcripts, events, balances, and Poseidon
+  digest.
+- Known-block commit-QC retries for locally materialized payloads now stay on
+  the cert-only fetch path even when the missing-QC request is dependency
+  stalled. The recovery path no longer spends the frontier stall-reset catch-up
+  budget for a block body that is already local.
+- Latest comparable 120s permissioned 20k FASTPQ GPU gate:
+  `dist/izanami-prebuilt-20k-fastpq-gpu-detached-transfer-cert-stall-120s-20260510-110407`.
+  The artifact summary reports `2,400,000` offered, `2,400,000` ingress
+  accepted, `2,400,000` successes, zero failures, submit latency `p50=3ms`,
+  `p95=36ms`, `p99=86ms`, `max=218ms`, strict height `10`, strict approved
+  `32,898`, and peer height/approval skew `0`.
+- The gate confirms the intended routing changes: known-block frontier
+  stall-reset catch-up routes `0`, known-block exact-body repair routes `0`,
+  cert-only known-block update requests `57`, and detached apply fallback
+  `0` across the slow commit samples. The remaining blocker is merge cost:
+  slow commit samples show `validation_execution_tx_apply_merge_ms` p50
+  around `4.3s` per 4096-transfer block, with detached execution itself around
+  `0.15s`.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-inflight cargo test -p iroha_core --lib detached_asset_transfer_matches_sequential_transcript_and_events -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-inflight cargo test -p iroha_core --lib known_block_commit_qc_recovery -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-inflight cargo clippy -p iroha_core --tests -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-20k-frontier-metadata-rbc-20260509-180500 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`
+  - Artifact summary/diagnostic checks over the 20k gate above
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+
+## 2026-05-10 Izanami stable transfer contention audit
+
+- Izanami stable transfer planning now uses deterministic sender/receiver
+  halves instead of random receivers. Stable runs still submit only preseeded
+  `TransferAsset` instructions on the measured hot path, but the generated
+  transfer stream avoids avoidable receiver collisions that inflate
+  block-merge fallback work during large-block profiling.
+- High-TPS stable runs now seed at least `8,192` workload accounts, while
+  chaos high-TPS runs keep the existing `4,096` floor. This gives the 20k
+  stable profile a larger disjoint-pair pool without changing chaos coverage.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-stable-workload cargo test -p izanami stable_transfer_plan_uses_disjoint_sender_receiver_halves -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-stable-workload cargo test -p izanami prebuilt_stress_queue_capacity_scales_to_buffer -- --nocapture`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+
+## 2026-05-10 FASTPQ transcript digest precompute rerun
+
+- Single-delta FASTPQ transfer transcripts now compute and store their Poseidon
+  preimage digest when `StateTransaction::record_transfer_transcript` records
+  the transcript. The pending-transcript coverage now asserts that the digest is
+  available before block drain, so validation/commit no longer has to submit
+  the same single-delta digest work on the hot path.
+- The release build and clean 20k FASTPQ GPU Izanami gate both completed with
+  the rebuilt binaries:
+  `dist/izanami-prebuilt-20k-fastpq-gpu-precomputed-digest-clean-120s-20260510-095052`.
+  Izanami exited `0`, prebuilt and used all `2,400,000` transactions, accepted
+  and succeeded all submissions with zero failures, and reported submit latency
+  `p50=3ms`, `p95=33ms`, `p99=81ms`, `max=222ms`.
+- Final strict progress in the clean run was height `15`, approved `54,008`,
+  with peer height/approval skew `0`; peer stderr logs were empty. Sumeragi
+  reported no commit inflight timeouts and no slow commit stage timings, but
+  the final transaction queue still saturated (`894,605 / 2,400,000`) and one
+  missing-QC view-change signal remained.
+- A separate diagnostic run taken while a local release build was still active
+  is treated as contaminated, but its slow commit-stage lines showed
+  `validation_execution_tx_finalize_digest_submit_ms=0`, confirming that the
+  digest-submit stage has been moved out of the hot path. The remaining 20k
+  blocker is committed-throughput/proposal recovery and real commit reuse, not
+  transcript digest finalization.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-precompute-check cargo check -p iroha_core --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-20k-fastpq-precomputed-digest-20260510 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`
+  - 120s clean 20k Izanami FASTPQ GPU gate using the rebuilt release binaries above
+  - `cargo fmt --all --check`
+  - `git diff --check`
+
+## 2026-05-10 Sumeragi local-payload commit-QC recovery
+
+- Known-block commit-QC recovery no longer routes locally materialized payloads
+  through exact frontier body repair before requesting the missing commit QC.
+  Local payloads now use the existing certificate-only peer fetch path
+  immediately, while payloads that are not materialized locally still arm exact
+  body repair and honor ingress grace.
+- Added focused coverage that separates those two cases and updated the local
+  retry regression so a cert-only retry does not require an active frontier
+  body-repair slot.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-inflight cargo test -p iroha_core --lib known_block_commit_qc_recovery -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-inflight cargo clippy -p iroha_core --tests -- -D warnings`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+
+## 2026-05-10 ISI registry/executor surface cleanup
+
+- The default built-in instruction registry now exposes grouped instruction
+  families through their canonical boxes only: register/unregister, mint/burn,
+  transfer, key-value metadata, grant/revoke, RWA, repo, and settlement. Direct
+  generic/grouped wire names such as `Register<Domain>`, concrete
+  mint/burn/transfer variants, `Grant<Permission, Account>`, `RepoIsi`, and
+  `DvpIsi` are intentionally absent from the default registry, while the boxed
+  families keep stable wire IDs.
+- Missing standalone executable ISIs are now registered and dispatched for
+  oracle disputes/governance/Twitter bindings, SoraDNS, content bundles,
+  confidential parameter lifecycle, SoraFS pricing/credit, public-lane staking
+  reward/bond/unbond/slash/claim flows, `RebindPublicLaneValidatorPeer`,
+  `ExpireSpaceDirectoryManifest`, and `RemoveSmartContractBytes`.
+- Added registry/dispatch drift coverage in `iroha_core` and data-model
+  registry coverage that proves direct grouped variants stay unregistered while
+  boxed stable IDs and the new standalone surface decode.
+- Removed the dead SoraFS `RecordReplicationReceipt` data-model ISI and its
+  unused data-model receipt status/record types. The Kotlin and Java Android
+  typed builders for that removed instruction were deleted as well; the
+  independent `sorafs_manifest` receipt records remain.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+  - `cargo test -p iroha_data_model instruction_registry`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-registry cargo test -p iroha_data_model instruction_registry`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-registry cargo test -p iroha_data_model registry`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-registry cargo test -p iroha_core --lib default_instruction_registry_entries_have_core_dispatch_handlers`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-registry cargo test -p iroha_core --lib oracle`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-registry cargo test -p iroha_core --test oracle`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-registry cargo test -p iroha_core --test social_viral_incentives`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-registry cargo test -p iroha_core --test confidential_params_registry` (compiled; no runnable tests under the active cfg)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-isi-registry cargo test -p iroha_core --lib smartcontracts::isi` compiles and runs the broad slice but still fails existing non-registry transfer/NFT/SNS/VPN tests that require separate fixture repair.
+
+## 2026-05-10 Sumeragi vNext/Izanami 20k restart
+
+- Repaired the Sumeragi vNext unit-test harness after the runtime `Reactor`
+  boundary removal: direct actor-owned vNext dispatch, validation rejection,
+  commit persistence, proposal acceptance, and availability handoff tests now
+  bind vote/QC chain-order through the active signing topology.
+- Torii query batch canonicalization now covers the oracle and Twitter binding
+  output variants, and Torii test utilities include the current Sumeragi worker
+  validation-stall defaults.
+- Test-network genesis now wraps peer PoP registration through the registered
+  `RegisterBox::Peer` shape via `InstructionBox::from(register)` and expands
+  topology entries only into the HSM-bound registration path. This fixes the
+  Izanami genesis signing panic from a raw `RegisterPeerWithPop` Norito payload
+  and avoids duplicate plain peer registrations.
+- Fresh 20k FASTPQ GPU gate:
+  `dist/izanami-prebuilt-20k-fastpq-gpu-direct-digest-batch-120s-20260510-033617`.
+  Izanami exited `0`, prebuilt/used all `2,400,000` transactions, accepted and
+  succeeded all submissions with zero failures, and reported submit latency
+  `p50=3ms`, `p95=33ms`, `p99=79ms`, `max=191ms`. Final strict progress was
+  height `17`, approved `61,543`, peer height/approval skew `0`; peer stderr
+  logs were empty. The run still ended with a saturated transaction queue
+  (`866,385 / 2,400,000`) and one missing-QC view-change signal, so the next
+  throughput slice remains queue drain/block validation and commit reuse.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-inflight cargo test -p iroha_core --lib validate_block_for_voting_records_timings -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-inflight cargo test -p iroha_core --lib commit_stage_timings_threshold_uses_non_overlapping_total -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-inflight cargo test -p iroha_data_model set_transaction_results --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-inflight cargo test -p fastpq_prover direct_gpu_batch_limit_covers_izanami_block_shape --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-inflight cargo test -p iroha_test_network genesis_registers_peers_with_pop --lib -- --nocapture`
+  - Direct `iroha_core --lib` vNext tests:
+    `vnext_dispatch_validation_queues_worker_and_accepts_result`,
+    `vnext_reject_validation_aborts_slot_and_removes_pending`,
+    `vnext_commit_persisted_marks_round_slot_committed`,
+    `vnext_proposal_accepted_marks_round_slot_proposed`, and
+    `vnext_availability_ready_marks_round_slot_awaiting_validation`.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-inflight cargo clippy -p fastpq_prover -p iroha_data_model -p iroha_core --lib -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-inflight cargo clippy -p iroha_core --tests -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-inflight cargo clippy -p iroha_torii -p iroha_test_network --lib -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-20k-frontier-metadata-rbc-20260509-180500 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`
+  - 120s 20k Izanami FASTPQ GPU gate using the rebuilt release binaries above
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+
+## 2026-05-10 Sumeragi/Data-Model fallback cleanup
+
+- `SignedBlock::set_transaction_results*` is now fallible and validates
+  external entrypoint hash prefixes plus existing consensus merkle roots before
+  mutating block result roots. `presigned_with_payload` no longer hydrates the
+  legacy transaction cache implicitly; RBC recovery explicitly hydrates decoded
+  payloads with `BlockPayload::hydrate_legacy_transaction_cache_from_entrypoints`.
+- Sumeragi vNext no longer has a runtime `Reactor` event/effect boundary. The
+  actor owns vNext round/slot/validation state directly, including validation
+  result handling, ticks, rechain/view-change handling, recovery, and
+  block-sync sidecar hydration.
+- Vote/QC chain-order binding now derives from the effective signature or
+  phase-specific roster, including NewView commit-history rosters, and QC
+  aggregation carries that binding into the materialized certificate.
+- Validation redrive and stall timing now use explicit worker config knobs
+  under `sumeragi.advanced.worker`, with zero-value rejection at config parse
+  time.
+- Broad data-model validation also refreshed stale generated fixtures for
+  confidential wallet signed transactions, Nexus lane-commitment `.to`
+  companions, oracle reference JSON, and the BlockHeader Norito golden after
+  the current canonical encodings changed.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo check -p iroha_core --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_config sumeragi -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_data_model --features transparent_api set_transaction_results -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_data_model --features transparent_api payload_hydration -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_data_model --features transparent_api presigned_with_payload_does_not_hydrate -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_core --lib new_view_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_core --lib pacemaker_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_core --lib commit_qc_redrives -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_core --lib commit_pipeline_redrives_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_core --lib vnext_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_core --lib chain_order -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_data_model --features transparent_api --test confidential_wallet_fixtures confidential_wallet_fixtures_are_stable -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_data_model --features transparent_api --test consensus_roundtrip regenerate_lane_commitment_fixtures -- --ignored --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_data_model --features transparent_api --test consensus_roundtrip lane_commitment_fixtures_roundtrip -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_data_model --features transparent_api --test norito_chain_layout signed_block_wire_accepts_default_and_rejects_non_default_layout_flags -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_data_model --features transparent_api --test norito_golden_scaffold -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_data_model --features transparent_api --test oracle_reference_fixtures regenerate_follow_reference_fixtures -- --ignored --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_data_model --features transparent_api --test oracle_reference_fixtures -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vnext-cleanup cargo test -p iroha_data_model --features transparent_api -- --nocapture`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+
+## 2026-05-10 Soracles operator MVP
+
+- Soracles now routes feed registration, provider observations, aggregation,
+  disputes, governance changes, rollback, and Twitter binding ISIs through
+  normal instruction dispatch and `InstructionBox` conversion.
+- Operator management is covered by typed oracle permissions, while observation
+  submit and aggregation remain provider-membership gated. Feed registration,
+  aggregation replay/staleness, dispute anchoring, and governance stage order
+  now enforce the MVP safety rules documented in `docs/source/soracles.md`.
+- Oracle query coverage now includes feed, history, provider stats, dispute,
+  change, and Twitter binding lookups, including singular provider-stat records
+  that carry both key and counters. The CLI adds `iroha soracles tx ...` and
+  `iroha soracles query ...` subcommands alongside the existing bundle/catalog
+  and evidence GC helpers.
+- Focused follow-up coverage now exercises the oracle operator ISI surface
+  through `InstructionBox` dispatch, validates role-derived typed permissions,
+  rejects invalid feed configs, quorum/replay/stale aggregation, unanchored
+  disputes, and governance stage jumps, round-trips all oracle query
+  constructors through Norito, and verifies CLI subcommand parsing plus
+  output-only instruction generation without a live node. The compiled `iroha`
+  binary smoke suite now also exercises `iroha --output app soracles tx
+  aggregate`, decodes stdout back into `AggregateOracleFeed`, and checks the
+  feed/slot/request/evidence fields.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo check -p iroha_data_model -p iroha_executor_data_model -p iroha_executor`
+  - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo check -p iroha_core --lib`
+  - `cargo check -p iroha_data_model -p iroha_executor_data_model -p iroha_executor -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo test -p iroha_data_model oracle -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo test -p iroha_executor_data_model oracle -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo test -p iroha_core --test oracle oracle -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo test -p iroha_core oracle -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo test -p iroha_cli --test cli_smoke soracles_aggregate_output_emits_instruction_payload -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo test -p iroha_cli soracles -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo test -p iroha_cli --test cli_smoke -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo clippy -p iroha_data_model -p iroha_executor_data_model -p iroha_executor -p iroha_core -p iroha_cli --all-targets -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-soracles-check cargo clippy -p iroha_cli --test cli_smoke -- -D warnings`
+  - `cargo fmt -p iroha_cli -- --check` after the CLI smoke increment
+  - `git diff --check`
+- Note: the latest workspace-wide `cargo fmt --all --check` is blocked by an
+  unrelated dirty `crates/iroha_core/src/sumeragi/main_loop/tests.rs` hunk that
+  rustfmt wants to reflow; it was left untouched to preserve non-Soracles work.
+
+## 2026-05-09 Sumeragi vNext active-load validation guard
+
+- DA validation worker freshness now scales with the pending block size
+  (`16ms` per transaction, capped at `90s`) before vNext treats a worker as
+  stalled. The no-argument helper remains available for focused tests, while
+  production timeout checks use the hash-specific pending-block floor.
+- vNext tick recovery now defers `ValidationTimeout` while the matching worker
+  is still fresh, and defers `ValidationBackpressure` when the block is still
+  locally pending so queue saturation remains on the shell retry path instead
+  of entering vNext recovery. Recovering and aborted slots no longer redrive
+  stale validation ownership.
+- The Sumeragi commit-result fixture now initializes the commit-stage
+  validation timing field, keeping focused `iroha_core --lib` builds aligned
+  with the current commit telemetry shape.
+- The 120s 20k prebuilt FASTPQ GPU run
+  `dist/izanami-prebuilt-20k-fastpq-gpu-vnext-stallfloor16-120s-20260509`
+  accepted and succeeded all `2,400,000` submissions with zero failures and
+  submit latency `p50=2ms`, `p95=4ms`, `p99=36ms`. It finished at strict
+  height `4`, strict approved `8,254`, and logged zero stale vNext redrives,
+  zero recovery slots, zero validation worker stall expirations, and zero view
+  changes.
+- The remaining 20k acceptance blocker is no longer false validation recovery:
+  the run still saturated the transaction queue (`870,642 / 2,400,000`) and
+  reported commit-inflight timeout noise while large blocks were validating and
+  committing. The next throughput slice should reuse or carry validation
+  execution artifacts into commit instead of executing the same large block
+  path twice.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib da_validation_worker_stall_timeout_scales_with_pending_block_size -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib tick_defers_vnext_validation_backpressure_while_pending_block_exists -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib vnext_validation -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib commit_pipeline_redrives_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib commit_pipeline_keeps_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib validation_worker -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo check -p iroha_core --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo clippy -p iroha_core --lib -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-20k-vnext-redrive-20260509-backpressureguard cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`
+  - 20k Izanami GPU 120s gate using the prebuilt release binaries above
+  - `cargo fmt --all --check`
+  - `git diff --check`
+
+## 2026-05-09 Torii/Sumeragi validation gap closure
+
+- ZK proof list integration fixtures now seed proof records and TLV tag indexes
+  through committed WSV test helpers, so `/v1/zk/proofs?has_tag=...` exercises
+  the same derived indexes used by production query paths.
+- Sumeragi vNext chain-order/quorum helpers now use the live signature topology
+  or ordered-validator slice that is actually in scope, keeping the current
+  `iroha_core` test build compiling after the vNext redrive changes.
+- The fresh validation-inflight timeout floor is compiled for production while
+  the no-argument stall-timeout helper is test-only, removing the non-test
+  dead-code warning without changing focused test coverage.
+- Validation:
+  - `cargo fmt --all`
+  - `git diff --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-full cargo test -p iroha_core --lib list_and_count_filter_by_tag_and_status -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-full cargo test -p iroha_core --lib maybe_force_view_change_for_stalled_pending_honors_fresh_validation_worker_floor_under_tx_backlog -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-full cargo test -p iroha_torii`
 
 ## 2026-05-09 FASTPQ GPU Izanami fallback cleanup
 
@@ -188,7 +630,17 @@ Last updated: 2026-05-09
   stale commit-QC redrive, queue-full backpressure, configured fallback timing,
   and stalled or disconnected inflight redrive. The inline validation helper is
   retained only for focused unit tests.
+- Recovery-heartbeat proposals now survive RBC/block-payload recovery because
+  `SignedBlock::presigned_with_payload` hydrates the skipped transaction cache
+  from external entrypoints when rebuilding a signed block from a decoded
+  payload. Pacemaker recovery tests now seed real validation inflight state when
+  asserting that an old-view frontier owner remains live across a missing-QC
+  view advance, and commit-QC-history-sensitive pacemaker fixtures hold the
+  existing commit-history test guard so parallel harness setup cannot reset
+  their global QC context mid-assertion.
 - Validation:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
   - `rustfmt --edition 2024 crates/iroha_core/src/sumeragi/main_loop/commit.rs crates/iroha_core/src/sumeragi/main_loop/qc.rs crates/iroha_core/src/sumeragi/main_loop/validation.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib vnext_dispatch_validation_queues_worker_and_accepts_result -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib through_vnext -- --nocapture`
@@ -199,7 +651,44 @@ Last updated: 2026-05-09
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib validation_inline -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib validation_allows -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib stale_view_async_commit_votes_for_known_pending_block_still_form_qc -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo check -p iroha_core --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib block_sync_update_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib vote_only -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib stale_frontier_with -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib vnext_worker -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib commit_qc_redrives -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib commit_pipeline_redrives_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib commit_pipeline_keeps_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib commit_pipeline_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib pacemaker_defers_reproposal_after_missing_qc_view_advance_with_live_frontier_owner -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib pacemaker_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib pacemaker_ -- --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_core --lib new_view_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo test -p iroha_data_model presigned_with_payload_hydrates_transactions_from_entrypoints --features transparent_api -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-redrive-current cargo clippy -p iroha_core --lib -- -D warnings`
+  - `git diff --check`
   - `git diff --check -- crates/iroha_core/src/sumeragi/main_loop/commit.rs crates/iroha_core/src/sumeragi/main_loop/qc.rs crates/iroha_core/src/sumeragi/main_loop/validation.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs status.md roadmap.md`
+
+## 2026-05-09 Torii MCP header policy and Norito error envelopes
+
+- MCP route dispatch now keeps default `extra_headers` from overriding
+  reserved auth/internal headers while allowing the Connect management tools to
+  pass their explicit `Authorization` header through the new scoped policy.
+  `x-iroha-api-version` remains user-settable for tool dispatch.
+- Norito public transaction ingress rejection tests now decode the structured
+  `ErrorEnvelope` response for malformed transaction payloads instead of
+  assuming a plain-text body, while still asserting that decode failures do not
+  surface panic text.
+- Operator-profile MCP endpoint coverage now exercises the Sumeragi and
+  governance agent aliases without enabling broader writer-only policy.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-confirmation cargo test -p iroha_torii --lib apply_extra_headers -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-confirmation cargo test -p iroha_torii --lib connect_management_extra_headers_allow_authorization_only -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-confirmation cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_sumeragi_endpoints_dispatch -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-confirmation cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-confirmation cargo test -p iroha_torii --test norito_ingress public_transaction_route_rejects -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-confirmation cargo test -p iroha_torii --test norito_ingress norito_transaction_rejects_invalid_signature_without_decode_panic -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-confirmation cargo test -p iroha_torii --test norito_ingress -- --nocapture`
 
 ## 2026-05-09 Offline V2 issuer OpenAPI body auth
 
@@ -246,9 +735,15 @@ Last updated: 2026-05-09
   defaults use the current `5s` commit-inflight timeout.
 - Updated Sumeragi configuration examples to show
   `commit_inflight_timeout_ms = 5000`, matching the actual default.
+- Cleaned duplicate `execution_context_hash` fields from transaction
+  confirmation and Torii block-event test fixtures so they compile against the
+  current `BlockHeader` shape.
 - Validation:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-config cargo test -p iroha_config --test fixtures minimal_config_snapshot -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-config cargo test -p iroha_config --test fixtures`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-confirmation cargo test -p iroha --lib tx_confirmation_stream_tests -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-confirmation cargo test -p iroha --test tx_confirmation -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-confirmation cargo test -p iroha_torii --lib committed_block_height_detects_commits --features app_api,telemetry -- --nocapture`
   - `cargo fmt --all --check`
   - `git diff --check`
 

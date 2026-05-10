@@ -578,7 +578,12 @@ mod tests {
     fn canonical_signed_transaction_payload(
         signed: &iroha_data_model::transaction::SignedTransaction,
     ) -> Arc<Vec<u8>> {
-        Arc::new(ncore::to_bytes(signed).expect("encode signed transaction"))
+        Arc::new(
+            ncore::to_bytes(
+                &iroha_data_model::transaction::TransactionEntrypoint::External(signed.clone()),
+            )
+            .expect("encode transaction entrypoint"),
+        )
     }
 
     #[test]
@@ -851,7 +856,7 @@ mod tests {
         let ready_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
             BlockMessage::RbcReady(ready),
         )));
-        assert_eq!(ready_msg.topic(), NetworkTopic::ConsensusChunk);
+        assert_eq!(ready_msg.topic(), NetworkTopic::Consensus);
 
         let deliver = RbcDeliver {
             block_hash,
@@ -867,7 +872,7 @@ mod tests {
         let deliver_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
             BlockMessage::RbcDeliver(deliver),
         )));
-        assert_eq!(deliver_msg.topic(), NetworkTopic::ConsensusChunk);
+        assert_eq!(deliver_msg.topic(), NetworkTopic::Consensus);
     }
 
     #[test]
@@ -958,7 +963,12 @@ mod tests {
         let canonical_payload = canonical_signed_transaction_payload(&signed);
         let payload = {
             let _guard = ncore::DecodeFlagsGuard::enter(ncore::header_flags::COMPACT_LEN);
-            Arc::new(ncore::to_bytes(&signed).expect("encode signed transaction"))
+            Arc::new(
+                ncore::to_bytes(
+                    &iroha_data_model::transaction::TransactionEntrypoint::External(signed.clone()),
+                )
+                .expect("encode transaction entrypoint"),
+            )
         };
         std::thread::spawn(move || {
             let gossip = TransactionGossip {

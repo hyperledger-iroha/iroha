@@ -498,6 +498,7 @@ impl Execute for iroha_data_model::isi::sns::UnfreezeSnsName {
 mod tests {
     use std::num::NonZeroU64;
 
+    use iroha_crypto::Hash;
     use iroha_data_model::{
         account::{Account, AccountAddress, rekey::AccountAlias},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
@@ -522,7 +523,7 @@ mod tests {
             ACCOUNT_ALIAS_SUFFIX_ID, SnsNamespace, get_name_record, policy_by_id,
             seed_default_namespace_policies,
         },
-        state::{State, World, WorldReadOnly},
+        state::{State, StateTransaction, World, WorldReadOnly},
     };
 
     fn owner() -> AccountId {
@@ -551,6 +552,10 @@ mod tests {
             0,
             0,
         )
+    }
+
+    fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
+        state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
     }
 
     fn sns_payment_payer_state() -> (State, AccountId, AccountId, AssetDefinitionId) {
@@ -635,6 +640,7 @@ mod tests {
         {
             let mut block = state.block(next_header(state));
             let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx, 0xC1);
             iroha_data_model::isi::sns::RegisterSnsName::new(request)
                 .execute(payer, &mut stx)
                 .expect("register SNS alias");
@@ -755,6 +761,7 @@ mod tests {
         {
             let mut block = state.block(next_header(&state));
             let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx, 0xC2);
             AcquireAccountAliasLease::new(
                 alias.clone(),
                 authority.clone(),
@@ -784,6 +791,7 @@ mod tests {
         {
             let mut block = state.block(next_header(&state));
             let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx, 0xC3);
             RenewAccountAliasLease::new(alias, authority.clone(), 1)
                 .execute(&authority, &mut stx)
                 .expect("renew lease");
@@ -857,6 +865,7 @@ mod tests {
         {
             let mut block = state.block(next_header(&state));
             let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx, 0xC4);
             iroha_data_model::isi::sns::RenewSnsName::new(
                 ACCOUNT_ALIAS_SUFFIX_ID,
                 "renewed@universal",
@@ -975,6 +984,7 @@ mod tests {
         {
             let mut block = state.block(next_header(&state));
             let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx, 0xC5);
             AcquireAccountAliasLease::new(alias, authority.clone(), authority.clone(), 1, None)
                 .execute(&authority, &mut stx)
                 .expect("acquire lease with deployment payment asset");

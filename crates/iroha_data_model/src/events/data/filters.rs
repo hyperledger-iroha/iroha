@@ -2199,6 +2199,7 @@ mod tests {
                     feed_id: feed_id.clone(),
                     feed_config_version: FeedConfigVersion(1),
                     slot: 10,
+                    request_hash: Hash::new(b"oracle-filter-request"),
                     outcome: FeedEventOutcome::Missing,
                 },
                 evidence_hashes: Vec::new(),

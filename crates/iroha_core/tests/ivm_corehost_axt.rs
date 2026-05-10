@@ -935,14 +935,16 @@ fn axt_replay_ledger_persists_through_kura_replay() {
             .sign(signer.private_key())
             .unpack(|_| {})
             .into();
-    base_block.set_transaction_results_with_transcripts(
-        Vec::new(),
-        &entry_hashes,
-        Vec::new(),
-        BTreeMap::new(),
-        vec![envelope.clone()],
-        Some(snapshot.clone()),
-    );
+    base_block
+        .set_transaction_results_with_transcripts(
+            Vec::new(),
+            &entry_hashes,
+            Vec::new(),
+            BTreeMap::new(),
+            vec![envelope.clone()],
+            Some(snapshot.clone()),
+        )
+        .expect("empty test block should attach AXT envelope results");
     let mut state_block = state.block(base_block.header());
     let valid_block = ValidBlock::validate_unchecked(base_block, &mut state_block).unpack(|_| {});
     let committed = valid_block.commit_unchecked().unpack(|_| {});
@@ -1930,26 +1932,31 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
             .unpack(|_| {})
             .into();
     let envelopes = vec![envelope.clone()];
-    base_block.set_transaction_results_with_transcripts(
-        Vec::new(),
-        &entry_hashes,
-        Vec::new(),
-        BTreeMap::new(),
-        envelopes.clone(),
-        None,
-    );
+    base_block
+        .set_transaction_results_with_transcripts(
+            Vec::new(),
+            &entry_hashes,
+            Vec::new(),
+            BTreeMap::new(),
+            envelopes.clone(),
+            None,
+        )
+        .expect("empty test block should attach AXT envelope results");
     let mut state_block = state.block(base_block.header());
     let valid = iroha_core::block::ValidBlock::validate_unchecked(base_block, &mut state_block)
         .unpack(|_| {});
     let mut committed = valid.commit_unchecked().unpack(|_| {});
-    committed.as_mut().set_transaction_results_with_transcripts(
-        Vec::new(),
-        &entry_hashes,
-        Vec::new(),
-        BTreeMap::new(),
-        envelopes.clone(),
-        None,
-    );
+    committed
+        .as_mut()
+        .set_transaction_results_with_transcripts(
+            Vec::new(),
+            &entry_hashes,
+            Vec::new(),
+            BTreeMap::new(),
+            envelopes.clone(),
+            None,
+        )
+        .expect("empty committed test block should attach AXT envelope results");
     assert_eq!(
         committed
             .as_ref()

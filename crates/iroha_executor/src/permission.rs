@@ -177,6 +177,12 @@ declare_permissions! {
     iroha_executor_data_model::permission::sorafs::{CanRegisterSorafsProviderOwner},
     iroha_executor_data_model::permission::sorafs::{CanUnregisterSorafsProviderOwner},
     iroha_executor_data_model::permission::soranet::{CanIngestSoranetPrivacy},
+    iroha_executor_data_model::permission::oracle::{CanRegisterOracleFeed},
+    iroha_executor_data_model::permission::oracle::{CanProposeOracleChange},
+    iroha_executor_data_model::permission::oracle::{CanVoteOracleChangeStage},
+    iroha_executor_data_model::permission::oracle::{CanRollbackOracleChange},
+    iroha_executor_data_model::permission::oracle::{CanResolveOracleDispute},
+    iroha_executor_data_model::permission::oracle::{CanManageTwitterBindings},
     iroha_executor_data_model::permission::nexus::{CanPublishSpaceDirectoryManifest},
     iroha_executor_data_model::permission::nexus::{CanUseFeeSponsor},
 }
@@ -506,6 +512,24 @@ mod soranet {
     use super::*;
 
     impl_owned_permission!(CanIngestSoranetPrivacy);
+}
+
+mod oracle {
+    use iroha_executor_data_model::permission::oracle::{
+        CanManageTwitterBindings, CanProposeOracleChange, CanRegisterOracleFeed,
+        CanResolveOracleDispute, CanRollbackOracleChange, CanVoteOracleChangeStage,
+    };
+
+    use super::*;
+
+    impl_owned_permission!(
+        CanRegisterOracleFeed,
+        CanProposeOracleChange,
+        CanVoteOracleChangeStage,
+        CanRollbackOracleChange,
+        CanResolveOracleDispute,
+        CanManageTwitterBindings,
+    );
 }
 
 mod peer {

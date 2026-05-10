@@ -681,11 +681,6 @@ mod tests {
     fn register_unregister_boxes_registry_decode_stable_ids() {
         let account = account(0x63);
         let registry = crate::isi::registry::default();
-        assert_registry_decodes(
-            &registry,
-            std::any::type_name::<RegisterPeerWithPop>(),
-            register_peer_with_pop(),
-        );
 
         let register_cases = [
             RegisterBox::Peer(register_peer_with_pop()),

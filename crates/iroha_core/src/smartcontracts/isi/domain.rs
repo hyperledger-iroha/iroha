@@ -5676,7 +5676,7 @@ mod tests {
             owned_by: account_id.clone(),
         };
         let (nft_id, nft_value) = nft.into_key_value();
-        tx.world.nfts.insert(nft_id.clone(), nft_value);
+        tx.world.insert_nft_entry(nft_id.clone(), nft_value);
 
         tx.nexus.fees.fee_sink_account_id = authority.to_string();
         tx.nexus.staking.stake_escrow_account_id = authority.to_string();
@@ -5734,7 +5734,7 @@ mod tests {
             owned_by: account_id.clone(),
         };
         let (nft_id, nft_value) = nft.into_key_value();
-        tx.world.nfts.insert(nft_id.clone(), nft_value);
+        tx.world.insert_nft_entry(nft_id.clone(), nft_value);
 
         let permission: Permission = iroha_executor_data_model::permission::nft::CanTransferNft {
             nft: nft_id.clone(),
@@ -6964,8 +6964,10 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register account");
 
-        let feed = iroha_data_model::oracle::kits::price_xor_usd().feed_config;
+        let kit = iroha_data_model::oracle::kits::price_xor_usd();
+        let feed = kit.feed_config;
         let feed_id = feed.feed_id.clone();
+        let request_hash = kit.connector_request.request_hash();
         tx.world.oracle_history.insert(
             feed_id.clone(),
             vec![iroha_data_model::events::data::oracle::FeedEventRecord {
@@ -6973,6 +6975,7 @@ mod tests {
                     feed_id: feed_id.clone(),
                     feed_config_version: feed.feed_config_version,
                     slot: 1,
+                    request_hash,
                     outcome: iroha_data_model::oracle::FeedEventOutcome::Success(
                         iroha_data_model::oracle::FeedSuccess {
                             value: iroha_data_model::oracle::ObservationValue::new(1_000, 2),

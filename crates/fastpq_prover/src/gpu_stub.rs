@@ -75,13 +75,6 @@ impl LdeDispatch {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_error(error: GpuError) -> Self {
-        Self {
-            outcome: Err(error),
-        }
-    }
-
     pub fn wait(self) -> Result<Option<Vec<Vec<u64>>>, GpuError> {
         self.outcome
     }

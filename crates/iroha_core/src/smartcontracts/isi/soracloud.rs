@@ -11196,7 +11196,7 @@ mod tests {
         time::Duration,
     };
 
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Hash, KeyPair};
     use iroha_data_model::{
         Encode,
         account::Account,
@@ -11241,6 +11241,10 @@ mod tests {
         query::store::LiveQueryStore,
         state::{State, World, WorldReadOnly},
     };
+
+    fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
+        state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
+    }
 
     fn seed_domain_name_lease_tx(
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -13620,6 +13624,7 @@ mod tests {
                 .header();
             let mut state_block = state.block(block_header);
             let mut stx = state_block.transaction();
+            seed_test_call_hash(&mut stx, 0xE1);
             let capability = sample_model_host_capability(ALICE_ID.clone(), 1, 1_000_000);
 
             isi::AdvertiseSoracloudModelHost {
@@ -13978,6 +13983,7 @@ mod tests {
         .header();
         let mut second_state_block = state.block(second_block_header);
         let mut second_stx = second_state_block.transaction();
+        seed_test_call_hash(&mut second_stx, 0xE2);
 
         isi::JoinSoracloudHfSharedLease {
             repo_id: repo_id.to_string(),

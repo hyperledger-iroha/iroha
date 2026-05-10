@@ -29,7 +29,9 @@ use iroha_crypto::{Algorithm, Hash as CryptoHash, KeyPair, Sm2PrivateKey};
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
+    isi::oracle::AggregateOracleFeed,
     metadata::Metadata,
+    oracle::FeedId,
     soranet::incentives::{RelayBondLedgerEntryV1, RelayEpochMetricsV1, RelayRewardInstructionV1},
 };
 use iroha_primitives::numeric::Numeric;
@@ -363,6 +365,56 @@ fn command() -> Command {
     cmd.env("NO_COLOR", "1");
     cmd.env("CLICOLOR", "0");
     cmd
+}
+
+#[test]
+fn soracles_aggregate_output_emits_instruction_payload() {
+    use torii_mock_support::{TempDir, write_client_config};
+
+    let temp_dir = TempDir::new("soracles_aggregate").expect("temp dir");
+    let config_path = temp_dir.path().join("client.toml");
+    write_client_config(&config_path, "http://localhost").expect("write config");
+
+    let request_hash = CryptoHash::new(b"soracles-cli-smoke-request");
+    let evidence_hash = CryptoHash::new(b"soracles-cli-smoke-evidence");
+    let output = command()
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--output")
+        .args([
+            "app",
+            "soracles",
+            "tx",
+            "aggregate",
+            "--feed-id",
+            "cli_smoke_feed",
+            "--slot",
+            "42",
+            "--request-hash",
+            &request_hash.to_string(),
+            "--evidence-hash",
+            &evidence_hash.to_string(),
+        ])
+        .output()
+        .expect("execute soracles aggregate output command");
+    assert!(
+        output.status.success(),
+        "soracles aggregate --output failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let instructions = parse_instruction_stdout(&stdout);
+    assert_eq!(instructions.len(), 1);
+    let aggregate = instructions[0]
+        .as_any()
+        .downcast_ref::<AggregateOracleFeed>()
+        .expect("aggregate oracle instruction payload");
+    let expected_feed: FeedId = "cli_smoke_feed".parse().expect("feed id");
+    assert_eq!(aggregate.feed_id, expected_feed);
+    assert_eq!(aggregate.slot, 42);
+    assert_eq!(aggregate.request_hash, request_hash);
+    assert_eq!(aggregate.evidence_hashes, vec![evidence_hash]);
 }
 
 fn write_contract_app_manifest(dir: &torii_mock_support::TempDir) -> PathBuf {

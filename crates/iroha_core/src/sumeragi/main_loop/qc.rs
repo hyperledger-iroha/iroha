@@ -352,6 +352,12 @@ impl Actor {
         if qc.height <= committed_height.saturating_add(1) {
             add_candidate(self.roster_for_live_vote_with_mode(qc.height, consensus_mode));
         }
+        if let Some(cached) = self.vote_roster_cache.get(&qc.subject_block_hash)
+            && cached.height == qc.height
+            && cached.view == qc.view
+        {
+            add_candidate(cached.roster.clone());
+        }
         add_candidate(self.canonical_round_roster_with_mode(qc.height, qc.view, consensus_mode));
         candidates.iter().any(|candidate| candidate == &embedded)
     }
@@ -768,6 +774,21 @@ impl Actor {
                                 "commit QC validation inflight exceeded worker stall timeout; redriving validation through vNext"
                             );
                         }
+                    }
+                    if let Some((height, view, payload_hash)) = self
+                        .pending
+                        .pending_blocks
+                        .get(&hash)
+                        .map(|pending| (pending.height, pending.view, pending.payload_hash))
+                        && self.redrive_stale_vnext_validation_for_pending(
+                            hash,
+                            height,
+                            view,
+                            payload_hash,
+                            "commit_qc_inflight_redrive",
+                        )
+                    {
+                        return false;
                     }
                     if self.subsystems.validation.inflight.contains_key(&hash)
                         && !self
@@ -2118,7 +2139,13 @@ impl Actor {
     ) {
         let chain_id = &self.common_config.chain;
         let (consensus_mode, mode_tag, _) = self.consensus_context_for_height(height);
-        let (chain_order_hash, rechain_seq) = self.vnext_chain_order_binding_for(height, view);
+        let (chain_order_hash, rechain_seq) = self
+            .vnext_chain_order_binding_for_signature_topology(
+                height,
+                view,
+                consensus_mode,
+                signature_topology,
+            );
         let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
         let canonical_roster = super::roster::canonicalize_roster_for_mode(
             signature_topology.as_ref().to_vec(),
@@ -3670,8 +3697,6 @@ impl Actor {
             };
 
         let validator_set = canonical_topology.as_ref().to_vec();
-        let (chain_order_hash, rechain_seq) =
-            self.vnext_chain_order_binding_for(ctx.height, ctx.view);
         crate::sumeragi::consensus::Qc {
             phase: ctx.phase,
             subject_block_hash: ctx.block_hash,
@@ -3680,8 +3705,8 @@ impl Actor {
             height: ctx.height,
             view: ctx.view,
             epoch: ctx.epoch,
-            chain_order_hash,
-            rechain_seq,
+            chain_order_hash: ctx.chain_order_hash,
+            rechain_seq: ctx.rechain_seq,
             mode_tag: ctx.mode_tag,
             highest_qc: ctx.highest_qc,
             validator_set_hash: HashOf::new(&validator_set),
@@ -3794,7 +3819,13 @@ impl Actor {
             topology_for_view(signature_topology_source, height, view, mode_tag, prf_seed);
         let required = signature_topology.min_votes_for_commit();
         let voting_len = signature_topology.as_ref().len();
-        let (chain_order_hash, rechain_seq) = self.vnext_chain_order_binding_for(height, view);
+        let (chain_order_hash, rechain_seq) = self
+            .vnext_chain_order_binding_for_signature_topology(
+                height,
+                view,
+                consensus_mode,
+                &signature_topology,
+            );
         let qc_key = (
             phase,
             block_hash,
@@ -4210,6 +4241,8 @@ impl Actor {
                 height,
                 view,
                 epoch,
+                chain_order_hash,
+                rechain_seq,
                 mode_tag: mode_tag.to_string(),
                 highest_qc,
             },
@@ -5949,7 +5982,7 @@ impl Actor {
             qc.view,
         );
         let (expected_chain_order_hash, expected_rechain_seq) =
-            self.vnext_chain_order_binding_for(qc.height, qc.view);
+            self.vnext_chain_order_binding_for_qc(&qc);
         if qc.chain_order_hash != expected_chain_order_hash
             || qc.rechain_seq != expected_rechain_seq
         {

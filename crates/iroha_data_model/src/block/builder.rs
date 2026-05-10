@@ -330,8 +330,12 @@ mod tests {
         ];
         let results = vec![r1.clone(), r2.clone(), r3.clone()];
 
-        built.set_transaction_results(vec![trig.clone()], &entry_hashes, results.clone());
-        manual.set_transaction_results(vec![trig], &entry_hashes, results);
+        built
+            .set_transaction_results(vec![trig.clone()], &entry_hashes, results.clone())
+            .expect("built block entrypoint hashes should match payload");
+        manual
+            .set_transaction_results(vec![trig], &entry_hashes, results)
+            .expect("manual block entrypoint hashes should match payload");
 
         // Compare roots and contents
         assert_eq!(built.header().merkle_root(), manual.header().merkle_root());

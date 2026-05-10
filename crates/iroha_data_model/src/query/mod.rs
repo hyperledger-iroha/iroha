@@ -797,6 +797,18 @@ mod model {
         BlockHeaderHash(Vec<HashOf<BlockHeader>>),
         /// Batch of proof records.
         ProofRecord(Vec<crate::proof::ProofRecord>),
+        /// Batch of oracle feed configurations.
+        OracleFeedConfig(Vec<crate::oracle::FeedConfig>),
+        /// Batch of oracle feed history records.
+        OracleFeedEventRecord(Vec<crate::events::data::oracle::FeedEventRecord>),
+        /// Batch of oracle provider statistics records.
+        OracleProviderStatsRecord(Vec<crate::oracle::OracleProviderStatsRecord>),
+        /// Batch of oracle disputes.
+        OracleDispute(Vec<crate::oracle::OracleDispute>),
+        /// Batch of oracle change proposals.
+        OracleChangeProposal(Vec<crate::oracle::OracleChangeProposal>),
+        /// Batch of twitter binding records.
+        TwitterBindingRecord(Vec<crate::oracle::TwitterBindingRecord>),
         /// Batch of native asset escrow records.
         AssetEscrowRecord(Vec<crate::escrow::AssetEscrowRecord>),
         /// Batch of native anonymous asset escrow records.
@@ -853,6 +865,14 @@ mod model {
         FindTriggerById(trigger::prelude::FindTriggerById),
         /// Fetch a Twitter binding record by hash.
         FindTwitterBindingByHash(oracle::prelude::FindTwitterBindingByHash),
+        /// Fetch an oracle feed by identifier.
+        FindOracleFeedById(oracle::prelude::FindOracleFeedById),
+        /// Fetch an oracle dispute by identifier.
+        FindOracleDisputeById(oracle::prelude::FindOracleDisputeById),
+        /// Fetch an oracle change by identifier.
+        FindOracleChangeById(oracle::prelude::FindOracleChangeById),
+        /// Fetch oracle provider statistics by key.
+        FindOracleProviderStatsByKey(oracle::prelude::FindOracleProviderStatsByKey),
         /// Fetch domain endorsement records.
         FindDomainEndorsements(endorsement::prelude::FindDomainEndorsements),
         /// Fetch the domain endorsement policy.
@@ -935,6 +955,14 @@ mod model {
         Trigger(crate::trigger::Trigger),
         /// Twitter binding payload.
         TwitterBindingRecord(crate::oracle::TwitterBindingRecord),
+        /// Oracle feed configuration payload.
+        OracleFeedConfig(crate::oracle::FeedConfig),
+        /// Oracle dispute payload.
+        OracleDispute(crate::oracle::OracleDispute),
+        /// Oracle change proposal payload.
+        OracleChangeProposal(crate::oracle::OracleChangeProposal),
+        /// Oracle provider statistics payload.
+        OracleProviderStats(crate::oracle::OracleProviderStats),
         /// Domain endorsements payload.
         DomainEndorsements(Vec<crate::nexus::DomainEndorsementRecord>),
         /// Domain endorsement policy payload.
@@ -1084,6 +1112,18 @@ mod model {
                 try_build!(crate::block::BlockHeader, BlockHeader);
                 try_build!(crate::proof::ProofRecord, ProofRecord);
                 try_build!(crate::permission::Permission, Permission);
+                try_build!(crate::oracle::FeedConfig, OracleFeedConfig);
+                try_build!(
+                    crate::events::data::oracle::FeedEventRecord,
+                    OracleFeedEventRecord
+                );
+                try_build!(
+                    crate::oracle::OracleProviderStatsRecord,
+                    OracleProviderStatsRecord
+                );
+                try_build!(crate::oracle::OracleDispute, OracleDispute);
+                try_build!(crate::oracle::OracleChangeProposal, OracleChangeProposal);
+                try_build!(crate::oracle::TwitterBindingRecord, TwitterBindingRecord);
                 try_build!(crate::escrow::AssetEscrowRecord, AssetEscrowRecord);
                 try_build!(
                     crate::escrow::AnonymousAssetEscrowRecord,
@@ -1178,6 +1218,18 @@ mod model {
         BlockHeader,
         /// Proof record items.
         ProofRecord,
+        /// Oracle feed configuration items.
+        OracleFeedConfig,
+        /// Oracle feed history record items.
+        OracleFeedEventRecord,
+        /// Oracle provider statistics record items.
+        OracleProviderStatsRecord,
+        /// Oracle dispute items.
+        OracleDispute,
+        /// Oracle change proposal items.
+        OracleChangeProposal,
+        /// Twitter binding record items.
+        TwitterBindingRecord,
         /// Permission items.
         Permission,
         /// Native asset escrow records.
@@ -1301,6 +1353,42 @@ mod model {
     impl ItemKindTag for crate::proof::ProofRecord {
         fn kind() -> QueryItemKind {
             QueryItemKind::ProofRecord
+        }
+    }
+    #[cfg(feature = "fast_dsl")]
+    impl ItemKindTag for crate::oracle::FeedConfig {
+        fn kind() -> QueryItemKind {
+            QueryItemKind::OracleFeedConfig
+        }
+    }
+    #[cfg(feature = "fast_dsl")]
+    impl ItemKindTag for crate::events::data::oracle::FeedEventRecord {
+        fn kind() -> QueryItemKind {
+            QueryItemKind::OracleFeedEventRecord
+        }
+    }
+    #[cfg(feature = "fast_dsl")]
+    impl ItemKindTag for crate::oracle::OracleProviderStatsRecord {
+        fn kind() -> QueryItemKind {
+            QueryItemKind::OracleProviderStatsRecord
+        }
+    }
+    #[cfg(feature = "fast_dsl")]
+    impl ItemKindTag for crate::oracle::OracleDispute {
+        fn kind() -> QueryItemKind {
+            QueryItemKind::OracleDispute
+        }
+    }
+    #[cfg(feature = "fast_dsl")]
+    impl ItemKindTag for crate::oracle::OracleChangeProposal {
+        fn kind() -> QueryItemKind {
+            QueryItemKind::OracleChangeProposal
+        }
+    }
+    #[cfg(feature = "fast_dsl")]
+    impl ItemKindTag for crate::oracle::TwitterBindingRecord {
+        fn kind() -> QueryItemKind {
+            QueryItemKind::TwitterBindingRecord
         }
     }
     #[cfg(feature = "fast_dsl")]
@@ -1894,6 +1982,14 @@ impl QueryOutputBatchBox {
             (Self::BlockHeader(v1), Self::BlockHeader(v2)) => v1.extend(v2),
             (Self::BlockHeaderHash(v1), Self::BlockHeaderHash(v2)) => v1.extend(v2),
             (Self::RepoAgreement(v1), Self::RepoAgreement(v2)) => v1.extend(v2),
+            (Self::OracleFeedConfig(v1), Self::OracleFeedConfig(v2)) => v1.extend(v2),
+            (Self::OracleFeedEventRecord(v1), Self::OracleFeedEventRecord(v2)) => v1.extend(v2),
+            (Self::OracleProviderStatsRecord(v1), Self::OracleProviderStatsRecord(v2)) => {
+                v1.extend(v2)
+            }
+            (Self::OracleDispute(v1), Self::OracleDispute(v2)) => v1.extend(v2),
+            (Self::OracleChangeProposal(v1), Self::OracleChangeProposal(v2)) => v1.extend(v2),
+            (Self::TwitterBindingRecord(v1), Self::TwitterBindingRecord(v2)) => v1.extend(v2),
             (Self::AssetEscrowRecord(v1), Self::AssetEscrowRecord(v2)) => v1.extend(v2),
             (Self::AnonymousAssetEscrowRecord(v1), Self::AnonymousAssetEscrowRecord(v2)) => {
                 v1.extend(v2)
@@ -1942,6 +2038,12 @@ impl QueryOutputBatchBox {
             Self::BlockHeaderHash(v) => v.len(),
             Self::ProofRecord(v) => v.len(),
             Self::RepoAgreement(v) => v.len(),
+            Self::OracleFeedConfig(v) => v.len(),
+            Self::OracleFeedEventRecord(v) => v.len(),
+            Self::OracleProviderStatsRecord(v) => v.len(),
+            Self::OracleDispute(v) => v.len(),
+            Self::OracleChangeProposal(v) => v.len(),
+            Self::TwitterBindingRecord(v) => v.len(),
             Self::AssetEscrowRecord(v) => v.len(),
             Self::AnonymousAssetEscrowRecord(v) => v.len(),
         }
@@ -2643,6 +2745,13 @@ impl_iter_queries! {
     proof::prelude::FindProofRecords => crate::proof::ProofRecord,
     proof::prelude::FindProofRecordsByBackend => crate::proof::ProofRecord,
     proof::prelude::FindProofRecordsByStatus => crate::proof::ProofRecord,
+    oracle::prelude::FindOracleFeeds => crate::oracle::FeedConfig,
+    oracle::prelude::FindOracleHistoryByFeedId => crate::events::data::oracle::FeedEventRecord,
+    oracle::prelude::FindOracleProviderStatsByFeedId => crate::oracle::OracleProviderStatsRecord,
+    oracle::prelude::FindOracleDisputes => crate::oracle::OracleDispute,
+    oracle::prelude::FindOracleDisputesByFeedId => crate::oracle::OracleDispute,
+    oracle::prelude::FindOracleChanges => crate::oracle::OracleChangeProposal,
+    oracle::prelude::FindTwitterBindingsByUaid => crate::oracle::TwitterBindingRecord,
 }
 
 impl_singular_queries! {
@@ -2661,6 +2770,10 @@ impl_singular_queries! {
     escrow::prelude::FindAnonymousAssetEscrowById => crate::escrow::AnonymousAssetEscrowRecord,
     trigger::prelude::FindTriggerById => crate::trigger::Trigger,
     oracle::FindTwitterBindingByHash => crate::oracle::TwitterBindingRecord,
+    oracle::FindOracleFeedById => crate::oracle::FeedConfig,
+    oracle::FindOracleDisputeById => crate::oracle::OracleDispute,
+    oracle::FindOracleChangeById => crate::oracle::OracleChangeProposal,
+    oracle::FindOracleProviderStatsByKey => crate::oracle::OracleProviderStats,
     endorsement::prelude::FindDomainEndorsements => Vec<crate::nexus::DomainEndorsementRecord>,
     endorsement::prelude::FindDomainEndorsementPolicy => crate::nexus::DomainEndorsementPolicy,
     endorsement::prelude::FindDomainCommittee => crate::nexus::DomainCommittee,
@@ -3322,9 +3435,110 @@ pub mod oracle {
     //! Oracle-specific query definitions.
     use derive_more::Display;
 
-    use crate::oracle::KeyedHash;
+    use crate::{
+        nexus::UniversalAccountId,
+        oracle::{FeedId, KeyedHash, OracleChangeId, OracleDisputeId, OracleProviderKey},
+    };
 
     queries! {
+        /// Find all registered oracle feeds.
+        #[derive(Copy, Display)]
+        #[display("Find oracle feeds")]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct FindOracleFeeds;
+
+        /// Find a registered oracle feed by id.
+        #[derive(Display)]
+        #[display("Find oracle feed `{feed_id}`")]
+        #[repr(transparent)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        pub struct FindOracleFeedById {
+            /// Feed identifier to look up.
+            pub feed_id: FeedId,
+        }
+
+        /// Find retained oracle history for a feed.
+        #[derive(Display)]
+        #[display("Find oracle history for feed `{feed_id}`")]
+        #[repr(transparent)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        pub struct FindOracleHistoryByFeedId {
+            /// Feed identifier whose history should be returned.
+            pub feed_id: FeedId,
+        }
+
+        /// Find provider statistics for one feed.
+        #[derive(Display)]
+        #[display("Find oracle provider stats for feed `{feed_id}`")]
+        #[repr(transparent)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        pub struct FindOracleProviderStatsByFeedId {
+            /// Feed identifier whose provider stats should be returned.
+            pub feed_id: FeedId,
+        }
+
+        /// Find provider statistics by exact feed/provider key.
+        #[derive(Display)]
+        #[display("Find oracle provider stats `{key:?}`")]
+        #[repr(transparent)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        pub struct FindOracleProviderStatsByKey {
+            /// Provider statistics key.
+            pub key: OracleProviderKey,
+        }
+
+        /// Find all oracle disputes.
+        #[derive(Copy, Display)]
+        #[display("Find oracle disputes")]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct FindOracleDisputes;
+
+        /// Find an oracle dispute by id.
+        #[derive(Display)]
+        #[display("Find oracle dispute `{dispute_id:?}`")]
+        #[repr(transparent)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        pub struct FindOracleDisputeById {
+            /// Dispute identifier to look up.
+            pub dispute_id: OracleDisputeId,
+        }
+
+        /// Find oracle disputes for a feed.
+        #[derive(Display)]
+        #[display("Find oracle disputes for feed `{feed_id}`")]
+        #[repr(transparent)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        pub struct FindOracleDisputesByFeedId {
+            /// Feed identifier whose disputes should be returned.
+            pub feed_id: FeedId,
+        }
+
+        /// Find all oracle change proposals.
+        #[derive(Copy, Display)]
+        #[display("Find oracle changes")]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct FindOracleChanges;
+
+        /// Find an oracle change proposal by id.
+        #[derive(Display)]
+        #[display("Find oracle change `{change_id:?}`")]
+        #[repr(transparent)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        pub struct FindOracleChangeById {
+            /// Oracle change identifier to look up.
+            pub change_id: OracleChangeId,
+        }
+
+        /// Find twitter binding records by universal account id.
+        #[derive(Display)]
+        #[display("Find twitter bindings for `{uaid:?}`")]
+        #[repr(transparent)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        pub struct FindTwitterBindingsByUaid {
+            /// Universal account id to look up.
+            pub uaid: UniversalAccountId,
+        }
+
         /// Find a twitter binding by keyed hash.
         #[derive(Display)]
         #[display("Find twitter binding `{binding_hash:?}`")]
@@ -3346,7 +3560,12 @@ pub mod oracle {
 
     pub mod prelude {
         //! Prelude re-exports for oracle queries.
-        pub use super::FindTwitterBindingByHash;
+        pub use super::{
+            FindOracleChangeById, FindOracleChanges, FindOracleDisputeById, FindOracleDisputes,
+            FindOracleDisputesByFeedId, FindOracleFeedById, FindOracleFeeds,
+            FindOracleHistoryByFeedId, FindOracleProviderStatsByFeedId,
+            FindOracleProviderStatsByKey, FindTwitterBindingByHash, FindTwitterBindingsByUaid,
+        };
     }
 }
 
@@ -4160,6 +4379,14 @@ pub mod error {
             PublicKey(PublicKey),
             /// Failed to find twitter binding for keyed hash `{0:?}`
             TwitterBinding(crate::oracle::KeyedHash),
+            /// Failed to find oracle feed `{0}`
+            OracleFeed(crate::oracle::FeedId),
+            /// Failed to find oracle dispute `{0:?}`
+            OracleDispute(crate::oracle::OracleDisputeId),
+            /// Failed to find oracle change `{0:?}`
+            OracleChange(crate::oracle::OracleChangeId),
+            /// Failed to find oracle provider stats `{0:?}`
+            OracleProviderStats(crate::oracle::OracleProviderKey),
             /// Failed to find native asset escrow: `{0:?}`
             AssetEscrow(crate::escrow::EscrowId),
         }

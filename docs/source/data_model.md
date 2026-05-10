@@ -134,7 +134,8 @@ These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become 
   - `signatures: BTreeSet<BlockSignature>` (from validators),
   - `payload: BlockPayload { header: BlockHeader, transactions: Vec<SignedTransaction> }`,
   - `result: BlockResult` (secondary execution state) containing `time_triggers`, entry/result Merkle trees, `transaction_results`, and `fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>`.
-- Utilities: `presigned`, `set_transaction_results(...)`, `set_transaction_results_with_transcripts(...)`, `header()`, `signatures()`, `hash()`, `add_signature`, `replace_signatures`.
+- Utilities: `presigned`, fallible `set_transaction_results(...)` and `set_transaction_results_with_transcripts(...)`, `header()`, `signatures()`, `hash()`, `add_signature`, `replace_signatures`.
+- Legacy payload transaction caches decoded from wire entrypoints must be hydrated explicitly with `BlockPayload::hydrate_legacy_transaction_cache_from_entrypoints()`.
 - Merkle roots: transaction entrypoints and results are committed via Merkle trees; result Merkle root is placed into the block header.
 - Block inclusion proofs (`BlockProofs`) expose both entry/result Merkle proofs and the `fastpq_transcripts` map so off-chain provers can fetch the transfer deltas associated with a transaction hash.
 - `ExecWitness` messages (streamed via Torii and piggy-backed on consensus gossip) now include both `fastpq_transcripts` and prover-ready `fastpq_batches: Vec<FastpqTransitionBatch>` with embedded `public_inputs` (dsid, slot, roots, perm_root, tx_set_hash), so external provers can ingest canonical FASTPQ rows without re-encoding transcripts.

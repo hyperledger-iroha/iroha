@@ -115,6 +115,33 @@ mod model {
 
 pub use self::model::{BlockPayload, BlockResult};
 
+impl BlockPayload {
+    /// Hydrate the legacy signed-transaction cache from explicit external entrypoints.
+    ///
+    /// New block wire stores external transaction entrypoints in `external_entrypoints`; the
+    /// `transactions` vector is skipped by Norito and exists only for legacy in-process callers.
+    /// Call this after decoding payload bytes only when that legacy cache is explicitly needed.
+    pub fn hydrate_legacy_transaction_cache_from_entrypoints(&mut self) -> usize {
+        if !self.transactions.is_empty() || self.external_entrypoints.is_empty() {
+            return self.transactions.len();
+        }
+        self.transactions = self
+            .external_entrypoints
+            .iter()
+            .filter_map(|entrypoint| match entrypoint {
+                TransactionEntrypoint::External(tx) => Some(tx.clone()),
+                TransactionEntrypoint::SealedReveal(reveal) => {
+                    Some(reveal.signed_transaction().clone())
+                }
+                TransactionEntrypoint::SealedCommitment(_)
+                | TransactionEntrypoint::PrivateKaigi(_)
+                | TransactionEntrypoint::Time(_) => None,
+            })
+            .collect();
+        self.transactions.len()
+    }
+}
+
 impl PartialEq for BlockPayload {
     fn eq(&self, other: &Self) -> bool {
         self.header == other.header

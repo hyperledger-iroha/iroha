@@ -2676,8 +2676,13 @@ impl Actor {
             vote.height,
             vote.view,
         );
-        let (expected_chain_order_hash, expected_rechain_seq) =
-            self.vnext_chain_order_binding_for(vote.height, vote.view);
+        let (expected_chain_order_hash, expected_rechain_seq) = self
+            .vnext_chain_order_binding_for_signature_topology(
+                vote.height,
+                vote.view,
+                consensus_mode,
+                signature_topology,
+            );
         if vote.chain_order_hash != expected_chain_order_hash
             || vote.rechain_seq != expected_rechain_seq
         {

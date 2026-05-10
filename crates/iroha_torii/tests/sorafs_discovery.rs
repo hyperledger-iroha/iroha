@@ -1779,6 +1779,8 @@ async fn sorafs_pin_register_route_disabled_when_storage_off() {
 async fn sorafs_capacity_route_enabled_when_storage_on() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_storage.enabled = true;
+    let temp_dir = tempdir().expect("storage temp dir");
+    cfg.torii.sorafs_storage.data_dir = temp_dir.path().join("storage");
 
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();

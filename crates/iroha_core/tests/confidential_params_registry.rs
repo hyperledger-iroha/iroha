@@ -12,6 +12,7 @@ use iroha_data_model::{
     Registrable, ValidationFail,
     block::BlockHeader,
     confidential::{ConfidentialParamsId, ConfidentialStatus, PedersenParams, PoseidonParams},
+    domain::DomainId,
     isi::{
         confidential,
         error::{InstructionExecutionError, InvalidParameterError},

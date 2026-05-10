@@ -4,6 +4,7 @@
 use std::sync::Mutex as StdMutex;
 use std::{
     collections::{HashMap, HashSet},
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -652,6 +653,7 @@ pub fn prepare_state(
         lanes,
         sorafs_replication,
         nexus_staking,
+        matches!(workload_profile, WorkloadProfile::Stable),
     );
     state.asset_instances.insert(treasury_asset_id);
     if let (Some(stake_amount), Some(setup)) = (npos_bootstrap_stake, state.nexus_staking.as_ref())
@@ -712,6 +714,7 @@ pub fn prepare_state(
 pub struct WorkloadEngine {
     state: Mutex<ChaosState>,
     recipes: Vec<RecipeKind>,
+    plan_sequence: AtomicU64,
     #[cfg(test)]
     recipe_override: StdMutex<Option<RecipeKind>>,
 }
@@ -721,12 +724,17 @@ impl WorkloadEngine {
         Self {
             state: Mutex::new(state),
             recipes,
+            plan_sequence: AtomicU64::new(0),
             #[cfg(test)]
             recipe_override: StdMutex::new(None),
         }
     }
 
     pub async fn next_plan(&self, rng: &mut StdRng) -> Result<TransactionPlan> {
+        self.next_ordered_plan(rng).await.map(|(_, plan)| plan)
+    }
+
+    pub async fn next_ordered_plan(&self, rng: &mut StdRng) -> Result<(u64, TransactionPlan)> {
         #[cfg(test)]
         if let Some(kind) = {
             let guard = self
@@ -736,7 +744,9 @@ impl WorkloadEngine {
             *guard
         } {
             let mut guard = self.state.lock().await;
-            return guard.produce_plan(kind, rng);
+            let plan = guard.produce_plan(kind, rng)?;
+            let order = self.plan_sequence.fetch_add(1, Ordering::Relaxed);
+            return Ok((order, plan));
         }
 
         let kind = *self
@@ -744,7 +754,9 @@ impl WorkloadEngine {
             .choose(rng)
             .ok_or_else(|| eyre!("no recipes configured"))?;
         let mut guard = self.state.lock().await;
-        guard.produce_plan(kind, rng)
+        let plan = guard.produce_plan(kind, rng)?;
+        let order = self.plan_sequence.fetch_add(1, Ordering::Relaxed);
+        Ok((order, plan))
     }
 
     pub async fn record_result(&self, plan: &TransactionPlan, succeeded: bool) {
@@ -926,6 +938,7 @@ pub struct ChaosState {
     sorafs_replication: Option<SorafsReplicationSeed>,
     sorafs_replication_ready: bool,
     nexus_staking: Option<NexusStakingSetup>,
+    low_contention_transfers: bool,
     counters: ChaosCounters,
 }
 
@@ -983,6 +996,7 @@ impl ChaosState {
         lanes: Vec<LaneId>,
         sorafs_replication: Option<SorafsReplicationSeed>,
         nexus_staking: Option<NexusStakingSetup>,
+        low_contention_transfers: bool,
     ) -> Self {
         let mut asset_definitions = HashSet::new();
         asset_definitions.insert(asset_numeric.clone());
@@ -1028,6 +1042,7 @@ impl ChaosState {
             sorafs_replication,
             sorafs_replication_ready: false,
             nexus_staking,
+            low_contention_transfers,
             counters: ChaosCounters::default(),
         }
     }
@@ -1286,15 +1301,26 @@ impl ChaosState {
     }
 
     fn plan_transfer_asset(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        let sender = if self.users.is_empty() {
-            self.treasury.clone()
-        } else {
-            let idx =
-                usize::try_from(self.counters.transfer).unwrap_or(usize::MAX) % self.users.len();
+        let (sender, receiver) = if self.low_contention_transfers && self.users.len() >= 2 {
+            let pair_count = self.users.len() / 2;
+            let idx = usize::try_from(self.counters.transfer).unwrap_or(usize::MAX) % pair_count;
             self.counters.transfer = self.counters.transfer.saturating_add(1);
-            self.users[idx].clone()
+            (
+                self.users[idx].clone(),
+                self.users[pair_count + idx].clone(),
+            )
+        } else {
+            let sender = if self.users.is_empty() {
+                self.treasury.clone()
+            } else {
+                let idx = usize::try_from(self.counters.transfer).unwrap_or(usize::MAX)
+                    % self.users.len();
+                self.counters.transfer = self.counters.transfer.saturating_add(1);
+                self.users[idx].clone()
+            };
+            let receiver = self.random_user_except(rng, &sender.id)?;
+            (sender, receiver)
         };
-        let receiver = self.random_user_except(rng, &sender.id)?;
         let amount: Numeric = rng.random_range(1_u32..=50_u32).into();
         let source_asset = AssetId::new(self.asset_numeric.clone(), sender.id.clone());
         let instructions = vec![InstructionBox::from(Transfer::asset_numeric(
@@ -4136,6 +4162,85 @@ mod tests {
                 .all(|instruction| instruction.as_any().downcast_ref::<MintBox>().is_none()),
             "stable transfer path should not mint during the measured hot path"
         );
+    }
+
+    #[test]
+    fn stable_transfer_plan_uses_disjoint_sender_receiver_halves() {
+        let PreparedChaos { mut state, .. } =
+            prepare_state(8, None, None, WorkloadProfile::Stable, false).expect("state prepared");
+        let mut rng = StdRng::seed_from_u64(225);
+        let pair_count = state.users.len() / 2;
+
+        let first = state.plan_transfer_asset(&mut rng).expect("first transfer");
+        let second = state
+            .plan_transfer_asset(&mut rng)
+            .expect("second transfer");
+
+        let first_transfer = first.instructions[0]
+            .as_any()
+            .downcast_ref::<TransferBox>()
+            .expect("transfer instruction");
+        let second_transfer = second.instructions[0]
+            .as_any()
+            .downcast_ref::<TransferBox>()
+            .expect("transfer instruction");
+        let TransferBox::Asset(first_transfer) = first_transfer else {
+            panic!("stable transfer should move a numeric asset");
+        };
+        let TransferBox::Asset(second_transfer) = second_transfer else {
+            panic!("stable transfer should move a numeric asset");
+        };
+
+        assert_eq!(first.signer.id, state.users[0].id);
+        assert_eq!(first_transfer.destination, state.users[pair_count].id);
+        assert_eq!(second.signer.id, state.users[1].id);
+        assert_eq!(second_transfer.destination, state.users[pair_count + 1].id);
+        assert_ne!(first.signer.id, first_transfer.destination);
+        assert_ne!(second.signer.id, second_transfer.destination);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ordered_plan_sequence_preserves_stable_transfer_pair_order() {
+        let PreparedChaos { state, recipes, .. } =
+            prepare_state(8, None, None, WorkloadProfile::Stable, false).expect("state prepared");
+        let pair_count = state.users.len() / 2;
+        let first_sender = state.users[0].id.clone();
+        let first_receiver = state.users[pair_count].id.clone();
+        let second_sender = state.users[1].id.clone();
+        let second_receiver = state.users[pair_count + 1].id.clone();
+        let engine = WorkloadEngine::new(state, recipes);
+        engine.set_recipe_override(Some(RecipeKind::TransferAsset));
+        let mut rng = StdRng::seed_from_u64(226);
+
+        let (first_order, first) = engine
+            .next_ordered_plan(&mut rng)
+            .await
+            .expect("first ordered transfer");
+        let (second_order, second) = engine
+            .next_ordered_plan(&mut rng)
+            .await
+            .expect("second ordered transfer");
+
+        let first_transfer = first.instructions[0]
+            .as_any()
+            .downcast_ref::<TransferBox>()
+            .expect("transfer instruction");
+        let second_transfer = second.instructions[0]
+            .as_any()
+            .downcast_ref::<TransferBox>()
+            .expect("transfer instruction");
+        let TransferBox::Asset(first_transfer) = first_transfer else {
+            panic!("stable transfer should move a numeric asset");
+        };
+        let TransferBox::Asset(second_transfer) = second_transfer else {
+            panic!("stable transfer should move a numeric asset");
+        };
+
+        assert_eq!((first_order, second_order), (0, 1));
+        assert_eq!(first.signer.id, first_sender);
+        assert_eq!(first_transfer.destination, first_receiver);
+        assert_eq!(second.signer.id, second_sender);
+        assert_eq!(second_transfer.destination, second_receiver);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

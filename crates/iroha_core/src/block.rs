@@ -2675,10 +2675,28 @@ pub(crate) mod valid {
         pub(crate) execution_tx_schedule_ms: u64,
         /// Elapsed milliseconds spent applying overlays and finalizing results.
         pub(crate) execution_tx_apply_ms: u64,
+        /// Elapsed milliseconds spent preparing apply accounting before layer execution.
+        pub(crate) execution_tx_apply_setup_ms: u64,
+        /// Elapsed milliseconds spent building conflict-free apply layers.
+        pub(crate) execution_tx_apply_layer_build_ms: u64,
         /// Elapsed milliseconds spent executing time triggers.
         pub(crate) execution_tx_time_triggers_ms: u64,
         /// Elapsed milliseconds spent finalizing block results after time triggers.
         pub(crate) execution_tx_finalize_ms: u64,
+        /// Elapsed milliseconds spent submitting FASTPQ transcript digest work.
+        pub(crate) execution_tx_finalize_digest_submit_ms: u64,
+        /// Elapsed milliseconds spent preparing FASTPQ entry dataspace records.
+        pub(crate) execution_tx_finalize_dataspaces_ms: u64,
+        /// Elapsed milliseconds spent computing and storing the transaction set hash.
+        pub(crate) execution_tx_finalize_tx_set_ms: u64,
+        /// Elapsed milliseconds spent finalizing and draining FASTPQ transfer transcripts.
+        pub(crate) execution_tx_finalize_transcripts_ms: u64,
+        /// Elapsed milliseconds spent draining AXT state for block results.
+        pub(crate) execution_tx_finalize_axt_ms: u64,
+        /// Elapsed milliseconds spent publishing transaction results into the block.
+        pub(crate) execution_tx_finalize_set_results_ms: u64,
+        /// Elapsed finalization milliseconds not attributed to a narrower sub-stage.
+        pub(crate) execution_tx_finalize_other_ms: u64,
         /// Elapsed milliseconds spent preparing apply layers (validation + setup).
         pub(crate) execution_tx_apply_prep_ms: u64,
         /// Elapsed milliseconds spent executing detached overlays.
@@ -2691,6 +2709,10 @@ pub(crate) mod valid {
         pub(crate) execution_tx_apply_quarantine_ms: u64,
         /// Elapsed milliseconds spent in the sequential apply path (when parallel apply is off).
         pub(crate) execution_tx_apply_sequential_ms: u64,
+        /// Elapsed milliseconds spent materializing transaction results after apply.
+        pub(crate) execution_tx_apply_results_ms: u64,
+        /// Elapsed apply milliseconds not attributed to a narrower apply sub-stage.
+        pub(crate) execution_tx_apply_other_ms: u64,
         /// Elapsed milliseconds spent validating AXT envelopes.
         pub(crate) execution_axt_ms: u64,
         /// Elapsed milliseconds spent validating DA shard cursors.
@@ -4414,7 +4436,11 @@ pub(crate) mod valid {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
-            Self::validate_and_record_transactions(&mut block, state_block, None, true);
+            if let Err(error) =
+                Self::validate_and_record_transactions(&mut block, state_block, None, true)
+            {
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
             if let Err(error) = validate_axt_envelopes(&block, state_block) {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
@@ -4460,7 +4486,16 @@ pub(crate) mod valid {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
-            Self::validate_and_record_transactions(&mut block, state_block, None, true);
+            if let Err(error) =
+                Self::validate_and_record_transactions(&mut block, state_block, None, true)
+            {
+                let ev = PipelineEventBox::from(BlockEvent {
+                    header: block.header(),
+                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
+                });
+                send_events(ev);
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
             if let Err(error) = validate_axt_envelopes(&block, state_block) {
                 let ev = PipelineEventBox::from(BlockEvent {
                     header: block.header(),
@@ -4521,6 +4556,7 @@ pub(crate) mod valid {
                 false,
                 false,
                 false,
+                None,
             )
         }
 
@@ -4555,6 +4591,7 @@ pub(crate) mod valid {
                 skip_block_signatures,
                 trust_replay_tx_signatures,
                 true,
+                None,
             )
         }
 
@@ -4584,6 +4621,46 @@ pub(crate) mod valid {
                 false,
                 false,
                 false,
+                None,
+            )
+        }
+
+        /// Execute a previously validated commit candidate while preserving current-tip checks.
+        ///
+        /// Callers must only use this after independently verifying that local validation roots
+        /// and commit-certificate roots agree for the same block. The path still checks
+        /// state-dependent block invariants, transaction limits, duplicate detection, and
+        /// execution-context alignment, but trusts the already validated block and transaction
+        /// signatures so commit does not repeat that cryptographic work.
+        #[allow(clippy::too_many_arguments)]
+        pub(crate) fn validate_prevalidated_commit_keep_voting_block_with_events_and_timing<
+            'state,
+            F: FnMut(PipelineEventBox),
+        >(
+            block: SignedBlock,
+            topology: &Topology,
+            expected_chain_id: &ChainId,
+            genesis_account: &AccountId,
+            time_source: &TimeSource,
+            state: &'state State,
+            voting_block: &mut Option<VotingBlock>,
+            timings: &mut ValidationTimings,
+            mut send_events: F,
+        ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
+            Self::validate_keep_voting_block_inner(
+                block,
+                topology,
+                expected_chain_id,
+                genesis_account,
+                time_source,
+                state,
+                voting_block,
+                false,
+                Some(timings),
+                true,
+                true,
+                false,
+                Some(&mut send_events),
             )
         }
 
@@ -4601,6 +4678,7 @@ pub(crate) mod valid {
             skip_block_signatures: bool,
             trust_replay_tx_signatures: bool,
             replay_compatibility: bool,
+            mut send_events: Option<&mut dyn FnMut(PipelineEventBox)>,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
             let total_start = Instant::now();
             let stateless_start = Instant::now();
@@ -4608,6 +4686,15 @@ pub(crate) mod valid {
                 u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
             };
             let mut timings = timings;
+            let mut emit_rejection = |block: &SignedBlock, error: &BlockValidationError| {
+                if let Some(send_events) = send_events.as_deref_mut() {
+                    let ev = PipelineEventBox::from(BlockEvent {
+                        header: block.header(),
+                        status: BlockStatus::Rejected(map_block_err_to_reason(error)),
+                    });
+                    send_events(ev);
+                }
+            };
             let record_timings =
                 |timings: &mut Option<&mut ValidationTimings>,
                  stateless_elapsed: Duration,
@@ -4647,13 +4734,7 @@ pub(crate) mod valid {
                                 to_ms(static_state_start.elapsed());
                         }
                         record_timings(&mut timings, stateless_elapsed, None);
-                        let ev = PipelineEventBox::from(BlockEvent {
-                            header: block.header(),
-                            status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
-                        });
-                        // No callback available here; rejection is emitted by the caller in
-                        // `_with_events` variants. Keep behavior unchanged.
-                        let _ = ev; // avoid unused warning if optimized out
+                        emit_rejection(&block, &error);
                         return WithEvents::new(Err((Box::new(block), Box::new(error))));
                     }
                 }
@@ -4707,23 +4788,13 @@ pub(crate) mod valid {
                     timings.stateless_snapshot_ms = to_ms(static_snapshot_start.elapsed());
                 }
                 record_timings(&mut timings, stateless_elapsed, None);
-                let ev = PipelineEventBox::from(BlockEvent {
-                    header: block.header(),
-                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
-                });
-                // No callback available here; rejection is emitted by the caller in
-                // `_with_events` variants. Keep behavior unchanged.
-                let _ = ev; // avoid unused warning if optimized out
+                emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Err(error) = Self::validate_npos_effects_with_state(&block, state) {
                 let stateless_elapsed = stateless_start.elapsed();
                 record_timings(&mut timings, stateless_elapsed, None);
-                let ev = PipelineEventBox::from(BlockEvent {
-                    header: block.header(),
-                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
-                });
-                let _ = ev;
+                emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Some(context) = cache_context {
@@ -4759,11 +4830,7 @@ pub(crate) mod valid {
                 }
                 record_timings(&mut timings, stateless_elapsed, Some(execution_start));
                 let error = BlockValidationError::DaShardCursor(error);
-                let ev = PipelineEventBox::from(BlockEvent {
-                    header: block.header(),
-                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
-                });
-                let _ = ev;
+                emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Some(timings) = timings.as_deref_mut() {
@@ -4781,13 +4848,18 @@ pub(crate) mod valid {
             }
             let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
             let tx_start = Instant::now();
-            Self::validate_and_record_transactions_with_prepared(
+            if let Err(error) = Self::validate_and_record_transactions_with_prepared(
                 &mut block,
                 &mut state_block,
                 timings.as_deref_mut(),
                 true,
                 Some(&prepared_txs),
-            );
+            ) {
+                drop(state_block);
+                record_timings(&mut timings, stateless_elapsed, Some(execution_start));
+                emit_rejection(&block, &error);
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
             if let Some(timings) = timings.as_deref_mut() {
                 timings.execution_tx_ms = to_ms(tx_start.elapsed());
             }
@@ -4798,6 +4870,7 @@ pub(crate) mod valid {
                     timings.execution_axt_ms = to_ms(axt_start.elapsed());
                 }
                 record_timings(&mut timings, stateless_elapsed, Some(execution_start));
+                emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Some(timings) = timings.as_deref_mut() {
@@ -4810,6 +4883,7 @@ pub(crate) mod valid {
                     timings.execution_da_cursor_ms = to_ms(da_cursor_start.elapsed());
                 }
                 record_timings(&mut timings, stateless_elapsed, Some(execution_start));
+                emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Some(timings) = timings.as_deref_mut() {
@@ -4821,6 +4895,7 @@ pub(crate) mod valid {
                 let error = BlockValidationError::EmptyBlock;
                 drop(state_block);
                 record_timings(&mut timings, stateless_elapsed, Some(execution_start));
+                emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             let genesis_clean_start = Instant::now();
@@ -4832,6 +4907,7 @@ pub(crate) mod valid {
                     timings.execution_genesis_clean_ms = to_ms(genesis_clean_start.elapsed());
                 }
                 record_timings(&mut timings, stateless_elapsed, Some(execution_start));
+                emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Some(timings) = timings.as_deref_mut() {
@@ -4847,7 +4923,7 @@ pub(crate) mod valid {
         /// Like [`Self::validate_keep_voting_block`], but emits a rejection block event on failure.
         #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
         pub fn validate_keep_voting_block_with_events<'state, F: FnMut(PipelineEventBox)>(
-            mut block: SignedBlock,
+            block: SignedBlock,
             topology: &Topology,
             expected_chain_id: &ChainId,
             genesis_account: &AccountId,
@@ -4857,176 +4933,55 @@ pub(crate) mod valid {
             soft_fork: bool,
             mut send_events: F,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
-            let static_data = {
-                let view = state.query_view();
-                match Self::validate_static_state_dependent(
-                    &block,
-                    topology,
-                    expected_chain_id,
-                    genesis_account,
-                    &view,
-                    soft_fork,
-                    time_source,
-                    false,
-                    false,
-                ) {
-                    Ok(data) => data,
-                    Err(error) => {
-                        let ev = PipelineEventBox::from(BlockEvent {
-                            header: block.header(),
-                            status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
-                        });
-                        send_events(ev);
-                        return WithEvents::new(Err((Box::new(block), Box::new(error))));
-                    }
-                }
-            };
-            let prepared_txs = Self::prepare_external_transactions(&block);
-            let committed_heights = {
-                let transactions_view = state.transactions.view();
-                Self::committed_heights_for_prepared_transactions(&prepared_txs, &transactions_view)
-            };
-            let cache_cap = static_data.pipeline_cfg.stateless_cache_cap;
-            let cache_enabled = cache_cap > 0 && !block.header().is_genesis();
-            let max_clock_drift_ms = static_data.max_clock_drift.as_millis();
-            let cache_context = if cache_enabled {
-                Some(StatelessValidationContext::new(
-                    expected_chain_id.clone(),
-                    u64::try_from(max_clock_drift_ms).unwrap_or(u64::MAX),
-                    static_data.tx_params,
-                    static_data.crypto_cfg.allowed_signing.clone(),
-                ))
-            } else {
-                None
-            };
-            #[cfg(feature = "telemetry")]
-            let metrics = Some(&state.telemetry);
-            #[cfg(not(feature = "telemetry"))]
-            let metrics = ();
-            let cache_now_ms = block.header().creation_time().as_millis();
-            let cached_stateless_ok = cache_context.as_ref().map(|context| {
-                let mut cache = state.stateless_validation_cache().lock();
-                cache.set_cap(cache_cap);
-                cache.ensure_context(context.clone());
-                prepared_txs
-                    .iter()
-                    .map(|prepared| cache.get_ok(&prepared.metadata.signed_hash, cache_now_ms))
-                    .collect::<Vec<_>>()
-            });
-            if let Err(error) = Self::validate_static_with_snapshot(
-                &block,
+            Self::validate_keep_voting_block_inner(
+                block,
+                topology,
                 expected_chain_id,
                 genesis_account,
-                &static_data,
-                &committed_heights,
-                &prepared_txs,
-                cached_stateless_ok.as_deref(),
-                false,
-                metrics,
-            ) {
-                let ev = PipelineEventBox::from(BlockEvent {
-                    header: block.header(),
-                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
-                });
-                send_events(ev);
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            if let Err(error) = Self::validate_npos_effects_with_state(&block, state) {
-                let ev = PipelineEventBox::from(BlockEvent {
-                    header: block.header(),
-                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
-                });
-                send_events(ev);
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            if let Some(context) = cache_context {
-                let mut cache = state.stateless_validation_cache().lock();
-                cache.set_cap(cache_cap);
-                cache.ensure_context(context);
-                for (tx, prepared) in Self::collect_external_signed_transactions(&block)
-                    .into_iter()
-                    .zip(prepared_txs.iter())
-                {
-                    let expires_at_ms = tx
-                        .time_to_live()
-                        .and_then(|ttl| tx.creation_time().checked_add(ttl))
-                        .map(|expires_at| expires_at.as_millis());
-                    let not_before_ms = tx
-                        .creation_time()
-                        .as_millis()
-                        .saturating_sub(max_clock_drift_ms);
-                    cache.insert_ok(prepared.metadata.signed_hash, expires_at_ms, not_before_ms);
-                }
-            }
-            // Release block writer before creating new one
-            let _ = voting_block.take();
-            if let Err(error) = state.ensure_da_indexes_hydrated() {
-                let error = BlockValidationError::DaShardCursor(error);
-                let ev = PipelineEventBox::from(BlockEvent {
-                    header: block.header(),
-                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
-                });
-                send_events(ev);
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            let mut state_block = if soft_fork {
-                state.block_and_revert(block.header())
-            } else {
-                state.block(block.header())
-            };
-            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
-            Self::validate_and_record_transactions_with_prepared(
-                &mut block,
-                &mut state_block,
+                time_source,
+                state,
+                voting_block,
+                soft_fork,
                 None,
-                true,
-                Some(&prepared_txs),
-            );
-            if let Err(error) = validate_axt_envelopes(&block, &state_block) {
-                let ev = PipelineEventBox::from(BlockEvent {
-                    header: block.header(),
-                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
-                });
-                send_events(ev);
-                drop(state_block);
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            if let Err(error) = state_block.validate_da_shard_cursors(&block) {
-                let ev = PipelineEventBox::from(BlockEvent {
-                    header: block.header(),
-                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
-                });
-                send_events(ev);
-                drop(state_block);
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            state_block.capture_exec_witness();
-            drop(exec_witness_guard);
-            if block.is_empty() {
-                let error = BlockValidationError::EmptyBlock;
-                let ev = PipelineEventBox::from(BlockEvent {
-                    header: block.header(),
-                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
-                });
-                send_events(ev);
-                drop(state_block);
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            if let Err(error) =
-                Self::ensure_genesis_transactions_clean(&block, genesis_account, expected_chain_id)
-            {
-                let ev = PipelineEventBox::from(BlockEvent {
-                    header: block.header(),
-                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
-                });
-                send_events(ev);
-                drop(state_block);
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            WithEvents::new(Ok((
-                ValidBlock::new_signatures_verified(block),
-                state_block,
-            )))
+                false,
+                false,
+                false,
+                Some(&mut send_events),
+            )
+        }
+
+        /// Like [`Self::validate_keep_voting_block_with_events`], but records timing breakdowns.
+        #[allow(clippy::too_many_arguments)]
+        pub(crate) fn validate_keep_voting_block_with_events_and_timing<
+            'state,
+            F: FnMut(PipelineEventBox),
+        >(
+            block: SignedBlock,
+            topology: &Topology,
+            expected_chain_id: &ChainId,
+            genesis_account: &AccountId,
+            time_source: &TimeSource,
+            state: &'state State,
+            voting_block: &mut Option<VotingBlock>,
+            soft_fork: bool,
+            timings: &mut ValidationTimings,
+            mut send_events: F,
+        ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
+            Self::validate_keep_voting_block_inner(
+                block,
+                topology,
+                expected_chain_id,
+                genesis_account,
+                time_source,
+                state,
+                voting_block,
+                soft_fork,
+                Some(timings),
+                false,
+                false,
+                false,
+                Some(&mut send_events),
+            )
         }
 
         /// All static checks that require a state snapshot.
@@ -5859,12 +5814,6 @@ pub(crate) mod valid {
                 if cached_stateless_ok.len() != prepared_txs.len() {
                     return Err(BlockValidationError::MerkleRootMismatch);
                 }
-                for (prechecked, cached_ok) in ed25519_prechecked
-                    .iter_mut()
-                    .zip(cached_stateless_ok.iter())
-                {
-                    *prechecked = *cached_ok;
-                }
             }
             let ed25519_batch_cap = pipeline_cfg.signature_batch_max_ed25519;
             if !is_genesis_block && ed25519_batch_cap > 0 {
@@ -6178,7 +6127,7 @@ pub(crate) mod valid {
             state_block: &mut StateBlock<'_>,
             mut timings: Option<&mut ValidationTimings>,
             entrypoints: Vec<TransactionEntrypoint>,
-        ) {
+        ) -> Result<(), BlockValidationError> {
             let to_ms = |duration: Duration| -> u64 {
                 u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
             };
@@ -6336,19 +6285,22 @@ pub(crate) mod valid {
                 state_block.drain_transfer_transcripts_with_pending(fastpq_digest_batch);
             let axt_envelopes = state_block.drain_axt_envelopes();
             let axt_policy_snapshot = Some(state_block.axt_policy_snapshot());
-            block.set_transaction_results_with_transcripts(
-                time_trgs,
-                ordered_hashes.as_slice(),
-                ordered_results,
-                fastpq_transcripts,
-                axt_envelopes,
-                axt_policy_snapshot,
-            );
+            block
+                .set_transaction_results_with_transcripts(
+                    time_trgs,
+                    ordered_hashes.as_slice(),
+                    ordered_results,
+                    fastpq_transcripts,
+                    axt_envelopes,
+                    axt_policy_snapshot,
+                )
+                .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), start) {
                 let elapsed = to_ms(start.elapsed());
                 timings.execution_tx_apply_ms = elapsed;
                 timings.execution_tx_apply_sequential_ms = elapsed;
             }
+            Ok(())
         }
 
         /// Validate each transaction in the block, apply resulting state changes,
@@ -6362,14 +6314,14 @@ pub(crate) mod valid {
             state_block: &mut StateBlock<'_>,
             timings: Option<&mut ValidationTimings>,
             skip_stateless_checks: bool,
-        ) {
+        ) -> Result<(), BlockValidationError> {
             Self::validate_and_record_transactions_with_prepared(
                 block,
                 state_block,
                 timings,
                 skip_stateless_checks,
                 None,
-            );
+            )
         }
 
         #[allow(
@@ -6386,7 +6338,7 @@ pub(crate) mod valid {
             timings: Option<&mut ValidationTimings>,
             skip_stateless_checks: bool,
             prepared_txs: Option<&[PreparedBlockTransaction]>,
-        ) {
+        ) -> Result<(), BlockValidationError> {
             use rayon::prelude::*;
 
             use crate::pipeline::{
@@ -6422,8 +6374,8 @@ pub(crate) mod valid {
                     state_block,
                     timings,
                     entrypoints,
-                );
-                return;
+                )?;
+                return Ok(());
             }
 
             // Prepare scheduling: collect transactions, their access sets, and hashes
@@ -7163,9 +7115,6 @@ pub(crate) mod valid {
                             return Some(reason);
                         }
                     }
-                    if cached_ok[idx] {
-                        return None;
-                    }
                     if skip_stateless_checks {
                         return None;
                     }
@@ -7848,12 +7797,16 @@ pub(crate) mod valid {
             }
 
             let apply_start = timings.as_ref().map(|_| Instant::now());
+            let apply_setup_start = timings.as_ref().map(|_| Instant::now());
+            let mut apply_setup_ms = 0u64;
+            let mut apply_layer_build_ms = 0u64;
             let mut apply_prep_ms = 0u64;
             let mut apply_detached_ms = 0u64;
             let mut apply_merge_ms = 0u64;
             let mut apply_fallback_ms = 0u64;
             let mut apply_quarantine_ms = 0u64;
             let mut apply_sequential_ms = 0u64;
+            let mut apply_results_ms = 0u64;
             let mut lane_summaries: BTreeMap<LaneId, LaneSummary> = BTreeMap::new();
             let mut dataspace_summaries: BTreeMap<(LaneId, DataSpaceId), u64> = BTreeMap::new();
             let mut pending_settlements = state_block.drain_settlement_records();
@@ -8298,6 +8251,9 @@ pub(crate) mod valid {
                 );
                 tx_results[idx] = Some(result);
             };
+            if let Some(start) = apply_setup_start {
+                apply_setup_ms = to_ms(start.elapsed());
+            }
             #[cfg(feature = "telemetry")]
             let t_apply_start = Instant::now();
             #[cfg(feature = "telemetry")]
@@ -8311,7 +8267,7 @@ pub(crate) mod valid {
             if state_block.pipeline.parallel_apply {
                 use rayon::prelude::*;
 
-                use crate::state::DetachedStateTransactionDelta;
+                use crate::state::{DetachedMergeContext, DetachedStateTransactionDelta};
 
                 #[derive(Clone)]
                 struct PreparedEntry {
@@ -8323,6 +8279,7 @@ pub(crate) mod valid {
 
                 // Compute conflict-free layers
                 // Compute conflict-free layers per DSF component and merge deterministically
+                let layer_build_start = timings.as_ref().map(|_| Instant::now());
                 let mut per_comp_layers: Vec<Vec<Vec<usize>>> =
                     Vec::with_capacity(components.len());
                 let mut max_depth = 0usize;
@@ -8368,6 +8325,9 @@ pub(crate) mod valid {
                         wave.sort_by_key(|&i| (call_hashes[i], i));
                         layers.push(wave);
                     }
+                }
+                if let Some(start) = layer_build_start {
+                    apply_layer_build_ms = to_ms(start.elapsed());
                 }
                 // Global quarantine collection executed after normal lane
                 let mut quarantine_seq: Vec<usize> = Vec::new();
@@ -8804,9 +8764,14 @@ pub(crate) mod valid {
                             let mut unsupported = false;
                             let mut reject: Option<TransactionRejectionReason> = None;
                             for instr in ovl.instructions() {
-                                if asset_transfer_target(instr).is_some() {
-                                    unsupported = true;
-                                    break;
+                                if let Some(transfer) = asset_transfer_target(instr) {
+                                    if detached_is_genesis
+                                        || ovl.instruction_count() != 1
+                                        || transfer.source().account() != &p.authority
+                                    {
+                                        unsupported = true;
+                                        break;
+                                    }
                                 }
                                 if !detached_is_genesis {
                                     if let Some(nft_id) = nft_metadata_target(instr) {
@@ -9201,10 +9166,23 @@ pub(crate) mod valid {
                             result
                         };
 
-                    for p in prepared {
-                        match deltas.get(p.idx).cloned().flatten() {
-                            Some(Ok(delta)) => {
-                                // Record pure reads (read_keys minus write_keys) before applying this tx
+                    let simple_transfer_batch = !prepared.is_empty()
+                        && {
+                            let precheck_tx = state_block.transaction();
+                            prepared.iter().all(|p| {
+                                matches!(
+                                    deltas.get(p.idx),
+                                    Some(Some(Ok(delta)))
+                                        if delta.supports_uncontrolled_single_transfer_batch(&precheck_tx)
+                                )
+                            })
+                        };
+
+                    if simple_transfer_batch {
+                        const SIMPLE_TRANSFER_BATCH_CHUNK: usize = 4_096;
+
+                        for prepared_chunk in prepared.chunks(SIMPLE_TRANSFER_BATCH_CHUNK) {
+                            for p in prepared_chunk {
                                 if let Some(aset) = access.get(p.idx) {
                                     for k in aset
                                         .read_keys
@@ -9217,22 +9195,32 @@ pub(crate) mod valid {
                                         );
                                     }
                                 }
-                                // ensure authority exists
-                                let missing_authority = {
-                                    let tx = txs[p.idx];
-                                    let st = state_block.transaction();
-                                    missing_authority_requires_rejection(
-                                        &st,
-                                        tx,
-                                        &p.authority,
-                                        tx.instructions().instruction_count() as usize,
-                                        block.header().is_genesis(),
-                                    )
-                                };
-                                if missing_authority {
-                                    record_amx_abort(state_block, p.idx, "commit");
-                                    let tx = txs[p.idx];
-                                    let hash = prepared_txs[p.idx].metadata.entrypoint_hash;
+                            }
+
+                            let mut state_tx = state_block.transaction();
+                            let mut batch_successes = 0usize;
+                            let mut aborts: Vec<(usize, &'static str)> = Vec::new();
+
+                            for p in prepared_chunk {
+                                let tx = txs[p.idx];
+                                let hash = prepared_txs[p.idx].metadata.entrypoint_hash;
+                                state_tx.current_lane_id = Some(routing_decisions[p.idx].lane_id);
+                                state_tx.current_dataspace_id =
+                                    Some(routing_decisions[p.idx].dataspace_id);
+                                state_tx.world.current_dataspace_id =
+                                    Some(routing_decisions[p.idx].dataspace_id);
+                                state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
+                                state_tx.current_tx_hash =
+                                    Some(prepared_txs[p.idx].metadata.signed_hash);
+
+                                if missing_authority_requires_rejection(
+                                    &state_tx,
+                                    tx,
+                                    &p.authority,
+                                    tx.instructions().instruction_count() as usize,
+                                    block.header().is_genesis(),
+                                ) {
+                                    aborts.push((p.idx, "commit"));
                                     record_result(
                                         p.idx,
                                         Err(TransactionRejectionReason::AccountDoesNotExist(
@@ -9250,29 +9238,15 @@ pub(crate) mod valid {
                                     }
                                     continue;
                                 }
-                                let tx = txs[p.idx];
-                                let hash = prepared_txs[p.idx].metadata.entrypoint_hash;
-                                let admission_result = {
-                                    let mut state_tx = state_block.transaction();
-                                    state_tx.current_lane_id =
-                                        Some(routing_decisions[p.idx].lane_id);
-                                    state_tx.current_dataspace_id =
-                                        Some(routing_decisions[p.idx].dataspace_id);
-                                    state_tx.world.current_dataspace_id =
-                                        Some(routing_decisions[p.idx].dataspace_id);
-                                    state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
-                                    state_tx.current_tx_hash =
-                                        Some(prepared_txs[p.idx].metadata.signed_hash);
-                                    validate_block_transaction_admission(
-                                        &mut state_tx,
-                                        tx,
-                                        routing_decisions[p.idx],
-                                    )
-                                };
-                                let admission = match admission_result {
+
+                                let admission = match validate_block_transaction_admission(
+                                    &mut state_tx,
+                                    tx,
+                                    routing_decisions[p.idx],
+                                ) {
                                     Ok(admission) => admission,
                                     Err(reason) => {
-                                        record_amx_abort(state_block, p.idx, "commit");
+                                        aborts.push((p.idx, "commit"));
                                         record_result(p.idx, Err(reason));
                                         if debug_trace_tx_eval {
                                             let ts = tx.creation_time().as_millis();
@@ -9284,12 +9258,36 @@ pub(crate) mod valid {
                                         continue;
                                     }
                                 };
-                                match delta.merge_into(state_block, &p.authority) {
+
+                                let result = match deltas.get(p.idx) {
+                                    Some(Some(Ok(delta))) => delta
+                                        .merge_uncontrolled_single_transfer_into_transaction(
+                                            &mut state_tx,
+                                            &p.authority,
+                                        )
+                                        .unwrap_or_else(|| {
+                                            Err(TransactionRejectionReason::Validation(
+                                                iroha_data_model::ValidationFail::NotPermitted(
+                                                    "detached transfer is not eligible for batch merge"
+                                                        .to_owned(),
+                                                ),
+                                            ))
+                                        }),
+                                    _ => Err(TransactionRejectionReason::Validation(
+                                        iroha_data_model::ValidationFail::NotPermitted(
+                                            "detached transfer batch lost its prechecked delta"
+                                                .to_owned(),
+                                        ),
+                                    )),
+                                };
+
+                                match result {
                                     Ok(trigger_sequence) => {
-                                        commit_stateful_admission_sequence_to_block(
-                                            state_block,
+                                        commit_stateful_admission_sequence(
+                                            &mut state_tx,
                                             &admission,
                                         );
+                                        batch_successes = batch_successes.saturating_add(1);
                                         record_result(p.idx, Ok(trigger_sequence));
                                         let lane_id = routing_decisions[p.idx].lane_id;
                                         let summary = lane_summaries.entry(lane_id).or_default();
@@ -9304,55 +9302,242 @@ pub(crate) mod valid {
                                         }
                                     }
                                     Err(reason) => {
-                                        record_amx_abort(state_block, p.idx, "commit");
-                                        match reason {
-                                            TransactionRejectionReason::Validation(_) => {
-                                                let result = apply_overlay_sequential(
-                                                    state_block,
-                                                    &mut lane_summaries,
-                                                    p.idx,
-                                                );
-                                                record_result(p.idx, result);
-                                            }
-                                            other => {
-                                                record_result(p.idx, Err(other));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            Some(Err(reason)) => {
-                                record_amx_abort(state_block, p.idx, "exec");
-                                match reason {
-                                    TransactionRejectionReason::Validation(_) => {
-                                        let result = apply_overlay_sequential(
-                                            state_block,
-                                            &mut lane_summaries,
-                                            p.idx,
-                                        );
-                                        record_result(p.idx, result);
-                                    }
-                                    other => {
-                                        let tx = txs[p.idx];
-                                        let hash = prepared_txs[p.idx].metadata.entrypoint_hash;
-                                        record_result(p.idx, Err(other));
+                                        aborts.push((p.idx, "commit"));
+                                        record_result(p.idx, Err(reason));
                                         if debug_trace_tx_eval {
                                             let ts = tx.creation_time().as_millis();
                                             eprintln!(
-                                                "[core-eval] reject(prepared-delta) hash={} ts={} auth={}",
+                                                "[core-eval] reject(prepared-merge) hash={} ts={} auth={}",
                                                 hash, ts, p.authority,
                                             );
                                         }
                                     }
                                 }
                             }
-                            None => {
-                                let result = apply_overlay_sequential(
-                                    state_block,
-                                    &mut lane_summaries,
-                                    p.idx,
-                                );
-                                record_result(p.idx, result);
+
+                            if batch_successes > 0 {
+                                // Each transfer transcript already carries the transaction hash
+                                // active when it was recorded. Clear the overlay hash so apply()
+                                // flushes batched transcripts into their per-transaction buckets.
+                                state_tx.tx_call_hash = None;
+                                state_tx.apply();
+                                state_block
+                                    .add_committed_fragments(batch_successes.saturating_sub(1));
+                            } else {
+                                drop(state_tx);
+                            }
+                            for (idx, stage) in aborts {
+                                record_amx_abort(state_block, idx, stage);
+                            }
+                        }
+                    } else {
+                        for p in prepared {
+                            match deltas.get(p.idx).cloned().flatten() {
+                                Some(Ok(delta)) => {
+                                    // Record pure reads (read_keys minus write_keys) before applying this tx
+                                    if let Some(aset) = access.get(p.idx) {
+                                        for k in aset
+                                            .read_keys
+                                            .iter()
+                                            .filter(|k| !aset.write_keys.contains(*k))
+                                        {
+                                            crate::sumeragi::witness::record_read_from_access_key(
+                                                state_block,
+                                                k,
+                                            );
+                                        }
+                                    }
+                                    let tx = txs[p.idx];
+                                    let hash = prepared_txs[p.idx].metadata.entrypoint_hash;
+                                    let mut state_tx = state_block.transaction();
+                                    state_tx.current_lane_id =
+                                        Some(routing_decisions[p.idx].lane_id);
+                                    state_tx.current_dataspace_id =
+                                        Some(routing_decisions[p.idx].dataspace_id);
+                                    state_tx.world.current_dataspace_id =
+                                        Some(routing_decisions[p.idx].dataspace_id);
+                                    state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
+                                    state_tx.current_tx_hash =
+                                        Some(prepared_txs[p.idx].metadata.signed_hash);
+                                    if missing_authority_requires_rejection(
+                                        &state_tx,
+                                        tx,
+                                        &p.authority,
+                                        tx.instructions().instruction_count() as usize,
+                                        block.header().is_genesis(),
+                                    ) {
+                                        drop(state_tx);
+                                        record_amx_abort(state_block, p.idx, "commit");
+                                        record_result(
+                                            p.idx,
+                                            Err(TransactionRejectionReason::AccountDoesNotExist(
+                                                iroha_data_model::query::error::FindError::Account(
+                                                    p.authority.clone(),
+                                                ),
+                                            )),
+                                        );
+                                        if debug_trace_tx_eval {
+                                            let ts = tx.creation_time().as_millis();
+                                            eprintln!(
+                                                "[core-eval] reject(no-authority) hash={} ts={} auth={}",
+                                                hash, ts, p.authority,
+                                            );
+                                        }
+                                        continue;
+                                    }
+                                    let admission = match validate_block_transaction_admission(
+                                        &mut state_tx,
+                                        tx,
+                                        routing_decisions[p.idx],
+                                    ) {
+                                        Ok(admission) => admission,
+                                        Err(reason) => {
+                                            drop(state_tx);
+                                            record_amx_abort(state_block, p.idx, "commit");
+                                            record_result(p.idx, Err(reason));
+                                            if debug_trace_tx_eval {
+                                                let ts = tx.creation_time().as_millis();
+                                                eprintln!(
+                                                    "[core-eval] reject(admission) hash={} ts={} auth={}",
+                                                    hash, ts, p.authority,
+                                                );
+                                            }
+                                            continue;
+                                        }
+                                    };
+                                    if let Some(result) = delta
+                                        .merge_single_transfer_into_transaction(
+                                            &mut state_tx,
+                                            &p.authority,
+                                        )
+                                    {
+                                        match result {
+                                            Ok(trigger_sequence) => {
+                                                commit_stateful_admission_sequence(
+                                                    &mut state_tx,
+                                                    &admission,
+                                                );
+                                                state_tx.apply();
+                                                record_result(p.idx, Ok(trigger_sequence));
+                                                let lane_id = routing_decisions[p.idx].lane_id;
+                                                let summary =
+                                                    lane_summaries.entry(lane_id).or_default();
+                                                summary.detached_merged =
+                                                    summary.detached_merged.saturating_add(1);
+                                                if debug_trace_tx_eval {
+                                                    let ts = tx.creation_time().as_millis();
+                                                    eprintln!(
+                                                        "[core-eval] ok(prepared-merge) hash={} ts={} auth={}",
+                                                        hash, ts, p.authority,
+                                                    );
+                                                }
+                                            }
+                                            Err(reason) => {
+                                                drop(state_tx);
+                                                record_amx_abort(state_block, p.idx, "commit");
+                                                match reason {
+                                                    TransactionRejectionReason::Validation(_) => {
+                                                        let result = apply_overlay_sequential(
+                                                            state_block,
+                                                            &mut lane_summaries,
+                                                            p.idx,
+                                                        );
+                                                        record_result(p.idx, result);
+                                                    }
+                                                    other => {
+                                                        record_result(p.idx, Err(other));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        continue;
+                                    }
+                                    drop(state_tx);
+                                    let merge_context = DetachedMergeContext {
+                                        tx_call_hash: Some(iroha_crypto::Hash::from(hash)),
+                                        current_tx_hash: Some(
+                                            prepared_txs[p.idx].metadata.signed_hash,
+                                        ),
+                                        current_lane_id: Some(routing_decisions[p.idx].lane_id),
+                                        current_dataspace_id: Some(
+                                            routing_decisions[p.idx].dataspace_id,
+                                        ),
+                                    };
+                                    match delta.merge_into_with_context(
+                                        state_block,
+                                        &p.authority,
+                                        merge_context,
+                                    ) {
+                                        Ok(trigger_sequence) => {
+                                            commit_stateful_admission_sequence_to_block(
+                                                state_block,
+                                                &admission,
+                                            );
+                                            record_result(p.idx, Ok(trigger_sequence));
+                                            let lane_id = routing_decisions[p.idx].lane_id;
+                                            let summary =
+                                                lane_summaries.entry(lane_id).or_default();
+                                            summary.detached_merged =
+                                                summary.detached_merged.saturating_add(1);
+                                            if debug_trace_tx_eval {
+                                                let ts = tx.creation_time().as_millis();
+                                                eprintln!(
+                                                    "[core-eval] ok(prepared-merge) hash={} ts={} auth={}",
+                                                    hash, ts, p.authority,
+                                                );
+                                            }
+                                        }
+                                        Err(reason) => {
+                                            record_amx_abort(state_block, p.idx, "commit");
+                                            match reason {
+                                                TransactionRejectionReason::Validation(_) => {
+                                                    let result = apply_overlay_sequential(
+                                                        state_block,
+                                                        &mut lane_summaries,
+                                                        p.idx,
+                                                    );
+                                                    record_result(p.idx, result);
+                                                }
+                                                other => {
+                                                    record_result(p.idx, Err(other));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Some(Err(reason)) => {
+                                    record_amx_abort(state_block, p.idx, "exec");
+                                    match reason {
+                                        TransactionRejectionReason::Validation(_) => {
+                                            let result = apply_overlay_sequential(
+                                                state_block,
+                                                &mut lane_summaries,
+                                                p.idx,
+                                            );
+                                            record_result(p.idx, result);
+                                        }
+                                        other => {
+                                            let tx = txs[p.idx];
+                                            let hash = prepared_txs[p.idx].metadata.entrypoint_hash;
+                                            record_result(p.idx, Err(other));
+                                            if debug_trace_tx_eval {
+                                                let ts = tx.creation_time().as_millis();
+                                                eprintln!(
+                                                    "[core-eval] reject(prepared-delta) hash={} ts={} auth={}",
+                                                    hash, ts, p.authority,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                                None => {
+                                    let result = apply_overlay_sequential(
+                                        state_block,
+                                        &mut lane_summaries,
+                                        p.idx,
+                                    );
+                                    record_result(p.idx, result);
+                                }
                             }
                         }
                     }
@@ -9806,6 +9991,7 @@ pub(crate) mod valid {
                 }
             }
 
+            let apply_results_start = timings.as_ref().map(|_| Instant::now());
             #[cfg(feature = "telemetry")]
             {
                 let aggregate_lane = state_block.nexus.routing_policy.default_lane;
@@ -9975,6 +10161,9 @@ pub(crate) mod valid {
                 });
                 ordered_results.push(result);
             }
+            if let Some(start) = apply_results_start {
+                apply_results_ms = to_ms(start.elapsed());
+            }
 
             let time_triggers_start = timings.as_ref().map(|_| Instant::now());
             let (time_trgs, mut time_trg_hashes, mut time_trg_results) =
@@ -9993,7 +10182,12 @@ pub(crate) mod valid {
                 );
             }
             let finalize_start = timings.as_ref().map(|_| Instant::now());
+            let digest_submit_start = timings.as_ref().map(|_| Instant::now());
             let fastpq_digest_batch = state_block.submit_transfer_transcript_digest_batch();
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), digest_submit_start) {
+                timings.execution_tx_finalize_digest_submit_ms = to_ms(start.elapsed());
+            }
+            let dataspaces_start = timings.as_ref().map(|_| Instant::now());
             let mut fastpq_entry_dataspaces = std::collections::BTreeMap::new();
             for (idx, entry_hash) in call_hashes.iter().enumerate() {
                 fastpq_entry_dataspaces.insert(
@@ -10009,28 +10203,59 @@ pub(crate) mod valid {
             }
             hashes.append(&mut time_trg_hashes);
             ordered_results.append(&mut time_trg_results);
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), dataspaces_start) {
+                timings.execution_tx_finalize_dataspaces_ms = to_ms(start.elapsed());
+            }
 
+            let tx_set_start = timings.as_ref().map(|_| Instant::now());
             let mut tx_set_hashes = hashes.clone();
             tx_set_hashes.sort_unstable();
             let tx_set_hash =
                 crate::fastpq::tx_set_hash_from_ordered_hashes(tx_set_hashes.iter().copied());
             state_block.set_fastpq_tx_set_hash(tx_set_hash);
             state_block.set_fastpq_entry_dataspaces(fastpq_entry_dataspaces);
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), tx_set_start) {
+                timings.execution_tx_finalize_tx_set_ms = to_ms(start.elapsed());
+            }
 
+            let transcripts_start = timings.as_ref().map(|_| Instant::now());
             let fastpq_transcripts =
                 state_block.drain_transfer_transcripts_with_pending(fastpq_digest_batch);
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), transcripts_start) {
+                timings.execution_tx_finalize_transcripts_ms = to_ms(start.elapsed());
+            }
+            let axt_start = timings.as_ref().map(|_| Instant::now());
             let axt_envelopes = state_block.drain_axt_envelopes();
             let axt_policy_snapshot = Some(state_block.axt_policy_snapshot());
-            block.set_transaction_results_with_transcripts(
-                time_trgs,
-                hashes.as_slice(),
-                ordered_results,
-                fastpq_transcripts,
-                axt_envelopes,
-                axt_policy_snapshot,
-            );
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), axt_start) {
+                timings.execution_tx_finalize_axt_ms = to_ms(start.elapsed());
+            }
+            let set_results_start = timings.as_ref().map(|_| Instant::now());
+            block
+                .set_transaction_results_with_transcripts(
+                    time_trgs,
+                    hashes.as_slice(),
+                    ordered_results,
+                    fastpq_transcripts,
+                    axt_envelopes,
+                    axt_policy_snapshot,
+                )
+                .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), set_results_start) {
+                timings.execution_tx_finalize_set_results_ms = to_ms(start.elapsed());
+            }
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), finalize_start) {
-                timings.execution_tx_finalize_ms = to_ms(start.elapsed());
+                let finalize_ms = to_ms(start.elapsed());
+                let known_finalize_ms = timings
+                    .execution_tx_finalize_digest_submit_ms
+                    .saturating_add(timings.execution_tx_finalize_dataspaces_ms)
+                    .saturating_add(timings.execution_tx_finalize_tx_set_ms)
+                    .saturating_add(timings.execution_tx_finalize_transcripts_ms)
+                    .saturating_add(timings.execution_tx_finalize_axt_ms)
+                    .saturating_add(timings.execution_tx_finalize_set_results_ms);
+                timings.execution_tx_finalize_ms = finalize_ms;
+                timings.execution_tx_finalize_other_ms =
+                    finalize_ms.saturating_sub(known_finalize_ms);
             }
             #[cfg(feature = "telemetry")]
             {
@@ -10042,14 +10267,31 @@ pub(crate) mod valid {
                 );
             }
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), apply_start) {
-                timings.execution_tx_apply_ms = to_ms(start.elapsed());
+                let apply_ms = to_ms(start.elapsed());
+                let known_apply_ms = apply_setup_ms
+                    .saturating_add(apply_layer_build_ms)
+                    .saturating_add(apply_prep_ms)
+                    .saturating_add(apply_detached_ms)
+                    .saturating_add(apply_merge_ms)
+                    .saturating_add(apply_fallback_ms)
+                    .saturating_add(apply_quarantine_ms)
+                    .saturating_add(apply_sequential_ms)
+                    .saturating_add(apply_results_ms)
+                    .saturating_add(timings.execution_tx_time_triggers_ms)
+                    .saturating_add(timings.execution_tx_finalize_ms);
+                timings.execution_tx_apply_ms = apply_ms;
+                timings.execution_tx_apply_setup_ms = apply_setup_ms;
+                timings.execution_tx_apply_layer_build_ms = apply_layer_build_ms;
                 timings.execution_tx_apply_prep_ms = apply_prep_ms;
                 timings.execution_tx_apply_detached_ms = apply_detached_ms;
                 timings.execution_tx_apply_merge_ms = apply_merge_ms;
                 timings.execution_tx_apply_fallback_ms = apply_fallback_ms;
                 timings.execution_tx_apply_quarantine_ms = apply_quarantine_ms;
                 timings.execution_tx_apply_sequential_ms = apply_sequential_ms;
+                timings.execution_tx_apply_results_ms = apply_results_ms;
+                timings.execution_tx_apply_other_ms = apply_ms.saturating_sub(known_apply_ms);
             }
+            Ok(())
         }
 
         /// Like [`Self::validate`], but without the static check part.
@@ -10068,7 +10310,8 @@ pub(crate) mod valid {
                 "unchecked block payload is not in canonical transaction entrypoint order"
             );
             let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
-            Self::validate_and_record_transactions(&mut block, state_block, None, false);
+            Self::validate_and_record_transactions(&mut block, state_block, None, false)
+                .expect("unchecked block should have internally consistent entrypoint hashes");
             if let Err(error) = validate_axt_envelopes(&block, state_block) {
                 panic!("AXT envelope validation failed on unchecked block: {error}");
             }
@@ -12520,7 +12763,8 @@ pub(crate) mod valid {
                 &mut state_block,
                 None,
                 false,
-            );
+            )
+            .expect("full validation should attach transaction results");
             let full_results: Vec<_> = full_block
                 .results()
                 .map(|result| result.as_ref().is_ok())
@@ -12534,7 +12778,8 @@ pub(crate) mod valid {
                 &mut state_block,
                 None,
                 true,
-            );
+            )
+            .expect("skip-stateless validation should attach transaction results");
             let skip_results: Vec<_> = skip_block
                 .results()
                 .map(|result| result.as_ref().is_ok())
@@ -13751,7 +13996,8 @@ pub(crate) mod valid {
 
             let mut voting_block: Option<super::super::VotingBlock> = None;
             let mut events = Vec::new();
-            let result = ValidBlock::validate_keep_voting_block_with_events(
+            let mut timings = ValidationTimings::new();
+            let result = ValidBlock::validate_keep_voting_block_with_events_and_timing(
                 signed_block,
                 &topology,
                 &state.chain_id.clone(),
@@ -13760,6 +14006,7 @@ pub(crate) mod valid {
                 &state,
                 &mut voting_block,
                 false,
+                &mut timings,
                 |event| events.push(event),
             )
             .unpack(|_| {});
@@ -13768,11 +14015,93 @@ pub(crate) mod valid {
                 "validation with events should succeed and warm stateless cache"
             );
             assert!(events.is_empty(), "no rejection events expected");
+            assert!(
+                timings.total_ms >= timings.stateless_ms,
+                "total validation timing should cover stateless timing"
+            );
 
             let cache = state.stateless_validation_cache().lock();
             assert!(
                 cache.contains_key(&tx_hash),
                 "successful static validation with events should populate stateless cache",
+            );
+        }
+
+        #[test]
+        fn validate_prevalidated_commit_keep_voting_block_trusts_validated_signatures() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let state = State::new(World::new(), Arc::clone(&kura), query);
+
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let (leader_public, leader_private) = leader.into_parts();
+            let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
+
+            let _ = commit_block_at_height(&state, &kura, &topology, &leader_private, 1, None, 0);
+
+            let (_tx_handle, tx_time_source) = TimeSource::new_mock(Duration::from_millis(0));
+            let (authority, signer) = gen_account_in("prevalidated-commit");
+            let tx = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                authority,
+                &tx_time_source,
+            )
+            .with_instructions([Log::new(Level::INFO, "prevalidated".to_owned())])
+            .sign(signer.private_key());
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+
+            let (_block_handle, block_time_source) =
+                TimeSource::new_mock(Duration::from_millis(10));
+            let builder =
+                BlockBuilder::new_with_time_source(vec![accepted], block_time_source.clone());
+            let wrong_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let new_block = builder
+                .chain(0, state.view().latest_block().as_deref())
+                .sign(wrong_leader.private_key())
+                .unpack(|_| {});
+            let signed_block: SignedBlock = SignedBlock::from(new_block);
+
+            let mut full_voting_block: Option<super::super::VotingBlock> = None;
+            let full_result = ValidBlock::validate_keep_voting_block(
+                signed_block.clone(),
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &block_time_source,
+                &state,
+                &mut full_voting_block,
+                false,
+            )
+            .unpack(|_| {});
+            assert!(
+                full_result.is_err(),
+                "ordinary validation should reject the intentionally wrong leader signature"
+            );
+
+            let mut voting_block: Option<super::super::VotingBlock> = None;
+            let mut events = Vec::new();
+            let mut timings = ValidationTimings::new();
+            let result =
+                ValidBlock::validate_prevalidated_commit_keep_voting_block_with_events_and_timing(
+                    signed_block,
+                    &topology,
+                    &state.chain_id.clone(),
+                    &ALICE_ID,
+                    &block_time_source,
+                    &state,
+                    &mut voting_block,
+                    &mut timings,
+                    |event| events.push(event),
+                )
+                .unpack(|_| {});
+            assert!(
+                result.is_ok(),
+                "prevalidated commit execution should trust previously checked signatures"
+            );
+            assert!(events.is_empty(), "no rejection events expected");
+            assert!(
+                timings.total_ms >= timings.execution_ms,
+                "prevalidated timing should still include execution"
             );
         }
 
@@ -14065,9 +14394,17 @@ pub(crate) mod valid {
                 .build_and_sign(&genesis_keypair)
                 .expect("ordered genesis parameters should build");
 
+            let genesis_domain =
+                Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account);
+            let genesis_account_model =
+                Account::new(genesis_account.clone()).build(&genesis_account);
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = State::new(
+                World::with([genesis_domain], [genesis_account_model], []),
+                kura,
+                query_handle,
+            );
             let topology = Topology::new(vec![PeerId::new(KeyPair::random().public_key().clone())]);
             let time_source = TimeSource::new_system();
             let mut voting_block = None;
@@ -14415,14 +14752,16 @@ mod commit {
                 .into();
             let entry_hashes: Vec<HashOf<TransactionEntrypoint>> = Vec::new();
             let results: Vec<TransactionResultInner> = Vec::new();
-            block.set_transaction_results_with_transcripts(
-                Vec::new(),
-                &entry_hashes,
-                results,
-                BTreeMap::new(),
-                vec![envelope],
-                Some(snapshot),
-            );
+            block
+                .set_transaction_results_with_transcripts(
+                    Vec::new(),
+                    &entry_hashes,
+                    results,
+                    BTreeMap::new(),
+                    vec![envelope],
+                    Some(snapshot),
+                )
+                .expect("empty test block should attach AXT envelope results");
             block
         }
 
@@ -15762,14 +16101,16 @@ mod commit {
                 .into();
             let entry_hashes: Vec<HashOf<TransactionEntrypoint>> = Vec::new();
             let results: Vec<TransactionResultInner> = Vec::new();
-            block.set_transaction_results_with_transcripts(
-                Vec::new(),
-                &entry_hashes,
-                results,
-                BTreeMap::new(),
-                vec![envelope],
-                None,
-            );
+            block
+                .set_transaction_results_with_transcripts(
+                    Vec::new(),
+                    &entry_hashes,
+                    results,
+                    BTreeMap::new(),
+                    vec![envelope],
+                    None,
+                )
+                .expect("empty test block should attach AXT envelope results");
 
             let state_block = state.block(block.header());
             let err = validate_axt_envelopes(&block, &state_block).unwrap_err();

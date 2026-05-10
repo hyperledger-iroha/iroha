@@ -5470,6 +5470,7 @@ where
     let mut vm = ivm_cache
         .clone_runtime(&summary, bytecode.as_ref(), gas_limit)
         .map_err(OverlayBuildError::IvmLoad)?;
+    vm.set_zk_trace_enabled(true);
 
     let accounts = state_ro.accounts_snapshot();
     let streaming_meta = resolve_streaming_metadata(state_ro, tx.authority());

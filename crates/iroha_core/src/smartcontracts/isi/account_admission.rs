@@ -366,7 +366,7 @@ pub(super) fn ensure_receiving_account(
 mod tests {
     use std::collections::BTreeMap;
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         account::{ACCOUNT_ADMISSION_POLICY_METADATA_KEY, admission::ImplicitAccountCreationFee},
         parameter::Parameters,
@@ -381,7 +381,7 @@ mod tests {
         kura::Kura,
         query::store::LiveQueryStore,
         smartcontracts::Execute,
-        state::{State, World},
+        state::{State, StateTransaction, World},
     };
 
     static POLICY_METADATA_KEY: LazyLock<Name> = LazyLock::new(|| {
@@ -442,6 +442,10 @@ mod tests {
         State::new_for_testing(world, kura, query)
     }
 
+    fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
+        state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
+    }
+
     #[test]
     fn transfer_asset_creates_destination_account_in_open_domain() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -476,6 +480,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx, 0xA1);
         let dest = random_account_id();
         Transfer::asset_numeric(alice_asset_id.clone(), 10_u32, dest.clone())
             .execute(&ALICE_ID, &mut stx)
@@ -557,6 +562,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx, 0xA2);
 
         let dest = random_account_id();
         let entry = TransferAssetBatchEntry::new(

@@ -54,6 +54,12 @@ fn ensure_query_registry_initialized() {
         dm_query::ErasedIterQuery<dm::block::SignedBlock>,
         dm_query::ErasedIterQuery<dm::block::BlockHeader>,
         dm_query::ErasedIterQuery<dm::proof::ProofRecord>,
+        dm_query::ErasedIterQuery<dm::oracle::FeedConfig>,
+        dm_query::ErasedIterQuery<dm::events::data::oracle::FeedEventRecord>,
+        dm_query::ErasedIterQuery<dm::oracle::OracleProviderStatsRecord>,
+        dm_query::ErasedIterQuery<dm::oracle::OracleDispute>,
+        dm_query::ErasedIterQuery<dm::oracle::OracleChangeProposal>,
+        dm_query::ErasedIterQuery<dm::oracle::TwitterBindingRecord>,
         dm_query::ErasedIterQuery<dm::escrow::AssetEscrowRecord>,
         dm_query::ErasedIterQuery<dm::escrow::AnonymousAssetEscrowRecord>,
     ]);
@@ -426,6 +432,18 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindTwitterBindingByHash(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindOracleFeedById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindOracleDisputeById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindOracleChangeById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindOracleProviderStatsByKey(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindDomainEndorsements(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
@@ -578,6 +596,15 @@ impl ExecuteQueryBox for QueryBox<QueryOutputBatchBox> {
             dm::block::SignedBlock => dm::query::block::prelude::FindBlocks,
             dm::block::BlockHeader => dm::query::block::prelude::FindBlockHeaders,
             dm::proof::ProofRecord => dm::query::proof::prelude::FindProofRecords,
+            dm::oracle::FeedConfig => dm::query::oracle::prelude::FindOracleFeeds,
+            dm::events::data::oracle::FeedEventRecord =>
+                dm::query::oracle::prelude::FindOracleHistoryByFeedId,
+            dm::oracle::OracleProviderStatsRecord =>
+                dm::query::oracle::prelude::FindOracleProviderStatsByFeedId,
+            dm::oracle::OracleDispute => dm::query::oracle::prelude::FindOracleDisputes,
+            dm::oracle::OracleChangeProposal => dm::query::oracle::prelude::FindOracleChanges,
+            dm::oracle::TwitterBindingRecord =>
+                dm::query::oracle::prelude::FindTwitterBindingsByUaid,
             dm::query::CommittedTransaction => dm::query::transaction::prelude::FindTransactions,
             dm::escrow::AssetEscrowRecord => dm::query::escrow::prelude::FindAssetEscrows,
             dm::escrow::AnonymousAssetEscrowRecord =>
@@ -627,6 +654,78 @@ impl SortableQueryOutput for iroha_data_model::proof::ProofRecord {
 
     fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.id.cmp(&other.id)
+    }
+}
+
+impl SortableQueryOutput for iroha_data_model::oracle::FeedConfig {
+    type TiebreakKey = iroha_data_model::oracle::FeedId;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.feed_id.clone()
+    }
+}
+
+impl SortableQueryOutput for iroha_data_model::events::data::oracle::FeedEventRecord {
+    type TiebreakKey = Vec<u8>;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        norito::codec::Encode::encode(&self.event)
+    }
+}
+
+impl SortableQueryOutput for iroha_data_model::oracle::OracleProviderStatsRecord {
+    type TiebreakKey = iroha_data_model::oracle::OracleProviderKey;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.key.clone()
+    }
+}
+
+impl SortableQueryOutput for iroha_data_model::oracle::OracleDispute {
+    type TiebreakKey = iroha_data_model::oracle::OracleDisputeId;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.id
+    }
+}
+
+impl SortableQueryOutput for iroha_data_model::oracle::OracleChangeProposal {
+    type TiebreakKey = iroha_data_model::oracle::OracleChangeId;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.id
+    }
+}
+
+impl SortableQueryOutput for iroha_data_model::oracle::TwitterBindingRecord {
+    type TiebreakKey = iroha_crypto::Hash;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.binding_digest()
     }
 }
 
@@ -1938,6 +2037,35 @@ impl ValidQueryRequest {
                                     iroha_data_model::query::escrow::prelude::FindAnonymousAssetEscrows
                                 )
                             }
+                            QueryItemKind::OracleFeedConfig => run_payload_or_default!(
+                                iroha_data_model::oracle::FeedConfig,
+                                iroha_data_model::query::oracle::prelude::FindOracleFeeds
+                            ),
+                            QueryItemKind::OracleFeedEventRecord => {
+                                run_payload_or_default!(require_payload iroha_data_model::events::data::oracle::FeedEventRecord, iroha_data_model::query::oracle::prelude::FindOracleHistoryByFeedId)
+                            }
+                            QueryItemKind::OracleProviderStatsRecord => {
+                                run_payload_or_default!(require_payload iroha_data_model::oracle::OracleProviderStatsRecord, iroha_data_model::query::oracle::prelude::FindOracleProviderStatsByFeedId)
+                            }
+                            QueryItemKind::OracleDispute => {
+                                if !iter_query.query_payload.is_empty() {
+                                    run_payload_or_default!(
+                                        require_payload iroha_data_model::oracle::OracleDispute,
+                                        iroha_data_model::query::oracle::prelude::FindOracleDisputesByFeedId
+                                    )
+                                }
+                                run_payload_or_default!(
+                                    iroha_data_model::oracle::OracleDispute,
+                                    iroha_data_model::query::oracle::prelude::FindOracleDisputes
+                                )
+                            }
+                            QueryItemKind::OracleChangeProposal => run_payload_or_default!(
+                                iroha_data_model::oracle::OracleChangeProposal,
+                                iroha_data_model::query::oracle::prelude::FindOracleChanges
+                            ),
+                            QueryItemKind::TwitterBindingRecord => {
+                                run_payload_or_default!(require_payload iroha_data_model::oracle::TwitterBindingRecord, iroha_data_model::query::oracle::prelude::FindTwitterBindingsByUaid)
+                            }
                             QueryItemKind::Permission => {
                                 run_payload_or_default!(require_payload iroha_data_model::permission::Permission, iroha_data_model::query::permission::prelude::FindPermissionsByAccountId)
                             }
@@ -2057,6 +2185,25 @@ impl ValidQueryRequest {
                             iroha_data_model::escrow::AnonymousAssetEscrowRecord,
                             iroha_data_model::query::escrow::prelude::FindAnonymousAssetEscrows
                         ),
+                        QueryItemKind::OracleFeedConfig => run_unit!(
+                            iroha_data_model::oracle::FeedConfig,
+                            iroha_data_model::query::oracle::prelude::FindOracleFeeds
+                        ),
+                        QueryItemKind::OracleFeedEventRecord
+                        | QueryItemKind::OracleProviderStatsRecord
+                        | QueryItemKind::TwitterBindingRecord => {
+                            return Err(Error::Conversion(
+                                "missing or malformed query payload".into(),
+                            ));
+                        }
+                        QueryItemKind::OracleDispute => run_unit!(
+                            iroha_data_model::oracle::OracleDispute,
+                            iroha_data_model::query::oracle::prelude::FindOracleDisputes
+                        ),
+                        QueryItemKind::OracleChangeProposal => run_unit!(
+                            iroha_data_model::oracle::OracleChangeProposal,
+                            iroha_data_model::query::oracle::prelude::FindOracleChanges
+                        ),
                         QueryItemKind::Permission => {
                             return Err(Error::Conversion(
                                 "missing or malformed query payload".into(),
@@ -2162,6 +2309,25 @@ impl ValidQueryRequest {
                         QueryItemKind::AnonymousAssetEscrowRecord => run_unit!(
                             iroha_data_model::escrow::AnonymousAssetEscrowRecord,
                             iroha_data_model::query::escrow::prelude::FindAnonymousAssetEscrows
+                        ),
+                        QueryItemKind::OracleFeedConfig => run_unit!(
+                            iroha_data_model::oracle::FeedConfig,
+                            iroha_data_model::query::oracle::prelude::FindOracleFeeds
+                        ),
+                        QueryItemKind::OracleFeedEventRecord
+                        | QueryItemKind::OracleProviderStatsRecord
+                        | QueryItemKind::TwitterBindingRecord => {
+                            return Err(Error::Conversion(
+                                "missing or malformed query payload".into(),
+                            ));
+                        }
+                        QueryItemKind::OracleDispute => run_unit!(
+                            iroha_data_model::oracle::OracleDispute,
+                            iroha_data_model::query::oracle::prelude::FindOracleDisputes
+                        ),
+                        QueryItemKind::OracleChangeProposal => run_unit!(
+                            iroha_data_model::oracle::OracleChangeProposal,
+                            iroha_data_model::query::oracle::prelude::FindOracleChanges
                         ),
                         QueryItemKind::Permission => {
                             return Err(Error::Conversion(
@@ -2274,6 +2440,25 @@ impl ValidQueryRequest {
                         QueryItemKind::AnonymousAssetEscrowRecord => run_unit!(
                             iroha_data_model::escrow::AnonymousAssetEscrowRecord,
                             iroha_data_model::query::escrow::prelude::FindAnonymousAssetEscrows
+                        ),
+                        QueryItemKind::OracleFeedConfig => run_unit!(
+                            iroha_data_model::oracle::FeedConfig,
+                            iroha_data_model::query::oracle::prelude::FindOracleFeeds
+                        ),
+                        QueryItemKind::OracleFeedEventRecord
+                        | QueryItemKind::OracleProviderStatsRecord
+                        | QueryItemKind::TwitterBindingRecord => {
+                            return Err(Error::Conversion(
+                                "missing or malformed query payload".into(),
+                            ));
+                        }
+                        QueryItemKind::OracleDispute => run_unit!(
+                            iroha_data_model::oracle::OracleDispute,
+                            iroha_data_model::query::oracle::prelude::FindOracleDisputes
+                        ),
+                        QueryItemKind::OracleChangeProposal => run_unit!(
+                            iroha_data_model::oracle::OracleChangeProposal,
+                            iroha_data_model::query::oracle::prelude::FindOracleChanges
                         ),
                         QueryItemKind::Permission => {
                             return Err(Error::Conversion(
@@ -2745,6 +2930,155 @@ impl ValidQueryRequest {
                 )? {
                     return Ok(resp);
                 }
+                if let Some(resp) = run_dispatch::<
+                    iroha_data_model::oracle::FeedConfig,
+                    iroha_data_model::query::oracle::prelude::FindOracleFeeds,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    state,
+                    live_query_store,
+                    authority,
+                    stored_cursor_budget,
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::oracle::prelude::FindOracleFeeds,
+                        >(e)
+                        .or(Some(
+                            iroha_data_model::query::oracle::prelude::FindOracleFeeds,
+                        ))
+                    },
+                )? {
+                    return Ok(resp);
+                }
+                if let Some(resp) = run_dispatch::<
+                    iroha_data_model::events::data::oracle::FeedEventRecord,
+                    iroha_data_model::query::oracle::prelude::FindOracleHistoryByFeedId,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    state,
+                    live_query_store,
+                    authority,
+                    stored_cursor_budget,
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::oracle::prelude::FindOracleHistoryByFeedId,
+                        >(e)
+                    },
+                )? {
+                    return Ok(resp);
+                }
+                if let Some(resp) = run_dispatch::<
+                    iroha_data_model::oracle::OracleProviderStatsRecord,
+                    iroha_data_model::query::oracle::prelude::FindOracleProviderStatsByFeedId,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    state,
+                    live_query_store,
+                    authority,
+                    stored_cursor_budget,
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::oracle::prelude::FindOracleProviderStatsByFeedId,
+                        >(e)
+                    },
+                )? {
+                    return Ok(resp);
+                }
+                if let Some(resp) = run_dispatch::<
+                    iroha_data_model::oracle::OracleDispute,
+                    iroha_data_model::query::oracle::prelude::FindOracleDisputesByFeedId,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    state,
+                    live_query_store,
+                    authority,
+                    stored_cursor_budget,
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::oracle::prelude::FindOracleDisputesByFeedId,
+                        >(e)
+                    },
+                )? {
+                    return Ok(resp);
+                }
+                if let Some(resp) = run_dispatch::<
+                    iroha_data_model::oracle::OracleDispute,
+                    iroha_data_model::query::oracle::prelude::FindOracleDisputes,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    state,
+                    live_query_store,
+                    authority,
+                    stored_cursor_budget,
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::oracle::prelude::FindOracleDisputes,
+                        >(e)
+                        .or(Some(
+                            iroha_data_model::query::oracle::prelude::FindOracleDisputes,
+                        ))
+                    },
+                )? {
+                    return Ok(resp);
+                }
+                if let Some(resp) = run_dispatch::<
+                    iroha_data_model::oracle::OracleChangeProposal,
+                    iroha_data_model::query::oracle::prelude::FindOracleChanges,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    state,
+                    live_query_store,
+                    authority,
+                    stored_cursor_budget,
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::oracle::prelude::FindOracleChanges,
+                        >(e)
+                        .or(Some(
+                            iroha_data_model::query::oracle::prelude::FindOracleChanges,
+                        ))
+                    },
+                )? {
+                    return Ok(resp);
+                }
+                if let Some(resp) = run_dispatch::<
+                    iroha_data_model::oracle::TwitterBindingRecord,
+                    iroha_data_model::query::oracle::prelude::FindTwitterBindingsByUaid,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    state,
+                    live_query_store,
+                    authority,
+                    stored_cursor_budget,
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::oracle::prelude::FindTwitterBindingsByUaid,
+                        >(e)
+                    },
+                )? {
+                    return Ok(resp);
+                }
 
                 Err(Error::Conversion(
                     "unsupported iterable query type".to_string(),
@@ -3037,6 +3371,35 @@ impl ValidQueryRequest {
                                     iroha_data_model::escrow::AnonymousAssetEscrowRecord,
                                     iroha_data_model::query::escrow::prelude::FindAnonymousAssetEscrows
                                 )
+                            }
+                            QueryItemKind::OracleFeedConfig => run_payload_or_default!(
+                                iroha_data_model::oracle::FeedConfig,
+                                iroha_data_model::query::oracle::prelude::FindOracleFeeds
+                            ),
+                            QueryItemKind::OracleFeedEventRecord => {
+                                run_payload_or_default!(require_payload iroha_data_model::events::data::oracle::FeedEventRecord, iroha_data_model::query::oracle::prelude::FindOracleHistoryByFeedId)
+                            }
+                            QueryItemKind::OracleProviderStatsRecord => {
+                                run_payload_or_default!(require_payload iroha_data_model::oracle::OracleProviderStatsRecord, iroha_data_model::query::oracle::prelude::FindOracleProviderStatsByFeedId)
+                            }
+                            QueryItemKind::OracleDispute => {
+                                if !iter_query.query_payload.is_empty() {
+                                    run_payload_or_default!(
+                                        require_payload iroha_data_model::oracle::OracleDispute,
+                                        iroha_data_model::query::oracle::prelude::FindOracleDisputesByFeedId
+                                    )
+                                }
+                                run_payload_or_default!(
+                                    iroha_data_model::oracle::OracleDispute,
+                                    iroha_data_model::query::oracle::prelude::FindOracleDisputes
+                                )
+                            }
+                            QueryItemKind::OracleChangeProposal => run_payload_or_default!(
+                                iroha_data_model::oracle::OracleChangeProposal,
+                                iroha_data_model::query::oracle::prelude::FindOracleChanges
+                            ),
+                            QueryItemKind::TwitterBindingRecord => {
+                                run_payload_or_default!(require_payload iroha_data_model::oracle::TwitterBindingRecord, iroha_data_model::query::oracle::prelude::FindTwitterBindingsByUaid)
                             }
                             QueryItemKind::Permission => {
                                 run_payload_or_default!(require_payload iroha_data_model::permission::Permission, iroha_data_model::query::permission::prelude::FindPermissionsByAccountId)
@@ -3440,6 +3803,162 @@ impl ValidQueryRequest {
                             .or(Some(
                                 iroha_data_model::query::proof::prelude::FindProofRecords,
                             ))
+                    },
+                )? {
+                    return Ok((resp, processed_items));
+                }
+                if let Some((resp, processed_items)) = run_dispatch::<
+                    iroha_data_model::oracle::FeedConfig,
+                    iroha_data_model::query::oracle::prelude::FindOracleFeeds,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    budget_items,
+                    state,
+                    live_query_store,
+                    authority,
+                    None,
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::oracle::prelude::FindOracleFeeds,
+                        >(e)
+                        .or(Some(
+                            iroha_data_model::query::oracle::prelude::FindOracleFeeds,
+                        ))
+                    },
+                )? {
+                    return Ok((resp, processed_items));
+                }
+                if let Some((resp, processed_items)) = run_dispatch::<
+                    iroha_data_model::events::data::oracle::FeedEventRecord,
+                    iroha_data_model::query::oracle::prelude::FindOracleHistoryByFeedId,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    budget_items,
+                    state,
+                    live_query_store,
+                    authority,
+                    None,
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::oracle::prelude::FindOracleHistoryByFeedId,
+                        >(e)
+                    },
+                )? {
+                    return Ok((resp, processed_items));
+                }
+                if let Some((resp, processed_items)) = run_dispatch::<
+                    iroha_data_model::oracle::OracleProviderStatsRecord,
+                    iroha_data_model::query::oracle::prelude::FindOracleProviderStatsByFeedId,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    budget_items,
+                    state,
+                    live_query_store,
+                    authority,
+                    None,
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::oracle::prelude::FindOracleProviderStatsByFeedId,
+                        >(e)
+                    },
+                )? {
+                    return Ok((resp, processed_items));
+                }
+                if let Some((resp, processed_items)) = run_dispatch::<
+                    iroha_data_model::oracle::OracleDispute,
+                    iroha_data_model::query::oracle::prelude::FindOracleDisputesByFeedId,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    budget_items,
+                    state,
+                    live_query_store,
+                    authority,
+                    None,
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::oracle::prelude::FindOracleDisputesByFeedId,
+                        >(e)
+                    },
+                )? {
+                    return Ok((resp, processed_items));
+                }
+                if let Some((resp, processed_items)) = run_dispatch::<
+                    iroha_data_model::oracle::OracleDispute,
+                    iroha_data_model::query::oracle::prelude::FindOracleDisputes,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    budget_items,
+                    state,
+                    live_query_store,
+                    authority,
+                    None,
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::oracle::prelude::FindOracleDisputes,
+                        >(e)
+                        .or(Some(
+                            iroha_data_model::query::oracle::prelude::FindOracleDisputes,
+                        ))
+                    },
+                )? {
+                    return Ok((resp, processed_items));
+                }
+                if let Some((resp, processed_items)) = run_dispatch::<
+                    iroha_data_model::oracle::OracleChangeProposal,
+                    iroha_data_model::query::oracle::prelude::FindOracleChanges,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    budget_items,
+                    state,
+                    live_query_store,
+                    authority,
+                    None,
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::oracle::prelude::FindOracleChanges,
+                        >(e)
+                        .or(Some(
+                            iroha_data_model::query::oracle::prelude::FindOracleChanges,
+                        ))
+                    },
+                )? {
+                    return Ok((resp, processed_items));
+                }
+                if let Some((resp, processed_items)) = run_dispatch::<
+                    iroha_data_model::oracle::TwitterBindingRecord,
+                    iroha_data_model::query::oracle::prelude::FindTwitterBindingsByUaid,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    budget_items,
+                    state,
+                    live_query_store,
+                    authority,
+                    None,
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::oracle::prelude::FindTwitterBindingsByUaid,
+                        >(e)
                     },
                 )? {
                     return Ok((resp, processed_items));

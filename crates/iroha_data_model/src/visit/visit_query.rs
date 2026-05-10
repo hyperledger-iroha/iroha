@@ -50,6 +50,10 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
         visit_find_asset_by_id(FindAssetById),
         visit_find_asset_definition_by_id(FindAssetDefinitionById),
         visit_find_trigger_by_id(FindTriggerById),
+        visit_find_oracle_feed_by_id(FindOracleFeedById),
+        visit_find_oracle_dispute_by_id(FindOracleDisputeById),
+        visit_find_oracle_change_by_id(FindOracleChangeById),
+        visit_find_oracle_provider_stats_by_key(FindOracleProviderStatsByKey),
         visit_find_twitter_binding_by_hash(FindTwitterBindingByHash),
         visit_find_domain_endorsements(FindDomainEndorsements),
         visit_find_domain_endorsement_policy(FindDomainEndorsementPolicy),
@@ -99,6 +103,12 @@ pub fn visit_iter_query<V: Visit + ?Sized>(visitor: &mut V, query_with_params: &
         crate::peer::PeerId => visit_find_peers,
         crate::trigger::TriggerId => visit_find_active_trigger_ids,
         crate::trigger::Trigger => visit_find_triggers,
+        crate::oracle::FeedConfig => visit_find_oracle_feeds,
+        crate::events::data::oracle::FeedEventRecord => visit_find_oracle_history_by_feed_id,
+        crate::oracle::OracleProviderStatsRecord => visit_find_oracle_provider_stats_by_feed_id,
+        crate::oracle::OracleDispute => visit_find_oracle_disputes,
+        crate::oracle::OracleChangeProposal => visit_find_oracle_changes,
+        crate::oracle::TwitterBindingRecord => visit_find_twitter_bindings_by_uaid,
         crate::query::CommittedTransaction => visit_find_transactions,
         crate::block::BlockHeader => visit_find_block_headers,
         crate::block::SignedBlock => visit_find_blocks,
@@ -147,6 +157,18 @@ macro_rules! query_visitors {
                 &$crate::query::asset::prelude::FindAssetDefinitionById
             ),
             visit_find_trigger_by_id(&$crate::query::trigger::prelude::FindTriggerById),
+            visit_find_oracle_feed_by_id(
+                &$crate::query::oracle::prelude::FindOracleFeedById
+            ),
+            visit_find_oracle_dispute_by_id(
+                &$crate::query::oracle::prelude::FindOracleDisputeById
+            ),
+            visit_find_oracle_change_by_id(
+                &$crate::query::oracle::prelude::FindOracleChangeById
+            ),
+            visit_find_oracle_provider_stats_by_key(
+                &$crate::query::oracle::prelude::FindOracleProviderStatsByKey
+            ),
             visit_find_twitter_binding_by_hash(
                 &$crate::query::oracle::prelude::FindTwitterBindingByHash
             ),
@@ -211,6 +233,12 @@ macro_rules! query_visitors {
             visit_find_peers(&$crate::query::ErasedIterQuery<$crate::peer::PeerId>),
             visit_find_active_trigger_ids(&$crate::query::ErasedIterQuery<$crate::trigger::TriggerId>),
             visit_find_triggers(&$crate::query::ErasedIterQuery<$crate::trigger::Trigger>),
+            visit_find_oracle_feeds(&$crate::query::ErasedIterQuery<$crate::oracle::FeedConfig>),
+            visit_find_oracle_history_by_feed_id(&$crate::query::ErasedIterQuery<$crate::events::data::oracle::FeedEventRecord>),
+            visit_find_oracle_provider_stats_by_feed_id(&$crate::query::ErasedIterQuery<$crate::oracle::OracleProviderStatsRecord>),
+            visit_find_oracle_disputes(&$crate::query::ErasedIterQuery<$crate::oracle::OracleDispute>),
+            visit_find_oracle_changes(&$crate::query::ErasedIterQuery<$crate::oracle::OracleChangeProposal>),
+            visit_find_twitter_bindings_by_uaid(&$crate::query::ErasedIterQuery<$crate::oracle::TwitterBindingRecord>),
             visit_find_transactions(&$crate::query::ErasedIterQuery<$crate::query::CommittedTransaction>),
             visit_find_blocks(&$crate::query::ErasedIterQuery<$crate::block::SignedBlock>),
             visit_find_block_headers(&$crate::query::ErasedIterQuery<$crate::block::BlockHeader>),
@@ -272,6 +300,10 @@ mod tests {
             SingularQueryBox::FindAssetEscrowById(_) => {}
             SingularQueryBox::FindAnonymousAssetEscrowById(_) => {}
             SingularQueryBox::FindTriggerById(_) => {}
+            SingularQueryBox::FindOracleFeedById(_) => {}
+            SingularQueryBox::FindOracleDisputeById(_) => {}
+            SingularQueryBox::FindOracleChangeById(_) => {}
+            SingularQueryBox::FindOracleProviderStatsByKey(_) => {}
             SingularQueryBox::FindTwitterBindingByHash(_) => {}
             SingularQueryBox::FindDaPinIntentByTicket(_) => {}
             SingularQueryBox::FindDaPinIntentByManifest(_) => {}

@@ -395,6 +395,11 @@ impl_into_box! {
 
 impl crate::seal::Instruction for SettlementInstructionBox {}
 
+impl SettlementInstructionBox {
+    /// Stable Norito wire identifier for boxed settlement instructions.
+    pub const WIRE_ID: &'static str = "iroha.settlement";
+}
+
 fn settlement_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
@@ -671,17 +676,19 @@ mod tests {
             std::any::type_name::<SettlementInstructionBox>(),
             SettlementInstructionBox::Dvp(dvp_instruction()),
         );
-        assert_registry_decodes(
-            &registry,
+        for value in [
+            SettlementInstructionBox::Dvp(dvp_instruction()),
+            SettlementInstructionBox::Pvp(pvp_instruction()),
+        ] {
+            assert_registry_decodes(&registry, SettlementInstructionBox::WIRE_ID, value);
+        }
+        for name in [
             std::any::type_name::<DvpIsi>(),
-            dvp_instruction(),
-        );
-        assert_registry_decodes(&registry, DvpIsi::WIRE_ID, dvp_instruction());
-        assert_registry_decodes(
-            &registry,
             std::any::type_name::<PvpIsi>(),
-            pvp_instruction(),
-        );
-        assert_registry_decodes(&registry, PvpIsi::WIRE_ID, pvp_instruction());
+            DvpIsi::WIRE_ID,
+            PvpIsi::WIRE_ID,
+        ] {
+            assert!(!registry.contains(name), "{name} must remain boxed-only");
+        }
     }
 }

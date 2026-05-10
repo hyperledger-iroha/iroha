@@ -1265,7 +1265,8 @@ async fn mcp_jsonrpc_tools_call_agent_alias_sumeragi_commit_certificates_accepts
 async fn mcp_jsonrpc_tools_call_agent_alias_sumeragi_endpoints_dispatch() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    enable_writer_mcp(&mut cfg);
+    cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
 
     let app = build_router(cfg);
     for (id, tool_name, arguments) in [
@@ -1879,7 +1880,8 @@ async fn mcp_jsonrpc_tools_call_agent_alias_proofs_endpoints_dispatch() {
 async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    enable_writer_mcp(&mut cfg);
+    cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
 
     let app = build_router(cfg);
     for (id, tool_name, arguments) in [

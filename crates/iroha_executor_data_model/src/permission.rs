@@ -658,12 +658,61 @@ pub mod soranet {
     }
 }
 
+/// Permission tokens governing operator-managed oracle state.
+pub mod oracle {
+    use super::*;
+    use iroha_data_model::oracle::OracleChangeStage;
+
+    permission! {
+        /// Permission to register oracle feed configurations.
+        #[derive(Copy)]
+        pub struct CanRegisterOracleFeed;
+    }
+
+    permission! {
+        /// Permission to propose oracle feed governance changes.
+        #[derive(Copy)]
+        pub struct CanProposeOracleChange;
+    }
+
+    permission! {
+        /// Permission to vote in a specific oracle change stage.
+        #[derive(Copy)]
+        pub struct CanVoteOracleChangeStage {
+            /// Stage in which the holder may vote.
+            pub stage: OracleChangeStage,
+        }
+    }
+
+    permission! {
+        /// Permission to roll back oracle change proposals.
+        #[derive(Copy)]
+        pub struct CanRollbackOracleChange;
+    }
+
+    permission! {
+        /// Permission to resolve oracle disputes.
+        #[derive(Copy)]
+        pub struct CanResolveOracleDispute;
+    }
+
+    permission! {
+        /// Permission to record or revoke oracle-backed Twitter bindings.
+        #[derive(Copy)]
+        pub struct CanManageTwitterBindings;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::account::CanRegisterAccount;
     use super::escrow::CanResolveEscrowDispute;
+    use super::oracle::{
+        CanManageTwitterBindings, CanRegisterOracleFeed, CanVoteOracleChangeStage,
+    };
     use crate::permission::Permission as _;
     use iroha_data_model::DomainId;
+    use iroha_data_model::oracle::OracleChangeStage;
 
     #[test]
     fn can_register_account_serializes_as_json_string_field() {
@@ -689,5 +738,23 @@ mod tests {
             CanResolveEscrowDispute::name().as_str(),
             "CanResolveEscrowDispute"
         );
+    }
+
+    #[test]
+    fn oracle_permissions_use_expected_names_and_payloads() {
+        assert_eq!(
+            CanRegisterOracleFeed::name().as_str(),
+            "CanRegisterOracleFeed"
+        );
+        assert_eq!(
+            CanManageTwitterBindings::name().as_str(),
+            "CanManageTwitterBindings"
+        );
+
+        let stage_vote = CanVoteOracleChangeStage {
+            stage: OracleChangeStage::PolicyJury,
+        };
+        let json = norito::json::to_json(&stage_vote).expect("serialize to JSON");
+        assert!(json.contains("PolicyJury"));
     }
 }

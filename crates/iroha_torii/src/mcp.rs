@@ -2777,7 +2777,7 @@ async fn dispatch_connect_session_delete(
     let mut path = String::from("/v1/connect/session/");
     path.push_str(&urlencoding::encode(sid));
     let extra_headers = connect_management_headers(arguments)?;
-    dispatch_route(
+    dispatch_route_with_extra_header_policy(
         app,
         inbound_headers,
         Method::DELETE,
@@ -2789,6 +2789,7 @@ async fn dispatch_connect_session_delete(
             .get("accept")
             .and_then(Value::as_str)
             .map(str::to_owned),
+        ExtraHeaderPolicy::ConnectManagement,
     )
     .await
 }
@@ -2804,7 +2805,7 @@ async fn dispatch_connect_status(
         path.push_str(&urlencoding::encode(sid));
     }
     let extra_headers = connect_management_headers(arguments)?;
-    dispatch_route(
+    dispatch_route_with_extra_header_policy(
         app,
         inbound_headers,
         Method::GET,
@@ -2816,6 +2817,7 @@ async fn dispatch_connect_status(
             .get("accept")
             .and_then(Value::as_str)
             .map(str::to_owned),
+        ExtraHeaderPolicy::ConnectManagement,
     )
     .await
 }
@@ -8271,6 +8273,44 @@ async fn dispatch_route(
     content_type: Option<String>,
     accept: Option<String>,
 ) -> Result<Value, String> {
+    dispatch_route_with_extra_header_policy(
+        app,
+        inbound_headers,
+        method,
+        path_and_query,
+        extra_headers,
+        body,
+        content_type,
+        accept,
+        ExtraHeaderPolicy::Default,
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum ExtraHeaderPolicy {
+    Default,
+    ConnectManagement,
+}
+
+impl ExtraHeaderPolicy {
+    fn allows_reserved_extra_header(self, lowered: &str) -> bool {
+        matches!(self, Self::ConnectManagement) && lowered == "authorization"
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_route_with_extra_header_policy(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    method: Method,
+    path_and_query: &str,
+    extra_headers: Option<&Value>,
+    body: Vec<u8>,
+    content_type: Option<String>,
+    accept: Option<String>,
+    extra_header_policy: ExtraHeaderPolicy,
+) -> Result<Value, String> {
     let dispatched_remote_ip = dispatched_remote_ip(inbound_headers);
     let dispatched_connect_addr = dispatched_connect_addr(dispatched_remote_ip);
     let mut request = Request::builder()
@@ -8282,7 +8322,7 @@ async fn dispatch_route(
     {
         let headers = request.headers_mut();
         forward_auth_headers(headers, inbound_headers);
-        apply_extra_headers(headers, extra_headers)?;
+        apply_extra_headers_with_policy(headers, extra_headers, extra_header_policy)?;
         if let Some(accept_value) = accept {
             let value = HeaderValue::from_str(&accept_value)
                 .map_err(|err| format!("invalid accept header: {err}"))?;
@@ -8466,13 +8506,21 @@ fn forward_auth_headers(out: &mut HeaderMap, inbound: &HeaderMap) {
 }
 
 fn apply_extra_headers(out: &mut HeaderMap, value: Option<&Value>) -> Result<(), String> {
+    apply_extra_headers_with_policy(out, value, ExtraHeaderPolicy::Default)
+}
+
+fn apply_extra_headers_with_policy(
+    out: &mut HeaderMap,
+    value: Option<&Value>,
+    policy: ExtraHeaderPolicy,
+) -> Result<(), String> {
     let Some(headers_obj) = value.and_then(Value::as_object) else {
         return Ok(());
     };
 
     for (raw_name, raw_value) in headers_obj {
         let lowered = raw_name.to_ascii_lowercase();
-        if is_reserved_extra_header(&lowered) {
+        if is_reserved_extra_header(&lowered) && !policy.allows_reserved_extra_header(&lowered) {
             continue;
         }
         let header_name: HeaderName = raw_name
@@ -8501,7 +8549,6 @@ fn is_reserved_extra_header(lowered: &str) -> bool {
     ) || lowered == HEADER_X_API_TOKEN
         || lowered == HEADER_X_IROHA_ACCOUNT
         || lowered == HEADER_X_IROHA_SIGNATURE
-        || lowered == HEADER_X_IROHA_API_VERSION
         || lowered == limits::REMOTE_ADDR_HEADER
         || lowered.starts_with("x-iroha-internal-")
 }
@@ -14558,7 +14605,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_extra_headers_blocks_reserved_internal_headers() {
+    fn apply_extra_headers_blocks_reserved_internal_headers_but_allows_api_version() {
         let mut out = HeaderMap::new();
         let headers = norito::json!({
             "x-test": "1",
@@ -14581,17 +14628,46 @@ mod tests {
             out.get("x-test").and_then(|value| value.to_str().ok()),
             Some("1")
         );
+        assert_eq!(
+            out.get("x-iroha-api-version")
+                .and_then(|value| value.to_str().ok()),
+            Some("injected")
+        );
         assert!(!out.contains_key("x-iroha-remote-addr"));
         assert!(!out.contains_key("x-forwarded-client-cert"));
         assert!(!out.contains_key("authorization"));
         assert!(!out.contains_key("x-api-token"));
         assert!(!out.contains_key("x-iroha-account"));
         assert!(!out.contains_key("x-iroha-signature"));
-        assert!(!out.contains_key("x-iroha-api-version"));
         assert!(!out.contains_key("x-iroha-timestamp-ms"));
         assert!(!out.contains_key("x-iroha-nonce"));
         assert!(!out.contains_key("x-iroha-witness"));
         assert!(!out.contains_key("x-iroha-internal-route"));
+    }
+
+    #[test]
+    fn connect_management_extra_headers_allow_authorization_only() {
+        let mut out = HeaderMap::new();
+        let headers = norito::json!({
+            "Authorization": "Bearer management",
+            "x-iroha-account": "injected",
+            "x-iroha-remote-addr": "127.0.0.1"
+        });
+
+        apply_extra_headers_with_policy(
+            &mut out,
+            Some(&headers),
+            ExtraHeaderPolicy::ConnectManagement,
+        )
+        .expect("headers accepted");
+
+        assert_eq!(
+            out.get("authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer management")
+        );
+        assert!(!out.contains_key("x-iroha-account"));
+        assert!(!out.contains_key("x-iroha-remote-addr"));
     }
 
     #[tokio::test]

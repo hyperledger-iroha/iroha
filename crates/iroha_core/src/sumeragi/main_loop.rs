@@ -2929,6 +2929,8 @@ fn validate_block_for_voting_with_timings(
         execution_tx_dag_ms = timings.execution_tx_dag_ms,
         execution_tx_schedule_ms = timings.execution_tx_schedule_ms,
         execution_tx_apply_ms = timings.execution_tx_apply_ms,
+        execution_tx_apply_setup_ms = timings.execution_tx_apply_setup_ms,
+        execution_tx_apply_layer_build_ms = timings.execution_tx_apply_layer_build_ms,
         execution_tx_time_triggers_ms = timings.execution_tx_time_triggers_ms,
         execution_tx_finalize_ms = timings.execution_tx_finalize_ms,
         execution_tx_apply_prep_ms = timings.execution_tx_apply_prep_ms,
@@ -2937,6 +2939,15 @@ fn validate_block_for_voting_with_timings(
         execution_tx_apply_fallback_ms = timings.execution_tx_apply_fallback_ms,
         execution_tx_apply_quarantine_ms = timings.execution_tx_apply_quarantine_ms,
         execution_tx_apply_sequential_ms = timings.execution_tx_apply_sequential_ms,
+        execution_tx_apply_results_ms = timings.execution_tx_apply_results_ms,
+        execution_tx_apply_other_ms = timings.execution_tx_apply_other_ms,
+        execution_tx_finalize_digest_submit_ms = timings.execution_tx_finalize_digest_submit_ms,
+        execution_tx_finalize_dataspaces_ms = timings.execution_tx_finalize_dataspaces_ms,
+        execution_tx_finalize_tx_set_ms = timings.execution_tx_finalize_tx_set_ms,
+        execution_tx_finalize_transcripts_ms = timings.execution_tx_finalize_transcripts_ms,
+        execution_tx_finalize_axt_ms = timings.execution_tx_finalize_axt_ms,
+        execution_tx_finalize_set_results_ms = timings.execution_tx_finalize_set_results_ms,
+        execution_tx_finalize_other_ms = timings.execution_tx_finalize_other_ms,
         execution_axt_ms = timings.execution_axt_ms,
         execution_da_cursor_ms = timings.execution_da_cursor_ms,
         execution_genesis_clean_ms = timings.execution_genesis_clean_ms,
@@ -10598,6 +10609,8 @@ struct QcBuildContext {
     height: u64,
     view: u64,
     epoch: u64,
+    chain_order_hash: Hash,
+    rechain_seq: u64,
     mode_tag: String,
     highest_qc: Option<crate::sumeragi::consensus::QcRef>,
 }
@@ -10844,7 +10857,7 @@ pub(super) struct Actor {
     block_signer_cache: BlockSignerCache,
     qc_cache: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
     qc_signer_tally: BTreeMap<QcVoteKey, QcSignerTally>,
-    vnext_reactors: BTreeMap<(u64, u64), super::vnext::Reactor>,
+    vnext_rounds: BTreeMap<(u64, u64), VNextRoundState>,
     vnext_rechain_votes: BTreeMap<VNextRechainVoteKey, BTreeMap<PeerId, super::vnext::RechainVote>>,
     vnext_view_change_votes:
         BTreeMap<VNextViewChangeVoteKey, BTreeMap<PeerId, super::vnext::ViewChangeVote>>,
@@ -10892,6 +10905,78 @@ pub(super) struct Actor {
     roster_validation_cache: RosterValidationCache,
     #[cfg(test)]
     background_request_log: Option<Arc<Mutex<Vec<BackgroundRequestLogEntry>>>>,
+}
+
+enum VNextValidationAction {
+    Accept(super::vnext::ValidationRoots),
+    Reject(super::vnext::ValidationFailure),
+    DropStale { id: u64, generation: u64 },
+    None,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VNextRecoveryReason {
+    ValidationTimeout,
+    ValidationBackpressure,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct VNextSlotState {
+    slot: super::vnext::SlotId,
+    slot_state: super::vnext::SlotState,
+    validation: super::vnext::ValidationState,
+}
+
+impl VNextSlotState {
+    fn new(slot: super::vnext::SlotId) -> Self {
+        Self {
+            slot,
+            slot_state: super::vnext::SlotState::Idle,
+            validation: super::vnext::ValidationState::Unqueued,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct VNextRoundState {
+    chain_order: super::vnext::ChainOrder,
+    quorum: super::vnext::QuorumPolicy,
+    slots: BTreeMap<HashOf<BlockHeader>, VNextSlotState>,
+    next_validation_id: u64,
+    config: super::vnext::PerformanceFaultConfig,
+    last_rechain_ms: Option<u64>,
+}
+
+impl VNextRoundState {
+    fn new(
+        chain_order: super::vnext::ChainOrder,
+        quorum: super::vnext::QuorumPolicy,
+        config: super::vnext::PerformanceFaultConfig,
+    ) -> Self {
+        Self {
+            chain_order,
+            quorum,
+            slots: BTreeMap::new(),
+            next_validation_id: 0,
+            config,
+            last_rechain_ms: None,
+        }
+    }
+
+    fn slot(&self, block_hash: HashOf<BlockHeader>) -> Option<&VNextSlotState> {
+        self.slots.get(&block_hash)
+    }
+
+    fn slot_mut(&mut self, slot: super::vnext::SlotId) -> &mut VNextSlotState {
+        self.slots
+            .entry(slot.block_hash)
+            .or_insert_with(|| VNextSlotState::new(slot))
+    }
+
+    fn next_validation_assignment(&mut self) -> (u64, u64) {
+        self.next_validation_id = self.next_validation_id.saturating_add(1);
+        (self.next_validation_id, self.next_validation_id)
+    }
 }
 
 #[cfg(test)]
@@ -13244,8 +13329,8 @@ mod persisted_roster_for_block_tests {
         let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer = PeerId::new(keypair.public_key().clone());
         let roster = vec![peer];
-        let signers_bitmap = vec![0b0000_0001];
-        let aggregate = vec![0xAB; 96];
+        let signers_bitmap = vec![0];
+        let aggregate = Vec::new();
         let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
         ValidatorSetCheckpoint::new(
             1,
@@ -18540,7 +18625,7 @@ impl Actor {
             block_signer_cache: BlockSignerCache::new(BLOCK_SIGNER_CACHE_LIMIT),
             qc_cache: BTreeMap::new(),
             qc_signer_tally: BTreeMap::new(),
-            vnext_reactors: BTreeMap::new(),
+            vnext_rounds: BTreeMap::new(),
             vnext_rechain_votes: BTreeMap::new(),
             vnext_view_change_votes: BTreeMap::new(),
             vnext_rechain_journal: VecDeque::new(),
@@ -19656,35 +19741,131 @@ impl Actor {
 
         next_due = Self::merge_deadline(next_due, self.missing_block_next_due(now));
         next_due = Self::merge_deadline(next_due, self.idle_view_next_due(now));
-        next_due = Self::merge_deadline(next_due, self.vnext_reactor_next_due(now));
+        next_due = Self::merge_deadline(next_due, self.vnext_round_next_due(now));
 
         next_due
     }
 
-    fn vnext_reactor_next_due(&self, now: Instant) -> Option<Instant> {
+    fn vnext_round_next_due(&self, now: Instant) -> Option<Instant> {
         let now_ms = Self::vnext_now_ms();
         let config = super::vnext::PerformanceFaultConfig::from(&self.config.vnext);
         let mut next_due = None;
 
-        for reactor in self.vnext_reactors.values() {
-            for slot in reactor.slots.values() {
-                let timeout_anchor_ms = match slot.validation {
-                    super::vnext::ValidationState::Running { started_at_ms, .. } => started_at_ms,
-                    super::vnext::ValidationState::Backpressured { since_ms } => since_ms,
+        for round in self.vnext_rounds.values() {
+            for slot in round.slots.values() {
+                let due = match slot.validation {
+                    super::vnext::ValidationState::Running { started_at_ms, .. } => self
+                        .vnext_validation_worker_fresh_deadline(slot.slot, now)
+                        .unwrap_or_else(|| {
+                            Self::vnext_due_instant(
+                                now,
+                                now_ms,
+                                started_at_ms.saturating_add(config.suspicion_timeout_ms),
+                            )
+                        }),
+                    super::vnext::ValidationState::Backpressured { since_ms } => {
+                        Self::vnext_due_instant(
+                            now,
+                            now_ms,
+                            since_ms.saturating_add(config.suspicion_timeout_ms),
+                        )
+                    }
                     _ => continue,
-                };
-                let due_ms = timeout_anchor_ms.saturating_add(config.suspicion_timeout_ms);
-                let due = if due_ms <= now_ms {
-                    now
-                } else {
-                    now.checked_add(Duration::from_millis(due_ms.saturating_sub(now_ms)))
-                        .unwrap_or(now)
                 };
                 next_due = Self::merge_deadline(next_due, Some(due));
             }
         }
 
         next_due
+    }
+
+    fn vnext_due_instant(now: Instant, now_ms: u64, due_ms: u64) -> Instant {
+        if due_ms <= now_ms {
+            now
+        } else {
+            now.checked_add(Duration::from_millis(due_ms.saturating_sub(now_ms)))
+                .unwrap_or(now)
+        }
+    }
+
+    fn vnext_validation_worker_fresh_deadline(
+        &self,
+        slot: super::vnext::SlotId,
+        now: Instant,
+    ) -> Option<Instant> {
+        let inflight = self.subsystems.validation.inflight.get(&slot.block_hash)?;
+        let vnext_inflight = self
+            .subsystems
+            .validation
+            .vnext_inflight
+            .get(&slot.block_hash)?;
+        if vnext_inflight.slot != slot {
+            return None;
+        }
+        if self
+            .validation_inflight_inline_reason(slot.block_hash, slot.height)
+            .is_some()
+        {
+            return None;
+        }
+        Some(
+            inflight
+                .started_at
+                .checked_add(self.validation_worker_stall_timeout_for(slot.block_hash))
+                .unwrap_or(now)
+                .max(now),
+        )
+    }
+
+    fn vnext_validation_timeout_protected_blocks(
+        &self,
+        key: (u64, u64),
+        now: Instant,
+    ) -> BTreeSet<HashOf<BlockHeader>> {
+        let Some(round) = self.vnext_rounds.get(&key) else {
+            return BTreeSet::new();
+        };
+        round
+            .slots
+            .values()
+            .filter_map(|slot| {
+                matches!(
+                    slot.validation,
+                    super::vnext::ValidationState::Running { .. }
+                )
+                .then_some(slot.slot)
+            })
+            .filter(|slot| {
+                self.vnext_validation_worker_fresh_deadline(*slot, now)
+                    .is_some()
+            })
+            .map(|slot| slot.block_hash)
+            .collect()
+    }
+
+    fn vnext_validation_backpressure_protected_blocks(
+        &self,
+        key: (u64, u64),
+    ) -> BTreeSet<HashOf<BlockHeader>> {
+        let Some(round) = self.vnext_rounds.get(&key) else {
+            return BTreeSet::new();
+        };
+        round
+            .slots
+            .values()
+            .filter(|slot| {
+                matches!(
+                    slot.validation,
+                    super::vnext::ValidationState::Backpressured { .. }
+                )
+            })
+            .filter(|slot| {
+                self.pending
+                    .pending_blocks
+                    .contains_key(&slot.slot.block_hash)
+            })
+            .map(|slot| slot.slot.block_hash)
+            .collect()
     }
 
     pub(super) fn should_tick(&self) -> bool {
@@ -19850,8 +20031,8 @@ impl Actor {
             self.drain_known_block_qc_work(tick_deadline)
         };
         let vnext_progress = {
-            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.vnext_reactor");
-            self.tick_vnext_reactors(Self::vnext_now_ms())
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.vnext_round");
+            self.tick_vnext_rounds(Self::vnext_now_ms())
         };
         let (missing_block_progress, missing_block_cost) = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.retry_missing_block");
@@ -20885,9 +21066,9 @@ impl Actor {
             return Ok(());
         };
         let chain_order = self
-            .vnext_reactors
+            .vnext_rounds
             .get(&(height, view))
-            .map(|reactor| reactor.chain_order.clone())
+            .map(|round| round.chain_order.clone())
             .unwrap_or(base_chain_order);
 
         let signer_roster = match &message {
@@ -20939,45 +21120,34 @@ impl Actor {
             return Ok(());
         }
 
-        let event = match message {
+        let config = super::vnext::PerformanceFaultConfig::from(&self.config.vnext);
+        let round = self
+            .vnext_rounds
+            .entry((height, view))
+            .or_insert_with(|| VNextRoundState::new(chain_order.clone(), quorum.clone(), config));
+        round.quorum = quorum;
+        round.config = config;
+
+        match message {
             super::vnext::ConsensusMessage::Suspect(suspect) => {
-                super::vnext::ReactorEvent::SuspectReceived {
-                    suspect,
-                    now_ms: Self::vnext_now_ms(),
-                }
+                self.handle_vnext_suspect_received(suspect, Self::vnext_now_ms());
             }
             super::vnext::ConsensusMessage::RechainProposal(proposal) => {
-                super::vnext::ReactorEvent::RechainProposalReceived { proposal }
+                self.handle_vnext_rechain_proposal_received(proposal);
             }
             super::vnext::ConsensusMessage::RechainVote(vote) => {
-                super::vnext::ReactorEvent::RechainVoteReceived { vote }
+                self.accept_vnext_rechain_vote(vote);
             }
             super::vnext::ConsensusMessage::RechainCertificate(certificate) => {
-                super::vnext::ReactorEvent::RechainCertificateReceived {
-                    certificate,
-                    now_ms: Self::vnext_now_ms(),
-                }
+                self.handle_vnext_rechain_certificate_received(certificate, Self::vnext_now_ms());
             }
             super::vnext::ConsensusMessage::ViewChangeVote(vote) => {
-                super::vnext::ReactorEvent::ViewChangeVoteReceived { vote }
+                self.accept_vnext_view_change_vote(vote);
             }
             super::vnext::ConsensusMessage::ViewChangeCertificate(certificate) => {
-                super::vnext::ReactorEvent::ViewChangeCertificateReceived { certificate }
+                self.handle_vnext_view_change_certificate_received(certificate);
             }
-        };
-        let config = super::vnext::PerformanceFaultConfig::from(&self.config.vnext);
-        let effects = {
-            let reactor = self
-                .vnext_reactors
-                .entry((height, view))
-                .or_insert_with(|| {
-                    super::vnext::Reactor::new(chain_order.clone(), quorum.clone(), config)
-                });
-            reactor.quorum = quorum;
-            reactor.config = config;
-            reactor.handle_event(event)
-        };
-        self.apply_vnext_effects(effects);
+        }
         Ok(())
     }
 
@@ -20988,55 +21158,113 @@ impl Actor {
             .unwrap_or(0)
     }
 
-    fn tick_vnext_reactors(&mut self, now_ms: u64) -> bool {
-        if self.vnext_reactors.is_empty() {
+    fn tick_vnext_rounds(&mut self, now_ms: u64) -> bool {
+        if self.vnext_rounds.is_empty() {
             return false;
         }
 
         let config = super::vnext::PerformanceFaultConfig::from(&self.config.vnext);
-        let reactor_keys = self.vnext_reactors.keys().copied().collect::<Vec<_>>();
+        let round_keys = self.vnext_rounds.keys().copied().collect::<Vec<_>>();
         let mut progress = false;
 
-        for key in reactor_keys {
-            let effects = {
-                let Some(reactor) = self.vnext_reactors.get_mut(&key) else {
+        for key in round_keys {
+            let protected_validation_timeouts =
+                self.vnext_validation_timeout_protected_blocks(key, Instant::now());
+            let protected_validation_backpressure =
+                self.vnext_validation_backpressure_protected_blocks(key);
+            let recoveries = {
+                let Some(round) = self.vnext_rounds.get_mut(&key) else {
                     continue;
                 };
-                reactor.config = config;
-                reactor.handle_event(super::vnext::ReactorEvent::Tick { now_ms })
+                round.config = config;
+                let mut recoveries = Vec::new();
+                for slot in round.slots.values_mut() {
+                    if matches!(
+                        slot.slot_state,
+                        super::vnext::SlotState::Recovering { .. }
+                            | super::vnext::SlotState::Aborted { .. }
+                    ) {
+                        continue;
+                    }
+                    let reason = match slot.validation.decision_at(now_ms, &round.config) {
+                        super::vnext::ValidationDecision::RaiseSuspicion => match slot.validation {
+                            super::vnext::ValidationState::Backpressured { .. } => {
+                                VNextRecoveryReason::ValidationBackpressure
+                            }
+                            _ => VNextRecoveryReason::ValidationTimeout,
+                        },
+                        _ => continue,
+                    };
+                    let should_defer = (matches!(reason, VNextRecoveryReason::ValidationTimeout)
+                        && protected_validation_timeouts.contains(&slot.slot.block_hash))
+                        || (matches!(reason, VNextRecoveryReason::ValidationBackpressure)
+                            && protected_validation_backpressure.contains(&slot.slot.block_hash));
+                    if should_defer {
+                        continue;
+                    }
+                    slot.slot_state = super::vnext::SlotState::Recovering {
+                        block_hash: Some(slot.slot.block_hash),
+                    };
+                    recoveries.push((slot.slot, reason));
+                }
+                recoveries
             };
 
-            if !effects.is_empty() {
+            if !recoveries.is_empty() {
                 progress = true;
-                self.apply_vnext_effects(effects);
+                for (slot, reason) in recoveries {
+                    debug!(
+                        height = slot.height,
+                        view = slot.view,
+                        block = %slot.block_hash,
+                        ?reason,
+                        "vNext round entered recovery"
+                    );
+                    self.start_vnext_recovery(slot, reason);
+                }
             }
         }
 
         progress
     }
 
-    pub(super) fn vnext_chain_order_binding_for(&self, height: u64, view: u64) -> (Hash, u64) {
-        if let Some(reactor) = self.vnext_reactors.get(&(height, view)) {
-            return (reactor.chain_order.hash(), reactor.chain_order.rechain_seq);
-        }
-
-        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
-        let mut commit_topology = self.state.commit_topology_snapshot();
-        if commit_topology.is_empty() {
-            commit_topology = self.effective_commit_topology();
-        }
+    fn vnext_chain_order_binding_for_roster(
+        &self,
+        height: u64,
+        view: u64,
+        consensus_mode: ConsensusMode,
+        mode_tag: &str,
+        prf_seed: Option<[u8; 32]>,
+        commit_topology: Vec<PeerId>,
+    ) -> (Hash, u64) {
         if commit_topology.is_empty() {
             return (crate::sumeragi::consensus::default_chain_order_hash(), 0);
         }
 
         let topology = super::network_topology::Topology::new(commit_topology);
         let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
-        let Some(quorum) = self.vnext_quorum_policy(consensus_mode, signature_topology.as_ref())
-        else {
+        self.vnext_chain_order_binding_for_ordered_validators(
+            height,
+            view,
+            consensus_mode,
+            signature_topology.as_ref().to_vec(),
+        )
+    }
+
+    pub(super) fn vnext_chain_order_binding_for_ordered_validators(
+        &self,
+        height: u64,
+        view: u64,
+        consensus_mode: ConsensusMode,
+        ordered_validators: Vec<PeerId>,
+    ) -> (Hash, u64) {
+        if ordered_validators.is_empty() {
+            return (crate::sumeragi::consensus::default_chain_order_hash(), 0);
+        }
+        let Some(quorum) = self.vnext_quorum_policy(consensus_mode, &ordered_validators) else {
             return (crate::sumeragi::consensus::default_chain_order_hash(), 0);
         };
-        let Some(critical_prefix_len) =
-            quorum.smallest_satisfying_prefix_len(signature_topology.as_ref())
+        let Some(critical_prefix_len) = quorum.smallest_satisfying_prefix_len(&ordered_validators)
         else {
             return (crate::sumeragi::consensus::default_chain_order_hash(), 0);
         };
@@ -21048,12 +21276,108 @@ impl Actor {
             view,
             epoch,
             0,
-            signature_topology.as_ref().to_vec(),
+            ordered_validators,
             critical_prefix_len,
             critical_prefix_len,
         )
         .map(|order| (order.hash(), order.rechain_seq))
         .unwrap_or_else(|_| (crate::sumeragi::consensus::default_chain_order_hash(), 0))
+    }
+
+    pub(super) fn vnext_chain_order_binding_for_signature_topology(
+        &self,
+        height: u64,
+        view: u64,
+        consensus_mode: ConsensusMode,
+        signature_topology: &super::network_topology::Topology,
+    ) -> (Hash, u64) {
+        if let Some(round) = self.vnext_rounds.get(&(height, view)) {
+            return (round.chain_order.hash(), round.chain_order.rechain_seq);
+        }
+        self.vnext_chain_order_binding_for_ordered_validators(
+            height,
+            view,
+            consensus_mode,
+            signature_topology.as_ref().to_vec(),
+        )
+    }
+
+    pub(super) fn vnext_chain_order_binding_for(&self, height: u64, view: u64) -> (Hash, u64) {
+        if let Some(round) = self.vnext_rounds.get(&(height, view)) {
+            return (round.chain_order.hash(), round.chain_order.rechain_seq);
+        }
+
+        self.base_vnext_chain_order_and_quorum_for(height, view)
+            .map(|(order, _)| (order.hash(), order.rechain_seq))
+            .unwrap_or_else(|| (crate::sumeragi::consensus::default_chain_order_hash(), 0))
+    }
+
+    fn vnext_chain_order_binding_for_phase(
+        &self,
+        phase: crate::sumeragi::consensus::Phase,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> (Hash, u64) {
+        if let Some(round) = self.vnext_rounds.get(&(height, view)) {
+            return (round.chain_order.hash(), round.chain_order.rechain_seq);
+        }
+
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let commit_topology = if matches!(phase, crate::sumeragi::consensus::Phase::NewView) {
+            self.roster_for_new_view_with_mode(block_hash, height, view, consensus_mode)
+        } else {
+            self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode)
+        };
+        self.vnext_chain_order_binding_for_roster(
+            height,
+            view,
+            consensus_mode,
+            mode_tag,
+            prf_seed,
+            commit_topology,
+        )
+    }
+
+    pub(super) fn vnext_chain_order_binding_for_qc(
+        &self,
+        qc: &crate::sumeragi::consensus::Qc,
+    ) -> (Hash, u64) {
+        if let Some(round) = self.vnext_rounds.get(&(qc.height, qc.view)) {
+            return (round.chain_order.hash(), round.chain_order.rechain_seq);
+        }
+        if !qc.validator_set.is_empty()
+            && qc.validator_set_hash_version == VALIDATOR_SET_HASH_VERSION_V1
+            && HashOf::new(&qc.validator_set) == qc.validator_set_hash
+        {
+            let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
+            return self.vnext_chain_order_binding_for_roster(
+                qc.height,
+                qc.view,
+                consensus_mode,
+                mode_tag,
+                prf_seed,
+                qc.validator_set.clone(),
+            );
+        }
+        self.vnext_chain_order_binding_for_phase(
+            qc.phase,
+            qc.subject_block_hash,
+            qc.height,
+            qc.view,
+        )
+    }
+
+    pub(super) fn vnext_chain_order_binding_for_vote(
+        &self,
+        vote: &crate::sumeragi::consensus::Vote,
+    ) -> (Hash, u64) {
+        self.vnext_chain_order_binding_for_phase(
+            vote.phase,
+            vote.block_hash,
+            vote.height,
+            vote.view,
+        )
     }
 
     fn base_vnext_chain_order_and_quorum_for(
@@ -21112,9 +21436,9 @@ impl Actor {
 
         let key = (height, view);
         let chain_order = self
-            .vnext_reactors
+            .vnext_rounds
             .get(&key)
-            .map(|reactor| reactor.chain_order.clone())
+            .map(|round| round.chain_order.clone())
             .unwrap_or(base_chain_order);
         let slot = super::vnext::SlotId {
             height,
@@ -21123,17 +21447,8 @@ impl Actor {
             block_hash,
         };
         let config = super::vnext::PerformanceFaultConfig::from(&self.config.vnext);
-        let effects = {
-            let reactor = self
-                .vnext_reactors
-                .entry(key)
-                .or_insert_with(|| super::vnext::Reactor::new(chain_order, quorum.clone(), config));
-            reactor.quorum = quorum;
-            reactor.config = config;
-            reactor
-                .handle_event(super::vnext::ReactorEvent::ProposalAccepted { slot, payload_hash })
-        };
-        self.apply_vnext_effects(effects);
+        self.ensure_vnext_round(key, chain_order, quorum, config);
+        self.mark_vnext_proposal_accepted(slot, payload_hash);
         true
     }
 
@@ -21157,9 +21472,9 @@ impl Actor {
 
         let key = (height, view);
         let chain_order = self
-            .vnext_reactors
+            .vnext_rounds
             .get(&key)
-            .map(|reactor| reactor.chain_order.clone())
+            .map(|round| round.chain_order.clone())
             .unwrap_or(base_chain_order);
         let slot = super::vnext::SlotId {
             height,
@@ -21168,16 +21483,8 @@ impl Actor {
             block_hash,
         };
         let config = super::vnext::PerformanceFaultConfig::from(&self.config.vnext);
-        let effects = {
-            let reactor = self
-                .vnext_reactors
-                .entry(key)
-                .or_insert_with(|| super::vnext::Reactor::new(chain_order, quorum.clone(), config));
-            reactor.quorum = quorum;
-            reactor.config = config;
-            reactor.handle_event(super::vnext::ReactorEvent::AvailabilityReady { slot })
-        };
-        self.apply_vnext_effects(effects);
+        self.ensure_vnext_round(key, chain_order, quorum, config);
+        self.mark_vnext_availability_ready(slot);
         true
     }
 
@@ -21202,9 +21509,9 @@ impl Actor {
 
         let key = (height, view);
         let chain_order = self
-            .vnext_reactors
+            .vnext_rounds
             .get(&key)
-            .map(|reactor| reactor.chain_order.clone())
+            .map(|round| round.chain_order.clone())
             .unwrap_or(base_chain_order);
         let slot = super::vnext::SlotId {
             height,
@@ -21214,26 +21521,10 @@ impl Actor {
         };
         let config = super::vnext::PerformanceFaultConfig::from(&self.config.vnext);
         let now_ms = Self::vnext_now_ms();
-        let effects = {
-            let reactor = self
-                .vnext_reactors
-                .entry(key)
-                .or_insert_with(|| super::vnext::Reactor::new(chain_order, quorum.clone(), config));
-            reactor.quorum = quorum;
-            reactor.config = config;
-
-            let mut effects = reactor
-                .handle_event(super::vnext::ReactorEvent::ProposalAccepted { slot, payload_hash });
-            effects.extend(
-                reactor.handle_event(super::vnext::ReactorEvent::AvailabilityReady { slot }),
-            );
-            effects.extend(
-                reactor.handle_event(super::vnext::ReactorEvent::ValidationNeeded { slot, now_ms }),
-            );
-            effects
-        };
-        self.apply_vnext_effects(effects);
-        true
+        self.ensure_vnext_round(key, chain_order, quorum, config);
+        self.mark_vnext_proposal_accepted(slot, payload_hash);
+        self.mark_vnext_availability_ready(slot);
+        self.drive_vnext_validation_needed(slot, now_ms)
     }
 
     pub(super) fn drive_vnext_commit_persisted_for_block(
@@ -21256,9 +21547,9 @@ impl Actor {
 
         let key = (height, view);
         let chain_order = self
-            .vnext_reactors
+            .vnext_rounds
             .get(&key)
-            .map(|reactor| reactor.chain_order.clone())
+            .map(|round| round.chain_order.clone())
             .unwrap_or(base_chain_order);
         let slot = super::vnext::SlotId {
             height,
@@ -21267,37 +21558,158 @@ impl Actor {
             block_hash,
         };
         let config = super::vnext::PerformanceFaultConfig::from(&self.config.vnext);
-        let effects = {
-            let reactor = self
-                .vnext_reactors
-                .entry(key)
-                .or_insert_with(|| super::vnext::Reactor::new(chain_order, quorum.clone(), config));
-            reactor.quorum = quorum;
-            reactor.config = config;
-            reactor.handle_event(super::vnext::ReactorEvent::CommitPersisted { slot })
-        };
-        self.apply_vnext_effects(effects);
+        self.ensure_vnext_round(key, chain_order, quorum, config);
+        self.mark_vnext_commit_persisted(slot);
         true
     }
 
-    fn handle_vnext_worker_event(
+    fn ensure_vnext_round(
         &mut self,
-        slot: super::vnext::SlotId,
-        event: super::vnext::ReactorEvent,
-    ) -> Vec<super::vnext::ReactorEffect> {
-        let key = (slot.height, slot.view);
-        let config = super::vnext::PerformanceFaultConfig::from(&self.config.vnext);
-        let Some(reactor) = self.vnext_reactors.get_mut(&key) else {
+        key: (u64, u64),
+        chain_order: super::vnext::ChainOrder,
+        quorum: super::vnext::QuorumPolicy,
+        config: super::vnext::PerformanceFaultConfig,
+    ) {
+        let round = self
+            .vnext_rounds
+            .entry(key)
+            .or_insert_with(|| VNextRoundState::new(chain_order, quorum.clone(), config));
+        round.quorum = quorum;
+        round.config = config;
+    }
+
+    fn mark_vnext_proposal_accepted(&mut self, slot: super::vnext::SlotId, payload_hash: Hash) {
+        let Some(round) = self.vnext_rounds.get_mut(&(slot.height, slot.view)) else {
             warn!(
                 height = slot.height,
                 view = slot.view,
                 block = %slot.block_hash,
-                "vNext validation worker event had no installed reactor"
+                "vNext proposal accepted without installed round"
             );
-            return Vec::new();
+            return;
         };
-        reactor.config = config;
-        reactor.handle_event(event)
+        let slot_state = round.slot_mut(slot);
+        if matches!(
+            slot_state.slot_state,
+            super::vnext::SlotState::Committed { .. }
+        ) {
+            return;
+        }
+        slot_state.slot_state = super::vnext::SlotState::Proposed {
+            block_hash: slot.block_hash,
+            payload_hash,
+        };
+    }
+
+    fn mark_vnext_availability_ready(&mut self, slot: super::vnext::SlotId) {
+        let Some(round) = self.vnext_rounds.get_mut(&(slot.height, slot.view)) else {
+            warn!(
+                height = slot.height,
+                view = slot.view,
+                block = %slot.block_hash,
+                "vNext availability became ready without installed round"
+            );
+            return;
+        };
+        let slot_state = round.slot_mut(slot);
+        if matches!(
+            slot_state.slot_state,
+            super::vnext::SlotState::Committed { .. }
+        ) {
+            return;
+        }
+        slot_state.slot_state = super::vnext::SlotState::AwaitingValidation {
+            block_hash: slot.block_hash,
+        };
+    }
+
+    fn mark_vnext_commit_persisted(&mut self, slot: super::vnext::SlotId) {
+        let Some(round) = self.vnext_rounds.get_mut(&(slot.height, slot.view)) else {
+            warn!(
+                height = slot.height,
+                view = slot.view,
+                block = %slot.block_hash,
+                "vNext commit persisted without installed round"
+            );
+            return;
+        };
+        round.slot_mut(slot).slot_state = super::vnext::SlotState::Committed {
+            block_hash: slot.block_hash,
+        };
+    }
+
+    fn drive_vnext_validation_needed(&mut self, slot: super::vnext::SlotId, now_ms: u64) -> bool {
+        let Some((id, generation)) = ({
+            let Some(round) = self.vnext_rounds.get_mut(&(slot.height, slot.view)) else {
+                warn!(
+                    height = slot.height,
+                    view = slot.view,
+                    block = %slot.block_hash,
+                    "vNext validation requested without installed round"
+                );
+                return false;
+            };
+            let config = round.config;
+            let should_dispatch = {
+                let slot_state = round.slot_mut(slot);
+                if matches!(
+                    slot_state.slot_state,
+                    super::vnext::SlotState::Committed { .. }
+                ) {
+                    false
+                } else {
+                    matches!(
+                        slot_state.validation.decision_at(now_ms, &config),
+                        super::vnext::ValidationDecision::DispatchWorker
+                    )
+                }
+            };
+            should_dispatch.then(|| {
+                let (id, generation) = round.next_validation_assignment();
+                round.slot_mut(slot).validation = super::vnext::ValidationState::Queued {
+                    id,
+                    generation,
+                    queued_at_ms: now_ms,
+                };
+                (id, generation)
+            })
+        }) else {
+            return false;
+        };
+
+        debug!(
+            height = slot.height,
+            view = slot.view,
+            block = %slot.block_hash,
+            id,
+            generation,
+            "vNext round requested validation dispatch"
+        );
+        self.dispatch_vnext_validation(slot, id, generation)
+    }
+
+    fn mark_vnext_validation_deferred(&mut self, slot: super::vnext::SlotId) -> bool {
+        let Some(round) = self.vnext_rounds.get_mut(&(slot.height, slot.view)) else {
+            warn!(
+                height = slot.height,
+                view = slot.view,
+                block = %slot.block_hash,
+                "vNext validation deferred without installed round"
+            );
+            return false;
+        };
+        let slot_state = round.slot_mut(slot);
+        if matches!(
+            slot_state.slot_state,
+            super::vnext::SlotState::Committed { .. }
+        ) {
+            return false;
+        }
+        slot_state.validation = super::vnext::ValidationState::Unqueued;
+        slot_state.slot_state = super::vnext::SlotState::AwaitingValidation {
+            block_hash: slot.block_hash,
+        };
+        true
     }
 
     fn handle_vnext_validation_result(
@@ -21305,12 +21717,88 @@ impl Actor {
         slot: super::vnext::SlotId,
         result: super::vnext::ValidationWorkerResult,
     ) {
-        let effects = self.handle_vnext_worker_event(
-            slot,
-            super::vnext::ReactorEvent::ValidationResult { slot, result },
-        );
-        if !effects.is_empty() {
-            self.apply_vnext_effects(effects);
+        let result_id = result.id;
+        let result_generation = result.generation;
+        let action = {
+            let Some(round) = self.vnext_rounds.get_mut(&(slot.height, slot.view)) else {
+                warn!(
+                    height = slot.height,
+                    view = slot.view,
+                    block = %slot.block_hash,
+                    "vNext validation result had no installed round"
+                );
+                return;
+            };
+            let slot_state = round.slot_mut(slot);
+            if matches!(
+                slot_state.slot_state,
+                super::vnext::SlotState::Recovering { .. }
+                    | super::vnext::SlotState::Aborted { .. }
+                    | super::vnext::SlotState::Committed { .. }
+            ) {
+                VNextValidationAction::DropStale {
+                    id: result_id,
+                    generation: result_generation,
+                }
+            } else if slot_state.validation.apply_worker_result(result)
+                == super::vnext::WorkerResultAction::IgnoredStale
+            {
+                VNextValidationAction::DropStale {
+                    id: result_id,
+                    generation: result_generation,
+                }
+            } else {
+                match &slot_state.validation {
+                    super::vnext::ValidationState::Valid { roots } => {
+                        slot_state.slot_state = super::vnext::SlotState::Prepared {
+                            block_hash: slot.block_hash,
+                        };
+                        VNextValidationAction::Accept(*roots)
+                    }
+                    super::vnext::ValidationState::Invalid { failure } => {
+                        slot_state.slot_state = super::vnext::SlotState::Aborted {
+                            reason_label: failure.reason_label.clone(),
+                        };
+                        VNextValidationAction::Reject(failure.clone())
+                    }
+                    _ => VNextValidationAction::None,
+                }
+            }
+        };
+
+        match action {
+            VNextValidationAction::Accept(roots) => {
+                debug!(
+                    height = slot.height,
+                    view = slot.view,
+                    block = %slot.block_hash,
+                    parent_state_root = %roots.parent_state_root,
+                    post_state_root = %roots.post_state_root,
+                    "vNext round accepted validated slot"
+                );
+                self.accept_vnext_validated_slot(slot, roots);
+            }
+            VNextValidationAction::Reject(failure) => {
+                debug!(
+                    height = slot.height,
+                    view = slot.view,
+                    block = %slot.block_hash,
+                    reason = %failure.reason_label,
+                    "vNext round rejected validation"
+                );
+                self.reject_vnext_validation_slot(slot, failure);
+            }
+            VNextValidationAction::DropStale { id, generation } => {
+                debug!(
+                    height = slot.height,
+                    view = slot.view,
+                    block = %slot.block_hash,
+                    id,
+                    generation,
+                    "vNext round dropped stale worker result"
+                );
+            }
+            VNextValidationAction::None => {}
         }
     }
 
@@ -21319,16 +21807,40 @@ impl Actor {
         slot: super::vnext::SlotId,
         id: u64,
         generation: u64,
-    ) -> Vec<super::vnext::ReactorEffect> {
-        self.handle_vnext_worker_event(
-            slot,
-            super::vnext::ReactorEvent::ValidationQueueFull {
-                slot,
+    ) -> bool {
+        let Some(round) = self.vnext_rounds.get_mut(&(slot.height, slot.view)) else {
+            warn!(
+                height = slot.height,
+                view = slot.view,
+                block = %slot.block_hash,
+                "vNext validation queue saturation had no installed round"
+            );
+            return false;
+        };
+        let slot_state = round.slot_mut(slot);
+        if matches!(
+            &slot_state.validation,
+            super::vnext::ValidationState::Queued {
+                id: queued_id,
+                generation: queued_generation,
+                ..
+            } if *queued_id == id && *queued_generation == generation
+        ) {
+            slot_state.validation = super::vnext::ValidationState::Backpressured {
+                since_ms: Self::vnext_now_ms(),
+            };
+            true
+        } else {
+            debug!(
+                height = slot.height,
+                view = slot.view,
+                block = %slot.block_hash,
                 id,
                 generation,
-                now_ms: Self::vnext_now_ms(),
-            },
-        )
+                "vNext round dropped stale queue-full event"
+            );
+            false
+        }
     }
 
     fn dispatch_vnext_validation(
@@ -21336,7 +21848,7 @@ impl Actor {
         slot: super::vnext::SlotId,
         id: u64,
         generation: u64,
-    ) -> Vec<super::vnext::ReactorEffect> {
+    ) -> bool {
         let Some((block, height, view, validation_status, roots)) = self
             .pending
             .pending_blocks
@@ -21375,7 +21887,7 @@ impl Actor {
         match validation_status {
             ValidationStatus::Valid => {
                 let Some((parent_state_root, post_state_root)) = roots else {
-                    return self.handle_vnext_validation_result_and_continue(
+                    self.handle_vnext_validation_result(
                         slot,
                         super::vnext::ValidationWorkerResult {
                             id,
@@ -21388,8 +21900,9 @@ impl Actor {
                             ),
                         },
                     );
+                    return true;
                 };
-                return self.handle_vnext_validation_result_and_continue(
+                self.handle_vnext_validation_result(
                     slot,
                     super::vnext::ValidationWorkerResult {
                         id,
@@ -21402,9 +21915,10 @@ impl Actor {
                         ),
                     },
                 );
+                return true;
             }
             ValidationStatus::Invalid => {
-                return self.handle_vnext_validation_result_and_continue(
+                self.handle_vnext_validation_result(
                     slot,
                     super::vnext::ValidationWorkerResult {
                         id,
@@ -21417,6 +21931,7 @@ impl Actor {
                         ),
                     },
                 );
+                return true;
             }
             ValidationStatus::Pending => {}
         }
@@ -21430,14 +21945,11 @@ impl Actor {
                     .get(&slot.block_hash)
                     .is_some_and(|vnext| vnext.generation == generation && vnext.slot == slot)
             {
-                return self.handle_vnext_worker_event(
+                return self.mark_vnext_validation_worker_started(
                     slot,
-                    super::vnext::ReactorEvent::ValidationWorkerStarted {
-                        slot,
-                        id,
-                        generation,
-                        started_at_ms: Self::vnext_now_ms(),
-                    },
+                    id,
+                    generation,
+                    Self::vnext_now_ms(),
                 );
             }
             warn!(
@@ -21462,8 +21974,8 @@ impl Actor {
         }
 
         let (topology, commit_topology) =
-            if let Some(reactor) = self.vnext_reactors.get(&(slot.height, slot.view)) {
-                let commit_topology = reactor.chain_order.ordered_validators.clone();
+            if let Some(round) = self.vnext_rounds.get(&(slot.height, slot.view)) {
+                let commit_topology = round.chain_order.ordered_validators.clone();
                 if commit_topology.is_empty() {
                     warn!(
                         height = slot.height,
@@ -21563,6 +22075,7 @@ impl Actor {
             return self.handle_vnext_validation_queue_full(slot, id, generation);
         }
 
+        let dispatched_at = Instant::now();
         self.subsystems
             .validation
             .superseded_results
@@ -21571,7 +22084,7 @@ impl Actor {
             slot.block_hash,
             ValidationInFlight {
                 id,
-                started_at: Instant::now(),
+                started_at: dispatched_at,
                 frontier_generation,
             },
         );
@@ -21579,142 +22092,51 @@ impl Actor {
             slot.block_hash,
             VNextValidationInFlight { slot, generation },
         );
-        self.handle_vnext_worker_event(
-            slot,
-            super::vnext::ReactorEvent::ValidationWorkerStarted {
-                slot,
-                id,
-                generation,
-                started_at_ms: Self::vnext_now_ms(),
-            },
-        )
+        self.touch_pending_progress(slot.block_hash, slot.height, slot.view, dispatched_at);
+        self.mark_vnext_validation_worker_started(slot, id, generation, Self::vnext_now_ms())
     }
 
-    fn handle_vnext_validation_result_and_continue(
+    fn mark_vnext_validation_worker_started(
         &mut self,
         slot: super::vnext::SlotId,
-        result: super::vnext::ValidationWorkerResult,
-    ) -> Vec<super::vnext::ReactorEffect> {
-        self.handle_vnext_worker_event(
-            slot,
-            super::vnext::ReactorEvent::ValidationResult { slot, result },
-        )
-    }
-
-    fn apply_vnext_effects(&mut self, effects: Vec<super::vnext::ReactorEffect>) {
-        for effect in effects {
-            match effect {
-                super::vnext::ReactorEffect::DispatchValidation {
-                    slot,
-                    id,
-                    generation,
-                } => {
-                    debug!(
-                        height = slot.height,
-                        view = slot.view,
-                        block = %slot.block_hash,
-                        id,
-                        generation,
-                        "vNext reactor requested validation dispatch"
-                    );
-                    let effects = self.dispatch_vnext_validation(slot, id, generation);
-                    if !effects.is_empty() {
-                        self.apply_vnext_effects(effects);
-                    }
-                }
-                super::vnext::ReactorEffect::AcceptValidated { slot, roots } => {
-                    debug!(
-                        height = slot.height,
-                        view = slot.view,
-                        block = %slot.block_hash,
-                        parent_state_root = %roots.parent_state_root,
-                        post_state_root = %roots.post_state_root,
-                        "vNext reactor accepted validated slot"
-                    );
-                    self.accept_vnext_validated_slot(slot, roots);
-                }
-                super::vnext::ReactorEffect::RejectValidation { slot, failure } => {
-                    debug!(
-                        height = slot.height,
-                        view = slot.view,
-                        block = %slot.block_hash,
-                        reason = %failure.reason_label,
-                        "vNext reactor rejected validation"
-                    );
-                    self.reject_vnext_validation_slot(slot, failure);
-                }
-                super::vnext::ReactorEffect::BroadcastVNext { mut message } => {
-                    self.sign_local_vnext_message(&mut message);
-                    self.schedule_background(BackgroundRequest::Broadcast {
-                        msg: BlockMessageWire::new(BlockMessage::VNext(message)),
-                    });
-                }
-                super::vnext::ReactorEffect::StartRecovery { slot, reason } => {
-                    debug!(
-                        height = slot.height,
-                        view = slot.view,
-                        block = %slot.block_hash,
-                        ?reason,
-                        "vNext reactor entered recovery"
-                    );
-                    self.start_vnext_recovery(slot, reason);
-                }
-                super::vnext::ReactorEffect::InstallRechain { certificate } => {
-                    self.install_vnext_rechain_certificate(certificate);
-                }
-                super::vnext::ReactorEffect::AcceptRechainProposal {
-                    proposal: _,
-                    certificate,
-                } => {
-                    self.broadcast_vnext_rechain_vote(certificate);
-                }
-                super::vnext::ReactorEffect::AcceptRechainVote { vote } => {
-                    debug!(
-                        height = vote.slot.height,
-                        view = vote.slot.view,
-                        signer = %vote.signer,
-                        "vNext reactor accepted re-chain vote"
-                    );
-                    self.accept_vnext_rechain_vote(vote);
-                }
-                super::vnext::ReactorEffect::AcceptViewChangeVote { vote } => {
-                    debug!(
-                        new_view = vote.new_view,
-                        signer = %vote.signer,
-                        "vNext reactor accepted view-change vote"
-                    );
-                    self.accept_vnext_view_change_vote(vote);
-                }
-                super::vnext::ReactorEffect::InstallViewChange { certificate } => {
-                    self.install_vnext_view_change_certificate(certificate);
-                }
-                super::vnext::ReactorEffect::RequireViewChange { slot, reason_label } => {
-                    self.require_vnext_view_change(slot, reason_label);
-                }
-                super::vnext::ReactorEffect::DropStaleWorkerResult {
-                    slot,
-                    id,
-                    generation,
-                } => {
-                    debug!(
-                        height = slot.height,
-                        view = slot.view,
-                        block = %slot.block_hash,
-                        id,
-                        generation,
-                        "vNext reactor dropped stale worker result"
-                    );
-                }
-                super::vnext::ReactorEffect::RejectSuspicion { slot, reason_label } => {
-                    debug!(
-                        height = slot.height,
-                        view = slot.view,
-                        block = %slot.block_hash,
-                        reason = %reason_label,
-                        "vNext reactor rejected suspicion/evidence"
-                    );
-                }
-            }
+        id: u64,
+        generation: u64,
+        started_at_ms: u64,
+    ) -> bool {
+        let Some(round) = self.vnext_rounds.get_mut(&(slot.height, slot.view)) else {
+            warn!(
+                height = slot.height,
+                view = slot.view,
+                block = %slot.block_hash,
+                "vNext validation worker start had no installed round"
+            );
+            return false;
+        };
+        let slot_state = round.slot_mut(slot);
+        if matches!(
+            &slot_state.validation,
+            super::vnext::ValidationState::Queued {
+                id: queued_id,
+                generation: queued_generation,
+                ..
+            } if *queued_id == id && *queued_generation == generation
+        ) {
+            slot_state.validation =
+                slot_state
+                    .validation
+                    .clone()
+                    .worker_started(id, generation, started_at_ms);
+            true
+        } else {
+            debug!(
+                height = slot.height,
+                view = slot.view,
+                block = %slot.block_hash,
+                id,
+                generation,
+                "vNext round dropped stale worker-start event"
+            );
+            false
         }
     }
 
@@ -21730,21 +22152,12 @@ impl Actor {
             .remove(&slot.block_hash);
     }
 
-    fn start_vnext_recovery(
-        &mut self,
-        slot: super::vnext::SlotId,
-        reason: super::vnext::RecoveryReason,
-    ) {
+    fn start_vnext_recovery(&mut self, slot: super::vnext::SlotId, reason: VNextRecoveryReason) {
         self.clear_vnext_validation_worker_ownership(slot);
 
         let cause = match reason {
-            super::vnext::RecoveryReason::ValidationTimeout
-            | super::vnext::RecoveryReason::ValidationBackpressure => {
-                ViewChangeCause::QuorumTimeout
-            }
-            super::vnext::RecoveryReason::SuccessorObligation => {
-                ViewChangeCause::CensorshipEvidence
-            }
+            VNextRecoveryReason::ValidationTimeout
+            | VNextRecoveryReason::ValidationBackpressure => ViewChangeCause::QuorumTimeout,
         };
         self.trigger_view_change_with_cause(slot.height, slot.view, cause);
     }
@@ -21756,13 +22169,186 @@ impl Actor {
             view = slot.view,
             block = %slot.block_hash,
             reason = %reason_label,
-            "vNext reactor required a live view change"
+            "vNext round required a live view change"
         );
         self.broadcast_vnext_view_change_vote_for_slot(slot, slot.view.saturating_add(1));
         self.trigger_view_change_with_cause(
             slot.height,
             slot.view,
             ViewChangeCause::CensorshipEvidence,
+        );
+    }
+
+    fn handle_vnext_suspect_received(&mut self, suspect: super::vnext::Suspect, now_ms: u64) {
+        let key = (suspect.slot.height, suspect.slot.view);
+        let slot = suspect.slot;
+        let mut install = None;
+        let mut require = None;
+        let mut reject = None;
+        let Some(round) = self.vnext_rounds.get_mut(&key) else {
+            self.reject_vnext_suspicion(slot, "round_missing");
+            return;
+        };
+        if round
+            .last_rechain_ms
+            .is_some_and(|last| now_ms.saturating_sub(last) < round.config.rechain_cooldown_ms)
+        {
+            reject = Some("rechain_cooldown".to_owned());
+        } else {
+            match round
+                .chain_order
+                .rechain_after_suspect(suspect, &round.quorum)
+            {
+                Ok(certificate) => {
+                    if certificate.tainted.len() > usize::from(round.config.max_tainted_per_view) {
+                        require = Some("max_tainted_per_view_exceeded".to_owned());
+                    } else {
+                        round.chain_order = certificate.new_order.clone();
+                        round.last_rechain_ms = Some(now_ms);
+                        install = Some(certificate);
+                    }
+                }
+                Err(super::vnext::RechainError::InsufficientUntaintedValidators { .. })
+                | Err(super::vnext::RechainError::InsufficientQuorumAfterQuarantine) => {
+                    require = Some("rechain_would_weaken_quorum".to_owned());
+                }
+                Err(err) => reject = Some(super::vnext::rechain_error_label(&err).to_owned()),
+            }
+        }
+        if let Some(certificate) = install {
+            self.install_vnext_rechain_certificate(certificate);
+        }
+        if let Some(reason_label) = require {
+            self.require_vnext_view_change(slot, reason_label);
+        }
+        if let Some(reason_label) = reject {
+            self.reject_vnext_suspicion(slot, &reason_label);
+        }
+    }
+
+    fn handle_vnext_rechain_proposal_received(&mut self, proposal: super::vnext::RechainProposal) {
+        let key = (proposal.slot.height, proposal.slot.view);
+        let slot = proposal.slot;
+        let mut accepted = None;
+        let mut require = None;
+        let mut reject = None;
+        let Some(round) = self.vnext_rounds.get_mut(&key) else {
+            self.reject_vnext_suspicion(slot, "round_missing");
+            return;
+        };
+        if proposal.previous_chain_order_hash != round.chain_order.hash() {
+            reject = Some("chain_order_hash_mismatch".to_owned());
+        } else {
+            match round
+                .chain_order
+                .rechain_after_suspicions(proposal.suspicions.clone(), &round.quorum)
+            {
+                Ok(expected)
+                    if proposal.proposed_order == expected.new_order
+                        && proposal.suspicions == expected.suspicions =>
+                {
+                    accepted = Some(expected);
+                }
+                Ok(_) => reject = Some("rechain_evidence_mismatch".to_owned()),
+                Err(super::vnext::RechainError::InsufficientUntaintedValidators { .. })
+                | Err(super::vnext::RechainError::InsufficientQuorumAfterQuarantine) => {
+                    require = Some("rechain_would_weaken_quorum".to_owned());
+                }
+                Err(err) => reject = Some(super::vnext::rechain_error_label(&err).to_owned()),
+            }
+        }
+        if let Some(certificate) = accepted {
+            self.broadcast_vnext_rechain_vote(certificate);
+        }
+        if let Some(reason_label) = require {
+            self.require_vnext_view_change(slot, reason_label);
+        }
+        if let Some(reason_label) = reject {
+            self.reject_vnext_suspicion(slot, &reason_label);
+        }
+    }
+
+    fn handle_vnext_rechain_certificate_received(
+        &mut self,
+        certificate: super::vnext::RechainCertificate,
+        now_ms: u64,
+    ) {
+        let key = (certificate.slot.height, certificate.slot.view);
+        let slot = certificate.slot;
+        let mut install = None;
+        let mut require = None;
+        let mut reject = None;
+        let Some(round) = self.vnext_rounds.get_mut(&key) else {
+            self.install_vnext_rechain_certificate(certificate);
+            return;
+        };
+        if certificate.previous_chain_order_hash != round.chain_order.hash() {
+            if certificate.new_chain_order_hash == round.chain_order.hash()
+                && certificate.new_order == round.chain_order
+            {
+                return;
+            }
+            reject = Some("chain_order_hash_mismatch".to_owned());
+        } else {
+            match round
+                .chain_order
+                .rechain_after_suspicions(certificate.suspicions.clone(), &round.quorum)
+            {
+                Ok(expected)
+                    if certificate.new_order == expected.new_order
+                        && certificate.new_chain_order_hash == expected.new_chain_order_hash
+                        && certificate.rechain_seq == expected.rechain_seq
+                        && certificate.tainted == expected.tainted
+                        && certificate.suspicions == expected.suspicions =>
+                {
+                    if certificate.tainted.len() > usize::from(round.config.max_tainted_per_view) {
+                        require = Some("max_tainted_per_view_exceeded".to_owned());
+                    } else {
+                        round.chain_order = certificate.new_order.clone();
+                        round.last_rechain_ms = Some(now_ms);
+                        install = Some(certificate);
+                    }
+                }
+                Ok(_) => reject = Some("rechain_evidence_mismatch".to_owned()),
+                Err(super::vnext::RechainError::InsufficientUntaintedValidators { .. })
+                | Err(super::vnext::RechainError::InsufficientQuorumAfterQuarantine) => {
+                    require = Some("rechain_would_weaken_quorum".to_owned());
+                }
+                Err(err) => reject = Some(super::vnext::rechain_error_label(&err).to_owned()),
+            }
+        }
+        if let Some(certificate) = install {
+            self.install_vnext_rechain_certificate(certificate);
+        }
+        if let Some(reason_label) = require {
+            self.require_vnext_view_change(slot, reason_label);
+        }
+        if let Some(reason_label) = reject {
+            self.reject_vnext_suspicion(slot, &reason_label);
+        }
+    }
+
+    fn handle_vnext_view_change_certificate_received(
+        &mut self,
+        certificate: super::vnext::ViewChangeCertificate,
+    ) {
+        if let Some(slot) = certificate.highest_slot
+            && let Some(round) = self.vnext_rounds.get_mut(&(slot.height, slot.view))
+        {
+            round.slot_mut(slot).slot_state = super::vnext::SlotState::Aborted {
+                reason_label: "view_change_certificate".to_owned(),
+            };
+        }
+        self.install_vnext_view_change_certificate(certificate);
+    }
+
+    fn reject_vnext_suspicion(&self, slot: super::vnext::SlotId, reason_label: &str) {
+        debug!(
+            height = slot.height,
+            view = slot.view,
+            block = %slot.block_hash,
+            reason = %reason_label,
+            "vNext round rejected suspicion/evidence"
         );
     }
 
@@ -21989,21 +22575,14 @@ impl Actor {
 
     fn publish_vnext_rechain_certificate(&mut self, certificate: super::vnext::RechainCertificate) {
         let slot = certificate.slot;
-        let effects = self
-            .vnext_reactors
-            .get_mut(&(slot.height, slot.view))
-            .map(|reactor| {
-                reactor.handle_event(super::vnext::ReactorEvent::RechainCertificateReceived {
-                    certificate: certificate.clone(),
-                    now_ms: Self::vnext_now_ms(),
-                })
-            })
-            .unwrap_or_else(|| {
-                vec![super::vnext::ReactorEffect::InstallRechain {
-                    certificate: certificate.clone(),
-                }]
-            });
-        self.apply_vnext_effects(effects);
+        if self.vnext_rounds.contains_key(&(slot.height, slot.view)) {
+            self.handle_vnext_rechain_certificate_received(
+                certificate.clone(),
+                Self::vnext_now_ms(),
+            );
+        } else {
+            self.install_vnext_rechain_certificate(certificate.clone());
+        }
         self.broadcast_vnext_control_message(super::vnext::ConsensusMessage::RechainCertificate(
             certificate,
         ));
@@ -22093,20 +22672,11 @@ impl Actor {
     ) {
         let height = self.vnext_view_change_certificate_height(&certificate);
         let view = certificate.new_view;
-        let effects = self
-            .vnext_reactors
-            .get_mut(&(height, view))
-            .map(|reactor| {
-                reactor.handle_event(super::vnext::ReactorEvent::ViewChangeCertificateReceived {
-                    certificate: certificate.clone(),
-                })
-            })
-            .unwrap_or_else(|| {
-                vec![super::vnext::ReactorEffect::InstallViewChange {
-                    certificate: certificate.clone(),
-                }]
-            });
-        self.apply_vnext_effects(effects);
+        if self.vnext_rounds.contains_key(&(height, view)) {
+            self.handle_vnext_view_change_certificate_received(certificate.clone());
+        } else {
+            self.install_vnext_view_change_certificate(certificate.clone());
+        }
         self.broadcast_vnext_control_message(
             super::vnext::ConsensusMessage::ViewChangeCertificate(certificate),
         );
@@ -22132,9 +22702,9 @@ impl Actor {
         let (base_chain_order, quorum) =
             self.base_vnext_chain_order_and_quorum_for(height, view)?;
         let chain_order = self
-            .vnext_reactors
+            .vnext_rounds
             .get(&(height, view))
-            .map(|reactor| reactor.chain_order.clone())
+            .map(|round| round.chain_order.clone())
             .unwrap_or(base_chain_order);
         Some((chain_order, quorum))
     }
@@ -26897,14 +27467,6 @@ impl Actor {
         committed_height: u64,
         now: Instant,
     ) -> bool {
-        if request.height == committed_height.saturating_add(1)
-            && self
-                .phase_tracker
-                .current_view(request.height)
-                .is_some_and(|current_view| current_view > request.view)
-        {
-            return false;
-        }
         let pending_payload_available =
             self.pending
                 .pending_blocks
@@ -35290,11 +35852,18 @@ impl Actor {
             let backlog_dampened_frontier_pending = pending.height == frontier_height
                 && raw_backlog_dampens_frontier_pending
                 && !near_quorum_fast_timeout_allowed;
-            let pending_timeout = if backlog_dampened_frontier_pending {
+            let mut pending_timeout = if backlog_dampened_frontier_pending {
                 decision.timeout.max(frontier_pending_backlog_timeout)
             } else {
                 decision.timeout
             };
+            if pending.validation_status == ValidationStatus::Pending {
+                if let Some(validation_floor) =
+                    self.validation_inflight_fresh_timeout_floor(*block_hash, pending.height, now)
+                {
+                    pending_timeout = pending_timeout.max(validation_floor);
+                }
+            }
             let recovery_backlog_active = matches!(
                 decision.class,
                 StalledPendingTimeoutClass::ActiveRecoveryBacklogTimeout
@@ -36614,6 +37183,24 @@ impl Actor {
             );
             return false;
         }
+        if height == contiguous_frontier_height
+            && !proposal_seen
+            && !frontier_pending_exists
+            && queue_active_backlog
+            && !frontier_slot_vote_backed_evidence
+            && self.maybe_defer_missing_qc_rotation(height, current_view, age, timeout)
+        {
+            debug!(
+                height,
+                view = current_view,
+                age_ms = age.as_millis(),
+                timeout_ms = timeout.as_millis(),
+                missing_qc_reacquire_window_ms =
+                    self.recovery_missing_qc_reacquire_window().as_millis(),
+                "deferring empty-frontier missing_qc rotation while transaction backlog leaves the leader a bounded proposal window"
+            );
+            return false;
+        }
         if missing_qc_actionable_dependency_signals && height != contiguous_frontier_height {
             if reset_stalled_frontier_state {
                 debug!(
@@ -36868,8 +37455,10 @@ impl Actor {
                     );
                     return false;
                 }
+                let nonleader_empty_frontier_recovery_allowed =
+                    current_view == 0 || !self.local_is_round_leader(height, current_view);
                 if !proposal_seen
-                    && current_view == 0
+                    && nonleader_empty_frontier_recovery_allowed
                     && matches!(direct_cause, ViewChangeCause::MissingQc)
                     && !pre_reset_passive_frontier_slot_without_external_dependency
                     && !self.frontier_slot_passive_catchup_active_at_height(height)
@@ -37265,7 +37854,24 @@ impl Actor {
             .pending
             .missing_commit_qc_requests
             .iter()
-            .filter(|(_, request)| request.height == height && request.view < min_view)
+            .filter(|(hash, request)| {
+                if request.height != height || request.view >= min_view {
+                    return false;
+                }
+                let preserve_exact_frontier_repair =
+                    self.frontier_slot.as_ref().is_some_and(|slot| {
+                        slot.height == request.height
+                            && slot.view == request.view
+                            && slot.block_hash == **hash
+                            && Self::frontier_slot_has_active_owner_state_in_slot(slot)
+                    }) && self.missing_commit_qc_request_has_actionable_dependency(
+                        **hash,
+                        request,
+                        self.committed_height_snapshot(),
+                        Instant::now(),
+                    );
+                !preserve_exact_frontier_repair
+            })
             .map(|(hash, _)| *hash)
             .collect();
         let mut missing_commit_qc_removed = 0usize;
