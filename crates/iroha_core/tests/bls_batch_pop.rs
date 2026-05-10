@@ -17,7 +17,8 @@ use iroha_core::{
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     ChainId, Metadata, PeerId, Registrable,
-    block::builder::BlockBuilder,
+    block::{BlockExecutionContextBundle, ExternalExecutionContext, builder::BlockBuilder},
+    nexus::{DataSpaceId, LaneId},
     prelude::{
         Account, AccountId, AssetDefinition, BlockHeader, Domain, DomainId, HashOf, Level, Log,
         SignedTransaction, TransactionBuilder,
@@ -96,6 +97,17 @@ fn make_tx(
     builder.sign(kp.private_key())
 }
 
+fn push_single_tx_with_context(builder: &mut BlockBuilder, tx: SignedTransaction) {
+    builder.set_execution_context(Some(BlockExecutionContextBundle::new(vec![
+        ExternalExecutionContext::new(
+            tx.hash_as_entrypoint(),
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+        ),
+    ])));
+    builder.push_transaction(tx);
+}
+
 #[test]
 fn bls_batch_block_validates_with_pop() {
     let (state, chain, account, kp) = mk_state_with_bls_batch();
@@ -103,7 +115,7 @@ fn bls_batch_block_validates_with_pop() {
     let tx = make_tx(&chain, &account, &kp, true);
     let header = BlockHeader::new(nonzero!(2_u64), Some(genesis_hash), None, None, 1, 0);
     let mut builder = BlockBuilder::new(header);
-    builder.push_transaction(tx);
+    push_single_tx_with_context(&mut builder, tx);
     let proof_policies = proof_policy_bundle(&state.view().nexus().lane_config);
     builder.set_da_proof_policies(Some(proof_policies));
     let block = builder.build_with_signature(0, peer_kp.private_key());
@@ -129,7 +141,7 @@ fn bls_batch_block_validates_without_pop_fallback() {
     let tx = make_tx(&chain, &account, &kp, false);
     let header = BlockHeader::new(nonzero!(2_u64), Some(genesis_hash), None, None, 1, 0);
     let mut builder = BlockBuilder::new(header);
-    builder.push_transaction(tx);
+    push_single_tx_with_context(&mut builder, tx);
     let proof_policies = proof_policy_bundle(&state.view().nexus().lane_config);
     builder.set_da_proof_policies(Some(proof_policies));
     let block = builder.build_with_signature(0, peer_kp.private_key());
@@ -156,7 +168,7 @@ fn bls_batch_block_rejects_missing_proof_policy_hash() {
     let tx = make_tx(&chain, &account, &kp, true);
     let header = BlockHeader::new(nonzero!(2_u64), Some(genesis_hash), None, None, 1, 0);
     let mut builder = BlockBuilder::new(header);
-    builder.push_transaction(tx);
+    push_single_tx_with_context(&mut builder, tx);
     let block = builder.build_with_signature(0, peer_kp.private_key());
 
     let mut state_block = state.block(block.header());

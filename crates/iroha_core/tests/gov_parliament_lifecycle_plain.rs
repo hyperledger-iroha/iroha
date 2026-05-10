@@ -165,6 +165,7 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
     let header_1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block_1 = state.block(header_1);
     let mut stx_1 = block_1.transaction();
+    stx_1.tx_call_hash = Some(Hash::prehashed([0x51; Hash::LENGTH]));
 
     let propose_perm: Permission = CanProposeContractDeployment {
         contract_address: proposal_contract_address.clone(),
