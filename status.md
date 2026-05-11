@@ -19,14 +19,17 @@ Last updated: 2026-05-10
 ## 2026-05-10 Sumeragi missing-QC recovery ordering
 
 - Empty contiguous-frontier `missing_qc` idle ticks now use the unified
-  frontier recovery arming pass only for the initial view. Post-rotation rounds
-  with no actionable frontier dependency rotate at the base timeout, so stale
-  block/control ingress cannot permanently suppress idle recovery.
+  frontier recovery arming pass for the initial view and for a non-leader's
+  first timeout in a later view when no recovery owner exists. Post-rotation
+  rounds with a recorded same-view timeout or stale ingress still rotate at the
+  base timeout, so stale block/control ingress cannot permanently suppress idle
+  recovery.
 - Validation:
   - `cargo fmt --all`
   - `cargo test -p iroha_core --lib force_view_change_if_idle_allows_empty_frontier_after_stale_block_ingress_without_progress -- --nocapture`
   - `cargo test -p iroha_core --lib force_view_change_if_idle_no_actionable_dependency_rotates_after_base_timeout -- --nocapture`
   - `cargo test -p iroha_core --lib force_view_change_if_idle_arms_nonleader_empty_frontier_recovery_after_pacemaker_attempt -- --nocapture`
+  - `cargo test -p iroha_core sumeragi::main_loop::tests::force_view_change_if_idle_ -- --nocapture`
   - `git diff --check`
 
 ## 2026-05-09 iroha_core library regression sweep
