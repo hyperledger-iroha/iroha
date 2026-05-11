@@ -946,6 +946,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 rebroadcast_sessions_per_tick:
                     defaults::sumeragi::RBC_REBROADCAST_SESSIONS_PER_TICK,
                 payload_chunks_per_tick: defaults::sumeragi::RBC_PAYLOAD_CHUNKS_PER_TICK,
+                inline_block_created_backup: iroha_config::parameters::defaults::sumeragi::RBC_INLINE_BLOCK_CREATED_BACKUP,
                 store_max_sessions: defaults::sumeragi::RBC_STORE_MAX_SESSIONS,
                 store_soft_sessions: defaults::sumeragi::RBC_STORE_SOFT_SESSIONS,
                 store_max_bytes: defaults::sumeragi::RBC_STORE_MAX_BYTES,

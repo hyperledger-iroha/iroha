@@ -4251,7 +4251,6 @@ impl Actor {
             aggregate_signature,
             roots,
         );
-
         iroha_logger::info!(
             height,
             view,
@@ -4273,7 +4272,11 @@ impl Actor {
                 "commit quorum completed"
             );
         }
-        if let Err(err) = self.handle_qc_with_aggregate(qc.clone(), Some(true)) {
+        if let Err(err) = self.handle_qc_with_aggregate_and_roster(
+            qc.clone(),
+            Some(true),
+            Some(canonical_topology.as_ref().to_vec()),
+        ) {
             warn!(
                 ?err,
                 height,
@@ -5939,11 +5942,20 @@ impl Actor {
         self.handle_qc_with_aggregate(qc, None)
     }
 
-    #[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
     pub(super) fn handle_qc_with_aggregate(
         &mut self,
         qc: crate::sumeragi::consensus::Qc,
         aggregate_ok: Option<bool>,
+    ) -> Result<()> {
+        self.handle_qc_with_aggregate_and_roster(qc, aggregate_ok, None)
+    }
+
+    #[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
+    fn handle_qc_with_aggregate_and_roster(
+        &mut self,
+        qc: crate::sumeragi::consensus::Qc,
+        aggregate_ok: Option<bool>,
+        topology_override: Option<Vec<PeerId>>,
     ) -> Result<()> {
         let mut aggregate_ok = aggregate_ok;
         // Prepare certificates are view-scoped; commit/new-view certificates can safely arrive
@@ -6091,7 +6103,9 @@ impl Actor {
         }
         let was_qc_cached = self.qc_cache.contains_key(&qc_cache_key);
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
-        let commit_topology = if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
+        let commit_topology = if let Some(topology) = topology_override {
+            super::roster::canonicalize_roster_for_mode(topology, consensus_mode)
+        } else if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
             self.roster_for_new_view_with_mode(
                 qc.subject_block_hash,
                 qc.height,

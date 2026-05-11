@@ -1355,6 +1355,7 @@ fn minimal_config_snapshot() {
                     session_ttl: 120s,
                     rebroadcast_sessions_per_tick: 8,
                     payload_chunks_per_tick: 64,
+                inline_block_created_backup: iroha_config::parameters::defaults::sumeragi::RBC_INLINE_BLOCK_CREATED_BACKUP,
                     store_max_sessions: 4096,
                     store_soft_sessions: 3072,
                     store_max_bytes: 2147483648,

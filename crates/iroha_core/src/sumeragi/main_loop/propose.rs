@@ -17,6 +17,14 @@ use iroha_data_model::prelude::Repeats;
 const PROPOSAL_STALE_WINDOW_TX_QUANTUM: usize = 4_096;
 const PROPOSAL_STALE_WINDOW_MAX_MULTIPLIER: u32 = 4;
 
+pub(super) const fn should_seed_frontier_backup_transport(
+    da_enabled: bool,
+    inline_frontier_block_created_transport: bool,
+    inline_block_created_backup: bool,
+) -> bool {
+    da_enabled && inline_frontier_block_created_transport && inline_block_created_backup
+}
+
 pub(super) fn resolve_prev_block_for_proposal(
     proposal_height: u64,
     highest_qc: &crate::sumeragi::consensus::QcHeaderRef,
@@ -2079,7 +2087,6 @@ impl Actor {
 
         let queue_len_after_pop = self.queue.queued_len();
         let mut internal_work = if transactions.is_empty() {
-            let work = self.internal_proposal_work(proposal_height, prev_block.as_deref());
             if allow_recovery_heartbeat {
                 let heartbeat = self.build_recovery_heartbeat_transaction(proposal_height)?;
                 let encoded_len = heartbeat.encoded_len();
@@ -2090,19 +2097,20 @@ impl Actor {
                     height = proposal_height,
                     view,
                     queue_len = queue_len_after_pop,
-                    internal_work = work.has_work(),
                     "injecting recovery heartbeat transaction for empty leader queue"
                 );
-                work.has_work().then_some(work)
-            } else if !work.has_work() {
-                info!(
-                    height,
-                    view,
-                    queue_len = queue_len_after_pop,
-                    "skipping empty proposal; empty blocks are disallowed"
-                );
-                return Ok(false);
+                None
             } else {
+                let work = self.internal_proposal_work(proposal_height, prev_block.as_deref());
+                if !work.has_work() {
+                    info!(
+                        height,
+                        view,
+                        queue_len = queue_len_after_pop,
+                        "skipping empty proposal; empty blocks are disallowed"
+                    );
+                    return Ok(false);
+                }
                 Some(work)
             }
         } else {
@@ -2748,14 +2756,18 @@ impl Actor {
                     || !block_created_frame_fits);
             let inline_frontier_block_created_transport =
                 frontier_block_created_ready && !frontier_rbc_transport_needed;
-            let seed_frontier_backup_transport =
-                da_enabled && inline_frontier_block_created_transport;
-            let mut rbc_plan = if da_enabled {
-                // Keep the inline BlockCreated fast path for exact frontier payloads, but still
-                // seed Proposal + RBC transport under DA so a missed BlockCreated frame does not
-                // force peers onto the slower exact-body recovery path. Multi-chunk frontiers and
-                // non-frontier recovery continue to rely on Proposal + RBC as their primary body
-                // transport.
+            let seed_frontier_backup_transport = should_seed_frontier_backup_transport(
+                da_enabled,
+                inline_frontier_block_created_transport,
+                self.config.rbc.inline_block_created_backup,
+            );
+            let use_rbc_transport = da_enabled
+                && (!inline_frontier_block_created_transport || seed_frontier_backup_transport);
+            let mut rbc_plan = if use_rbc_transport {
+                // Inline single-frame frontier BlockCreated messages can skip Proposal + RBC
+                // backup when configured to favor low-latency steady-state transport. Multi-chunk,
+                // oversized, and non-frontier recovery payloads continue to rely on Proposal + RBC
+                // as their primary DA body transport.
                 self.prepare_rbc_plan(rbc::RbcPlanInputs {
                     signed_block: &signed_block,
                     transactions: &transactions_for_plan,
@@ -3231,17 +3243,20 @@ impl Actor {
         let mut retained_sizes = Vec::with_capacity(tx_sizes.len());
         let mut dropped = 0usize;
 
-        for (((guard, tx), routing), size) in tx_guards
+        let mut guard_iter = tx_guards.into_iter();
+        for ((tx, routing), size) in transactions
             .into_iter()
-            .zip(transactions.into_iter())
             .zip(routing_decisions.into_iter())
             .zip(tx_sizes.into_iter())
         {
+            let guard = guard_iter.next();
             if state.has_committed_transaction(tx.hash()) {
                 dropped = dropped.saturating_add(1);
                 continue;
             }
-            retained_guards.push(guard);
+            if let Some(guard) = guard {
+                retained_guards.push(guard);
+            }
             retained_transactions.push(tx);
             retained_routing.push(routing);
             retained_sizes.push(size);
@@ -4316,7 +4331,10 @@ impl Actor {
                         "cached proposal has no live pending body and no active exact repair; rotating recovery view"
                     );
                 }
-                if cache_age.is_some_and(|age| age < repair_window) {
+                if (cached_hint.is_some() || pending_queue_len == 0)
+                    && !repair_exhausted
+                    && cache_age.is_some_and(|age| age < repair_window)
+                {
                     self.subsystems.propose.pacemaker.next_deadline = now
                         .checked_add(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
                         .unwrap_or(now);

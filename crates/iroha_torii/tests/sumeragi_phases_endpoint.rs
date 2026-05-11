@@ -64,9 +64,14 @@ async fn sumeragi_phases_endpoint_shape() {
         "block_created_dropped_by_lock_total",
         "block_created_hint_mismatch_total",
         "block_created_proposal_mismatch_total",
+        "max_ms",
     ] {
         assert!(v.get(k).is_some(), "missing key: {k}");
     }
+    let max = v
+        .get("max_ms")
+        .and_then(|x| x.as_object())
+        .expect("max_ms object present");
     let ema = v
         .get("ema_ms")
         .and_then(|x| x.as_object())
@@ -80,10 +85,17 @@ async fn sumeragi_phases_endpoint_shape() {
         "commit_ms",
         "pipeline_total_ms",
     ] {
+        assert!(max.get(k).is_some(), "missing max key: {k}");
         assert!(ema.get(k).is_some(), "missing ema key: {k}");
     }
     assert_eq!(
         v.get("pipeline_total_ms")
+            .and_then(norito::json::Value::as_u64)
+            .unwrap_or(0),
+        187
+    );
+    assert_eq!(
+        max.get("pipeline_total_ms")
             .and_then(norito::json::Value::as_u64)
             .unwrap_or(0),
         187

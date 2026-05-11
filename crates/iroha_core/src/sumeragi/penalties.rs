@@ -966,6 +966,7 @@ mod tests {
                 session_ttl: Duration::from_secs(0),
                 rebroadcast_sessions_per_tick: 1,
                 payload_chunks_per_tick: 1,
+                inline_block_created_backup: iroha_config::parameters::defaults::sumeragi::RBC_INLINE_BLOCK_CREATED_BACKUP,
                 store_max_sessions: 0,
                 store_soft_sessions: 0,
                 store_max_bytes: 0,

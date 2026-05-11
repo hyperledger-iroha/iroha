@@ -1,6 +1,463 @@
 # Status
 
-Last updated: 2026-05-10
+Last updated: 2026-05-11
+
+## 2026-05-11 20k liveness 300s phase-tail boundary
+
+- Sumeragi execution status now reports the last completed block-pipeline apply,
+  not the in-flight pre-apply overlay snapshot. The public status payload carries
+  aggregate `pipeline_execution` counters for lane vertices/edges, overlay work,
+  RBC bytes/chunks, detached prepared/merged/fallback counts, and quarantine
+  execution. Per-lane detail remains available, while Izanami now treats the
+  aggregate as authoritative and uses per-lane summing only as a fallback for
+  older payloads.
+- Focused coverage now guards both telemetry and non-telemetry builds:
+  `parallel_apply_knob_compiles_without_telemetry` asserts the public status
+  snapshot shows detached work when `pipeline.parallel_apply = true`, and
+  `parallel_apply_knob_affects_detached_counters` keeps the metrics path covered
+  under the `telemetry` feature.
+- Sumeragi phase status now also exposes per-phase maximums for the current
+  process lifetime. Torii returns them in `/v1/sumeragi/phases` as `max_ms`,
+  and Izanami records `phase_collect_da_max_ms`,
+  `phase_collect_precommit_max_ms`, and `phase_pipeline_total_max_ms` in the
+  liveness matrix. This makes rejected rows useful for tail diagnosis instead
+  of only reporting the last sampled phase.
+- Short-run 20k-ingress matrix evidence after the status fix:
+  - `dist/izanami-liveness-matrix-20k-cap1184-status-verify-30s-20260511-054723`:
+    cap `1184`, pipeline `300ms`, collectors/redundant-send `3/3`, backup RBC
+    on passed with `600,000` accepted submissions, `486.00` committed TPS,
+    peer p95 `2.904s`, zero view changes, and status confirmed
+    `detached_prepared_total = detached_merged_total = 1184`.
+  - `dist/izanami-liveness-matrix-20k-next-options-60s-20260511-054850`:
+    cap `1216` passed at pipeline `300ms` (`508.42` committed TPS, peer p95
+    `2.935s`) and `350ms` (`508.42` committed TPS, peer p95 `2.837s`).
+    Cap `1280` at pipeline `350ms` also passed with `514.72` committed TPS,
+    peer p95 `2.940s`, zero view changes, and full detached merge
+    (`1280/1280`, fallback `0`).
+  - `dist/izanami-liveness-matrix-20k-cap1280-confirm-120s-20260511-055329`:
+    cap `1280`, scan multiplier `32`, pipeline `350ms`, fanout `3/3`, backup
+    RBC on is the new confirmed stable point. It accepted all `2,400,000`
+    submissions, reached strict height `51`, approved `62,732` transactions,
+    committed `522.77` TPS, held runner p95 to `2503ms`, peer p95 to `2.923s`,
+    installed zero view changes, and ended with
+    `detached_prepared_total = detached_merged_total = 1280`, fallback `0`.
+  - `dist/izanami-liveness-matrix-20k-cap1344-1408-60s-20260511-055803`:
+    cap `1344` passed at pipeline `350ms` (`539.95` committed TPS, peer p95
+    `2.933s`) and `400ms` (`521.62` committed TPS, peer p95 `2.872s`). Cap
+    `1408` also passed for 60s at pipeline `400ms` with `541.37` committed TPS
+    and peer p95 `2.957s`, but this was only a short-run result.
+  - `dist/izanami-liveness-matrix-20k-cap1408-confirm-120s-20260511-060245`:
+    cap `1408`, pipeline `400ms` failed the 120s confirmation gate. It accepted
+    `2,101,825` submissions before the runner p95 reached `3003ms`; parsed peer
+    p95 was `3.106s`, max peer gap was `3.369s`, and the row crossed the
+    3-second block-cadence budget. DA and precommit tails were visible in the
+    sample (`492ms` DA, `599ms` precommit), so cap `1408` is rejected for the
+    current stable baseline.
+  - `dist/izanami-liveness-matrix-20k-cap1344-confirm-120s-20260511-060729`:
+    cap `1344`, pipeline `350ms` accepted all `2,400,000` submissions with zero
+    view changes and no fallback execution, but failed the hard peer-cadence
+    gate at peer p95 `3.004s` (`526.50` committed TPS).
+  - `dist/izanami-liveness-matrix-20k-cap1344-p400-confirm-120s-20260511-061034`:
+    cap `1344`, pipeline `400ms` also accepted all `2,400,000` submissions with
+    zero view changes and no fallback execution, but failed the peer-cadence
+    gate at peer p95 `3.008s` (`516.08` committed TPS).
+  - `dist/izanami-liveness-matrix-20k-cap1312-confirm-120s-20260511-061319`:
+    cap `1312`, scan multiplier `32`, pipeline `350ms`, fanout `3/3`, backup
+    RBC on passed the 120s gate. It accepted all `2,400,000` submissions,
+    reached strict height `50`, approved `63,126` transactions, committed
+    `526.05` TPS, held runner p95 to `2503ms`, peer p95 to `2.941s`, installed
+    zero view changes, and ended with
+    `detached_prepared_total = detached_merged_total = 1312`, fallback `0`.
+  - `dist/izanami-liveness-matrix-20k-cap1328-confirm-120s-20260511-061707`:
+    cap `1328`, pipeline `350ms` accepted all `2,400,000` submissions with zero
+    view changes and no fallback execution, but failed the peer-cadence gate at
+    peer p95 `3.073s` (`510.42` committed TPS). This rejects the immediate
+    midpoint above cap `1312`.
+- 300s 20k-ingress soak evidence:
+  - `dist/izanami-liveness-matrix-20k-cap1312-soak-300s-20260511-062743`:
+    cap `1312`, pipeline `350ms` failed the longer gate. It accepted
+    `5,407,598` submissions, reached strict height `103`, hit runner p95
+    `3006ms`, parsed peer p95 `3.271s`, and crossed the hard 3-second cadence
+    budget.
+  - `dist/izanami-liveness-matrix-20k-cap1280-soak-300s-20260511-064115`:
+    cap `1280`, pipeline `350ms` failed with runner p95 `3006ms`, parsed peer
+    p95 `3.155s`, and phase maxes showing `1021ms` DA, `1429ms` precommit,
+    and `5356ms` pipeline tail.
+  - `dist/izanami-liveness-matrix-20k-cap1216-soak-300s-20260511-064652`:
+    cap `1216`, pipeline `350ms` failed with parsed peer p95 `3.084s`; DA and
+    precommit maxes were `934ms` and `1231ms`.
+  - `dist/izanami-liveness-matrix-20k-cap1120-soak-300s-20260511-065228`:
+    cap `1120`, pipeline `300ms` passed parsed peer p95 (`2.856s`) but failed
+    the hard runner gate at `3005ms`; this row is a near miss, not an accepted
+    baseline.
+  - `dist/izanami-liveness-matrix-20k-cap1024-soak-300s-20260511-065900`:
+    cap `1024`, pipeline `300ms` passed. It accepted all `6,000,000`
+    submissions, reached strict height `131`, approved `132,230` transactions,
+    committed `440.77` TPS, held runner p95 to `2506ms`, parsed peer p95 to
+    `2.921s`, and installed zero view changes.
+  - `dist/izanami-liveness-matrix-20k-cap1120-p250-soak-300s-20260511-070515`:
+    cap `1120`, pipeline `250ms` failed with runner p95 `3005ms`, parsed peer
+    p95 `3.039s`, and DA/precommit maxes `1066ms`/`1356ms`.
+  - `dist/izanami-liveness-matrix-20k-cap1024-p250-soak-300s-20260511-071039`:
+    cap `1024`, pipeline `250ms` passed. It accepted all `6,000,000`
+    submissions, reached strict height `130`, approved `131,145` transactions,
+    committed `437.15` TPS, held runner p95 to `2506ms`, and parsed peer p95 to
+    `2.874s`.
+  - `dist/izanami-liveness-matrix-20k-cap1088-p250-soak-300s-20260511-071656`:
+    cap `1088`, pipeline `250ms` is the current accepted 300s boundary. It
+    accepted all `6,000,000` submissions, reached strict height `127`, approved
+    `136,073` transactions, committed `453.58` TPS, held runner p95 to
+    `2510ms`, parsed peer p95 to `2.982s`, installed zero view changes, and
+    ended with full detached merge (`1088/1088`, fallback `0`).
+  - `dist/izanami-liveness-matrix-20k-cap1104-p250-soak-300s-20260511-072314`:
+    cap `1104`, pipeline `250ms` is rejected. Parsed peer p95 stayed under the
+    limit at `2.885s`, but the hard runner gate reached `3005ms` at the
+    target-height checkpoint before full ingress completed.
+- Conclusion: the 120s cap `1312` result was not durable. The current accepted
+  20k-ingress operating point is cap `1088`, scan multiplier `32`, pipeline
+  `250ms`, collectors/redundant-send `3/3`, backup RBC on. This preserves
+  consensus liveness in the 2-3s p95 block envelope for 300s, but it still only
+  commits hundreds of TPS. Reaching 20k committed TPS requires safe payloads in
+  the tens of thousands per block or a major deterministic execution/DA/QC tail
+  reduction; raising the cap beyond `1088` currently loses the liveness gate.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo test -p iroha_core --lib access_set_source_and_conflict_rate_snapshot_updates -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo test -p iroha_core --test parallel_apply_knob parallel_apply_knob_compiles_without_telemetry -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo test -p iroha_core --features telemetry --test parallel_apply_knob parallel_apply_knob_affects_detached_counters -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo test -p iroha_torii status_snapshot_json_includes -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo test -p izanami sumeragi_status_digest_preserves_detailed_liveness_evidence -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo test -p iroha_core --lib phase_snapshot_exposes_phase_ema -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo test -p iroha_torii --features telemetry --test sumeragi_phases_endpoint -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo test -p izanami parse_sumeragi_phase_snapshot_extracts_expected_fields -- --nocapture`
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/block.rs crates/iroha_core/tests/parallel_apply_knob.rs crates/iroha_core/src/sumeragi/status.rs crates/iroha_torii/src/routing.rs crates/iroha_torii/src/routing/consensus.rs crates/izanami/src/chaos.rs`
+  - `python3 -m py_compile scripts/run_izanami_liveness_matrix.py`
+  - `git diff --check`
+  - `git diff --cached --check -- crates/iroha_core/src/block.rs crates/iroha_core/tests/parallel_apply_knob.rs crates/iroha_core/src/sumeragi/status.rs crates/iroha_torii/src/routing.rs crates/iroha_torii/src/routing/consensus.rs crates/izanami/src/chaos.rs status.md roadmap.md`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`
+  - 30s status verification, 60s next-options matrix, 120s cap-1280,
+    cap-1344, cap-1408, cap-1312, and cap-1328 confirmation matrices, plus the
+    300s cap-1312, cap-1280, cap-1216, cap-1120, cap-1024, cap-1088, and
+    cap-1104 soaks listed above.
+
+## 2026-05-11 Live-frontier missing-QC recovery matrix
+
+- Sumeragi now suppresses idle missing-QC committed-anchor range pulls when the
+  local node is already working on the contiguous frontier height, has local
+  round liveness, and has no explicit same-height commit-QC dependency. The
+  reacquire attempt is still recorded and throttled, but it no longer injects
+  block-sync range-pull traffic into a live round that is already advancing.
+- `scripts/run_izanami_liveness_matrix.py` now treats the parsed peer commit
+  p95 as a hard row gate (`--peer-gap-p95-threshold-s`, default `3.0`), reports
+  DA/precommit phase timing and RBC repair counts, and retains target-height
+  progress fields from failed Izanami runs so rejected rows still have useful
+  matrix data.
+- New 20k ingress matrix evidence after the suppression:
+  - `dist/izanami-liveness-matrix-20k-live-frontier-confirm-120s-20260511-034742`:
+    cap `1120`, pipeline `300ms`, collectors/redundant-send `3/3`, and backup
+    RBC on is the confirmed stable point. It accepted all `2,400,000`
+    submissions, reached strict height `52`, approved `56,041` transactions,
+    committed `467.01` TPS, held runner p95 to `2507ms`, parsed peer p95 to
+    `2.822s`, max peer gap to `2.996s`, and installed zero view changes.
+  - `dist/izanami-liveness-matrix-20k-live-frontier-cap-sweep-60s-20260511-034304`:
+    caps `1152`, `1184`, and `1200` completed without view changes but failed
+    the peer-cadence gate at parsed peer p95 `3.077s`, `3.154s`, and `3.089s`.
+    The extra throughput was therefore rejected as unstable for the current
+    liveness target.
+  - `dist/izanami-liveness-matrix-20k-live-frontier-pipeline-60s-20260511-035106`:
+    cap `1120` passed at pipeline `150ms`, `200ms`, and `250ms`, with parsed
+    peer p95 `2.841s`, `2.733s`, and `2.934s`. A cap `1152` retry at `250ms`
+    failed at `3.235s`.
+  - `dist/izanami-liveness-matrix-20k-live-frontier-pipe200-confirm-120s-20260511-035713`:
+    the tempting `1120`/`200ms` setting was not promoted. It failed the runner
+    gate at `3002ms` p95 and stopped after `2,104,874` accepted submissions,
+    despite parsed peer p95 staying under `3s`.
+- Conclusion: the current stable 20k-ingress operating point is still cap
+  `1120`, pipeline `300ms`, collectors/redundant-send `3/3`, backup RBC on.
+  Larger caps and lower pipeline timing can increase or preserve short-run
+  throughput, but the confirmed acceptance rule is consensus liveness first.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo test -p iroha_core --lib missing_qc_reacquire -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo test -p iroha_core --lib force_view_change_if_idle_reacquires -- --nocapture`
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `python3 -m py_compile scripts/run_izanami_liveness_matrix.py`
+  - `git diff --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`
+  - 60s cap sweep, 60s pipeline sweep, 120s cap-1120 confirmation, and 120s
+    pipe-200 rejection matrices listed above.
+
+## 2026-05-11 RBC READY repair fanout tightening
+
+- Sumeragi targeted RBC READY repair now sends the READY sidecar only to peers
+  whose READY signature is still missing from the local session, instead of
+  sending the sidecar to every remote validator once DELIVER/quorum repair is
+  active. Pre-quorum authoritative frontier sessions also keep repair small:
+  they send READY evidence without full payload/body fanout until READY quorum
+  or local DELIVER makes heavier rescue appropriate.
+- Focused coverage was updated for both paths:
+  `maybe_emit_rbc_deliver_prefers_ready_repair_after_ready_quorum` now asserts
+  that peers already observed locally are not direct READY-repair targets, and
+  `maybe_emit_rbc_deliver_prefers_targeted_ready_rescue_when_subset_skips_local`
+  verifies pre-quorum READY repair without payload fanout.
+- New 20k ingress matrix evidence:
+  - `dist/izanami-liveness-matrix-20k-ready-repair-60s-20260511-030904`:
+    cap `1120`/backup-on passed with `485.50` committed TPS and parsed peer p95
+    `2.793s`; cap `1216`/backup-on did not stall but stayed outside the
+    peer-cadence target with parsed peer p95 `3.397s` and max gap `5.515s`.
+  - `dist/izanami-liveness-matrix-20k-ready-repair-backupoff-60s-20260511-031258`:
+    backup-off improved larger-cap throughput slightly (`1216`: `489.22` TPS,
+    `1280`: `491.88` TPS), but both rows still exceeded the peer p95 target
+    (`3.183s` and `3.142s`) and had more gaps over `3s`.
+  - `dist/izanami-liveness-matrix-20k-ready-repair-confirm-120s-20260511-031638`:
+    cap `1120`/backup-on remains the current stable baseline after the repair
+    change: `2,400,000` submissions accepted, strict height `52`, `56,031`
+    approved transactions, `466.93` committed TPS, runner p95 `2504ms`, parsed
+    peer p95 `2.914s`, max gap `3.204s`, and zero view-change installs.
+- Conclusion: the repair tightening reduces redundant control/body traffic and
+  preserves the stable `1120` cap, but it does not unlock `1216+`. The next
+  throughput work remains reducing DA/RBC/QC tail latency and block application
+  cost enough for larger blocks to stay inside the 2-3s liveness envelope.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo test -p iroha_core --lib maybe_emit_rbc_deliver -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo test -p iroha_core --lib rescue_rbc_missing_ready_peers -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`
+  - 60s backup-on, 60s backup-off, and 120s cap-1120 20k Izanami matrices listed above.
+
+## 2026-05-11 Inline BlockCreated backup-RBC matrix
+
+- Sumeragi now exposes
+  `sumeragi.advanced.rbc.inline_block_created_backup` so exact single-frame
+  frontier `BlockCreated` proposals can be tested with or without the redundant
+  Proposal + RBC body backup path. The production/default posture remains
+  backup-on; oversized, multi-chunk, and non-frontier proposal bodies still use
+  Proposal + RBC transport.
+- Izanami wires the knob through CLI/config/persistence as
+  `--sumeragi-inline-block-created-backup-rbc`, and
+  `scripts/run_izanami_liveness_matrix.py` accepts a seventh row field:
+  `name:cap:scan:pipeline_ms:collectors_k:redundant_send_r:inline_backup_rbc`.
+- The 60s comparison in
+  `dist/izanami-liveness-matrix-20k-inline-backup-60s-20260511-021833`
+  isolated the switch at cap `1120`/fanout `3/3`: backup-on passed with
+  `476.02` committed TPS and parsed peer p95 `2.749s`; backup-off also passed
+  with `486.55` committed TPS and parsed peer p95 `2.708s`. Higher caps did
+  not become stable: `1280` backup-off failed at parsed peer p95 `3.401s`, and
+  `1536` backup-off failed at `3.230s`.
+- A narrow 60s backup-off sweep in
+  `dist/izanami-liveness-matrix-20k-inline-backup-narrow-60s-20260511-022450`
+  showed why 60s samples are not enough: `1216` passed once with `487.42`
+  committed TPS and peer p95 `2.938s`, while `1152` and `1184` already showed
+  peer p95 above the `3s` line.
+- The 120s confirmation in
+  `dist/izanami-liveness-matrix-20k-inline-backup-confirm-120s-20260511-022926`
+  rejected `1216` backup-off as a stable cap: it accepted all ingress but
+  failed the cadence gate at parsed peer p95 `3.306s`. The same run confirmed
+  `1120` backup-off as stable with `2,400,000` submissions accepted, strict
+  height `52`, `56,198` approved transactions, `468.32` committed TPS, runner
+  p95 `2506ms`, parsed peer p95 `2.919s`, and zero view-change installs.
+- The same-binary 120s backup-on confirmation in
+  `dist/izanami-liveness-matrix-20k-inline-backup-on-confirm-120s-20260511-023458`
+  passed with `468.01` committed TPS, runner p95 `2507ms`, parsed peer p95
+  `2.913s`, and zero view-change installs. Conclusion: backup-off is a useful
+  explicit experiment knob and safe at cap `1120`, but it does not justify
+  raising the accepted cap or changing the default recovery posture.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo test -p iroha_core --lib backup_transport -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo test -p iroha_torii --test connect_gating --no-run`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo test -p izanami sumeragi -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo test -p izanami roundtrip -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo build --release -p izanami --bin izanami`
+  - `python3 -m py_compile scripts/run_izanami_liveness_matrix.py`
+  - `rustfmt --edition 2024 --check crates/iroha_config/src/parameters/defaults.rs crates/iroha_config/src/parameters/actual.rs crates/iroha_config/src/parameters/user.rs crates/iroha_config/tests/fixtures.rs crates/iroha_torii/src/test_utils.rs crates/iroha_torii/tests/connect_gating.rs crates/iroha_core/src/kiso.rs crates/iroha_core/src/sumeragi/penalties.rs crates/iroha_core/src/sumeragi/main_loop/rbc.rs crates/iroha_core/src/sumeragi/main_loop/propose.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs crates/izanami/src/config.rs crates/izanami/src/main.rs crates/izanami/src/persistence.rs crates/izanami/src/chaos.rs`
+  - `git diff --check`
+  - 60s, narrow 60s, and 120s 20k Izanami inline-backup matrices listed above.
+
+## 2026-05-11 Izanami collector fanout matrix
+
+- Izanami now also exposes NPoS collector fanout as matrixable runtime inputs:
+  `--sumeragi-collectors-k` and
+  `--sumeragi-collectors-redundant-send-r`. The values are parsed from CLI,
+  persisted in stored Izanami run arguments, and injected into generated
+  Sumeragi genesis parameters.
+- `scripts/run_izanami_liveness_matrix.py` accepts optional row suffixes
+  `:collectors_k:redundant_send_r` and records those columns in
+  `summary.csv`/`summary.md`, allowing consensus fanout rows to be compared
+  without source edits.
+- The 60s collector matrix in
+  `dist/izanami-liveness-matrix-20k-collectors-60s-20260511-012322` compared
+  the existing `1024/4/4` baseline with lower redundancy. `1024/3/3` regressed
+  committed TPS and parsed peer p95, while `1088/3/3` passed the runner gate
+  with `1,200,000` accepted submissions, `455.78` committed TPS, runner p95
+  `2501ms`, parsed peer p95 `2.918s`, and zero view-change installs.
+  `1280/3/3` still failed the hard `3s` p95 gate.
+- The first 120s confirmation in
+  `dist/izanami-liveness-matrix-20k-collectors-confirm-120s-20260511-012933`
+  promoted `1088/3/3` over `1024/4/4`: it accepted all `2,400,000`
+  submissions, reached strict height `52`, approved `54,475` transactions,
+  committed `453.96` TPS, held runner strict p95 to `2505ms`, and had parsed
+  peer p95 `2.928s`.
+- A narrower 60s sweep in
+  `dist/izanami-liveness-matrix-20k-collectors-narrow-60s-20260511-013755`
+  found a better candidate at `1120/3/3`: `467.35` committed TPS, runner p95
+  `2502ms`, parsed peer p95 `2.749s`, and only one parsed peer gap over `3s`.
+  `1152` and `1216` runner-passed but had parsed peer p95 at or above `3s`.
+- The 120s confirmation in
+  `dist/izanami-liveness-matrix-20k-collectors-cap1120-confirm-120s-20260511-014406`
+  makes `1120/3/3` the current best confirmed point: `2,400,000` submissions
+  accepted, strict height `53`, `57,265` approved transactions, `477.21`
+  committed TPS, runner strict p95 `2506ms`, parsed peer p95 `2.856s`, and
+  zero view-change installs.
+- Conclusion: reducing collector redundancy from `4/4` to `3/3` gives a small
+  safe-cap improvement when paired with cap `1120`, but it does not change the
+  core throughput order of magnitude. The next work remains DA/RBC/QC and
+  application/queue-drain tail latency reduction so larger blocks can stay
+  under the 2-3s liveness SLO.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-collectors-20260511 cargo test -p izanami sumeragi -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-collectors-20260511 cargo test -p izanami roundtrip -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-collectors-20260511 cargo build --release -p izanami --bin izanami`
+  - `python3 -m py_compile scripts/run_izanami_liveness_matrix.py`
+  - `rustfmt --edition 2024 --check crates/izanami/src/chaos.rs crates/izanami/src/config.rs crates/izanami/src/main.rs crates/izanami/src/persistence.rs`
+  - `git diff --check`
+  - 60s, 120s, narrow 60s, and cap-1120 120s 20k Izanami collector fanout
+    matrices listed above.
+
+## 2026-05-11 Sumeragi post-commit pacemaker kick
+
+- Resolved the pending Sumeragi/ISI merge index forward without textual conflict
+  markers. The retained resolution keeps the commit-QC/vote replay paths,
+  detached-transfer call-hash fixtures, account-admission/SNS behavior, and
+  registry-side changes intact.
+- Durable commit completion now kickstarts the pacemaker when transactions are
+  queued and the only proposal backpressure is transaction-queue saturation or
+  consensus-queue pacing. Active pending blocks, RBC backlog, and relay
+  backpressure remain hard stops.
+- Focused coverage now verifies post-commit kickstart behavior for queued work
+  with no backpressure, queue-only saturation, consensus-queue-only pacing, hard
+  active/RBC/relay blockers, and an empty transaction queue.
+- The rebuilt 20k FASTPQ GPU liveness gate at
+  `dist/izanami-prebuilt-20k-fastpq-gpu-postcommit-kick-120s-20260511-011906`
+  reached strict/quorum height `42` by `105.06s` and accepted all `2,101,351`
+  offered submissions with zero failures before the hard cadence gate stopped
+  the run. It missed the `3s` p95 block-interval threshold narrowly:
+  quorum/strict p95 was `3002ms` across `37` samples. The run still showed
+  queue saturation, ending around `759k` queued transactions in peer heartbeat
+  samples before shutdown.
+- Validation:
+  - `cargo test -p iroha_core --lib kickstart_pacemaker_after_commit_triggers_only_when_allowed -- --nocapture`
+  - `cargo test -p iroha_core --lib evaluate_pacemaker -- --nocapture`
+  - `cargo test -p iroha_core --lib starv -- --nocapture`
+  - `cargo clippy -p iroha_core --tests -- -D warnings`
+  - `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`
+  - 120s 20k Izanami FASTPQ GPU liveness gate with
+    `--latency-p95-threshold 3s` (failed at `3002ms` p95).
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+
+## 2026-05-11 Izanami 20k liveness matrix
+
+- Izanami now exposes the Sumeragi block payload tuning knobs directly:
+  `--sumeragi-block-max-transactions` and
+  `--sumeragi-proposal-queue-scan-multiplier`. The values are persisted in
+  stored Izanami run arguments and flow into both genesis block parameters and
+  runtime Sumeragi config, so matrix runs no longer require source edits.
+- Added `scripts/run_izanami_liveness_matrix.py` to run repeatable 20k ingress
+  sweeps and emit `summary.csv`/`summary.md` with accepted submissions,
+  committed transaction rate, runner block-interval p95, parsed peer commit-gap
+  p95/max, queue saturation, and view-change counters.
+- The 60s pilot matrix in
+  `dist/izanami-liveness-matrix-20k-60s-20260511-003049` tested caps `1024`,
+  `1280`, `1536`, and `2048` with scan/pipeline variants. All rows accepted
+  the offered load, but only `1024` was comfortably inside the peer-observed
+  3s p95 cadence target (`2.723s`). `1280` passed the runner gate for 60s but
+  already had parsed peer p95 `3.069s`; `1536+` failed.
+- The 120s confirm matrix in
+  `dist/izanami-liveness-matrix-20k-confirm-120s-20260511-004146` keeps
+  `1024` as the safe cap: it accepted all `2,400,000` submissions, reached
+  strict height `52`, had zero view-change installs, runner strict interval p95
+  `2506ms`, parsed peer p95 `2.903s`, and committed `51,550` transactions
+  (`429.58 TPS`). `1280` failed at the target checkpoint with runner p95
+  `3002ms` and parsed peer p95 `3.236s`.
+- The narrower 120s matrix in
+  `dist/izanami-liveness-matrix-20k-narrow-120s-20260511-004711` shows no
+  confirmed cap headroom above `1024`: `1088`, `1152`, and `1216` all failed
+  the 3s runner p95 gate and had parsed peer p95 from `3.271s` to `3.369s`.
+- Conclusion: the current code can sustain 20k ingress while keeping consensus
+  live at the 1,024-transaction cap, but it is not close to 20k committed TPS.
+  With 2-3s blocks, reaching 20k committed TPS requires tens of thousands of
+  safe transactions per block or equivalent parallelization. The next hard work
+  is reducing DA/QC/application tail latency and queue-drain cost enough to
+  raise the safe block payload without sacrificing the liveness gate.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-matrix-20260511 cargo test -p izanami sumeragi_block -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-matrix-20260511 cargo test -p izanami roundtrip -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-matrix-20260511 cargo build --release -p izanami --bin izanami`
+  - `python3 -m py_compile scripts/run_izanami_liveness_matrix.py`
+  - `rustfmt --edition 2024 --check crates/izanami/src/chaos.rs crates/izanami/src/config.rs crates/izanami/src/main.rs crates/izanami/src/persistence.rs`
+  - `git diff --check`
+  - 60s pilot, 120s confirm, and 120s narrow 20k Izanami liveness matrices
+    listed above.
+
+## 2026-05-10 Izanami consensus liveness target
+
+- The 20k Izanami gate is now treated as a block-production liveness test first:
+  accepted submissions are not sufficient if consensus stalls. The working SLO
+  is sustained 20k ingress while peers continue committing blocks at roughly a
+  2-3s cadence.
+- Cadence analysis of
+  `dist/izanami-prebuilt-20k-fastpq-gpu-cert-vote-replay-120s-20260510-154724`
+  shows the 4,096-transaction cap is not stable enough for that SLO: inter-block
+  gaps averaged `7.20s`, p50 was `6.10s`, p95 was `13.62s`, and all `62`
+  measured gaps exceeded `3s`. The steady post-QC persist segment alone was
+  about `2.31s` p50 / `2.67s` p95, leaving no room for proposal, validation,
+  and QC formation.
+- The comparable 2,048-cap 20k control artifact
+  `dist/izanami-prebuilt-20k-age-ring-cap2048-120s-20260430-170353` accepted
+  all `2,400,000` submissions, reached strict height `66`, had zero view-change
+  installs, and kept inter-block cadence at p50 `1.80s` / p95 `2.91s`.
+- The current-code 2,048-cap rerun
+  `dist/izanami-prebuilt-20k-liveness2048-current-120s-20260510-211240`
+  accepted all `2,400,000` submissions with zero failures and zero view-change
+  installs, but it only reached strict height `34`; inter-block cadence was p50
+  `3.54s`, p95 `4.54s`, and max `5.77s`.
+- The current-code 1,024-cap rerun
+  `dist/izanami-prebuilt-20k-liveness1024-current-120s-20260510-212330`
+  accepted all `2,400,000` submissions with zero failures and zero view-change
+  installs, reached strict height `52`, and kept inter-block cadence at p50
+  `2.28s` / p95 `2.94s` / max `3.32s` across `200` measured gaps. Stage timing
+  split was p95 `1.50s` from previous commit to validation, `0.88s` from
+  validation to QC, and `0.95s` from QC to commit, with no slow commit-stage
+  lines. Izanami's high-TPS harness cap is therefore `1,024` transactions per
+  block until block application and queue-drain optimizations can raise the cap
+  without reintroducing stalls.
+- Izanami now accepts `--latency-p95-threshold` on duration-only runs. When no
+  `--target-blocks` KPI is configured, the harness derives a soft block target
+  from `duration / threshold`, reuses the block-progress monitor until the
+  duration deadline, and treats missing interval samples as a hard failure
+  because the run cannot prove consensus liveness. Izanami summaries now also
+  emit final quorum/strict block-interval p50, p95, and sample counts when the
+  progress monitor is active.
+- The cadence-gated 1,024-cap run
+  `dist/izanami-prebuilt-20k-liveness1024-gated-120s-20260510-220144` used
+  `--latency-p95-threshold 3s`, accepted all `2,400,000` submissions with zero
+  failures, reported submit latency p50 `2ms` / p95 `4ms`, reached strict
+  height `52`, and passed the hard p95 block-interval gate. Parsed peer commit
+  gaps were p50 `2.28s`, p95 `2.97s`, and max `3.38s` across `200` measured
+  gaps. Proposal-to-commit timing from peer logs was p95 `2.26s`, split between
+  proposal-to-QC p95 `1.42s` and QC-to-commit p95 `0.95s`. The queue still
+  saturated (`862,671 / 2,400,000`), so the next optimization target is applied
+  throughput and queue drain without losing the 2-3s block cadence.
+- Validation:
+  - Parsed existing 20k Izanami peer stdout logs for commit-gap,
+    validation-to-QC, and QC-to-commit timing.
+  - `rustfmt --edition 2024 --check crates/izanami/src/chaos.rs crates/izanami/src/config.rs`
+  - `cargo test -p izanami latency -- --nocapture`
+  - `cargo test -p izanami block_interval -- --nocapture`
+  - `git diff --check -- crates/izanami/src/chaos.rs crates/izanami/src/config.rs roadmap.md status.md`
+  - `cargo test -p izanami make_network_builder_applies_pipeline_time -- --nocapture`
+  - `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`
+  - `cargo build --release -p izanami --bin izanami`
+  - 120s 20k Izanami liveness gates at the 2,048 and 1,024 transaction caps,
+    plus the 1,024-cap gated rerun with `--latency-p95-threshold 3s`.
 
 ## 2026-05-10 Sumeragi commit-QC recovery and cert-only vote replay
 
@@ -68,9 +525,10 @@ Last updated: 2026-05-10
 - The 8,192 and 16,384 max-transaction experiments did not improve the 20k
   gate. The 16,384 run no longer self-aborted after the larger-batch grace, but
   regressed into multi-second validation/merge waits and commit-inflight churn;
-  the 8,192 run tied the earlier approval count with worse latency/churn. The
-  Izanami high-TPS stable profile therefore stays at the proven 4,096 block
-  cap.
+  the 8,192 run tied the earlier approval count with worse latency/churn. That
+  pass kept the Izanami high-TPS profile at the then-current 4,096 block cap,
+  but the later liveness analysis above moves the harness to 1,024 while block
+  cadence is the primary gate.
 - Final-code 20k FASTPQ GPU gate evidence:
   `dist/izanami-prebuilt-20k-fastpq-gpu-low-contention-8192-block4096-finalcode-120s-20260510-153218`
   accepted and succeeded all `2,400,000` submissions with zero failures,
@@ -516,6 +974,53 @@ Last updated: 2026-05-10
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-full cargo test -p iroha_core --lib list_and_count_filter_by_tag_and_status -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-full cargo test -p iroha_core --lib maybe_force_view_change_for_stalled_pending_honors_fresh_validation_worker_floor_under_tx_backlog -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-full cargo test -p iroha_torii`
+## 2026-05-10 BLS admission aggregate precheck
+
+- `ValidBlock::validate` now runs BLS transaction signature micro-batch
+  prechecks during static validation, before duplicate-payload rejection, and
+  feeds those prechecked results into transaction admission. Height-1 BLS
+  transactions with aggregate-prechecked bad signatures are rejected instead of
+  slipping through the genesis transaction shortcut.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --test admission_batching --features bls,telemetry bls_ -- --nocapture`
+  - `cargo test -p iroha_core --test admission_batching --features bls,telemetry -- --nocapture`
+  - `cargo check -p iroha_core --features bls`
+  - `git diff --check`
+
+## 2026-05-10 Sumeragi missing-QC recovery ordering
+
+- Empty contiguous-frontier `missing_qc` idle ticks now use the unified
+  frontier recovery arming pass only for the initial view. Post-rotation rounds
+  with no actionable frontier dependency rotate at the base timeout, so stale
+  block/control ingress cannot permanently suppress idle recovery.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_allows_empty_frontier_after_stale_block_ingress_without_progress -- --nocapture`
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_no_actionable_dependency_rotates_after_base_timeout -- --nocapture`
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_arms_nonleader_empty_frontier_recovery_after_pacemaker_attempt -- --nocapture`
+  - `git diff --check`
+
+## 2026-05-09 iroha_core library regression sweep
+
+- Repaired the broad `iroha_core` library regression set covering block
+  stateless validation, genesis parameter transaction fixtures, network gossip
+  roundtrips, IVM admission/host policy checks, FastPQ transfer transcript
+  call-hash fixtures, SNS/account-admission transfer flows, domain NFT cleanup,
+  block-sync RBC ingress handling, Sumeragi roster/QC/vote recovery, cached
+  proposal rotation, VRF reveal routing, and proposal timing.
+- Sumeragi vote/QC handling now validates cached and replayed evidence against
+  the roster context used to aggregate it, preserves fresh cached frontier
+  proposals before their repair window expires, and signs NPoS VRF reveal test
+  messages with the peer selected by the effective commit topology.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib external_vrf_reveal_broadcasts_after_acceptance -- --nocapture`
+  - `cargo test -p iroha_core --lib on_block_message_handles_vrf_reveal_before_commit_catchup_finalizes_epoch -- --nocapture`
+  - `cargo test -p iroha_core --lib assemble_proposal_allows_stale_retired_prior_view_local_vote_history -- --nocapture`
+  - `cargo test -p iroha_core --lib pacemaker_does_not_rotate_fresh_cached_frontier_proposal_before_body_materializes -- --nocapture`
+  - `cargo test -p iroha_core --lib cached_recovery_proposal_ -- --nocapture`
+  - `cargo test -p iroha_core --lib` (`5530` passed, `0` failed, `22` ignored)
 
 ## 2026-05-09 FASTPQ GPU Izanami fallback cleanup
 

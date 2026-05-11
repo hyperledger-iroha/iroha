@@ -669,6 +669,101 @@ mod tests {
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
 
+    fn framed_instruction_payload<T>(value: &T) -> Vec<u8>
+    where
+        T: crate::isi::Instruction
+            + norito::codec::Encode
+            + 'static
+            + norito::core::NoritoSerialize,
+    {
+        let (payload, flags) = norito::codec::encode_with_header_flags(value);
+        norito::core::frame_bare_with_header_flags::<T>(&payload, flags)
+            .expect("frame instruction payload")
+    }
+
+    fn raw_instruction_payload<T>(value: &T) -> Vec<u8>
+    where
+        T: crate::isi::Instruction + norito::codec::Encode,
+    {
+        let (payload, _) = norito::codec::encode_with_header_flags(value);
+        payload
+    }
+
+    fn framed_instruction_payload_with_tag<T>(value: &T, tag: u32) -> Vec<u8>
+    where
+        T: crate::isi::Instruction
+            + norito::codec::Encode
+            + 'static
+            + norito::core::NoritoSerialize,
+    {
+        let (mut payload, flags) = norito::codec::encode_with_header_flags(value);
+        payload
+            .get_mut(..4)
+            .expect("boxed instruction payload starts with a variant tag")
+            .copy_from_slice(&tag.to_le_bytes());
+        norito::core::frame_bare_with_header_flags::<T>(&payload, flags)
+            .expect("frame instruction payload")
+    }
+
+    fn assert_default_registry_rejects_payload<T>(wire_id: &str, value: T)
+    where
+        T: crate::isi::Instruction
+            + norito::codec::Encode
+            + 'static
+            + norito::core::NoritoSerialize,
+    {
+        let registry = default();
+        let framed = framed_instruction_payload(&value);
+        let decoded = registry
+            .decode(wire_id, &framed)
+            .expect("canonical wire id remains registered");
+
+        assert!(
+            decoded.is_err(),
+            "{wire_id} must reject payload encoded for {}",
+            std::any::type_name::<T>()
+        );
+    }
+
+    fn assert_default_registry_rejects_framed_payload(wire_id: &str, framed: &[u8], source: &str) {
+        let registry = default();
+        let decoded = registry
+            .decode(wire_id, framed)
+            .expect("canonical wire id remains registered");
+
+        assert!(
+            decoded.is_err(),
+            "{wire_id} must reject framed payload encoded for {source}"
+        );
+    }
+
+    fn settlement_leg(from: AccountId, to: AccountId, quantity: u32) -> settlement::SettlementLeg {
+        settlement::SettlementLeg::new(asset_definition_id(), quantity.into(), from, to)
+    }
+
+    fn assert_instruction_box_uses_wire_id(
+        instruction: InstructionBox,
+        expected_wire_id: &str,
+        expected_type_name: &'static str,
+    ) {
+        let (wire_id, framed) = super::super::encoded_instruction_pair_payload(&instruction)
+            .expect("instruction is registered for pair encoding");
+        assert_eq!(
+            wire_id, expected_wire_id,
+            "InstructionBox conversion must use canonical boxed wire id"
+        );
+
+        let decoded = default()
+            .decode(wire_id, &framed)
+            .expect("encoded wire id is registered")
+            .expect("encoded payload decodes");
+        assert_eq!(
+            crate::isi::Instruction::id(&*decoded),
+            expected_type_name,
+            "pair payload should decode back into the canonical boxed family"
+        );
+    }
+
     #[test]
     fn default_registry_registers_public_lane_validator() {
         let registry = default();
@@ -691,6 +786,23 @@ mod tests {
         assert!(registry.contains(std::any::type_name::<
             crate::isi::kaigi::ReportKaigiRelayHealth,
         >()));
+    }
+
+    #[test]
+    fn instruction_registry_wire_ids_are_unique_and_registered_as_lookup_keys() {
+        let registry = default();
+        let mut seen = std::collections::BTreeMap::new();
+
+        for name in registry.names() {
+            let wire_id = registry.wire_id(name).expect("registered type has wire id");
+            assert!(
+                registry.contains(wire_id),
+                "{wire_id} must be a lookup key for {name}"
+            );
+            if let Some(previous) = seen.insert(wire_id, name) {
+                panic!("wire id collision: {wire_id} registered for {previous} and {name}");
+            }
+        }
     }
 
     #[test]
@@ -761,6 +873,514 @@ mod tests {
                 !registry.contains(wire_id),
                 "{wire_id} must not be in default registry"
             );
+        }
+    }
+
+    #[test]
+    fn instruction_registry_does_not_decode_removed_direct_wire_ids() {
+        let registry = default();
+        let direct_repo = repo::RepoMarginCallIsi::new(
+            "registry_repo_margin".parse().expect("repo agreement id"),
+        );
+        let direct_dvp = settlement::DvpIsi::new(
+            "registry_settlement".parse().expect("settlement id"),
+            settlement_leg(account(0xB1), account(0xB2), 10),
+            settlement_leg(account(0xB2), account(0xB1), 11),
+            settlement::SettlementPlan::default(),
+        );
+
+        let direct_repo_payload = framed_instruction_payload(&direct_repo);
+        let direct_dvp_payload = framed_instruction_payload(&direct_dvp);
+
+        assert!(
+            registry
+                .decode(repo::RepoMarginCallIsi::WIRE_ID, &direct_repo_payload)
+                .is_none(),
+            "removed repo direct wire id must stay undecodable"
+        );
+        assert!(
+            registry
+                .decode(settlement::DvpIsi::WIRE_ID, &direct_dvp_payload)
+                .is_none(),
+            "removed settlement direct wire id must stay undecodable"
+        );
+    }
+
+    #[test]
+    fn instruction_registry_rejects_unknown_and_near_miss_wire_ids() {
+        let registry = default();
+        let register_box = RegisterBox::Domain(Register::domain(Domain::new(domain_id())));
+        let framed = framed_instruction_payload(&register_box);
+
+        for wire_id in [
+            "",
+            "iroha.register ",
+            "iroha.Register",
+            "iroha.register/Domain",
+            "iroha.repo.initiate",
+            "iroha.settlement.dvp",
+            "iroha.unknown.instruction",
+        ] {
+            assert!(
+                registry.decode(wire_id, &framed).is_none(),
+                "{wire_id:?} must not decode as a default instruction"
+            );
+        }
+    }
+
+    #[test]
+    fn instruction_registry_does_not_decode_removed_direct_type_names() {
+        let registry = default();
+        let direct_register = Register::domain(Domain::new(domain_id()));
+        let direct_mint = Mint::asset_numeric(9_u32, asset_id());
+        let direct_metadata = SetKeyValue::domain(
+            domain_id(),
+            "legacy".parse().expect("metadata key"),
+            iroha_primitives::json::Json::new("value"),
+        );
+
+        for (type_name, framed) in [
+            (
+                std::any::type_name::<Register<Domain>>(),
+                framed_instruction_payload(&direct_register),
+            ),
+            (
+                std::any::type_name::<Mint<Numeric, Asset>>(),
+                framed_instruction_payload(&direct_mint),
+            ),
+            (
+                std::any::type_name::<SetKeyValue<Domain>>(),
+                framed_instruction_payload(&direct_metadata),
+            ),
+        ] {
+            assert!(
+                registry.decode(type_name, &framed).is_none(),
+                "{type_name} must not decode through removed direct type-name lookup"
+            );
+        }
+    }
+
+    #[test]
+    fn public_instruction_pair_helpers_reject_removed_direct_names() {
+        let direct_register = Register::domain(Domain::new(domain_id()));
+        let direct_mint = Mint::asset_numeric(9_u32, asset_id());
+        let direct_repo = repo::RepoMarginCallIsi::new(
+            "registry_repo_pair_helper"
+                .parse()
+                .expect("repo agreement id"),
+        );
+        let direct_dvp = settlement::DvpIsi::new(
+            "registry_settlement_pair_helper"
+                .parse()
+                .expect("settlement id"),
+            settlement_leg(account(0xD1), account(0xD2), 70),
+            settlement_leg(account(0xD2), account(0xD1), 71),
+            settlement::SettlementPlan::default(),
+        );
+
+        for (removed_name, raw_payload, framed_payload) in [
+            (
+                std::any::type_name::<Register<Domain>>(),
+                raw_instruction_payload(&direct_register),
+                framed_instruction_payload(&direct_register),
+            ),
+            (
+                std::any::type_name::<Mint<Numeric, Asset>>(),
+                raw_instruction_payload(&direct_mint),
+                framed_instruction_payload(&direct_mint),
+            ),
+            (
+                repo::RepoMarginCallIsi::WIRE_ID,
+                raw_instruction_payload(&direct_repo),
+                framed_instruction_payload(&direct_repo),
+            ),
+            (
+                settlement::DvpIsi::WIRE_ID,
+                raw_instruction_payload(&direct_dvp),
+                framed_instruction_payload(&direct_dvp),
+            ),
+        ] {
+            assert!(
+                crate::isi::frame_instruction_payload(removed_name, &raw_payload).is_err(),
+                "{removed_name} must not be frameable through the public helper"
+            );
+            assert!(
+                crate::isi::decode_instruction_from_pair(removed_name, &framed_payload).is_err(),
+                "{removed_name} must not be decodable through the public pair helper"
+            );
+        }
+    }
+
+    #[test]
+    fn instruction_box_from_grouped_direct_variants_uses_boxed_wire_ids() {
+        assert_instruction_box_uses_wire_id(
+            Register::domain(Domain::new(domain_id())).into(),
+            RegisterBox::WIRE_ID,
+            std::any::type_name::<RegisterBox>(),
+        );
+        assert_instruction_box_uses_wire_id(
+            Mint::asset_numeric(12_u32, asset_id()).into(),
+            MintBox::WIRE_ID,
+            std::any::type_name::<MintBox>(),
+        );
+        assert_instruction_box_uses_wire_id(
+            SetKeyValue::domain(
+                domain_id(),
+                "canonical".parse().expect("metadata key"),
+                iroha_primitives::json::Json::new("boxed"),
+            )
+            .into(),
+            SetKeyValueBox::WIRE_ID,
+            std::any::type_name::<SetKeyValueBox>(),
+        );
+        assert_instruction_box_uses_wire_id(
+            repo::RepoMarginCallIsi::new(
+                "registry_repo_conversion"
+                    .parse()
+                    .expect("repo agreement id"),
+            )
+            .into(),
+            repo::RepoInstructionBox::WIRE_ID,
+            std::any::type_name::<repo::RepoInstructionBox>(),
+        );
+        assert_instruction_box_uses_wire_id(
+            settlement::DvpIsi::new(
+                "registry_settlement_conversion"
+                    .parse()
+                    .expect("settlement id"),
+                settlement_leg(account(0xD3), account(0xD4), 80),
+                settlement_leg(account(0xD4), account(0xD3), 81),
+                settlement::SettlementPlan::default(),
+            )
+            .into(),
+            settlement::SettlementInstructionBox::WIRE_ID,
+            std::any::type_name::<settlement::SettlementInstructionBox>(),
+        );
+    }
+
+    #[test]
+    fn instruction_registry_rejects_removed_direct_names_with_boxed_payloads() {
+        let register_box = RegisterBox::Domain(Register::domain(Domain::new(domain_id())));
+        let mint_box = MintBox::Asset(Mint::asset_numeric(14_u32, asset_id()));
+        let repo_box = repo::RepoInstructionBox::MarginCall(repo::RepoMarginCallIsi::new(
+            "registry_repo_removed_name_boxed"
+                .parse()
+                .expect("repo agreement id"),
+        ));
+        let settlement_box = settlement::SettlementInstructionBox::Dvp(settlement::DvpIsi::new(
+            "registry_settlement_removed_name_boxed"
+                .parse()
+                .expect("settlement id"),
+            settlement_leg(account(0xD5), account(0xD6), 90),
+            settlement_leg(account(0xD6), account(0xD5), 91),
+            settlement::SettlementPlan::default(),
+        ));
+
+        for (removed_name, boxed_payload) in [
+            (
+                std::any::type_name::<Register<Domain>>(),
+                framed_instruction_payload(&register_box),
+            ),
+            (
+                std::any::type_name::<Mint<Numeric, Asset>>(),
+                framed_instruction_payload(&mint_box),
+            ),
+            (
+                std::any::type_name::<repo::RepoMarginCallIsi>(),
+                framed_instruction_payload(&repo_box),
+            ),
+            (
+                repo::RepoMarginCallIsi::WIRE_ID,
+                framed_instruction_payload(&repo_box),
+            ),
+            (
+                std::any::type_name::<settlement::DvpIsi>(),
+                framed_instruction_payload(&settlement_box),
+            ),
+            (
+                settlement::DvpIsi::WIRE_ID,
+                framed_instruction_payload(&settlement_box),
+            ),
+        ] {
+            assert!(
+                default().decode(removed_name, &boxed_payload).is_none(),
+                "{removed_name} must not alias a canonical boxed payload"
+            );
+            assert!(
+                crate::isi::decode_instruction_from_pair(removed_name, &boxed_payload).is_err(),
+                "{removed_name} must not decode through the public pair helper"
+            );
+        }
+    }
+
+    #[test]
+    fn instruction_registry_frame_helper_rejects_direct_payloads_under_boxed_ids() {
+        let direct_register = Register::domain(Domain::new(domain_id()));
+        let direct_mint = Mint::asset_numeric(15_u32, asset_id());
+        let direct_repo = repo::RepoMarginCallIsi::new(
+            "registry_repo_frame_spoof"
+                .parse()
+                .expect("repo agreement id"),
+        );
+        let direct_dvp = settlement::DvpIsi::new(
+            "registry_settlement_frame_spoof"
+                .parse()
+                .expect("settlement id"),
+            settlement_leg(account(0xD7), account(0xD8), 100),
+            settlement_leg(account(0xD8), account(0xD7), 101),
+            settlement::SettlementPlan::default(),
+        );
+
+        for (boxed_wire_id, raw_payload) in [
+            (
+                RegisterBox::WIRE_ID,
+                raw_instruction_payload(&direct_register),
+            ),
+            (MintBox::WIRE_ID, raw_instruction_payload(&direct_mint)),
+            (
+                repo::RepoInstructionBox::WIRE_ID,
+                raw_instruction_payload(&direct_repo),
+            ),
+            (
+                settlement::SettlementInstructionBox::WIRE_ID,
+                raw_instruction_payload(&direct_dvp),
+            ),
+        ] {
+            let spoofed = crate::isi::frame_instruction_payload(boxed_wire_id, &raw_payload)
+                .expect("canonical boxed wire id is frameable");
+            assert!(
+                crate::isi::decode_instruction_from_pair(boxed_wire_id, &spoofed).is_err(),
+                "{boxed_wire_id} must reject framed bytes sourced from a direct legacy payload"
+            );
+        }
+    }
+
+    #[test]
+    fn instruction_registry_rejects_unframed_canonical_payloads() {
+        let register_box = RegisterBox::Domain(Register::domain(Domain::new(domain_id())));
+        let repo_box = repo::RepoInstructionBox::MarginCall(repo::RepoMarginCallIsi::new(
+            "registry_repo_unframed".parse().expect("repo agreement id"),
+        ));
+        let settlement_box = settlement::SettlementInstructionBox::Dvp(settlement::DvpIsi::new(
+            "registry_settlement_unframed"
+                .parse()
+                .expect("settlement id"),
+            settlement_leg(account(0xC1), account(0xC2), 50),
+            settlement_leg(account(0xC2), account(0xC1), 51),
+            settlement::SettlementPlan::default(),
+        ));
+
+        for (wire_id, payload, source) in [
+            (
+                RegisterBox::WIRE_ID,
+                raw_instruction_payload(&register_box),
+                std::any::type_name::<RegisterBox>(),
+            ),
+            (
+                repo::RepoInstructionBox::WIRE_ID,
+                raw_instruction_payload(&repo_box),
+                std::any::type_name::<repo::RepoInstructionBox>(),
+            ),
+            (
+                settlement::SettlementInstructionBox::WIRE_ID,
+                raw_instruction_payload(&settlement_box),
+                std::any::type_name::<settlement::SettlementInstructionBox>(),
+            ),
+        ] {
+            assert_default_registry_rejects_framed_payload(wire_id, &payload, source);
+        }
+    }
+
+    #[test]
+    fn instruction_registry_rejects_trailing_bytes_after_valid_frames() {
+        let register_box = RegisterBox::Domain(Register::domain(Domain::new(domain_id())));
+        let repo_box = repo::RepoInstructionBox::MarginCall(repo::RepoMarginCallIsi::new(
+            "registry_repo_trailing".parse().expect("repo agreement id"),
+        ));
+        let settlement_box = settlement::SettlementInstructionBox::Dvp(settlement::DvpIsi::new(
+            "registry_settlement_trailing"
+                .parse()
+                .expect("settlement id"),
+            settlement_leg(account(0xC3), account(0xC4), 60),
+            settlement_leg(account(0xC4), account(0xC3), 61),
+            settlement::SettlementPlan::default(),
+        ));
+
+        for (wire_id, mut framed, source) in [
+            (
+                RegisterBox::WIRE_ID,
+                framed_instruction_payload(&register_box),
+                std::any::type_name::<RegisterBox>(),
+            ),
+            (
+                repo::RepoInstructionBox::WIRE_ID,
+                framed_instruction_payload(&repo_box),
+                std::any::type_name::<repo::RepoInstructionBox>(),
+            ),
+            (
+                settlement::SettlementInstructionBox::WIRE_ID,
+                framed_instruction_payload(&settlement_box),
+                std::any::type_name::<settlement::SettlementInstructionBox>(),
+            ),
+        ] {
+            framed.extend_from_slice(&[0xAA, 0x55]);
+            assert_default_registry_rejects_framed_payload(wire_id, &framed, source);
+        }
+    }
+
+    #[test]
+    fn instruction_registry_rejects_direct_payloads_spoofed_as_boxes() {
+        assert_default_registry_rejects_payload(
+            RegisterBox::WIRE_ID,
+            Register::domain(Domain::new(domain_id())),
+        );
+        assert_default_registry_rejects_payload(
+            MintBox::WIRE_ID,
+            Mint::asset_numeric(7_u32, asset_id()),
+        );
+        assert_default_registry_rejects_payload(
+            SetKeyValueBox::WIRE_ID,
+            SetKeyValue::domain(
+                domain_id(),
+                "spoofed".parse().expect("metadata key"),
+                iroha_primitives::json::Json::new("value"),
+            ),
+        );
+        assert_default_registry_rejects_payload(
+            repo::RepoInstructionBox::WIRE_ID,
+            repo::RepoMarginCallIsi::new("registry_repo_spoof".parse().expect("repo agreement id")),
+        );
+        assert_default_registry_rejects_payload(
+            settlement::SettlementInstructionBox::WIRE_ID,
+            settlement::DvpIsi::new(
+                "registry_settlement_spoof".parse().expect("settlement id"),
+                settlement_leg(account(0xB3), account(0xB4), 20),
+                settlement_leg(account(0xB4), account(0xB3), 21),
+                settlement::SettlementPlan::default(),
+            ),
+        );
+    }
+
+    #[test]
+    fn instruction_registry_rejects_cross_family_box_payloads() {
+        let register_box = RegisterBox::Domain(Register::domain(Domain::new(domain_id())));
+        let repo_box = repo::RepoInstructionBox::MarginCall(repo::RepoMarginCallIsi::new(
+            "registry_repo_cross_family"
+                .parse()
+                .expect("repo agreement id"),
+        ));
+        let settlement_box = settlement::SettlementInstructionBox::Dvp(settlement::DvpIsi::new(
+            "registry_settlement_cross_family"
+                .parse()
+                .expect("settlement id"),
+            settlement_leg(account(0xB5), account(0xB6), 30),
+            settlement_leg(account(0xB6), account(0xB5), 31),
+            settlement::SettlementPlan::default(),
+        ));
+
+        assert_default_registry_rejects_framed_payload(
+            MintBox::WIRE_ID,
+            &framed_instruction_payload(&register_box),
+            std::any::type_name::<RegisterBox>(),
+        );
+        assert_default_registry_rejects_framed_payload(
+            settlement::SettlementInstructionBox::WIRE_ID,
+            &framed_instruction_payload(&repo_box),
+            std::any::type_name::<repo::RepoInstructionBox>(),
+        );
+        assert_default_registry_rejects_framed_payload(
+            repo::RepoInstructionBox::WIRE_ID,
+            &framed_instruction_payload(&settlement_box),
+            std::any::type_name::<settlement::SettlementInstructionBox>(),
+        );
+    }
+
+    #[test]
+    fn instruction_registry_rejects_cross_family_payloads_through_type_name_aliases() {
+        let register_box = RegisterBox::Domain(Register::domain(Domain::new(domain_id())));
+        let repo_box = repo::RepoInstructionBox::MarginCall(repo::RepoMarginCallIsi::new(
+            "registry_repo_cross_type_name"
+                .parse()
+                .expect("repo agreement id"),
+        ));
+        let settlement_box = settlement::SettlementInstructionBox::Dvp(settlement::DvpIsi::new(
+            "registry_settlement_cross_type_name"
+                .parse()
+                .expect("settlement id"),
+            settlement_leg(account(0xD9), account(0xDA), 110),
+            settlement_leg(account(0xDA), account(0xD9), 111),
+            settlement::SettlementPlan::default(),
+        ));
+
+        assert_default_registry_rejects_framed_payload(
+            std::any::type_name::<MintBox>(),
+            &framed_instruction_payload(&register_box),
+            std::any::type_name::<RegisterBox>(),
+        );
+        assert_default_registry_rejects_framed_payload(
+            std::any::type_name::<settlement::SettlementInstructionBox>(),
+            &framed_instruction_payload(&repo_box),
+            std::any::type_name::<repo::RepoInstructionBox>(),
+        );
+        assert_default_registry_rejects_framed_payload(
+            std::any::type_name::<repo::RepoInstructionBox>(),
+            &framed_instruction_payload(&settlement_box),
+            std::any::type_name::<settlement::SettlementInstructionBox>(),
+        );
+    }
+
+    #[test]
+    fn instruction_registry_rejects_invalid_box_variant_tags() {
+        let invalid_tag = u32::MAX;
+        let register_box = RegisterBox::Domain(Register::domain(Domain::new(domain_id())));
+        let repo_box = repo::RepoInstructionBox::MarginCall(repo::RepoMarginCallIsi::new(
+            "registry_repo_bad_tag".parse().expect("repo agreement id"),
+        ));
+        let settlement_box = settlement::SettlementInstructionBox::Dvp(settlement::DvpIsi::new(
+            "registry_settlement_bad_tag"
+                .parse()
+                .expect("settlement id"),
+            settlement_leg(account(0xB7), account(0xB8), 40),
+            settlement_leg(account(0xB8), account(0xB7), 41),
+            settlement::SettlementPlan::default(),
+        ));
+
+        for (wire_id, framed) in [
+            (
+                RegisterBox::WIRE_ID,
+                framed_instruction_payload_with_tag(&register_box, invalid_tag),
+            ),
+            (
+                repo::RepoInstructionBox::WIRE_ID,
+                framed_instruction_payload_with_tag(&repo_box, invalid_tag),
+            ),
+            (
+                settlement::SettlementInstructionBox::WIRE_ID,
+                framed_instruction_payload_with_tag(&settlement_box, invalid_tag),
+            ),
+        ] {
+            let decoded = default()
+                .decode(wire_id, &framed)
+                .expect("canonical wire id remains registered");
+            assert!(decoded.is_err(), "{wire_id} must reject invalid enum tag");
+        }
+    }
+
+    #[test]
+    fn instruction_registry_rejects_truncated_box_payloads() {
+        let registry = default();
+        for wire_id in [
+            RegisterBox::WIRE_ID,
+            MintBox::WIRE_ID,
+            SetKeyValueBox::WIRE_ID,
+            GrantBox::WIRE_ID,
+            repo::RepoInstructionBox::WIRE_ID,
+            settlement::SettlementInstructionBox::WIRE_ID,
+        ] {
+            let decoded = registry
+                .decode(wire_id, &[0xFF])
+                .expect("canonical wire id remains registered");
+            assert!(decoded.is_err(), "{wire_id} must reject truncated payload");
         }
     }
 

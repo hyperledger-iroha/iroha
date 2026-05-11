@@ -6307,6 +6307,12 @@ pub struct SumeragiRbc {
         default = "defaults::sumeragi::RBC_PAYLOAD_CHUNKS_PER_TICK"
     )]
     pub payload_chunks_per_tick: usize,
+    /// Whether inline frontier BlockCreated payloads also seed Proposal + RBC backup transport.
+    #[config(
+        env = "SUMERAGI_RBC_INLINE_BLOCK_CREATED_BACKUP",
+        default = "defaults::sumeragi::RBC_INLINE_BLOCK_CREATED_BACKUP"
+    )]
+    pub inline_block_created_backup: bool,
     /// Maximum number of RBC session summaries persisted to disk.
     #[config(
         env = "SUMERAGI_RBC_STORE_MAX_SESSIONS",
@@ -7778,6 +7784,7 @@ impl Sumeragi {
                 session_ttl: std::time::Duration::from_millis(rbc.session_ttl_ms),
                 rebroadcast_sessions_per_tick: rbc.rebroadcast_sessions_per_tick,
                 payload_chunks_per_tick: rbc.payload_chunks_per_tick,
+                inline_block_created_backup: rbc.inline_block_created_backup,
                 store_max_sessions: rbc.store_max_sessions,
                 store_soft_sessions: rbc.store_soft_sessions,
                 store_max_bytes: rbc.store_max_bytes,

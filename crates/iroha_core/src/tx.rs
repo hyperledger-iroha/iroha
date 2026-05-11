@@ -8213,6 +8213,9 @@ pub mod tests {
         assert!(AcceptedTransaction::ensure_signature_limit(2, &limits).is_ok());
     }
 
+    const IVM_METADATA_HEADER_LEN: usize = 17;
+    const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
+
     /// Build a minimal valid IVM program: header (1.0, vector=4, `max_cycles=0`, abi=1) + HALT.
     fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         let mut code = Vec::new();
@@ -8253,6 +8256,57 @@ pub mod tests {
         program.push(abi_version);
         program.extend_from_slice(&code);
         program
+    }
+
+    /// Build a minimal program and insert a literal-section padding block so the artifact
+    /// reaches `total_len` bytes.
+    fn minimal_ivm_program_with_literal_padding(abi_version: u8, total_len: usize) -> Vec<u8> {
+        assert!(
+            total_len >= IVM_METADATA_HEADER_LEN + 4 + 16,
+            "literal padding requires at least one opcode and metadata block"
+        );
+        let mut program = minimal_ivm_program(abi_version);
+        let mut code = program.split_off(IVM_METADATA_HEADER_LEN);
+        debug_assert_eq!(
+            code.len(),
+            4,
+            "minimal program should contain a single opcode"
+        );
+
+        let pad_len = total_len
+            .checked_sub(IVM_METADATA_HEADER_LEN + code.len())
+            .expect("total_len smaller than header + code");
+        assert!(
+            pad_len >= 16,
+            "literal table header consumes 16 bytes; remaining pad must fit that"
+        );
+        let data_and_pad = pad_len - 16;
+        let literal_data_len = data_and_pad
+            .checked_sub(data_and_pad % 4)
+            .expect("literal padding underflow");
+        let post_pad = data_and_pad - literal_data_len;
+        assert!(
+            post_pad == (4 - (literal_data_len % 4)) % 4,
+            "requested total_len cannot be represented by a valid literal section"
+        );
+        let literal_data_len_u32 = u32::try_from(literal_data_len)
+            .expect("literal data length exceeds literal section encoding");
+        let post_pad_u32 =
+            u32::try_from(post_pad).expect("pad length exceeds literal section encoding");
+
+        let mut padded = program;
+        padded.extend_from_slice(&LITERAL_SECTION_MAGIC);
+        padded.extend_from_slice(&0u32.to_le_bytes()); // literal count
+        padded.extend_from_slice(&post_pad_u32.to_le_bytes());
+        padded.extend_from_slice(&literal_data_len_u32.to_le_bytes());
+        padded.resize(padded.len() + literal_data_len + post_pad, 0);
+        padded.append(&mut code);
+        assert_eq!(
+            padded.len(),
+            total_len,
+            "padding must reach exact target length"
+        );
+        padded
     }
 
     /// Build a minimal program that issues a single syscall followed by HALT.
@@ -9174,19 +9228,22 @@ pub mod tests {
         let chain: ChainId = "chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
 
-        let at_limit_blob = minimal_ivm_program_with_instruction_count(1, 1_000, 251);
-
-        // Limit bytecode size exactly to the valid bytecode fixture length.
+        // Use an exact bytecode-size limit that can be represented by the 17-byte
+        // IVM metadata header plus a valid literal-prefix alignment.
+        const BYTECODE_LIMIT: u64 = 1021;
         let default_limits = TransactionParameters::default();
         let limits = TransactionParameters::with_max_signatures(
             NonZeroU64::new(1).unwrap(),
-            NonZeroU64::new(251).unwrap(),
-            NonZeroU64::new(at_limit_blob.len() as u64).unwrap(),
+            NonZeroU64::new(10).unwrap(),
+            NonZeroU64::new(BYTECODE_LIMIT).unwrap(),
             default_limits.max_tx_bytes(),
             default_limits.max_decompressed_bytes(),
             default_limits.max_metadata_depth(),
         );
 
+        // Create a blob exactly at the allowed bytecode size.
+        let at_limit_blob = minimal_ivm_program_with_literal_padding(1, BYTECODE_LIMIT as usize);
+        assert_eq!(at_limit_blob.len(), BYTECODE_LIMIT as usize);
         let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
             .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(at_limit_blob)))

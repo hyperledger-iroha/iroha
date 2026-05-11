@@ -61,3 +61,18 @@ fn oracle_queries_roundtrip_through_norito() {
         FindTwitterBindingByHash
     );
 }
+
+#[test]
+fn oracle_query_decode_rejects_truncated_norito_payloads() {
+    let feed_id: FeedId = "price_xor_usd".parse().expect("feed id");
+    let query = FindOracleFeedById::new(feed_id);
+    let bytes = norito::to_bytes(&query).expect("encode query");
+    let truncated_lengths = [0_usize, 1, bytes.len() / 2, bytes.len().saturating_sub(1)];
+
+    for len in truncated_lengths {
+        assert!(
+            norito::decode_from_bytes::<FindOracleFeedById>(&bytes[..len]).is_err(),
+            "truncated query payload of length {len} must reject"
+        );
+    }
+}

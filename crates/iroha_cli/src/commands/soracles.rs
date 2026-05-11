@@ -15,8 +15,8 @@ use iroha::data_model::{
     isi::{InstructionBox, oracle as oracle_isi},
     nexus::UniversalAccountId,
     oracle::{
-        FeedConfig, FeedConfigVersion, FeedEventOutcome, FeedId, FeedSlot, KeyedHash,
-        Observation, OracleChangeClass, OracleChangeId, OracleChangeStage, OracleDisputeId,
+        FeedConfig, FeedConfigVersion, FeedEventOutcome, FeedId, FeedSlot, KeyedHash, Observation,
+        OracleChangeClass, OracleChangeId, OracleChangeStage, OracleDisputeId,
         OracleDisputeOutcome, OracleProviderKey, OracleRejectionCode, TwitterBindingAttestation,
     },
     prelude::{Hash, QueryBuilderExt},
@@ -627,9 +627,7 @@ impl Run for QueryCommand {
         let client = context.client_from_config();
         match self {
             Self::Feeds => {
-                let feeds = client
-                    .query(oracle_query::FindOracleFeeds)
-                    .execute_all()?;
+                let feeds = client.query(oracle_query::FindOracleFeeds).execute_all()?;
                 context.print_data(&feeds)
             }
             Self::Feed(args) => {
@@ -639,21 +637,17 @@ impl Run for QueryCommand {
             }
             Self::History(args) => {
                 let history = client
-                    .query(oracle_query::FindOracleHistoryByFeedId::new(
-                        args.feed_id,
-                    ))
+                    .query(oracle_query::FindOracleHistoryByFeedId::new(args.feed_id))
                     .execute_all()?;
                 context.print_data(&history)
             }
             Self::ProviderStats(args) => {
                 if let Some(provider) = args.provider {
                     let provider = crate::resolve_account_id(context, &provider)?;
-                    let stats = client.query_single(
-                        oracle_query::FindOracleProviderStatsByKey::new(OracleProviderKey::new(
-                            args.feed_id,
-                            provider,
-                        )),
-                    )?;
+                    let stats =
+                        client.query_single(oracle_query::FindOracleProviderStatsByKey::new(
+                            OracleProviderKey::new(args.feed_id, provider),
+                        ))?;
                     context.print_data(&stats)
                 } else {
                     let stats = client
@@ -1324,6 +1318,7 @@ fn now_unix(now: SystemTime) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
     use iroha::data_model::account::AccountId;
     use iroha::data_model::oracle::{
         FeedEvent, FeedSuccess, ObservationBody, ObservationValue, ReportEntry,
@@ -1331,7 +1326,6 @@ mod tests {
     };
     use iroha_crypto::HashOf;
     use iroha_i18n::{Bundle as I18nBundle, Language, Localizer};
-    use clap::Parser;
     use std::fmt::Display;
     use tempfile::TempDir;
 
@@ -1417,13 +1411,23 @@ mod tests {
         path
     }
 
+    fn write_invalid_json_file(dir: &TempDir, name: &str) -> PathBuf {
+        let path = dir.path().join(name);
+        std::fs::write(&path, b"{not valid norito json").expect("write invalid json fixture");
+        path
+    }
+
+    fn assert_failed_to_parse(error: eyre::Report) {
+        let rendered = format!("{error:?}");
+        assert!(
+            rendered.contains("failed to parse"),
+            "expected malformed JSON parse error, got: {rendered}"
+        );
+    }
+
     fn sample_twitter_attestation() -> TwitterBindingAttestation {
         TwitterBindingAttestation {
-            binding_hash: KeyedHash::new(
-                "pepper-social-v1",
-                b"test-pepper",
-                b"twitter-user-123",
-            ),
+            binding_hash: KeyedHash::new("pepper-social-v1", b"test-pepper", b"twitter-user-123"),
             uaid: UniversalAccountId::from_hash(Hash::new(b"cli-uaid")),
             status: TwitterBindingStatus::Following,
             tweet_id: Some("tweet-123".to_string()),
@@ -1511,7 +1515,13 @@ mod tests {
             QueryCommand::History(args) => assert_eq!(args.feed_id.as_str(), "xor_usd"),
             other => panic!("unexpected command: {other:?}"),
         }
-        match parse_query(vec!["soracles", "query", "provider-stats", "--feed-id", "xor_usd"]) {
+        match parse_query(vec![
+            "soracles",
+            "query",
+            "provider-stats",
+            "--feed-id",
+            "xor_usd",
+        ]) {
             QueryCommand::ProviderStats(args) => {
                 assert_eq!(args.feed_id.as_str(), "xor_usd");
                 assert!(args.provider.is_none());
@@ -1537,7 +1547,13 @@ mod tests {
             QueryCommand::Disputes(args) => assert!(args.feed_id.is_none()),
             other => panic!("unexpected command: {other:?}"),
         }
-        match parse_query(vec!["soracles", "query", "disputes", "--feed-id", "xor_usd"]) {
+        match parse_query(vec![
+            "soracles",
+            "query",
+            "disputes",
+            "--feed-id",
+            "xor_usd",
+        ]) {
             QueryCommand::Disputes(args) => {
                 assert_eq!(args.feed_id.expect("feed filter").as_str(), "xor_usd");
             }
@@ -1577,8 +1593,7 @@ mod tests {
 
     #[test]
     fn tx_aggregate_generates_output_instruction_without_live_node() {
-        let mut ctx =
-            TestContext::new(crate::CliOutputFormat::Json).with_output_instructions();
+        let mut ctx = TestContext::new(crate::CliOutputFormat::Json).with_output_instructions();
         TxCommand::Aggregate(AggregateTx {
             feed_id: "xor_usd".parse().expect("feed id"),
             slot: 42,
@@ -1594,8 +1609,7 @@ mod tests {
         let tmp = TempDir::new().expect("tmpdir");
         let kit = iroha::data_model::oracle::kits::price_xor_usd();
         let feed_path = write_json_file(&tmp, "feed.json", &kit.feed_config);
-        let observation_path =
-            write_json_file(&tmp, "observation.json", &kit.observations[0]);
+        let observation_path = write_json_file(&tmp, "observation.json", &kit.observations[0]);
         let attestation = sample_twitter_attestation();
         let attestation_path = write_json_file(&tmp, "attestation.json", &attestation);
         let binding_hash_path =
@@ -1660,11 +1674,357 @@ mod tests {
         ];
 
         for command in commands {
-            let mut ctx =
-                TestContext::new(crate::CliOutputFormat::Json).with_output_instructions();
+            let mut ctx = TestContext::new(crate::CliOutputFormat::Json).with_output_instructions();
             command
                 .run(&mut ctx)
                 .expect("generate output instruction without live node");
+        }
+    }
+
+    #[test]
+    fn tx_file_backed_commands_reject_malformed_json_without_live_node() {
+        let tmp = TempDir::new().expect("tmpdir");
+        let invalid_path = write_invalid_json_file(&tmp, "invalid.json");
+        let feed_id: FeedId = "xor_usd".parse().expect("feed id");
+        let change_id = Hash::new(b"cli-invalid-json-change");
+
+        let commands = vec![
+            TxCommand::Register(RegisterTx {
+                feed_json: invalid_path.clone(),
+            }),
+            TxCommand::Submit(SubmitTx {
+                observation_json: invalid_path.clone(),
+            }),
+            TxCommand::ProposeChange(ProposeChangeTx {
+                change_id,
+                feed_json: invalid_path.clone(),
+                class: ChangeClassArg::Low,
+                payload_hash: Hash::new(b"invalid-json-payload"),
+                evidence_hashes: Vec::new(),
+            }),
+            TxCommand::RecordTwitterBinding(RecordTwitterBindingTx {
+                attestation_json: invalid_path.clone(),
+                feed_id,
+            }),
+            TxCommand::RevokeTwitterBinding(RevokeTwitterBindingTx {
+                binding_hash_json: invalid_path.clone(),
+                reason: "malformed".to_string(),
+            }),
+        ];
+
+        for command in commands {
+            let mut ctx = TestContext::new(crate::CliOutputFormat::Json).with_output_instructions();
+            let err = command
+                .run(&mut ctx)
+                .expect_err("malformed JSON must reject before building an instruction");
+            assert_failed_to_parse(err);
+            assert!(
+                ctx.printed.is_empty(),
+                "failed command should not emit output instructions"
+            );
+        }
+    }
+
+    #[test]
+    fn tx_file_backed_commands_reject_missing_files_without_live_node() {
+        let tmp = TempDir::new().expect("tmpdir");
+        let missing_path = tmp.path().join("missing.json");
+        let feed_id: FeedId = "xor_usd".parse().expect("feed id");
+        let change_id = Hash::new(b"cli-missing-file-change");
+
+        let commands = vec![
+            TxCommand::Register(RegisterTx {
+                feed_json: missing_path.clone(),
+            }),
+            TxCommand::Submit(SubmitTx {
+                observation_json: missing_path.clone(),
+            }),
+            TxCommand::ProposeChange(ProposeChangeTx {
+                change_id,
+                feed_json: missing_path.clone(),
+                class: ChangeClassArg::Low,
+                payload_hash: Hash::new(b"missing-file-payload"),
+                evidence_hashes: Vec::new(),
+            }),
+            TxCommand::RecordTwitterBinding(RecordTwitterBindingTx {
+                attestation_json: missing_path.clone(),
+                feed_id,
+            }),
+            TxCommand::RevokeTwitterBinding(RevokeTwitterBindingTx {
+                binding_hash_json: missing_path,
+                reason: "missing file".to_string(),
+            }),
+        ];
+
+        for command in commands {
+            let mut ctx = TestContext::new(crate::CliOutputFormat::Json).with_output_instructions();
+            let err = command
+                .run(&mut ctx)
+                .expect_err("missing JSON file must reject before building an instruction");
+            let rendered = format!("{err:?}");
+            assert!(
+                rendered.contains("failed to read"),
+                "expected missing-file read error, got: {rendered}"
+            );
+            assert!(
+                ctx.printed.is_empty(),
+                "failed command should not emit output instructions"
+            );
+        }
+    }
+
+    #[test]
+    fn query_file_backed_command_rejects_malformed_uaid_json_without_live_node() {
+        let tmp = TempDir::new().expect("tmpdir");
+        let invalid_path = write_invalid_json_file(&tmp, "invalid-uaid.json");
+        let mut ctx = TestContext::new(crate::CliOutputFormat::Json);
+        let err = QueryCommand::TwitterBindings(TwitterBindingsQuery {
+            uaid_json: invalid_path,
+        })
+        .run(&mut ctx)
+        .expect_err("malformed UAID JSON must reject before a query result is printed");
+        assert_failed_to_parse(err);
+        assert!(ctx.printed.is_empty());
+    }
+
+    #[test]
+    fn query_file_backed_command_rejects_missing_uaid_json_without_live_node() {
+        let tmp = TempDir::new().expect("tmpdir");
+        let missing_path = tmp.path().join("missing-uaid.json");
+        let mut ctx = TestContext::new(crate::CliOutputFormat::Json);
+        let err = QueryCommand::TwitterBindings(TwitterBindingsQuery {
+            uaid_json: missing_path,
+        })
+        .run(&mut ctx)
+        .expect_err("missing UAID JSON must reject before a query result is printed");
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("failed to read"),
+            "expected missing-file read error, got: {rendered}"
+        );
+        assert!(ctx.printed.is_empty());
+    }
+
+    #[test]
+    fn rejects_unknown_change_stage_and_class_values_at_parse_time() {
+        let change_id = Hash::new(b"bad-stage").to_string();
+        let stage_err = SoraclesHarness::try_parse_from([
+            "soracles",
+            "tx",
+            "vote-change-stage",
+            "--change-id",
+            change_id.as_str(),
+            "--stage",
+            "root",
+        ])
+        .expect_err("unknown stage must fail clap parsing")
+        .to_string();
+        assert!(
+            stage_err.contains("invalid value"),
+            "unexpected stage parse error: {stage_err}"
+        );
+
+        let tmp = TempDir::new().expect("tmpdir");
+        let feed_path = tmp.path().join("feed.json");
+        let payload_hash = Hash::new(b"bad-class").to_string();
+        let class_err = SoraclesHarness::try_parse_from([
+            "soracles",
+            "tx",
+            "propose-change",
+            "--change-id",
+            change_id.as_str(),
+            "--feed-json",
+            feed_path.to_str().expect("utf8 path"),
+            "--class",
+            "catastrophic",
+            "--payload-hash",
+            payload_hash.as_str(),
+        ])
+        .expect_err("unknown change class must fail clap parsing")
+        .to_string();
+        assert!(
+            class_err.contains("invalid value"),
+            "unexpected class parse error: {class_err}"
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_dispute_outcome_and_invalid_approve_values_at_parse_time() {
+        let change_id = Hash::new(b"bad-approve").to_string();
+        let outcome_err = SoraclesHarness::try_parse_from([
+            "soracles",
+            "tx",
+            "resolve-dispute",
+            "--dispute-id",
+            "7",
+            "--outcome",
+            "void",
+        ])
+        .expect_err("unknown dispute outcome must fail clap parsing")
+        .to_string();
+        assert!(
+            outcome_err.contains("invalid value"),
+            "unexpected outcome parse error: {outcome_err}"
+        );
+
+        let approve_err = SoraclesHarness::try_parse_from([
+            "soracles",
+            "tx",
+            "vote-change-stage",
+            "--change-id",
+            change_id.as_str(),
+            "--stage",
+            "intake",
+            "--approve",
+            "maybe",
+        ])
+        .expect_err("invalid approve flag must fail clap parsing")
+        .to_string();
+        assert!(
+            approve_err.contains("invalid value") || approve_err.contains("unexpected argument"),
+            "unexpected approve parse error: {approve_err}"
+        );
+    }
+
+    #[test]
+    fn rejects_missing_required_tx_arguments_at_parse_time() {
+        let change_id = Hash::new(b"missing-required").to_string();
+        let payload_hash = Hash::new(b"missing-required-payload").to_string();
+        let request_hash = Hash::new(b"missing-required-request").to_string();
+        let cases = vec![
+            vec![
+                "soracles",
+                "tx",
+                "aggregate",
+                "--feed-id",
+                "xor_usd",
+                "--slot",
+                "42",
+            ],
+            vec![
+                "soracles",
+                "tx",
+                "open-dispute",
+                "--feed-id",
+                "xor_usd",
+                "--slot",
+                "42",
+                "--request-hash",
+                request_hash.as_str(),
+            ],
+            vec![
+                "soracles",
+                "tx",
+                "propose-change",
+                "--change-id",
+                change_id.as_str(),
+                "--class",
+                "low",
+                "--payload-hash",
+                payload_hash.as_str(),
+            ],
+            vec![
+                "soracles",
+                "tx",
+                "rollback-change",
+                "--change-id",
+                change_id.as_str(),
+            ],
+            vec!["soracles", "tx", "record-twitter-binding", "--feed-id", "xor_usd"],
+        ];
+
+        for argv in cases {
+            let err = SoraclesHarness::try_parse_from(argv)
+                .expect_err("missing required argument must fail clap parsing")
+                .to_string();
+            assert!(
+                err.contains("required"),
+                "unexpected missing-argument parse error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_missing_required_query_arguments_at_parse_time() {
+        let cases = vec![
+            vec!["soracles", "query", "feed"],
+            vec!["soracles", "query", "history"],
+            vec!["soracles", "query", "provider-stats"],
+            vec!["soracles", "query", "dispute"],
+            vec!["soracles", "query", "change"],
+            vec!["soracles", "query", "twitter-bindings"],
+        ];
+
+        for argv in cases {
+            let err = SoraclesHarness::try_parse_from(argv)
+                .expect_err("missing required query argument must fail clap parsing")
+                .to_string();
+            assert!(
+                err.contains("required"),
+                "unexpected missing-query parse error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_hash_and_numeric_values_at_parse_time() {
+        let valid_hash = Hash::new(b"valid-cli-hash").to_string();
+        let cases = vec![
+            vec![
+                "soracles",
+                "tx",
+                "aggregate",
+                "--feed-id",
+                "xor_usd",
+                "--slot",
+                "not-a-slot",
+                "--request-hash",
+                valid_hash.as_str(),
+            ],
+            vec![
+                "soracles",
+                "tx",
+                "aggregate",
+                "--feed-id",
+                "xor_usd",
+                "--slot",
+                "42",
+                "--request-hash",
+                "not-a-hash",
+            ],
+            vec![
+                "soracles",
+                "tx",
+                "resolve-dispute",
+                "--dispute-id",
+                "not-an-id",
+                "--outcome",
+                "upheld",
+            ],
+            vec![
+                "soracles",
+                "query",
+                "change",
+                "--change-id",
+                "not-a-hash",
+            ],
+            vec![
+                "soracles",
+                "query",
+                "dispute",
+                "--dispute-id",
+                "not-an-id",
+            ],
+        ];
+
+        for argv in cases {
+            let err = SoraclesHarness::try_parse_from(argv)
+                .expect_err("invalid scalar argument must fail clap parsing")
+                .to_string();
+            assert!(
+                err.contains("invalid value"),
+                "unexpected invalid-scalar parse error: {err}"
+            );
         }
     }
 

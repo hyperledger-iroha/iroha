@@ -662,11 +662,24 @@ impl Actor {
             ConsensusMode::Permissioned => super::consensus::PERMISSIONED_TAG,
             ConsensusMode::Npos => super::consensus::NPOS_TAG,
         };
-        let prf_seed = Some(super::prf_seed_for_height_from_world(
-            &world,
-            &self.chain_id,
-            height,
-        ));
+        let prf_seed_value = if matches!(consensus_mode, ConsensusMode::Npos) {
+            let current_height = self.committed_height_snapshot();
+            let expected_epoch = self.epoch_for_height_from_world(&world, current_height, height);
+            self.epoch_manager
+                .as_ref()
+                .filter(|manager| {
+                    manager.epoch() == expected_epoch
+                        && manager.epoch_for_height(height) == expected_epoch
+                        && world.vrf_epochs().get(&expected_epoch).is_none()
+                })
+                .map_or_else(
+                    || super::prf_seed_for_height_from_world(&world, &self.chain_id, height),
+                    super::epoch::EpochManager::seed,
+                )
+        } else {
+            super::prf_seed_for_height_from_world(&world, &self.chain_id, height)
+        };
+        let prf_seed = Some(prf_seed_value);
         drop(world);
         (consensus_mode, mode_tag, prf_seed)
     }

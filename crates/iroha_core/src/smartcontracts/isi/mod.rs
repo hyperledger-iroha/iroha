@@ -381,7 +381,8 @@ mod registry_dispatch_tests {
     }
 
     fn has_dispatch_handler(handler_table: &str, type_name: &str) -> bool {
-        let leaf = type_name
+        let root_type_name = type_name.split('<').next().unwrap_or(type_name);
+        let leaf = root_type_name
             .rsplit("::")
             .next()
             .expect("type name has at least one segment");
@@ -406,6 +407,93 @@ mod registry_dispatch_tests {
             missing.is_empty(),
             "default registry entries missing core dispatch handlers: {missing:?}"
         );
+    }
+
+    #[test]
+    fn custom_instruction_is_only_default_registry_entry_without_core_dispatch_handler() {
+        let registry = iroha_data_model::isi::registry::default();
+        let handler_table = handler_table_source();
+        let missing = registry
+            .names()
+            .filter(|name| !has_dispatch_handler(handler_table, name))
+            .collect::<BTreeSet<_>>();
+        let expected = BTreeSet::from([std::any::type_name::<CustomInstruction>()]);
+
+        assert_eq!(
+            missing, expected,
+            "only CustomInstruction should require a custom executor"
+        );
+    }
+
+    #[test]
+    fn custom_instruction_stays_custom_executor_only() {
+        let registry = iroha_data_model::isi::registry::default();
+        let handler_table = handler_table_source();
+        let custom_instruction = std::any::type_name::<CustomInstruction>();
+
+        assert!(
+            registry.contains(custom_instruction),
+            "custom instructions must remain decodable for custom executors"
+        );
+        assert!(
+            !has_dispatch_handler(handler_table, custom_instruction),
+            "custom instructions must not be executable by the default core dispatcher"
+        );
+    }
+
+    #[test]
+    fn direct_grouped_variants_stay_out_of_default_registry_even_with_handlers() {
+        let registry = iroha_data_model::isi::registry::default();
+        let handler_table = handler_table_source();
+        let direct_variants = [
+            std::any::type_name::<iroha_data_model::isi::register::RegisterPeerWithPop>(),
+            std::any::type_name::<Mint<Numeric, Asset>>(),
+            std::any::type_name::<Burn<Numeric, Asset>>(),
+            std::any::type_name::<Transfer<Asset, Numeric, Account>>(),
+            std::any::type_name::<SetKeyValue<Trigger>>(),
+            std::any::type_name::<iroha_data_model::isi::repo::RepoIsi>(),
+            std::any::type_name::<iroha_data_model::isi::repo::ReverseRepoIsi>(),
+            std::any::type_name::<iroha_data_model::isi::repo::RepoMarginCallIsi>(),
+            std::any::type_name::<iroha_data_model::isi::rwa::RegisterRwa>(),
+            std::any::type_name::<iroha_data_model::isi::rwa::TransferRwa>(),
+            std::any::type_name::<iroha_data_model::isi::rwa::MergeRwas>(),
+            std::any::type_name::<iroha_data_model::isi::rwa::RedeemRwa>(),
+            std::any::type_name::<iroha_data_model::isi::rwa::FreezeRwa>(),
+            std::any::type_name::<iroha_data_model::isi::rwa::UnfreezeRwa>(),
+            std::any::type_name::<iroha_data_model::isi::rwa::HoldRwa>(),
+            std::any::type_name::<iroha_data_model::isi::settlement::DvpIsi>(),
+            std::any::type_name::<iroha_data_model::isi::settlement::PvpIsi>(),
+        ];
+
+        for name in direct_variants {
+            assert!(
+                has_dispatch_handler(handler_table, name),
+                "{name} should remain an internal delegation target"
+            );
+            assert!(
+                !registry.contains(name),
+                "{name} is an internal handler target, not a public wire form"
+            );
+        }
+    }
+
+    #[test]
+    fn removed_direct_stable_wire_ids_do_not_alias_boxed_dispatch_entries() {
+        let registry = iroha_data_model::isi::registry::default();
+        let removed_wire_ids = [
+            iroha_data_model::isi::repo::RepoIsi::WIRE_ID,
+            iroha_data_model::isi::repo::ReverseRepoIsi::WIRE_ID,
+            iroha_data_model::isi::repo::RepoMarginCallIsi::WIRE_ID,
+            iroha_data_model::isi::settlement::DvpIsi::WIRE_ID,
+            iroha_data_model::isi::settlement::PvpIsi::WIRE_ID,
+        ];
+
+        for wire_id in removed_wire_ids {
+            assert!(
+                !registry.contains(wire_id),
+                "{wire_id} must not alias any default dispatcher entry"
+            );
+        }
     }
 }
 
@@ -1040,6 +1128,88 @@ mod tests {
             is_registered,
             "RegisterVerifiedLaneRelay must be wired into INSTRUCTION_HANDLERS"
         );
+        Ok(())
+    }
+
+    #[test]
+    async fn default_executor_rejects_invalid_instruction_placeholders() -> Result<()> {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let mut state_block = state.block(valid_block.as_ref().header().clone());
+        let mut state_transaction = state_block.transaction();
+        let instruction = InstructionBox::from(iroha_data_model::isi::InvalidInstruction::new(
+            "iroha.register",
+            [0xAB; 32],
+            "malformed boxed payload",
+        ));
+
+        let err = execute_borrowed_instruction(&instruction, &ALICE_ID, &mut state_transaction)
+            .expect_err("invalid instruction placeholders must fail execution");
+
+        assert!(matches!(
+            err,
+            InstructionExecutionError::Conversion(message)
+                if message.contains("invalid instruction payload")
+                    && message.contains("wire_id=iroha.register")
+                    && message.contains("malformed boxed payload")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn default_executor_rejects_custom_instruction_without_custom_executor() -> Result<()> {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let mut state_block = state.block(valid_block.as_ref().header().clone());
+        let mut state_transaction = state_block.transaction();
+        let instruction = InstructionBox::from(CustomInstruction::new("requires custom executor"));
+
+        let err = execute_borrowed_instruction(&instruction, &ALICE_ID, &mut state_transaction)
+            .expect_err("custom instructions must not execute through the default dispatcher");
+
+        assert!(matches!(
+            err,
+            InstructionExecutionError::Conversion(message)
+                if message.contains("Custom instructions require an executor upgrade")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn default_executor_rejects_opaque_instruction_even_with_registered_wire_id() -> Result<()>
+    {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let mut state_block = state.block(valid_block.as_ref().header().clone());
+        let mut state_transaction = state_block.transaction();
+        let log = Log::new(Level::INFO, "opaque default executor".to_owned());
+        let (payload, flags) = norito::codec::encode_with_header_flags(&log);
+        let framed = norito::core::frame_bare_with_header_flags::<Log>(&payload, flags)
+            .expect("frame log payload");
+        let opaque = iroha_data_model::isi::OpaqueInstruction::from_framed(Log::WIRE_ID, &framed)
+            .expect("opaque payload");
+        let instruction = InstructionBox::from(opaque);
+
+        let err = execute_borrowed_instruction(&instruction, &ALICE_ID, &mut state_transaction)
+            .expect_err("opaque instructions must not execute through the default dispatcher");
+
+        assert!(matches!(
+            err,
+            InstructionExecutionError::Conversion(message)
+                if message.contains("Unknown instruction type")
+        ));
         Ok(())
     }
 

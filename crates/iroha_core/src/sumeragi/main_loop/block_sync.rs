@@ -4332,6 +4332,10 @@ impl Actor {
                                 None,
                             );
                         } else {
+                            if let Some(pending) = self.pending.pending_blocks.get_mut(&block_hash)
+                            {
+                                pending.note_commit_qc_observed(qc.epoch);
+                            }
                             debug!(
                                 incoming_hash = %block_hash,
                                 height = block_height,
@@ -5963,6 +5967,9 @@ impl Actor {
                 None,
             );
         } else {
+            if let Some(pending) = self.pending.pending_blocks.get_mut(&block_hash) {
+                pending.note_commit_qc_observed(qc.epoch);
+            }
             debug!(
                 incoming_hash = %block_hash,
                 height = block_height,

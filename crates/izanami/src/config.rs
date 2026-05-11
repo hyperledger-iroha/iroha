@@ -60,7 +60,7 @@ pub struct IzanamiArgs {
     /// Bounded grace period for draining spawned submission tasks after workload shutdown.
     #[arg(long, default_value = "15s", value_parser = parse_duration)]
     pub shutdown_drain_timeout: Duration,
-    /// Optional p95 block-interval threshold enforced when `target_blocks` is set.
+    /// Optional p95 block-interval threshold enforced while monitoring block progress.
     #[arg(long, value_parser = parse_duration)]
     pub latency_p95_threshold: Option<Duration>,
     /// Optional run-relative offset before fault workers start injecting faults.
@@ -87,6 +87,41 @@ pub struct IzanamiArgs {
     /// Number of workers used to fill the prebuilt transaction buffer; 0 chooses a host-aware default.
     #[arg(long, default_value_t = 0)]
     pub prebuild_tx_workers: usize,
+    /// Maximum transactions per Sumeragi block injected into the test network.
+    #[arg(
+        long,
+        default_value_t = DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub sumeragi_block_max_transactions: u64,
+    /// Proposal queue scan multiplier used to fill each candidate Sumeragi block.
+    #[arg(
+        long,
+        default_value_t = DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub sumeragi_proposal_queue_scan_multiplier: u64,
+    /// Sumeragi collector fanout injected into NPoS test-network parameters.
+    #[arg(
+        long = "sumeragi-collectors-k",
+        default_value_t = DEFAULT_SUMERAGI_COLLECTORS_K,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub sumeragi_collectors_k: u64,
+    /// Sumeragi redundant-send fanout injected into NPoS test-network parameters.
+    #[arg(
+        long = "sumeragi-collectors-redundant-send-r",
+        default_value_t = DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub sumeragi_collectors_redundant_send_r: u64,
+    /// Whether inline frontier BlockCreated payloads also seed Proposal + RBC backup transport.
+    #[arg(
+        long = "sumeragi-inline-block-created-backup-rbc",
+        default_value_t = DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
+        action = clap::ArgAction::Set
+    )]
+    pub sumeragi_inline_block_created_backup_rbc: bool,
     /// Workload profile controlling which recipes are scheduled.
     #[arg(long, value_enum, default_value_t = WorkloadProfile::Stable)]
     pub workload_profile: WorkloadProfile,
@@ -133,6 +168,11 @@ pub enum WorkloadProfile {
 pub const DEFAULT_PROGRESS_INTERVAL: Duration = Duration::from_secs(15);
 pub const DEFAULT_PROGRESS_TIMEOUT: Duration = Duration::from_secs(120);
 pub const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(15);
+pub const DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS: u64 = 1_024;
+pub const DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER: u64 = 1;
+pub const DEFAULT_SUMERAGI_COLLECTORS_K: u64 = 4;
+pub const DEFAULT_SUMERAGI_REDUNDANT_SEND_R: u64 = 4;
+pub const DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC: bool = true;
 /// Minimum pipeline time accepted by the test-network builder (must stay in sync).
 pub const MIN_PIPELINE_TIME: Duration = Duration::from_millis(2);
 
@@ -402,6 +442,11 @@ pub struct ChaosConfig {
     pub submitters: usize,
     pub prebuild_tx_buffer: usize,
     pub prebuild_tx_workers: usize,
+    pub sumeragi_block_max_transactions: u64,
+    pub sumeragi_proposal_queue_scan_multiplier: u64,
+    pub sumeragi_collectors_k: u64,
+    pub sumeragi_collectors_redundant_send_r: u64,
+    pub sumeragi_inline_block_created_backup_rbc: bool,
     pub workload_profile: WorkloadProfile,
     pub allow_contract_deploy_in_stable: bool,
     pub fault_interval: RangeInclusive<Duration>,
@@ -468,11 +513,6 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
         {
             return Err(eyre!("latency_p95_threshold must be greater than zero"));
         }
-        if args.latency_p95_threshold.is_some() && args.target_blocks.is_none() {
-            return Err(eyre!(
-                "latency_p95_threshold requires target_blocks to be set"
-            ));
-        }
         if args
             .fault_window_start
             .is_some_and(|offset| offset >= args.duration)
@@ -518,6 +558,30 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
         if args.submitters == 0 {
             return Err(eyre!("submitters must be greater than zero"));
         }
+        if i64::try_from(args.sumeragi_block_max_transactions).is_err() {
+            return Err(eyre!(
+                "sumeragi_block_max_transactions ({}) exceeds config-layer limits",
+                args.sumeragi_block_max_transactions
+            ));
+        }
+        if i64::try_from(args.sumeragi_proposal_queue_scan_multiplier).is_err() {
+            return Err(eyre!(
+                "sumeragi_proposal_queue_scan_multiplier ({}) exceeds config-layer limits",
+                args.sumeragi_proposal_queue_scan_multiplier
+            ));
+        }
+        if u16::try_from(args.sumeragi_collectors_k).is_err() {
+            return Err(eyre!(
+                "sumeragi_collectors_k ({}) exceeds NPoS parameter limits",
+                args.sumeragi_collectors_k
+            ));
+        }
+        if u8::try_from(args.sumeragi_collectors_redundant_send_r).is_err() {
+            return Err(eyre!(
+                "sumeragi_collectors_redundant_send_r ({}) exceeds NPoS parameter limits",
+                args.sumeragi_collectors_redundant_send_r
+            ));
+        }
         if args.fault_interval_min > args.fault_interval_max {
             return Err(eyre!(
                 "fault interval min ({:?}) cannot be greater than max ({:?})",
@@ -557,6 +621,11 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             submitters,
             prebuild_tx_buffer,
             prebuild_tx_workers,
+            sumeragi_block_max_transactions,
+            sumeragi_proposal_queue_scan_multiplier,
+            sumeragi_collectors_k,
+            sumeragi_collectors_redundant_send_r,
+            sumeragi_inline_block_created_backup_rbc,
             workload_profile,
             allow_contract_deploy_in_stable,
             log_filter,
@@ -593,6 +662,11 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             submitters,
             prebuild_tx_buffer,
             prebuild_tx_workers,
+            sumeragi_block_max_transactions,
+            sumeragi_proposal_queue_scan_multiplier,
+            sumeragi_collectors_k,
+            sumeragi_collectors_redundant_send_r,
+            sumeragi_inline_block_created_backup_rbc,
             workload_profile,
             allow_contract_deploy_in_stable,
             fault_interval: fault_interval_min..=fault_interval_max,
@@ -639,6 +713,11 @@ impl IzanamiArgs {
             submitters: cfg.submitters,
             prebuild_tx_buffer: cfg.prebuild_tx_buffer,
             prebuild_tx_workers: cfg.prebuild_tx_workers,
+            sumeragi_block_max_transactions: cfg.sumeragi_block_max_transactions,
+            sumeragi_proposal_queue_scan_multiplier: cfg.sumeragi_proposal_queue_scan_multiplier,
+            sumeragi_collectors_k: cfg.sumeragi_collectors_k,
+            sumeragi_collectors_redundant_send_r: cfg.sumeragi_collectors_redundant_send_r,
+            sumeragi_inline_block_created_backup_rbc: cfg.sumeragi_inline_block_created_backup_rbc,
             workload_profile: cfg.workload_profile,
             allow_contract_deploy_in_stable: cfg.allow_contract_deploy_in_stable,
             log_filter: cfg.log_filter.clone(),
@@ -1108,6 +1187,13 @@ mod tests {
             submitters: 1,
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
+            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
+            sumeragi_proposal_queue_scan_multiplier:
+                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
+            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
+            sumeragi_inline_block_created_backup_rbc:
+                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1152,6 +1238,13 @@ mod tests {
             submitters: 1,
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
+            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
+            sumeragi_proposal_queue_scan_multiplier:
+                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
+            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
+            sumeragi_inline_block_created_backup_rbc:
+                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "warn".to_string(),
@@ -1188,6 +1281,13 @@ mod tests {
             submitters: 1,
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
+            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
+            sumeragi_proposal_queue_scan_multiplier:
+                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
+            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
+            sumeragi_inline_block_created_backup_rbc:
+                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1229,6 +1329,13 @@ mod tests {
             submitters: 1,
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
+            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
+            sumeragi_proposal_queue_scan_multiplier:
+                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
+            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
+            sumeragi_inline_block_created_backup_rbc:
+                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1268,6 +1375,13 @@ mod tests {
             submitters: 1,
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
+            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
+            sumeragi_proposal_queue_scan_multiplier:
+                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
+            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
+            sumeragi_inline_block_created_backup_rbc:
+                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1360,6 +1474,13 @@ mod tests {
             submitters: 1,
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
+            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
+            sumeragi_proposal_queue_scan_multiplier:
+                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
+            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
+            sumeragi_inline_block_created_backup_rbc:
+                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1401,6 +1522,13 @@ mod tests {
             submitters: 1,
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
+            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
+            sumeragi_proposal_queue_scan_multiplier:
+                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
+            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
+            sumeragi_inline_block_created_backup_rbc:
+                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1442,6 +1570,13 @@ mod tests {
             submitters: 1,
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
+            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
+            sumeragi_proposal_queue_scan_multiplier:
+                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
+            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
+            sumeragi_inline_block_created_backup_rbc:
+                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1483,6 +1618,13 @@ mod tests {
             submitters: 1,
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
+            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
+            sumeragi_proposal_queue_scan_multiplier:
+                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
+            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
+            sumeragi_inline_block_created_backup_rbc:
+                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1503,7 +1645,7 @@ mod tests {
     }
 
     #[test]
-    fn chaos_config_rejects_latency_threshold_without_target_blocks() {
+    fn chaos_config_accepts_latency_threshold_without_target_blocks() {
         let args = IzanamiArgs {
             tui: false,
             allow_net: true,
@@ -1524,6 +1666,13 @@ mod tests {
             submitters: 1,
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
+            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
+            sumeragi_proposal_queue_scan_multiplier:
+                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
+            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
+            sumeragi_inline_block_created_backup_rbc:
+                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1534,12 +1683,11 @@ mod tests {
             nexus: false,
             diagnostic_dir: None,
         };
-        let Err(err) = ChaosConfig::try_from(args) else {
-            panic!("latency threshold without target_blocks should fail");
-        };
-        assert!(
-            err.to_string().contains("requires target_blocks"),
-            "error should mention target_blocks requirement: {err}"
+        let config = ChaosConfig::try_from(args)
+            .expect("duration-only cadence gates should not require target_blocks");
+        assert_eq!(
+            config.latency_p95_threshold,
+            Some(Duration::from_millis(900))
         );
     }
 
@@ -1565,6 +1713,13 @@ mod tests {
             submitters: 1,
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
+            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
+            sumeragi_proposal_queue_scan_multiplier:
+                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
+            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
+            sumeragi_inline_block_created_backup_rbc:
+                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1582,6 +1737,25 @@ mod tests {
             err.to_string().contains("latency_p95_threshold"),
             "error should mention latency_p95_threshold: {err}"
         );
+    }
+
+    #[test]
+    fn chaos_config_accepts_sumeragi_block_tuning() {
+        let mut args = IzanamiArgs::defaults();
+        args.allow_net = true;
+        args.faulty = 0;
+        args.sumeragi_block_max_transactions = 1_536;
+        args.sumeragi_proposal_queue_scan_multiplier = 2;
+        args.sumeragi_collectors_k = 3;
+        args.sumeragi_collectors_redundant_send_r = 3;
+        args.sumeragi_inline_block_created_backup_rbc = true;
+
+        let config = ChaosConfig::try_from(args).expect("sumeragi block tuning should be valid");
+        assert_eq!(config.sumeragi_block_max_transactions, 1_536);
+        assert_eq!(config.sumeragi_proposal_queue_scan_multiplier, 2);
+        assert_eq!(config.sumeragi_collectors_k, 3);
+        assert_eq!(config.sumeragi_collectors_redundant_send_r, 3);
+        assert!(config.sumeragi_inline_block_created_backup_rbc);
     }
 
     #[test]
@@ -1651,6 +1825,13 @@ mod tests {
             submitters: 0,
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
+            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
+            sumeragi_proposal_queue_scan_multiplier:
+                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
+            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
+            sumeragi_inline_block_created_backup_rbc:
+                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1692,6 +1873,13 @@ mod tests {
             submitters: 1,
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
+            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
+            sumeragi_proposal_queue_scan_multiplier:
+                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
+            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
+            sumeragi_inline_block_created_backup_rbc:
+                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),

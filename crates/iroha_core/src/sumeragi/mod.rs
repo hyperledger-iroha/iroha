@@ -12534,12 +12534,12 @@ pub(crate) fn test_sumeragi_handle(
 /// Build a lightweight Sumeragi handle with configurable RBC/block queues for unit tests.
 #[cfg(test)]
 pub(crate) fn test_sumeragi_handle_with_rbc_cap(
-    rbc_channel_cap: usize,
+    rbc_chunk_cap: usize,
     block_channel_cap: usize,
 ) -> (SumeragiHandle, mpsc::Receiver<InboundBlockMessage>) {
     let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(1);
     let (block_tx, _block_rx) = mpsc::sync_channel(block_channel_cap);
-    let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(rbc_channel_cap);
+    let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(rbc_chunk_cap);
     let (vote_tx, _vote_rx) = mpsc::sync_channel(1);
     let (consensus_tx, _consensus_rx) = mpsc::sync_channel(1);
     let (background_tx, _background_rx) = mpsc::sync_channel(1);

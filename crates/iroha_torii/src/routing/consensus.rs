@@ -54,6 +54,18 @@ struct SumeragiPhasesEma {
 }
 
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+#[allow(clippy::struct_field_names)]
+struct SumeragiPhasesMax {
+    propose_ms: u64,
+    collect_da_ms: u64,
+    collect_prevote_ms: u64,
+    collect_precommit_ms: u64,
+    collect_aggregator_ms: u64,
+    commit_ms: u64,
+    pipeline_total_ms: u64,
+}
+
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 struct SumeragiPhasesResponse {
     propose_ms: u64,
     collect_da_ms: u64,
@@ -66,6 +78,7 @@ struct SumeragiPhasesResponse {
     block_created_dropped_by_lock_total: u64,
     block_created_hint_mismatch_total: u64,
     block_created_proposal_mismatch_total: u64,
+    max_ms: SumeragiPhasesMax,
     ema_ms: SumeragiPhasesEma,
 }
 
@@ -696,6 +709,15 @@ pub async fn handle_v1_sumeragi_phases(
         block_created_dropped_by_lock_total: snap.block_created_dropped_by_lock_total,
         block_created_hint_mismatch_total: snap.block_created_hint_mismatch_total,
         block_created_proposal_mismatch_total: snap.block_created_proposal_mismatch_total,
+        max_ms: SumeragiPhasesMax {
+            propose_ms: snap.propose_max_ms,
+            collect_da_ms: snap.collect_da_max_ms,
+            collect_prevote_ms: snap.collect_prevote_max_ms,
+            collect_precommit_ms: snap.collect_precommit_max_ms,
+            collect_aggregator_ms: snap.collect_aggregator_max_ms,
+            commit_ms: snap.commit_max_ms,
+            pipeline_total_ms: snap.pipeline_total_max_ms,
+        },
         ema_ms: SumeragiPhasesEma {
             propose_ms: snap.propose_ema_ms,
             collect_da_ms: snap.collect_da_ema_ms,
@@ -2779,6 +2801,43 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             snap.access_set_sources.conservative_fallback,
         ),
     ]);
+    let pipeline_execution = json_object(vec![
+        json_entry(
+            "tx_vertices_total",
+            snap.pipeline_execution.tx_vertices_total,
+        ),
+        json_entry("tx_edges_total", snap.pipeline_execution.tx_edges_total),
+        json_entry(
+            "overlay_count_total",
+            snap.pipeline_execution.overlay_count_total,
+        ),
+        json_entry(
+            "overlay_instr_total",
+            snap.pipeline_execution.overlay_instr_total,
+        ),
+        json_entry(
+            "overlay_bytes_total",
+            snap.pipeline_execution.overlay_bytes_total,
+        ),
+        json_entry("rbc_chunks_total", snap.pipeline_execution.rbc_chunks_total),
+        json_entry("rbc_bytes_total", snap.pipeline_execution.rbc_bytes_total),
+        json_entry(
+            "detached_prepared_total",
+            snap.pipeline_execution.detached_prepared_total,
+        ),
+        json_entry(
+            "detached_merged_total",
+            snap.pipeline_execution.detached_merged_total,
+        ),
+        json_entry(
+            "detached_fallback_total",
+            snap.pipeline_execution.detached_fallback_total,
+        ),
+        json_entry(
+            "quarantine_executed_total",
+            snap.pipeline_execution.quarantine_executed_total,
+        ),
+    ]);
     let recent_evictions = Value::Array(
         snap.rbc_store_recent_evictions
             .iter()
@@ -3328,6 +3387,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "pipeline_conflict_rate_bps",
             snap.pipeline_conflict_rate_bps,
         ),
+        json_entry("pipeline_execution", pipeline_execution),
         json_entry("access_set_sources", access_set_sources),
         json_entry("nexus_fee", nexus_fee_snapshot_value(&snap.nexus_fee)),
         json_entry(
@@ -4325,6 +4385,12 @@ mod status_tests {
                 ema_state_commit_to_next_propose_ms: 10,
                 ema_deliver_to_next_propose_ms: 39,
             },
+            pipeline_execution: status::PipelineExecutionSnapshot {
+                tx_vertices_total: 10,
+                detached_merged_total: 4,
+                detached_fallback_total: 1,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let payload = status_snapshot_json(&snap);
@@ -4435,6 +4501,28 @@ mod status_tests {
                 .get("ema_deliver_to_next_propose_ms")
                 .and_then(Value::as_u64),
             Some(39)
+        );
+        let pipeline_execution = payload
+            .get("pipeline_execution")
+            .and_then(Value::as_object)
+            .expect("pipeline execution object");
+        assert_eq!(
+            pipeline_execution
+                .get("tx_vertices_total")
+                .and_then(Value::as_u64),
+            Some(10)
+        );
+        assert_eq!(
+            pipeline_execution
+                .get("detached_merged_total")
+                .and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            pipeline_execution
+                .get("detached_fallback_total")
+                .and_then(Value::as_u64),
+            Some(1)
         );
     }
 }

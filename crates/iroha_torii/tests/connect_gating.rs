@@ -487,6 +487,21 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                 fast_finality_inline_validation_max_transactions:
                     iroha_config::parameters::defaults::sumeragi::
                         VALIDATION_FAST_FINALITY_INLINE_MAX_TRANSACTIONS,
+                validation_stall_da_per_entrypoint_floor: std::time::Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::
+                        VALIDATION_STALL_DA_PER_ENTRYPOINT_FLOOR_MS,
+                ),
+                validation_stall_inline_fallback_multiplier:
+                    iroha_config::parameters::defaults::sumeragi::
+                        VALIDATION_STALL_INLINE_FALLBACK_MULTIPLIER,
+                validation_stall_ema_multiplier:
+                    iroha_config::parameters::defaults::sumeragi::VALIDATION_STALL_EMA_MULTIPLIER,
+                validation_stall_non_da_cap: std::time::Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::VALIDATION_STALL_NON_DA_CAP_MS,
+                ),
+                validation_stall_da_cap: std::time::Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::VALIDATION_STALL_DA_CAP_MS,
+                ),
                 qc_verify_worker_threads:
                     iroha_config::parameters::defaults::sumeragi::QC_VERIFY_WORKER_THREADS,
                 qc_verify_work_queue_cap:
@@ -666,6 +681,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                     iroha_config::parameters::defaults::sumeragi::RBC_REBROADCAST_SESSIONS_PER_TICK,
                 payload_chunks_per_tick:
                     iroha_config::parameters::defaults::sumeragi::RBC_PAYLOAD_CHUNKS_PER_TICK,
+                inline_block_created_backup: iroha_config::parameters::defaults::sumeragi::RBC_INLINE_BLOCK_CREATED_BACKUP,
                 store_max_sessions:
                     iroha_config::parameters::defaults::sumeragi::RBC_STORE_MAX_SESSIONS,
                 store_soft_sessions:

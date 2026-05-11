@@ -1679,7 +1679,7 @@ fn kickstart_pacemaker_after_commit<F>(
 where
     F: FnMut(Instant) -> bool,
 {
-    if queue_len > 0 && !backpressure.should_defer() {
+    if queue_len > 0 && (!backpressure.should_defer() || backpressure.only_pacing_backpressure()) {
         let now = Instant::now();
         let _ = trigger(now);
         return true;
@@ -7752,32 +7752,48 @@ impl Actor {
         })
     }
 
+    fn pending_live_local_owner_for_round(&self, height: u64, view: u64) -> bool {
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        self.pending.pending_blocks.iter().any(|(hash, pending)| {
+            pending.height == height
+                && pending.view < view
+                && (pending.local_commit_vote_emitted() || pending.commit_qc_observed())
+                && self.pending_block_is_active_for_tip(*hash, pending, tip_height, tip_hash)
+        })
+    }
+
     fn keep_frontier_pending_active_across_view_change(
         &self,
         height: u64,
         min_view: u64,
         block_hash: HashOf<BlockHeader>,
     ) -> bool {
-        if !self
-            .frontier_slot_live_local_owner_for_round(height, min_view)
-            .is_some_and(|(owner_hash, _)| owner_hash == block_hash)
-        {
+        let Some(slot) = self.frontier_slot.as_ref().filter(|slot| {
+            slot.height == height
+                && slot.block_hash == block_hash
+                && self.frontier_slot_has_live_local_owner_work_for_view(slot, min_view)
+        }) else {
             return false;
-        }
+        };
 
-        let pending_commit_qc_observed =
-            self.pending
-                .pending_blocks
-                .get(&block_hash)
-                .is_some_and(|pending| {
-                    !pending.aborted
-                        && !pending.is_retired_same_height()
-                        && pending.height == height
-                        && pending.view < min_view
-                        && pending.commit_qc_observed()
-                });
+        let local_vote_bridge_active = slot.active_view < min_view
+            || matches!(slot.lock_state, FrontierOwnerLockState::LocallyVoted);
 
-        pending_commit_qc_observed
+        let pending_vote_or_commit_qc_observed = self
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .is_some_and(|pending| {
+                !pending.aborted
+                    && !pending.is_retired_same_height()
+                    && pending.height == height
+                    && pending.view < min_view
+                    && (pending.commit_qc_observed()
+                        || (pending.local_commit_vote_emitted() && local_vote_bridge_active))
+            });
+
+        pending_vote_or_commit_qc_observed
             || self
                 .subsystems
                 .validation
@@ -7861,6 +7877,7 @@ impl Actor {
             || self
                 .frontier_slot_live_local_owner_for_round(height, view)
                 .is_some()
+            || self.pending_live_local_owner_for_round(height, view)
             || (height == self.committed_height_snapshot().saturating_add(1)
                 && self
                     .local_same_height_vote(height, self.epoch_for_height(height))
@@ -25267,27 +25284,18 @@ impl Actor {
             }
         }
         let targets: Vec<_> = target_set.iter().cloned().collect();
+        let ready_targets = targets.clone();
 
         let roster = self.ensure_rbc_session_roster(key);
-        let has_missing_ready = !target_set.is_empty();
-        let mut ready_target_set = target_set;
-        if !roster.is_empty() {
+        let quorum_or_delivery_repair = if roster.is_empty() {
+            false
+        } else {
             let topology = super::network_topology::Topology::new(roster.clone());
             let required = self.rbc_deliver_quorum(&topology);
-            let quorum_or_delivery_repair =
-                session.delivered || (required != 0 && ready_count >= required);
-            if has_missing_ready && quorum_or_delivery_repair {
-                let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
-                let signature_topology =
-                    topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
-                for peer in signature_topology.as_ref() {
-                    if peer != &local_peer_id {
-                        ready_target_set.insert(peer.clone());
-                    }
-                }
-            }
-        }
-        let ready_targets: Vec<_> = ready_target_set.into_iter().collect();
+            session.delivered || (required != 0 && ready_count >= required)
+        };
+        let allow_targeted_payload_rescue =
+            !authoritative_ready_repair || quorum_or_delivery_repair;
 
         if targets.is_empty() && ready_targets.is_empty() {
             return false;
@@ -25307,7 +25315,8 @@ impl Actor {
 
         // Peers can still be missing INIT/chunks after the local session reaches DELIVER, so
         // keep targeted body rescue enabled under the existing cooldown until READY catches up.
-        if payload_due && !roster.is_empty() && !targets.is_empty() {
+        if allow_targeted_payload_rescue && payload_due && !roster.is_empty() && !targets.is_empty()
+        {
             if payload_session.total_chunks() != 0
                 && payload_session.received_chunks() < payload_session.total_chunks()
                 && let Some((height, view, payload_bytes, payload_hash)) = self
@@ -27536,6 +27545,36 @@ impl Actor {
                 committed_height,
                 now,
             )
+    }
+
+    fn should_preserve_missing_commit_qc_request_for_local_payload(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        request: &MissingBlockRequest,
+    ) -> bool {
+        if !matches!(request.phase, crate::sumeragi::consensus::Phase::Commit)
+            || self
+                .cached_commit_qc_for_block(block_hash, request.height, request.view)
+                .is_some()
+        {
+            return false;
+        }
+        let slot_owner_matches = self.authoritative_slot_owner_hash(request.height, request.view)
+            == Some(block_hash)
+            || self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == request.height
+                    && slot.view == request.view
+                    && slot.block_hash == block_hash
+            });
+        if !slot_owner_matches {
+            return false;
+        }
+        self.local_signed_block_for_hash(block_hash)
+            .is_some_and(|block| {
+                let header = block.header();
+                header.height().get() == request.height
+                    && header.view_change_index() == request.view
+            })
     }
 
     fn known_block_commit_qc_request_is_superseded_by_higher_new_view_quorum(
@@ -31418,11 +31457,22 @@ impl Actor {
         &mut self,
         height: u64,
     ) -> (usize, usize, usize, usize, usize, usize, usize) {
+        let preserve_commit_qc_repair: BTreeSet<_> = self
+            .pending
+            .missing_commit_qc_requests
+            .iter()
+            .filter(|(_, request)| request.height == height)
+            .filter(|(hash, request)| {
+                self.should_preserve_missing_commit_qc_request_for_local_payload(**hash, request)
+            })
+            .map(|(hash, _)| *hash)
+            .collect();
         let stale_pending: Vec<_> = self
             .pending
             .pending_blocks
             .iter()
             .filter(|(_, pending)| pending.height == height)
+            .filter(|(hash, _)| !preserve_commit_qc_repair.contains(hash))
             .map(|(hash, _)| *hash)
             .collect();
         let mut pending_removed = 0usize;
@@ -31457,6 +31507,7 @@ impl Actor {
             .missing_commit_qc_requests
             .iter()
             .filter(|(_, request)| request.height == height)
+            .filter(|(hash, _)| !preserve_commit_qc_repair.contains(hash))
             .map(|(hash, _)| *hash)
             .collect();
         for hash in stale_known_block_commit_qc {
@@ -34098,6 +34149,32 @@ impl Actor {
             })
     }
 
+    fn should_suppress_live_frontier_idle_missing_qc_reacquire(
+        &self,
+        height: u64,
+        current_view: u64,
+        dependency_signals: bool,
+        prior_same_height_reacquire: bool,
+        observed_head: Option<crate::sumeragi::consensus::QcHeaderRef>,
+    ) -> bool {
+        if !self.config.resilience.enabled || !dependency_signals || prior_same_height_reacquire {
+            return false;
+        }
+        if height != self.committed_height_snapshot().saturating_add(1) {
+            return false;
+        }
+        if observed_head.is_some_and(|head| head.height > height) {
+            return false;
+        }
+        if self.has_commit_phase_missing_qc_dependency_for_height(height)
+            || self.missing_qc_height_has_unresolved_dependency_at_height(height)
+        {
+            return false;
+        }
+        self.slot_has_round_liveness(height, current_view)
+            || self.pending_block_count_for_height(height) != 0
+    }
+
     fn pending_block_count_for_height(&self, height: u64) -> usize {
         self.pending
             .pending_blocks
@@ -35113,6 +35190,32 @@ impl Actor {
                 );
             }
             if reason == "quorum_timeout" {
+                if !allow_rotation
+                    && !self
+                        .frontier_slot
+                        .as_ref()
+                        .is_some_and(|slot| slot.height == height)
+                {
+                    let _ = self.seed_frontier_slot_from_same_height_evidence(
+                        height, view, now, reason, true,
+                    );
+                    return FrontierRecoveryAdvance::None;
+                }
+                if !allow_rotation
+                    && self.frontier_slot.as_ref().is_some_and(|slot| {
+                        slot.height == height
+                            && slot.view == view
+                            && slot.repair_state.quorum_timeout_rebroadcasted
+                    })
+                {
+                    debug!(
+                        height,
+                        view,
+                        reason,
+                        "suppressing exact-frontier quorum-timeout rotation while recovery caller only permits arming"
+                    );
+                    return FrontierRecoveryAdvance::None;
+                }
                 return self.handle_frontier_slot_event(
                     now,
                     FrontierSlotEvent::OnQuorumTimeout {
@@ -35587,13 +35690,22 @@ impl Actor {
         let mut requested = false;
         let mut triggered = false;
         let local_height = self.committed_height_snapshot();
+        let observed_head = self.observed_recovery_qc_head();
+        let suppress_live_frontier_anchor_reacquire = self
+            .should_suppress_live_frontier_idle_missing_qc_reacquire(
+                height,
+                current_view,
+                dependency_signals,
+                prior_same_height_reacquire,
+                observed_head,
+            );
         let contiguous_frontier_unresolved = self
             .frontier_catchup_target_height(local_height)
             .filter(|frontier_height| *frontier_height == local_height.saturating_add(1))
             .is_some_and(|frontier_height| {
                 self.frontier_catchup_has_unresolved_dependency(frontier_height)
             });
-        if let Some(highest) = self.observed_recovery_qc_head() {
+        if !suppress_live_frontier_anchor_reacquire && let Some(highest) = observed_head {
             let highest_far_ahead = highest.height > local_height.saturating_add(2);
             if !(contiguous_frontier_unresolved && highest_far_ahead) {
                 triggered = true;
@@ -35627,12 +35739,22 @@ impl Actor {
         } else {
             0
         };
-        requested |= self.request_range_pull_from_anchor_with_tier(
-            range_pull_height,
-            "idle_missing_qc_reacquire",
-            now,
-            broad_range_pull_tier,
-        );
+        if suppress_live_frontier_anchor_reacquire {
+            debug!(
+                height,
+                current_view,
+                local_height,
+                dependency_signals,
+                "suppressing idle missing-QC committed-anchor reacquire for live contiguous frontier round"
+            );
+        } else {
+            requested |= self.request_range_pull_from_anchor_with_tier(
+                range_pull_height,
+                "idle_missing_qc_reacquire",
+                now,
+                broad_range_pull_tier,
+            );
+        }
         if broad_range_pull_tier.is_some() {
             debug!(
                 height,
@@ -35646,7 +35768,7 @@ impl Actor {
         if requested || triggered {
             super::status::inc_consensus_missing_qc_reacquire_success();
         }
-        requested || triggered
+        requested || triggered || suppress_live_frontier_anchor_reacquire
     }
 
     fn ensure_proposal_liveness_slot(
@@ -37400,6 +37522,10 @@ impl Actor {
         {
             return true;
         }
+        let remote_higher_new_view_observed =
+            self.subsystems.propose.new_view_tracker.entries.keys().any(
+                |(entry_height, entry_view)| *entry_height == height && *entry_view > current_view,
+            );
         if !missing_qc_actionable_dependency_signals {
             if height == contiguous_frontier_height {
                 if exact_frontier_body_repair_active {
@@ -37439,16 +37565,7 @@ impl Actor {
                 } else {
                     ViewChangeCause::MissingQc
                 };
-                let remote_higher_new_view_observed =
-                    self.subsystems.propose.new_view_tracker.entries.keys().any(
-                        |(entry_height, entry_view)| {
-                            *entry_height == height && *entry_view > current_view
-                        },
-                    );
-                if !proposal_seen
-                    && frontier_slot_vote_backed_evidence
-                    && remote_higher_new_view_observed
-                {
+                if frontier_slot_vote_backed_evidence && remote_higher_new_view_observed {
                     debug!(
                         height,
                         view = current_view,
@@ -37493,14 +37610,13 @@ impl Actor {
                     );
                     return false;
                 }
-                let nonleader_empty_frontier_recovery_allowed =
-                    current_view == 0 || !self.local_is_round_leader(height, current_view);
-                if !proposal_seen
-                    && nonleader_empty_frontier_recovery_allowed
+                let empty_frontier_missing_qc_recovery_first = !proposal_seen
                     && matches!(direct_cause, ViewChangeCause::MissingQc)
+                    && current_view == 0
+                    && !self.exact_frontier_body_repair_active_at_height(height)
                     && !pre_reset_passive_frontier_slot_without_external_dependency
-                    && !self.frontier_slot_passive_catchup_active_at_height(height)
-                {
+                    && !self.frontier_slot_passive_catchup_active_at_height(height);
+                if empty_frontier_missing_qc_recovery_first {
                     let allow_recovery_rotation = self.frontier_recovery.is_some_and(|state| {
                         state.frontier_height == height
                             && state.last_cause == "missing_qc"
@@ -37711,6 +37827,27 @@ impl Actor {
                 } else {
                     ViewChangeCause::MissingQc
                 };
+            if frontier_slot_vote_backed_evidence && remote_higher_new_view_observed {
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    missing_qc_actionable_dependency_signals,
+                    "routing dependency-backed local vote evidence through unified quorum-timeout recovery after higher-view NEW_VIEW traffic"
+                );
+                return matches!(
+                    self.advance_frontier_recovery(
+                        "quorum_timeout",
+                        height,
+                        current_view,
+                        proposal_seen,
+                        false,
+                        false,
+                        now,
+                    ),
+                    FrontierRecoveryAdvance::Rotate
+                );
+            }
             if pre_reset_frontier_reanchor_unresolved_in_window
                 && matches!(direct_cause, ViewChangeCause::MissingQc)
                 && !self
@@ -37908,7 +38045,9 @@ impl Actor {
                         self.committed_height_snapshot(),
                         Instant::now(),
                     );
-                !preserve_exact_frontier_repair
+                let preserve_local_payload = self
+                    .should_preserve_missing_commit_qc_request_for_local_payload(**hash, request);
+                !(preserve_exact_frontier_repair || preserve_local_payload)
             })
             .map(|(hash, _)| *hash)
             .collect();

@@ -4848,6 +4848,8 @@ pub struct SumeragiRbc {
     pub rebroadcast_sessions_per_tick: usize,
     /// Maximum RBC payload chunks broadcast per tick.
     pub payload_chunks_per_tick: usize,
+    /// Whether inline frontier BlockCreated payloads also seed Proposal + RBC backup transport.
+    pub inline_block_created_backup: bool,
     /// Maximum number of persisted RBC session summaries retained on disk.
     pub store_max_sessions: usize,
     /// Soft quota for persisted RBC session summaries.

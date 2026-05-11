@@ -4023,6 +4023,12 @@ impl Actor {
             .max_by_key(|qc| qc.view)
             .cloned()
         {
+            if let Some(pending) = self.pending.pending_blocks.get_mut(&block_hash)
+                && pending.height == height
+                && pending.view == view
+            {
+                pending.note_commit_qc_observed(qc.epoch);
+            }
             let block_known_for_lock = self.block_known_for_lock(block_hash);
             if self.process_precommit_qc(&qc, block_known_for_lock, false) {
                 debug!(

@@ -3782,6 +3782,31 @@ mod tests {
         }
     }
 
+    fn test_domain_id() -> DomainId {
+        DomainId::try_new("wonderland", "universal").expect("domain id")
+    }
+
+    fn framed_instruction_payload<T>(value: &T) -> Vec<u8>
+    where
+        T: Instruction + norito::codec::Encode + 'static + norito::core::NoritoSerialize,
+    {
+        let (payload, flags) = norito::codec::encode_with_header_flags(value);
+        norito::core::frame_bare_with_header_flags::<T>(&payload, flags)
+            .expect("frame instruction payload")
+    }
+
+    fn bare_instruction_pair(name: &str, framed_payload: Vec<u8>) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        norito::core::NoritoSerialize::serialize(&(name.to_owned(), framed_payload), &mut bytes)
+            .expect("serialize instruction pair");
+        bytes
+    }
+
+    fn framed_instruction_pair(name: &str, framed_payload: Vec<u8>) -> Vec<u8> {
+        norito::core::to_bytes(&(name.to_owned(), framed_payload))
+            .expect("serialize framed instruction pair")
+    }
+
     #[test]
     fn aa_setup_instruction_registry() {
         let _guard = RegistryGuard::set(instruction_registry![Log]);
@@ -3976,6 +4001,21 @@ mod tests {
         assert_eq!(
             norito::to_bytes(&opaque).expect("encode opaque"),
             norito::to_bytes(&(wire_id.to_owned(), framed_payload)).expect("encode pair"),
+        );
+    }
+
+    #[test]
+    fn opaque_instruction_rejects_unframed_or_malformed_payloads() {
+        let log = Log::new(Level::INFO, "opaque reject raw".to_owned());
+        let raw_payload = Instruction::dyn_encode(&log);
+
+        assert!(
+            OpaqueInstruction::from_framed("opaque/raw", &raw_payload).is_err(),
+            "opaque instructions must carry a Norito-framed payload"
+        );
+        assert!(
+            OpaqueInstruction::from_framed("opaque/short", &[0x01, 0x02]).is_err(),
+            "short garbage must not be accepted as a framed opaque payload"
         );
     }
 
@@ -4189,6 +4229,174 @@ mod tests {
             norito::core::Error::Message(msg) => assert!(
                 msg.contains("canonical Norito framing"),
                 "error should steer callers to the canonical encoding: {msg}"
+            ),
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn instruction_box_strict_decoders_reject_removed_direct_instruction_pairs() {
+        use norito::core::DecodeFromSlice;
+
+        let _guard = RegistryGuard::set(crate::instruction_registry::default());
+        let direct_register = Register::domain(Domain::new(test_domain_id()));
+        let direct_repo = repo::RepoMarginCallIsi::new(
+            "instruction_box_removed_direct"
+                .parse()
+                .expect("repo agreement id"),
+        );
+
+        for (removed_name, framed_payload) in [
+            (
+                std::any::type_name::<Register<Domain>>(),
+                framed_instruction_payload(&direct_register),
+            ),
+            (
+                repo::RepoMarginCallIsi::WIRE_ID,
+                framed_instruction_payload(&direct_repo),
+            ),
+        ] {
+            let framed_pair = framed_instruction_pair(removed_name, framed_payload.clone());
+            let archived = norito::core::from_bytes::<InstructionBox>(&framed_pair)
+                .expect("instruction pair bytes");
+            assert!(
+                norito::core::NoritoDeserialize::try_deserialize(archived).is_err(),
+                "{removed_name} must be rejected by strict InstructionBox deserialization"
+            );
+
+            let bare_pair = bare_instruction_pair(removed_name, framed_payload);
+            assert!(
+                InstructionBox::decode_from_slice(&bare_pair).is_err(),
+                "{removed_name} must be rejected by canonical borrowed-pair decoding"
+            );
+        }
+    }
+
+    #[test]
+    fn instruction_box_lossy_deserialize_maps_removed_direct_pair_to_invalid_instruction() {
+        let _guard = RegistryGuard::set(crate::instruction_registry::default());
+        let direct_register = Register::domain(Domain::new(test_domain_id()));
+        let removed_name = std::any::type_name::<Register<Domain>>();
+        let framed_payload = framed_instruction_payload(&direct_register);
+        let framed_pair = framed_instruction_pair(removed_name, framed_payload.clone());
+        let archived =
+            norito::core::from_bytes::<InstructionBox>(&framed_pair).expect("instruction pair");
+
+        let decoded: InstructionBox = norito::core::NoritoDeserialize::deserialize(archived);
+        let invalid = decoded
+            .as_any()
+            .downcast_ref::<transparent::InvalidInstruction>()
+            .expect("removed direct instruction becomes invalid placeholder");
+        let expected_hash: [u8; 32] = iroha_crypto::Hash::new(&framed_payload).into();
+
+        assert_eq!(invalid.wire_id, removed_name);
+        assert_eq!(invalid.payload_hash, expected_hash);
+        assert!(
+            invalid.message.contains("not registered")
+                || invalid.message.contains("unknown instruction"),
+            "invalid placeholder should preserve the decode failure: {}",
+            invalid.message
+        );
+    }
+
+    #[test]
+    fn instruction_box_strict_decoders_reject_cross_family_instruction_pairs() {
+        use norito::core::DecodeFromSlice;
+
+        let _guard = RegistryGuard::set(crate::instruction_registry::default());
+        let register_payload = framed_instruction_payload(&RegisterBox::Domain(Register::domain(
+            Domain::new(test_domain_id()),
+        )));
+        let repo_payload = framed_instruction_payload(&repo::RepoInstructionBox::MarginCall(
+            repo::RepoMarginCallIsi::new("instruction_box_cross_family".parse().expect("repo id")),
+        ));
+
+        for (spoofed_name, mismatched_payload) in [
+            (MintBox::WIRE_ID, register_payload),
+            (settlement::SettlementInstructionBox::WIRE_ID, repo_payload),
+        ] {
+            let framed_pair = framed_instruction_pair(spoofed_name, mismatched_payload.clone());
+            let archived = norito::core::from_bytes::<InstructionBox>(&framed_pair)
+                .expect("instruction pair bytes");
+            assert!(
+                norito::core::NoritoDeserialize::try_deserialize(archived).is_err(),
+                "{spoofed_name} must reject a payload from another boxed family"
+            );
+
+            let bare_pair = bare_instruction_pair(spoofed_name, mismatched_payload);
+            assert!(
+                InstructionBox::decode_from_slice(&bare_pair).is_err(),
+                "{spoofed_name} must reject mismatched borrowed-pair payloads"
+            );
+        }
+    }
+
+    #[test]
+    fn instruction_box_lossy_deserialize_maps_cross_family_pair_to_invalid_instruction() {
+        let _guard = RegistryGuard::set(crate::instruction_registry::default());
+        let framed_payload = framed_instruction_payload(&RegisterBox::Domain(Register::domain(
+            Domain::new(test_domain_id()),
+        )));
+        let framed_pair = framed_instruction_pair(MintBox::WIRE_ID, framed_payload.clone());
+        let archived =
+            norito::core::from_bytes::<InstructionBox>(&framed_pair).expect("instruction pair");
+
+        let decoded: InstructionBox = norito::core::NoritoDeserialize::deserialize(archived);
+        let invalid = decoded
+            .as_any()
+            .downcast_ref::<transparent::InvalidInstruction>()
+            .expect("cross-family instruction becomes invalid placeholder");
+        let expected_hash: [u8; 32] = iroha_crypto::Hash::new(&framed_payload).into();
+
+        assert_eq!(invalid.wire_id, MintBox::WIRE_ID);
+        assert_eq!(invalid.payload_hash, expected_hash);
+    }
+
+    #[test]
+    fn instruction_box_lossy_deserialize_bounds_unknown_wire_error_message() {
+        let _guard = RegistryGuard::set(crate::instruction_registry::default());
+        let hostile_name = format!("iroha.{}", "x".repeat(2048));
+        let framed_pair = framed_instruction_pair(&hostile_name, Vec::new());
+        let archived =
+            norito::core::from_bytes::<InstructionBox>(&framed_pair).expect("instruction pair");
+
+        let decoded: InstructionBox = norito::core::NoritoDeserialize::deserialize(archived);
+        let invalid = decoded
+            .as_any()
+            .downcast_ref::<transparent::InvalidInstruction>()
+            .expect("unknown instruction becomes invalid placeholder");
+        let expected_hash: [u8; 32] = iroha_crypto::Hash::new(&[]).into();
+
+        assert_eq!(invalid.wire_id, hostile_name);
+        assert_eq!(invalid.payload_hash, expected_hash);
+        assert!(
+            invalid.message.len() <= 256,
+            "decode error should be bounded, got {} bytes",
+            invalid.message.len()
+        );
+        assert!(
+            invalid.message.contains("unknown instruction"),
+            "invalid placeholder should explain the rejected wire id"
+        );
+    }
+
+    #[test]
+    fn instruction_box_decode_from_slice_rejects_trailing_bytes_after_valid_pair() {
+        use norito::core::DecodeFromSlice;
+
+        let _guard = RegistryGuard::set(instruction_registry![Log]);
+        let boxed = InstructionBox::from(Log::new(Level::INFO, "pair tail".to_owned()));
+        let mut bare_pair = Vec::new();
+        norito::core::NoritoSerialize::serialize(&boxed, &mut bare_pair)
+            .expect("serialize instruction box pair");
+        bare_pair.extend_from_slice(&[0xAA, 0x55]);
+
+        let err = InstructionBox::decode_from_slice(&bare_pair)
+            .expect_err("trailing bytes after a valid pair must be rejected");
+        match err {
+            norito::core::Error::Message(msg) => assert!(
+                msg.contains("canonical Norito framing"),
+                "error should reject non-canonical trailing bytes: {msg}"
             ),
             other => panic!("unexpected error variant: {other:?}"),
         }

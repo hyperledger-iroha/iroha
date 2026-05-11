@@ -1317,6 +1317,7 @@ mod tests {
                         RBC_REBROADCAST_SESSIONS_PER_TICK,
                     payload_chunks_per_tick:
                         iroha_config::parameters::defaults::sumeragi::RBC_PAYLOAD_CHUNKS_PER_TICK,
+                inline_block_created_backup: iroha_config::parameters::defaults::sumeragi::RBC_INLINE_BLOCK_CREATED_BACKUP,
                     store_max_sessions:
                         iroha_config::parameters::defaults::sumeragi::RBC_STORE_MAX_SESSIONS,
                     store_soft_sessions:

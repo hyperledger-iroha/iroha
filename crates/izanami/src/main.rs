@@ -120,6 +120,23 @@ fn merge_with_overrides(
     if is_cli_source(matches, "prebuild_tx_workers") {
         base.prebuild_tx_workers = overrides.prebuild_tx_workers;
     }
+    if is_cli_source(matches, "sumeragi_block_max_transactions") {
+        base.sumeragi_block_max_transactions = overrides.sumeragi_block_max_transactions;
+    }
+    if is_cli_source(matches, "sumeragi_proposal_queue_scan_multiplier") {
+        base.sumeragi_proposal_queue_scan_multiplier =
+            overrides.sumeragi_proposal_queue_scan_multiplier;
+    }
+    if is_cli_source(matches, "sumeragi_collectors_k") {
+        base.sumeragi_collectors_k = overrides.sumeragi_collectors_k;
+    }
+    if is_cli_source(matches, "sumeragi_collectors_redundant_send_r") {
+        base.sumeragi_collectors_redundant_send_r = overrides.sumeragi_collectors_redundant_send_r;
+    }
+    if is_cli_source(matches, "sumeragi_inline_block_created_backup_rbc") {
+        base.sumeragi_inline_block_created_backup_rbc =
+            overrides.sumeragi_inline_block_created_backup_rbc;
+    }
     if is_cli_source(matches, "workload_profile") {
         base.workload_profile = overrides.workload_profile;
     }
@@ -353,6 +370,39 @@ mod tests {
             merged.latency_p95_threshold,
             Some(Duration::from_millis(900))
         );
+    }
+
+    #[test]
+    fn cli_overrides_sumeragi_block_tuning() {
+        let defaults = config::IzanamiArgs::defaults();
+        let mut persisted = defaults.clone();
+        persisted.sumeragi_block_max_transactions = 1_024;
+        persisted.sumeragi_proposal_queue_scan_multiplier = 1;
+        persisted.sumeragi_collectors_k = 4;
+        persisted.sumeragi_collectors_redundant_send_r = 4;
+        persisted.sumeragi_inline_block_created_backup_rbc = true;
+
+        let (cli_args, matches) = parse_cli_arguments(vec![
+            "izanami".to_string(),
+            "--tui".to_string(),
+            "--sumeragi-block-max-transactions".to_string(),
+            "1536".to_string(),
+            "--sumeragi-proposal-queue-scan-multiplier".to_string(),
+            "2".to_string(),
+            "--sumeragi-collectors-k".to_string(),
+            "3".to_string(),
+            "--sumeragi-collectors-redundant-send-r".to_string(),
+            "3".to_string(),
+            "--sumeragi-inline-block-created-backup-rbc".to_string(),
+            "false".to_string(),
+        ]);
+
+        let merged = merge_with_overrides(persisted, &cli_args, &matches);
+        assert_eq!(merged.sumeragi_block_max_transactions, 1_536);
+        assert_eq!(merged.sumeragi_proposal_queue_scan_multiplier, 2);
+        assert_eq!(merged.sumeragi_collectors_k, 3);
+        assert_eq!(merged.sumeragi_collectors_redundant_send_r, 3);
+        assert!(!merged.sumeragi_inline_block_created_backup_rbc);
     }
 
     #[test]

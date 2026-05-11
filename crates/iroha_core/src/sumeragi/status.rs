@@ -353,6 +353,12 @@ static LAST_COLLECT_PREVOTE_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COLLECT_PRECOMMIT_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COLLECT_AGG_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COMMIT_MS: AtomicU64 = AtomicU64::new(0);
+static MAX_PROPOSE_MS: AtomicU64 = AtomicU64::new(0);
+static MAX_COLLECT_DA_MS: AtomicU64 = AtomicU64::new(0);
+static MAX_COLLECT_PREVOTE_MS: AtomicU64 = AtomicU64::new(0);
+static MAX_COLLECT_PRECOMMIT_MS: AtomicU64 = AtomicU64::new(0);
+static MAX_COLLECT_AGG_MS: AtomicU64 = AtomicU64::new(0);
+static MAX_COMMIT_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_PROPOSE_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COLLECT_DA_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COLLECT_PREVOTE_EMA_MS: AtomicU64 = AtomicU64::new(0);
@@ -650,6 +656,7 @@ static VOTE_VALIDATION_DROPS_BY_PEER: OnceLock<
 static VOTE_VALIDATION_DROPS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static SETTLEMENT_STATUS: OnceLock<Mutex<SettlementStatusState>> = OnceLock::new();
 static LANE_ACTIVITY: OnceLock<Mutex<Vec<LaneActivitySnapshot>>> = OnceLock::new();
+static PIPELINE_EXECUTION: OnceLock<Mutex<PipelineExecutionSnapshot>> = OnceLock::new();
 static ACCESS_SET_SOURCES: OnceLock<Mutex<AccessSetSourceSummary>> = OnceLock::new();
 static DATASPACE_ACTIVITY: OnceLock<Mutex<Vec<DataspaceActivitySnapshot>>> = OnceLock::new();
 static RBC_LANE_BACKLOG: OnceLock<Mutex<Vec<LaneRbcSnapshot>>> = OnceLock::new();
@@ -1383,6 +1390,41 @@ pub struct LaneActivitySnapshot {
     pub rbc_chunks: u64,
     /// Approximate total RBC payload bytes attributed to this lane.
     pub rbc_bytes_total: u64,
+    /// Transactions prepared for detached overlay execution.
+    pub detached_prepared: u64,
+    /// Detached transaction deltas merged without sequential fallback.
+    pub detached_merged: u64,
+    /// Detached transaction deltas that fell back to sequential execution.
+    pub detached_fallback: u64,
+    /// Quarantine transactions executed in the sequential quarantine lane.
+    pub quarantine_executed: u64,
+}
+
+/// Aggregate execution summary for the latest block pipeline run.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PipelineExecutionSnapshot {
+    /// Total transaction vertices across all lanes.
+    pub tx_vertices_total: u64,
+    /// Total conflict edges across all lanes.
+    pub tx_edges_total: u64,
+    /// Total overlay fragments executed across all lanes.
+    pub overlay_count_total: u64,
+    /// Total overlay instructions executed across all lanes.
+    pub overlay_instr_total: u64,
+    /// Total overlay bytes executed across all lanes.
+    pub overlay_bytes_total: u64,
+    /// Total RBC chunks attributed across all lanes.
+    pub rbc_chunks_total: u64,
+    /// Total RBC payload bytes attributed across all lanes.
+    pub rbc_bytes_total: u64,
+    /// Transactions prepared for detached overlay execution.
+    pub detached_prepared_total: u64,
+    /// Detached transaction deltas merged without sequential fallback.
+    pub detached_merged_total: u64,
+    /// Detached transaction deltas that fell back to sequential execution.
+    pub detached_fallback_total: u64,
+    /// Quarantine transactions executed in the sequential quarantine lane.
+    pub quarantine_executed_total: u64,
 }
 
 /// Summary of access-set sources used for IVM transactions in the latest block.
@@ -3975,6 +4017,8 @@ pub struct StatusSnapshot {
     pub access_set_sources: AccessSetSourceSummary,
     /// Conflict rate in basis points for the latest validated block.
     pub pipeline_conflict_rate_bps: u64,
+    /// Aggregate execution snapshot for the latest block pipeline run.
+    pub pipeline_execution: PipelineExecutionSnapshot,
     /// Latest per-lane execution snapshot for the block pipeline.
     pub lane_activity: Vec<LaneActivitySnapshot>,
     /// Latest per-dataspace execution snapshot for the block pipeline.
@@ -4932,6 +4976,7 @@ pub fn snapshot() -> StatusSnapshot {
         vrf_penalties_pending,
         access_set_sources: access_set_source_snapshot(),
         pipeline_conflict_rate_bps: PIPELINE_CONFLICT_RATE_BPS.load(Ordering::Relaxed),
+        pipeline_execution: pipeline_execution_snapshot(),
         lane_activity: lane_activity_snapshot(),
         dataspace_activity: dataspace_activity_snapshot(),
         rbc_lane_backlog: rbc_lane_backlog_snapshot(),
@@ -4951,27 +4996,32 @@ pub fn snapshot() -> StatusSnapshot {
 
 /// Set last observed latency for the `propose` phase (ms).
 pub fn set_phase_propose_ms(ms: u64) {
-    LAST_PROPOSE_MS.store(ms, Ordering::Relaxed);
+    store_phase_ms(&LAST_PROPOSE_MS, &MAX_PROPOSE_MS, ms);
 }
 /// Set last observed latency for the data-availability collection phase (ms).
 pub fn set_phase_collect_da_ms(ms: u64) {
-    LAST_COLLECT_DA_MS.store(ms, Ordering::Relaxed);
+    store_phase_ms(&LAST_COLLECT_DA_MS, &MAX_COLLECT_DA_MS, ms);
 }
 /// Set last observed latency for the prevote collection phase (ms).
 pub fn set_phase_collect_prevote_ms(ms: u64) {
-    LAST_COLLECT_PREVOTE_MS.store(ms, Ordering::Relaxed);
+    store_phase_ms(&LAST_COLLECT_PREVOTE_MS, &MAX_COLLECT_PREVOTE_MS, ms);
 }
 /// Set last observed latency for the precommit collection phase (ms).
 pub fn set_phase_collect_precommit_ms(ms: u64) {
-    LAST_COLLECT_PRECOMMIT_MS.store(ms, Ordering::Relaxed);
+    store_phase_ms(&LAST_COLLECT_PRECOMMIT_MS, &MAX_COLLECT_PRECOMMIT_MS, ms);
 }
 /// Set last observed latency for redundant collector fan-out (ms).
 pub fn set_phase_collect_aggregator_ms(ms: u64) {
-    LAST_COLLECT_AGG_MS.store(ms, Ordering::Relaxed);
+    store_phase_ms(&LAST_COLLECT_AGG_MS, &MAX_COLLECT_AGG_MS, ms);
 }
 /// Set last observed latency for the commit phase (ms).
 pub fn set_phase_commit_ms(ms: u64) {
-    LAST_COMMIT_MS.store(ms, Ordering::Relaxed);
+    store_phase_ms(&LAST_COMMIT_MS, &MAX_COMMIT_MS, ms);
+}
+
+fn store_phase_ms(latest: &AtomicU64, maximum: &AtomicU64, ms: u64) {
+    latest.store(ms, Ordering::Relaxed);
+    maximum.fetch_max(ms, Ordering::Relaxed);
 }
 
 /// Set EMA latency for the propose phase (ms).
@@ -6306,6 +6356,12 @@ pub fn phase_latencies_snapshot() -> PhaseLatenciesSnapshot {
     let collect_precommit_ms = LAST_COLLECT_PRECOMMIT_MS.load(Ordering::Relaxed);
     let collect_aggregator_ms = LAST_COLLECT_AGG_MS.load(Ordering::Relaxed);
     let commit_ms = LAST_COMMIT_MS.load(Ordering::Relaxed);
+    let propose_max_ms = MAX_PROPOSE_MS.load(Ordering::Relaxed);
+    let collect_da_max_ms = MAX_COLLECT_DA_MS.load(Ordering::Relaxed);
+    let collect_prevote_max_ms = MAX_COLLECT_PREVOTE_MS.load(Ordering::Relaxed);
+    let collect_precommit_max_ms = MAX_COLLECT_PRECOMMIT_MS.load(Ordering::Relaxed);
+    let collect_aggregator_max_ms = MAX_COLLECT_AGG_MS.load(Ordering::Relaxed);
+    let commit_max_ms = MAX_COMMIT_MS.load(Ordering::Relaxed);
     let propose_ema_ms = LAST_PROPOSE_EMA_MS.load(Ordering::Relaxed);
     let collect_da_ema_ms = LAST_COLLECT_DA_EMA_MS.load(Ordering::Relaxed);
     let collect_prevote_ema_ms = LAST_COLLECT_PREVOTE_EMA_MS.load(Ordering::Relaxed);
@@ -6320,6 +6376,13 @@ pub fn phase_latencies_snapshot() -> PhaseLatenciesSnapshot {
         + u128::from(commit_ms))
     .min(u128::from(u64::MAX));
     let pipeline_total_ms = u64::try_from(pipeline_total_acc).unwrap_or(u64::MAX);
+    let pipeline_total_max_acc = (u128::from(propose_max_ms)
+        + u128::from(collect_da_max_ms)
+        + u128::from(collect_prevote_max_ms)
+        + u128::from(collect_precommit_max_ms)
+        + u128::from(commit_max_ms))
+    .min(u128::from(u64::MAX));
+    let pipeline_total_max_ms = u64::try_from(pipeline_total_max_acc).unwrap_or(u64::MAX);
     PhaseLatenciesSnapshot {
         propose_ms,
         collect_da_ms,
@@ -6327,6 +6390,12 @@ pub fn phase_latencies_snapshot() -> PhaseLatenciesSnapshot {
         collect_precommit_ms,
         collect_aggregator_ms,
         commit_ms,
+        propose_max_ms,
+        collect_da_max_ms,
+        collect_prevote_max_ms,
+        collect_precommit_max_ms,
+        collect_aggregator_max_ms,
+        commit_max_ms,
         propose_ema_ms,
         collect_da_ema_ms,
         collect_prevote_ema_ms,
@@ -6334,6 +6403,7 @@ pub fn phase_latencies_snapshot() -> PhaseLatenciesSnapshot {
         collect_aggregator_ema_ms,
         commit_ema_ms,
         pipeline_total_ms,
+        pipeline_total_max_ms,
         pipeline_total_ema_ms: LAST_PIPELINE_TOTAL_EMA_MS.load(Ordering::Relaxed),
         gossip_fallback_total: GOSSIP_FALLBACK_TOTAL.load(Ordering::Relaxed),
         block_created_dropped_by_lock_total: BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL
@@ -6544,9 +6614,18 @@ fn dataspace_activity_slot() -> &'static Mutex<Vec<DataspaceActivitySnapshot>> {
     DATASPACE_ACTIVITY.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+fn pipeline_execution_slot() -> &'static Mutex<PipelineExecutionSnapshot> {
+    PIPELINE_EXECUTION.get_or_init(|| Mutex::new(PipelineExecutionSnapshot::default()))
+}
+
 /// Replace the lane-activity snapshot used by `/v1/sumeragi/status`.
 pub fn set_lane_activity_snapshot(entries: Vec<LaneActivitySnapshot>) {
     *lane_activity_slot().lock().unwrap() = entries;
+}
+
+/// Replace the aggregate pipeline-execution snapshot used by `/v1/sumeragi/status`.
+pub fn set_pipeline_execution_snapshot(snapshot: PipelineExecutionSnapshot) {
+    *pipeline_execution_slot().lock().unwrap() = snapshot;
 }
 
 /// Replace the access-set source summary used by `/v1/sumeragi/status`.
@@ -6566,6 +6645,10 @@ pub fn set_dataspace_activity_snapshot(entries: Vec<DataspaceActivitySnapshot>) 
 
 fn lane_activity_snapshot() -> Vec<LaneActivitySnapshot> {
     lane_activity_slot().lock().unwrap().clone()
+}
+
+fn pipeline_execution_snapshot() -> PipelineExecutionSnapshot {
+    *pipeline_execution_slot().lock().unwrap()
 }
 
 fn access_set_source_snapshot() -> AccessSetSourceSummary {
@@ -7798,6 +7881,7 @@ pub(crate) fn reset_qc_latency_stats_for_tests() {
 pub(crate) fn reset_rbc_backlog_stats_for_tests() {
     *rbc_backlog_slot().lock().unwrap() = RbcBacklogSnapshot::default();
     lane_activity_slot().lock().unwrap().clear();
+    *pipeline_execution_slot().lock().unwrap() = PipelineExecutionSnapshot::default();
     *access_set_source_slot().lock().unwrap() = AccessSetSourceSummary::default();
     PIPELINE_CONFLICT_RATE_BPS.store(0, Ordering::Relaxed);
     dataspace_activity_slot().lock().unwrap().clear();
@@ -8142,6 +8226,25 @@ pub(crate) fn rbc_store_pressure_log_state_for_tests() -> (u8, u64) {
 
 #[cfg(test)]
 pub(crate) fn reset_gossip_fallback_for_tests() {
+    LAST_PROPOSE_MS.store(0, Ordering::Relaxed);
+    LAST_COLLECT_DA_MS.store(0, Ordering::Relaxed);
+    LAST_COLLECT_PREVOTE_MS.store(0, Ordering::Relaxed);
+    LAST_COLLECT_PRECOMMIT_MS.store(0, Ordering::Relaxed);
+    LAST_COLLECT_AGG_MS.store(0, Ordering::Relaxed);
+    LAST_COMMIT_MS.store(0, Ordering::Relaxed);
+    MAX_PROPOSE_MS.store(0, Ordering::Relaxed);
+    MAX_COLLECT_DA_MS.store(0, Ordering::Relaxed);
+    MAX_COLLECT_PREVOTE_MS.store(0, Ordering::Relaxed);
+    MAX_COLLECT_PRECOMMIT_MS.store(0, Ordering::Relaxed);
+    MAX_COLLECT_AGG_MS.store(0, Ordering::Relaxed);
+    MAX_COMMIT_MS.store(0, Ordering::Relaxed);
+    LAST_PROPOSE_EMA_MS.store(0, Ordering::Relaxed);
+    LAST_COLLECT_DA_EMA_MS.store(0, Ordering::Relaxed);
+    LAST_COLLECT_PREVOTE_EMA_MS.store(0, Ordering::Relaxed);
+    LAST_COLLECT_PRECOMMIT_EMA_MS.store(0, Ordering::Relaxed);
+    LAST_COLLECT_AGG_EMA_MS.store(0, Ordering::Relaxed);
+    LAST_COMMIT_EMA_MS.store(0, Ordering::Relaxed);
+    LAST_PIPELINE_TOTAL_EMA_MS.store(0, Ordering::Relaxed);
     GOSSIP_FALLBACK_TOTAL.store(0, Ordering::Relaxed);
     GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL.store(0, Ordering::Relaxed);
     QUORUM_STALL_AGE_ESCALATION_TOTAL.store(0, Ordering::Relaxed);
@@ -8197,6 +8300,18 @@ pub struct PhaseLatenciesSnapshot {
     pub collect_aggregator_ms: u64,
     /// Last observed latency for commit phase (ms).
     pub commit_ms: u64,
+    /// Maximum observed latency for the propose phase since process start (ms).
+    pub propose_max_ms: u64,
+    /// Maximum observed latency for data-availability QC collection since process start (ms).
+    pub collect_da_max_ms: u64,
+    /// Maximum observed latency for prevote QC collection since process start (ms).
+    pub collect_prevote_max_ms: u64,
+    /// Maximum observed latency for precommit QC collection since process start (ms).
+    pub collect_precommit_max_ms: u64,
+    /// Maximum observed latency for redundant collector fan-out since process start (ms).
+    pub collect_aggregator_max_ms: u64,
+    /// Maximum observed latency for commit phase since process start (ms).
+    pub commit_max_ms: u64,
     /// EMA latency for the propose phase (ms).
     pub propose_ema_ms: u64,
     /// EMA latency for data-availability QC collection (ms).
@@ -8211,6 +8326,8 @@ pub struct PhaseLatenciesSnapshot {
     pub commit_ema_ms: u64,
     /// Aggregate pipeline latency across propose/DA/prevote/precommit/commit (ms).
     pub pipeline_total_ms: u64,
+    /// Sum of per-phase maximum latencies across propose/DA/prevote/precommit/commit (ms).
+    pub pipeline_total_max_ms: u64,
     /// Aggregate pipeline EMA latency across propose/DA/prevote/precommit/commit (ms).
     pub pipeline_total_ema_ms: u64,
     /// Gossip fallback invocations (collectors exhausted).
@@ -8324,8 +8441,22 @@ mod tests {
             prepass_merge: 4,
             conservative_fallback: 5,
         };
+        let execution = super::PipelineExecutionSnapshot {
+            tx_vertices_total: 10,
+            tx_edges_total: 3,
+            overlay_count_total: 4,
+            overlay_instr_total: 40,
+            overlay_bytes_total: 400,
+            rbc_chunks_total: 2,
+            rbc_bytes_total: 2_048,
+            detached_prepared_total: 5,
+            detached_merged_total: 4,
+            detached_fallback_total: 1,
+            quarantine_executed_total: 0,
+        };
         super::set_access_set_source_summary(summary);
         super::set_pipeline_conflict_rate_bps(250);
+        super::set_pipeline_execution_snapshot(execution);
 
         let snap = super::snapshot();
         assert_eq!(
@@ -8342,6 +8473,14 @@ mod tests {
             summary.conservative_fallback
         );
         assert_eq!(snap.pipeline_conflict_rate_bps, 250);
+        assert_eq!(
+            snap.pipeline_execution.detached_merged_total,
+            execution.detached_merged_total
+        );
+        assert_eq!(
+            snap.pipeline_execution.overlay_bytes_total,
+            execution.overlay_bytes_total
+        );
 
         super::reset_rbc_backlog_stats_for_tests();
     }
@@ -8873,8 +9012,12 @@ mod tests {
         super::inc_gossip_fallback();
         let snapshot = super::phase_latencies_snapshot();
         assert_eq!(snapshot.collect_aggregator_ms, 11);
+        assert_eq!(snapshot.collect_da_max_ms, 6);
+        assert_eq!(snapshot.collect_precommit_max_ms, 8);
+        assert_eq!(snapshot.collect_aggregator_max_ms, 11);
         assert_eq!(snapshot.collect_aggregator_ema_ms, 31);
         assert_eq!(snapshot.pipeline_total_ms, 35);
+        assert_eq!(snapshot.pipeline_total_max_ms, 35);
         assert_eq!(snapshot.pipeline_total_ema_ms, 30);
         assert_eq!(snapshot.gossip_fallback_total, 2);
         assert_eq!(snapshot.block_created_dropped_by_lock_total, 0);

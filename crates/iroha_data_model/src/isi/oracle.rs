@@ -583,6 +583,21 @@ mod tests {
         assert_eq!(decoded, value);
     }
 
+    fn assert_framed_rejects_truncated<T>(value: &T)
+    where
+        T: norito::core::NoritoSerialize,
+        for<'de> T: norito::core::NoritoDeserialize<'de>,
+    {
+        let bytes = norito::to_bytes(value).expect("encode oracle instruction");
+        let truncated_lengths = [0_usize, 1, bytes.len() / 2, bytes.len().saturating_sub(1)];
+        for len in truncated_lengths {
+            assert!(
+                norito::decode_from_bytes::<T>(&bytes[..len]).is_err(),
+                "truncated oracle instruction frame of length {len} must reject"
+            );
+        }
+    }
+
     fn assert_registry_decodes<T>(registry: &crate::isi::InstructionRegistry, value: T)
     where
         T: crate::isi::Instruction
@@ -695,6 +710,33 @@ mod tests {
         assert_slice_roundtrip(rollback);
         assert_slice_roundtrip(record_binding);
         assert_slice_roundtrip(revoke_binding);
+    }
+
+    #[test]
+    fn oracle_framed_decode_rejects_truncated_payloads() {
+        let (
+            register,
+            submit,
+            aggregate,
+            open_dispute,
+            resolve_dispute,
+            propose,
+            vote,
+            rollback,
+            record_binding,
+            revoke_binding,
+        ) = sample_values();
+
+        assert_framed_rejects_truncated(&register);
+        assert_framed_rejects_truncated(&submit);
+        assert_framed_rejects_truncated(&aggregate);
+        assert_framed_rejects_truncated(&open_dispute);
+        assert_framed_rejects_truncated(&resolve_dispute);
+        assert_framed_rejects_truncated(&propose);
+        assert_framed_rejects_truncated(&vote);
+        assert_framed_rejects_truncated(&rollback);
+        assert_framed_rejects_truncated(&record_binding);
+        assert_framed_rejects_truncated(&revoke_binding);
     }
 
     #[test]

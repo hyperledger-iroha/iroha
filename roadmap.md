@@ -1,6 +1,6 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-05-10
+Last updated: 2026-05-11
 
 Completed history lives in `status.md`. This file should only track unfinished work.
 
@@ -28,27 +28,35 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Sumeragi vNext consensus replacement
 
-- Keep reducing the remaining 20k Izanami queue-drain gap now that the
-  large-block merge bottleneck is no longer visible and cert-only commit-QC
-  recovery can replay cached votes to requesters. The 2026-05-10
-  cert-vote-replay rerun
-  `dist/izanami-prebuilt-20k-fastpq-gpu-cert-vote-replay-120s-20260510-154724`
-  accepted and succeeded all `2,400,000` submissions with zero failures,
-  reached strict height `16` / strict approved `57,385`, kept submit latency at
-  `p50=3ms` / `p95=29ms`, dropped missing-block fetches to `105`, replayed
-  cached commit votes on the cert-only path `53` times, and ended with
-  commit-inflight timeout total `0` and commit inflight inactive. The
-  transaction queue still saturated (`843,109 / 2,400,000`) and final peer
-  height/approval skew remained `2` / `8,192`, so the open work is queue drain
-  and final height convergence under sustained 20k ingress after missing-QC
-  pressure has been reduced. The 8,192 and 16,384 block-cap experiments proved
-  that larger blocks are not the next fix on the 300ms pipeline, and a
-  same-height commit-vote inbound bypass was tested but not retained after it
-  regressed the 20k gate. Rerun the clean 20k gate after the next
-  Sumeragi/QC-cadence or ingress-backpressure change and keep the
-  simple-transfer batch path guarded by exact trigger-filter matching so
-  per-transaction transcript, event, trigger, and rejection semantics remain
-  intact.
+- Optimize from the cap `1088` / pipeline `250ms` 20k liveness baseline toward
+  higher applied throughput while preserving the hard 2-3s consensus cadence
+  gate. The current confirmed 300s stable point is
+  `dist/izanami-liveness-matrix-20k-cap1088-p250-soak-300s-20260511-071656`:
+  scan multiplier `32`, collectors/redundant-send `3/3`, backup RBC on, all
+  `6,000,000` submissions accepted, strict height `127`, zero view changes,
+  runner p95 `2510ms`, parsed peer p95 `2.982s`, max peer gap `3.530s`, full
+  detached merge (`1088/1088`, fallback `0`), and `453.58` committed TPS.
+  Higher rows are rejected for now: cap `1104`/`250ms` failed the hard runner
+  gate at `3005ms`, cap `1120`/`250ms` failed both runner and parsed p95 gates,
+  cap `1120`/`300ms` was only a runner-gate near miss, and the older cap
+  `1312` 120s pass failed the 300s soak. Next, target DA/precommit and
+  target-height runner-tail reduction before trying to raise cap again. Accept
+  a result only if the runner gate, parsed peer p95 gate, zero-view-change
+  requirement, and detached-merge counters remain green. Keep backup-on as the
+  default recovery posture and use backup-off only as an explicit experiment
+  row. The
+  4,096, 8,192, and 16,384 cap experiments already proved that much larger
+  blocks are not the next fix without reducing DA/RBC/QC/application tail
+  latency and queue-drain cost. Keep the simple-transfer batch path guarded by
+  exact trigger-filter matching so per-transaction transcript, event, trigger,
+  and rejection semantics remain intact.
+- Treat 20k committed TPS as a separate throughput goal from 20k ingress
+  liveness. At 2-3s blocks, the current safe cap can only commit hundreds of
+  transactions per second; reaching 20k committed TPS requires safe payloads in
+  the tens of thousands of transactions per block, equivalent deterministic
+  parallel execution, or both. Use the matrix runner for every optimization
+  step and require the consensus liveness gate to stay green before accepting a
+  higher-throughput result.
 - Keep hardening the actor-owned vNext round state now that the standalone
   runtime reactor boundary is gone. vNext control frames, body-backed proposal
   acceptance, DA/RBC availability handoffs, timeout ticks, validation worker

@@ -351,6 +351,18 @@ struct SumeragiPhasesEma {
 }
 
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+#[allow(clippy::struct_field_names)]
+struct SumeragiPhasesMax {
+    propose_ms: u64,
+    collect_da_ms: u64,
+    collect_prevote_ms: u64,
+    collect_precommit_ms: u64,
+    collect_aggregator_ms: u64,
+    commit_ms: u64,
+    pipeline_total_ms: u64,
+}
+
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 struct SumeragiPhasesResponse {
     propose_ms: u64,
     collect_da_ms: u64,
@@ -363,6 +375,7 @@ struct SumeragiPhasesResponse {
     block_created_dropped_by_lock_total: u64,
     block_created_hint_mismatch_total: u64,
     block_created_proposal_mismatch_total: u64,
+    max_ms: SumeragiPhasesMax,
     ema_ms: SumeragiPhasesEma,
 }
 
@@ -7513,6 +7526,15 @@ pub async fn handle_v1_sumeragi_phases(
         block_created_dropped_by_lock_total: snap.block_created_dropped_by_lock_total,
         block_created_hint_mismatch_total: snap.block_created_hint_mismatch_total,
         block_created_proposal_mismatch_total: snap.block_created_proposal_mismatch_total,
+        max_ms: SumeragiPhasesMax {
+            propose_ms: snap.propose_max_ms,
+            collect_da_ms: snap.collect_da_max_ms,
+            collect_prevote_ms: snap.collect_prevote_max_ms,
+            collect_precommit_ms: snap.collect_precommit_max_ms,
+            collect_aggregator_ms: snap.collect_aggregator_max_ms,
+            commit_ms: snap.commit_max_ms,
+            pipeline_total_ms: snap.pipeline_total_max_ms,
+        },
         ema_ms: SumeragiPhasesEma {
             propose_ms: snap.propose_ema_ms,
             collect_da_ms: snap.collect_da_ema_ms,
@@ -45003,6 +45025,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                     json_entry("overlay_bytes_total", entry.overlay_bytes_total),
                     json_entry("rbc_chunks", entry.rbc_chunks),
                     json_entry("rbc_bytes_total", entry.rbc_bytes_total),
+                    json_entry("detached_prepared", entry.detached_prepared),
+                    json_entry("detached_merged", entry.detached_merged),
+                    json_entry("detached_fallback", entry.detached_fallback),
+                    json_entry("quarantine_executed", entry.quarantine_executed),
                 ])
             })
             .collect(),
@@ -45014,6 +45040,43 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry(
             "conservative_fallback",
             snap.access_set_sources.conservative_fallback,
+        ),
+    ]);
+    let pipeline_execution = json_object(vec![
+        json_entry(
+            "tx_vertices_total",
+            snap.pipeline_execution.tx_vertices_total,
+        ),
+        json_entry("tx_edges_total", snap.pipeline_execution.tx_edges_total),
+        json_entry(
+            "overlay_count_total",
+            snap.pipeline_execution.overlay_count_total,
+        ),
+        json_entry(
+            "overlay_instr_total",
+            snap.pipeline_execution.overlay_instr_total,
+        ),
+        json_entry(
+            "overlay_bytes_total",
+            snap.pipeline_execution.overlay_bytes_total,
+        ),
+        json_entry("rbc_chunks_total", snap.pipeline_execution.rbc_chunks_total),
+        json_entry("rbc_bytes_total", snap.pipeline_execution.rbc_bytes_total),
+        json_entry(
+            "detached_prepared_total",
+            snap.pipeline_execution.detached_prepared_total,
+        ),
+        json_entry(
+            "detached_merged_total",
+            snap.pipeline_execution.detached_merged_total,
+        ),
+        json_entry(
+            "detached_fallback_total",
+            snap.pipeline_execution.detached_fallback_total,
+        ),
+        json_entry(
+            "quarantine_executed_total",
+            snap.pipeline_execution.quarantine_executed_total,
         ),
     ]);
     let dataspace_activity = Value::Array(
@@ -45413,6 +45476,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "pipeline_conflict_rate_bps",
             snap.pipeline_conflict_rate_bps,
         ),
+        json_entry("pipeline_execution", pipeline_execution),
         json_entry("access_set_sources", access_set_sources),
         json_entry("lane_activity", lane_activity),
         json_entry("dataspace_activity", dataspace_activity),
@@ -45915,6 +45979,10 @@ mod status_tests {
     fn status_snapshot_strips_lane_fields_when_disabled() {
         use core::num::NonZeroU64;
         let snapshot = sumeragi::StatusSnapshot {
+            pipeline_execution: status::PipelineExecutionSnapshot {
+                detached_merged_total: 4,
+                ..Default::default()
+            },
             lane_activity: vec![status::LaneActivitySnapshot {
                 lane_id: 1,
                 tx_vertices: 7,
@@ -45924,6 +45992,7 @@ mod status_tests {
                 overlay_bytes_total: 2,
                 rbc_chunks: 0,
                 rbc_bytes_total: 0,
+                ..status::LaneActivitySnapshot::default()
             }],
             dataspace_activity: vec![status::DataspaceActivitySnapshot {
                 lane_id: 1,
@@ -46003,6 +46072,7 @@ mod status_tests {
         assert!(stripped.lane_relay_envelopes.is_empty());
         assert_eq!(stripped.lane_governance_sealed_total, 0);
         assert!(stripped.lane_governance_sealed_aliases.is_empty());
+        assert_eq!(stripped.pipeline_execution.detached_merged_total, 4);
     }
 
     #[test]
@@ -47078,6 +47148,82 @@ mod status_tests {
                 .and_then(Value::as_u64)
                 .unwrap(),
             512
+        );
+    }
+
+    #[test]
+    fn status_snapshot_json_includes_lane_execution_counters() {
+        let snap = sumeragi::StatusSnapshot {
+            lane_activity: vec![status::LaneActivitySnapshot {
+                lane_id: 7,
+                tx_vertices: 11,
+                tx_edges: 3,
+                overlay_count: 11,
+                overlay_instr_total: 11,
+                detached_prepared: 10,
+                detached_merged: 9,
+                detached_fallback: 1,
+                quarantine_executed: 0,
+                ..Default::default()
+            }],
+            pipeline_execution: status::PipelineExecutionSnapshot {
+                tx_vertices_total: 11,
+                tx_edges_total: 3,
+                overlay_count_total: 11,
+                overlay_instr_total: 11,
+                detached_prepared_total: 10,
+                detached_merged_total: 9,
+                detached_fallback_total: 1,
+                quarantine_executed_total: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let payload = status_snapshot_json(&snap);
+        let pipeline_execution = payload
+            .get("pipeline_execution")
+            .and_then(Value::as_object)
+            .expect("pipeline execution object");
+        assert_eq!(
+            pipeline_execution
+                .get("detached_prepared_total")
+                .and_then(Value::as_u64),
+            Some(10)
+        );
+        assert_eq!(
+            pipeline_execution
+                .get("detached_merged_total")
+                .and_then(Value::as_u64),
+            Some(9)
+        );
+        assert_eq!(
+            pipeline_execution
+                .get("detached_fallback_total")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        let lane_activity = payload
+            .get("lane_activity")
+            .and_then(Value::as_array)
+            .expect("lane activity array");
+        let entry = lane_activity[0]
+            .as_object()
+            .expect("lane activity object entry");
+        assert_eq!(
+            entry.get("detached_prepared").and_then(Value::as_u64),
+            Some(10)
+        );
+        assert_eq!(
+            entry.get("detached_merged").and_then(Value::as_u64),
+            Some(9)
+        );
+        assert_eq!(
+            entry.get("detached_fallback").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            entry.get("quarantine_executed").and_then(Value::as_u64),
+            Some(0)
         );
     }
 }

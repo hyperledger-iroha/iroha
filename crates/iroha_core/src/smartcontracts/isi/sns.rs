@@ -924,6 +924,7 @@ mod tests {
 
         let mut block = state.block(next_header(&state));
         let mut stx = block.transaction();
+        stx.tx_call_hash = Some(Hash::prehashed([0xC5; Hash::LENGTH]));
         iroha_data_model::isi::sns::RegisterSnsName::new(request)
             .execute(&payer, &mut stx)
             .expect_err("unfunded payer must not register SNS name");
@@ -984,7 +985,7 @@ mod tests {
         {
             let mut block = state.block(next_header(&state));
             let mut stx = block.transaction();
-            seed_test_call_hash(&mut stx, 0xC5);
+            seed_test_call_hash(&mut stx, 0xC6);
             AcquireAccountAliasLease::new(alias, authority.clone(), authority.clone(), 1, None)
                 .execute(&authority, &mut stx)
                 .expect("acquire lease with deployment payment asset");
@@ -1059,6 +1060,7 @@ mod tests {
             let mut stx = block.transaction();
             stx.current_dataspace_id = Some(paynet);
             stx.world.current_dataspace_id = Some(paynet);
+            stx.tx_call_hash = Some(Hash::prehashed([0xC7; Hash::LENGTH]));
             AcquireAccountAliasLease::new(alias, authority.clone(), authority.clone(), 1, None)
                 .execute(&authority, &mut stx)
                 .expect("external settlement skips local global asset transfer");
@@ -1116,6 +1118,7 @@ mod tests {
 
         let mut block = state.block(next_header(&state));
         let mut stx = block.transaction();
+        stx.tx_call_hash = Some(Hash::prehashed([0xC8; Hash::LENGTH]));
         let err = AcquireAccountAliasLease::new(
             AccountAlias::domainless("merchant".parse().expect("label"), DataSpaceId::UNIVERSAL),
             authority.clone(),
@@ -1190,6 +1193,7 @@ mod tests {
 
         let mut block = state.block(next_header(&state));
         let mut stx = block.transaction();
+        stx.tx_call_hash = Some(Hash::prehashed([0xC9; Hash::LENGTH]));
         let err = RenewAccountAliasLease::new(alias, authority.clone(), 1)
             .execute(&authority, &mut stx)
             .expect_err("non-owner without permission must fail");

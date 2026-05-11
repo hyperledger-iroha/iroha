@@ -688,7 +688,10 @@ fn ivm_syscall_charges_fees() {
         .expect("execution");
 
     let scall_cost = ivm::gas::cost_of(scall).expect("SCALL must have gas cost");
-    assert_eq!(state_tx.last_tx_gas_used, scall_cost);
+    // DEBUG_PRINT charges deterministic host work gas on top of the SCALL opcode.
+    let debug_print_host_gas = 16;
+    let expected_debug_print_gas = scall_cost + debug_print_host_gas;
+    assert_eq!(state_tx.last_tx_gas_used, expected_debug_print_gas);
 
     let fee = u128::from(state_tx.last_tx_gas_used) * u128::from(rate);
     let payer_balance_after = state_tx

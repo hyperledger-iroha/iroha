@@ -2,8 +2,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //!
 //! We run the same block twice with `parallel_apply=false` and `parallel_apply=true`.
-//! With telemetry enabled, the detached-pipeline counters should remain zero in
-//! sequential mode and be non-zero in parallel mode (at least `prepared`).
+//! With telemetry enabled, the detached-pipeline metrics should remain zero in
+//! sequential mode and be non-zero in parallel mode. Without telemetry, the
+//! public status snapshot should still expose post-apply detached counters.
 
 use std::borrow::Cow;
 
@@ -94,9 +95,14 @@ fn parallel_apply_knob_affects_detached_counters() {
     let cb = vb.commit_unchecked().unpack(|_| {});
     let _ = sb.apply_without_execution(&cb, Vec::new());
     let (prep_s, merged_s, fallback_s) = state_seq.view().metrics().pipeline_detached_counts();
+    let status_s = iroha_core::sumeragi::status::snapshot();
     assert_eq!(prep_s, 0, "sequential: prepared must be zero");
     assert_eq!(merged_s, 0, "sequential: merged must be zero");
     assert_eq!(fallback_s, 0, "sequential: fallback must be zero");
+    assert_eq!(
+        status_s.pipeline_execution.detached_prepared_total, 0,
+        "sequential status: prepared must be zero"
+    );
 
     // Parallel mode: expect at least one prepared entry
     let (mut state_par, chain_id, alice_id, kp) = build_world();
@@ -109,9 +115,14 @@ fn parallel_apply_knob_affects_detached_counters() {
     let cb = vb.commit_unchecked().unpack(|_| {});
     let _ = sb.apply_without_execution(&cb, Vec::new());
     let (prep_p, _merged_p, _fallback_p) = state_par.view().metrics().pipeline_detached_counts();
+    let status_p = iroha_core::sumeragi::status::snapshot();
     assert!(
         prep_p >= 1,
         "parallel: expected at least one prepared entry"
+    );
+    assert!(
+        status_p.pipeline_execution.detached_prepared_total >= 1,
+        "parallel status: expected at least one prepared entry"
     );
 }
 
@@ -129,5 +140,17 @@ fn parallel_apply_knob_compiles_without_telemetry() {
         let vb = ValidBlock::validate_unchecked(new_block, &mut sb).unpack(|_| {});
         let cb = vb.commit_unchecked().unpack(|_| {});
         let _ = sb.apply_without_execution(&cb, Vec::new());
+        let status = iroha_core::sumeragi::status::snapshot();
+        if flag {
+            assert!(
+                status.pipeline_execution.detached_prepared_total >= 1,
+                "parallel status: expected at least one prepared entry"
+            );
+        } else {
+            assert_eq!(
+                status.pipeline_execution.detached_prepared_total, 0,
+                "sequential status: prepared must be zero"
+            );
+        }
     }
 }

@@ -10861,11 +10861,12 @@ mod pointer_abi_tests {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(10_000);
         let mut host = CoreHost::new(fixture_account("alice"));
-        const UNKNOWN_SYSCALL: u32 = 0xE1;
+        // Pick a syscall number outside allowed/known ranges.
+        const UNKNOWN_SYSCALL: u32 = u32::MAX;
         let res = host.syscall(UNKNOWN_SYSCALL, &mut vm);
         assert!(matches!(
             res,
-            Err(ivm::VMError::UnknownSyscall(number)) if number == UNKNOWN_SYSCALL
+            Err(ivm::VMError::UnknownSyscall(UNKNOWN_SYSCALL))
         ));
     }
 
@@ -11000,7 +11001,7 @@ fn build_program(code: &[u8], vector_length: u8) -> Vec<u8> {
 mod tests {
     use std::{collections::BTreeMap, sync::Arc};
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     #[cfg(not(feature = "fast_dsl"))]
     use iroha_data_model::query::account::prelude::FindAccounts;
     use iroha_data_model::{
@@ -13474,7 +13475,7 @@ seiyaku AliasPayout {{
         let mut tx = block.transaction();
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
-        seed_test_call_hash(&mut tx, 0xC1);
+        seed_test_call_hash(&mut tx, 0xF1);
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias.clone(),
             authority.clone(),
@@ -13610,7 +13611,7 @@ seiyaku AliasPayout {{
         let mut tx = block.transaction();
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
-        seed_test_call_hash(&mut tx, 0xC2);
+        seed_test_call_hash(&mut tx, 0xF2);
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias.clone(),
             authority.clone(),
@@ -13710,7 +13711,7 @@ seiyaku AliasPayout {{
         let mut tx = block.transaction();
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
-        seed_test_call_hash(&mut tx, 0xC3);
+        seed_test_call_hash(&mut tx, 0xF3);
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias.clone(),
             authority.clone(),
@@ -13798,6 +13799,7 @@ seiyaku Callee {
             Json::new(()),
         );
         let gas = result.expect("call_contract syscall should succeed");
+        assert!(gas > 0);
         assert!(durable_state_overlay.is_empty());
         let tlv = vm
             .memory
@@ -14757,6 +14759,7 @@ seiyaku AliasPayout {
             )),
             paynet,
         );
+        tx.tx_call_hash = Some(Hash::prehashed([0xF4; Hash::LENGTH]));
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias.clone(),
             authority.clone(),
@@ -15258,6 +15261,7 @@ seiyaku AliasPayout {
             )),
             paynet,
         );
+        tx.tx_call_hash = Some(Hash::prehashed([0xF5; Hash::LENGTH]));
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias.clone(),
             authority.clone(),
@@ -15582,6 +15586,7 @@ seiyaku AliasPayout {
             )),
             paynet,
         );
+        tx.tx_call_hash = Some(Hash::prehashed([0xF6; Hash::LENGTH]));
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias.clone(),
             authority.clone(),
@@ -15733,6 +15738,7 @@ seiyaku AliasPayout {
             )),
             paynet,
         );
+        tx.tx_call_hash = Some(Hash::prehashed([0xF7; Hash::LENGTH]));
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias.clone(),
             authority.clone(),
@@ -15884,6 +15890,7 @@ seiyaku AliasPayout {
             )),
             paynet,
         );
+        tx.tx_call_hash = Some(Hash::prehashed([0xF8; Hash::LENGTH]));
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias,
             authority.clone(),
@@ -16019,6 +16026,7 @@ seiyaku AliasPayout {
             )),
             paynet,
         );
+        tx.tx_call_hash = Some(Hash::prehashed([0xF9; Hash::LENGTH]));
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias,
             authority.clone(),
@@ -16154,6 +16162,7 @@ seiyaku AliasPayout {
             )),
             paynet,
         );
+        tx.tx_call_hash = Some(Hash::prehashed([0xFA; Hash::LENGTH]));
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias.clone(),
             authority.clone(),
@@ -16469,6 +16478,7 @@ seiyaku AliasPayout {
             )),
             paynet,
         );
+        tx.tx_call_hash = Some(Hash::prehashed([0xFB; Hash::LENGTH]));
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias.clone(),
             authority.clone(),

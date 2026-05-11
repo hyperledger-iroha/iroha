@@ -5504,6 +5504,7 @@ where
         .map_err(OverlayBuildError::IvmRun)?;
 
     vm.set_gas_limit(gas_limit);
+    vm.set_zk_trace_enabled(true);
     run_vm_with_host(&mut vm, &mut host)?;
 
     let gas_used = gas_limit.saturating_sub(vm.remaining_gas());

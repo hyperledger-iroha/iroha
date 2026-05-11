@@ -2981,6 +2981,8 @@ pub mod sumeragi {
     pub const RBC_REBROADCAST_SESSIONS_PER_TICK: usize = 8;
     /// Maximum RBC payload chunks broadcast per tick to avoid bursty floods.
     pub const RBC_PAYLOAD_CHUNKS_PER_TICK: usize = 64;
+    /// Default: seed Proposal + RBC backup for inline frontier BlockCreated payloads.
+    pub const RBC_INLINE_BLOCK_CREATED_BACKUP: bool = true;
     /// Default maximum number of persisted RBC session summaries kept on disk.
     pub const RBC_STORE_MAX_SESSIONS: usize = 4096;
     /// Default soft quota for persisted RBC sessions. Back-pressure engages beyond this.
