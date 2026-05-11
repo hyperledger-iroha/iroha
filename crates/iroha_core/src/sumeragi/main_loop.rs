@@ -37441,6 +37441,12 @@ impl Actor {
 
         let track_missing_qc_timeout =
             !proposal_seen || proposal_seen_missing_qc_dependency_signals;
+        let same_view_missing_qc_timeout_recorded = track_missing_qc_timeout
+            && self
+                .subsystems
+                .propose
+                .last_missing_qc_timeout_trigger
+                .is_some_and(|last| last.height == height && last.view == current_view);
         let missing_qc_timeout_streak = if track_missing_qc_timeout {
             next_missing_qc_timeout_streak(
                 self.subsystems.propose.last_missing_qc_timeout_trigger,
@@ -37610,9 +37616,19 @@ impl Actor {
                     );
                     return false;
                 }
+                let missing_qc_frontier_recovery_owner =
+                    self.frontier_recovery.is_some_and(|state| {
+                        state.frontier_height == height && state.last_cause == "missing_qc"
+                    });
+                let nonleader_empty_frontier_missing_qc_recovery = !self
+                    .local_is_round_leader(height, current_view)
+                    && !Self::frontier_consensus_ingress_queued(queue_depths)
+                    && (missing_qc_frontier_recovery_owner
+                        || (!self.frontier_recovery_exists_at_height(height)
+                            && !same_view_missing_qc_timeout_recorded));
                 let empty_frontier_missing_qc_recovery_first = !proposal_seen
                     && matches!(direct_cause, ViewChangeCause::MissingQc)
-                    && current_view == 0
+                    && (current_view == 0 || nonleader_empty_frontier_missing_qc_recovery)
                     && !self.exact_frontier_body_repair_active_at_height(height)
                     && !pre_reset_passive_frontier_slot_without_external_dependency
                     && !self.frontier_slot_passive_catchup_active_at_height(height);
