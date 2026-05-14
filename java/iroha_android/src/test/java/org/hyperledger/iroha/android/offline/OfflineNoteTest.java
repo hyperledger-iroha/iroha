@@ -38,8 +38,18 @@ import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
+import org.hyperledger.iroha.norito.NoritoDecoder;
+import org.hyperledger.iroha.norito.NoritoHeader;
+import org.hyperledger.iroha.norito.SchemaHash;
 
 public final class OfflineNoteTest {
+
+  private static final String MODEL_ISSUE_SCHEMA =
+      "iroha_data_model::offline::model::OfflineNoteIssueV2";
+  private static final String MODEL_REDEEM_SCHEMA =
+      "iroha_data_model::offline::model::OfflineNoteRedeemV2";
+  private static final String MODEL_AUDIT_SCHEMA =
+      "iroha_data_model::offline::model::OfflineNoteAuditBundleV2";
 
   private OfflineNoteTest() {}
 
@@ -49,6 +59,7 @@ public final class OfflineNoteTest {
     offlineNoteModelsMatchRustNoritoVectors();
     publicNoritoDecodersRoundTripFixturePayloads();
     publicNoritoInstructionDecodersReadExplorerEnvelopeBytes();
+    offlineNoteV2InstructionsUseChainFraming();
     walletDerivationsMatchRustVectors();
     publicInputHashesMatchRustVectors();
     proofBindingRejectsMismatch();
@@ -350,6 +361,25 @@ public final class OfflineNoteTest {
                         wirePayloadBytes(OfflineNote.redeemInstruction(redeem))))
                 .noritoEncoded()),
         "decoded redeem instruction");
+  }
+
+  private static void offlineNoteV2InstructionsUseChainFraming() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    assertInstructionFraming(
+        OfflineNote.issueInstruction(issue(fixture)),
+        OfflineNote.ISSUE_INSTRUCTION_SCHEMA,
+        MODEL_ISSUE_SCHEMA,
+        modelBodyFromFixture(fixture, "issue", MODEL_ISSUE_SCHEMA));
+    assertInstructionFraming(
+        OfflineNote.redeemInstruction(redeem(fixture)),
+        OfflineNote.REDEEM_INSTRUCTION_SCHEMA,
+        MODEL_REDEEM_SCHEMA,
+        modelBodyFromFixture(fixture, "redeem", MODEL_REDEEM_SCHEMA));
+    assertInstructionFraming(
+        OfflineNote.auditInstruction(audit(fixture)),
+        OfflineNote.AUDIT_INSTRUCTION_SCHEMA,
+        MODEL_AUDIT_SCHEMA,
+        modelBodyFromFixture(fixture, "audit", MODEL_AUDIT_SCHEMA));
   }
 
   private static void walletDerivationsMatchRustVectors() throws Exception {
@@ -5102,6 +5132,49 @@ public final class OfflineNoteTest {
       out.write((int) (remaining & 0xFF));
       remaining >>>= 8;
     }
+  }
+
+  private static void assertInstructionFraming(
+      final InstructionBox box,
+      final String expectedWireName,
+      final String modelSchemaPath,
+      final byte[] expectedModelBody) {
+    if (!(box.payload() instanceof InstructionBox.WirePayload)) {
+      throw new AssertionError("instruction payload must be a WirePayload");
+    }
+    final InstructionBox.WirePayload payload = (InstructionBox.WirePayload) box.payload();
+    assertEquals(expectedWireName, payload.wireName(), "instruction wire name");
+
+    final byte[] instructionSchema = SchemaHash.hash16(expectedWireName);
+    final byte[] modelSchema = SchemaHash.hash16(modelSchemaPath);
+    final NoritoHeader.DecodeResult decoded =
+        NoritoHeader.decode(payload.payloadBytes(), instructionSchema);
+    assertEquals(
+        NoritoHeader.COMPACT_LEN,
+        decoded.header().flags(),
+        "outer instruction frame flags");
+    assertEquals(
+        NoritoHeader.COMPRESSION_NONE,
+        decoded.header().compression(),
+        "outer instruction frame compression");
+    assertTrue(
+        !Arrays.equals(decoded.header().schemaHash(), modelSchema),
+        "frame schema hash must not equal the inner model schema hash");
+
+    final NoritoDecoder innerDecoder =
+        new NoritoDecoder(decoded.payload(), decoded.header().flags(), 0);
+    final long declaredLength = innerDecoder.readLength(true);
+    assertEquals(expectedModelBody.length, declaredLength, "inner field compact length");
+    final byte[] innerField = innerDecoder.readBytes((int) declaredLength);
+    assertEquals(0L, innerDecoder.remaining(), "no trailing bytes after inner field");
+    assertEquals(hex(expectedModelBody), hex(innerField), "inner field bytes");
+  }
+
+  private static byte[] modelBodyFromFixture(
+      final Map<String, Object> fixture, final String chainKey, final String modelSchemaPath) {
+    final byte[] full =
+        base64Bytes(string(obj(obj(fixture, "chain_vectors"), chainKey), "norito_base64"));
+    return NoritoHeader.decode(full, SchemaHash.hash16(modelSchemaPath)).payload();
   }
 
   @SuppressWarnings("unchecked")

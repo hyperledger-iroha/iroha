@@ -21,10 +21,12 @@ import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
 import org.hyperledger.iroha.norito.NoritoHeader;
+import org.hyperledger.iroha.norito.SchemaHash;
 import org.hyperledger.iroha.norito.TypeAdapter;
 
 /** Native Java implementation of Iroha Offline Note canonical Norito encodings. */
@@ -260,8 +262,34 @@ public final class OfflineNote {
     return NoritoCodec.decode(bytes, adapter, schema);
   }
 
-  private static byte[] encodeInstructionWrapper(final String schema, final byte[] modelPayload) {
-    return NoritoCodec.encode(modelPayload, schema, INSTRUCTION_WRAPPER_ADAPTER, 0);
+  private static byte[] encodeInstructionWrapper(final String schema, final byte[] modelFrame) {
+    final byte[] modelBody = NoritoHeader.decode(modelFrame, null).payload();
+    return frameInstruction(schema, modelBody);
+  }
+
+  private static byte[] frameInstruction(final String wireName, final byte[] modelBody) {
+    if (wireName == null || wireName.isBlank()) {
+      throw new IllegalArgumentException("wireName must not be blank");
+    }
+    if (modelBody == null || modelBody.length == 0) {
+      throw new IllegalArgumentException("modelBody must not be empty");
+    }
+    final NoritoEncoder innerEncoder = new NoritoEncoder(NoritoHeader.COMPACT_LEN);
+    innerEncoder.writeLength(modelBody.length, true);
+    innerEncoder.writeBytes(modelBody);
+    final byte[] inner = innerEncoder.toByteArray();
+    final NoritoHeader header =
+        new NoritoHeader(
+            SchemaHash.hash16(wireName),
+            inner.length,
+            CRC64.compute(inner),
+            NoritoHeader.COMPACT_LEN,
+            NoritoHeader.COMPRESSION_NONE);
+    final byte[] headerBytes = header.encode();
+    final byte[] out = new byte[headerBytes.length + inner.length];
+    System.arraycopy(headerBytes, 0, out, 0, headerBytes.length);
+    System.arraycopy(inner, 0, out, headerBytes.length, inner.length);
+    return out;
   }
 
   private static <T> T decodeInstructionModel(
@@ -1766,19 +1794,6 @@ public final class OfflineNote {
           outputAmounts);
     }
   }
-
-  private static final TypeAdapter<byte[]> INSTRUCTION_WRAPPER_ADAPTER =
-      new TypeAdapter<>() {
-        @Override
-        public void encode(final NoritoEncoder encoder, final byte[] value) {
-          writeField(encoder, child -> child.writeBytes(value));
-        }
-
-        @Override
-        public byte[] decode(final NoritoDecoder decoder) {
-          return readField(decoder, child -> child.readBytes(child.remaining()));
-        }
-      };
 
   private record InstructionModelPayload(byte[] bytes, int flags) {}
 

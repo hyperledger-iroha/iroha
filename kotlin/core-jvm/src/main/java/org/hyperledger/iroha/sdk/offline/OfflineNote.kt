@@ -12,10 +12,12 @@ import org.hyperledger.iroha.sdk.address.PublicKeyPayload
 import org.hyperledger.iroha.sdk.address.algorithmForCurveId
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
+import org.hyperledger.iroha.sdk.norito.CRC64
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
+import org.hyperledger.iroha.sdk.norito.SchemaHash
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
 
 /** Native JVM implementation of Iroha Offline Note canonical Norito encodings. */
@@ -256,8 +258,31 @@ object OfflineNote {
     private fun <T> decodeWithHeader(bytes: ByteArray, schema: String, adapter: TypeAdapter<T>): T =
         NoritoCodec.decode(bytes, adapter, schema)
 
-    private fun encodeInstructionWrapper(schema: String, modelPayload: ByteArray): ByteArray =
-        NoritoCodec.encode(modelPayload, schema, InstructionWrapperAdapter, 0)
+    internal fun encodeInstructionWrapper(schema: String, modelFrame: ByteArray): ByteArray {
+        val modelBody = NoritoHeader.decode(modelFrame, expectedHash = null).payload
+        return frameInstruction(schema, modelBody)
+    }
+
+    internal fun frameInstruction(wireName: String, modelBody: ByteArray): ByteArray {
+        require(wireName.isNotBlank()) { "wireName must not be blank" }
+        require(modelBody.isNotEmpty()) { "modelBody must not be empty" }
+        val inner = NoritoEncoder(NoritoHeader.COMPACT_LEN).apply {
+            writeLength(modelBody.size.toLong(), compact = true)
+            writeBytes(modelBody)
+        }.toByteArray()
+        val header = NoritoHeader(
+            schemaHash = SchemaHash.hash16(wireName),
+            payloadLength = inner.size,
+            checksum = CRC64.compute(inner),
+            flags = NoritoHeader.COMPACT_LEN,
+            compression = NoritoHeader.COMPRESSION_NONE,
+        )
+        val headerBytes = header.encode()
+        val out = ByteArray(headerBytes.size + inner.size)
+        System.arraycopy(headerBytes, 0, out, 0, headerBytes.size)
+        System.arraycopy(inner, 0, out, headerBytes.size, inner.size)
+        return out
+    }
 
     private fun <T> decodeInstructionModel(
         bytes: ByteArray,
@@ -971,15 +996,6 @@ object OfflineNote {
                 outputAmounts,
             )
         }
-    }
-
-    private object InstructionWrapperAdapter : TypeAdapter<ByteArray> {
-        override fun encode(encoder: NoritoEncoder, value: ByteArray) {
-            writeField(encoder) { it.writeBytes(value) }
-        }
-
-        override fun decode(decoder: NoritoDecoder): ByteArray =
-            readField(decoder) { it.readBytes(it.remaining()) }
     }
 
     private class InstructionModelPayload(
