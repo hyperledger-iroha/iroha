@@ -998,6 +998,8 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
         REALISTIC_30TPS_STALL_THRESHOLD.as_secs(),
     );
     let stall_threshold = Duration::from_secs(stall_secs.max(1));
+    let max_avg_secs_per_block =
+        env_or_default_f64("IROHA_REALISTIC_30TPS_MAX_AVG_SECS_PER_BLOCK", 3.0);
     let submit_parallelism = env_or_default_usize(
         "IROHA_REALISTIC_30TPS_PARALLELISM",
         REALISTIC_30TPS_SUBMIT_PARALLELISM,
@@ -1349,7 +1351,7 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
             };
 
             eprintln!(
-                "realistic localnet recipe: peers={}, target_tps={}, duration_secs={}, total_txs={}, target_non_empty_delta={}, block_time_ms={}, commit_time_ms={}, block_max_txs={}, load_kind={}, transfer_accounts={}, transfer_initial_balance={}, transfer_max_amount={}, ram_lfe_email_accounts={}, ram_lfe_email_policy={}, ram_lfe_program={}, submit_parallelism={}, queue_soft_limit={}, baseline_non_empty={}, baseline_approved={}",
+                "realistic localnet recipe: peers={}, target_tps={}, duration_secs={}, total_txs={}, target_non_empty_delta={}, block_time_ms={}, commit_time_ms={}, block_max_txs={}, load_kind={}, transfer_accounts={}, transfer_initial_balance={}, transfer_max_amount={}, ram_lfe_email_accounts={}, ram_lfe_email_policy={}, ram_lfe_program={}, submit_parallelism={}, queue_soft_limit={}, max_avg_secs_per_block={max_avg_secs_per_block:.3}, baseline_non_empty={}, baseline_approved={}",
                 network.peers().len(),
                 target_tps,
                 duration_secs,
@@ -1688,8 +1690,8 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
                 "expected at least {target_blocks} final non-empty blocks for {duration_secs}s at {target_tps} TPS; produced {produced_blocks} (baseline={baseline_non_empty}, load_end_min_non_empty={load_end_min_non_empty}, final_min_non_empty={min_non_empty})"
             );
             ensure!(
-                load_avg_secs_per_block <= 3.0,
-                "average block interval during load exceeded 3s: load_avg_secs_per_block={load_avg_secs_per_block:.3}, load_end_produced_blocks={load_end_produced_blocks}, load_elapsed={load_end_elapsed:?}"
+                load_avg_secs_per_block <= max_avg_secs_per_block,
+                "average block interval during load exceeded {max_avg_secs_per_block:.3}s: load_avg_secs_per_block={load_avg_secs_per_block:.3}, load_end_produced_blocks={load_end_produced_blocks}, load_elapsed={load_end_elapsed:?}"
             );
             ensure!(
                 min_approved >= target_approved,
@@ -5464,6 +5466,8 @@ fn write_throughput_artifacts(
 
     let metrics_dir = run_dir.join("metrics");
     fs::create_dir_all(&metrics_dir).wrap_err("create metrics dir")?;
+    let logs_dir = run_dir.join("logs");
+    fs::create_dir_all(&logs_dir).wrap_err("create logs dir")?;
 
     for snapshot in &artifacts.warmup_metrics {
         let path = metrics_dir.join(format!("{}-warmup.prom", snapshot.peer));
@@ -5798,18 +5802,30 @@ fn write_throughput_artifacts(
         .iter()
         .map(|peer| {
             let mut map = Map::new();
+            let copied_stdout = copy_peer_log_into_artifacts(&logs_dir, peer, "stdout");
+            let copied_stderr = copy_peer_log_into_artifacts(&logs_dir, peer, "stderr");
             map.insert("index".to_string(), Value::from(peer.index));
             map.insert("mnemonic".to_string(), Value::String(peer.mnemonic.clone()));
-            let stdout = peer
-                .stdout_log
-                .as_ref()
-                .map_or(Value::Null, |path| Value::String(path.clone()));
-            let stderr = peer
-                .stderr_log
-                .as_ref()
-                .map_or(Value::Null, |path| Value::String(path.clone()));
-            map.insert("stdout_log".to_string(), stdout);
-            map.insert("stderr_log".to_string(), stderr);
+            map.insert(
+                "stdout_log".to_string(),
+                copied_stdout.map_or(Value::Null, Value::String),
+            );
+            map.insert(
+                "stderr_log".to_string(),
+                copied_stderr.map_or(Value::Null, Value::String),
+            );
+            map.insert(
+                "stdout_log_original".to_string(),
+                peer.stdout_log
+                    .as_ref()
+                    .map_or(Value::Null, |path| Value::String(path.clone())),
+            );
+            map.insert(
+                "stderr_log_original".to_string(),
+                peer.stderr_log
+                    .as_ref()
+                    .map_or(Value::Null, |path| Value::String(path.clone())),
+            );
             Value::Object(map)
         })
         .collect();
@@ -5831,6 +5847,51 @@ fn write_throughput_artifacts(
         .wrap_err_with(|| format!("write {}", summary_path.display()))?;
 
     Ok(run_dir)
+}
+
+fn copy_peer_log_into_artifacts(
+    logs_dir: &Path,
+    peer: &PeerLogInfo,
+    stream: &'static str,
+) -> Option<String> {
+    let source = match stream {
+        "stdout" => peer.stdout_log.as_ref(),
+        "stderr" => peer.stderr_log.as_ref(),
+        _ => None,
+    }?;
+    let source_path = Path::new(source);
+    if !source_path.is_file() {
+        return Some(source.clone());
+    }
+    let file_name = peer_log_artifact_file_name(peer.index, &peer.mnemonic, stream);
+    let dest = logs_dir.join(file_name);
+    if let Err(err) = fs::copy(source_path, &dest) {
+        eprintln!(
+            "failed to copy peer {stream} log for {} from {} to {}: {err:?}",
+            peer.mnemonic,
+            source_path.display(),
+            dest.display()
+        );
+        return Some(source.clone());
+    }
+    Some(dest.to_string_lossy().to_string())
+}
+
+fn peer_log_artifact_file_name(index: u64, mnemonic: &str, stream: &str) -> String {
+    let mut sanitized: String = mnemonic
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if sanitized.is_empty() {
+        sanitized.push_str("peer");
+    }
+    format!("{index}-{sanitized}-{stream}.log")
 }
 
 #[derive(Clone, Debug, Default)]
