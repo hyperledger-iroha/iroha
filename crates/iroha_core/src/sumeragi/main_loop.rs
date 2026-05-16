@@ -25286,15 +25286,7 @@ impl Actor {
         let targets: Vec<_> = target_set.iter().cloned().collect();
 
         let roster = self.ensure_rbc_session_roster(key);
-        let ready_targets = if session.delivered && !roster.is_empty() {
-            roster
-                .iter()
-                .filter(|peer| *peer != &local_peer_id)
-                .cloned()
-                .collect()
-        } else {
-            targets.clone()
-        };
+        let ready_targets = targets.clone();
         let quorum_or_delivery_repair = if roster.is_empty() {
             false
         } else {
