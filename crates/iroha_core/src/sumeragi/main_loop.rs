@@ -25284,9 +25284,17 @@ impl Actor {
             }
         }
         let targets: Vec<_> = target_set.iter().cloned().collect();
-        let ready_targets = targets.clone();
 
         let roster = self.ensure_rbc_session_roster(key);
+        let ready_targets = if session.delivered && !roster.is_empty() {
+            roster
+                .iter()
+                .filter(|peer| *peer != &local_peer_id)
+                .cloned()
+                .collect()
+        } else {
+            targets.clone()
+        };
         let quorum_or_delivery_repair = if roster.is_empty() {
             false
         } else {
@@ -37447,6 +37455,17 @@ impl Actor {
                 .propose
                 .last_missing_qc_timeout_trigger
                 .is_some_and(|last| last.height == height && last.view == current_view);
+        let tx_backlog_reacquire_exhausted_for_rotation = queue_active_backlog
+            && self.recovery_rotate_after_reacquire_exhausted()
+            && self
+                .subsystems
+                .propose
+                .proposal_liveness
+                .is_some_and(|slot| {
+                    slot.height == height
+                        && slot.view == current_view
+                        && slot.reacquire_exhausted_recorded
+                });
         let missing_qc_timeout_streak = if track_missing_qc_timeout {
             next_missing_qc_timeout_streak(
                 self.subsystems.propose.last_missing_qc_timeout_trigger,
@@ -37576,20 +37595,14 @@ impl Actor {
                         height,
                         view = current_view,
                         committed_height,
-                        "routing empty-frontier local vote evidence through unified quorum-timeout recovery after higher-view NEW_VIEW traffic"
+                        "rotating empty-frontier local vote evidence despite higher-view NEW_VIEW traffic"
                     );
-                    return matches!(
-                        self.advance_frontier_recovery(
-                            "quorum_timeout",
-                            height,
-                            current_view,
-                            proposal_seen,
-                            false,
-                            false,
-                            now,
-                        ),
-                        FrontierRecoveryAdvance::Rotate
+                    self.trigger_view_change_with_cause(
+                        height,
+                        current_view,
+                        ViewChangeCause::QuorumTimeout,
                     );
+                    return true;
                 }
                 if pre_reset_frontier_reanchor_unresolved_in_window
                     && matches!(direct_cause, ViewChangeCause::MissingQc)
@@ -37631,7 +37644,8 @@ impl Actor {
                     && (current_view == 0 || nonleader_empty_frontier_missing_qc_recovery)
                     && !self.exact_frontier_body_repair_active_at_height(height)
                     && !pre_reset_passive_frontier_slot_without_external_dependency
-                    && !self.frontier_slot_passive_catchup_active_at_height(height);
+                    && !self.frontier_slot_passive_catchup_active_at_height(height)
+                    && !tx_backlog_reacquire_exhausted_for_rotation;
                 if empty_frontier_missing_qc_recovery_first {
                     let allow_recovery_rotation = self.frontier_recovery.is_some_and(|state| {
                         state.frontier_height == height
@@ -37849,20 +37863,14 @@ impl Actor {
                     view = current_view,
                     committed_height,
                     missing_qc_actionable_dependency_signals,
-                    "routing dependency-backed local vote evidence through unified quorum-timeout recovery after higher-view NEW_VIEW traffic"
+                    "rotating dependency-backed local vote evidence despite higher-view NEW_VIEW traffic"
                 );
-                return matches!(
-                    self.advance_frontier_recovery(
-                        "quorum_timeout",
-                        height,
-                        current_view,
-                        proposal_seen,
-                        false,
-                        false,
-                        now,
-                    ),
-                    FrontierRecoveryAdvance::Rotate
+                self.trigger_view_change_with_cause(
+                    height,
+                    current_view,
+                    ViewChangeCause::QuorumTimeout,
                 );
+                return true;
             }
             if pre_reset_frontier_reanchor_unresolved_in_window
                 && matches!(direct_cause, ViewChangeCause::MissingQc)

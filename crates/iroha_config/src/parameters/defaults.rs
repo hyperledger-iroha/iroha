@@ -2037,12 +2037,19 @@ pub mod torii {
     pub const ISO_BRIDGE_DEDUPE_TTL_SECS: u64 = 5 * 60; // 5 minutes
     /// ISO 20022 default rail profile.
     pub const ISO_BRIDGE_DEFAULT_PROFILE: &str = "generic-iso20022";
+    /// ISO 20022 default structured-address validation mode.
+    pub const ISO_BRIDGE_STRUCTURED_ADDRESS_MODE: &str = "permissive";
     /// ISO 20022 reference data refresh cadence (seconds).
     pub const ISO_BRIDGE_REFERENCE_REFRESH_SECS: u64 = 24 * 60 * 60; // 24 hours
     /// Return the default ISO 20022 bridge rail profile identifier.
     #[must_use]
     pub fn iso_bridge_default_profile() -> String {
         ISO_BRIDGE_DEFAULT_PROFILE.to_owned()
+    }
+    /// Return the default ISO 20022 structured-address validation mode.
+    #[must_use]
+    pub fn iso_bridge_structured_address_mode() -> String {
+        ISO_BRIDGE_STRUCTURED_ADDRESS_MODE.to_owned()
     }
     /// SoraFS discovery disabled by default (iroha2 builds).
     pub const SORAFS_DISCOVERY_ENABLED: bool = false;

@@ -1,8 +1,23 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-05-11
+Last updated: 2026-05-16
 
 Completed history lives in `status.md`. This file should only track unfinished work.
+
+## TradFi ISO 20022 interop follow-ups
+
+- Add inbound lifecycle endpoints for `pacs.002`, `pacs.004`, `camt.056`,
+  `sese.023`, `sese.024`, and `sese.025`. `sese.023` should map to settlement
+  instructions only when all account, instrument, venue, CSD, and cash-leg
+  crosswalks are configured.
+- Add outbox helpers for `pacs.004`, `camt.029`, `sese.024`, and `sese.025`
+  using the same durable ISO bridge record model as `pacs.002`.
+- Implement deterministic XMLDSig/XAdES verification for profiles that require
+  embedded signatures. Until then, live rail profiles should keep rejecting
+  unsupported embedded signature blocks.
+- Add official MDR/XSD fixture coverage per profile and broaden Torii tests for
+  profile mismatch, cancellation/return transitions, reference snapshot
+  checksum expectations, and replay by business message id/UETR.
 
 ## Soracles follow-ups
 

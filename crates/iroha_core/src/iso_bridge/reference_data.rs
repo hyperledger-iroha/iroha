@@ -583,10 +583,6 @@ impl ReferenceDataSnapshots {
     pub fn snapshot_id(&self) -> String {
         let mut root = json::Map::new();
         root.insert(
-            "loaded_at_unix".to_owned(),
-            Value::from(self.loaded_at.unix_timestamp().max(0) as u64),
-        );
-        root.insert(
             "datasets".to_owned(),
             Value::Array(vec![
                 dataset_snapshot_value(self.isin_cusip()),
@@ -781,17 +777,22 @@ fn dataset_snapshot_value<T>(snapshot: &DatasetSnapshot<T>) -> Value {
     );
     map.insert(
         "state".to_owned(),
-        Value::String(match snapshot.state() {
-            SnapshotState::Missing => "missing",
-            SnapshotState::Loaded => "loaded",
-            SnapshotState::Failed => "failed",
-        }
-        .to_owned()),
+        Value::String(
+            match snapshot.state() {
+                SnapshotState::Missing => "missing",
+                SnapshotState::Loaded => "loaded",
+                SnapshotState::Failed => "failed",
+            }
+            .to_owned(),
+        ),
     );
     if let Some(meta) = snapshot.metadata() {
         map.insert("version".to_owned(), Value::String(meta.version.clone()));
         map.insert("source".to_owned(), Value::String(meta.source.clone()));
-        map.insert("record_count".to_owned(), Value::from(meta.record_count as u64));
+        map.insert(
+            "record_count".to_owned(),
+            Value::from(meta.record_count as u64),
+        );
         map.insert(
             "fetched_at".to_owned(),
             meta.fetched_at

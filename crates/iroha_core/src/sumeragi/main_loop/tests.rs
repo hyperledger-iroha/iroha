@@ -19653,6 +19653,7 @@ async fn fetch_pending_block_payload_uses_block_created_for_noncanonical_committ
 async fn fetch_pending_block_stashes_exact_committed_tip_until_commit_proof_available() {
     use crate::sumeragi::status;
 
+    let _commit_history_guard = status::commit_history_test_guard();
     status::reset_commit_certs_for_tests();
     status::reset_validator_checkpoints_for_tests();
 
@@ -38092,10 +38093,8 @@ async fn handle_qc_drops_empty_block_payload() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
-    {
-        let _guard = super::status::message_handling_test_guard();
-        super::status::reset_message_handling_for_tests();
-    }
+    let _guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
     let height = 1_u64;
     let view = 0_u64;
     let block = empty_block(height, view, None);
@@ -44142,29 +44141,6 @@ async fn rebroadcast_stalled_rbc_payloads_uses_slower_deliver_cooldown() {
     harness
         .actor
         .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
-
-    let committed_block = pending_block.clone();
-    harness
-        .actor
-        .kura
-        .store_block(committed_block.clone())
-        .expect("store committed block");
-    let state = Arc::get_mut(&mut harness.actor.state).expect("state uniquely held");
-    state.push_block_hash_for_testing(committed_block.hash());
-    let next_block = sample_block(key.1.saturating_add(1), 0, Some(committed_block.hash()));
-    harness
-        .actor
-        .kura
-        .store_block(next_block.clone())
-        .expect("store committed block");
-    state.push_block_hash_for_testing(next_block.hash());
-    let next_next_block = sample_block(key.1.saturating_add(2), 0, Some(next_block.hash()));
-    harness
-        .actor
-        .kura
-        .store_block(next_next_block.clone())
-        .expect("store committed block");
-    state.push_block_hash_for_testing(next_next_block.hash());
 
     super::status::reset_worker_loop_snapshot_for_tests();
     harness.actor.relay_backpressure.disable_for_tests();
@@ -104644,7 +104620,7 @@ async fn inbound_vote_processes_committed_epoch_rollover_before_validation() {
         .seed();
     let height = 2u64;
     let epoch = 1u64;
-    let active_seed = seed_epoch0;
+    let active_seed = crate::sumeragi::next_epoch_seed_from_seed(seed_epoch0);
 
     let (stale_mode, stale_mode_tag, stale_seed) = actor.consensus_context_for_height(height);
     assert_eq!(stale_mode, ConsensusMode::Npos);
@@ -133922,6 +133898,12 @@ fn validate_qc_against_votes_rejects_signature_from_wrong_signer_key() {
         signer: 1,
         bls_sig: Vec::new(),
     };
+    bind_default_permissioned_vote_to_topology_chain_order(
+        &mut valid_vote,
+        &topology,
+        super::PERMISSIONED_TAG,
+        prf_seed,
+    );
     sign_vote_for_canonical_signer(&mut valid_vote, &chain, &topology, &peer_keys);
     vote_log.insert(vote_log_key_for_vote(&valid_vote), valid_vote);
 
@@ -134013,6 +133995,12 @@ fn validate_qc_against_votes_records_invalid_signature_reason_for_mismatched_sig
     } else {
         &kp0
     };
+    bind_default_permissioned_vote_to_topology_chain_order(
+        &mut mismatched_vote,
+        &topology,
+        super::PERMISSIONED_TAG,
+        prf_seed,
+    );
     let bad_preimage = super::vote_preimage(&chain, super::PERMISSIONED_TAG, &mismatched_vote);
     let bad_sig = Signature::new(wrong_kp.private_key(), &bad_preimage);
     mismatched_vote.bls_sig = bad_sig.payload().to_vec();
@@ -134033,6 +134021,12 @@ fn validate_qc_against_votes_records_invalid_signature_reason_for_mismatched_sig
         signer: 1,
         bls_sig: Vec::new(),
     };
+    bind_default_permissioned_vote_to_topology_chain_order(
+        &mut valid_vote,
+        &topology,
+        super::PERMISSIONED_TAG,
+        prf_seed,
+    );
     sign_vote_for_canonical_signer(&mut valid_vote, &chain, &topology, &peer_keys);
     vote_log.insert(vote_log_key_for_vote(&valid_vote), valid_vote);
 

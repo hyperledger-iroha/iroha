@@ -1,6 +1,37 @@
 # Status
 
-Last updated: 2026-05-11
+Last updated: 2026-05-16
+
+## 2026-05-16 TradFi ISO 20022 interop audit/profile bridge
+
+- Added the canonical TradFi ISO 20022 audit/design note at
+  `docs/source/finance/tradfi_interop_audit.md` and linked it from the finance
+  settlement mapping portal page.
+- Added the shared `iroha_core::iso_bridge::profiles` catalog with static
+  Norito JSON defaults for generic ISO 20022, Swift CBPR+, Fedwire Funds, SEPA
+  SCT Inst, and securities CSD profiles. The Torii `iso_bridge` configuration
+  now exposes `default_profile`, operator profile overrides, `store_dir`, and
+  embedded signature policy without introducing new production environment
+  toggles.
+- Torii `pacs.008`/`pacs.009` ingestion now selects profiles via
+  `X-Iroha-Iso-Profile` or `?profile=...`, validates message versions,
+  Business Application Header/BizSvc/UETR policy, required reference datasets,
+  minor units, SupplementaryData size, structured-address mode, and embedded
+  XML signature policy. ISO bridge records persist under `store_dir/messages`
+  with profile metadata, payload hash, UETR, transaction hash, reason codes, and
+  status history.
+- Follow-up hardening now resolves Business Application Header fields through
+  suffix/canonical aliases for live-profile enforcement, keeps the structured
+  address default on a constant-backed `ReadConfig` expression, and rechecks
+  payload/UETR conflicts before replacing rejected or expired retry records.
+  Focused Torii tests for BAH alias handling and UETR retry conflicts are green.
+- ISO status responses now carry profile and audit metadata, expose
+  `/v1/iso20022/messages/{msg_id}`, and can emit current `pacs.002` XML at
+  `/v1/iso20022/messages/{msg_id}/pacs002`. OpenAPI, MCP, and JS SDK submission
+  surfaces include profile selection.
+- JS `submitIsoMessage` no longer injects wall-clock `creationDateTime`; callers
+  must pass an explicit timestamp. CLI `sese.023`/`sese.025` previews now accept
+  `--iso-settlement-date YYYY-MM-DD` for deterministic settlement-date output.
 
 ## 2026-05-11 20k liveness 300s phase-tail boundary
 

@@ -1025,6 +1025,20 @@ fn bool_query_param(name: &str, description: &str) -> Value {
     Value::Object(param)
 }
 
+fn iso_profile_selection_parameters() -> Vec<Value> {
+    vec![
+        string_header_param(
+            "X-Iroha-Iso-Profile",
+            "Optional ISO bridge rail profile. Overrides the `profile` query parameter.",
+            false,
+        ),
+        string_query_param(
+            "profile",
+            "Optional ISO bridge rail profile used when `X-Iroha-Iso-Profile` is absent.",
+        ),
+    ]
+}
+
 fn path_param(name: &str, description: &str) -> Value {
     let mut param = Map::new();
     param.insert("name".into(), Value::String(name.to_owned()));
@@ -1390,7 +1404,7 @@ fn transaction_paths() -> Map {
             "Submit a pacs.008 message for ISO 20022 bridging.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
-            Vec::new(),
+            iso_profile_selection_parameters(),
         )),
     );
     paths.insert(
@@ -1401,7 +1415,7 @@ fn transaction_paths() -> Map {
             "Submit a pacs.009 message for ISO 20022 bridging.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
-            Vec::new(),
+            iso_profile_selection_parameters(),
         )),
     );
     paths.insert(
@@ -1411,6 +1425,26 @@ fn transaction_paths() -> Map {
             "Fetch ISO 20022 message status.",
             "Return ISO 20022 message status by message id.",
             "#/components/schemas/JsonValue",
+            vec![string_path_param("msg_id", "ISO 20022 message id.")],
+        )),
+    );
+    paths.insert(
+        "/v1/iso20022/messages/{msg_id}".to_owned(),
+        Value::Object(json_get_operation(
+            "ISO20022",
+            "Fetch ISO 20022 message record.",
+            "Return the rich ISO 20022 message record by message id, including profile metadata and status history.",
+            "#/components/schemas/JsonValue",
+            vec![string_path_param("msg_id", "ISO 20022 message id.")],
+        )),
+    );
+    paths.insert(
+        "/v1/iso20022/messages/{msg_id}/pacs002".to_owned(),
+        Value::Object(json_get_operation(
+            "ISO20022",
+            "Fetch ISO 20022 pacs.002 status XML.",
+            "Return the current ISO 20022 payment status report for a bridged message.",
+            "#/components/schemas/XmlText",
             vec![string_path_param("msg_id", "ISO 20022 message id.")],
         )),
     );
@@ -7491,6 +7525,14 @@ fn openapi_schemas() -> Map {
         norito::json!({
             "type": "array",
             "items": { "$ref": "#/components/schemas/JsonValue" }
+        }),
+    );
+    schemas.insert(
+        "XmlText".to_owned(),
+        norito::json!({
+            "description": "XML payload returned as UTF-8 text.",
+            "type": "string",
+            "format": "xml"
         }),
     );
     schemas.insert(

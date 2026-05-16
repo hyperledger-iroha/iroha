@@ -478,7 +478,8 @@ impl TradfiRailProfile {
         direction: MessageDirection,
     ) -> Option<&MessageProfile> {
         self.message_profiles.iter().find(|profile| {
-            profile.direction == direction && profile.message_type.eq_ignore_ascii_case(message_type)
+            profile.direction == direction
+                && profile.message_type.eq_ignore_ascii_case(message_type)
         })
     }
 
@@ -534,11 +535,9 @@ fn profile_from_value(value: &Value) -> Result<TradfiRailProfile, String> {
     let id = required_string(obj, "id")?;
     let rail = TradfiRail::parse(required_string(obj, "rail")?)
         .ok_or_else(|| format!("profile `{id}` has unknown rail"))?;
-    let embedded_signature_policy = EmbeddedSignaturePolicy::parse(required_string(
-        obj,
-        "embedded_signature_policy",
-    )?)
-    .ok_or_else(|| format!("profile `{id}` has unknown embedded signature policy"))?;
+    let embedded_signature_policy =
+        EmbeddedSignaturePolicy::parse(required_string(obj, "embedded_signature_policy")?)
+            .ok_or_else(|| format!("profile `{id}` has unknown embedded signature policy"))?;
     let required_reference_datasets = optional_string_array(obj, "required_reference_datasets")?
         .into_iter()
         .map(|raw| {
@@ -573,10 +572,9 @@ fn message_profile_from_value(value: &Value) -> Result<MessageProfile, String> {
     let versions = optional_string_array(obj, "versions")?;
     let business_services = optional_string_array(obj, "business_services")?;
     let structured_address_mode =
-        StructuredAddressMode::parse(required_string(obj, "structured_address_mode")?)
-            .ok_or_else(|| {
-                format!("message profile `{message_type}` has unknown structured address mode")
-            })?;
+        StructuredAddressMode::parse(required_string(obj, "structured_address_mode")?).ok_or_else(
+            || format!("message profile `{message_type}` has unknown structured address mode"),
+        )?;
     let supplementary_data_max_bytes =
         optional_usize(obj, "supplementary_data_max_bytes")?.unwrap_or(4096);
     let amount_minor_units = parse_minor_units(obj.get("amount_minor_units"), &message_type)?;
@@ -602,16 +600,19 @@ fn parse_minor_units(
     let Some(value) = value else {
         return Ok(out);
     };
-    for entry in value
-        .as_array()
-        .ok_or_else(|| format!("message profile `{message_type}` amount_minor_units must be array"))?
-    {
+    for entry in value.as_array().ok_or_else(|| {
+        format!("message profile `{message_type}` amount_minor_units must be array")
+    })? {
         let obj = entry
             .as_object()
             .ok_or_else(|| "amount_minor_units entry must be an object".to_owned())?;
-        let currency = required_string(obj, "currency")?.trim().to_ascii_uppercase();
+        let currency = required_string(obj, "currency")?
+            .trim()
+            .to_ascii_uppercase();
         if currency.len() != 3 || !currency.chars().all(|c| c.is_ascii_uppercase()) {
-            return Err(format!("invalid currency `{currency}` in amount minor-unit profile"));
+            return Err(format!(
+                "invalid currency `{currency}` in amount minor-unit profile"
+            ));
         }
         let units = optional_usize(obj, "minor_units")?
             .ok_or_else(|| format!("currency `{currency}` missing minor_units"))?;
@@ -705,10 +706,12 @@ mod tests {
     #[test]
     fn required_reference_data_is_profile_specific() {
         let catalog = default_profile_catalog();
-        assert!(catalog["generic-iso20022"].required_reference_datasets.is_empty());
         assert!(
-            catalog["swift-cbpr-plus"].requires_dataset(ReferenceDatasetRequirement::BicLei)
+            catalog["generic-iso20022"]
+                .required_reference_datasets
+                .is_empty()
         );
+        assert!(catalog["swift-cbpr-plus"].requires_dataset(ReferenceDatasetRequirement::BicLei));
         assert!(catalog["securities-csd"].requires_dataset(ReferenceDatasetRequirement::IsinCusip));
         assert!(
             catalog["securities-csd"].requires_dataset(ReferenceDatasetRequirement::MicDirectory)

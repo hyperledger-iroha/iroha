@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt::Write as FmtWrite,
     fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
     str::FromStr,
     sync::Arc,
     time::{Duration, Instant, SystemTime},
@@ -605,7 +605,9 @@ fn parse_config_account_id(literal: &str, field: &str) -> eyre::Result<AccountId
         .wrap_err_with(|| format!("{field} must parse as an account identifier"))
 }
 
-fn load_profile_catalog(config: &actual::IsoBridge) -> eyre::Result<HashMap<String, TradfiRailProfile>> {
+fn load_profile_catalog(
+    config: &actual::IsoBridge,
+) -> eyre::Result<HashMap<String, TradfiRailProfile>> {
     let mut catalog = profiles::default_profile_catalog();
     let global_policy = config
         .embedded_signature_policy
@@ -642,8 +644,12 @@ fn convert_config_profile(
     if id.is_empty() {
         eyre::bail!("iso_bridge profile id must not be empty");
     }
-    let rail = TradfiRail::parse(&config.rail)
-        .ok_or_else(|| eyre::eyre!("iso_bridge profile `{id}` has unknown rail `{}`", config.rail))?;
+    let rail = TradfiRail::parse(&config.rail).ok_or_else(|| {
+        eyre::eyre!(
+            "iso_bridge profile `{id}` has unknown rail `{}`",
+            config.rail
+        )
+    })?;
     let embedded_signature_policy = config
         .embedded_signature_policy
         .as_deref()
@@ -656,9 +662,7 @@ fn convert_config_profile(
         .iter()
         .map(|dataset| {
             ReferenceDatasetRequirement::parse(dataset).ok_or_else(|| {
-                eyre::eyre!(
-                    "iso_bridge profile `{id}` has unknown reference dataset `{dataset}`"
-                )
+                eyre::eyre!("iso_bridge profile `{id}` has unknown reference dataset `{dataset}`")
             })
         })
         .collect::<eyre::Result<Vec<_>>>()?;
@@ -871,20 +875,20 @@ impl Iso20022BridgeRuntime {
             .message_profile(message_type, MessageDirection::Inbound)
             .ok_or(MsgError::ValidationFailed)?;
         self.require_profile_reference_data(profile)?;
-        let definition_id = message_definition_id(parsed, message_type)
-            .ok_or(MsgError::ValidationFailed)?;
+        let definition_id =
+            message_definition_id(parsed, message_type).ok_or(MsgError::ValidationFailed)?;
         if !message_profile.allows_version(definition_id) {
             return Err(MsgError::UnknownMessageType);
         }
         let business_message_id = business_message_id(parsed).map(ToOwned::to_owned);
         if message_profile.require_app_header
-            && (parsed.field_text("AppHdr/BizMsgIdr").is_none()
-                || parsed.field_text("AppHdr/MsgDefIdr").is_none()
-                || parsed.field_text("AppHdr/CreDt").is_none())
+            && (app_header_business_message_id(parsed).is_none()
+                || app_header_message_definition_id(parsed).is_none()
+                || app_header_creation_date(parsed).is_none())
         {
             return Err(MsgError::MissingField("AppHdr"));
         }
-        let business_service = parsed.field_text("AppHdr/BizSvc").map(ToOwned::to_owned);
+        let business_service = business_service(parsed).map(ToOwned::to_owned);
         if message_profile.require_business_service {
             let service = business_service
                 .as_deref()
@@ -914,7 +918,8 @@ impl Iso20022BridgeRuntime {
         if embedded_signature_detected {
             match profile.embedded_signature_policy {
                 EmbeddedSignaturePolicy::RecordOnly => {}
-                EmbeddedSignaturePolicy::RejectUnsupported | EmbeddedSignaturePolicy::RequireVerified => {
+                EmbeddedSignaturePolicy::RejectUnsupported
+                | EmbeddedSignaturePolicy::RequireVerified => {
                     return Err(MsgError::ValidationFailed);
                 }
             }
@@ -939,16 +944,15 @@ impl Iso20022BridgeRuntime {
     }
 
     /// Perform idempotency checks and record a new inbound message.
-    pub fn check_and_record_inbound(
-        &self,
-        message_id: &str,
-        metadata: IsoMessageMetadata,
-    ) -> bool {
+    pub fn check_and_record_inbound(&self, message_id: &str, metadata: IsoMessageMetadata) -> bool {
         let now = Instant::now();
         self.prune_expired(now);
         if let Some(mut existing) = self.records.get_mut(message_id) {
             let expired = now.saturating_duration_since(existing.last_seen) > self.dedupe_ttl;
             if expired || existing.state == IsoMessageState::Rejected {
+                if self.metadata_conflicts(message_id, &metadata) {
+                    return false;
+                }
                 self.remove_record_indexes(message_id, &existing);
                 *existing = IsoMessageRecord::pending(now);
                 existing.metadata = metadata.clone();
@@ -1260,6 +1264,7 @@ impl Iso20022BridgeRuntime {
         } else {
             let mut record = IsoMessageRecord::rejected(now, reason);
             record.rejection_reason_code = reason_code.map(std::borrow::ToOwned::to_owned);
+            record.status_history.clear();
             record.push_history();
             self.records.insert(message_id.to_owned(), record);
         }
@@ -1766,14 +1771,13 @@ impl Iso20022BridgeRuntime {
         let Some(store_dir) = self.store_dir.as_deref() else {
             return;
         };
-        let path = store_dir.join("messages").join(message_filename(message_id));
+        let path = store_dir
+            .join("messages")
+            .join(message_filename(message_id));
         let _ = fs::remove_file(path);
     }
 
-    fn require_profile_reference_data(
-        &self,
-        profile: &TradfiRailProfile,
-    ) -> Result<(), MsgError> {
+    fn require_profile_reference_data(&self, profile: &TradfiRailProfile) -> Result<(), MsgError> {
         for requirement in &profile.required_reference_datasets {
             if !self.reference_data.has_required_dataset(*requirement) {
                 return Err(MsgError::ValidationFailed);
@@ -1879,7 +1883,10 @@ fn persisted_record_value(message_id: &str, record: &IsoMessageRecord) -> JsonVa
         "transaction_hash".to_owned(),
         string_or_null(record.transaction_hash.as_deref()),
     );
-    root.insert("detail".to_owned(), string_or_null(record.detail.as_deref()));
+    root.insert(
+        "detail".to_owned(),
+        string_or_null(record.detail.as_deref()),
+    );
     root.insert(
         "ledger_tx_queued".to_owned(),
         JsonValue::from(record.ledger_tx_queued),
@@ -2112,7 +2119,10 @@ fn history_value(entry: &IsoStatusHistoryEntry) -> JsonValue {
         JsonValue::from(system_time_to_ms(entry.updated_at())),
     );
     map.insert("detail".to_owned(), string_or_null(entry.detail()));
-    map.insert("reason_code".to_owned(), string_or_null(entry.reason_code()));
+    map.insert(
+        "reason_code".to_owned(),
+        string_or_null(entry.reason_code()),
+    );
     JsonValue::Object(map)
 }
 
@@ -2176,38 +2186,55 @@ fn pacs002_from_code(value: &str) -> Option<Pacs002Status> {
     }
 }
 
-fn message_definition_id<'a>(parsed: &'a ParsedMessage, message_type: &str) -> Option<&'a str> {
-    parsed
-        .field_text("AppHdr/MsgDefIdr")
-        .or_else(|| parsed.field_text("MsgDefIdr"))
-        .or_else(|| {
-            parsed.iter().find_map(|(field, value)| {
-                field.ends_with("/MsgDefIdr")
-                    .then(|| core::str::from_utf8(value).ok())
-                    .flatten()
-            })
-        })
-        .or(Some(message_type))
+fn message_definition_id<'a>(parsed: &'a ParsedMessage, message_type: &'a str) -> Option<&'a str> {
+    field_text_by_suffix(parsed, &["AppHdr/MsgDefIdr", "MsgDefIdr"]).or(Some(message_type))
+}
+
+fn app_header_business_message_id(parsed: &ParsedMessage) -> Option<&str> {
+    field_text_by_suffix(parsed, &["AppHdr/BizMsgIdr", "BizMsgIdr"])
+}
+
+fn app_header_message_definition_id(parsed: &ParsedMessage) -> Option<&str> {
+    field_text_by_suffix(parsed, &["AppHdr/MsgDefIdr", "MsgDefIdr"])
+}
+
+fn app_header_creation_date(parsed: &ParsedMessage) -> Option<&str> {
+    field_text_by_suffix(
+        parsed,
+        &["AppHdr/CreDt", "CreDt", "AppHdr/CreDtTm", "CreDtTm"],
+    )
+}
+
+fn business_service(parsed: &ParsedMessage) -> Option<&str> {
+    field_text_by_suffix(parsed, &["AppHdr/BizSvc", "BizSvc"])
 }
 
 fn business_message_id(parsed: &ParsedMessage) -> Option<&str> {
-    parsed
-        .field_text("AppHdr/BizMsgIdr")
-        .or_else(|| parsed.field_text("BizMsgIdr"))
+    field_text_by_suffix(parsed, &["AppHdr/BizMsgIdr", "BizMsgIdr"])
         .or_else(|| parsed.field_text("MsgId"))
 }
 
 fn uetr(parsed: &ParsedMessage) -> Option<&str> {
-    parsed
-        .field_text("UETR")
-        .or_else(|| {
+    field_text_by_suffix(parsed, &["UETR"]).filter(|value| !value.trim().is_empty())
+}
+
+fn field_text_by_suffix<'a>(parsed: &'a ParsedMessage, suffixes: &[&str]) -> Option<&'a str> {
+    suffixes.iter().find_map(|suffix| {
+        parsed.field_text(suffix).or_else(|| {
             parsed.iter().find_map(|(field, value)| {
-                field.ends_with("/UETR")
+                field_matches_suffix(field, suffix)
                     .then(|| core::str::from_utf8(value).ok())
                     .flatten()
             })
         })
-        .filter(|value| !value.trim().is_empty())
+    })
+}
+
+fn field_matches_suffix(field: &str, suffix: &str) -> bool {
+    field == suffix
+        || field
+            .strip_suffix(suffix)
+            .is_some_and(|prefix| prefix.ends_with('/'))
 }
 
 fn has_embedded_signature_marker(parsed: &ParsedMessage) -> bool {
@@ -2344,7 +2371,7 @@ mod tests {
         nexus::{AxtRejectContext, AxtRejectReason, DataSpaceId, LaneId},
         transaction::error::{TransactionLimitError, TransactionRejectionReason},
     };
-    use tempfile::NamedTempFile;
+    use tempfile::{NamedTempFile, TempDir};
 
     use super::*;
 
@@ -2390,6 +2417,35 @@ mod tests {
                 asset_definition,
             }],
             reference_data: actual::IsoReferenceData::default(),
+        }
+    }
+
+    fn sample_pacs008() -> ParsedMessage {
+        parse_message(
+            "pacs.008",
+            b"MsgId=m-profile\nIntrBkSttlmAmt=10.00\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF",
+        )
+        .expect("parsed")
+    }
+
+    fn live_message_profile(message_type: &str, version: &str) -> actual::IsoBridgeProfile {
+        actual::IsoBridgeProfile {
+            id: format!("{message_type}-live-test"),
+            rail: "generic-iso20022".to_owned(),
+            embedded_signature_policy: None,
+            required_reference_datasets: Vec::new(),
+            message_profiles: vec![actual::IsoMessageProfile {
+                message_type: message_type.to_owned(),
+                direction: "inbound".to_owned(),
+                versions: vec![version.to_owned()],
+                business_services: vec!["swift.cbprplus.02".to_owned()],
+                require_app_header: true,
+                require_business_service: true,
+                require_uetr: false,
+                structured_address_mode: "permissive".to_owned(),
+                supplementary_data_max_bytes: 4096,
+                amount_minor_units: Vec::new(),
+            }],
         }
     }
 
@@ -2501,6 +2557,228 @@ mod tests {
             runtime.reference_data().isin_cusip().state(),
             SnapshotState::Missing
         );
+    }
+
+    #[test]
+    fn runtime_resolves_default_profile() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        assert_eq!(runtime.default_profile().id, "generic-iso20022");
+        assert!(runtime.resolve_profile(Some("swift-cbpr-plus")).is_some());
+        assert!(runtime.resolve_profile(Some("unknown-profile")).is_none());
+    }
+
+    #[test]
+    fn profile_validation_records_metadata_for_generic_messages() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        let parsed = sample_pacs008();
+        let metadata = runtime
+            .validate_profile_submission(
+                runtime.default_profile(),
+                "pacs.008",
+                &parsed,
+                b"profile payload",
+            )
+            .expect("generic profile accepts message");
+        assert_eq!(metadata.profile_id(), Some("generic-iso20022"));
+        assert_eq!(metadata.message_type(), Some("pacs.008"));
+        assert!(metadata.payload_hash().is_some());
+        assert!(metadata.reference_snapshot_id().is_some());
+        assert!(!metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn live_profile_accepts_bah_fields_with_data_pdu_prefixes() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(live_message_profile("pacs.008", "pacs.008.001.08"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("pacs.008-live-test"))
+            .expect("custom profile");
+        let parsed = parse_message(
+            "pacs.008",
+            b"DataPDU/AppHdr/BizMsgIdr=HDR-123\nDataPDU/AppHdr/MsgDefIdr=pacs.008.001.08\nDataPDU/AppHdr/CreDt=2025-01-01T12:00:00Z\nDataPDU/AppHdr/BizSvc=swift.cbprplus.02\nMsgId=m-profile\nIntrBkSttlmAmt=10.00\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF",
+        )
+        .expect("parsed");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, b"profile payload")
+            .expect("BAH suffix fields should satisfy live profile");
+
+        assert_eq!(metadata.business_service(), Some("swift.cbprplus.02"));
+        assert_eq!(metadata.business_message_id(), Some("HDR-123"));
+    }
+
+    #[test]
+    fn live_profile_accepts_pacs009_canonical_app_header_aliases() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(live_message_profile("pacs.009", "pacs.009.001.10"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("pacs.009-live-test"))
+            .expect("custom profile");
+        let parsed = parse_message(
+            "pacs.009",
+            b"AppHdr/BizMsgIdr=HDR-009\nAppHdr/MsgDefIdr=pacs.009.001.10\nAppHdr/CreDt=2025-01-01T12:00:00Z\nAppHdr/BizSvc=swift.cbprplus.02\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF",
+        )
+        .expect("parsed");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.009", &parsed, b"profile payload")
+            .expect("canonicalized BAH aliases should satisfy live profile");
+
+        assert_eq!(metadata.business_service(), Some("swift.cbprplus.02"));
+        assert_eq!(metadata.business_message_id(), Some("HDR-009"));
+    }
+
+    #[test]
+    fn live_profile_requires_reference_datasets() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        let parsed = sample_pacs008();
+        let profile = runtime
+            .resolve_profile(Some("swift-cbpr-plus"))
+            .expect("swift profile");
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, b"profile payload")
+            .expect_err("missing reference data must reject live profile");
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn profile_validation_rejects_amount_minor_unit_mismatch() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        let parsed = parse_message(
+            "pacs.008",
+            b"MsgId=m-minor\nIntrBkSttlmAmt=10.001\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF",
+        )
+        .expect("parsed");
+        let err = runtime
+            .validate_profile_submission(runtime.default_profile(), "pacs.008", &parsed, b"minor")
+            .expect_err("USD has two minor units");
+        assert!(matches!(
+            err,
+            MsgError::InvalidValue {
+                field,
+                kind: InvalidValueKind::Amount
+            } if field == "IntrBkSttlmAmt"
+        ));
+    }
+
+    #[test]
+    fn profile_idempotency_rejects_replayed_uetr() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        let first = IsoMessageMetadata::inbound(
+            "generic-iso20022",
+            "pacs.008",
+            None,
+            Some("biz-1".to_owned()),
+            Some("123e4567-e89b-12d3-a456-426614174000".to_owned()),
+            "hash-1".to_owned(),
+            "snapshot".to_owned(),
+            false,
+        );
+        let replay = IsoMessageMetadata::inbound(
+            "generic-iso20022",
+            "pacs.008",
+            None,
+            Some("biz-2".to_owned()),
+            Some("123E4567-E89B-12D3-A456-426614174000".to_owned()),
+            "hash-2".to_owned(),
+            "snapshot".to_owned(),
+            false,
+        );
+        assert!(runtime.check_and_record_inbound("msg-1", first));
+        assert!(!runtime.check_and_record_inbound("msg-2", replay));
+    }
+
+    #[test]
+    fn retry_replacement_rejects_conflicting_uetr() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        let first = IsoMessageMetadata::inbound(
+            "generic-iso20022",
+            "pacs.008",
+            None,
+            Some("biz-1".to_owned()),
+            Some("123e4567-e89b-12d3-a456-426614174000".to_owned()),
+            "hash-1".to_owned(),
+            "snapshot".to_owned(),
+            false,
+        );
+        let second = IsoMessageMetadata::inbound(
+            "generic-iso20022",
+            "pacs.008",
+            None,
+            Some("biz-2".to_owned()),
+            Some("123e4567-e89b-12d3-a456-426614174001".to_owned()),
+            "hash-2".to_owned(),
+            "snapshot".to_owned(),
+            false,
+        );
+        let conflicting_retry = IsoMessageMetadata::inbound(
+            "generic-iso20022",
+            "pacs.008",
+            None,
+            Some("biz-1-retry".to_owned()),
+            Some("123E4567-E89B-12D3-A456-426614174001".to_owned()),
+            "hash-3".to_owned(),
+            "snapshot".to_owned(),
+            false,
+        );
+
+        assert!(runtime.check_and_record_inbound("msg-1", first));
+        assert!(runtime.check_and_record_inbound("msg-2", second));
+        runtime.mark_rejected("msg-1", Some("retry allowed".to_owned()), Some("ED05"));
+
+        assert!(!runtime.check_and_record_inbound("msg-1", conflicting_retry));
+        assert_eq!(
+            runtime
+                .uetr_index
+                .get(&normalise_uetr("123e4567-e89b-12d3-a456-426614174001"))
+                .map(|entry| entry.clone()),
+            Some("msg-2".to_owned())
+        );
+    }
+
+    #[test]
+    fn durable_store_reloads_message_status() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        {
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            assert!(runtime.check_and_record_message("persisted-msg"));
+            runtime.mark_accepted("persisted-msg", "tx-persisted");
+        }
+        let reloaded = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let status = reloaded
+            .message_status("persisted-msg")
+            .expect("reloaded status");
+        assert_eq!(status.status_label(), "Accepted");
+        assert_eq!(status.transaction_hash(), Some("tx-persisted"));
+        assert!(!status.status_history().is_empty());
     }
 
     #[test]

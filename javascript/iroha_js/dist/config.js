@@ -531,6 +531,10 @@ export {
  *   isoBridge: {
  *     enabled: boolean;
  *     dedupeTtlSecs: number;
+ *     defaultProfile: string | null;
+ *     profiles: Array<Record<string, unknown>>;
+ *     storeDir: string | null;
+ *     embeddedSignaturePolicy: string | null;
  *     signer: { accountId: string; privateKey?: string | null } | null;
  *     accountAliases: Array<{ iban: string; accountId: string }>;
  *     currencyAssets: Array<{ currency: string; assetDefinition: string }>;
@@ -681,6 +685,12 @@ function normalizeIsoBridgeConfig(section) {
       "IsoBridge.dedupe_ttl_secs",
       0,
     ),
+    defaultProfile: requireString(section.default_profile),
+    profiles: Array.isArray(section.profiles)
+      ? section.profiles.filter((entry) => getObject(entry)).map((entry) => ({ ...entry }))
+      : [],
+    storeDir: requireString(section.store_dir),
+    embeddedSignaturePolicy: requireString(section.embedded_signature_policy),
     signer: normalizeIsoBridgeSigner(section.signer),
     accountAliases,
     currencyAssets,

@@ -340,7 +340,9 @@ use tower_http::{
 use utils::extractors::{NoritoVersioned, NoritoVersionedBytes};
 
 // Bring connect-info make service into scope for axum 0.8 serve path
-use crate::iso20022_bridge::{Iso20022BridgeRuntime, IsoMessageState, Pacs002Status};
+use crate::iso20022_bridge::{
+    Iso20022BridgeRuntime, IsoMessageState, IsoMessageStatus, Pacs002Status,
+};
 use crate::{router::builder::RouterBuilder, routing::conversion_error};
 
 /// Norito JSON derive macros used across Torii modules.
@@ -28859,6 +28861,175 @@ async fn handler_iso_status(
     ))
 }
 
+async fn handler_iso_pacs002(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(msg_id): axum::extract::Path<String>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/iso20022/messages/pacs002",
+    )
+    .await?;
+    let runtime = match &app.iso_bridge {
+        Some(rt) => rt.clone(),
+        None => {
+            return Err(Error::Query(
+                iroha_data_model::ValidationFail::NotPermitted("iso20022 bridge disabled".into()),
+            ));
+        }
+    };
+
+    let mut status = runtime.message_status(&msg_id).ok_or_else(|| {
+        Error::Query(iroha_data_model::ValidationFail::NotPermitted(
+            "unknown ISO 20022 message identifier".into(),
+        ))
+    })?;
+    if status.derived_status() != Pacs002Status::Acsc {
+        if let Some(hash_str) = status.transaction_hash() {
+            if let Ok(hash) = hash_str.parse::<HashOf<SignedTransaction>>() {
+                if app.state.has_committed_transaction(hash) {
+                    runtime.mark_settled(&msg_id, SystemTime::now());
+                    if let Some(updated) = runtime.message_status(&msg_id) {
+                        status = updated;
+                    }
+                }
+            }
+        }
+    }
+
+    let xml = iso_pacs002_xml(&status);
+    Ok((
+        StatusCode::OK,
+        [("content-type", "application/xml; charset=utf-8")],
+        xml,
+    )
+        .into_response())
+}
+
+fn iso_pacs002_xml(status: &IsoMessageStatus) -> String {
+    let msg_id = xml_escape(status.message_id());
+    let message_name = xml_escape(
+        status
+            .metadata()
+            .message_type()
+            .unwrap_or("unknown.iso20022.message"),
+    );
+    let tx_id = xml_escape(
+        status
+            .transaction_hash()
+            .or_else(|| status.metadata().business_message_id())
+            .unwrap_or_else(|| status.message_id()),
+    );
+    let status_code = status.pacs002_code();
+    let created_at = xml_timestamp(SystemTime::now());
+    let original_created_at = xml_timestamp(status.updated_at());
+    let group_reason = iso_status_reason_xml("      ", status);
+    let tx_reason = iso_status_reason_xml("      ", status);
+
+    format!(
+        concat!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>"#,
+            "\n",
+            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">"#,
+            "\n  <FIToFIPmtStsRpt>",
+            "\n    <GrpHdr>",
+            "\n      <MsgId>IROHA-PACS002-{msg_id}</MsgId>",
+            "\n      <CreDtTm>{created_at}</CreDtTm>",
+            "\n    </GrpHdr>",
+            "\n    <OrgnlGrpInfAndSts>",
+            "\n      <OrgnlMsgId>{msg_id}</OrgnlMsgId>",
+            "\n      <OrgnlMsgNmId>{message_name}</OrgnlMsgNmId>",
+            "\n      <OrgnlCreDtTm>{original_created_at}</OrgnlCreDtTm>",
+            "\n      <OrgnlNbOfTxs>1</OrgnlNbOfTxs>",
+            "\n      <GrpSts>{status_code}</GrpSts>",
+            "{group_reason}",
+            "\n    </OrgnlGrpInfAndSts>",
+            "\n    <TxInfAndSts>",
+            "\n      <OrgnlTxId>{tx_id}</OrgnlTxId>",
+            "\n      <TxSts>{status_code}</TxSts>",
+            "{tx_reason}",
+            "\n    </TxInfAndSts>",
+            "\n  </FIToFIPmtStsRpt>",
+            "\n</Document>\n"
+        ),
+        msg_id = msg_id,
+        created_at = created_at,
+        message_name = message_name,
+        original_created_at = original_created_at,
+        status_code = status_code,
+        group_reason = group_reason,
+        tx_id = tx_id,
+        tx_reason = tx_reason,
+    )
+}
+
+fn iso_status_reason_xml(indent: &str, status: &IsoMessageStatus) -> String {
+    let reason = status
+        .rejection_reason_code()
+        .or_else(|| status.hold_reason_code())
+        .or_else(|| status.change_reason_codes().first().map(String::as_str));
+    let detail = status.detail();
+    if reason.is_none() && detail.is_none() {
+        return String::new();
+    }
+    let mut xml = String::new();
+    xml.push('\n');
+    xml.push_str(indent);
+    xml.push_str("<StsRsnInf>");
+    if let Some(reason) = reason {
+        xml.push('\n');
+        xml.push_str(indent);
+        xml.push_str("  <Rsn>");
+        xml.push_str(&iso_reason_xml(reason));
+        xml.push_str("</Rsn>");
+    }
+    if let Some(detail) = detail {
+        xml.push('\n');
+        xml.push_str(indent);
+        xml.push_str("  <AddtlInf>");
+        xml.push_str(&xml_escape(detail));
+        xml.push_str("</AddtlInf>");
+    }
+    xml.push('\n');
+    xml.push_str(indent);
+    xml.push_str("</StsRsnInf>");
+    xml
+}
+
+fn iso_reason_xml(reason: &str) -> String {
+    let trimmed = reason.trim();
+    if let Some(proprietary) = trimmed.strip_prefix("PRTRY:") {
+        return format!("<Prtry>{}</Prtry>", xml_escape(proprietary));
+    }
+    format!("<Cd>{}</Cd>", xml_escape(trimmed))
+}
+
+fn xml_timestamp(time: SystemTime) -> String {
+    OffsetDateTime::from(time)
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned())
+}
+
+fn xml_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
 fn iso_profile_from_request<'a>(
     runtime: &'a Iso20022BridgeRuntime,
     headers: &HeaderMap,
@@ -33533,6 +33704,11 @@ impl Torii {
                 .route("/v1/iso20022/pacs008", post(handler_iso_pacs008))
                 .route("/v1/iso20022/pacs009", post(handler_iso_pacs009))
                 .route("/v1/iso20022/status/{msg_id}", get(handler_iso_status))
+                .route("/v1/iso20022/messages/{msg_id}", get(handler_iso_status))
+                .route(
+                    "/v1/iso20022/messages/{msg_id}/pacs002",
+                    get(handler_iso_pacs002),
+                )
         });
     }
 

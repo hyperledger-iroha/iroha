@@ -305,6 +305,15 @@ function createIsoSubmissionPayload(overrides = {}) {
     status: "Accepted",
     pacs002_code: "ACSP",
     transaction_hash: null,
+    profile_id: null,
+    message_type: null,
+    business_service: null,
+    business_message_id: null,
+    uetr: null,
+    payload_hash: null,
+    reference_snapshot_id: null,
+    embedded_signature_detected: false,
+    status_history: [],
     hold_reason_code: null,
     change_reason_codes: [],
     rejection_reason_code: null,
@@ -1244,6 +1253,26 @@ test("submitIsoPacs008 forwards retryProfile to fetch options", async () => {
   };
   await client.submitIsoPacs008("<xml/>", { retryProfile: "iso-bridge" });
   assert.equal(captured?.retryProfile, "iso-bridge");
+});
+
+test("submitIsoPacs008 forwards selected ISO profile header", async () => {
+  let captured;
+  const submissionPayload = createIsoSubmissionPayload({ message_id: "PROFILE1" });
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should be mocked");
+    },
+  });
+  client._request = async (_method, _url, init = {}) => {
+    captured = init;
+    return createResponse({
+      status: 202,
+      jsonData: submissionPayload,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  await client.submitIsoPacs008("<xml/>", { profile: "swift-cbpr-plus" });
+  assert.equal(captured?.headers["X-Iroha-Iso-Profile"], "swift-cbpr-plus");
 });
 
 test("submitIsoPacs008 rejects invalid retryProfile overrides", async () => {
@@ -4648,6 +4677,7 @@ test("submitIsoMessage builds pacs.008 XML and posts with defaults", async () =>
   const response = await client.submitIsoMessage({
     messageId: "built-iso",
     instructionId: "instr-iso",
+    creationDateTime: "2026-02-01T00:00:00Z",
     amount: { currency: "EUR", value: "5.00" },
     instigatingAgent: { bic: "DEUTDEFF" },
     instructedAgent: { bic: "COBADEFF" },
@@ -4661,9 +4691,32 @@ test("submitIsoMessage builds pacs.008 XML and posts with defaults", async () =>
   assert.equal(call.init.headers.Accept, "application/json");
   const xml = call.init.body?.toString("utf8") ?? "";
   assert.match(xml, /<MsgId>built-iso<\/MsgId>/);
+  assert.match(xml, /<CreDtTm>2026-02-01T00:00:00\.000Z<\/CreDtTm>/);
   assert.match(xml, /<InstrId>instr-iso<\/InstrId>/);
   assert.match(xml, /<IntrBkSttlmAmt Ccy="EUR">5\.00<\/IntrBkSttlmAmt>/);
   assert.deepEqual(response, payload);
+});
+
+test("submitIsoMessage requires explicit creationDateTime", async () => {
+  let fetched = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetched = true;
+      throw new Error("submitIsoMessage should reject before fetching");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.submitIsoMessage({
+        messageId: "built-iso",
+        instructionId: "instr-iso",
+        amount: { currency: "EUR", value: "5.00" },
+        instigatingAgent: { bic: "DEUTDEFF" },
+        instructedAgent: { bic: "COBADEFF" },
+      }),
+    /creationDateTime is required/,
+  );
+  assert.equal(fetched, false);
 });
 
 test("submitIsoMessage rejects unsupported option fields", async () => {
@@ -4851,6 +4904,7 @@ test("submitIsoMessage resolves accepted status without transaction hash when re
     {
       messageId: "accept-no-tx",
       instructionId: "instr-accept-no-tx",
+      creationDateTime: "2026-02-01T00:00:00Z",
       amount: { currency: "EUR", value: "1.00" },
       instigatingAgent: { bic: "DEUTDEFF" },
       instructedAgent: { bic: "COBADEFF" },

@@ -17703,7 +17703,7 @@ pub struct IsoMessageProfile {
     #[config(default = "false")]
     /// Whether UETR must be present.
     pub require_uetr: bool,
-    #[config(default = "\"permissive\".to_owned()")]
+    #[config(default = "defaults::torii::ISO_BRIDGE_STRUCTURED_ADDRESS_MODE.to_owned()")]
     /// Structured address mode identifier.
     pub structured_address_mode: String,
     #[config(default = "4096")]

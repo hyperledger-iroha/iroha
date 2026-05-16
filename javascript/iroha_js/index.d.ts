@@ -2709,6 +2709,10 @@ export interface IsoBridgeCurrencyBinding {
 export interface IsoBridgeConfigSnapshot {
   enabled: boolean;
   dedupeTtlSecs: number;
+  defaultProfile: string | null;
+  profiles: ReadonlyArray<Record<string, unknown>>;
+  storeDir: string | null;
+  embeddedSignaturePolicy: string | null;
   signer: IsoBridgeSignerSnapshot | null;
   accountAliases: ReadonlyArray<IsoBridgeAliasEntry>;
   currencyAssets: ReadonlyArray<IsoBridgeCurrencyBinding>;
@@ -5425,6 +5429,15 @@ export interface IsoMessageSubmissionResponseBase {
   status: IsoBridgeStatus;
   pacs002_code: Pacs002StatusCode | null;
   transaction_hash: string | null;
+  profile_id: string | null;
+  message_type: string | null;
+  business_service: string | null;
+  business_message_id: string | null;
+  uetr: string | null;
+  payload_hash: string | null;
+  reference_snapshot_id: string | null;
+  embedded_signature_detected: boolean;
+  status_history: ReadonlyArray<IsoStatusHistoryEntry>;
   hold_reason_code: string | null;
   change_reason_codes: ReadonlyArray<string>;
   rejection_reason_code: string | null;
@@ -5444,6 +5457,14 @@ export interface IsoPacs009SubmissionResponse extends IsoMessageSubmissionRespon
 export interface IsoMessageStatusResponse extends IsoMessageSubmissionResponseBase {
   detail: string | null;
   updated_at_ms: number;
+}
+
+export interface IsoStatusHistoryEntry {
+  status: IsoBridgeStatus;
+  pacs002_code: Pacs002StatusCode;
+  updated_at_ms: number | null;
+  detail: string | null;
+  reason_code: string | null;
 }
 
 export interface IsoMessagePollEvent {
@@ -5468,6 +5489,7 @@ export interface SubmitIsoMessageOptions {
   kind?: "pacs.008" | "pacs.009";
   messageKind?: "pacs.008" | "pacs.009";
   contentType?: string;
+  profile?: string;
   signal?: AbortSignal;
   retryProfile?: string;
   wait?: IsoMessageWaitOptions;
@@ -7634,16 +7656,17 @@ export declare class ToriiClient {
   ): Promise<number>;
   submitIsoPacs008(
     message: ArrayBufferView | ArrayBuffer | Buffer | string,
-    options?: { contentType?: string; signal?: AbortSignal; retryProfile?: string },
+    options?: { contentType?: string; profile?: string; signal?: AbortSignal; retryProfile?: string },
   ): Promise<IsoPacs008SubmissionResponse | null>;
   submitIsoPacs009(
     message: ArrayBufferView | ArrayBuffer | Buffer | string,
-    options?: { contentType?: string; signal?: AbortSignal; retryProfile?: string },
+    options?: { contentType?: string; profile?: string; signal?: AbortSignal; retryProfile?: string },
   ): Promise<IsoPacs009SubmissionResponse | null>;
   submitIsoPacs008AndWait(
     message: ArrayBufferView | ArrayBuffer | Buffer | string,
     options?: {
       contentType?: string;
+      profile?: string;
       signal?: AbortSignal;
       retryProfile?: string;
       wait?: IsoMessageWaitOptions;
@@ -7653,6 +7676,7 @@ export declare class ToriiClient {
     message: ArrayBufferView | ArrayBuffer | Buffer | string,
     options?: {
       contentType?: string;
+      profile?: string;
       signal?: AbortSignal;
       retryProfile?: string;
       wait?: IsoMessageWaitOptions;
