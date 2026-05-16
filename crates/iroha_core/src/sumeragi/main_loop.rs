@@ -25284,9 +25284,26 @@ impl Actor {
             }
         }
         let targets: Vec<_> = target_set.iter().cloned().collect();
+        if targets.is_empty() {
+            return false;
+        }
 
         let roster = self.ensure_rbc_session_roster(key);
-        let ready_targets = targets.clone();
+        let ready_targets = if session.delivered && !roster.is_empty() {
+            let topology = super::network_topology::Topology::new(roster.clone());
+            let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
+            let signature_topology = topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+            signature_topology
+                .as_ref()
+                .iter()
+                .filter(|peer| *peer != &local_peer_id)
+                .cloned()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        } else {
+            targets.clone()
+        };
         let quorum_or_delivery_repair = if roster.is_empty() {
             false
         } else {
@@ -25297,9 +25314,6 @@ impl Actor {
         let allow_targeted_payload_rescue =
             !authoritative_ready_repair || quorum_or_delivery_repair;
 
-        if targets.is_empty() && ready_targets.is_empty() {
-            return false;
-        }
         let mut sent = false;
 
         let now = Instant::now();

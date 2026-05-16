@@ -2,6 +2,17 @@
 
 Last updated: 2026-05-16
 
+## 2026-05-16 Sumeragi delivered RBC READY repair
+
+- Delivered RBC sessions that still observe at least one missing READY signer
+  now send the cached READY set to every remote validator in the view-rotated
+  signature topology before the DELIVER rebroadcast. Targeted body rescue stays
+  scoped to peers missing READY, and delivered sessions with no READY gap remain
+  quiet.
+- Focused validation is green for
+  `cargo test -p iroha_core sumeragi::main_loop::tests::rebroadcast_stalled_rbc_payloads_repairs_ready_before_deliver_after_delivery -- --nocapture`
+  and `cargo test -p iroha_core rescue_rbc_missing_ready_peers -- --nocapture`.
+
 ## 2026-05-16 TradFi ISO 20022 interop audit/profile bridge
 
 - Added the canonical TradFi ISO 20022 audit/design note at
