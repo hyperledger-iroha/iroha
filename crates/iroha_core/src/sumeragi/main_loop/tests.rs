@@ -30247,6 +30247,11 @@ async fn known_block_commit_evidence_replay_skips_during_cooldown() {
             .any(|entry| entry.msg_kind == Some("QcVote")),
         "first replay should retransmit commit evidence"
     );
+    let now = Instant::now();
+    actor.block_sync_rebroadcast_log.last_sent.insert(
+        block_hash,
+        now.checked_add(Duration::from_secs(60)).unwrap_or(now),
+    );
 
     assert!(
         !actor.maybe_replay_known_block_commit_evidence(
