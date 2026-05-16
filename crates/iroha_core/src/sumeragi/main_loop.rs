@@ -25447,42 +25447,71 @@ impl Actor {
         let ready_cooldown = self.rebroadcast_cooldown();
         let ready_due = self.rbc_ready_rebroadcast_due(&key, now, ready_cooldown);
         if ready_due
-            && !session.ready_signatures.is_empty()
-            && !roster.is_empty()
-            && !ready_targets.is_empty()
+            && self.send_targeted_rbc_ready_set_to_peers(
+                key,
+                session,
+                ready_targets.as_slice(),
+                now,
+            )
         {
-            let roster_hash = rbc::rbc_roster_hash(&roster);
-            if let Some(readies) = Self::rbc_ready_bundle(key, session, roster_hash) {
-                info!(
-                    height = key.1,
-                    view = key.2,
-                    block = %key.0,
-                    ready = readies.len(),
-                    targets = ?ready_targets,
-                    "sending targeted RBC READY set to ready-repair peers"
-                );
-                for ready in readies {
-                    let message = Arc::new(BlockMessage::RbcReady(ready));
-                    let encoded = Arc::new(BlockMessageWire::encode_message(message.as_ref()));
-                    for peer in &ready_targets {
-                        self.schedule_background(BackgroundRequest::Post {
-                            peer: peer.clone(),
-                            msg: BlockMessageWire::with_encoded(
-                                Arc::clone(&message),
-                                Arc::clone(&encoded),
-                            ),
-                        });
-                    }
-                }
-                self.subsystems
-                    .da_rbc
-                    .rbc
-                    .ready_rebroadcast_last_sent
-                    .insert(key, now);
-                sent = true;
-            }
+            sent = true;
         }
         sent
+    }
+
+    fn send_targeted_rbc_ready_set_to_peers(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        session: &RbcSession,
+        targets: &[PeerId],
+        now: Instant,
+    ) -> bool {
+        if session.ready_signatures.is_empty() || targets.is_empty() {
+            return false;
+        }
+        let local_peer_id = self.common_config.peer.id().clone();
+        let targets: Vec<_> = targets
+            .iter()
+            .filter(|peer| *peer != &local_peer_id)
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if targets.is_empty() {
+            return false;
+        }
+        let roster = self.ensure_rbc_session_roster(key);
+        if roster.is_empty() {
+            return false;
+        }
+        let roster_hash = rbc::rbc_roster_hash(&roster);
+        let Some(readies) = Self::rbc_ready_bundle(key, session, roster_hash) else {
+            return false;
+        };
+        info!(
+            height = key.1,
+            view = key.2,
+            block = %key.0,
+            ready = readies.len(),
+            targets = ?targets,
+            "sending targeted RBC READY set to ready-repair peers"
+        );
+        for ready in readies {
+            let message = Arc::new(BlockMessage::RbcReady(ready));
+            let encoded = Arc::new(BlockMessageWire::encode_message(message.as_ref()));
+            for peer in &targets {
+                self.schedule_background(BackgroundRequest::Post {
+                    peer: peer.clone(),
+                    msg: BlockMessageWire::with_encoded(Arc::clone(&message), Arc::clone(&encoded)),
+                });
+            }
+        }
+        self.subsystems
+            .da_rbc
+            .rbc
+            .ready_rebroadcast_last_sent
+            .insert(key, now);
+        true
     }
 
     fn rebroadcast_rbc_payload_for_missing_init(
@@ -25642,6 +25671,18 @@ impl Actor {
                 let idx = ValidatorIndex::try_from(idx).ok()?;
                 (!ready_senders.contains(&idx)).then_some(peer.clone())
             })
+            .collect()
+    }
+
+    fn rbc_remote_peers(
+        signature_topology: &super::network_topology::Topology,
+        local_peer_id: &PeerId,
+    ) -> Vec<PeerId> {
+        signature_topology
+            .as_ref()
+            .iter()
+            .filter(|peer| *peer != local_peer_id)
+            .cloned()
             .collect()
     }
 
@@ -26123,6 +26164,21 @@ impl Actor {
             let chunk_repair_allowed = hot_repair_allowed
                 || self.allow_exact_frontier_recovered_rbc_chunk_repair(key, &session);
             if session.progress_stage() == RbcProgressStage::Delivered {
+                let remote_ready_peers =
+                    Self::rbc_remote_peers(&signature_topology, self.common_config.peer.id());
+                let ready_due =
+                    self.rbc_ready_rebroadcast_due(&key, now, self.rebroadcast_cooldown());
+                if hot_repair_allowed
+                    && ready_due
+                    && self.send_targeted_rbc_ready_set_to_peers(
+                        key,
+                        &session,
+                        remote_ready_peers.as_slice(),
+                        now,
+                    )
+                {
+                    progress = true;
+                }
                 if hot_repair_allowed
                     && self.rescue_rbc_missing_ready_peers(
                         key,
