@@ -399,6 +399,11 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                 enabled: false,
                 dedupe_ttl_secs:
                     iroha_config::parameters::defaults::torii::ISO_BRIDGE_DEDUPE_TTL_SECS,
+                default_profile: iroha_config::parameters::defaults::torii::ISO_BRIDGE_DEFAULT_PROFILE
+                    .to_owned(),
+                profiles: Vec::new(),
+                store_dir: None,
+                embedded_signature_policy: None,
                 signer: None,
                 account_aliases: Vec::new(),
                 currency_assets: Vec::new(),

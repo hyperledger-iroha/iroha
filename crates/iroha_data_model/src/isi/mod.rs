@@ -1735,6 +1735,37 @@ impl<'a> norito::core::NoritoDeserialize<'a> for InstructionBox {
             message
         };
 
+        let ptr = core::ptr::from_ref(archived).cast::<u8>();
+        if let Ok(bytes) = norito::core::payload_slice_from_ptr(ptr) {
+            match decode_instruction_pair_fields_from_slice(bytes) {
+                Ok((name, payload, used)) if used == bytes.len() => {
+                    return match decode_instruction_from_pair(name, payload) {
+                        Ok(inst) => inst,
+                        Err(err) => {
+                            let hash: [u8; 32] = iroha_crypto::Hash::new(payload).into();
+                            let message = truncate_message(err.to_string());
+                            InstructionBox::from(crate::isi::transparent::InvalidInstruction::new(
+                                name.to_owned(),
+                                hash,
+                                message,
+                            ))
+                        }
+                    };
+                }
+                Ok((name, payload, _used)) => {
+                    let hash: [u8; 32] = iroha_crypto::Hash::new(payload).into();
+                    let message =
+                        truncate_message(instruction_canonical_framing_error().to_string());
+                    return InstructionBox::from(crate::isi::transparent::InvalidInstruction::new(
+                        name.to_owned(),
+                        hash,
+                        message,
+                    ));
+                }
+                Err(_) => {}
+            }
+        }
+
         let pair: Result<(String, Vec<u8>), norito::core::Error> =
             norito::core::NoritoDeserialize::try_deserialize(archived.cast());
         match pair {
@@ -1763,11 +1794,12 @@ impl<'a> norito::core::NoritoDeserialize<'a> for InstructionBox {
         archived: &'a norito::core::Archived<InstructionBox>,
     ) -> Result<Self, norito::core::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        if let Ok(bytes) = norito::core::payload_slice_from_ptr(ptr)
-            && let Ok((instruction, used)) = decode_instruction_from_borrowed_pair(bytes)
-            && used == bytes.len()
-        {
-            return Ok(instruction);
+        if let Ok(bytes) = norito::core::payload_slice_from_ptr(ptr) {
+            match decode_instruction_from_borrowed_pair(bytes) {
+                Ok((instruction, used)) if used == bytes.len() => return Ok(instruction),
+                Ok((_instruction, _used)) => return Err(instruction_canonical_framing_error()),
+                Err(_) => {}
+            }
         }
 
         let (name, bytes): (String, Vec<u8>) =
@@ -1778,19 +1810,13 @@ impl<'a> norito::core::NoritoDeserialize<'a> for InstructionBox {
 
 impl<'a> norito::core::DecodeFromSlice<'a> for InstructionBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        fn canonical_framing_error() -> norito::core::Error {
-            norito::core::Error::Message(
-                "instruction payload must use canonical Norito framing".to_owned(),
-            )
-        }
-
         let (inst, used) =
             decode_instruction_from_borrowed_pair(bytes).map_err(|err| match err {
                 norito::core::Error::Message(_) => err,
-                _ => canonical_framing_error(),
+                _ => instruction_canonical_framing_error(),
             })?;
         if used != bytes.len() {
-            return Err(canonical_framing_error());
+            return Err(instruction_canonical_framing_error());
         }
         norito::core::note_payload_access(bytes, used);
         Ok((inst, used))
@@ -2025,9 +2051,13 @@ pub fn decode_instruction_from_pair(
     )))
 }
 
-fn decode_instruction_from_borrowed_pair(
+fn instruction_canonical_framing_error() -> norito::Error {
+    norito::Error::Message("instruction payload must use canonical Norito framing".to_owned())
+}
+
+fn decode_instruction_pair_fields_from_slice(
     bytes: &[u8],
-) -> Result<(InstructionBox, usize), norito::Error> {
+) -> Result<(&str, &[u8], usize), norito::Error> {
     let flags =
         norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags);
     let (name_field_len, name_hdr) = norito::core::read_len_from_slice_with_flags(bytes, flags)?;
@@ -2081,8 +2111,15 @@ fn decode_instruction_from_borrowed_pair(
     let payload = payload_field
         .get(payload_start..payload_end)
         .ok_or(norito::Error::LengthMismatch)?;
+    Ok((name, payload, payload_field_end))
+}
+
+fn decode_instruction_from_borrowed_pair(
+    bytes: &[u8],
+) -> Result<(InstructionBox, usize), norito::Error> {
+    let (name, payload, used) = decode_instruction_pair_fields_from_slice(bytes)?;
     let instruction = decode_instruction_from_pair(name, payload)?;
-    Ok((instruction, payload_field_end))
+    Ok((instruction, used))
 }
 
 /// Frame a bare instruction payload with its Norito header using the registry metadata.
@@ -4235,6 +4272,69 @@ mod tests {
     }
 
     #[test]
+    fn instruction_box_lossy_deserialize_maps_malformed_pair_payload_to_invalid_instruction() {
+        let malformed_pair_payload = vec![0xFF; 32];
+        let framed = norito::core::frame_bare_with_header_flags::<InstructionBox>(
+            &malformed_pair_payload,
+            norito::core::default_encode_flags(),
+        )
+        .expect("frame malformed instruction-box payload");
+        let archived =
+            norito::core::from_bytes::<InstructionBox>(&framed).expect("instruction-box frame");
+
+        assert!(
+            norito::core::NoritoDeserialize::try_deserialize(archived).is_err(),
+            "strict decode must reject malformed pair payloads"
+        );
+
+        let decoded: InstructionBox = norito::core::NoritoDeserialize::deserialize(archived);
+        let invalid = decoded
+            .as_any()
+            .downcast_ref::<transparent::InvalidInstruction>()
+            .expect("malformed pair becomes invalid placeholder");
+
+        assert_eq!(invalid.wire_id, "<norito>");
+        assert_eq!(invalid.payload_hash, [0; 32]);
+        assert!(
+            invalid.message.len() <= 256,
+            "Norito tuple decode error should be bounded, got {} bytes",
+            invalid.message.len()
+        );
+    }
+
+    #[test]
+    fn instruction_box_decoders_reject_registered_wire_id_with_unframed_payload() {
+        use norito::core::DecodeFromSlice;
+
+        let _guard = RegistryGuard::set(crate::instruction_registry::default());
+        let malformed_payload = vec![0x01, 0x02, 0x03];
+        let framed_pair = framed_instruction_pair(Log::WIRE_ID, malformed_payload.clone());
+        let archived =
+            norito::core::from_bytes::<InstructionBox>(&framed_pair).expect("instruction pair");
+
+        assert!(
+            norito::core::NoritoDeserialize::try_deserialize(archived).is_err(),
+            "strict decode must reject unframed payload bytes for registered wire ids"
+        );
+
+        let bare_pair = bare_instruction_pair(Log::WIRE_ID, malformed_payload.clone());
+        assert!(
+            InstructionBox::decode_from_slice(&bare_pair).is_err(),
+            "borrowed-pair decode must reject unframed payload bytes for registered wire ids"
+        );
+
+        let decoded: InstructionBox = norito::core::NoritoDeserialize::deserialize(archived);
+        let invalid = decoded
+            .as_any()
+            .downcast_ref::<transparent::InvalidInstruction>()
+            .expect("malformed registered payload becomes invalid placeholder");
+        let expected_hash: [u8; 32] = iroha_crypto::Hash::new(&malformed_payload).into();
+
+        assert_eq!(invalid.wire_id, Log::WIRE_ID);
+        assert_eq!(invalid.payload_hash, expected_hash);
+    }
+
+    #[test]
     fn instruction_box_strict_decoders_reject_removed_direct_instruction_pairs() {
         use norito::core::DecodeFromSlice;
 
@@ -4400,6 +4500,68 @@ mod tests {
             ),
             other => panic!("unexpected error variant: {other:?}"),
         }
+    }
+
+    #[test]
+    fn instruction_box_try_deserialize_rejects_trailing_bytes_inside_framed_pair() {
+        let _guard = RegistryGuard::set(instruction_registry![Log]);
+        let boxed = InstructionBox::from(Log::new(Level::INFO, "framed pair tail".to_owned()));
+        let mut bare_pair = Vec::new();
+        norito::core::NoritoSerialize::serialize(&boxed, &mut bare_pair)
+            .expect("serialize instruction box pair");
+        bare_pair.extend_from_slice(&[0xAA, 0x55]);
+        let framed = norito::core::frame_bare_with_header_flags::<InstructionBox>(
+            &bare_pair,
+            norito::core::default_encode_flags(),
+        )
+        .expect("frame tailed instruction pair");
+        let archived =
+            norito::core::from_bytes::<InstructionBox>(&framed).expect("instruction box frame");
+
+        let err = norito::core::NoritoDeserialize::try_deserialize(archived)
+            .expect_err("framed instruction pairs with trailing bytes must be rejected");
+        match err {
+            norito::core::Error::Message(msg) => assert!(
+                msg.contains("canonical Norito framing"),
+                "error should reject non-canonical trailing bytes: {msg}"
+            ),
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn instruction_box_lossy_deserialize_maps_trailing_pair_bytes_to_invalid_instruction() {
+        let _guard = RegistryGuard::set(instruction_registry![Log]);
+        let boxed = InstructionBox::from(Log::new(Level::INFO, "lossy pair tail".to_owned()));
+        let (wire_id, framed_payload) =
+            encoded_instruction_pair_payload(&boxed).expect("encoded instruction payload");
+        assert_eq!(wire_id, Log::WIRE_ID);
+        let mut bare_pair = Vec::new();
+        norito::core::NoritoSerialize::serialize(&boxed, &mut bare_pair)
+            .expect("serialize instruction box pair");
+        bare_pair.extend_from_slice(&[0xAA, 0x55]);
+        let framed = norito::core::frame_bare_with_header_flags::<InstructionBox>(
+            &bare_pair,
+            norito::core::default_encode_flags(),
+        )
+        .expect("frame tailed instruction pair");
+        let archived =
+            norito::core::from_bytes::<InstructionBox>(&framed).expect("instruction box frame");
+
+        let decoded: InstructionBox = norito::core::NoritoDeserialize::deserialize(archived);
+        let invalid = decoded
+            .as_any()
+            .downcast_ref::<transparent::InvalidInstruction>()
+            .expect("tailed instruction pair becomes invalid placeholder");
+        let expected_hash: [u8; 32] = iroha_crypto::Hash::new(&framed_payload).into();
+
+        assert_eq!(invalid.wire_id, Log::WIRE_ID);
+        assert_eq!(invalid.payload_hash, expected_hash);
+        assert!(
+            invalid.message.contains("canonical Norito framing"),
+            "invalid placeholder should explain non-canonical trailing bytes: {}",
+            invalid.message
+        );
     }
 
     #[test]

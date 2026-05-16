@@ -4,4 +4,5 @@
 //! ISO 20022 bridge. Submodules cover reference data ingestion, validation, and
 //! telemetry instrumentation.
 
+pub mod profiles;
 pub mod reference_data;

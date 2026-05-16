@@ -713,6 +713,10 @@ fn minimal_config_snapshot() {
                 iso_bridge: IsoBridge {
                     enabled: false,
                     dedupe_ttl_secs: 300,
+                    default_profile: "generic-iso20022",
+                    profiles: [],
+                    store_dir: None,
+                    embedded_signature_policy: None,
                     signer: None,
                     account_aliases: [],
                     currency_assets: [],

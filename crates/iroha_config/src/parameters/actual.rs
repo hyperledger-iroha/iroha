@@ -7519,6 +7519,14 @@ pub struct IsoBridge {
     pub enabled: bool,
     /// TTL for deduplication records (seconds).
     pub dedupe_ttl_secs: u64,
+    /// Default rail/profile identifier used when requests do not select one.
+    pub default_profile: String,
+    /// Operator-defined profile overrides or additions.
+    pub profiles: Vec<IsoBridgeProfile>,
+    /// Directory where ISO bridge message state is persisted.
+    pub store_dir: Option<PathBuf>,
+    /// Optional global embedded XML signature policy override.
+    pub embedded_signature_policy: Option<String>,
     /// Optional signer configuration when enabled.
     pub signer: Option<IsoBridgeSigner>,
     /// Mapping of IBANs to on-ledger account identifiers.
@@ -7527,6 +7535,55 @@ pub struct IsoBridge {
     pub currency_assets: Vec<IsoCurrencyAsset>,
     /// Reference-data ingestion and refresh settings.
     pub reference_data: IsoReferenceData,
+}
+
+/// Operator-defined ISO bridge rail profile.
+#[derive(Debug, Clone)]
+pub struct IsoBridgeProfile {
+    /// Stable profile identifier.
+    pub id: String,
+    /// Rail family identifier.
+    pub rail: String,
+    /// Optional profile-level embedded XML signature policy.
+    pub embedded_signature_policy: Option<String>,
+    /// Required reference datasets for this profile.
+    pub required_reference_datasets: Vec<String>,
+    /// Message profile entries owned by this rail profile.
+    pub message_profiles: Vec<IsoMessageProfile>,
+}
+
+/// Message-specific ISO bridge profile configuration.
+#[derive(Debug, Clone)]
+pub struct IsoMessageProfile {
+    /// Canonical message family such as `pacs.008`.
+    pub message_type: String,
+    /// Direction identifier (`inbound`, `outbound`, or `follow-up`).
+    pub direction: String,
+    /// Exact ISO message definition identifiers accepted by this entry.
+    pub versions: Vec<String>,
+    /// Accepted business service identifiers.
+    pub business_services: Vec<String>,
+    /// Whether a Business Application Header is required.
+    pub require_app_header: bool,
+    /// Whether BizSvc must be present.
+    pub require_business_service: bool,
+    /// Whether UETR must be present.
+    pub require_uetr: bool,
+    /// Structured address mode identifier.
+    pub structured_address_mode: String,
+    /// Maximum serialized supplementary-data bytes.
+    pub supplementary_data_max_bytes: usize,
+    /// Currency minor-unit overrides.
+    pub amount_minor_units: Vec<IsoCurrencyMinorUnit>,
+}
+
+/// Currency minor-unit override for ISO amount validation.
+#[derive(Debug, Clone)]
+pub struct IsoCurrencyMinorUnit {
+    /// ISO 4217 currency code.
+    pub currency: String,
+    /// Number of permitted fractional decimal places.
+    pub minor_units: u8,
 }
 
 /// Signing configuration for ISO bridge transactions.

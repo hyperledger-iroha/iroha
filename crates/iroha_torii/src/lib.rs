@@ -193,7 +193,7 @@ use axum::{
     body::{Body, Bytes},
     debug_handler,
     extract::{
-        DefaultBodyLimit, Extension, State, WebSocketUpgrade,
+        DefaultBodyLimit, Extension, Query, State, WebSocketUpgrade,
         connect_info::IntoMakeServiceWithConnectInfo,
     },
     http::{HeaderMap, HeaderValue, Method as HttpMethod, Request, StatusCode, header::HeaderName},
@@ -28411,6 +28411,7 @@ async fn handler_get_sorafs_repair_status_all(
 async fn handler_iso_pacs008(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
@@ -28432,6 +28433,10 @@ async fn handler_iso_pacs008(
 
     let parsed =
         parse_message("pacs.008", &body).map_err(|err| Error::Query(map_iso_error(err)))?;
+    let profile = iso_profile_from_request(&runtime, &headers, &query)?;
+    let metadata = runtime
+        .validate_profile_submission(profile, "pacs.008", &parsed, &body)
+        .map_err(|err| Error::Query(map_iso_error(err)))?;
     let msg_id = parsed
         .field_text("MsgId")
         .ok_or_else(|| {
@@ -28441,7 +28446,7 @@ async fn handler_iso_pacs008(
         })?
         .to_owned();
 
-    if !runtime.check_and_record_message(&msg_id) {
+    if !runtime.check_and_record_inbound(&msg_id, metadata) {
         return Err(Error::Query(
             iroha_data_model::ValidationFail::NotPermitted("duplicate message identifier".into()),
         ));
@@ -28562,6 +28567,7 @@ async fn handler_iso_pacs008(
         "asset_id".into(),
         json_string_or_null(context.asset_id().map(ToString::to_string)),
     );
+    insert_iso_metadata_fields(&mut payload, &status_snapshot);
     Ok((
         StatusCode::ACCEPTED,
         JsonBody(norito::json::native::Value::Object(payload)),
@@ -28571,6 +28577,7 @@ async fn handler_iso_pacs008(
 async fn handler_iso_pacs009(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
@@ -28592,6 +28599,10 @@ async fn handler_iso_pacs009(
 
     let parsed =
         parse_message("pacs.009", &body).map_err(|err| Error::Query(map_iso_error(err)))?;
+    let profile = iso_profile_from_request(&runtime, &headers, &query)?;
+    let metadata = runtime
+        .validate_profile_submission(profile, "pacs.009", &parsed, &body)
+        .map_err(|err| Error::Query(map_iso_error(err)))?;
     let msg_id = parsed
         .field_text("BizMsgIdr")
         .ok_or_else(|| {
@@ -28601,7 +28612,7 @@ async fn handler_iso_pacs009(
         })?
         .to_owned();
 
-    if !runtime.check_and_record_message(&msg_id) {
+    if !runtime.check_and_record_inbound(&msg_id, metadata) {
         return Err(Error::Query(
             iroha_data_model::ValidationFail::NotPermitted("duplicate message identifier".into()),
         ));
@@ -28722,6 +28733,7 @@ async fn handler_iso_pacs009(
         "asset_id".into(),
         json_string_or_null(context.asset_id().map(ToString::to_string)),
     );
+    insert_iso_metadata_fields(&mut payload, &status_snapshot);
     Ok((
         StatusCode::ACCEPTED,
         JsonBody(norito::json::native::Value::Object(payload)),
@@ -28840,10 +28852,114 @@ async fn handler_iso_status(
         "asset_id".into(),
         json_string_or_null(status.asset_id().map(str::to_string)),
     );
+    insert_iso_metadata_fields(&mut payload, &status);
     Ok((
         StatusCode::OK,
         JsonBody(norito::json::native::Value::Object(payload)),
     ))
+}
+
+fn iso_profile_from_request<'a>(
+    runtime: &'a Iso20022BridgeRuntime,
+    headers: &HeaderMap,
+    query: &HashMap<String, String>,
+) -> Result<&'a iroha_core::iso_bridge::profiles::TradfiRailProfile, Error> {
+    let header_profile = headers
+        .get("x-iroha-iso-profile")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let query_profile = query
+        .get("profile")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let selected = header_profile.or(query_profile);
+    runtime.resolve_profile(selected).ok_or_else(|| {
+        Error::Query(iroha_data_model::ValidationFail::NotPermitted(
+            format!(
+                "unknown ISO 20022 profile `{}`",
+                selected.unwrap_or("<default>")
+            )
+            .into(),
+        ))
+    })
+}
+
+fn insert_iso_metadata_fields(
+    payload: &mut norito::json::native::Map,
+    status: &crate::iso20022_bridge::IsoMessageStatus,
+) {
+    let metadata = status.metadata();
+    payload.insert(
+        "profile_id".into(),
+        json_string_or_null(metadata.profile_id().map(str::to_string)),
+    );
+    payload.insert(
+        "message_type".into(),
+        json_string_or_null(metadata.message_type().map(str::to_string)),
+    );
+    payload.insert(
+        "business_service".into(),
+        json_string_or_null(metadata.business_service().map(str::to_string)),
+    );
+    payload.insert(
+        "business_message_id".into(),
+        json_string_or_null(metadata.business_message_id().map(str::to_string)),
+    );
+    payload.insert(
+        "uetr".into(),
+        json_string_or_null(metadata.uetr().map(str::to_string)),
+    );
+    payload.insert(
+        "payload_hash".into(),
+        json_string_or_null(metadata.payload_hash().map(str::to_string)),
+    );
+    payload.insert(
+        "reference_snapshot_id".into(),
+        json_string_or_null(metadata.reference_snapshot_id().map(str::to_string)),
+    );
+    payload.insert(
+        "embedded_signature_detected".into(),
+        norito::json::native::Value::from(metadata.embedded_signature_detected()),
+    );
+    let status_history = status
+        .status_history()
+        .iter()
+        .map(|entry| {
+            let mut item = norito::json::native::Map::new();
+            item.insert(
+                "status".into(),
+                norito::json::native::Value::from(entry.status_label().to_string()),
+            );
+            item.insert(
+                "pacs002_code".into(),
+                norito::json::native::Value::from(entry.pacs002_code().to_string()),
+            );
+            let updated_at_ms = entry
+                .updated_at()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
+                .unwrap_or(0);
+            item.insert(
+                "updated_at_ms".into(),
+                norito::json::native::Value::from(updated_at_ms),
+            );
+            item.insert(
+                "detail".into(),
+                json_string_or_null(entry.detail().map(str::to_string)),
+            );
+            item.insert(
+                "reason_code".into(),
+                json_string_or_null(entry.reason_code().map(str::to_string)),
+            );
+            norito::json::native::Value::Object(item)
+        })
+        .collect::<Vec<_>>();
+    payload.insert(
+        "status_history".into(),
+        norito::json::native::Value::Array(status_history),
+    );
 }
 
 fn map_iso_error(err: MsgError) -> iroha_data_model::ValidationFail {
@@ -55844,6 +55960,10 @@ mod tests {
         actual::IsoBridge {
             enabled: true,
             dedupe_ttl_secs: 30,
+            default_profile: "generic-iso20022".to_owned(),
+            profiles: Vec::new(),
+            store_dir: None,
+            embedded_signature_policy: None,
             signer: Some(actual::IsoBridgeSigner {
                 account_id: account_id.to_string(),
                 private_key: signer_keypair.private_key().clone(),
