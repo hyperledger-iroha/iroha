@@ -105,6 +105,9 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     );
     let burn = iroha_data_model::isi::Burn::asset_numeric(100u32, expected_asset_id_to.clone());
 
+    tx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
+        [0x51; iroha_crypto::Hash::LENGTH],
+    ));
     for instr in [
         InstructionBox::from(iroha_data_model::isi::MintBox::from(mint)),
         InstructionBox::from(iroha_data_model::isi::TransferBox::from(transfer)),
@@ -170,9 +173,6 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
     vm.run()
         .expect("state-loaded pointers should be accepted by transfer_asset");
 
-    let queued = CoreHost::with_host(&mut vm, CoreHost::drain_instructions);
-    assert_eq!(queued.len(), 1, "expected one queued transfer");
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     #[cfg(feature = "telemetry")]
@@ -217,11 +217,9 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
             .expect("setup should succeed");
     }
 
-    for instr in queued {
-        executor
-            .execute_instruction(&mut tx, &authority, instr)
-            .expect("apply queued transfer");
-    }
+    let queued = CoreHost::with_host(&mut vm, |host| host.apply_queued(&mut tx, &authority))
+        .expect("apply queued transfer");
+    assert_eq!(queued.len(), 1, "expected one queued transfer");
     tx.apply();
     block.commit().expect("commit block");
 

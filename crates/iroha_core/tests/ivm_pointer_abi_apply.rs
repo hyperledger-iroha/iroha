@@ -153,14 +153,9 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     }
 
     // Apply queued transfer via CoreHost bridge
-    let queued = CoreHost::with_host(&mut vm, CoreHost::drain_instructions);
+    let queued = CoreHost::with_host(&mut vm, |host| host.apply_queued(&mut tx, &from))
+        .expect("apply queued instructions");
     assert_eq!(queued.len(), 1);
-    let executor = tx.world.executor().clone();
-    for instr in queued {
-        executor
-            .execute_instruction(&mut tx, &from, instr)
-            .expect("apply queued instruction");
-    }
     tx.apply();
     block.commit().expect("commit block");
 
@@ -298,14 +293,9 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
             .expect("setup should succeed");
     }
 
-    let queued = CoreHost::with_host(&mut vm, CoreHost::drain_instructions);
+    let queued = CoreHost::with_host(&mut vm, |host| host.apply_queued(&mut tx, &from))
+        .expect("apply queued instructions");
     assert_eq!(queued.len(), 1);
-    let executor = tx.world.executor().clone();
-    for instr in queued {
-        executor
-            .execute_instruction(&mut tx, &from, instr)
-            .expect("apply queued instruction");
-    }
 }
 
 #[test]
@@ -417,13 +407,9 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
             .expect("setup should succeed");
     }
 
-    let queued = CoreHost::with_host(&mut vm, CoreHost::drain_instructions);
+    let queued = CoreHost::with_host(&mut vm, |host| host.apply_queued(&mut tx, &authority))
+        .expect("apply queued instructions");
     assert_eq!(queued.len(), 2);
-    for instr in queued {
-        executor
-            .execute_instruction(&mut tx, &authority, instr)
-            .expect("apply queued instruction");
-    }
 
     let dst_aed_bal = tx
         .world
