@@ -24716,8 +24716,24 @@ async fn commit_pipeline_uses_epoch_for_height_when_emitting_votes() {
     harness.shutdown.send();
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
+#[test]
+fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
+    let join_handle =
+        crate::sumeragi::sumeragi_thread_builder("sumeragi-commit-sidecar-cached-qc-test")
+            .spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to build Tokio runtime for cached-QC sidecar test")
+                    .block_on(commit_outcome_persists_roster_sidecar_from_cached_qc_impl());
+            })
+            .expect("failed to spawn cached-QC sidecar test thread");
+    join_handle
+        .join()
+        .expect("cached-QC sidecar test thread panicked");
+}
+
+async fn commit_outcome_persists_roster_sidecar_from_cached_qc_impl() {
     use crate::sumeragi::status;
 
     let _history_guard = status::commit_history_test_guard();
