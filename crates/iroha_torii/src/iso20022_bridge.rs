@@ -1,6 +1,8 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt::Write as FmtWrite,
+    fs,
+    path::PathBuf,
     str::FromStr,
     sync::Arc,
     time::{Duration, Instant, SystemTime},
@@ -9,8 +11,12 @@ use std::{
 use dashmap::DashMap;
 use eyre::WrapErr as _;
 use iroha_config::parameters::actual;
-use iroha_core::iso_bridge::reference_data::{
-    ReferenceDataError, ReferenceDataSnapshots, ValidationOutcome,
+use iroha_core::iso_bridge::{
+    profiles::{
+        self, EmbeddedSignaturePolicy, MessageDirection, MessageProfile,
+        ReferenceDatasetRequirement, StructuredAddressMode, TradfiRail, TradfiRailProfile,
+    },
+    reference_data::{ReferenceDataError, ReferenceDataSnapshots, ValidationOutcome},
 };
 use iroha_core::state::WorldReadOnly;
 use iroha_crypto::PrivateKey;
@@ -28,6 +34,7 @@ use iroha_data_model::{
 use iroha_primitives::{json::Json, numeric::Numeric};
 use ivm::iso20022::{IdentifierKind, InvalidValueKind, MsgError, ParsedMessage, parse_message};
 use norito::json::Value as JsonValue;
+use sha2::{Digest, Sha256};
 
 use crate::routing::{self, MaybeTelemetry};
 
@@ -41,9 +48,14 @@ pub struct Iso20022BridgeRuntime {
     index_aliases: Arc<BTreeMap<AliasIndex, (String, AccountId)>>,
     currency_assets: Arc<HashMap<String, String>>,
     reference_data: Arc<ReferenceDataSnapshots>,
+    default_profile_id: String,
+    profiles: Arc<HashMap<String, TradfiRailProfile>>,
+    store_dir: Option<PathBuf>,
     dedupe_ttl: Duration,
     records: DashMap<String, IsoMessageRecord>,
-    hash_index: DashMap<String, String>,
+    tx_hash_index: DashMap<String, String>,
+    payload_hash_index: DashMap<String, String>,
+    uetr_index: DashMap<String, String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -144,6 +156,130 @@ impl AddressParseObservation {
     }
 }
 
+/// Profile and idempotency metadata captured for an inbound ISO message.
+#[derive(Clone, Debug, Default)]
+pub struct IsoMessageMetadata {
+    profile_id: Option<String>,
+    message_type: Option<String>,
+    business_service: Option<String>,
+    business_message_id: Option<String>,
+    uetr: Option<String>,
+    payload_hash: Option<String>,
+    reference_snapshot_id: Option<String>,
+    embedded_signature_detected: bool,
+}
+
+impl IsoMessageMetadata {
+    fn inbound(
+        profile_id: &str,
+        message_type: &str,
+        business_service: Option<String>,
+        business_message_id: Option<String>,
+        uetr: Option<String>,
+        payload_hash: String,
+        reference_snapshot_id: String,
+        embedded_signature_detected: bool,
+    ) -> Self {
+        Self {
+            profile_id: Some(profile_id.to_owned()),
+            message_type: Some(message_type.to_owned()),
+            business_service,
+            business_message_id,
+            uetr,
+            payload_hash: Some(payload_hash),
+            reference_snapshot_id: Some(reference_snapshot_id),
+            embedded_signature_detected,
+        }
+    }
+
+    /// Selected rail profile identifier.
+    pub fn profile_id(&self) -> Option<&str> {
+        self.profile_id.as_deref()
+    }
+
+    /// ISO message family.
+    pub fn message_type(&self) -> Option<&str> {
+        self.message_type.as_deref()
+    }
+
+    /// Business service identifier from the Business Application Header.
+    pub fn business_service(&self) -> Option<&str> {
+        self.business_service.as_deref()
+    }
+
+    /// Business message identifier used for rail idempotency.
+    pub fn business_message_id(&self) -> Option<&str> {
+        self.business_message_id.as_deref()
+    }
+
+    /// UETR when present.
+    pub fn uetr(&self) -> Option<&str> {
+        self.uetr.as_deref()
+    }
+
+    /// SHA-256 hash of the submitted payload.
+    pub fn payload_hash(&self) -> Option<&str> {
+        self.payload_hash.as_deref()
+    }
+
+    /// Deterministic checksum of the reference-data snapshot used for validation.
+    pub fn reference_snapshot_id(&self) -> Option<&str> {
+        self.reference_snapshot_id.as_deref()
+    }
+
+    /// Whether an embedded XML signature subtree was observed.
+    pub fn embedded_signature_detected(&self) -> bool {
+        self.embedded_signature_detected
+    }
+}
+
+/// Historical ISO bridge status transition.
+#[derive(Clone, Debug)]
+pub struct IsoStatusHistoryEntry {
+    status: IsoMessageState,
+    pacs002_code: Pacs002Status,
+    updated_at: SystemTime,
+    detail: Option<String>,
+    reason_code: Option<String>,
+}
+
+impl IsoStatusHistoryEntry {
+    fn new(record: &IsoMessageRecord) -> Self {
+        Self {
+            status: record.state,
+            pacs002_code: record.derived_status(),
+            updated_at: record.updated_at,
+            detail: record.detail.clone(),
+            reason_code: record.rejection_reason_code.clone(),
+        }
+    }
+
+    /// Human-readable bridge state label.
+    pub fn status_label(&self) -> &'static str {
+        self.status.label()
+    }
+
+    /// ISO pacs.002 status code derived for this transition.
+    pub fn pacs002_code(&self) -> &'static str {
+        self.pacs002_code.code()
+    }
+
+    /// Transition timestamp.
+    pub fn updated_at(&self) -> SystemTime {
+        self.updated_at
+    }
+
+    /// Optional transition detail.
+    pub fn detail(&self) -> Option<&str> {
+        self.detail.as_deref()
+    }
+
+    /// Optional ISO or proprietary reason code.
+    pub fn reason_code(&self) -> Option<&str> {
+        self.reason_code.as_deref()
+    }
+}
+
 fn parse_account_address_literal(input: &str) -> (Option<String>, AddressParseObservation) {
     if input.is_empty() {
         return (None, AddressParseObservation::default());
@@ -185,10 +321,12 @@ pub struct IsoMessageStatus {
     detail: Option<String>,
     updated_at: SystemTime,
     context: IsoMessageContext,
+    metadata: IsoMessageMetadata,
     derived_status: Pacs002Status,
     hold_reason_code: Option<String>,
     change_reason_codes: Vec<String>,
     rejection_reason_code: Option<String>,
+    status_history: Vec<IsoStatusHistoryEntry>,
 }
 
 impl IsoMessageStatus {
@@ -248,6 +386,11 @@ impl IsoMessageStatus {
         self.derived_status
     }
 
+    /// Profile/idempotency metadata captured for the message.
+    pub fn metadata(&self) -> &IsoMessageMetadata {
+        &self.metadata
+    }
+
     pub fn hold_reason_code(&self) -> Option<&str> {
         self.hold_reason_code.as_deref()
     }
@@ -258,6 +401,11 @@ impl IsoMessageStatus {
 
     pub fn rejection_reason_code(&self) -> Option<&str> {
         self.rejection_reason_code.as_deref()
+    }
+
+    /// Status transition history for the message.
+    pub fn status_history(&self) -> &[IsoStatusHistoryEntry] {
+        &self.status_history
     }
 }
 
@@ -309,60 +457,74 @@ struct IsoMessageRecord {
     transaction_hash: Option<String>,
     detail: Option<String>,
     context: IsoMessageContext,
+    metadata: IsoMessageMetadata,
     ledger_tx_queued: bool,
     settled_at: Option<SystemTime>,
     hold_reason_code: Option<String>,
     change_reason_codes: Vec<String>,
     rejection_reason_code: Option<String>,
+    status_history: Vec<IsoStatusHistoryEntry>,
 }
 
 impl IsoMessageRecord {
     fn pending(now: Instant) -> Self {
-        Self {
+        let mut record = Self {
             last_seen: now,
             updated_at: SystemTime::now(),
             state: IsoMessageState::Pending,
             transaction_hash: None,
             detail: None,
             context: IsoMessageContext::default(),
+            metadata: IsoMessageMetadata::default(),
             ledger_tx_queued: false,
             settled_at: None,
             hold_reason_code: None,
             change_reason_codes: Vec::new(),
             rejection_reason_code: None,
-        }
+            status_history: Vec::new(),
+        };
+        record.push_history();
+        record
     }
 
     fn accepted(now: Instant, tx_hash: String) -> Self {
-        Self {
+        let mut record = Self {
             last_seen: now,
             updated_at: SystemTime::now(),
             state: IsoMessageState::Accepted,
             transaction_hash: Some(tx_hash),
             detail: None,
             context: IsoMessageContext::default(),
+            metadata: IsoMessageMetadata::default(),
             ledger_tx_queued: true,
             settled_at: None,
             hold_reason_code: None,
             change_reason_codes: Vec::new(),
             rejection_reason_code: None,
-        }
+            status_history: Vec::new(),
+        };
+        record.push_history();
+        record
     }
 
     fn rejected(now: Instant, detail: Option<String>) -> Self {
-        Self {
+        let mut record = Self {
             last_seen: now,
             updated_at: SystemTime::now(),
             state: IsoMessageState::Rejected,
             transaction_hash: None,
             detail,
             context: IsoMessageContext::default(),
+            metadata: IsoMessageMetadata::default(),
             ledger_tx_queued: false,
             settled_at: None,
             hold_reason_code: None,
             change_reason_codes: Vec::new(),
             rejection_reason_code: None,
-        }
+            status_history: Vec::new(),
+        };
+        record.push_history();
+        record
     }
 
     fn derived_status(&self) -> Pacs002Status {
@@ -419,6 +581,19 @@ impl IsoMessageRecord {
     fn mark_settled(&mut self, when: SystemTime) {
         self.settled_at = Some(when);
     }
+
+    fn push_history(&mut self) {
+        let entry = IsoStatusHistoryEntry::new(self);
+        let should_push = self.status_history.last().is_none_or(|last| {
+            last.status != entry.status
+                || last.pacs002_code != entry.pacs002_code
+                || last.detail != entry.detail
+                || last.reason_code != entry.reason_code
+        });
+        if should_push {
+            self.status_history.push(entry);
+        }
+    }
 }
 
 const ISO_PACS008_CONTEXT: &str = "/v1/iso20022/pacs008";
@@ -428,6 +603,138 @@ fn parse_config_account_id(literal: &str, field: &str) -> eyre::Result<AccountId
     AccountId::parse_encoded(literal)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .wrap_err_with(|| format!("{field} must parse as an account identifier"))
+}
+
+fn load_profile_catalog(
+    config: &actual::IsoBridge,
+) -> eyre::Result<HashMap<String, TradfiRailProfile>> {
+    let mut catalog = profiles::default_profile_catalog();
+    let global_policy = config
+        .embedded_signature_policy
+        .as_deref()
+        .map(parse_signature_policy)
+        .transpose()?;
+    if let Some(policy) = global_policy {
+        for profile in catalog.values_mut() {
+            profile.embedded_signature_policy = policy;
+        }
+    }
+
+    for override_profile in &config.profiles {
+        let profile = convert_config_profile(override_profile, global_policy)?;
+        catalog.insert(profile.id.clone(), profile);
+    }
+
+    let default_id = config.default_profile.trim();
+    if default_id.is_empty() {
+        eyre::bail!("iso_bridge default_profile must not be empty");
+    }
+    if !catalog.contains_key(default_id) {
+        eyre::bail!("iso_bridge default_profile `{default_id}` is not configured");
+    }
+
+    Ok(catalog.into_iter().collect())
+}
+
+fn convert_config_profile(
+    config: &actual::IsoBridgeProfile,
+    global_policy: Option<EmbeddedSignaturePolicy>,
+) -> eyre::Result<TradfiRailProfile> {
+    let id = config.id.trim();
+    if id.is_empty() {
+        eyre::bail!("iso_bridge profile id must not be empty");
+    }
+    let rail = TradfiRail::parse(&config.rail).ok_or_else(|| {
+        eyre::eyre!(
+            "iso_bridge profile `{id}` has unknown rail `{}`",
+            config.rail
+        )
+    })?;
+    let embedded_signature_policy = config
+        .embedded_signature_policy
+        .as_deref()
+        .map(parse_signature_policy)
+        .transpose()?
+        .or(global_policy)
+        .unwrap_or(EmbeddedSignaturePolicy::RecordOnly);
+    let required_reference_datasets = config
+        .required_reference_datasets
+        .iter()
+        .map(|dataset| {
+            ReferenceDatasetRequirement::parse(dataset).ok_or_else(|| {
+                eyre::eyre!("iso_bridge profile `{id}` has unknown reference dataset `{dataset}`")
+            })
+        })
+        .collect::<eyre::Result<Vec<_>>>()?;
+    let message_profiles = config
+        .message_profiles
+        .iter()
+        .map(|message| convert_config_message_profile(id, message))
+        .collect::<eyre::Result<Vec<_>>>()?;
+    if message_profiles.is_empty() {
+        eyre::bail!("iso_bridge profile `{id}` must define at least one message profile");
+    }
+    Ok(TradfiRailProfile {
+        id: id.to_owned(),
+        rail,
+        embedded_signature_policy,
+        required_reference_datasets,
+        message_profiles,
+    })
+}
+
+fn convert_config_message_profile(
+    profile_id: &str,
+    config: &actual::IsoMessageProfile,
+) -> eyre::Result<MessageProfile> {
+    let message_type = config.message_type.trim();
+    if message_type.is_empty() {
+        eyre::bail!("iso_bridge profile `{profile_id}` has an empty message_type");
+    }
+    let direction = MessageDirection::parse(&config.direction).ok_or_else(|| {
+        eyre::eyre!(
+            "iso_bridge profile `{profile_id}` message `{message_type}` has unknown direction `{}`",
+            config.direction
+        )
+    })?;
+    let structured_address_mode =
+        StructuredAddressMode::parse(&config.structured_address_mode).ok_or_else(|| {
+            eyre::eyre!(
+                "iso_bridge profile `{profile_id}` message `{message_type}` has unknown structured_address_mode `{}`",
+                config.structured_address_mode
+            )
+        })?;
+    let amount_minor_units = config
+        .amount_minor_units
+        .iter()
+        .map(|entry| {
+            let currency = normalise_currency(&entry.currency);
+            if !ivm::iso20022::validate_identifier(IdentifierKind::Currency, &currency) {
+                eyre::bail!(
+                    "iso_bridge profile `{profile_id}` message `{message_type}` has invalid currency `{}`",
+                    entry.currency
+                );
+            }
+            Ok((currency, entry.minor_units))
+        })
+        .collect::<eyre::Result<BTreeMap<_, _>>>()?;
+    Ok(MessageProfile {
+        message_type: message_type.to_owned(),
+        direction,
+        versions: config.versions.clone(),
+        business_services: config.business_services.clone(),
+        require_app_header: config.require_app_header,
+        require_business_service: config.require_business_service,
+        require_uetr: config.require_uetr,
+        structured_address_mode,
+        supplementary_data_max_bytes: config.supplementary_data_max_bytes,
+        amount_minor_units,
+    })
+}
+
+fn parse_signature_policy(value: &str) -> eyre::Result<EmbeddedSignaturePolicy> {
+    EmbeddedSignaturePolicy::parse(value)
+        .ok_or_else(|| eyre::eyre!("unknown ISO embedded signature policy `{value}`"))
 }
 
 impl Iso20022BridgeRuntime {
@@ -481,6 +788,7 @@ impl Iso20022BridgeRuntime {
         }
 
         let reference_data = Arc::new(ReferenceDataSnapshots::from_config(&config.reference_data));
+        let profiles = load_profile_catalog(config)?;
 
         let runtime = Iso20022BridgeRuntime {
             signer_account,
@@ -490,10 +798,17 @@ impl Iso20022BridgeRuntime {
             index_aliases: Arc::new(index_aliases),
             currency_assets: Arc::new(currencies),
             reference_data,
+            default_profile_id: config.default_profile.trim().to_owned(),
+            profiles: Arc::new(profiles),
+            store_dir: config.store_dir.clone(),
             dedupe_ttl: Duration::from_secs(config.dedupe_ttl_secs),
             records: DashMap::new(),
-            hash_index: DashMap::new(),
+            tx_hash_index: DashMap::new(),
+            payload_hash_index: DashMap::new(),
+            uetr_index: DashMap::new(),
         };
+
+        runtime.load_persisted_records();
 
         Ok(Some(runtime))
     }
@@ -532,26 +847,132 @@ impl Iso20022BridgeRuntime {
         &self.reference_data
     }
 
+    /// Return the configured default rail profile.
+    pub fn default_profile(&self) -> &TradfiRailProfile {
+        self.profiles
+            .get(&self.default_profile_id)
+            .expect("default ISO profile validated during runtime construction")
+    }
+
+    /// Resolve a profile identifier, falling back to the configured default.
+    pub fn resolve_profile(&self, profile_id: Option<&str>) -> Option<&TradfiRailProfile> {
+        let selected = profile_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .unwrap_or(&self.default_profile_id);
+        self.profiles.get(selected)
+    }
+
+    /// Validate profile policy for a parsed inbound message and produce audit metadata.
+    pub fn validate_profile_submission(
+        &self,
+        profile: &TradfiRailProfile,
+        message_type: &str,
+        parsed: &ParsedMessage,
+        payload: &[u8],
+    ) -> Result<IsoMessageMetadata, MsgError> {
+        let message_profile = profile
+            .message_profile(message_type, MessageDirection::Inbound)
+            .ok_or(MsgError::ValidationFailed)?;
+        self.require_profile_reference_data(profile)?;
+        let definition_id =
+            message_definition_id(parsed, message_type).ok_or(MsgError::ValidationFailed)?;
+        if !message_profile.allows_version(definition_id) {
+            return Err(MsgError::UnknownMessageType);
+        }
+        let business_message_id = business_message_id(parsed).map(ToOwned::to_owned);
+        if message_profile.require_app_header
+            && (app_header_business_message_id(parsed).is_none()
+                || app_header_message_definition_id(parsed).is_none()
+                || app_header_creation_date(parsed).is_none())
+        {
+            return Err(MsgError::MissingField("AppHdr"));
+        }
+        let business_service = business_service(parsed).map(ToOwned::to_owned);
+        if message_profile.require_business_service {
+            let service = business_service
+                .as_deref()
+                .ok_or_else(|| MsgError::MissingField("AppHdr/BizSvc"))?;
+            if !message_profile.allows_business_service(service) {
+                return Err(MsgError::InvalidValue {
+                    field: "AppHdr/BizSvc".to_owned(),
+                    kind: InvalidValueKind::Enum,
+                });
+            }
+        } else if let Some(service) = business_service.as_deref()
+            && !message_profile.allows_business_service(service)
+        {
+            return Err(MsgError::InvalidValue {
+                field: "AppHdr/BizSvc".to_owned(),
+                kind: InvalidValueKind::Enum,
+            });
+        }
+        let uetr = uetr(parsed).map(ToOwned::to_owned);
+        if message_profile.require_uetr && uetr.is_none() {
+            return Err(MsgError::MissingField("UETR"));
+        }
+        self.validate_amount_minor_units(message_profile, parsed)?;
+        self.validate_supplementary_data_limit(message_profile, parsed)?;
+        self.validate_structured_address_mode(message_profile, parsed)?;
+        let embedded_signature_detected = has_embedded_signature_marker(parsed);
+        if embedded_signature_detected {
+            match profile.embedded_signature_policy {
+                EmbeddedSignaturePolicy::RecordOnly => {}
+                EmbeddedSignaturePolicy::RejectUnsupported
+                | EmbeddedSignaturePolicy::RequireVerified => {
+                    return Err(MsgError::ValidationFailed);
+                }
+            }
+        }
+        Ok(IsoMessageMetadata::inbound(
+            &profile.id,
+            message_type,
+            business_service,
+            business_message_id,
+            uetr,
+            sha256_hex(payload),
+            self.reference_data.snapshot_id(),
+            embedded_signature_detected,
+        ))
+    }
+
     /// Perform a deduplication check for the provided message identifier.
     /// Returns `true` when the identifier is new (and records it), or `false`
     /// when a still-active entry already exists.
     pub fn check_and_record_message(&self, message_id: &str) -> bool {
+        self.check_and_record_inbound(message_id, IsoMessageMetadata::default())
+    }
+
+    /// Perform idempotency checks and record a new inbound message.
+    pub fn check_and_record_inbound(&self, message_id: &str, metadata: IsoMessageMetadata) -> bool {
         let now = Instant::now();
         self.prune_expired(now);
         if let Some(mut existing) = self.records.get_mut(message_id) {
             let expired = now.saturating_duration_since(existing.last_seen) > self.dedupe_ttl;
             if expired || existing.state == IsoMessageState::Rejected {
-                if let Some(old_hash) = existing.transaction_hash.take() {
-                    self.hash_index.remove(&old_hash);
+                if self.metadata_conflicts(message_id, &metadata) {
+                    return false;
                 }
+                self.remove_record_indexes(message_id, &existing);
                 *existing = IsoMessageRecord::pending(now);
+                existing.metadata = metadata.clone();
+                existing.push_history();
+                drop(existing);
+                self.insert_metadata_indexes(message_id, &metadata);
+                self.persist_message(message_id);
                 true
             } else {
                 false
             }
+        } else if self.metadata_conflicts(message_id, &metadata) {
+            false
         } else {
-            self.records
-                .insert(message_id.to_owned(), IsoMessageRecord::pending(now));
+            let mut record = IsoMessageRecord::pending(now);
+            record.metadata = metadata.clone();
+            record.push_history();
+            self.records.insert(message_id.to_owned(), record);
+            self.insert_metadata_indexes(message_id, &metadata);
+            self.persist_message(message_id);
             true
         }
     }
@@ -559,10 +980,9 @@ impl Iso20022BridgeRuntime {
     /// Remove a tracked message identifier from the dedupe cache (e.g. after a failed submission).
     pub fn remove_message(&self, message_id: &str) {
         if let Some((_, record)) = self.records.remove(message_id) {
-            if let Some(hash) = record.transaction_hash {
-                self.hash_index.remove(&hash);
-            }
+            self.remove_record_indexes(message_id, &record);
         }
+        self.remove_persisted_message(message_id);
     }
 
     /// Record supplementary ledger/account context attached to the message.
@@ -572,11 +992,13 @@ impl Iso20022BridgeRuntime {
             existing.last_seen = now;
             existing.updated_at = SystemTime::now();
             existing.context = context;
+            existing.push_history();
         } else {
             let mut record = IsoMessageRecord::pending(now);
             record.context = context;
             self.records.insert(message_id.to_owned(), record);
         }
+        self.persist_message(message_id);
     }
 
     /// Mark the provided message as queued for ledger execution.
@@ -586,11 +1008,14 @@ impl Iso20022BridgeRuntime {
             existing.last_seen = now;
             existing.updated_at = SystemTime::now();
             existing.set_queued();
+            existing.push_history();
         } else {
             let mut record = IsoMessageRecord::pending(now);
             record.set_queued();
+            record.push_history();
             self.records.insert(message_id.to_owned(), record);
         }
+        self.persist_message(message_id);
     }
 
     /// Flag a message as pending due to screening/manual hold with an optional ISO reason code.
@@ -600,11 +1025,14 @@ impl Iso20022BridgeRuntime {
             existing.last_seen = now;
             existing.updated_at = SystemTime::now();
             existing.set_hold_reason(reason_code.map(std::borrow::ToOwned::to_owned));
+            existing.push_history();
         } else {
             let mut record = IsoMessageRecord::pending(now);
             record.set_hold_reason(reason_code.map(std::borrow::ToOwned::to_owned));
+            record.push_history();
             self.records.insert(message_id.to_owned(), record);
         }
+        self.persist_message(message_id);
     }
 
     /// Clear any previously-set hold indicator for the message.
@@ -613,7 +1041,9 @@ impl Iso20022BridgeRuntime {
             existing.last_seen = Instant::now();
             existing.updated_at = SystemTime::now();
             existing.clear_hold();
+            existing.push_history();
         }
+        self.persist_message(message_id);
     }
 
     /// Replace the change-reason codes recorded for the message.
@@ -628,11 +1058,14 @@ impl Iso20022BridgeRuntime {
             existing.last_seen = now;
             existing.updated_at = SystemTime::now();
             existing.replace_change_reason_codes(codes_vec);
+            existing.push_history();
         } else {
             let mut record = IsoMessageRecord::pending(now);
             record.replace_change_reason_codes(codes_vec);
+            record.push_history();
             self.records.insert(message_id.to_owned(), record);
         }
+        self.persist_message(message_id);
     }
 
     /// Append a change-reason code for the message (deduplicated).
@@ -642,11 +1075,14 @@ impl Iso20022BridgeRuntime {
             existing.last_seen = now;
             existing.updated_at = SystemTime::now();
             existing.add_change_reason_code(code.to_owned());
+            existing.push_history();
         } else {
             let mut record = IsoMessageRecord::pending(now);
             record.add_change_reason_code(code.to_owned());
+            record.push_history();
             self.records.insert(message_id.to_owned(), record);
         }
+        self.persist_message(message_id);
     }
 
     /// Mark the message as fully settled on-ledger.
@@ -660,6 +1096,7 @@ impl Iso20022BridgeRuntime {
             existing.mark_settled(settled_at);
             existing.clear_hold();
             existing.rejection_reason_code = None;
+            existing.push_history();
         } else {
             let mut record = IsoMessageRecord::pending(now);
             record.state = IsoMessageState::Accepted;
@@ -667,13 +1104,15 @@ impl Iso20022BridgeRuntime {
             record.mark_settled(settled_at);
             record.clear_hold();
             record.rejection_reason_code = None;
+            record.push_history();
             self.records.insert(message_id.to_owned(), record);
         }
+        self.persist_message(message_id);
     }
 
     /// Mark the transaction identified by `tx_hash` as applied and fully settled.
     pub fn mark_transaction_applied(&self, tx_hash: &str, settled_at: SystemTime) {
-        if let Some((_, message_id)) = self.hash_index.remove(tx_hash) {
+        if let Some((_, message_id)) = self.tx_hash_index.remove(tx_hash) {
             self.mark_settled(&message_id, settled_at);
         }
     }
@@ -684,7 +1123,7 @@ impl Iso20022BridgeRuntime {
         tx_hash: &str,
         reason: Option<&TransactionRejectionReason>,
     ) {
-        if let Some((_, message_id)) = self.hash_index.remove(tx_hash) {
+        if let Some((_, message_id)) = self.tx_hash_index.remove(tx_hash) {
             let (detail, reason_code) = reason
                 .map(Self::rejection_reason_metadata)
                 .map(|(code, detail)| (Some(detail), Some(code)))
@@ -700,7 +1139,7 @@ impl Iso20022BridgeRuntime {
 
     /// Mark the transaction identified by `tx_hash` as expired in the queue.
     pub fn mark_transaction_expired(&self, tx_hash: &str) {
-        if let Some((_, message_id)) = self.hash_index.remove(tx_hash) {
+        if let Some((_, message_id)) = self.tx_hash_index.remove(tx_hash) {
             self.mark_rejected(
                 &message_id,
                 Some("transaction expired before admission".to_owned()),
@@ -777,7 +1216,7 @@ impl Iso20022BridgeRuntime {
         if let Some(mut existing) = self.records.get_mut(message_id) {
             if let Some(old_hash) = existing.transaction_hash.replace(tx_hash.clone()) {
                 if old_hash != tx_hash {
-                    self.hash_index.remove(&old_hash);
+                    self.tx_hash_index.remove(&old_hash);
                 }
             }
             existing.last_seen = now;
@@ -789,13 +1228,15 @@ impl Iso20022BridgeRuntime {
             existing.hold_reason_code = None;
             existing.change_reason_codes.clear();
             existing.rejection_reason_code = None;
+            existing.push_history();
         } else {
             self.records.insert(
                 message_id.to_owned(),
                 IsoMessageRecord::accepted(now, tx_hash.clone()),
             );
         }
-        self.hash_index.insert(tx_hash, message_id.to_owned());
+        self.tx_hash_index.insert(tx_hash, message_id.to_owned());
+        self.persist_message(message_id);
     }
 
     /// Mark the provided message as rejected and record the reason.
@@ -808,7 +1249,7 @@ impl Iso20022BridgeRuntime {
         let now = Instant::now();
         if let Some(mut existing) = self.records.get_mut(message_id) {
             if let Some(old_hash) = existing.transaction_hash.take() {
-                self.hash_index.remove(&old_hash);
+                self.tx_hash_index.remove(&old_hash);
             }
             existing.last_seen = now;
             existing.updated_at = SystemTime::now();
@@ -819,11 +1260,15 @@ impl Iso20022BridgeRuntime {
             existing.hold_reason_code = None;
             existing.change_reason_codes.clear();
             existing.rejection_reason_code = reason_code.map(std::borrow::ToOwned::to_owned);
+            existing.push_history();
         } else {
             let mut record = IsoMessageRecord::rejected(now, reason);
             record.rejection_reason_code = reason_code.map(std::borrow::ToOwned::to_owned);
+            record.status_history.clear();
+            record.push_history();
             self.records.insert(message_id.to_owned(), record);
         }
+        self.persist_message(message_id);
     }
 
     /// Retrieve the current status of a processed ISO 20022 message.
@@ -841,10 +1286,12 @@ impl Iso20022BridgeRuntime {
                 detail: record.detail.clone(),
                 updated_at: record.updated_at,
                 context,
+                metadata: record.metadata.clone(),
                 derived_status,
                 hold_reason_code,
                 change_reason_codes,
                 rejection_reason_code: record.rejection_reason_code.clone(),
+                status_history: record.status_history.clone(),
             }
         })
     }
@@ -1221,8 +1668,184 @@ impl Iso20022BridgeRuntime {
 impl Iso20022BridgeRuntime {
     fn prune_expired(&self, now: Instant) {
         let ttl = self.dedupe_ttl;
-        self.records
-            .retain(|_, record| now.saturating_duration_since(record.last_seen) <= ttl);
+        let expired = self
+            .records
+            .iter()
+            .filter_map(|entry| {
+                (now.saturating_duration_since(entry.last_seen) > ttl).then(|| entry.key().clone())
+            })
+            .collect::<Vec<_>>();
+        for message_id in expired {
+            self.remove_message(&message_id);
+        }
+    }
+
+    fn metadata_conflicts(&self, message_id: &str, metadata: &IsoMessageMetadata) -> bool {
+        metadata
+            .payload_hash()
+            .and_then(|hash| self.payload_hash_index.get(hash))
+            .is_some_and(|existing| existing.as_str() != message_id)
+            || metadata
+                .uetr()
+                .and_then(|uetr| self.uetr_index.get(&normalise_uetr(uetr)))
+                .is_some_and(|existing| existing.as_str() != message_id)
+    }
+
+    fn insert_metadata_indexes(&self, message_id: &str, metadata: &IsoMessageMetadata) {
+        if let Some(payload_hash) = metadata.payload_hash() {
+            self.payload_hash_index
+                .insert(payload_hash.to_owned(), message_id.to_owned());
+        }
+        if let Some(uetr) = metadata.uetr() {
+            self.uetr_index
+                .insert(normalise_uetr(uetr), message_id.to_owned());
+        }
+    }
+
+    fn remove_record_indexes(&self, message_id: &str, record: &IsoMessageRecord) {
+        if let Some(hash) = record.transaction_hash.as_deref() {
+            self.tx_hash_index.remove(hash);
+        }
+        if let Some(payload_hash) = record.metadata.payload_hash() {
+            self.payload_hash_index.remove(payload_hash);
+        }
+        if let Some(uetr) = record.metadata.uetr() {
+            self.uetr_index.remove(&normalise_uetr(uetr));
+        }
+        self.payload_hash_index
+            .retain(|_, existing_message| existing_message != message_id);
+        self.uetr_index
+            .retain(|_, existing_message| existing_message != message_id);
+    }
+
+    fn load_persisted_records(&self) {
+        let Some(store_dir) = self.store_dir.as_deref() else {
+            return;
+        };
+        let messages_dir = store_dir.join("messages");
+        let Ok(entries) = fs::read_dir(&messages_dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(value) = norito::json::from_json::<JsonValue>(&text) else {
+                continue;
+            };
+            if let Some((message_id, record)) = persisted_record_from_value(&value) {
+                self.insert_metadata_indexes(&message_id, &record.metadata);
+                if let Some(tx_hash) = record.transaction_hash.as_deref() {
+                    self.tx_hash_index
+                        .insert(tx_hash.to_owned(), message_id.clone());
+                }
+                self.records.insert(message_id, record);
+            }
+        }
+    }
+
+    fn persist_message(&self, message_id: &str) {
+        let Some(store_dir) = self.store_dir.as_deref() else {
+            return;
+        };
+        let Some(record) = self.records.get(message_id).map(|entry| entry.clone()) else {
+            return;
+        };
+        let messages_dir = store_dir.join("messages");
+        if fs::create_dir_all(&messages_dir).is_err() {
+            return;
+        }
+        let payload = persisted_record_value(message_id, &record);
+        let Ok(json) = norito::json::to_string_pretty(&payload) else {
+            return;
+        };
+        let path = messages_dir.join(message_filename(message_id));
+        let _ = fs::write(path, json);
+    }
+
+    fn remove_persisted_message(&self, message_id: &str) {
+        let Some(store_dir) = self.store_dir.as_deref() else {
+            return;
+        };
+        let path = store_dir
+            .join("messages")
+            .join(message_filename(message_id));
+        let _ = fs::remove_file(path);
+    }
+
+    fn require_profile_reference_data(&self, profile: &TradfiRailProfile) -> Result<(), MsgError> {
+        for requirement in &profile.required_reference_datasets {
+            if !self.reference_data.has_required_dataset(*requirement) {
+                return Err(MsgError::ValidationFailed);
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_amount_minor_units(
+        &self,
+        profile: &MessageProfile,
+        parsed: &ParsedMessage,
+    ) -> Result<(), MsgError> {
+        let Some(currency) = parsed.field_text("IntrBkSttlmCcy") else {
+            return Ok(());
+        };
+        let Some(amount) = parsed.field_text("IntrBkSttlmAmt") else {
+            return Ok(());
+        };
+        let currency = normalise_currency(currency);
+        let minor_units = profile.minor_units_for(&currency);
+        if amount_fraction_digits(amount) > usize::from(minor_units) {
+            return Err(MsgError::InvalidValue {
+                field: "IntrBkSttlmAmt".to_owned(),
+                kind: InvalidValueKind::Amount,
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_supplementary_data_limit(
+        &self,
+        profile: &MessageProfile,
+        parsed: &ParsedMessage,
+    ) -> Result<(), MsgError> {
+        let total = parsed
+            .iter()
+            .filter(|(field, _)| field.contains("SplmtryData"))
+            .map(|(field, value)| field.len() + value.len())
+            .sum::<usize>();
+        if total > profile.supplementary_data_max_bytes {
+            return Err(MsgError::TooManyOccurrences {
+                field: "SplmtryData",
+                max: profile.supplementary_data_max_bytes,
+                actual: total,
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_structured_address_mode(
+        &self,
+        profile: &MessageProfile,
+        parsed: &ParsedMessage,
+    ) -> Result<(), MsgError> {
+        if profile.structured_address_mode == StructuredAddressMode::Permissive {
+            return Ok(());
+        }
+        let has_unstructured_address = parsed
+            .iter()
+            .any(|(field, _)| field.ends_with("/PstlAdr/AdrLine") || field.contains("/AdrLine["));
+        if has_unstructured_address {
+            return Err(MsgError::InvalidValue {
+                field: "PstlAdr/AdrLine".to_owned(),
+                kind: InvalidValueKind::Enum,
+            });
+        }
+        Ok(())
     }
 
     fn require_bic(&self, field: &str, value: &str) -> Result<(), MsgError> {
@@ -1246,6 +1869,405 @@ impl Iso20022BridgeRuntime {
             },
         }
     }
+}
+
+fn persisted_record_value(message_id: &str, record: &IsoMessageRecord) -> JsonValue {
+    let mut root = norito::json::Map::new();
+    root.insert("message_id".to_owned(), JsonValue::from(message_id));
+    root.insert("state".to_owned(), JsonValue::from(record.state.label()));
+    root.insert(
+        "updated_at_ms".to_owned(),
+        JsonValue::from(system_time_to_ms(record.updated_at)),
+    );
+    root.insert(
+        "transaction_hash".to_owned(),
+        string_or_null(record.transaction_hash.as_deref()),
+    );
+    root.insert(
+        "detail".to_owned(),
+        string_or_null(record.detail.as_deref()),
+    );
+    root.insert(
+        "ledger_tx_queued".to_owned(),
+        JsonValue::from(record.ledger_tx_queued),
+    );
+    root.insert(
+        "settled_at_ms".to_owned(),
+        record
+            .settled_at
+            .map(system_time_to_ms)
+            .map_or(JsonValue::Null, JsonValue::from),
+    );
+    root.insert(
+        "hold_reason_code".to_owned(),
+        string_or_null(record.hold_reason_code.as_deref()),
+    );
+    root.insert(
+        "change_reason_codes".to_owned(),
+        JsonValue::Array(
+            record
+                .change_reason_codes
+                .iter()
+                .map(|code| JsonValue::from(code.as_str()))
+                .collect(),
+        ),
+    );
+    root.insert(
+        "rejection_reason_code".to_owned(),
+        string_or_null(record.rejection_reason_code.as_deref()),
+    );
+    root.insert("context".to_owned(), context_value(&record.context));
+    root.insert("metadata".to_owned(), metadata_value(&record.metadata));
+    root.insert(
+        "status_history".to_owned(),
+        JsonValue::Array(
+            record
+                .status_history
+                .iter()
+                .map(history_value)
+                .collect::<Vec<_>>(),
+        ),
+    );
+    JsonValue::Object(root)
+}
+
+fn persisted_record_from_value(value: &JsonValue) -> Option<(String, IsoMessageRecord)> {
+    let obj = value.as_object()?;
+    let message_id = obj.get("message_id")?.as_str()?.to_owned();
+    let state = state_from_label(obj.get("state")?.as_str()?)?;
+    let updated_at = obj
+        .get("updated_at_ms")
+        .and_then(JsonValue::as_u64)
+        .map(system_time_from_ms)
+        .unwrap_or_else(SystemTime::now);
+    let transaction_hash = obj
+        .get("transaction_hash")
+        .and_then(JsonValue::as_str)
+        .map(ToOwned::to_owned);
+    let detail = obj
+        .get("detail")
+        .and_then(JsonValue::as_str)
+        .map(ToOwned::to_owned);
+    let ledger_tx_queued = obj
+        .get("ledger_tx_queued")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
+    let settled_at = obj
+        .get("settled_at_ms")
+        .and_then(JsonValue::as_u64)
+        .map(system_time_from_ms);
+    let hold_reason_code = obj
+        .get("hold_reason_code")
+        .and_then(JsonValue::as_str)
+        .map(ToOwned::to_owned);
+    let change_reason_codes = obj
+        .get("change_reason_codes")
+        .and_then(JsonValue::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(JsonValue::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let rejection_reason_code = obj
+        .get("rejection_reason_code")
+        .and_then(JsonValue::as_str)
+        .map(ToOwned::to_owned);
+    let context = obj
+        .get("context")
+        .and_then(context_from_value)
+        .unwrap_or_default();
+    let metadata = obj
+        .get("metadata")
+        .and_then(metadata_from_value)
+        .unwrap_or_default();
+    let mut record = IsoMessageRecord {
+        last_seen: Instant::now(),
+        updated_at,
+        state,
+        transaction_hash,
+        detail,
+        context,
+        metadata,
+        ledger_tx_queued,
+        settled_at,
+        hold_reason_code,
+        change_reason_codes,
+        rejection_reason_code,
+        status_history: obj
+            .get("status_history")
+            .and_then(JsonValue::as_array)
+            .map(|items| items.iter().filter_map(history_from_value).collect())
+            .unwrap_or_default(),
+    };
+    if record.status_history.is_empty() {
+        record.push_history();
+    }
+    Some((message_id, record))
+}
+
+fn context_value(context: &IsoMessageContext) -> JsonValue {
+    let mut map = norito::json::Map::new();
+    map.insert(
+        "ledger_id".to_owned(),
+        string_or_null(context.ledger_id.as_deref()),
+    );
+    map.insert(
+        "source_account_id".to_owned(),
+        string_or_null(context.source_account_id.as_deref()),
+    );
+    map.insert(
+        "source_account_address".to_owned(),
+        string_or_null(context.source_account_address.as_deref()),
+    );
+    map.insert(
+        "target_account_id".to_owned(),
+        string_or_null(context.target_account_id.as_deref()),
+    );
+    map.insert(
+        "target_account_address".to_owned(),
+        string_or_null(context.target_account_address.as_deref()),
+    );
+    map.insert(
+        "asset_definition_id".to_owned(),
+        string_or_null(context.asset_definition_id.as_deref()),
+    );
+    map.insert(
+        "asset_id".to_owned(),
+        string_or_null(context.asset_id.as_deref()),
+    );
+    JsonValue::Object(map)
+}
+
+fn context_from_value(value: &JsonValue) -> Option<IsoMessageContext> {
+    let obj = value.as_object()?;
+    Some(IsoMessageContext {
+        ledger_id: optional_string(obj, "ledger_id"),
+        source_account_id: optional_string(obj, "source_account_id"),
+        source_account_address: optional_string(obj, "source_account_address"),
+        target_account_id: optional_string(obj, "target_account_id"),
+        target_account_address: optional_string(obj, "target_account_address"),
+        asset_definition_id: optional_string(obj, "asset_definition_id"),
+        asset_id: optional_string(obj, "asset_id"),
+        source_address_observation: AddressParseObservation::default(),
+        target_address_observation: AddressParseObservation::default(),
+    })
+}
+
+fn metadata_value(metadata: &IsoMessageMetadata) -> JsonValue {
+    let mut map = norito::json::Map::new();
+    map.insert(
+        "profile_id".to_owned(),
+        string_or_null(metadata.profile_id.as_deref()),
+    );
+    map.insert(
+        "message_type".to_owned(),
+        string_or_null(metadata.message_type.as_deref()),
+    );
+    map.insert(
+        "business_service".to_owned(),
+        string_or_null(metadata.business_service.as_deref()),
+    );
+    map.insert(
+        "business_message_id".to_owned(),
+        string_or_null(metadata.business_message_id.as_deref()),
+    );
+    map.insert("uetr".to_owned(), string_or_null(metadata.uetr.as_deref()));
+    map.insert(
+        "payload_hash".to_owned(),
+        string_or_null(metadata.payload_hash.as_deref()),
+    );
+    map.insert(
+        "reference_snapshot_id".to_owned(),
+        string_or_null(metadata.reference_snapshot_id.as_deref()),
+    );
+    map.insert(
+        "embedded_signature_detected".to_owned(),
+        JsonValue::from(metadata.embedded_signature_detected),
+    );
+    JsonValue::Object(map)
+}
+
+fn metadata_from_value(value: &JsonValue) -> Option<IsoMessageMetadata> {
+    let obj = value.as_object()?;
+    Some(IsoMessageMetadata {
+        profile_id: optional_string(obj, "profile_id"),
+        message_type: optional_string(obj, "message_type"),
+        business_service: optional_string(obj, "business_service"),
+        business_message_id: optional_string(obj, "business_message_id"),
+        uetr: optional_string(obj, "uetr"),
+        payload_hash: optional_string(obj, "payload_hash"),
+        reference_snapshot_id: optional_string(obj, "reference_snapshot_id"),
+        embedded_signature_detected: obj
+            .get("embedded_signature_detected")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+fn history_value(entry: &IsoStatusHistoryEntry) -> JsonValue {
+    let mut map = norito::json::Map::new();
+    map.insert("status".to_owned(), JsonValue::from(entry.status_label()));
+    map.insert(
+        "pacs002_code".to_owned(),
+        JsonValue::from(entry.pacs002_code()),
+    );
+    map.insert(
+        "updated_at_ms".to_owned(),
+        JsonValue::from(system_time_to_ms(entry.updated_at())),
+    );
+    map.insert("detail".to_owned(), string_or_null(entry.detail()));
+    map.insert(
+        "reason_code".to_owned(),
+        string_or_null(entry.reason_code()),
+    );
+    JsonValue::Object(map)
+}
+
+fn history_from_value(value: &JsonValue) -> Option<IsoStatusHistoryEntry> {
+    let obj = value.as_object()?;
+    Some(IsoStatusHistoryEntry {
+        status: state_from_label(obj.get("status")?.as_str()?)?,
+        pacs002_code: pacs002_from_code(obj.get("pacs002_code")?.as_str()?)?,
+        updated_at: obj
+            .get("updated_at_ms")
+            .and_then(JsonValue::as_u64)
+            .map(system_time_from_ms)
+            .unwrap_or_else(SystemTime::now),
+        detail: optional_string(obj, "detail"),
+        reason_code: optional_string(obj, "reason_code"),
+    })
+}
+
+fn optional_string(obj: &norito::json::Map, key: &str) -> Option<String> {
+    obj.get(key)
+        .and_then(JsonValue::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn string_or_null(value: Option<&str>) -> JsonValue {
+    value.map_or(JsonValue::Null, JsonValue::from)
+}
+
+fn message_filename(message_id: &str) -> String {
+    format!("{}.json", sha256_hex(message_id.as_bytes()))
+}
+
+fn system_time_to_ms(time: SystemTime) -> u64 {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
+}
+
+fn system_time_from_ms(ms: u64) -> SystemTime {
+    std::time::UNIX_EPOCH + Duration::from_millis(ms)
+}
+
+fn state_from_label(value: &str) -> Option<IsoMessageState> {
+    match value {
+        "Pending" => Some(IsoMessageState::Pending),
+        "Accepted" => Some(IsoMessageState::Accepted),
+        "Rejected" => Some(IsoMessageState::Rejected),
+        _ => None,
+    }
+}
+
+fn pacs002_from_code(value: &str) -> Option<Pacs002Status> {
+    match value {
+        "ACTC" => Some(Pacs002Status::Actc),
+        "ACSP" => Some(Pacs002Status::Acsp),
+        "ACSC" => Some(Pacs002Status::Acsc),
+        "ACWC" => Some(Pacs002Status::Acwc),
+        "PDNG" => Some(Pacs002Status::Pdng),
+        "RJCT" => Some(Pacs002Status::Rjct),
+        _ => None,
+    }
+}
+
+fn message_definition_id<'a>(parsed: &'a ParsedMessage, message_type: &'a str) -> Option<&'a str> {
+    field_text_by_suffix(parsed, &["AppHdr/MsgDefIdr", "MsgDefIdr"]).or(Some(message_type))
+}
+
+fn app_header_business_message_id(parsed: &ParsedMessage) -> Option<&str> {
+    field_text_by_suffix(parsed, &["AppHdr/BizMsgIdr", "BizMsgIdr"])
+}
+
+fn app_header_message_definition_id(parsed: &ParsedMessage) -> Option<&str> {
+    field_text_by_suffix(parsed, &["AppHdr/MsgDefIdr", "MsgDefIdr"])
+}
+
+fn app_header_creation_date(parsed: &ParsedMessage) -> Option<&str> {
+    field_text_by_suffix(
+        parsed,
+        &["AppHdr/CreDt", "CreDt", "AppHdr/CreDtTm", "CreDtTm"],
+    )
+}
+
+fn business_service(parsed: &ParsedMessage) -> Option<&str> {
+    field_text_by_suffix(parsed, &["AppHdr/BizSvc", "BizSvc"])
+}
+
+fn business_message_id(parsed: &ParsedMessage) -> Option<&str> {
+    field_text_by_suffix(parsed, &["AppHdr/BizMsgIdr", "BizMsgIdr"])
+        .or_else(|| parsed.field_text("MsgId"))
+}
+
+fn uetr(parsed: &ParsedMessage) -> Option<&str> {
+    field_text_by_suffix(parsed, &["UETR"]).filter(|value| !value.trim().is_empty())
+}
+
+fn field_text_by_suffix<'a>(parsed: &'a ParsedMessage, suffixes: &[&str]) -> Option<&'a str> {
+    suffixes.iter().find_map(|suffix| {
+        parsed.field_text(suffix).or_else(|| {
+            parsed.iter().find_map(|(field, value)| {
+                field_matches_suffix(field, suffix)
+                    .then(|| core::str::from_utf8(value).ok())
+                    .flatten()
+            })
+        })
+    })
+}
+
+fn field_matches_suffix(field: &str, suffix: &str) -> bool {
+    field == suffix
+        || field
+            .strip_suffix(suffix)
+            .is_some_and(|prefix| prefix.ends_with('/'))
+}
+
+fn has_embedded_signature_marker(parsed: &ParsedMessage) -> bool {
+    parsed.iter().any(|(field, _)| {
+        field.contains("Sgntr")
+            || field.contains("Signature")
+            || field.ends_with("/@ignored")
+            || field.contains("SignedInfo")
+            || field.contains("QualifyingProperties")
+    })
+}
+
+fn amount_fraction_digits(amount: &str) -> usize {
+    amount
+        .trim()
+        .split_once('.')
+        .map(|(_, fraction)| fraction.len())
+        .unwrap_or(0)
+}
+
+fn normalise_uetr(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 fn normalise_identifier(kind: IdentifierKind, value: &str) -> String {
@@ -1349,7 +2371,7 @@ mod tests {
         nexus::{AxtRejectContext, AxtRejectReason, DataSpaceId, LaneId},
         transaction::error::{TransactionLimitError, TransactionRejectionReason},
     };
-    use tempfile::NamedTempFile;
+    use tempfile::{NamedTempFile, TempDir};
 
     use super::*;
 
@@ -1378,6 +2400,10 @@ mod tests {
         actual::IsoBridge {
             enabled: true,
             dedupe_ttl_secs: 60,
+            default_profile: "generic-iso20022".to_owned(),
+            profiles: Vec::new(),
+            store_dir: None,
+            embedded_signature_policy: None,
             signer: Some(actual::IsoBridgeSigner {
                 account_id: account_literal.clone(),
                 private_key,
@@ -1391,6 +2417,35 @@ mod tests {
                 asset_definition,
             }],
             reference_data: actual::IsoReferenceData::default(),
+        }
+    }
+
+    fn sample_pacs008() -> ParsedMessage {
+        parse_message(
+            "pacs.008",
+            b"MsgId=m-profile\nIntrBkSttlmAmt=10.00\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF",
+        )
+        .expect("parsed")
+    }
+
+    fn live_message_profile(message_type: &str, version: &str) -> actual::IsoBridgeProfile {
+        actual::IsoBridgeProfile {
+            id: format!("{message_type}-live-test"),
+            rail: "generic-iso20022".to_owned(),
+            embedded_signature_policy: None,
+            required_reference_datasets: Vec::new(),
+            message_profiles: vec![actual::IsoMessageProfile {
+                message_type: message_type.to_owned(),
+                direction: "inbound".to_owned(),
+                versions: vec![version.to_owned()],
+                business_services: vec!["swift.cbprplus.02".to_owned()],
+                require_app_header: true,
+                require_business_service: true,
+                require_uetr: false,
+                structured_address_mode: "permissive".to_owned(),
+                supplementary_data_max_bytes: 4096,
+                amount_minor_units: Vec::new(),
+            }],
         }
     }
 
@@ -1502,6 +2557,228 @@ mod tests {
             runtime.reference_data().isin_cusip().state(),
             SnapshotState::Missing
         );
+    }
+
+    #[test]
+    fn runtime_resolves_default_profile() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        assert_eq!(runtime.default_profile().id, "generic-iso20022");
+        assert!(runtime.resolve_profile(Some("swift-cbpr-plus")).is_some());
+        assert!(runtime.resolve_profile(Some("unknown-profile")).is_none());
+    }
+
+    #[test]
+    fn profile_validation_records_metadata_for_generic_messages() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        let parsed = sample_pacs008();
+        let metadata = runtime
+            .validate_profile_submission(
+                runtime.default_profile(),
+                "pacs.008",
+                &parsed,
+                b"profile payload",
+            )
+            .expect("generic profile accepts message");
+        assert_eq!(metadata.profile_id(), Some("generic-iso20022"));
+        assert_eq!(metadata.message_type(), Some("pacs.008"));
+        assert!(metadata.payload_hash().is_some());
+        assert!(metadata.reference_snapshot_id().is_some());
+        assert!(!metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn live_profile_accepts_bah_fields_with_data_pdu_prefixes() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(live_message_profile("pacs.008", "pacs.008.001.08"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("pacs.008-live-test"))
+            .expect("custom profile");
+        let parsed = parse_message(
+            "pacs.008",
+            b"DataPDU/AppHdr/BizMsgIdr=HDR-123\nDataPDU/AppHdr/MsgDefIdr=pacs.008.001.08\nDataPDU/AppHdr/CreDt=2025-01-01T12:00:00Z\nDataPDU/AppHdr/BizSvc=swift.cbprplus.02\nMsgId=m-profile\nIntrBkSttlmAmt=10.00\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF",
+        )
+        .expect("parsed");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, b"profile payload")
+            .expect("BAH suffix fields should satisfy live profile");
+
+        assert_eq!(metadata.business_service(), Some("swift.cbprplus.02"));
+        assert_eq!(metadata.business_message_id(), Some("HDR-123"));
+    }
+
+    #[test]
+    fn live_profile_accepts_pacs009_canonical_app_header_aliases() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(live_message_profile("pacs.009", "pacs.009.001.10"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("pacs.009-live-test"))
+            .expect("custom profile");
+        let parsed = parse_message(
+            "pacs.009",
+            b"AppHdr/BizMsgIdr=HDR-009\nAppHdr/MsgDefIdr=pacs.009.001.10\nAppHdr/CreDt=2025-01-01T12:00:00Z\nAppHdr/BizSvc=swift.cbprplus.02\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF",
+        )
+        .expect("parsed");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.009", &parsed, b"profile payload")
+            .expect("canonicalized BAH aliases should satisfy live profile");
+
+        assert_eq!(metadata.business_service(), Some("swift.cbprplus.02"));
+        assert_eq!(metadata.business_message_id(), Some("HDR-009"));
+    }
+
+    #[test]
+    fn live_profile_requires_reference_datasets() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        let parsed = sample_pacs008();
+        let profile = runtime
+            .resolve_profile(Some("swift-cbpr-plus"))
+            .expect("swift profile");
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, b"profile payload")
+            .expect_err("missing reference data must reject live profile");
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn profile_validation_rejects_amount_minor_unit_mismatch() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        let parsed = parse_message(
+            "pacs.008",
+            b"MsgId=m-minor\nIntrBkSttlmAmt=10.001\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF",
+        )
+        .expect("parsed");
+        let err = runtime
+            .validate_profile_submission(runtime.default_profile(), "pacs.008", &parsed, b"minor")
+            .expect_err("USD has two minor units");
+        assert!(matches!(
+            err,
+            MsgError::InvalidValue {
+                field,
+                kind: InvalidValueKind::Amount
+            } if field == "IntrBkSttlmAmt"
+        ));
+    }
+
+    #[test]
+    fn profile_idempotency_rejects_replayed_uetr() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        let first = IsoMessageMetadata::inbound(
+            "generic-iso20022",
+            "pacs.008",
+            None,
+            Some("biz-1".to_owned()),
+            Some("123e4567-e89b-12d3-a456-426614174000".to_owned()),
+            "hash-1".to_owned(),
+            "snapshot".to_owned(),
+            false,
+        );
+        let replay = IsoMessageMetadata::inbound(
+            "generic-iso20022",
+            "pacs.008",
+            None,
+            Some("biz-2".to_owned()),
+            Some("123E4567-E89B-12D3-A456-426614174000".to_owned()),
+            "hash-2".to_owned(),
+            "snapshot".to_owned(),
+            false,
+        );
+        assert!(runtime.check_and_record_inbound("msg-1", first));
+        assert!(!runtime.check_and_record_inbound("msg-2", replay));
+    }
+
+    #[test]
+    fn retry_replacement_rejects_conflicting_uetr() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        let first = IsoMessageMetadata::inbound(
+            "generic-iso20022",
+            "pacs.008",
+            None,
+            Some("biz-1".to_owned()),
+            Some("123e4567-e89b-12d3-a456-426614174000".to_owned()),
+            "hash-1".to_owned(),
+            "snapshot".to_owned(),
+            false,
+        );
+        let second = IsoMessageMetadata::inbound(
+            "generic-iso20022",
+            "pacs.008",
+            None,
+            Some("biz-2".to_owned()),
+            Some("123e4567-e89b-12d3-a456-426614174001".to_owned()),
+            "hash-2".to_owned(),
+            "snapshot".to_owned(),
+            false,
+        );
+        let conflicting_retry = IsoMessageMetadata::inbound(
+            "generic-iso20022",
+            "pacs.008",
+            None,
+            Some("biz-1-retry".to_owned()),
+            Some("123E4567-E89B-12D3-A456-426614174001".to_owned()),
+            "hash-3".to_owned(),
+            "snapshot".to_owned(),
+            false,
+        );
+
+        assert!(runtime.check_and_record_inbound("msg-1", first));
+        assert!(runtime.check_and_record_inbound("msg-2", second));
+        runtime.mark_rejected("msg-1", Some("retry allowed".to_owned()), Some("ED05"));
+
+        assert!(!runtime.check_and_record_inbound("msg-1", conflicting_retry));
+        assert_eq!(
+            runtime
+                .uetr_index
+                .get(&normalise_uetr("123e4567-e89b-12d3-a456-426614174001"))
+                .map(|entry| entry.clone()),
+            Some("msg-2".to_owned())
+        );
+    }
+
+    #[test]
+    fn durable_store_reloads_message_status() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        {
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            assert!(runtime.check_and_record_message("persisted-msg"));
+            runtime.mark_accepted("persisted-msg", "tx-persisted");
+        }
+        let reloaded = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let status = reloaded
+            .message_status("persisted-msg")
+            .expect("reloaded status");
+        assert_eq!(status.status_label(), "Accepted");
+        assert_eq!(status.transaction_hash(), Some("tx-persisted"));
+        assert!(!status.status_history().is_empty());
     }
 
     #[test]

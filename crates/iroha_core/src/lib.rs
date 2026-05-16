@@ -857,7 +857,7 @@ mod tests {
         let ready_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
             BlockMessage::RbcReady(ready),
         )));
-        assert_eq!(ready_msg.topic(), NetworkTopic::Consensus);
+        assert_eq!(ready_msg.topic(), NetworkTopic::ConsensusChunk);
 
         let deliver = RbcDeliver {
             block_hash,
@@ -873,7 +873,7 @@ mod tests {
         let deliver_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
             BlockMessage::RbcDeliver(deliver),
         )));
-        assert_eq!(deliver_msg.topic(), NetworkTopic::Consensus);
+        assert_eq!(deliver_msg.topic(), NetworkTopic::ConsensusChunk);
     }
 
     #[test]

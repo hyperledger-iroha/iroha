@@ -722,6 +722,10 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             iso_bridge: A::IsoBridge {
                 enabled: false,
                 dedupe_ttl_secs: defaults::torii::ISO_BRIDGE_DEDUPE_TTL_SECS,
+                default_profile: defaults::torii::ISO_BRIDGE_DEFAULT_PROFILE.to_owned(),
+                profiles: Vec::new(),
+                store_dir: None,
+                embedded_signature_policy: None,
                 signer: None,
                 account_aliases: Vec::new(),
                 currency_assets: Vec::new(),

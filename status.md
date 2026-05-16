@@ -1,6 +1,48 @@
 # Status
 
-Last updated: 2026-05-11
+Last updated: 2026-05-16
+
+## 2026-05-16 Sumeragi delivered RBC READY repair
+
+- Delivered RBC sessions that still observe at least one missing READY signer
+  now send the cached READY set to every remote validator in the view-rotated
+  signature topology before the DELIVER rebroadcast. Targeted body rescue stays
+  scoped to peers missing READY, and delivered sessions with no READY gap remain
+  quiet.
+- Focused validation is green for
+  `cargo test -p iroha_core sumeragi::main_loop::tests::rebroadcast_stalled_rbc_payloads_repairs_ready_before_deliver_after_delivery -- --nocapture`
+  and `cargo test -p iroha_core rescue_rbc_missing_ready_peers -- --nocapture`.
+
+## 2026-05-16 TradFi ISO 20022 interop audit/profile bridge
+
+- Added the canonical TradFi ISO 20022 audit/design note at
+  `docs/source/finance/tradfi_interop_audit.md` and linked it from the finance
+  settlement mapping portal page.
+- Added the shared `iroha_core::iso_bridge::profiles` catalog with static
+  Norito JSON defaults for generic ISO 20022, Swift CBPR+, Fedwire Funds, SEPA
+  SCT Inst, and securities CSD profiles. The Torii `iso_bridge` configuration
+  now exposes `default_profile`, operator profile overrides, `store_dir`, and
+  embedded signature policy without introducing new production environment
+  toggles.
+- Torii `pacs.008`/`pacs.009` ingestion now selects profiles via
+  `X-Iroha-Iso-Profile` or `?profile=...`, validates message versions,
+  Business Application Header/BizSvc/UETR policy, required reference datasets,
+  minor units, SupplementaryData size, structured-address mode, and embedded
+  XML signature policy. ISO bridge records persist under `store_dir/messages`
+  with profile metadata, payload hash, UETR, transaction hash, reason codes, and
+  status history.
+- Follow-up hardening now resolves Business Application Header fields through
+  suffix/canonical aliases for live-profile enforcement, keeps the structured
+  address default on a constant-backed `ReadConfig` expression, and rechecks
+  payload/UETR conflicts before replacing rejected or expired retry records.
+  Focused Torii tests for BAH alias handling and UETR retry conflicts are green.
+- ISO status responses now carry profile and audit metadata, expose
+  `/v1/iso20022/messages/{msg_id}`, and can emit current `pacs.002` XML at
+  `/v1/iso20022/messages/{msg_id}/pacs002`. OpenAPI, MCP, and JS SDK submission
+  surfaces include profile selection.
+- JS `submitIsoMessage` no longer injects wall-clock `creationDateTime`; callers
+  must pass an explicit timestamp. CLI `sese.023`/`sese.025` previews now accept
+  `--iso-settlement-date YYYY-MM-DD` for deterministic settlement-date output.
 
 ## 2026-05-11 20k liveness 300s phase-tail boundary
 
@@ -22,6 +64,11 @@ Last updated: 2026-05-11
   `phase_collect_precommit_max_ms`, and `phase_pipeline_total_max_ms` in the
   liveness matrix. This makes rejected rows useful for tail diagnosis instead
   of only reporting the last sampled phase.
+- `scripts/run_izanami_liveness_matrix.py` now passes a 5s progress-monitor
+  interval by default and records it in the matrix. The previous 15s monitor
+  interval was too coarse for a 2-3s block-cadence gate and could reject rows
+  on monitor-window quantization even when peer-observed block gaps were below
+  the threshold.
 - Short-run 20k-ingress matrix evidence after the status fix:
   - `dist/izanami-liveness-matrix-20k-cap1184-status-verify-30s-20260511-054723`:
     cap `1184`, pipeline `300ms`, collectors/redundant-send `3/3`, backup RBC
@@ -104,22 +151,46 @@ Last updated: 2026-05-11
     committed `437.15` TPS, held runner p95 to `2506ms`, and parsed peer p95 to
     `2.874s`.
   - `dist/izanami-liveness-matrix-20k-cap1088-p250-soak-300s-20260511-071656`:
-    cap `1088`, pipeline `250ms` is the current accepted 300s boundary. It
+    cap `1088`, pipeline `250ms` passed under the old 15s progress monitor. It
     accepted all `6,000,000` submissions, reached strict height `127`, approved
     `136,073` transactions, committed `453.58` TPS, held runner p95 to
     `2510ms`, parsed peer p95 to `2.982s`, installed zero view changes, and
     ended with full detached merge (`1088/1088`, fallback `0`).
   - `dist/izanami-liveness-matrix-20k-cap1104-p250-soak-300s-20260511-072314`:
-    cap `1104`, pipeline `250ms` is rejected. Parsed peer p95 stayed under the
-    limit at `2.885s`, but the hard runner gate reached `3005ms` at the
-    target-height checkpoint before full ingress completed.
+    cap `1104`, pipeline `250ms` was rejected by the old 15s progress monitor.
+    Parsed peer p95 stayed under the limit at `2.885s`, but the hard runner
+    gate reached `3005ms` at the target-height checkpoint before full ingress
+    completed.
+  - `dist/izanami-liveness-matrix-20k-cap1104-p250-pi5-soak-300s-20260511-073757`:
+    cap `1104`, pipeline `250ms`, 5s progress monitor completed all
+    `6,000,000` submissions and kept runner p95 at `2522ms`, but the row is
+    still rejected on the external block-gap gate: parsed peer p95 was
+    `3.054s`.
+  - `dist/izanami-liveness-matrix-20k-cap1096-p250-pi5-soak-300s-20260511-074409`:
+    cap `1096`, pipeline `250ms`, 5s progress monitor is the current accepted
+    300s boundary. It accepted all `6,000,000` submissions, reached strict
+    height `126`, approved `135,938` transactions, committed `453.13` TPS, held
+    runner p95 to `2523ms`, parsed peer p95 to `2.899s`, installed zero view
+    changes, and ended with full detached merge (`1096/1096`, fallback `0`).
+  - `dist/izanami-liveness-matrix-20k-cap1100-p250-pi5-soak-300s-20260511-075025`:
+    cap `1100`, pipeline `250ms`, collectors/redundant-send `3/3` accepted all
+    ingress but is rejected on parsed peer p95 `3.071s`.
+  - `dist/izanami-liveness-matrix-20k-cap1100-p250-k4r4-pi5-soak-300s-20260511-075630`:
+    cap `1100`, pipeline `250ms`, collectors/redundant-send `4/4` also
+    accepted all ingress but is rejected on parsed peer p95 `3.022s` and lower
+    committed throughput (`451.14` TPS), so extra collector fanout is not the
+    next fix.
+  - A precommit scheduling-order experiment that sent the local precommit vote
+    before local QC application was rejected and reverted. It did not move the
+    boundary: cap `1100` still failed at parsed peer p95 `3.041s`, and cap
+    `1096` regressed to parsed peer p95 `3.029s`.
 - Conclusion: the 120s cap `1312` result was not durable. The current accepted
-  20k-ingress operating point is cap `1088`, scan multiplier `32`, pipeline
+  20k-ingress operating point is cap `1096`, scan multiplier `32`, pipeline
   `250ms`, collectors/redundant-send `3/3`, backup RBC on. This preserves
   consensus liveness in the 2-3s p95 block envelope for 300s, but it still only
   commits hundreds of TPS. Reaching 20k committed TPS requires safe payloads in
   the tens of thousands per block or a major deterministic execution/DA/QC tail
-  reduction; raising the cap beyond `1088` currently loses the liveness gate.
+  reduction; raising the cap to `1100+` currently loses the liveness gate.
 - Validation:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo test -p iroha_core --lib access_set_source_and_conflict_rate_snapshot_updates -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo test -p iroha_core --test parallel_apply_knob parallel_apply_knob_compiles_without_telemetry -- --nocapture`
@@ -136,8 +207,8 @@ Last updated: 2026-05-11
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-inline-backup-20260511 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`
   - 30s status verification, 60s next-options matrix, 120s cap-1280,
     cap-1344, cap-1408, cap-1312, and cap-1328 confirmation matrices, plus the
-    300s cap-1312, cap-1280, cap-1216, cap-1120, cap-1024, cap-1088, and
-    cap-1104 soaks listed above.
+    300s cap-1312, cap-1280, cap-1216, cap-1120, cap-1024, cap-1088,
+    cap-1096, cap-1100, and cap-1104 soaks listed above.
 
 ## 2026-05-11 Live-frontier missing-QC recovery matrix
 

@@ -25,6 +25,8 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
+use super::profiles::ReferenceDatasetRequirement;
+
 /// Dataset kinds tracked by the ISO bridge reference-data loader.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatasetKind {
@@ -576,6 +578,37 @@ impl ReferenceDataSnapshots {
         self.loaded_at
     }
 
+    /// Return a deterministic checksum over loaded dataset provenance.
+    #[must_use]
+    pub fn snapshot_id(&self) -> String {
+        let mut root = json::Map::new();
+        root.insert(
+            "datasets".to_owned(),
+            Value::Array(vec![
+                dataset_snapshot_value(self.isin_cusip()),
+                dataset_snapshot_value(self.bic_lei()),
+                dataset_snapshot_value(self.mic_directory()),
+            ]),
+        );
+        let rendered = json::to_json(&Value::Object(root)).unwrap_or_default();
+        let digest = Sha256::digest(rendered.as_bytes());
+        hex_lower(&digest)
+    }
+
+    /// Returns true when a required dataset is loaded.
+    #[must_use]
+    pub fn has_required_dataset(&self, requirement: ReferenceDatasetRequirement) -> bool {
+        match requirement {
+            ReferenceDatasetRequirement::BicLei => self.bic_lei.state() == SnapshotState::Loaded,
+            ReferenceDatasetRequirement::IsinCusip => {
+                self.isin_cusip.state() == SnapshotState::Loaded
+            }
+            ReferenceDatasetRequirement::MicDirectory => {
+                self.mic_directory.state() == SnapshotState::Loaded
+            }
+        }
+    }
+
     fn dataset_records_or_skip<T>(
         snapshot: &DatasetSnapshot<T>,
     ) -> Result<Option<&T>, ReferenceDataError> {
@@ -734,6 +767,62 @@ impl ReferenceDataSnapshots {
         Self::dataset_records_or_skip(&self.mic_directory)?
             .map_or_else(|| Ok(None), |records| Ok(records.by_mic(mic)))
     }
+}
+
+fn dataset_snapshot_value<T>(snapshot: &DatasetSnapshot<T>) -> Value {
+    let mut map = json::Map::new();
+    map.insert(
+        "kind".to_owned(),
+        Value::String(snapshot.kind().label().to_owned()),
+    );
+    map.insert(
+        "state".to_owned(),
+        Value::String(
+            match snapshot.state() {
+                SnapshotState::Missing => "missing",
+                SnapshotState::Loaded => "loaded",
+                SnapshotState::Failed => "failed",
+            }
+            .to_owned(),
+        ),
+    );
+    if let Some(meta) = snapshot.metadata() {
+        map.insert("version".to_owned(), Value::String(meta.version.clone()));
+        map.insert("source".to_owned(), Value::String(meta.source.clone()));
+        map.insert(
+            "record_count".to_owned(),
+            Value::from(meta.record_count as u64),
+        );
+        map.insert(
+            "fetched_at".to_owned(),
+            meta.fetched_at
+                .map(|ts| ts.format(&Rfc3339).unwrap_or_else(|_| ts.to_string()))
+                .map_or(Value::Null, Value::String),
+        );
+    }
+    map.insert(
+        "configured_path".to_owned(),
+        snapshot.configured_path().map_or(Value::Null, |path| {
+            Value::String(path.display().to_string())
+        }),
+    );
+    map.insert(
+        "diagnostics".to_owned(),
+        snapshot
+            .diagnostics()
+            .map_or(Value::Null, |diag| Value::String(diag.to_owned())),
+    );
+    Value::Object(map)
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 /// Crosswalk entry describing an instrument record.

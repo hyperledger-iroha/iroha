@@ -6847,18 +6847,45 @@ fn build_iso20022_payload_body(arguments: &Map) -> Result<(Vec<u8>, Option<Strin
     build_request_body(&adapted)
 }
 
+fn iso20022_profile_headers_argument(arguments: &Map) -> Result<Option<Value>, String> {
+    let mut headers = arguments
+        .get("headers")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(raw_profile) = arguments.get("profile") {
+        let profile = raw_profile
+            .as_str()
+            .ok_or_else(|| "`profile` must be a string".to_owned())?
+            .trim();
+        if profile.is_empty() {
+            return Err("`profile` must not be empty".to_owned());
+        }
+        headers.insert(
+            "X-Iroha-Iso-Profile".to_owned(),
+            Value::String(profile.to_owned()),
+        );
+    }
+    if headers.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(Value::Object(headers)))
+    }
+}
+
 async fn dispatch_iroha_iso20022_pacs008_submit(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
     let (body, content_type) = build_iso20022_payload_body(arguments)?;
+    let headers = iso20022_profile_headers_argument(arguments)?;
     dispatch_route(
         app,
         inbound_headers,
         Method::POST,
         "/v1/iso20022/pacs008",
-        arguments.get("headers"),
+        headers.as_ref(),
         body,
         content_type,
         arguments
@@ -6875,12 +6902,13 @@ async fn dispatch_iroha_iso20022_pacs009_submit(
     arguments: &Map,
 ) -> Result<Value, String> {
     let (body, content_type) = build_iso20022_payload_body(arguments)?;
+    let headers = iso20022_profile_headers_argument(arguments)?;
     dispatch_route(
         app,
         inbound_headers,
         Method::POST,
         "/v1/iso20022/pacs009",
-        arguments.get("headers"),
+        headers.as_ref(),
         body,
         content_type,
         arguments
@@ -13624,6 +13652,10 @@ fn iroha_iso20022_pacs008_submit_tool() -> ToolSpec {
                     "type": "string",
                     "description": "Optional content type override (defaults to application/xml when `message_xml`/`xml` is used)."
                 },
+                "profile": {
+                    "type": "string",
+                    "description": "Optional ISO bridge rail profile; sent as `X-Iroha-Iso-Profile`."
+                },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -13665,6 +13697,10 @@ fn iroha_iso20022_pacs009_submit_tool() -> ToolSpec {
                 "content_type": {
                     "type": "string",
                     "description": "Optional content type override (defaults to application/xml when `message_xml`/`xml` is used)."
+                },
+                "profile": {
+                    "type": "string",
+                    "description": "Optional ISO bridge rail profile; sent as `X-Iroha-Iso-Profile`."
                 },
                 "headers": {
                     "type": "object",

@@ -7667,20 +7667,24 @@ export class ToriiClient {
   /**
    * Submit an ISO 20022 pacs.008 message (`POST /v1/iso20022/pacs008`).
    * @param {ArrayBufferView | ArrayBuffer | Buffer | string} message XML payload
-   * @param {{contentType?: string, signal?: AbortSignal}} [options]
+   * @param {{contentType?: string, profile?: string, signal?: AbortSignal}} [options]
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async submitIsoPacs008(message, options = {}) {
-    const { signal, contentType, retryProfile } = normalizeIsoSubmissionOptions(
+    const { signal, contentType, retryProfile, profile } = normalizeIsoSubmissionOptions(
       options,
       "submitIsoPacs008",
     );
     const body = normalizeIsoPayload(message, "submitIsoPacs008.message");
+    const headers = {
+      "Content-Type": contentType ?? "application/xml",
+      Accept: "application/json",
+    };
+    if (profile) {
+      headers["X-Iroha-Iso-Profile"] = profile;
+    }
     const response = await this._request("POST", "/v1/iso20022/pacs008", {
-      headers: {
-        "Content-Type": contentType ?? "application/xml",
-        Accept: "application/json",
-      },
+      headers,
       body,
       signal,
       retryProfile,
@@ -7695,20 +7699,24 @@ export class ToriiClient {
   /**
    * Submit an ISO 20022 pacs.009 message (`POST /v1/iso20022/pacs009`).
    * @param {ArrayBufferView | ArrayBuffer | Buffer | string} message XML payload
-   * @param {{contentType?: string, signal?: AbortSignal}} [options]
+   * @param {{contentType?: string, profile?: string, signal?: AbortSignal}} [options]
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async submitIsoPacs009(message, options = {}) {
-    const { signal, contentType, retryProfile } = normalizeIsoSubmissionOptions(
+    const { signal, contentType, retryProfile, profile } = normalizeIsoSubmissionOptions(
       options,
       "submitIsoPacs009",
     );
     const body = normalizeIsoPayload(message, "submitIsoPacs009.message");
+    const headers = {
+      "Content-Type": contentType ?? "application/xml",
+      Accept: "application/json",
+    };
+    if (profile) {
+      headers["X-Iroha-Iso-Profile"] = profile;
+    }
     const response = await this._request("POST", "/v1/iso20022/pacs009", {
-      headers: {
-        "Content-Type": contentType ?? "application/xml",
-        Accept: "application/json",
-      },
+      headers,
       body,
       signal,
       retryProfile,
@@ -7954,7 +7962,7 @@ export class ToriiClient {
   /**
    * Build and submit an ISO 20022 message from structured fields.
    * @param {import("./index").BuildPacs008Options | import("./index").BuildPacs009Options} fields
-   * @param {{kind?: string, contentType?: string, signal?: AbortSignal, wait?: IsoMessageWaitOptions}} [options]
+   * @param {{kind?: string, contentType?: string, profile?: string, signal?: AbortSignal, wait?: IsoMessageWaitOptions}} [options]
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async submitIsoMessage(fields, options = {}) {
@@ -7988,19 +7996,13 @@ export class ToriiClient {
       );
     }
     const kind = normalizedKind ?? normalizedMessageKind ?? "pacs.008";
-    const { signal, contentType, retryProfile } = normalizeIsoSubmissionOptions(
+    const { signal, contentType, retryProfile, profile } = normalizeIsoSubmissionOptions(
       resolvedOptions,
       "submitIsoMessage",
       ["kind", "messageKind", "wait", "retryProfile"],
     );
     const normalizedFields =
       fields === undefined || fields === null ? {} : { ...fields };
-    if (
-      normalizedFields.creationDateTime === undefined ||
-      normalizedFields.creationDateTime === null
-    ) {
-      normalizedFields.creationDateTime = new Date().toISOString();
-    }
     const xml =
       kind === "pacs.009"
         ? buildPacs009Message(normalizedFields)
@@ -8010,6 +8012,7 @@ export class ToriiClient {
       contentType:
         contentType ??
         (kind === "pacs.009" ? "application/pacs009+xml" : "application/pacs008+xml"),
+      profile,
       retryProfile,
     };
     let waitOptions = resolvedOptions.wait;
@@ -10876,6 +10879,31 @@ function normalizeIsoSubmissionResponse(payload, context, options = {}) {
     status,
     pacs002_code: pacs002Code,
     transaction_hash: normalizeIsoOptionalString(record.transaction_hash, `${context}.transaction_hash`),
+    profile_id: normalizeIsoOptionalString(record.profile_id, `${context}.profile_id`),
+    message_type: normalizeIsoOptionalString(record.message_type, `${context}.message_type`),
+    business_service: normalizeIsoOptionalString(
+      record.business_service,
+      `${context}.business_service`,
+    ),
+    business_message_id: normalizeIsoOptionalString(
+      record.business_message_id,
+      `${context}.business_message_id`,
+    ),
+    uetr: normalizeIsoOptionalString(record.uetr, `${context}.uetr`),
+    payload_hash: normalizeIsoOptionalString(record.payload_hash, `${context}.payload_hash`),
+    reference_snapshot_id: normalizeIsoOptionalString(
+      record.reference_snapshot_id,
+      `${context}.reference_snapshot_id`,
+    ),
+    embedded_signature_detected:
+      record.embedded_signature_detected === undefined ||
+      record.embedded_signature_detected === null
+        ? false
+        : coerceBoolean(
+            record.embedded_signature_detected,
+            `${context}.embedded_signature_detected`,
+          ),
+    status_history: normalizeIsoStatusHistory(record.status_history, `${context}.status_history`),
     hold_reason_code: normalizeIsoOptionalString(record.hold_reason_code, `${context}.hold_reason_code`),
     change_reason_codes: normalizeIsoStringArray(
       record.change_reason_codes,
@@ -10931,6 +10959,40 @@ function normalizeIsoStatusResponse(payload, context) {
   return normalizeIsoSubmissionResponse(payload, context, { includeStatusFields: true });
 }
 
+function normalizeIsoStatusHistory(value, context) {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return value.map((entry, index) => {
+    const record = ToriiClient._requirePlainObject(entry, `${context}[${index}]`);
+    return {
+      status: normalizeIsoStatus(record.status, `${context}[${index}].status`),
+      pacs002_code: normalizePacs002Code(
+        record.pacs002_code,
+        `${context}[${index}].pacs002_code`,
+      ),
+      updated_at_ms:
+        record.updated_at_ms === undefined || record.updated_at_ms === null
+          ? null
+          : ToriiClient._normalizeUnsignedInteger(
+              record.updated_at_ms,
+              `${context}[${index}].updated_at_ms`,
+              { allowZero: true },
+            ),
+      detail: normalizeIsoOptionalString(record.detail, `${context}[${index}].detail`, {
+        allowEmpty: true,
+      }),
+      reason_code: normalizeIsoOptionalString(
+        record.reason_code,
+        `${context}[${index}].reason_code`,
+      ),
+    };
+  });
+}
+
 function normalizeIsoStatus(value, context) {
   const status = ToriiClient._requireNonEmptyString(value, context).trim();
   const normalized = ISO_STATUS_VALUES.get(status.toLowerCase());
@@ -10975,7 +11037,7 @@ function normalizeIsoMessageKind(value, context) {
 
 function normalizeIsoSubmissionOptions(options, context, extraAllowedKeys = []) {
   if (options === undefined) {
-    return { signal: undefined, contentType: undefined, retryProfile: undefined };
+    return { signal: undefined, contentType: undefined, retryProfile: undefined, profile: undefined };
   }
   const optionPath = `${context}.options`;
   const unsupportedLabel = context === "submitIsoMessage" ? `${context} options` : optionPath;
@@ -10986,7 +11048,7 @@ function normalizeIsoSubmissionOptions(options, context, extraAllowedKeys = []) 
       optionPath,
     );
   }
-  const allowedKeys = new Set(["signal", "contentType", "retryProfile", ...extraAllowedKeys]);
+  const allowedKeys = new Set(["signal", "contentType", "retryProfile", "profile", ...extraAllowedKeys]);
   const extras = Object.keys(options).filter((key) => !allowedKeys.has(key));
   if (extras.length > 0) {
     throw createValidationError(
@@ -11030,7 +11092,11 @@ function normalizeIsoSubmissionOptions(options, context, extraAllowedKeys = []) 
   if (options.retryProfile !== undefined && options.retryProfile !== null) {
     retryProfile = requireNonEmptyString(options.retryProfile, `${optionPath}.retryProfile`);
   }
-  return { signal, contentType, retryProfile };
+  let profile;
+  if (options.profile !== undefined && options.profile !== null) {
+    profile = requireNonEmptyString(options.profile, `${optionPath}.profile`);
+  }
+  return { signal, contentType, retryProfile, profile };
 }
 
 function normalizeIsoStatusOptions(options, context) {

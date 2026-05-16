@@ -17641,6 +17641,16 @@ pub struct IsoBridge {
     )]
     /// Deduplication time-to-live for inbound ISO bridge requests.
     pub dedupe_ttl_secs: u64,
+    #[config(default = "defaults::torii::iso_bridge_default_profile()")]
+    /// Default ISO bridge rail profile when a request does not select one.
+    pub default_profile: String,
+    #[config(default = "Vec::new()")]
+    /// Operator-defined ISO bridge profile overrides or additions.
+    pub profiles: Vec<IsoBridgeProfile>,
+    /// Directory where ISO bridge message state is persisted.
+    pub store_dir: Option<PathBuf>,
+    /// Optional global embedded XML signature policy override.
+    pub embedded_signature_policy: Option<String>,
     /// Signing credentials used for bridge operations.
     pub signer: Option<IsoBridgeSigner>,
     #[config(default = "Vec::new()")]
@@ -17652,6 +17662,65 @@ pub struct IsoBridge {
     #[config(default = "IsoReferenceData::default()")]
     /// Reference-data ingestion configuration.
     pub reference_data: IsoReferenceData,
+}
+
+/// User-level ISO bridge rail profile override.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct IsoBridgeProfile {
+    /// Stable profile identifier.
+    pub id: String,
+    /// Rail family identifier.
+    pub rail: String,
+    /// Optional profile-level embedded XML signature policy.
+    pub embedded_signature_policy: Option<String>,
+    #[config(default = "Vec::new()")]
+    /// Required reference datasets for this profile.
+    pub required_reference_datasets: Vec<String>,
+    #[config(default = "Vec::new()")]
+    /// Message profiles owned by this rail profile.
+    pub message_profiles: Vec<IsoMessageProfile>,
+}
+
+/// User-level message-specific ISO bridge profile override.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct IsoMessageProfile {
+    /// Canonical message family such as `pacs.008`.
+    pub message_type: String,
+    /// Direction identifier (`inbound`, `outbound`, or `follow-up`).
+    pub direction: String,
+    #[config(default = "Vec::new()")]
+    /// Exact ISO message definition identifiers accepted by this entry.
+    pub versions: Vec<String>,
+    #[config(default = "Vec::new()")]
+    /// Accepted business service identifiers.
+    pub business_services: Vec<String>,
+    #[config(default = "false")]
+    /// Whether a Business Application Header is required.
+    pub require_app_header: bool,
+    #[config(default = "false")]
+    /// Whether BizSvc must be present.
+    pub require_business_service: bool,
+    #[config(default = "false")]
+    /// Whether UETR must be present.
+    pub require_uetr: bool,
+    #[config(default = "defaults::torii::ISO_BRIDGE_STRUCTURED_ADDRESS_MODE.to_owned()")]
+    /// Structured address mode identifier.
+    pub structured_address_mode: String,
+    #[config(default = "4096")]
+    /// Maximum serialized supplementary-data bytes.
+    pub supplementary_data_max_bytes: usize,
+    #[config(default = "Vec::new()")]
+    /// Currency minor-unit overrides.
+    pub amount_minor_units: Vec<IsoCurrencyMinorUnit>,
+}
+
+/// User-level ISO currency minor-unit override.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct IsoCurrencyMinorUnit {
+    /// ISO 4217 currency code.
+    pub currency: String,
+    /// Number of permitted fractional decimal places.
+    pub minor_units: u8,
 }
 
 /// User-level configuration container for `RbcSampling`.
@@ -19271,6 +19340,14 @@ impl IsoBridge {
         actual::IsoBridge {
             enabled: self.enabled,
             dedupe_ttl_secs: self.dedupe_ttl_secs,
+            default_profile: self.default_profile,
+            profiles: self
+                .profiles
+                .into_iter()
+                .map(IsoBridgeProfile::parse)
+                .collect(),
+            store_dir: self.store_dir,
+            embedded_signature_policy: self.embedded_signature_policy,
             signer: self.signer.map(IsoBridgeSigner::parse),
             account_aliases: self
                 .account_aliases
@@ -19283,6 +19360,52 @@ impl IsoBridge {
                 .map(IsoCurrencyAsset::parse)
                 .collect(),
             reference_data: self.reference_data.parse(),
+        }
+    }
+}
+
+impl IsoBridgeProfile {
+    fn parse(self) -> actual::IsoBridgeProfile {
+        actual::IsoBridgeProfile {
+            id: self.id,
+            rail: self.rail,
+            embedded_signature_policy: self.embedded_signature_policy,
+            required_reference_datasets: self.required_reference_datasets,
+            message_profiles: self
+                .message_profiles
+                .into_iter()
+                .map(IsoMessageProfile::parse)
+                .collect(),
+        }
+    }
+}
+
+impl IsoMessageProfile {
+    fn parse(self) -> actual::IsoMessageProfile {
+        actual::IsoMessageProfile {
+            message_type: self.message_type,
+            direction: self.direction,
+            versions: self.versions,
+            business_services: self.business_services,
+            require_app_header: self.require_app_header,
+            require_business_service: self.require_business_service,
+            require_uetr: self.require_uetr,
+            structured_address_mode: self.structured_address_mode,
+            supplementary_data_max_bytes: self.supplementary_data_max_bytes,
+            amount_minor_units: self
+                .amount_minor_units
+                .into_iter()
+                .map(IsoCurrencyMinorUnit::parse)
+                .collect(),
+        }
+    }
+}
+
+impl IsoCurrencyMinorUnit {
+    fn parse(self) -> actual::IsoCurrencyMinorUnit {
+        actual::IsoCurrencyMinorUnit {
+            currency: self.currency,
+            minor_units: self.minor_units,
         }
     }
 }
@@ -19618,6 +19741,33 @@ mod offline_cfg_tests {
         let json = r#"{
             "enabled": true,
             "dedupe_ttl_secs": 120,
+            "default_profile": "swift-cbpr-plus",
+            "profiles": [
+                {
+                    "id": "swift-cbpr-plus",
+                    "rail": "swift-cbpr-plus",
+                    "embedded_signature_policy": "reject-unsupported",
+                    "required_reference_datasets": ["bic-lei"],
+                    "message_profiles": [
+                        {
+                            "message_type": "pacs.008",
+                            "direction": "inbound",
+                            "versions": ["pacs.008.001.08"],
+                            "business_services": ["swift.cbprplus.02"],
+                            "require_app_header": true,
+                            "require_business_service": true,
+                            "require_uetr": true,
+                            "structured_address_mode": "require-structured",
+                            "supplementary_data_max_bytes": 4096,
+                            "amount_minor_units": [
+                                {"currency": "USD", "minor_units": 2}
+                            ]
+                        }
+                    ]
+                }
+            ],
+            "store_dir": null,
+            "embedded_signature_policy": null,
             "signer": {
                 "account_id": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
                 "private_key": "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83"
@@ -19641,6 +19791,12 @@ mod offline_cfg_tests {
 
         assert!(parsed.enabled);
         assert_eq!(parsed.dedupe_ttl_secs, 120);
+        assert_eq!(parsed.default_profile, "swift-cbpr-plus");
+        assert_eq!(parsed.profiles[0].id, "swift-cbpr-plus");
+        assert_eq!(
+            parsed.profiles[0].message_profiles[0].amount_minor_units[0].currency,
+            "USD"
+        );
         let signer = parsed.signer.expect("signer present");
         assert_eq!(
             signer.account_id,
@@ -19658,6 +19814,10 @@ mod offline_cfg_tests {
         let cfg = IsoBridge {
             enabled: true,
             dedupe_ttl_secs: 120,
+            default_profile: "generic-iso20022".to_owned(),
+            profiles: Vec::new(),
+            store_dir: None,
+            embedded_signature_policy: None,
             signer: None,
             account_aliases: Vec::new(),
             currency_assets: vec![IsoCurrencyAsset {
@@ -19676,6 +19836,10 @@ mod offline_cfg_tests {
         let cfg = IsoBridge {
             enabled: true,
             dedupe_ttl_secs: 120,
+            default_profile: "generic-iso20022".to_owned(),
+            profiles: Vec::new(),
+            store_dir: None,
+            embedded_signature_policy: None,
             signer: None,
             account_aliases: Vec::new(),
             currency_assets: vec![IsoCurrencyAsset {

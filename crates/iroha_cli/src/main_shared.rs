@@ -6421,6 +6421,9 @@ mod settlement {
         /// Optional settlement linkage (TYPE:REFERENCE, TYPE = WITH|BEFO|AFTE). May be repeated.
         #[arg(long, value_parser = iso_preview::parse_linkage_arg)]
         pub linkage: Vec<iso_preview::LinkageArg>,
+        /// Explicit ISO settlement date (YYYY-MM-DD) for deterministic sese.023 previews
+        #[arg(long = "iso-settlement-date", value_parser = iso_preview::parse_iso_date_arg)]
+        pub iso_settlement_date: Option<String>,
         /// Optional path to emit a sese.023 XML preview of the settlement
         #[arg(long = "iso-xml-out")]
         pub iso_xml_out: Option<std::path::PathBuf>,
@@ -6467,6 +6470,7 @@ mod settlement {
                     settlement_condition: self.settlement_condition.clone(),
                     place_of_settlement_mic: self.place_of_settlement_mic.clone(),
                     linkages: self.linkage.clone(),
+                    settlement_date: self.iso_settlement_date.clone(),
                 };
                 let xml = iso_preview::dvp_to_sese023(
                     &instruction,
@@ -6528,6 +6532,9 @@ mod settlement {
         /// Optional settlement condition code for SttlmParams/SttlmTxCond/Cd
         #[arg(long)]
         pub settlement_condition: Option<String>,
+        /// Explicit ISO settlement date (YYYY-MM-DD) for deterministic sese.025 previews
+        #[arg(long = "iso-settlement-date", value_parser = iso_preview::parse_iso_date_arg)]
+        pub iso_settlement_date: Option<String>,
         /// Optional path to emit a sese.025 XML preview of the settlement
         #[arg(long = "iso-xml-out")]
         pub iso_xml_out: Option<std::path::PathBuf>,
@@ -6572,6 +6579,7 @@ mod settlement {
                     settlement_condition: self.settlement_condition.clone(),
                     place_of_settlement_mic: self.place_of_settlement_mic.clone(),
                     linkages: Vec::new(),
+                    settlement_date: self.iso_settlement_date.clone(),
                 };
                 let xml = iso_preview::pvp_to_sese025(&instruction, &options)?;
                 iso_preview::write_iso_preview(path, &xml)?;
@@ -6628,6 +6636,7 @@ mod settlement {
             pub settlement_condition: Option<String>,
             pub place_of_settlement_mic: Option<String>,
             pub linkages: Vec<LinkageArg>,
+            pub settlement_date: Option<String>,
         }
 
         impl Default for SettlementPreviewOptions {
@@ -6638,7 +6647,25 @@ mod settlement {
                     settlement_condition: None,
                     place_of_settlement_mic: None,
                     linkages: Vec::new(),
+                    settlement_date: None,
                 }
+            }
+        }
+
+        pub fn parse_iso_date_arg(input: &str) -> Result<String, String> {
+            let trimmed = input.trim();
+            let bytes = trimmed.as_bytes();
+            let valid = bytes.len() == 10
+                && bytes[4] == b'-'
+                && bytes[7] == b'-'
+                && bytes
+                    .iter()
+                    .enumerate()
+                    .all(|(idx, byte)| idx == 4 || idx == 7 || byte.is_ascii_digit());
+            if valid {
+                Ok(trimmed.to_owned())
+            } else {
+                Err("ISO settlement date must use YYYY-MM-DD".to_owned())
             }
         }
 
@@ -6723,7 +6750,10 @@ mod settlement {
                     "CashLeg/Ccy",
                     settlement_currency_code(isi.payment_leg.asset_definition_id()).as_bytes(),
                 );
-                msg_set("SttlmDt", settlement_date_string().as_bytes());
+                msg_set(
+                    "SttlmDt",
+                    settlement_date_string(options.settlement_date.as_deref()).as_bytes(),
+                );
                 msg_set(
                     "CashLeg/Amt",
                     isi.payment_leg.quantity().to_string().as_bytes(),
@@ -6792,11 +6822,16 @@ mod settlement {
             }
         }
 
-        fn settlement_date_string() -> String {
-            OffsetDateTime::now_utc()
-                .date()
-                .format(&Iso8601::DATE)
-                .unwrap_or_else(|_| "1970-01-01".to_string())
+        fn settlement_date_string(explicit: Option<&str>) -> String {
+            explicit.map_or_else(
+                || {
+                    OffsetDateTime::now_utc()
+                        .date()
+                        .format(&Iso8601::DATE)
+                        .unwrap_or_else(|_| "1970-01-01".to_string())
+                },
+                ToOwned::to_owned,
+            )
         }
 
         pub fn pvp_to_sese025(isi: &PvpIsi, options: &SettlementPreviewOptions) -> Result<String> {
@@ -6805,7 +6840,10 @@ mod settlement {
                 msg_set("TxId", isi.settlement_id.to_string().as_bytes());
                 msg_set("SttlmTpAndAddtlParams/SctiesMvmntTp", b"RECE");
                 msg_set("SttlmTpAndAddtlParams/Pmt", b"APMT");
-                msg_set("SttlmDt", settlement_date_string().as_bytes());
+                msg_set(
+                    "SttlmDt",
+                    settlement_date_string(options.settlement_date.as_deref()).as_bytes(),
+                );
                 msg_set(
                     "SttlmParams/PrtlSttlmInd",
                     options.partial_indicator.as_iso().as_bytes(),
@@ -7193,6 +7231,7 @@ mod settlement {
                             reference: "PACS009-CLS".to_owned(),
                         },
                     ],
+                    settlement_date: Some("2026-02-01".to_owned()),
                 };
                 let xml = dvp_to_sese023(&sample_dvp(), Some("US0378331005"), None, &options)
                     .expect("preview succeeds");
@@ -7205,6 +7244,7 @@ mod settlement {
                     Some("NOMC")
                 );
                 assert_eq!(parsed.field_text("PlcOfSttlm/MktId"), Some("XNAS"));
+                assert_eq!(parsed.field_text("SttlmDt"), Some("2026-02-01"));
                 assert_eq!(parsed.field_text("Lnkgs/Lnkg[0]/Tp/Cd"), Some("WITH"));
                 assert_eq!(
                     parsed.field_text("Lnkgs/Lnkg[0]/Ref/Prtry"),
@@ -7225,6 +7265,7 @@ mod settlement {
                     settlement_condition: Some("NOMC".to_owned()),
                     place_of_settlement_mic: Some("XLON".to_owned()),
                     linkages: Vec::new(),
+                    settlement_date: Some("2026-02-02".to_owned()),
                 };
                 let xml = pvp_to_sese025(&sample_pvp(), &options).expect("preview succeeds");
                 let parsed = ivm::iso20022::parse_message("sese.025", xml.as_bytes())
@@ -7235,6 +7276,7 @@ mod settlement {
                     parsed.field_text("SttlmParams/SttlmTxCond/Cd"),
                     Some("NOMC")
                 );
+                assert_eq!(parsed.field_text("SttlmDt"), Some("2026-02-02"));
                 assert_eq!(parsed.field_text("PlcOfSttlm/MktId"), Some("XLON"));
             }
         }

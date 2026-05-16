@@ -16,6 +16,10 @@ by the bridge. It reflects the message scaffolding implemented in
 `crates/ivm/src/iso20022.rs` and serves as a reference when producing or
 validating Norito payloads.
 
+For the wider rail/profile audit, including CBPR+, Fedwire, SEPA SCT Inst, CSD
+profile defaults, persistence, signature policy, and remaining live-rail gaps,
+see `docs/source/finance/tradfi_interop_audit.md`.
+
 ### Reference Data Policy (Identifiers and Validation)
 
 This policy packages the identifier preferences, validation rules, and reference-data
