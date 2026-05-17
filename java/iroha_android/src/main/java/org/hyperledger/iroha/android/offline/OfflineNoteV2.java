@@ -889,6 +889,8 @@ public final class OfflineNoteV2 {
   public static final class PaymentTokenIdPreimageV2 {
     private final String domain;
     private final String chainId;
+    private final String paymentRequestId;
+    private final long createdAtMs;
     private final byte[] tokenNonce;
     private final byte[] senderKeyCertificatePayloadHash;
     private final List<byte[]> inputNullifiers;
@@ -896,6 +898,8 @@ public final class OfflineNoteV2 {
 
     public PaymentTokenIdPreimageV2(
         final String chainId,
+        final String paymentRequestId,
+        final long createdAtMs,
         final byte[] tokenNonce,
         final byte[] senderKeyCertificatePayloadHash,
         final List<byte[]> inputNullifiers,
@@ -903,6 +907,8 @@ public final class OfflineNoteV2 {
       this(
           PAYMENT_TOKEN_ID_DOMAIN,
           chainId,
+          paymentRequestId,
+          createdAtMs,
           tokenNonce,
           senderKeyCertificatePayloadHash,
           inputNullifiers,
@@ -912,6 +918,8 @@ public final class OfflineNoteV2 {
     public PaymentTokenIdPreimageV2(
         final String domain,
         final String chainId,
+        final String paymentRequestId,
+        final long createdAtMs,
         final byte[] tokenNonce,
         final byte[] senderKeyCertificatePayloadHash,
         final List<byte[]> inputNullifiers,
@@ -921,6 +929,8 @@ public final class OfflineNoteV2 {
       }
       this.domain = domain;
       this.chainId = requireNonBlank(chainId, "chain_id");
+      this.paymentRequestId = requireNonBlank(paymentRequestId, "payment_request_id");
+      this.createdAtMs = createdAtMs;
       this.tokenNonce = copy(tokenNonce, "tokenNonce");
       this.senderKeyCertificatePayloadHash =
           copy(senderKeyCertificatePayloadHash, "senderKeyCertificatePayloadHash");
@@ -938,6 +948,14 @@ public final class OfflineNoteV2 {
 
     public String chainId() {
       return chainId;
+    }
+
+    public String paymentRequestId() {
+      return paymentRequestId;
+    }
+
+    public long createdAtMs() {
+      return createdAtMs;
     }
 
     public byte[] tokenNonce() {
@@ -2034,6 +2052,8 @@ public final class OfflineNoteV2 {
         public void encode(final NoritoEncoder encoder, final PaymentTokenIdPreimageV2 value) {
           writeField(encoder, child -> writeString(child, value.domain()));
           writeField(encoder, child -> writeChainId(child, value.chainId()));
+          writeField(encoder, child -> writeString(child, value.paymentRequestId()));
+          writeField(encoder, child -> child.writeUInt(value.createdAtMs(), 64));
           writeField(encoder, child -> writeBytesVec(child, value.tokenNonce()));
           writeField(encoder, child -> child.writeBytes(value.senderKeyCertificatePayloadHash()));
           writeField(
@@ -2049,6 +2069,8 @@ public final class OfflineNoteV2 {
           return new PaymentTokenIdPreimageV2(
               readField(decoder, OfflineNoteV2::readString),
               readField(decoder, OfflineNoteV2::readChainId),
+              readField(decoder, OfflineNoteV2::readString),
+              readField(decoder, child -> child.readUInt(64)),
               readField(decoder, OfflineNoteV2::readBytesVec),
               readField(decoder, child -> readHash(child, "sender_key_certificate_payload_hash")),
               readField(decoder, child -> readVec(child, element -> readHash(element, "input_nullifier"))),

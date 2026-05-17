@@ -350,7 +350,8 @@ Example `vk_register.json`:
 ```
 
 Notes:
-- Commitments are domain‑separated hashes over `backend || bytes` and are verified on submit.
+- Commitments are domain-separated SHA-256 hashes over the `iroha:zk:v1:vk`
+  domain plus length-prefixed backend and VK bytes, and are verified on submit.
 
 ### Subscribing to Verifying Key Registry Events
 

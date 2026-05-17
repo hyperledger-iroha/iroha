@@ -258,28 +258,10 @@ pub enum Command {
     ModelWeightStatus(ModelWeightStatusArgs),
     /// Fetch the active uploaded-model encryption recipient from Torii.
     ModelUploadEncryptionRecipient(ModelUploadEncryptionRecipientArgs),
-    /// Register an uploaded-model bundle root in live Torii control-plane mode.
-    ModelUploadInit(ModelUploadInitArgs),
-    /// Append one uploaded-model encrypted chunk in live Torii control-plane mode.
-    ModelUploadChunk(ModelUploadChunkArgs),
-    /// Finalize an uploaded-model bundle into the model registry.
-    ModelUploadFinalize(ModelUploadFinalizeArgs),
-    /// Query uploaded-model bundle/chunk status in live Torii control-plane mode.
+    /// Register a SoraFS-backed uploaded-model bundle into the model registry.
+    ModelUploadRegister(ModelUploadRegisterArgs),
+    /// Query SoraFS-backed uploaded-model storage and registry status.
     ModelUploadStatus(ModelUploadStatusArgs),
-    /// Admit a deterministic private compile profile for an uploaded model.
-    ModelCompile(ModelCompileArgs),
-    /// Query uploaded-model compile status in live Torii control-plane mode.
-    ModelCompileStatus(ModelCompileStatusArgs),
-    /// Bind an uploaded model to an apartment that already admits model inference.
-    ModelAllow(ModelAllowArgs),
-    /// Start and finalize a private uploaded-model inference session.
-    ModelRunPrivate(ModelRunPrivateArgs),
-    /// Query private uploaded-model inference session status.
-    ModelRunStatus(ModelRunStatusArgs),
-    /// Release governed output material for a private uploaded-model session.
-    ModelDecryptOutput(ModelDecryptOutputArgs),
-    /// Orchestrate uploaded-model publish/init/chunk/finalize/compile/allow from a plan file.
-    ModelPublishPrivate(ModelPublishPrivateArgs),
     /// Join or create a shared Hugging Face lease pool in live Torii control-plane mode.
     HfDeploy(HfDeployArgs),
     /// Query shared Hugging Face lease pool status in live Torii control-plane mode.
@@ -499,41 +481,11 @@ impl Run for Command {
             }
             Command::ModelWeightStatus(args) => context.print_data(&args.run()?),
             Command::ModelUploadEncryptionRecipient(args) => context.print_data(&args.run()?),
-            Command::ModelUploadInit(args) => {
-                let output = args.run(&context.config().account, &context.config().key_pair)?;
-                context.print_data(&output)
-            }
-            Command::ModelUploadChunk(args) => {
-                let output = args.run(&context.config().account, &context.config().key_pair)?;
-                context.print_data(&output)
-            }
-            Command::ModelUploadFinalize(args) => {
+            Command::ModelUploadRegister(args) => {
                 let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
             Command::ModelUploadStatus(args) => context.print_data(&args.run()?),
-            Command::ModelCompile(args) => {
-                let output = args.run(&context.config().account, &context.config().key_pair)?;
-                context.print_data(&output)
-            }
-            Command::ModelCompileStatus(args) => context.print_data(&args.run()?),
-            Command::ModelAllow(args) => {
-                let output = args.run(&context.config().account, &context.config().key_pair)?;
-                context.print_data(&output)
-            }
-            Command::ModelRunPrivate(args) => {
-                let output = args.run(&context.config().account, &context.config().key_pair)?;
-                context.print_data(&output)
-            }
-            Command::ModelRunStatus(args) => context.print_data(&args.run()?),
-            Command::ModelDecryptOutput(args) => {
-                let output = args.run(&context.config().account, &context.config().key_pair)?;
-                context.print_data(&output)
-            }
-            Command::ModelPublishPrivate(args) => {
-                let output = args.run(&context.config().account, &context.config().key_pair)?;
-                context.print_data(&output)
-            }
             Command::HfDeploy(args) => {
                 let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
@@ -5904,6 +5856,65 @@ impl ModelUploadFinalizeArgs {
     }
 }
 
+/// Arguments for `app soracloud model-upload-register`.
+#[derive(clap::Args, Debug)]
+pub struct ModelUploadRegisterArgs {
+    /// Path to a `SoraUploadedModelBundleV1` JSON document with an approved SoraFS digest.
+    #[arg(long, value_name = "PATH")]
+    bundle_file: PathBuf,
+    /// Path to an `UploadedModelFinalizePayload` JSON document describing registry metadata.
+    #[arg(long, value_name = "PATH")]
+    request_file: PathBuf,
+    /// Service name that owns the uploaded model.
+    #[arg(long, value_name = "NAME")]
+    service_name: Option<String>,
+    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+    #[arg(long, value_name = "PATH")]
+    container: Option<PathBuf>,
+    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+    #[arg(long, value_name = "PATH")]
+    service: Option<PathBuf>,
+    /// Torii base URL for authoritative `model/upload/register`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutation.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelUploadRegisterArgs {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
+        let mut bundle: SoraUploadedModelBundleV1 = load_json(&self.bundle_file)?;
+        bundle.service_name = resolve_request_payload_service_name_name(
+            &bundle.service_name,
+            self.service_name,
+            self.container.as_deref(),
+            self.service.as_deref(),
+            "iroha app soracloud model-upload-register",
+        )?;
+        let finalize: UploadedModelFinalizePayload = load_json(&self.request_file)?;
+        let request = signed_uploaded_model_register_request(
+            bundle, finalize, authority, key_pair,
+        )?;
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/model/upload/register",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        let mut output = payload;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
+    }
+}
+
 /// Arguments for `app soracloud model-upload-status`.
 #[derive(clap::Args, Debug)]
 pub struct ModelUploadStatusArgs {
@@ -8928,6 +8939,37 @@ struct UploadedModelFinalizePayload {
 struct SignedUploadedModelFinalizeRequest {
     payload: UploadedModelFinalizePayload,
     provenance: ManifestProvenance,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    authority: Option<AccountId>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct UploadedModelRegisterPayload {
+    bundle: SoraUploadedModelBundleV1,
+    model_name: String,
+    artifact_id: String,
+    privacy_mode: SoraModelPrivacyModeV1,
+    weight_artifact_hash: Hash,
+    dataset_ref: String,
+    training_config_hash: Hash,
+    reproducibility_hash: Hash,
+    provenance_attestation_hash: Hash,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedUploadedModelRegisterRequest {
+    payload: UploadedModelRegisterPayload,
+    bundle_provenance: ManifestProvenance,
+    finalize_provenance: ManifestProvenance,
     #[norito(skip_serializing_if = "Option::is_none")]
     authority: Option<AccountId>,
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -12351,6 +12393,96 @@ fn signed_uploaded_model_finalize_request(
     })
 }
 
+fn signed_uploaded_model_register_request(
+    bundle: SoraUploadedModelBundleV1,
+    finalize: UploadedModelFinalizePayload,
+    _authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<SignedUploadedModelRegisterRequest> {
+    bundle
+        .validate()
+        .wrap_err("invalid uploaded model bundle")?;
+    if finalize.service_name.trim() != bundle.service_name.as_ref() {
+        return Err(eyre!(
+            "register finalize service_name `{}` must match bundle service_name `{}`",
+            finalize.service_name,
+            bundle.service_name
+        ));
+    }
+    if finalize.model_id != bundle.model_id {
+        return Err(eyre!(
+            "register finalize model_id `{}` must match bundle model_id `{}`",
+            finalize.model_id,
+            bundle.model_id
+        ));
+    }
+    if finalize.weight_version != bundle.weight_version {
+        return Err(eyre!(
+            "register finalize weight_version `{}` must match bundle weight_version `{}`",
+            finalize.weight_version,
+            bundle.weight_version
+        ));
+    }
+    if finalize.bundle_root != bundle.bundle_root {
+        return Err(eyre!(
+            "register finalize bundle_root must match bundle bundle_root"
+        ));
+    }
+    if finalize.model_name.trim().is_empty() {
+        return Err(eyre!("register model_name must not be empty"));
+    }
+    if finalize.artifact_id.trim().is_empty() {
+        return Err(eyre!("register artifact_id must not be empty"));
+    }
+    if finalize.dataset_ref.trim().is_empty() {
+        return Err(eyre!("register dataset_ref must not be empty"));
+    }
+    let payload = UploadedModelRegisterPayload {
+        bundle,
+        model_name: finalize.model_name,
+        artifact_id: finalize.artifact_id,
+        privacy_mode: finalize.privacy_mode,
+        weight_artifact_hash: finalize.weight_artifact_hash,
+        dataset_ref: finalize.dataset_ref,
+        training_config_hash: finalize.training_config_hash,
+        reproducibility_hash: finalize.reproducibility_hash,
+        provenance_attestation_hash: finalize.provenance_attestation_hash,
+    };
+
+    let bundle_encoded = encode_uploaded_model_bundle_register_provenance_payload(
+        payload.bundle.clone(),
+    )
+    .wrap_err("failed to encode uploaded model register bundle signature payload")?;
+    let finalize_encoded = encode_uploaded_model_finalize_provenance_payload(
+        payload.bundle.service_name.as_ref(),
+        payload.model_name.as_str(),
+        payload.bundle.model_id.as_str(),
+        payload.artifact_id.as_str(),
+        payload.bundle.weight_version.as_str(),
+        payload.bundle.bundle_root,
+        payload.privacy_mode,
+        payload.weight_artifact_hash,
+        payload.dataset_ref.as_str(),
+        payload.training_config_hash,
+        payload.reproducibility_hash,
+        payload.provenance_attestation_hash,
+    )
+    .wrap_err("failed to encode uploaded model register finalize signature payload")?;
+    Ok(SignedUploadedModelRegisterRequest {
+        payload,
+        bundle_provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature: Signature::new(key_pair.private_key(), &bundle_encoded),
+        },
+        finalize_provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature: Signature::new(key_pair.private_key(), &finalize_encoded),
+        },
+        authority: None,
+        private_key: None,
+    })
+}
+
 fn uploaded_model_compile_profile_hash(compile_profile: &SoraPrivateCompileProfileV1) -> Hash {
     let hash_of: HashOf<SoraPrivateCompileProfileV1> = HashOf::new(compile_profile);
     hash_of.into()
@@ -12990,18 +13122,7 @@ fn submit_soracloud_draft_transaction(
 }
 
 fn soracloud_submission_metadata() -> Metadata {
-    let mut metadata = Metadata::default();
-    let gas_asset_id = std::env::var("IROHA_SORACLOUD_GAS_ASSET_ID")
-        .ok()
-        .or_else(|| std::env::var("IROHA_GAS_ASSET_ID").ok())
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty());
-    if let Some(asset_id) = gas_asset_id {
-        let gas_asset_key =
-            Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
-        metadata.insert(gas_asset_key, Json::new(asset_id));
-    }
-    metadata
+    Metadata::default()
 }
 
 fn extract_json_field(payload: &json::Value, field: &str) -> Result<Option<json::Value>> {
@@ -13027,9 +13148,6 @@ where
         .wrap_err_with(|| format!("failed to derive /{endpoint_path} URL from --torii-url"))?;
     let body = json::to_vec(request_payload)
         .wrap_err("failed to encode soracloud mutation request payload")?;
-    if let Ok(path) = std::env::var("IROHA_SORACLOUD_DEBUG_BODY_FILE") {
-        let _ = std::fs::write(path, &body);
-    }
     let submission_config = soracloud_submission_config()?;
     let auth_headers = build_soracloud_mutation_auth_headers(&submission_config, &endpoint, &body)?;
 
@@ -13794,6 +13912,9 @@ where
         plaintext_root,
         runtime_format,
         bundle_root,
+        sorafs_manifest_digest: iroha::data_model::sorafs::pin_registry::ManifestDigest::new(
+            [0xA5; 32],
+        ),
         chunk_count: u32::try_from(chunks.len()).unwrap_or(u32::MAX),
         plaintext_bytes,
         ciphertext_bytes,
@@ -17777,7 +17898,7 @@ fn site_index_html() -> &'static str {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SoraCloud App</title>
+    <title>Soracloud App</title>
   </head>
   <body>
     <div id="app"></div>
@@ -20623,11 +20744,8 @@ iroha app soracloud rollout --container ./container_manifest.json --service ./se
 Other service-bound Soracloud commands, including `hf-deploy`,
 `hf-status`, `hf-lease-renew`, `hf-lease-leave`, `training-job-*`,
 `model-artifact-*`, `model-weight-*`,
-`model-upload-encryption-recipient`, `model-upload-init`,
-`model-upload-chunk`, `model-upload-finalize`, `model-upload-status`,
-`model-compile`, `model-compile-status`, `model-allow`,
-`model-run-private`, `model-run-status`, `model-decrypt-output`, and
-`model-publish-private`, also accept the same `--container` plus
+`model-upload-encryption-recipient`, `model-upload-register`, and
+`model-upload-status`, also accept the same `--container` plus
 `--service` manifest pair instead of a manual `--service-name` where a
 service name applies. The manifest-pair forms of those commands, plus
 `config-*`, `secret-*`, `rollback`, and `rollout`, also attach the same
@@ -22739,6 +22857,9 @@ mod tests {
             plaintext_root: Hash::new(b"plaintext-root"),
             runtime_format: SoraUploadedModelRuntimeFormatV1::HuggingFaceSafetensors,
             bundle_root: Hash::new(b"bundle-root"),
+            sorafs_manifest_digest: iroha::data_model::sorafs::pin_registry::ManifestDigest::new(
+                [0xA5; 32],
+            ),
             chunk_count: u32::try_from(chunks.len()).expect("chunk count"),
             plaintext_bytes,
             ciphertext_bytes,
@@ -28516,17 +28637,8 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
         assert!(readme.contains("model-artifact-*"));
         assert!(readme.contains("model-weight-*"));
         assert!(readme.contains("model-upload-encryption-recipient"));
-        assert!(readme.contains("model-upload-init"));
-        assert!(readme.contains("model-upload-chunk"));
-        assert!(readme.contains("model-upload-finalize"));
+        assert!(readme.contains("model-upload-register"));
         assert!(readme.contains("model-upload-status"));
-        assert!(readme.contains("model-compile"));
-        assert!(readme.contains("model-compile-status"));
-        assert!(readme.contains("model-allow"));
-        assert!(readme.contains("model-run-private"));
-        assert!(readme.contains("model-run-status"));
-        assert!(readme.contains("model-decrypt-output"));
-        assert!(readme.contains("model-publish-private"));
         let deploy_sh =
             fs::read_to_string(dir.join("deploy.sh")).expect("read http-service deploy.sh");
         assert!(deploy_sh.contains("app soracloud deploy"));

@@ -26,13 +26,11 @@ public final class OfflineQrStreamVisionScanner {
         }
         return results.compactMap { observation -> Data? in
             guard let string = observation.payloadStringValue else {
-                print("[OfflineQrStream] observation has no payloadStringValue")
                 return nil
             }
             do {
                 return try OfflineQrStreamTextCodec.decode(string, encoding: .base64)
             } catch {
-                print("[OfflineQrStream] TextCodec.decode failed: \(error), string prefix: \(String(string.prefix(40)))")
                 return nil
             }
         }
@@ -103,25 +101,16 @@ extension OfflineQrStreamCameraSession: AVCaptureVideoDataOutputSampleBufferDele
         do {
             frames = try scanner.decode(sampleBuffer: sampleBuffer)
         } catch {
-            print("[OfflineQrStream] scan error: \(error)")
             return
         }
         for frame in frames {
             do {
-                // Log frame header for debugging
-                if frame.count >= 4 {
-                    let kind = frame[3]
-                    let kindName = kind == 0 ? "header" : kind == 1 ? "data" : kind == 2 ? "parity" : "unknown(\(kind))"
-                    print("[OfflineQrStream] ingesting \(frame.count)B \(kindName) frame")
-                }
                 let result = try scanSession.ingest(frameBytes: frame)
-                print("[OfflineQrStream] result: \(result.receivedChunks)/\(result.totalChunks)")
                 onProgress?(result)
                 if let payload = result.payload {
                     onPayload?(payload)
                 }
             } catch {
-                print("[OfflineQrStream] ingest error: \(error)")
             }
         }
     }

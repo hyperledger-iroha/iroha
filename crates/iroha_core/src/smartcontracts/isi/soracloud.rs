@@ -34,10 +34,10 @@ use iroha_data_model::{
         SORA_SERVICE_ROLLOUT_STATE_VERSION_V1, SORA_SERVICE_SECRET_ENTRY_VERSION_V1,
         SORA_SERVICE_STATE_ENTRY_VERSION_V1, SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1,
         SORA_TRAINING_JOB_RECORD_VERSION_V1, SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
-        SORA_UPLOADED_MODEL_CHUNK_VERSION_V1, SecretEnvelopeV1, SoraAgentApartmentActionV1,
-        SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraAgentArtifactAllowRuleV1,
-        SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1, SoraAgentPersistentStateV1,
-        SoraAgentRuntimeStatusV1, SoraAgentWalletDailySpendEntryV1, SoraAgentWalletSpendRequestV1,
+        SecretEnvelopeV1, SoraAgentApartmentActionV1, SoraAgentApartmentAuditEventV1,
+        SoraAgentApartmentRecordV1, SoraAgentArtifactAllowRuleV1, SoraAgentAutonomyRunRecordV1,
+        SoraAgentMailboxMessageV1, SoraAgentPersistentStateV1, SoraAgentRuntimeStatusV1,
+        SoraAgentWalletDailySpendEntryV1, SoraAgentWalletSpendRequestV1,
         SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1, SoraHfPlacementHostAssignmentV1,
         SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1,
         SoraHfPlacementStatusV1, SoraHfResourceProfileV1, SoraHfSharedLeaseActionV1,
@@ -61,8 +61,8 @@ use iroha_data_model::{
         SoraServiceStateEntryV1, SoraStateEncryptionV1, SoraStateMutationOperationV1,
         SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
         SoraTrainingJobStatusV1, SoraUploadedModelBindingStatusV1, SoraUploadedModelBindingV1,
-        SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
-        derive_agent_autonomy_request_commitment, encode_agent_artifact_allow_provenance_payload,
+        SoraUploadedModelBundleV1, derive_agent_autonomy_request_commitment,
+        encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
         encode_agent_message_send_provenance_payload,
@@ -91,10 +91,9 @@ use iroha_data_model::{
         encode_training_job_retry_provenance_payload, encode_training_job_start_provenance_payload,
         encode_uploaded_model_allow_provenance_payload,
         encode_uploaded_model_bundle_register_provenance_payload,
-        encode_uploaded_model_chunk_append_provenance_payload,
         encode_uploaded_model_finalize_provenance_payload,
     },
-    sorafs::pin_registry::StorageClass,
+    sorafs::pin_registry::{PinStatus, StorageClass},
 };
 use iroha_primitives::{json::Json, numeric::Numeric};
 use mv::storage::StorageReadOnly;
@@ -1027,31 +1026,6 @@ fn verify_uploaded_model_bundle_register_provenance(
     Ok(())
 }
 
-fn verify_uploaded_model_chunk_append_provenance(
-    authority: &AccountId,
-    chunk: &SoraUploadedModelChunkV1,
-    provenance: &ManifestProvenance,
-) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
-        return Err(invalid_parameter(
-            "uploaded model chunk provenance signer must match the transaction authority",
-        ));
-    }
-    let payload =
-        encode_uploaded_model_chunk_append_provenance_payload(chunk.clone()).map_err(|err| {
-            invalid_parameter(format!(
-                "failed to encode uploaded model chunk provenance: {err}"
-            ))
-        })?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
-        .map_err(|_| {
-            invalid_parameter("uploaded model chunk provenance signature verification failed")
-        })?;
-    Ok(())
-}
-
 #[allow(clippy::too_many_arguments)]
 fn verify_uploaded_model_finalize_provenance(
     authority: &AccountId,
@@ -1395,16 +1369,40 @@ fn service_allows_uploaded_model_plane(bundle: &SoraDeploymentBundleV1) -> bool 
         || bundle.container.capabilities.allow_model_inference
 }
 
-fn uploaded_model_chunk_storage_key(
-    service_name: &Name,
-    model_id: &str,
-    weight_version: &str,
-    ordinal: u32,
-) -> String {
-    format!(
-        "{}::{model_id}::{weight_version}::{ordinal}",
-        service_name.as_ref()
-    )
+fn require_active_sorafs_uploaded_model_pin(
+    state_transaction: &StateTransaction<'_, '_>,
+    bundle: &SoraUploadedModelBundleV1,
+) -> Result<(), InstructionExecutionError> {
+    let Some(pin) = state_transaction
+        .world
+        .pin_manifests
+        .get(&bundle.sorafs_manifest_digest)
+    else {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "SoraFS manifest {:?} for uploaded model `{}` version `{}` is not registered",
+                bundle.sorafs_manifest_digest, bundle.model_id, bundle.weight_version
+            )
+            .into(),
+        ));
+    };
+    match pin.status {
+        PinStatus::Approved(_) => Ok(()),
+        PinStatus::Pending => Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "SoraFS manifest {:?} for uploaded model `{}` version `{}` is not approved",
+                bundle.sorafs_manifest_digest, bundle.model_id, bundle.weight_version
+            )
+            .into(),
+        )),
+        PinStatus::Retired(epoch) => Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "SoraFS manifest {:?} for uploaded model `{}` version `{}` retired at epoch {epoch}",
+                bundle.sorafs_manifest_digest, bundle.model_id, bundle.weight_version
+            )
+            .into(),
+        )),
+    }
 }
 
 fn active_private_session_count(
@@ -2673,26 +2671,6 @@ fn record_uploaded_model_bundle(
             ),
             record,
         );
-    Ok(())
-}
-
-fn record_uploaded_model_chunk(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    record: SoraUploadedModelChunkV1,
-) -> Result<(), InstructionExecutionError> {
-    record
-        .validate()
-        .map_err(|err| invalid_parameter(err.to_string()))?;
-    let chunk_key = uploaded_model_chunk_storage_key(
-        &record.service_name,
-        &record.model_id,
-        &record.weight_version,
-        record.ordinal,
-    );
-    state_transaction
-        .world
-        .soracloud_uploaded_model_chunks
-        .insert(chunk_key, record);
     Ok(())
 }
 
@@ -4543,33 +4521,6 @@ fn transfer_uploaded_model_amount(
         &sink_account,
         state_transaction,
     )
-}
-
-fn uploaded_model_ciphertext_hash(payload: &SecretEnvelopeV1) -> Hash {
-    Hash::new(payload.ciphertext.as_slice())
-}
-
-fn uploaded_model_chunk_manifest_root(
-    chunks: &[SoraUploadedModelChunkV1],
-) -> Result<Hash, InstructionExecutionError> {
-    let manifest = chunks
-        .iter()
-        .map(|chunk| {
-            (
-                chunk.ordinal,
-                chunk.offset_bytes,
-                chunk.plaintext_len,
-                chunk.ciphertext_len,
-                chunk.ciphertext_hash,
-            )
-        })
-        .collect::<Vec<_>>();
-    let encoded = norito::to_bytes(&manifest).map_err(|err| {
-        invalid_parameter(format!(
-            "failed to encode uploaded model chunk manifest for hashing: {err}"
-        ))
-    })?;
-    Ok(Hash::new(encoded))
 }
 
 fn duration_millis(duration: Duration) -> u64 {
@@ -9832,6 +9783,7 @@ impl Execute for isi::RegisterSoracloudUploadedModelBundle {
                 .into(),
             ));
         }
+        require_active_sorafs_uploaded_model_pin(state_transaction, &bundle)?;
 
         let record = SoraUploadedModelBundleV1 {
             schema_version: SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
@@ -9855,132 +9807,11 @@ impl Execute for isi::AppendSoracloudUploadedModelChunk {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
         require_soracloud_permission(authority, state_transaction)?;
-        let isi::AppendSoracloudUploadedModelChunk { chunk, provenance } = self;
-        verify_uploaded_model_chunk_append_provenance(authority, &chunk, &provenance)?;
-        chunk
-            .validate()
-            .map_err(|err| invalid_parameter(err.to_string()))?;
-        let model_id = parse_uploaded_model_id(&chunk.model_id)?;
-        let weight_version = parse_model_weight_version(&chunk.weight_version)?;
-
-        let bundle_key = (
-            chunk.service_name.as_ref().to_owned(),
-            model_id.clone(),
-            weight_version.clone(),
-        );
-        let Some(bundle_record) = state_transaction
-            .world
-            .soracloud_uploaded_model_bundles
-            .get(&bundle_key)
-            .cloned()
-        else {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "uploaded model bundle `{model_id}` version `{weight_version}` not found for service `{}`",
-                    chunk.service_name
-                )
+        let _ = self;
+        Err(InstructionExecutionError::InvariantViolation(
+            "Soracloud production V1 stores uploaded model bytes in SoraFS; chain-resident uploaded-model chunk append is disabled"
                 .into(),
-            ));
-        };
-        if chunk.bundle_root != bundle_record.bundle_root {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("bundle_root mismatch for uploaded model `{model_id}`").into(),
-            ));
-        }
-        if chunk.ordinal >= bundle_record.chunk_count {
-            return Err(invalid_parameter(format!(
-                "chunk ordinal {} exceeds bundle chunk_count {}",
-                chunk.ordinal, bundle_record.chunk_count
-            )));
-        }
-        if u64::from(chunk.plaintext_len)
-            > state_transaction
-                .nexus
-                .uploaded_models
-                .chunk_plaintext_bytes
-        {
-            return Err(invalid_parameter(format!(
-                "chunk plaintext_len exceeds nexus.uploaded_models.chunk_plaintext_bytes ({})",
-                state_transaction
-                    .nexus
-                    .uploaded_models
-                    .chunk_plaintext_bytes
-            )));
-        }
-        if usize::try_from(chunk.ciphertext_len).ok()
-            != Some(chunk.encrypted_payload.ciphertext.len())
-        {
-            return Err(invalid_parameter(
-                "ciphertext_len must equal encrypted_payload.ciphertext length",
-            ));
-        }
-        let ciphertext_hash = uploaded_model_ciphertext_hash(&chunk.encrypted_payload);
-        if chunk.ciphertext_hash != ciphertext_hash {
-            return Err(invalid_parameter(format!(
-                "ciphertext_hash does not match encrypted payload bytes for chunk {}",
-                chunk.ordinal
-            )));
-        }
-        let expected_offset = u64::from(chunk.ordinal).saturating_mul(
-            state_transaction
-                .nexus
-                .uploaded_models
-                .chunk_plaintext_bytes,
-        );
-        if chunk.offset_bytes != expected_offset {
-            return Err(invalid_parameter(format!(
-                "chunk offset_bytes {} does not match deterministic shard offset {}",
-                chunk.offset_bytes, expected_offset
-            )));
-        }
-
-        let chunk_key = uploaded_model_chunk_storage_key(
-            &chunk.service_name,
-            &model_id,
-            &weight_version,
-            chunk.ordinal,
-        );
-        if state_transaction
-            .world
-            .soracloud_uploaded_model_chunks
-            .get(&chunk_key)
-            .is_some()
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "uploaded model chunk {} already registered for `{model_id}` version `{weight_version}`",
-                    chunk.ordinal
-                )
-                .into(),
-            ));
-        }
-        let stored_chunk_count = state_transaction
-            .world
-            .soracloud_uploaded_model_chunks
-            .iter()
-            .filter(|(_key, stored_chunk)| {
-                stored_chunk.service_name == chunk.service_name
-                    && stored_chunk.model_id == model_id
-                    && stored_chunk.weight_version == weight_version
-            })
-            .count();
-        if u32::try_from(stored_chunk_count).unwrap_or(u32::MAX) != chunk.ordinal {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "uploaded model chunk {} must be appended in deterministic ordinal order",
-                    chunk.ordinal
-                )
-                .into(),
-            ));
-        }
-
-        let record = SoraUploadedModelChunkV1 {
-            schema_version: SORA_UPLOADED_MODEL_CHUNK_VERSION_V1,
-            model_id,
-            weight_version,
-            ..chunk
-        };
-        record_uploaded_model_chunk(state_transaction, record)
+        ))
     }
 }
 
@@ -10063,84 +9894,7 @@ impl Execute for isi::FinalizeSoracloudUploadedModelBundle {
                 format!("bundle_root mismatch for uploaded model `{model_id}`").into(),
             ));
         }
-
-        let mut chunks = state_transaction
-            .world
-            .soracloud_uploaded_model_chunks
-            .iter()
-            .filter_map(|(_key, chunk)| {
-                (chunk.service_name == service_name
-                    && chunk.model_id == model_id
-                    && chunk.weight_version == weight_version)
-                    .then(|| chunk.clone())
-            })
-            .collect::<Vec<_>>();
-        chunks.sort_by_key(|chunk| chunk.ordinal);
-        if u32::try_from(chunks.len()).unwrap_or(u32::MAX) != bundle_record.chunk_count {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "uploaded model `{model_id}` version `{weight_version}` has {} stored chunks but bundle expects {}",
-                    chunks.len(), bundle_record.chunk_count
-                )
-                .into(),
-            ));
-        }
-        let mut expected_offset = 0_u64;
-        let mut plaintext_total = 0_u64;
-        let mut ciphertext_total = 0_u64;
-        for (index, chunk) in chunks.iter().enumerate() {
-            let expected_ordinal = u32::try_from(index).unwrap_or(u32::MAX);
-            if chunk.ordinal != expected_ordinal {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "uploaded model `{model_id}` chunk ordering is not contiguous at ordinal {}",
-                        expected_ordinal
-                    )
-                    .into(),
-                ));
-            }
-            if chunk.offset_bytes != expected_offset {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "uploaded model `{model_id}` chunk {} offset {} does not match expected {}",
-                        chunk.ordinal, chunk.offset_bytes, expected_offset
-                    )
-                    .into(),
-                ));
-            }
-            expected_offset = expected_offset.saturating_add(u64::from(chunk.plaintext_len));
-            plaintext_total = plaintext_total.saturating_add(u64::from(chunk.plaintext_len));
-            ciphertext_total = ciphertext_total.saturating_add(u64::from(chunk.ciphertext_len));
-            let ciphertext_hash = uploaded_model_ciphertext_hash(&chunk.encrypted_payload);
-            if chunk.ciphertext_hash != ciphertext_hash {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "uploaded model `{model_id}` chunk {} ciphertext hash does not match payload bytes",
-                        chunk.ordinal
-                    )
-                    .into(),
-                ));
-            }
-        }
-        if plaintext_total != bundle_record.plaintext_bytes
-            || ciphertext_total != bundle_record.ciphertext_bytes
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "uploaded model `{model_id}` chunk byte totals do not match bundle manifest"
-                )
-                .into(),
-            ));
-        }
-        let computed_manifest_root = uploaded_model_chunk_manifest_root(&chunks)?;
-        if computed_manifest_root != bundle_record.chunk_manifest_root {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "uploaded model `{model_id}` chunk manifest root does not match bundle manifest"
-                )
-                .into(),
-            ));
-        }
+        require_active_sorafs_uploaded_model_pin(state_transaction, &bundle_record)?;
 
         let artifact_key = (service_name.as_ref().to_owned(), artifact_id.clone());
         if state_transaction
@@ -11228,6 +10982,7 @@ mod tests {
             SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
             SoraStateMutationOperationV1, SoraStateScopeV1, SoraTlsModeV1,
         },
+        sorafs::pin_registry::ManifestDigest,
     };
     use iroha_primitives::json::Json;
     use iroha_primitives::numeric::Numeric;
@@ -11933,6 +11688,138 @@ mod tests {
         bundle.container.capabilities.allow_model_training = true;
         bundle.service.container.manifest_hash = bundle.container_manifest_hash();
         bundle
+    }
+
+    fn sample_uploaded_model_bundle(
+        service_name: &str,
+        digest: ManifestDigest,
+    ) -> SoraUploadedModelBundleV1 {
+        SoraUploadedModelBundleV1 {
+            schema_version: SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
+            service_name: service_name.parse().expect("valid service name"),
+            model_id: "vision_model".to_string(),
+            weight_version: "v1".to_string(),
+            family: "decoder-only".to_string(),
+            modalities: vec!["text".to_string()],
+            plaintext_root: Hash::new(b"plaintext-root"),
+            runtime_format: iroha_data_model::soracloud::SoraUploadedModelRuntimeFormatV1::SoracloudPrivateIr,
+            bundle_root: Hash::new(b"bundle-root"),
+            sorafs_manifest_digest: digest,
+            chunk_count: 1,
+            plaintext_bytes: 4_096,
+            ciphertext_bytes: 4_352,
+            compile_profile_hash: Hash::new(b"compile-profile"),
+            chunk_manifest_root: Hash::new(b"chunk-manifest-root"),
+            upload_recipient: iroha_data_model::soracloud::SoraUploadedModelEncryptionRecipientV1 {
+                schema_version: iroha_data_model::soracloud::SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
+                key_id: "soracloud-upload".to_string(),
+                key_version: NonZeroU32::new(1).expect("non-zero key version"),
+                kem: iroha_data_model::soracloud::SoraUploadedModelKeyEncapsulationV1::X25519HkdfSha256,
+                aead: iroha_data_model::soracloud::SoraUploadedModelKeyWrapAeadV1::Aes256Gcm,
+                public_key_bytes: vec![3u8; 32],
+                public_key_fingerprint: Hash::new([3u8; 32]),
+            },
+            wrapped_bundle_key: iroha_data_model::soracloud::SoraUploadedModelWrappedKeyV1 {
+                schema_version: iroha_data_model::soracloud::SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1,
+                recipient_key_id: "soracloud-upload".to_string(),
+                recipient_key_version: NonZeroU32::new(1).expect("non-zero key version"),
+                kem: iroha_data_model::soracloud::SoraUploadedModelKeyEncapsulationV1::X25519HkdfSha256,
+                aead: iroha_data_model::soracloud::SoraUploadedModelKeyWrapAeadV1::Aes256Gcm,
+                ephemeral_public_key: vec![4u8; 32],
+                nonce: vec![5u8; 12],
+                wrapped_key_ciphertext: vec![6u8; 48],
+                ciphertext_hash: Hash::new([6u8; 48]),
+                aad_digest: Hash::new(b"wrapped-aad"),
+            },
+            pricing_policy: iroha_data_model::soracloud::SoraUploadedModelPricingPolicyV1 {
+                storage_xor_nanos: 0,
+                compile_xor_nanos: 0,
+                runtime_step_xor_nanos: 0,
+                decrypt_release_xor_nanos: 0,
+            },
+            decryption_policy_ref: "policy/private-release".to_string(),
+        }
+    }
+
+    fn uploaded_model_bundle_provenance(bundle: &SoraUploadedModelBundleV1) -> ManifestProvenance {
+        let payload = encode_uploaded_model_bundle_register_provenance_payload(bundle.clone())
+            .expect("uploaded model bundle payload");
+        ManifestProvenance {
+            signer: ALICE_KEYPAIR.public_key().clone(),
+            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+        }
+    }
+
+    fn uploaded_model_finalize_provenance(
+        service_name: &iroha_data_model::name::Name,
+        model_name: &str,
+        model_id: &str,
+        artifact_id: &str,
+        weight_version: &str,
+        bundle_root: Hash,
+        privacy_mode: SoraModelPrivacyModeV1,
+        weight_artifact_hash: Hash,
+        dataset_ref: &str,
+        training_config_hash: Hash,
+        reproducibility_hash: Hash,
+        provenance_attestation_hash: Hash,
+    ) -> ManifestProvenance {
+        let payload = encode_uploaded_model_finalize_provenance_payload(
+            service_name.as_ref(),
+            model_name,
+            model_id,
+            artifact_id,
+            weight_version,
+            bundle_root,
+            privacy_mode,
+            weight_artifact_hash,
+            dataset_ref,
+            training_config_hash,
+            reproducibility_hash,
+            provenance_attestation_hash,
+        )
+        .expect("uploaded model finalize payload");
+        ManifestProvenance {
+            signer: ALICE_KEYPAIR.public_key().clone(),
+            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+        }
+    }
+
+    fn insert_uploaded_model_pin(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        digest: ManifestDigest,
+        status: PinStatus,
+    ) {
+        let chunker = iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
+            profile_id: 1,
+            namespace: "sorafs".to_string(),
+            name: "sf1".to_string(),
+            semver: "1.0.0".to_string(),
+            multihash_code: 0x1e,
+        };
+        let policy = iroha_data_model::sorafs::pin_registry::PinPolicy {
+            min_replicas: 1,
+            storage_class: StorageClass::Warm,
+            retention_epoch: u64::MAX,
+        };
+        let mut record = iroha_data_model::sorafs::pin_registry::PinManifestRecord::new(
+            digest,
+            chunker,
+            [0xA7; 32],
+            policy,
+            ALICE_ID.clone(),
+            1,
+            None,
+            None,
+            Metadata::default(),
+        )
+        .with_content_length(4_352);
+        match status {
+            PinStatus::Pending => {}
+            PinStatus::Approved(epoch) => record.approve(epoch, None),
+            PinStatus::Retired(epoch) => record.retire(epoch, None),
+        }
+        state_transaction.world.pin_manifests.insert(digest, record);
     }
 
     fn sample_agent_manifest_with_capabilities(
@@ -15854,6 +15741,180 @@ mod tests {
     }
 
     #[test]
+    fn soracloud_uploaded_model_register_uses_approved_sorafs_pin_without_storing_chunks()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        let service_bundle = sample_training_bundle("portal", "1.0.0");
+        isi::DeploySoracloudService {
+            bundle: service_bundle.clone(),
+            initial_service_configs: BTreeMap::new(),
+            initial_service_secrets: BTreeMap::new(),
+            provenance: bundle_provenance(&service_bundle),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+
+        let digest = ManifestDigest::new([0xA5; 32]);
+        insert_uploaded_model_pin(&mut stx, digest, PinStatus::Approved(1));
+        let bundle = sample_uploaded_model_bundle("portal", digest);
+        isi::RegisterSoracloudUploadedModelBundle {
+            bundle: bundle.clone(),
+            provenance: uploaded_model_bundle_provenance(&bundle),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+
+        let bundle_key = (
+            "portal".to_string(),
+            "vision_model".to_string(),
+            "v1".to_string(),
+        );
+        assert!(
+            stx.world
+                .soracloud_uploaded_model_bundles
+                .get(&bundle_key)
+                .is_some()
+        );
+        assert_eq!(stx.world.soracloud_uploaded_model_chunks.iter().count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_uploaded_model_register_rejects_missing_or_retired_sorafs_pin()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        let service_bundle = sample_training_bundle("portal", "1.0.0");
+        isi::DeploySoracloudService {
+            bundle: service_bundle.clone(),
+            initial_service_configs: BTreeMap::new(),
+            initial_service_secrets: BTreeMap::new(),
+            provenance: bundle_provenance(&service_bundle),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+
+        let missing_digest = ManifestDigest::new([0xB5; 32]);
+        let missing_bundle = sample_uploaded_model_bundle("portal", missing_digest);
+        let missing_result = isi::RegisterSoracloudUploadedModelBundle {
+            bundle: missing_bundle.clone(),
+            provenance: uploaded_model_bundle_provenance(&missing_bundle),
+        }
+        .execute(&ALICE_ID, &mut stx);
+        assert!(missing_result.is_err());
+
+        let retired_digest = ManifestDigest::new([0xC5; 32]);
+        insert_uploaded_model_pin(&mut stx, retired_digest, PinStatus::Retired(9));
+        let retired_bundle = sample_uploaded_model_bundle("portal", retired_digest);
+        let retired_result = isi::RegisterSoracloudUploadedModelBundle {
+            bundle: retired_bundle.clone(),
+            provenance: uploaded_model_bundle_provenance(&retired_bundle),
+        }
+        .execute(&ALICE_ID, &mut stx);
+        assert!(retired_result.is_err());
+        assert_eq!(stx.world.soracloud_uploaded_model_chunks.iter().count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_uploaded_model_finalize_uses_sorafs_pin_metadata_without_chunks()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        let service_bundle = sample_training_bundle("portal", "1.0.0");
+        isi::DeploySoracloudService {
+            bundle: service_bundle.clone(),
+            initial_service_configs: BTreeMap::new(),
+            initial_service_secrets: BTreeMap::new(),
+            provenance: bundle_provenance(&service_bundle),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+
+        let digest = ManifestDigest::new([0xD5; 32]);
+        insert_uploaded_model_pin(&mut stx, digest, PinStatus::Approved(1));
+        let bundle = sample_uploaded_model_bundle("portal", digest);
+        isi::RegisterSoracloudUploadedModelBundle {
+            bundle: bundle.clone(),
+            provenance: uploaded_model_bundle_provenance(&bundle),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+
+        let service_name = bundle.service_name.clone();
+        let privacy_mode = SoraModelPrivacyModeV1::PrivateExecution;
+        let weight_artifact_hash = Hash::new(b"weights");
+        let training_config_hash = Hash::new(b"training-config");
+        let reproducibility_hash = Hash::new(b"reproducibility");
+        let provenance_attestation_hash = Hash::new(b"provenance-attestation");
+        isi::FinalizeSoracloudUploadedModelBundle {
+            service_name: service_name.clone(),
+            model_name: "vision_model".to_string(),
+            model_id: bundle.model_id.clone(),
+            artifact_id: "uploaded-artifact".to_string(),
+            weight_version: bundle.weight_version.clone(),
+            bundle_root: bundle.bundle_root,
+            privacy_mode,
+            weight_artifact_hash,
+            dataset_ref: "dataset://upload".to_string(),
+            training_config_hash,
+            reproducibility_hash,
+            provenance_attestation_hash,
+            provenance: uploaded_model_finalize_provenance(
+                &service_name,
+                "vision_model",
+                &bundle.model_id,
+                "uploaded-artifact",
+                &bundle.weight_version,
+                bundle.bundle_root,
+                privacy_mode,
+                weight_artifact_hash,
+                "dataset://upload",
+                training_config_hash,
+                reproducibility_hash,
+                provenance_attestation_hash,
+            ),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+
+        assert_eq!(stx.world.soracloud_uploaded_model_chunks.iter().count(), 0);
+        let registry = stx
+            .world
+            .soracloud_model_registries
+            .get(&(service_name.as_ref().to_owned(), "vision_model".to_string()))
+            .expect("model registry");
+        assert_eq!(registry.current_version.as_deref(), Some("v1"));
+        let artifact = stx
+            .world
+            .soracloud_model_artifacts
+            .get(&(
+                service_name.as_ref().to_owned(),
+                "uploaded-artifact".to_string(),
+            ))
+            .expect("model artifact");
+        assert_eq!(artifact.private_bundle_root, Some(bundle.bundle_root));
+        assert_eq!(
+            artifact.chunk_manifest_root,
+            Some(bundle.chunk_manifest_root)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn private_inference_release_finalization_reuses_checkpoint_step() -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let mut state = state_with_soracloud_permission(&kura)?;
@@ -15899,6 +15960,8 @@ mod tests {
                 plaintext_root: Hash::new(b"plaintext-root"),
                 runtime_format: iroha_data_model::soracloud::SoraUploadedModelRuntimeFormatV1::SoracloudPrivateIr,
                 bundle_root,
+                sorafs_manifest_digest:
+                    iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xA5; 32]),
                 chunk_count: 1,
                 plaintext_bytes: 4_096,
                 ciphertext_bytes: 4_352,

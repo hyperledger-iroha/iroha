@@ -48,16 +48,16 @@ are covered in later tasks but inherit the data formats described here.
 
 ## Chunking Profile
 
-SoraFS uses a Rabin-based content defined chunking (CDC) scheme inspired by
-FastCDC. The chunker operates with the following deterministic parameters:
+SoraFS uses a FastCDC-style gear rolling hash for content defined chunking
+(CDC). The chunker operates with the following deterministic parameters:
 
 | Parameter | Value | Notes |
 |-----------|-------|-------|
-| Rolling polynomial | `0x3DA3358B4DC173` | Same as FastCDC default. |
+| Rolling hash | Rotate-left-by-1 plus gear-table addition | No Rabin polynomial state is used. |
 | Target size | 262,144 bytes (256 KiB) | Midpoint; governs threshold mask. |
 | Minimum size | 65,536 bytes (64 KiB) | Prevents thrashing on small files. |
 | Maximum size | 524,288 bytes (512 KiB) | Caps tail chunks. |
-| Gear table | Fixed 64 KiB table derived from SHA3-256 seed `sorafs-v1-gear`. |
+| Gear table | 256 deterministic `u64` entries derived from SHA3-256 seed `sorafs-v1-gear` plus the little-endian byte index. |
 | Break mask | `0x0000FFFF` | Adaptive mask derived from `target_size`. |
 
 Determinism requirements:

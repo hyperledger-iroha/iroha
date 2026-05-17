@@ -20,7 +20,7 @@ use std::{
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use iroha_crypto::{
-    Algorithm, KeyPair, PrivateKey,
+    Algorithm, KeyPair, PrivateKey, PublicKey,
     soranet::{
         certificate::RelayCertificateBundleV2,
         handshake::{
@@ -45,8 +45,8 @@ use iroha_data_model::{
         },
         vpn::{
             VPN_DEFAULT_TUNNEL_MTU_BYTES, VPN_USAGE_VOUCHER_CONTROL_MAGIC, VpnCellClassV1,
-            VpnFlowLabelV1, VpnHelperTicketError, VpnHelperTicketV1, VpnUsageVoucherEnvelopeV1,
-            derive_vpn_session_address_plan_v1,
+            VpnFlowLabelV1, VpnHelperTicketError, VpnHelperTicketV1, VpnTariffV1,
+            VpnUsageVoucherEnvelopeV1, derive_vpn_session_address_plan_v1,
         },
     },
 };
@@ -60,11 +60,10 @@ use norito::{
 use quinn::{ClosedStream, Connection, Endpoint, Incoming, RecvStream, SendStream, VarInt};
 use rand::{SeedableRng, rngs::StdRng};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpStream, UnixStream},
     sync::{Mutex, Notify},
     task::JoinHandle,
     time::{Instant as TokioInstant, MissedTickBehavior, interval, interval_at, sleep, timeout},
@@ -86,7 +85,7 @@ use crate::{
         spawn_padding_task,
     },
     compliance::{ComplianceLogger, ThrottleAudit},
-    config::{self, ConfigError, RelayConfig, RelayMode},
+    config::{self, ConfigError, RelayConfig, RelayMode, VpnBackendEndpoint},
     congestion::{CongestionController, CongestionError, CongestionLease},
     constant_rate::ConstantRateProfileSpec,
     dos::{DoSControls, ThrottleReason, TokenPolicyError},
@@ -683,6 +682,8 @@ struct VpnVoucherDebtWindow {
     session_id: [u8; 16],
     quote_id: [u8; 32],
     relay_id: RelayId,
+    metering_public_key: PublicKey,
+    tariff: VpnTariffV1,
     max_unvouched_bytes: u64,
     observed_ingress_bytes: u64,
     observed_egress_bytes: u64,
@@ -699,6 +700,8 @@ impl VpnVoucherDebtWindow {
             session_id: helper_ticket.session_id,
             quote_id: helper_ticket.quote_id,
             relay_id: helper_ticket.relay_id,
+            metering_public_key: helper_ticket.metering_public_key.clone(),
+            tariff: helper_ticket.tariff,
             max_unvouched_bytes,
             observed_ingress_bytes: 0,
             observed_egress_bytes: 0,
@@ -723,7 +726,7 @@ impl VpnVoucherDebtWindow {
     fn accept_envelope(
         &mut self,
         envelope: &VpnUsageVoucherEnvelopeV1,
-    ) -> Result<(), VpnBackendBridgeError> {
+    ) -> Result<VpnUsageVoucherEnvelopeV1, VpnBackendBridgeError> {
         let voucher = &envelope.voucher;
         let body = &voucher.body;
         if body.session_id != self.session_id {
@@ -739,6 +742,11 @@ impl VpnVoucherDebtWindow {
         if body.relay_id != self.relay_id {
             return Err(VpnBackendBridgeError::UsageVoucher(
                 "voucher relay id does not match helper ticket".to_string(),
+            ));
+        }
+        if voucher.client_public_key != self.metering_public_key {
+            return Err(VpnBackendBridgeError::UsageVoucher(
+                "voucher public key does not match helper ticket".to_string(),
             ));
         }
         voucher.verify().map_err(|error| {
@@ -763,13 +771,23 @@ impl VpnVoucherDebtWindow {
                 "voucher earned fee must be cumulative".to_string(),
             ));
         }
+        let earned_fee_nanos = self.tariff.earned_fee_nanos(body);
+        if envelope.earned_fee_nanos != earned_fee_nanos {
+            return Err(VpnBackendBridgeError::UsageVoucher(
+                "voucher earned fee does not match helper ticket tariff".to_string(),
+            ));
+        }
 
         self.has_voucher = true;
         self.highest_sequence = body.sequence;
         self.vouched_ingress_bytes = body.ingress_bytes;
         self.vouched_egress_bytes = body.egress_bytes;
-        self.vouched_earned_fee_nanos = envelope.earned_fee_nanos;
-        self.ensure_within_window()
+        self.vouched_earned_fee_nanos = earned_fee_nanos;
+        self.ensure_within_window()?;
+        Ok(VpnUsageVoucherEnvelopeV1 {
+            voucher: voucher.clone(),
+            earned_fee_nanos,
+        })
     }
 
     fn ensure_within_window(&self) -> Result<(), VpnBackendBridgeError> {
@@ -810,12 +828,20 @@ fn decode_usage_voucher_control(
     Ok(Some(envelope))
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 struct VpnBackendBootstrap {
     session_id_hex: String,
     server_tunnel_addresses: Vec<String>,
     session_routes: Vec<String>,
     mtu_bytes: u16,
+}
+
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
+struct VpnBackendBootstrapEnvelope {
+    bootstrap: VpnBackendBootstrap,
+    timestamp_ms: u64,
+    nonce: [u8; 16],
+    mac: [u8; 32],
 }
 
 #[derive(Debug, Clone, norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
@@ -962,12 +988,43 @@ fn build_vpn_backend_bootstrap(session_id: [u8; 16]) -> VpnBackendBootstrap {
     }
 }
 
+fn vpn_backend_bootstrap_mac(
+    secret: &[u8; 32],
+    bootstrap: &VpnBackendBootstrap,
+    timestamp_ms: u64,
+    nonce: &[u8; 16],
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_keyed(secret);
+    hasher.update(b"soranet-vpn-backend-bootstrap-v1");
+    hasher.update(&bootstrap.encode());
+    hasher.update(&timestamp_ms.to_be_bytes());
+    hasher.update(nonce);
+    *hasher.finalize().as_bytes()
+}
+
+fn vpn_backend_bootstrap_envelope(
+    bootstrap: &VpnBackendBootstrap,
+    secret: Option<&[u8; 32]>,
+) -> VpnBackendBootstrapEnvelope {
+    let timestamp_ms = unix_time_ms_for_artifact();
+    let nonce = rand::random::<[u8; 16]>();
+    let mac = secret
+        .map(|secret| vpn_backend_bootstrap_mac(secret, bootstrap, timestamp_ms, &nonce))
+        .unwrap_or([0u8; 32]);
+    VpnBackendBootstrapEnvelope {
+        bootstrap: bootstrap.clone(),
+        timestamp_ms,
+        nonce,
+        mac,
+    }
+}
+
 async fn write_vpn_backend_bootstrap<W: AsyncWrite + Unpin>(
     writer: &mut W,
     bootstrap: &VpnBackendBootstrap,
+    secret: Option<&[u8; 32]>,
 ) -> Result<(), VpnBackendBridgeError> {
-    let payload = serde_json::to_vec(bootstrap)
-        .map_err(|error| VpnBackendBridgeError::BackendControl(error.to_string()))?;
+    let payload = vpn_backend_bootstrap_envelope(bootstrap, secret).encode();
     let len = u16::try_from(payload.len()).map_err(|_| {
         VpnBackendBridgeError::BackendControl(format!(
             "vpn backend bootstrap payload {} exceeds u16 length prefix",
@@ -2618,40 +2675,98 @@ impl RelayRuntime {
         vpn_session: VpnSessionHandle,
         helper_ticket: VpnHelperTicketV1,
     ) {
-        let Some(backend_addr) = overlay.config().backend_socket_addr() else {
+        let Some(backend_endpoint) = overlay.config().backend_endpoint() else {
             warn!(
                 remote = %remote,
                 session_id = %hex::encode(helper_ticket.session_id),
-                "vpn helper connection rejected: vpn.backend_addr is not configured"
+                "vpn helper connection rejected: vpn.backend_endpoint is not configured"
             );
             connection.close(0u32.into(), b"vpn backend unavailable");
             return;
         };
-
-        let backend =
-            match timeout(HANDSHAKE_STREAM_TIMEOUT, TcpStream::connect(backend_addr)).await {
-                Ok(Ok(stream)) => stream,
-                Ok(Err(error)) => {
-                    warn!(
-                        remote = %remote,
-                        backend = %backend_addr,
-                        %error,
-                        "failed to connect relay VPN backend"
-                    );
-                    connection.close(0u32.into(), b"vpn backend connect failed");
-                    return;
+        match backend_endpoint {
+            VpnBackendEndpoint::Unix(path) => {
+                let backend_label = format!("unix:{}", path.display());
+                match timeout(HANDSHAKE_STREAM_TIMEOUT, UnixStream::connect(&path)).await {
+                    Ok(Ok(stream)) => {
+                        Self::serve_vpn_backend_tunnel_stream(
+                            connection,
+                            remote,
+                            overlay,
+                            vpn_session,
+                            helper_ticket,
+                            stream,
+                            backend_label,
+                        )
+                        .await;
+                    }
+                    Ok(Err(error)) => {
+                        warn!(
+                            remote = %remote,
+                            backend = %backend_label,
+                            %error,
+                            "failed to connect relay VPN backend"
+                        );
+                        connection.close(0u32.into(), b"vpn backend connect failed");
+                    }
+                    Err(_) => {
+                        warn!(
+                            remote = %remote,
+                            backend = %backend_label,
+                            "timed out connecting relay VPN backend"
+                        );
+                        connection.close(0u32.into(), b"vpn backend connect timeout");
+                    }
                 }
-                Err(_) => {
-                    warn!(
-                        remote = %remote,
-                        backend = %backend_addr,
-                        "timed out connecting relay VPN backend"
-                    );
-                    connection.close(0u32.into(), b"vpn backend connect timeout");
-                    return;
+            }
+            VpnBackendEndpoint::Tcp(addr) => {
+                let backend_label = format!("tcp://{addr}");
+                match timeout(HANDSHAKE_STREAM_TIMEOUT, TcpStream::connect(addr.as_str())).await {
+                    Ok(Ok(stream)) => {
+                        Self::serve_vpn_backend_tunnel_stream(
+                            connection,
+                            remote,
+                            overlay,
+                            vpn_session,
+                            helper_ticket,
+                            stream,
+                            backend_label,
+                        )
+                        .await;
+                    }
+                    Ok(Err(error)) => {
+                        warn!(
+                            remote = %remote,
+                            backend = %backend_label,
+                            %error,
+                            "failed to connect relay VPN backend"
+                        );
+                        connection.close(0u32.into(), b"vpn backend connect failed");
+                    }
+                    Err(_) => {
+                        warn!(
+                            remote = %remote,
+                            backend = %backend_label,
+                            "timed out connecting relay VPN backend"
+                        );
+                        connection.close(0u32.into(), b"vpn backend connect timeout");
+                    }
                 }
-            };
+            }
+        }
+    }
 
+    async fn serve_vpn_backend_tunnel_stream<S>(
+        connection: Connection,
+        remote: SocketAddr,
+        overlay: Arc<VpnOverlay>,
+        vpn_session: VpnSessionHandle,
+        helper_ticket: VpnHelperTicketV1,
+        backend: S,
+        backend_addr: String,
+    ) where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
         let (mut send, mut recv) =
             match timeout(HANDSHAKE_STREAM_TIMEOUT, connection.accept_bi()).await {
                 Ok(Ok(streams)) => streams,
@@ -2688,7 +2803,11 @@ impl RelayRuntime {
             expires_at_ms = helper_ticket.expires_at_ms,
             "bridging helper-authenticated vpn tunnel to relay backend"
         );
-        if let Err(error) = write_vpn_backend_bootstrap(&mut backend_write, &bootstrap).await {
+        let bootstrap_secret = overlay.config().backend_bootstrap_secret_bytes();
+        if let Err(error) =
+            write_vpn_backend_bootstrap(&mut backend_write, &bootstrap, bootstrap_secret.as_ref())
+                .await
+        {
             warn!(
                 remote = %remote,
                 backend = %backend_addr,
@@ -2812,7 +2931,8 @@ impl RelayRuntime {
                         }
                         VpnCellClassV1::Control => {
                             if let Some(envelope) = decode_usage_voucher_control(&cell.payload)? {
-                                downstream_debt.lock().await.accept_envelope(&envelope)?;
+                                let envelope =
+                                    downstream_debt.lock().await.accept_envelope(&envelope)?;
                                 vpn_session.record_usage_voucher(envelope);
                             }
                         }
@@ -3960,7 +4080,7 @@ impl RelayRuntime {
         negotiated.grease.extend(context.grease.iter().cloned());
 
         let handshake_bytes = byte_guard.finish();
-        let vpn_session = match (vpn_helper_ticket, context.vpn.as_ref()) {
+        let vpn_session = match (vpn_helper_ticket.clone(), context.vpn.as_ref()) {
             (Some(helper_ticket), Some(overlay)) => Some(overlay.bind_helper_session(
                 overlay.start_session(Arc::clone(&context.metrics)),
                 helper_ticket,
@@ -4472,6 +4592,33 @@ mod tests {
 
     const TEST_RELAY_ID: RelayId = [0xAB; 32];
 
+    fn sample_metering_key_pair() -> KeyPair {
+        KeyPair::from_seed(vec![0x66; 32], Algorithm::Ed25519)
+    }
+
+    fn sample_vpn_tariff() -> VpnTariffV1 {
+        VpnTariffV1 {
+            lease_fee_nanos: 10_000,
+            active_fee_nanos_per_minute: 3_180,
+            ingress_fee_nanos_per_mib: 1_000,
+            egress_fee_nanos_per_mib: 2_000,
+        }
+    }
+
+    fn sample_helper_ticket(session_id: [u8; 16]) -> VpnHelperTicketV1 {
+        let key_pair = sample_metering_key_pair();
+        VpnHelperTicketV1 {
+            session_id,
+            quote_id: [0x11; 32],
+            account_hash: [0x22; 32],
+            relay_id: [0x33; 32],
+            payment_tx_hash: [0x44; 32],
+            metering_public_key: key_pair.public_key().clone(),
+            tariff: sample_vpn_tariff(),
+            expires_at_ms: u64::MAX,
+        }
+    }
+
     #[test]
     fn route_open_metrics_use_adapter_once() {
         let metrics = Arc::new(Metrics::new());
@@ -4556,7 +4703,8 @@ mod tests {
     async fn vpn_backend_bootstrap_encodes_session_address_plan() {
         let bootstrap = build_vpn_backend_bootstrap([0x5A; 16]);
         let (mut writer, mut reader) = duplex(4096);
-        write_vpn_backend_bootstrap(&mut writer, &bootstrap)
+        let secret = [0xA5; 32];
+        write_vpn_backend_bootstrap(&mut writer, &bootstrap, Some(&secret))
             .await
             .expect("bootstrap write");
 
@@ -4569,11 +4717,16 @@ mod tests {
         let len = usize::from(u16::from_be_bytes(len));
         let mut payload = vec![0u8; len];
         reader.read_exact(&mut payload).await.expect("payload");
-        let decoded: VpnBackendBootstrap =
-            serde_json::from_slice(&payload).expect("bootstrap json");
-        assert_eq!(decoded, bootstrap);
-        assert_eq!(decoded.server_tunnel_addresses.len(), 2);
-        assert_eq!(decoded.session_routes.len(), 2);
+        let mut payload = payload.as_slice();
+        let decoded = VpnBackendBootstrapEnvelope::decode(&mut payload).expect("bootstrap norito");
+        assert!(payload.is_empty());
+        assert_eq!(
+            decoded.mac,
+            vpn_backend_bootstrap_mac(&secret, &bootstrap, decoded.timestamp_ms, &decoded.nonce)
+        );
+        assert_eq!(decoded.bootstrap, bootstrap);
+        assert_eq!(decoded.bootstrap.server_tunnel_addresses.len(), 2);
+        assert_eq!(decoded.bootstrap.session_routes.len(), 2);
     }
 
     #[tokio::test]
@@ -4598,14 +4751,7 @@ mod tests {
         }));
         let session = overlay.start_session(Arc::clone(&metrics));
         let handle = overlay.bind_session(session, [0xA1; 16]);
-        let helper_ticket = VpnHelperTicketV1 {
-            session_id: [0xA1; 16],
-            quote_id: [0x11; 32],
-            account_hash: [0x22; 32],
-            relay_id: [0x33; 32],
-            payment_tx_hash: [0x44; 32],
-            expires_at_ms: u64::MAX,
-        };
+        let helper_ticket = sample_helper_ticket([0xA1; 16]);
         let adapter = VpnAdapter::new(handle.session().clone(), overlay.as_ref().clone());
         let bridge = VpnBridge::new(
             adapter.clone(),
@@ -4663,14 +4809,7 @@ mod tests {
         }));
         let session = overlay.start_session(Arc::clone(&metrics));
         let handle = overlay.bind_session(session, [0xB2; 16]);
-        let helper_ticket = VpnHelperTicketV1 {
-            session_id: [0xB2; 16],
-            quote_id: [0x11; 32],
-            account_hash: [0x22; 32],
-            relay_id: [0x33; 32],
-            payment_tx_hash: [0x44; 32],
-            expires_at_ms: u64::MAX,
-        };
+        let helper_ticket = sample_helper_ticket([0xB2; 16]);
         let adapter = VpnAdapter::new(handle.session().clone(), overlay.as_ref().clone());
         let bridge = VpnBridge::new(
             adapter.clone(),
@@ -4729,14 +4868,7 @@ mod tests {
 
     #[test]
     fn vpn_voucher_debt_window_rejects_unvouched_overrun() {
-        let helper_ticket = VpnHelperTicketV1 {
-            session_id: [0xA3; 16],
-            quote_id: [0x11; 32],
-            account_hash: [0x22; 32],
-            relay_id: [0x33; 32],
-            payment_tx_hash: [0x44; 32],
-            expires_at_ms: u64::MAX,
-        };
+        let helper_ticket = sample_helper_ticket([0xA3; 16]);
         let mut window = VpnVoucherDebtWindow::new(&helper_ticket, 4);
 
         window.record_ingress(4).expect("within debt window");
@@ -4745,15 +4877,8 @@ mod tests {
 
     #[test]
     fn vpn_usage_voucher_control_updates_receipt() {
-        let helper_ticket = VpnHelperTicketV1 {
-            session_id: [0xA4; 16],
-            quote_id: [0x11; 32],
-            account_hash: [0x22; 32],
-            relay_id: [0x33; 32],
-            payment_tx_hash: [0x44; 32],
-            expires_at_ms: u64::MAX,
-        };
-        let key_pair = KeyPair::from_seed(vec![0x66; 32], Algorithm::Ed25519);
+        let helper_ticket = sample_helper_ticket([0xA4; 16]);
+        let key_pair = sample_metering_key_pair();
         let body = iroha_data_model::soranet::vpn::VpnUsageVoucherBodyV1 {
             session_id: helper_ticket.session_id,
             quote_id: helper_ticket.quote_id,
@@ -4803,7 +4928,7 @@ mod tests {
         metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
         let overlay = VpnOverlay::from_config(Default::default());
         let session = overlay.start_session(Arc::clone(&metrics));
-        let handle = overlay.bind_helper_session(session, helper_ticket);
+        let handle = overlay.bind_helper_session(session, helper_ticket.clone());
         handle.record_usage_voucher(decoded);
         let receipt = handle.receipt();
 

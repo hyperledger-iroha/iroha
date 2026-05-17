@@ -312,6 +312,7 @@ pub mod wire {
         pub Option<u32>,
         pub Option<u32>,
         pub Option<u32>,
+        pub Option<[u8; 32]>,
     );
 
     impl ncore::NoritoSerialize for ConfidentialFeatureDigestWire {
@@ -321,7 +322,11 @@ pub mod wire {
                 Option<u32>,
                 Option<u32>,
                 Option<u32>,
-            ) as ncore::NoritoSerialize>::serialize(&(self.0, self.1, self.2, self.3), writer)
+                Option<[u8; 32]>,
+            ) as ncore::NoritoSerialize>::serialize(
+                &(self.0, self.1, self.2, self.3, self.4),
+                writer,
+            )
         }
 
         fn encoded_len_hint(&self) -> Option<usize> {
@@ -330,7 +335,10 @@ pub mod wire {
                 Option<u32>,
                 Option<u32>,
                 Option<u32>,
-            ) as ncore::NoritoSerialize>::encoded_len_hint(&(self.0, self.1, self.2, self.3))
+                Option<[u8; 32]>,
+            ) as ncore::NoritoSerialize>::encoded_len_hint(&(
+                self.0, self.1, self.2, self.3, self.4,
+            ))
         }
 
         fn encoded_len_exact(&self) -> Option<usize> {
@@ -339,36 +347,41 @@ pub mod wire {
                 Option<u32>,
                 Option<u32>,
                 Option<u32>,
-            ) as ncore::NoritoSerialize>::encoded_len_exact(&(self.0, self.1, self.2, self.3))
+                Option<[u8; 32]>,
+            ) as ncore::NoritoSerialize>::encoded_len_exact(&(
+                self.0, self.1, self.2, self.3, self.4,
+            ))
         }
     }
 
     impl<'de> ncore::NoritoDeserialize<'de> for ConfidentialFeatureDigestWire {
         fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
-            let (vk, poseidon, pedersen, rules): (
+            let (vk, poseidon, pedersen, rules, policy): (
                 Option<[u8; 32]>,
                 Option<u32>,
                 Option<u32>,
                 Option<u32>,
+                Option<[u8; 32]>,
             ) = <(
                 Option<[u8; 32]>,
                 Option<u32>,
                 Option<u32>,
                 Option<u32>,
+                Option<[u8; 32]>,
             ) as ncore::NoritoDeserialize>::deserialize(archived.cast());
-            Self(vk, poseidon, pedersen, rules)
+            Self(vk, poseidon, pedersen, rules, policy)
         }
 
         fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-            let (vk, poseidon, pedersen, rules) = <(
-                Option<[u8; 32]>,
-                Option<u32>,
-                Option<u32>,
-                Option<u32>,
-            ) as ncore::NoritoDeserialize>::try_deserialize(
-                archived.cast()
-            )?;
-            Ok(Self(vk, poseidon, pedersen, rules))
+            let (vk, poseidon, pedersen, rules, policy) =
+                <(
+                    Option<[u8; 32]>,
+                    Option<u32>,
+                    Option<u32>,
+                    Option<u32>,
+                    Option<[u8; 32]>,
+                ) as ncore::NoritoDeserialize>::try_deserialize(archived.cast())?;
+            Ok(Self(vk, poseidon, pedersen, rules, policy))
         }
     }
 
@@ -385,6 +398,7 @@ pub mod wire {
                 digest.poseidon_params_id,
                 digest.pedersen_params_id,
                 digest.conf_rules_version,
+                digest.zk_policy_hash,
             )
         }
     }
@@ -396,6 +410,7 @@ pub mod wire {
                 poseidon_params_id: wire.1,
                 pedersen_params_id: wire.2,
                 conf_rules_version: wire.3,
+                zk_policy_hash: wire.4,
             }
         }
     }

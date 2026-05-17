@@ -2670,7 +2670,7 @@ impl Executor {
                 // logical "current time" seen by `current_time_ms()`.
                 host.set_block_time_ms(tx_creation_time_ms);
                 host.set_crypto_config(Arc::clone(&state_transaction.crypto));
-                host.set_halo2_config(&state_transaction.zk.halo2);
+                host.set_zk_config(&state_transaction.zk);
                 host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
                 host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
                 host.set_query_state(state_transaction);
@@ -2898,7 +2898,7 @@ impl Executor {
                     CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts))
                 };
                 host.set_crypto_config(Arc::clone(&state_transaction.crypto));
-                host.set_halo2_config(&state_transaction.zk.halo2);
+                host.set_zk_config(&state_transaction.zk);
                 host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
                 host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
                 host.set_query_state(state_transaction);

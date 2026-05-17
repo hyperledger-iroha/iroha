@@ -3933,7 +3933,7 @@ pub async fn handle_list_vk(
 #[derive(
     Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
 )]
-/// Optional query-string overrides for `/query` endpoint.
+/// Optional query-string overrides for `/v1/query` endpoint.
 pub struct QueryOptions {
     /// Override cursor mode: "ephemeral" or "stored".
     pub cursor_mode: Option<String>,
@@ -23709,6 +23709,8 @@ pub struct RegisterPinManifestDto {
     pub manifest_digest_hex: String,
     /// SHA3-256 digest of chunk metadata (hex-encoded, optional 0x prefix accepted).
     pub chunk_digest_sha3_256_hex: String,
+    /// Total content length covered by the manifest.
+    pub content_length: u64,
     /// Epoch (inclusive) recorded for submission.
     pub submitted_epoch: u64,
     /// Optional gas asset id to attach to the server-built registration transaction.
@@ -23797,6 +23799,14 @@ pub struct RegisterPinManifestResponseDto {
     pub chunker_handle: String,
     /// Epoch supplied during submission.
     pub submitted_epoch: u64,
+    /// Total content length submitted for fee calculation.
+    pub content_length: u64,
+    /// Public pin fee expected by the current pricing schedule, in nano-XOR.
+    pub pin_fee_nano: u128,
+    /// Asset definition used to collect the public pin fee.
+    pub pin_fee_asset_id: String,
+    /// Treasury account that receives the public pin fee.
+    pub pin_fee_treasury_account_id: String,
     /// Alias binding that was submitted (if any).
     #[norito(default)]
     pub alias: Option<PinAliasDto>,
@@ -25593,6 +25603,7 @@ pub async fn handle_post_sorafs_register_manifest(
         digest: iroha_data_model::sorafs::pin_registry::ManifestDigest::new(manifest_digest_bytes),
         chunker: chunker_handle.clone(),
         chunk_digest_sha3_256: chunk_digest,
+        content_length: req.content_length,
         policy,
         submitted_epoch: req.submitted_epoch,
         alias: alias_binding,
@@ -25613,6 +25624,16 @@ pub async fn handle_post_sorafs_register_manifest(
         .with_instructions([dm::InstructionBox::from(isi)])
         .sign(&req.private_key.0);
 
+    let pin_fee_nano = state.gov.sorafs_pricing.public_pin_fee_nano(
+        policy.storage_class,
+        req.content_length,
+        policy.min_replicas,
+        req.submitted_epoch,
+        policy.retention_epoch,
+    );
+    let pin_fee_asset_id = state.gov.sorafs_pin_fee_asset_id.to_string();
+    let pin_fee_treasury_account_id = state.gov.sorafs_pin_fee_treasury_account.to_string();
+
     handle_transaction_with_metrics(
         chain_id,
         queue,
@@ -25630,6 +25651,10 @@ pub async fn handle_post_sorafs_register_manifest(
             descriptor.namespace, descriptor.name, descriptor.semver
         ),
         submitted_epoch: req.submitted_epoch,
+        content_length: req.content_length,
+        pin_fee_nano,
+        pin_fee_asset_id,
+        pin_fee_treasury_account_id,
         alias: req.alias.clone(),
         successor_of_hex: req.successor_of_hex.clone(),
     };

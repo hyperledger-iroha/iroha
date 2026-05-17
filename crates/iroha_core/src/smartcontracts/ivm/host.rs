@@ -18,6 +18,19 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(feature = "telemetry")]
+use crate::telemetry::StateTelemetry;
+use crate::{
+    executor::ContractRuntimeExecutionContext,
+    smartcontracts::isi::{
+        query::{IvmQueryValidator, QueryLimits, ValidQueryRequest},
+        triggers::{TRIGGER_ENABLED_METADATA_KEY, set::SetReadOnly},
+    },
+    state::{
+        StateBlock, StateQueryView, StateReadOnly, StateTransaction, StateView, WorldReadOnly,
+        current_axt_slot_from_block,
+    },
+};
 use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
 use iroha_data_model::{
     DataSpaceId, ValidationFail,
@@ -78,22 +91,6 @@ use norito::{
     core::{Archived, Header, NoritoSerialize},
     decode_from_bytes, json,
     streaming::CapabilityFlags,
-};
-#[cfg(test)]
-use sha2::{Digest, Sha256};
-
-#[cfg(feature = "telemetry")]
-use crate::telemetry::StateTelemetry;
-use crate::{
-    executor::ContractRuntimeExecutionContext,
-    smartcontracts::isi::{
-        query::{IvmQueryValidator, QueryLimits, ValidQueryRequest},
-        triggers::{TRIGGER_ENABLED_METADATA_KEY, set::SetReadOnly},
-    },
-    state::{
-        StateBlock, StateQueryView, StateReadOnly, StateTransaction, StateView, WorldReadOnly,
-        current_axt_slot_from_block,
-    },
 };
 
 const AXT_PROOF_CACHE_HIT: &str = "hit";
@@ -291,6 +288,7 @@ pub struct CoreHostImpl<QS> {
     codec_host: IvmCodecHost,
     access_log_enabled: bool,
     halo2_config: ivm::host::ZkHalo2Config,
+    stark_config: iroha_config::parameters::actual::Stark,
     crypto: Arc<iroha_config::parameters::actual::Crypto>,
     queued: Vec<QueuedInstruction>,
     fastpq_batch_entries: Option<Vec<TransferAssetBatchEntry>>,
@@ -1430,6 +1428,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             codec_host: IvmCodecHost::new(),
             access_log_enabled: false,
             halo2_config: ivm::host::ZkHalo2Config::default(),
+            stark_config: iroha_config::parameters::actual::Stark::default(),
             crypto,
             queued: Vec::new(),
             fastpq_batch_entries: None,
@@ -1487,7 +1486,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let snapshot = view.axt_policy_snapshot();
         let mut host = Self::new(authority);
         host.set_crypto_config(Arc::clone(&view.crypto));
-        host.set_halo2_config(&view.zk.halo2);
+        host.set_zk_config(&view.zk);
         host.set_chain_id(&view.chain_id);
         host.set_block_height(u64::try_from(view.height()).unwrap_or(u64::MAX));
         host.set_axt_timing(view.nexus.axt);
@@ -1516,6 +1515,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             codec_host: IvmCodecHost::new(),
             access_log_enabled: false,
             halo2_config: ivm::host::ZkHalo2Config::default(),
+            stark_config: iroha_config::parameters::actual::Stark::default(),
             crypto,
             queued: Vec::new(),
             fastpq_batch_entries: None,
@@ -1585,6 +1585,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             codec_host: IvmCodecHost::new(),
             access_log_enabled: false,
             halo2_config: ivm::host::ZkHalo2Config::default(),
+            stark_config: iroha_config::parameters::actual::Stark::default(),
             crypto,
             queued: Vec::new(),
             fastpq_batch_entries: None,
@@ -2105,6 +2106,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.notify_telemetry_halo2_config();
     }
 
+    /// Configure STARK verification limits for forwarded `ZK_VERIFY` syscalls.
+    pub fn set_stark_config(&mut self, cfg: &iroha_config::parameters::actual::Stark) {
+        self.stark_config = *cfg;
+    }
+
+    /// Configure all ZK verification limits for forwarded `ZK_VERIFY` syscalls.
+    pub fn set_zk_config(&mut self, cfg: &iroha_config::parameters::actual::Zk) {
+        self.set_halo2_config(&cfg.halo2);
+        self.set_stark_config(&cfg.stark);
+    }
+
     #[cfg(feature = "telemetry")]
     /// Attach a telemetry sink to the host and align it with the current SM state toggle.
     pub fn set_telemetry(&mut self, telemetry: StateTelemetry) {
@@ -2457,10 +2469,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     #[cfg(test)]
     fn hash_vk_bytes(backend: &str, bytes: &[u8]) -> [u8; 32] {
-        let mut h = Sha256::new();
-        h.update(backend.as_bytes());
-        h.update(bytes);
-        h.finalize().into()
+        crate::zk::hash_vk_bytes(backend, bytes)
     }
 
     fn validate_envelope_header(
@@ -2468,17 +2477,27 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         env: &iroha_data_model::zk::OpenVerifyEnvelope,
         payload_len: usize,
     ) -> Result<(), u64> {
-        if payload_len > self.halo2_config.max_envelope_bytes {
-            return Err(ivm::host::ERR_ENVELOPE_SIZE);
-        }
-        if !self.halo2_config.enabled {
-            return Err(ivm::host::ERR_DISABLED);
-        }
-        if self.halo2_config.backend != ivm::host::ZkHalo2Backend::Ipa {
-            return Err(ivm::host::ERR_BACKEND);
-        }
-        if env.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta {
-            return Err(ivm::host::ERR_BACKEND);
+        match env.backend {
+            iroha_data_model::zk::BackendTag::Halo2IpaPasta => {
+                if payload_len > self.halo2_config.max_envelope_bytes {
+                    return Err(ivm::host::ERR_ENVELOPE_SIZE);
+                }
+                if !self.halo2_config.enabled {
+                    return Err(ivm::host::ERR_DISABLED);
+                }
+                if self.halo2_config.backend != ivm::host::ZkHalo2Backend::Ipa {
+                    return Err(ivm::host::ERR_BACKEND);
+                }
+            }
+            iroha_data_model::zk::BackendTag::Stark => {
+                if payload_len > self.stark_config.max_envelope_bytes {
+                    return Err(ivm::host::ERR_ENVELOPE_SIZE);
+                }
+                if !self.stark_config.enabled {
+                    return Err(ivm::host::ERR_DISABLED);
+                }
+            }
+            _ => return Err(ivm::host::ERR_BACKEND),
         }
         Ok(())
     }
@@ -2530,7 +2549,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .find(|r| r.commitment == vk_commitment)
             .cloned()
             .ok_or(ivm::host::ERR_VK_MISSING)?;
-        if vk_rec.backend != BackendTag::Halo2IpaPasta {
+        if !matches!(
+            vk_rec.backend,
+            BackendTag::Halo2IpaPasta | BackendTag::Stark
+        ) {
             return Err(ivm::host::ERR_BACKEND);
         }
         if !vk_rec.is_active() {
@@ -2543,13 +2565,25 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn validate_proof_len(
         &self,
         vk_rec: &VerifyingKeyRecord,
-        proof_len_bytes: usize,
+        backend_label: &str,
+        env: &iroha_data_model::zk::OpenVerifyEnvelope,
     ) -> Result<(), u64> {
+        let proof_len_bytes = env.proof_bytes.len();
         let proof_limit = u32::try_from(proof_len_bytes).unwrap_or(u32::MAX);
         if vk_rec.max_proof_bytes > 0 && proof_limit > vk_rec.max_proof_bytes {
             return Err(ivm::host::ERR_PROOF_LEN);
         }
-        if proof_len_bytes > self.halo2_config.max_proof_bytes {
+        if crate::zk::is_stark_fri_v1_backend(backend_label) {
+            if proof_len_bytes > self.stark_config.max_proof_bytes {
+                return Err(ivm::host::ERR_PROOF_LEN);
+            }
+            if let Ok(open) = norito::decode_from_bytes::<iroha_data_model::zk::StarkFriOpenProofV1>(
+                &env.proof_bytes,
+            ) && open.envelope_bytes.len() > self.stark_config.max_proof_bytes
+            {
+                return Err(ivm::host::ERR_PROOF_LEN);
+            }
+        } else if proof_len_bytes > self.halo2_config.max_proof_bytes {
             return Err(ivm::host::ERR_PROOF_LEN);
         }
         Ok(())
@@ -2578,7 +2612,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         None
     }
 
-    fn curve_is_allowed(&self, curve_label: &str) -> bool {
+    fn curve_is_allowed(&self, backend_label: &str, curve_label: &str) -> bool {
+        if crate::zk::is_stark_fri_v1_backend(backend_label) {
+            return curve_label == "goldilocks";
+        }
         match self.halo2_config.curve {
             ivm::host::ZkCurve::Pallas | ivm::host::ZkCurve::Pasta => {
                 curve_label == "pallas" || curve_label == "pasta"
@@ -2624,21 +2661,22 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         if vk_rec.owner_manifest_id.as_deref().unwrap_or("core") != current_manifest {
             return Err(ivm::host::ERR_NAMESPACE);
         }
-        if !self.curve_is_allowed(&vk_rec.curve) {
+        if !self.curve_is_allowed(&backend_label, &vk_rec.curve) {
             return Err(ivm::host::ERR_CURVE);
         }
-        let Some(k) = Self::parse_zk1_ipa_k(&vk_box.bytes) else {
-            return Err(ivm::host::ERR_DECODE);
-        };
-        if k > self.halo2_config.max_k {
-            return Err(ivm::host::ERR_K);
+        if !crate::zk::is_stark_fri_v1_backend(&backend_label) {
+            let Some(k) = Self::parse_zk1_ipa_k(&vk_box.bytes) else {
+                return Err(ivm::host::ERR_DECODE);
+            };
+            if k > self.halo2_config.max_k {
+                return Err(ivm::host::ERR_K);
+            }
         }
         let schema_hash: [u8; 32] = Hash::new(&env.public_inputs).into();
         if schema_hash != vk_rec.public_inputs_schema_hash {
             return Err(ivm::host::ERR_VK_MISMATCH);
         }
-        let proof_len_bytes = env.proof_bytes.len();
-        self.validate_proof_len(&vk_rec, proof_len_bytes)?;
+        self.validate_proof_len(&vk_rec, &backend_label, &env)?;
         Ok((env, vk_box, backend_label))
     }
 
@@ -2671,17 +2709,21 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.enforce_zk_envelope_impl(payload, None)
     }
 
-    fn verify_bound_envelope(&mut self, payload: &[u8], namespace: &str) -> Result<bool, u64> {
-        let (_env, vk_box, backend_label) = self.enforce_zk_envelope(payload, namespace)?;
-        let proof = ProofBox::new(backend_label.clone().into(), payload.to_vec());
-        let guardrails = crate::zk::ZkVerifyGuardrails {
+    fn zk_verify_guardrails(&self) -> crate::zk::ZkVerifyGuardrails {
+        crate::zk::ZkVerifyGuardrails {
             halo2_enabled: self.halo2_config.enabled,
             halo2_max_envelope_bytes: self.halo2_config.max_envelope_bytes,
             halo2_max_proof_bytes: self.halo2_config.max_proof_bytes,
-            stark_enabled: false,
-            stark_max_envelope_bytes: 0,
-            stark_max_proof_bytes: 0,
-        };
+            stark_enabled: self.stark_config.enabled,
+            stark_max_envelope_bytes: self.stark_config.max_envelope_bytes,
+            stark_max_proof_bytes: self.stark_config.max_proof_bytes,
+        }
+    }
+
+    fn verify_bound_envelope(&mut self, payload: &[u8], namespace: &str) -> Result<bool, u64> {
+        let (_env, vk_box, backend_label) = self.enforce_zk_envelope(payload, namespace)?;
+        let proof = ProofBox::new(backend_label.clone().into(), payload.to_vec());
+        let guardrails = self.zk_verify_guardrails();
         Ok(crate::zk::verify_backend_with_timing_guardrails(
             &backend_label,
             &proof,
@@ -2694,14 +2736,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn verify_any_namespace_envelope(&mut self, payload: &[u8]) -> Result<bool, u64> {
         let (_env, vk_box, backend_label) = self.enforce_zk_envelope_any_namespace(payload)?;
         let proof = ProofBox::new(backend_label.clone().into(), payload.to_vec());
-        let guardrails = crate::zk::ZkVerifyGuardrails {
-            halo2_enabled: self.halo2_config.enabled,
-            halo2_max_envelope_bytes: self.halo2_config.max_envelope_bytes,
-            halo2_max_proof_bytes: self.halo2_config.max_proof_bytes,
-            stark_enabled: false,
-            stark_max_envelope_bytes: 0,
-            stark_max_proof_bytes: 0,
-        };
+        let guardrails = self.zk_verify_guardrails();
         Ok(crate::zk::verify_backend_with_timing_guardrails(
             &backend_label,
             &proof,
@@ -7424,25 +7459,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     vm.set_register(11, ivm::host::ERR_BATCH);
                     return Ok(gas);
                 }
-                if !self.halo2_config.enabled {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, ivm::host::ERR_DISABLED);
-                    return Ok(gas);
-                }
-                if self.halo2_config.backend != ivm::host::ZkHalo2Backend::Ipa {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, ivm::host::ERR_BACKEND);
-                    return Ok(gas);
-                }
-
-                let guardrails = crate::zk::ZkVerifyGuardrails {
-                    halo2_enabled: self.halo2_config.enabled,
-                    halo2_max_envelope_bytes: self.halo2_config.max_envelope_bytes,
-                    halo2_max_proof_bytes: self.halo2_config.max_proof_bytes,
-                    stark_enabled: false,
-                    stark_max_envelope_bytes: 0,
-                    stark_max_proof_bytes: 0,
-                };
+                let guardrails = self.zk_verify_guardrails();
 
                 let mut statuses: Vec<u8> = Vec::with_capacity(envs.len());
                 let mut first_error: Option<u64> = None;
@@ -17989,7 +18006,7 @@ seiyaku Vault {
         let view = state.view();
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
-        host.set_halo2_config(&view.zk.halo2);
+        host.set_zk_config(&view.zk);
         host.set_chain_id(&view.chain_id);
         host.set_zk_snapshots_from_world(view.world(), &view.zk)
             .expect("hydrate zk snapshots");
@@ -18184,18 +18201,23 @@ seiyaku Vault {
         namespace: &str,
         vk_bytes: Vec<u8>,
     ) -> VerifyingKeyRecord {
+        let (backend_tag, curve) = if crate::zk::is_stark_fri_v1_backend(backend) {
+            (BackendTag::Stark, "goldilocks")
+        } else {
+            (BackendTag::Halo2IpaPasta, "pallas")
+        };
         let mut rec = VerifyingKeyRecord::new_with_owner(
             1,
             circuit_id.to_string(),
             None,
             namespace,
-            BackendTag::Halo2IpaPasta,
-            "pallas",
+            backend_tag,
+            curve,
             schema_hash,
             commitment,
         );
         rec.status = iroha_data_model::confidential::ConfidentialStatus::Active;
-        rec.max_proof_bytes = 1024;
+        rec.max_proof_bytes = 1024 * 1024;
         rec.key = Some(VerifyingKeyBox::new(backend.into(), vk_bytes));
         rec
     }
@@ -18413,6 +18435,72 @@ seiyaku Vault {
         assert!(gas > 0, "verification prechecks still charge proof gas");
         assert_eq!(vm.register(10), 0);
         assert_eq!(vm.register(11), ivm::host::ERR_VK_MISSING);
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn zk_verify_batch_accepts_stark_registry_bound_envelope() {
+        crate::test_alias::ensure();
+        let mut host = CoreHost::new(fixture_account("alice"));
+        host.set_chain_id_bytes(b"chain".to_vec());
+        host.set_current_manifest_id(Some("core".to_string()));
+        let mut stark_cfg = iroha_config::parameters::actual::Stark::default();
+        stark_cfg.enabled = true;
+        host.set_stark_config(&stark_cfg);
+
+        let backend = "stark/fri/sha256-goldilocks";
+        let circuit_id = "stark/fri/sha256-goldilocks:ivm-syscall";
+        let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: circuit_id.to_string(),
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
+        };
+        let vk_bytes = norito::to_bytes(&vk_payload).expect("encode STARK vk");
+        let vk_box = VerifyingKeyBox::new(backend.into(), vk_bytes.clone());
+        let schema_descriptor = b"ivm-syscall-schema-v1";
+        let proof = crate::zk::prove_stark_fri_open_verify_envelope(
+            backend,
+            circuit_id,
+            &vk_box,
+            schema_descriptor,
+            vec![vec![[7u8; 32]]],
+        )
+        .expect("prove STARK envelope");
+        let env: iroha_data_model::zk::OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode OpenVerifyEnvelope");
+
+        let commitment = crate::zk::hash_vk(&vk_box);
+        let rec = active_vk_record(
+            commitment,
+            schema_hash(schema_descriptor),
+            backend,
+            circuit_id,
+            "transfer",
+            vk_bytes,
+        );
+        let mut map = BTreeMap::new();
+        map.insert(VerifyingKeyId::new(backend, "vk_stark"), rec);
+        host.set_verifying_keys(map).expect("set registry");
+
+        let payload = norito::to_bytes(&vec![env]).expect("encode batch");
+        let mut vm = IVM::new(1_000_000);
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+        vm.set_register(10, ptr);
+
+        host.syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &mut vm)
+            .expect("batch verify");
+        let out_ptr = vm.register(10);
+        let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let statuses: Vec<u8> = norito::decode_from_bytes(tlv.payload).expect("decode statuses");
+        assert_eq!(statuses, vec![1]);
+        assert_eq!(vm.register(11), 0);
+        assert_eq!(vm.register(12), u64::MAX);
     }
 
     #[cfg(feature = "zk-halo2-ipa")]

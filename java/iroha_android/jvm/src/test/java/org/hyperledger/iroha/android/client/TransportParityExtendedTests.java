@@ -116,7 +116,7 @@ public final class TransportParityExtendedTests {
               .setTransportExecutor(new OkHttpTestExecutor(SHARED_CLIENT))
               .build();
       try (ToriiEventStream stream =
-          okHttpClient.openSseStream("/events", options, okHttpListener)) {
+          okHttpClient.openSseStream("/v1/events/sse", options, okHttpListener)) {
         stream.completion().get(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
       }
 
@@ -127,7 +127,7 @@ public final class TransportParityExtendedTests {
               .setTransportExecutor(new JavaHttpExecutor(JDK_CLIENT))
               .build();
       try (ToriiEventStream stream =
-          jdkClient.openSseStream("/events", options, jdkListener)) {
+          jdkClient.openSseStream("/v1/events/sse", options, jdkListener)) {
         stream.completion().get(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
       }
 

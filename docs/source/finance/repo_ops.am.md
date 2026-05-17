@@ -682,7 +682,7 @@ GAR፣ ህዝበ ውሳኔ እና ቁፋሮ ቅርሶችን ከህይወት ኡ�
 3. የህይወት ኡደት ማረጋገጫ ቅጽበተ-ፎቶን ያውጡ እና ይህን ካደረጉ በኋላ ወዲያውኑ ይግለጹ
    የአስተዳደር ገምጋሚዎች የምግብ መፍጫ ስርዓቱን በተመሳሳዩ የመጠባበቂያ መሳሪያዎች እንደገና ማስላት ይችላሉ።
 4. Mirror `RepoAccountEvent::*` SSE ጭነቶች ለተጎዱ ሂሳቦች እና መጣል
-   ወደ ውጭ የተላከው NDJSON በ`artifacts/finance/repo/<agreement-id>/events.ndjson`
+   ወደ ውጭ የተላከው NDJSON በ`artifacts/finance/repo/<agreement-id>/v1/events/ws.ndjson`
    ፓኬጁን ከማቅረቡ በፊት.
 5. አንዴ ድምፅ ካለፈ፣ `hashes.txt`ን በGAR መለያ ያዘምኑ።
    ማዋቀር ሃሽ፣ እና የማብራሪያ ቼክተም ምክር ቤቱ የታቀዱ ልቀቶችን መከታተል ይችላል።

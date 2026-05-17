@@ -5788,6 +5788,7 @@ mod state {
         poseidon_params_id: Option<u32>,
         pedersen_params_id: Option<u32>,
         conf_rules_version: Option<u32>,
+        zk_policy_hash: Option<[u8; 32]>,
     }
 
     impl From<&crate::ConfidentialFeatureDigest> for HandshakeConfidentialDigest {
@@ -5797,6 +5798,7 @@ mod state {
                 poseidon_params_id: digest.poseidon_params_id,
                 pedersen_params_id: digest.pedersen_params_id,
                 conf_rules_version: digest.conf_rules_version,
+                zk_policy_hash: digest.zk_policy_hash,
             }
         }
     }
@@ -5808,6 +5810,7 @@ mod state {
                 poseidon_params_id: digest.poseidon_params_id,
                 pedersen_params_id: digest.pedersen_params_id,
                 conf_rules_version: digest.conf_rules_version,
+                zk_policy_hash: digest.zk_policy_hash,
             }
         }
     }
@@ -5833,12 +5836,18 @@ mod state {
                     &bytes[offset..],
                 )?;
             offset += used;
+            let (zk_policy_hash, used) =
+                <Option<[u8; 32]> as norito::core::DecodeFromSlice>::decode_from_slice(
+                    &bytes[offset..],
+                )?;
+            offset += used;
             Ok((
                 HandshakeConfidentialDigest {
                     vk_set_hash,
                     poseidon_params_id,
                     pedersen_params_id,
                     conf_rules_version,
+                    zk_policy_hash,
                 },
                 offset,
             ))

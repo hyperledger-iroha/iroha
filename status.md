@@ -1,6 +1,166 @@
 # Status
 
-Last updated: 2026-05-16
+Last updated: 2026-05-17
+
+## 2026-05-16 SoraFS paid pin registry enforcement
+
+- Public SoraFS pin registration now records content length and SoraFS pin-fee
+  payment metadata, transfers the computed public pin fee from the submitter to
+  the configured governance treasury, and stores the approved pin record as the
+  storage-ingest authority.
+- Torii storage pin ingest now requires a matching approved paid registry record
+  for manifest digest, chunk profile, content length, policy, chunk plan digest,
+  fee payer, fee asset, treasury, and amount. Legacy bearer-token/CIDR pin
+  admission no longer authorizes storage ingest.
+- Gateway admission now fails closed when the registry is unavailable, manifest
+  envelopes are validated against signed registry metadata instead of merely
+  detected, and unknown chunker profiles are rejected by Torii and `sorafs_node`.
+- CAR range responses now stream chunk files through `CarStreamingWriter`
+  instead of buffering the full range response in memory.
+
+## 2026-05-16 Offline Note V2 local-final SDK semantics
+
+- Swift, Kotlin/JVM, and Java Android Offline Note V2 wallets now treat
+  offline-to-offline `pay`/`accept` as the immediate, irrevocable value
+  transfer. Sender inputs become `SPENT`, sender change is immediately
+  `SPENDABLE`, and the recipient's matched receive-pending note becomes
+  `SPENDABLE` after local token/proof verification; online sync is not part of
+  the transfer path.
+- Audit publication is now an explicit optional online step
+  (`publishAudit`) that submits evidence without mutating local wallet
+  spendability. Wallet sync now reconciles redeem-pending notes only.
+- Payment-token handoff moved from JSON to a Norito envelope carrying
+  `chain_id`, `payment_request_id`, `created_at_ms`, `token_nonce`, `token_id`,
+  and the audit bundle. The token id preimage now binds the request id and
+  creation timestamp across Rust fixtures plus Swift/Kotlin/Java SDKs.
+- Swift Keychain, Kotlin in-memory/Android secure, and Java in-memory/Android
+  secure stores expose atomic note mutations so local-final state transitions
+  cannot be split across separate reads and writes.
+- Validation:
+  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :offline-wallet-android:compileReleaseKotlin --console=plain` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew -Dandroid.test.mains=org.hyperledger.iroha.android.offline.OfflineNoteV2Test :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :android:compileDebugJavaWithJavac --console=plain` from `java/iroha_android`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-v2-fixtures cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-v2-fixtures cargo test -p iroha_data_model --lib --features test-fixtures,transparent_api offline_note_v2_wallet_derivations -- --nocapture`
+  - `git diff --check`
+- A broader non-lib Rust test attempt,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-v2-fixtures cargo test -p iroha_data_model --features test-fixtures,transparent_api offline_note_v2_wallet_derivations -- --nocapture`,
+  still compiles unrelated test binaries and stops in
+  `crates/iroha_data_model/src/bin/qr_stream_fixtures.rs` because that bin uses
+  `json::json!` while the current import no longer exposes that macro path.
+
+## 2026-05-17 SoraNet VPN hardening pass
+
+- Helper-ticket v1 is now a 256-byte first-release frame that commits the
+  authorized Ed25519 metering public key and full deterministic tariff under
+  the helper-ticket MAC. Relay voucher acceptance rejects wrong metering keys
+  and recomputes earned fees from the ticket tariff instead of trusting voucher
+  envelopes.
+- Native VPN lease records now persist the quote policy and accepted settlement
+  receipt, and Torii receipt submission/listing reconstructs settlement context
+  from WSV `vpn_leases` instead of requiring process-local VPN session caches.
+- Relay/backend bridging now uses `vpn.backend_endpoint` with a default
+  permissioned Unix socket. TCP endpoints require a shared bootstrap secret and
+  use Norito bootstrap envelopes with timestamp, nonce, and keyed MAC; the
+  backend rejects stale, replayed, or bad-MAC frames.
+- Local helper workers read connect payloads from stdin rather than argv,
+  reject mismatched metering seeds, and batch traffic state-file writes with a
+  forced shutdown flush.
+- Focused validation passed for data-model helper-ticket tests,
+  `sora-vpn-backend` bootstrap tests, helper voucher signing tests, relay VPN
+  voucher/backend tests, `cargo check -p iroha_torii --lib`, `git diff --check`
+  on the task-scoped files, and rustfmt on the touched Rust files. Full
+  `cargo fmt --all --check` is still blocked by pre-existing unrelated
+  formatting diffs, and the focused Torii VPN test run is blocked before
+  execution by an unrelated dev-dependency import failure for
+  `iroha_torii_shared::QueueErrorEnvelope`.
+
+## 2026-05-16 ZK audit hardening
+
+- Confidential feature digests now commit to a `zk_policy_hash` covering
+  consensus-relevant ZK verifier policy, and the digest is serialized through
+  block headers and P2P confidential capability handshakes.
+- Proof and verifying-key commitments now use versioned, domain-separated,
+  length-prefixed SHA-256 inputs so proof hashes and VK commitments cannot
+  collide across domains or ambiguous backend/payload splits.
+- Generic `VerifyProof` now requires a registered `vk_ref`, rejects inline VKs,
+  and enforces active VK status, gas schedule, active circuit/version mapping,
+  circuit/schema/commitment binding, and backend guardrails before verification.
+- Consensus proof paths no longer reject solely because local elapsed
+  verification time exceeded `zk.verify_timeout`; elapsed time remains telemetry,
+  while validity-affecting limits are committed through config policy.
+- CoreHost IVM ZK verification now threads the full ZK config and accepts
+  registry-bound STARK/FRI envelopes when `zk-stark` is built and enabled,
+  including batch syscall coverage alongside the existing Halo2 IPA path.
+- Validation is currently blocked before these focused crates by unrelated
+  dirty-tree `iroha_data_model` compile errors in Kaigi/FastPQ JSON derives,
+  SoraNet VPN ordering, and SoraFS pricing type mismatches.
+
+## 2026-05-16 Soracloud production V1 hardening
+
+- Soracloud uploaded-model registration now records SoraFS-backed bundle
+  metadata instead of chain-resident encrypted model chunks. Bundle metadata
+  includes an approved active SoraFS `ManifestDigest`, and core validates that
+  pin before accepting register/finalize flows.
+- Public Torii routing now exposes the single
+  `/v1/soracloud/model/upload/register` mutation plus upload status/recipient
+  reads. The old upload chunk/finalize and private inference routes are no
+  longer registered.
+- Production runtime posture now requires explicit Inrou enablement and an
+  explicit runtime submission `gas_asset_id`; runtime submissions no longer
+  source gas assets from environment variables or accepted-asset fallbacks.
+- The embedded runtime fails closed for uploaded-model private inference in V1.
+  Status is limited to SoraFS-backed storage and model registry readiness until
+  a real deterministic private runtime exists.
+- The JavaScript Soracloud HF helper no longer accepts `privateKeyHex`.
+  Callers build an unsigned draft and assemble requests from external
+  provenance signatures.
+
+## 2026-05-17 FASTPQ verifier and proof sidecar hardening
+
+- FASTPQ V1 verification now recomputes the canonical CPU backend artifact from
+  the supplied batch before accepting proof-carried roots, FRI roots,
+  challenges, lookup product, and query openings. Relabelled proofs from a
+  different batch fail at root binding instead of relying on transcript drift.
+- Runtime FASTPQ proof generation now verifies each generated proof before
+  publishing it and enqueues successful proof snapshots into the existing Kura
+  per-block pipeline sidecar. The worker remains asynchronous after commit, so
+  block production does not wait for proof generation or sidecar merge I/O.
+- The FASTPQ JSON helper now uses Norito JSON derives/helpers instead of direct
+  `serde`/`serde_json` dependencies, and the proof/trace commitment path uses
+  CPU hashing for canonical roots and openings.
+- Validation note: `cargo check -p fastpq_prover --bins --lib` is currently
+  blocked before reaching `fastpq_prover` by unrelated dirty
+  `iroha_data_model` errors in SoraNet VPN and SoraFS pricing code.
+
+## 2026-05-16 Torii first-release API cleanup
+
+- Collapsed Torii API negotiation to the first-release `1.0` surface only and
+  removed the previous sunset/old-version posture from the shared defaults.
+- Moved public Norito submit/query/stream/system routes onto versioned paths:
+  `/v1/pipeline/transactions`,
+  `/v1/pipeline/transaction-entrypoints`,
+  `/v1/pipeline/transactions/batch`, `/v1/query`, `/v1/events/ws`,
+  `/v1/blocks/stream`, `/v1/peers`, `/v1/configuration`, `/v1/schema`, and
+  `/v1/api/version`. OpenAPI, MCP, telemetry peer monitoring, Rust route tests,
+  Swift/Kotlin/Java/JavaScript/Python client surfaces, and route docs now use
+  the same first-release paths.
+- Standardized Torii runtime failures on the Norito `ErrorEnvelope` with
+  optional `details` for reject codes, queue pressure, retry hints, endpoint
+  names, and AXT metadata. Queue rejections and proof throttling now return
+  that envelope instead of legacy ad-hoc payloads.
+- Removed the app contract-route API-token bypass so `torii.require_api_token`
+  applies consistently to those routes.
+- Validation: `cargo fmt --all` and `git diff --check` are green. A focused
+  `cargo test -p iroha_torii_shared` attempt is currently blocked before the
+  Torii crates by unrelated dirty-tree compile errors in
+  `crates/iroha_data_model/src/soranet/vpn.rs` and
+  `crates/iroha_data_model/src/sorafs/pricing.rs`. A targeted
+  `node --test test/toriiClient.test.js` attempt for the JS client is blocked
+  because `javascript/iroha_js/native/iroha_js_host.node` is missing and the
+  package requires `npm run build:native` first.
 
 ## 2026-05-16 Sumeragi delivered RBC READY repair
 
@@ -5806,7 +5966,7 @@ Last updated: 2026-05-16
   default of `64`.
 - Hardened route composition by gating `POST /v1/gov/protected-namespaces`
   behind operator access while leaving its read side available, removing the
-  SoraCloud root catch-all local-read fallback, and dropping SoraFS root/site
+  Soracloud root catch-all local-read fallback, and dropping SoraFS root/site
   catch-alls in favor of explicit `/api` and `/sorafs/cid/...` routes.
 - Replaced MCP read-only policy heuristics with first-class tool effects. The
   generated OpenAPI surface now publishes `x-iroha-tool-effect`, MCP consumes

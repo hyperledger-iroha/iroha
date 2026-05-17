@@ -4,7 +4,7 @@ use std::{
     env,
     ffi::OsStr,
     fs,
-    io::{self, Write as _},
+    io::{self, Read as _, Write as _},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, ExitCode, Stdio},
@@ -21,7 +21,7 @@ use blake3::hash as blake3_hash;
 use clap::{Parser, Subcommand};
 use hex::FromHexError;
 use iroha_crypto::{
-    Algorithm, KeyPair, Signature,
+    Algorithm, KeyPair, PublicKey, Signature,
     soranet::handshake::{
         DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
         RuntimeParams, build_client_hello, client_handle_relay_hello,
@@ -33,7 +33,7 @@ use iroha_data_model::{
         VPN_CELL_LEN, VPN_HELPER_TICKET_LEN, VPN_HELPER_TICKET_MAGIC,
         VPN_USAGE_VOUCHER_CONTROL_MAGIC, VpnCellClassV1, VpnCellError, VpnCellFlagsV1,
         VpnCellHeaderV1, VpnCellV1, VpnFlowLabelV1, VpnHelperTicketV1, VpnPaddedCellV1,
-        VpnUsageVoucherBodyV1, VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1,
+        VpnTariffV1, VpnUsageVoucherBodyV1, VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1,
     },
 };
 use nix::{
@@ -75,6 +75,9 @@ const PACKET_LEN_PREFIX_BYTES: usize = 2;
 const DEFAULT_ROUTE_CMD: &str = "ip";
 const DEFAULT_ROUTE_SHOW_PREFIX: [&str; 2] = ["-o", "route"];
 const DEFAULT_USAGE_VOUCHER_INTERVAL_MS: u64 = 1_000;
+static PENDING_BYTES_IN: AtomicU64 = AtomicU64::new(0);
+static PENDING_BYTES_OUT: AtomicU64 = AtomicU64::new(0);
+static LAST_TRAFFIC_FLUSH_MS: AtomicU64 = AtomicU64::new(0);
 #[cfg(target_os = "linux")]
 const LINUX_IFF_TUN: nix::libc::c_short = 0x0001;
 #[cfg(target_os = "linux")]
@@ -105,13 +108,9 @@ enum Command {
     Disconnect,
     Repair,
     #[command(hide = true)]
-    RunTunnel {
-        payload: Option<String>,
-    },
+    RunTunnel,
     #[command(hide = true)]
-    RunPacketEngine {
-        payload: Option<String>,
-    },
+    RunPacketEngine,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -314,8 +313,6 @@ struct UsageVoucherSigner {
     sequence: u64,
     started_at: Instant,
     last_emitted_at: Instant,
-    lease_fee_nanos: u64,
-    lease_secs: u64,
     interval: Duration,
 }
 
@@ -391,15 +388,15 @@ fn run(cli: Cli) -> Result<(), ControllerError> {
         Command::Connect { payload } => connect_command(payload.as_deref()),
         Command::Disconnect => disconnect_command("idle"),
         Command::Repair => repair_command(),
-        Command::RunTunnel { payload } => {
-            let payload = parse_connect_payload(payload.as_deref())?;
+        Command::RunTunnel => {
+            let payload = read_connect_payload_from_stdin()?;
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
             runtime.block_on(run_tunnel_command(payload))
         }
-        Command::RunPacketEngine { payload } => {
-            let payload = parse_connect_payload(payload.as_deref())?;
+        Command::RunPacketEngine => {
+            let payload = read_connect_payload_from_stdin()?;
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
@@ -424,16 +421,19 @@ fn connect_command(raw_payload: Option<&str>) -> Result<(), ControllerError> {
     persist_state(&state)?;
 
     let current_exe = env::current_exe()?;
-    let child = ProcessCommand::new(current_exe)
+    let payload_json = serde_json::to_string(&payload)
+        .map_err(|error| ControllerError::InvalidPayload(error.to_string()))?;
+    let mut child = ProcessCommand::new(current_exe)
         .arg("run-tunnel")
-        .arg(
-            serde_json::to_string(&payload)
-                .map_err(|error| ControllerError::InvalidPayload(error.to_string()))?,
-        )
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
+    child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| ControllerError::State("failed to open worker stdin".to_owned()))?
+        .write_all(payload_json.as_bytes())?;
     let child_pid = child.id();
     state.pid = Some(child_pid);
     persist_state(&state)?;
@@ -1282,12 +1282,6 @@ impl UsageVoucherSigner {
         let Some(seed_hex) = payload.metering_private_key_seed_hex.as_deref() else {
             return Ok(None);
         };
-        if payload.lease_fee_nanos == 0 || payload.lease_secs == 0 {
-            return Err(ControllerError::InvalidPayload(
-                "leaseSecs and leaseFeeNanos are required when meteringPrivateKeySeedHex is set"
-                    .to_owned(),
-            ));
-        }
         let seed = parse_fixed_hex_32(seed_hex, "metering private key seed")?;
         let ticket = decode_helper_ticket_metadata(payload.helper_ticket_hex.as_str())?;
         let expected_session_id = relay_session_id_from_session_id(payload.session_id.as_str());
@@ -1297,6 +1291,11 @@ impl UsageVoucherSigner {
             ));
         }
         let key_pair = KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519);
+        if key_pair.public_key() != &ticket.metering_public_key {
+            return Err(ControllerError::InvalidPayload(
+                "metering private key does not match helper ticket public key".to_owned(),
+            ));
+        }
         let now = Instant::now();
         Ok(Some(Self {
             key_pair,
@@ -1304,8 +1303,6 @@ impl UsageVoucherSigner {
             sequence: 0,
             started_at: now,
             last_emitted_at: now,
-            lease_fee_nanos: payload.lease_fee_nanos,
-            lease_secs: payload.lease_secs,
             interval: Duration::from_millis(payload.usage_voucher_interval_ms.max(1)),
         }))
     }
@@ -1336,11 +1333,7 @@ impl UsageVoucherSigner {
             client_public_key: self.key_pair.public_key().clone(),
             body,
         };
-        let earned_fee_nanos = tariff_earned_fee_nanos(
-            self.lease_fee_nanos,
-            self.lease_secs,
-            voucher.body.active_ms,
-        );
+        let earned_fee_nanos = self.ticket.tariff.earned_fee_nanos(&voucher.body);
         self.sequence = self.sequence.saturating_add(1);
         self.last_emitted_at = Instant::now();
         VpnUsageVoucherEnvelopeV1 {
@@ -1393,21 +1386,6 @@ async fn send_usage_voucher_control_cell(
     Ok(())
 }
 
-fn tariff_active_fee_nanos_per_minute(lease_fee_nanos: u64, lease_secs: u64) -> u64 {
-    let numerator = u128::from(lease_fee_nanos).saturating_mul(60);
-    let denominator = u128::from(lease_secs.max(1));
-    u64::try_from(numerator.div_ceil(denominator)).unwrap_or(u64::MAX)
-}
-
-fn tariff_earned_fee_nanos(lease_fee_nanos: u64, lease_secs: u64, active_ms: u64) -> u64 {
-    let active_fee_nanos_per_minute =
-        tariff_active_fee_nanos_per_minute(lease_fee_nanos, lease_secs);
-    let earned = u128::from(active_ms)
-        .saturating_mul(u128::from(active_fee_nanos_per_minute))
-        .div_ceil(60_000);
-    u64::try_from(earned.min(u128::from(lease_fee_nanos))).unwrap_or(u64::MAX)
-}
-
 fn decode_helper_ticket_metadata(hex_ticket: &str) -> Result<VpnHelperTicketV1, ControllerError> {
     let bytes = decode_hex(hex_ticket)?;
     if bytes.len() != VPN_HELPER_TICKET_LEN || !bytes.starts_with(VPN_HELPER_TICKET_MAGIC) {
@@ -1431,6 +1409,27 @@ fn decode_helper_ticket_metadata(hex_ticket: &str) -> Result<VpnHelperTicketV1, 
     let mut payment_tx_hash = [0u8; 32];
     payment_tx_hash.copy_from_slice(&bytes[cursor..cursor + 32]);
     cursor += 32;
+    let metering_public_key =
+        PublicKey::from_bytes(Algorithm::Ed25519, &bytes[cursor..cursor + 32]).map_err(
+            |error| {
+                ControllerError::InvalidPayload(format!(
+                    "helperTicketHex has invalid metering public key: {error}"
+                ))
+            },
+        )?;
+    cursor += 32;
+    let mut lease_fee_nanos = [0u8; 8];
+    lease_fee_nanos.copy_from_slice(&bytes[cursor..cursor + 8]);
+    cursor += 8;
+    let mut active_fee_nanos_per_minute = [0u8; 8];
+    active_fee_nanos_per_minute.copy_from_slice(&bytes[cursor..cursor + 8]);
+    cursor += 8;
+    let mut ingress_fee_nanos_per_mib = [0u8; 8];
+    ingress_fee_nanos_per_mib.copy_from_slice(&bytes[cursor..cursor + 8]);
+    cursor += 8;
+    let mut egress_fee_nanos_per_mib = [0u8; 8];
+    egress_fee_nanos_per_mib.copy_from_slice(&bytes[cursor..cursor + 8]);
+    cursor += 8;
     let mut expires_at = [0u8; 8];
     expires_at.copy_from_slice(&bytes[cursor..cursor + 8]);
     Ok(VpnHelperTicketV1 {
@@ -1439,6 +1438,13 @@ fn decode_helper_ticket_metadata(hex_ticket: &str) -> Result<VpnHelperTicketV1, 
         account_hash,
         relay_id,
         payment_tx_hash,
+        metering_public_key,
+        tariff: VpnTariffV1 {
+            lease_fee_nanos: u64::from_be_bytes(lease_fee_nanos),
+            active_fee_nanos_per_minute: u64::from_be_bytes(active_fee_nanos_per_minute),
+            ingress_fee_nanos_per_mib: u64::from_be_bytes(ingress_fee_nanos_per_mib),
+            egress_fee_nanos_per_mib: u64::from_be_bytes(egress_fee_nanos_per_mib),
+        },
         expires_at_ms: u64::from_be_bytes(expires_at),
     })
 }
@@ -1613,11 +1619,37 @@ fn add_traffic_bytes(bytes_in: u64, bytes_out: u64) -> Result<(), ControllerErro
     if bytes_in == 0 && bytes_out == 0 {
         return Ok(());
     }
+    PENDING_BYTES_IN.fetch_add(bytes_in, Ordering::Relaxed);
+    PENDING_BYTES_OUT.fetch_add(bytes_out, Ordering::Relaxed);
+    flush_traffic_bytes_if_due(false)
+}
+
+fn flush_traffic_bytes_if_due(force: bool) -> Result<(), ControllerError> {
+    let now_ms = unix_now_ms();
+    let last_ms = LAST_TRAFFIC_FLUSH_MS.load(Ordering::Relaxed);
+    if !force && last_ms != 0 && now_ms.saturating_sub(last_ms) < 1_000 {
+        return Ok(());
+    }
+    let bytes_in = PENDING_BYTES_IN.swap(0, Ordering::Relaxed);
+    let bytes_out = PENDING_BYTES_OUT.swap(0, Ordering::Relaxed);
+    if bytes_in == 0 && bytes_out == 0 {
+        LAST_TRAFFIC_FLUSH_MS.store(now_ms, Ordering::Relaxed);
+        return Ok(());
+    }
     let mut state = current_state();
     state.bytes_in = state.bytes_in.saturating_add(bytes_in);
     state.bytes_out = state.bytes_out.saturating_add(bytes_out);
-    persist_state(&state)?;
+    if let Err(error) = persist_state(&state) {
+        PENDING_BYTES_IN.fetch_add(bytes_in, Ordering::Relaxed);
+        PENDING_BYTES_OUT.fetch_add(bytes_out, Ordering::Relaxed);
+        return Err(error);
+    }
+    LAST_TRAFFIC_FLUSH_MS.store(now_ms, Ordering::Relaxed);
     Ok(())
+}
+
+fn flush_traffic_bytes() -> Result<(), ControllerError> {
+    flush_traffic_bytes_if_due(true)
 }
 
 fn cleanup_persisted_network(state: &mut State) -> Result<(), ControllerError> {
@@ -2030,6 +2062,7 @@ fn update_terminal_state(
     relay_endpoint: &str,
     message: String,
 ) -> Result<(), ControllerError> {
+    flush_traffic_bytes()?;
     let mut state = current_state();
     state.active = active;
     state.repair_required = repair_required;
@@ -2250,6 +2283,12 @@ fn parse_connect_payload(raw_payload: Option<&str>) -> Result<ConnectPayload, Co
         ));
     }
     Ok(payload)
+}
+
+fn read_connect_payload_from_stdin() -> Result<ConnectPayload, ControllerError> {
+    let mut raw_payload = String::new();
+    io::stdin().read_to_string(&mut raw_payload)?;
+    parse_connect_payload(Some(raw_payload.trim()))
 }
 
 fn parse_multiaddr(addr: &str) -> Result<ParsedMultiaddr, ControllerError> {
@@ -2534,12 +2573,21 @@ mod tests {
 
     #[test]
     fn helper_ticket_metadata_decodes_without_secret() {
+        let metering_keys = KeyPair::from_seed(vec![0x66; 32], Algorithm::Ed25519);
+        let tariff = VpnTariffV1 {
+            lease_fee_nanos: 1_000,
+            active_fee_nanos_per_minute: 100,
+            ingress_fee_nanos_per_mib: 7,
+            egress_fee_nanos_per_mib: 11,
+        };
         let ticket = VpnHelperTicketV1 {
             session_id: [0x11; 16],
             quote_id: [0x22; 32],
             account_hash: [0x33; 32],
             relay_id: [0x44; 32],
             payment_tx_hash: [0x55; 32],
+            metering_public_key: metering_keys.public_key().clone(),
+            tariff,
             expires_at_ms: 99_000,
         };
         let encoded = ticket.to_hex(&[0xAA; 32]);
@@ -2551,12 +2599,21 @@ mod tests {
     #[test]
     fn usage_voucher_signer_builds_signed_cumulative_voucher() {
         let session_id = "f69c894aa32726fe586fab520f88ae42d1fbb4ebf3083df057f4e40ca0a11111";
+        let metering_keys = KeyPair::from_seed(vec![0x66; 32], Algorithm::Ed25519);
+        let tariff = VpnTariffV1 {
+            lease_fee_nanos: 1_000,
+            active_fee_nanos_per_minute: 6_000,
+            ingress_fee_nanos_per_mib: 3,
+            egress_fee_nanos_per_mib: 5,
+        };
         let ticket = VpnHelperTicketV1 {
             session_id: relay_session_id_from_session_id(session_id),
             quote_id: [0x22; 32],
             account_hash: [0x33; 32],
             relay_id: [0x44; 32],
             payment_tx_hash: [0x55; 32],
+            metering_public_key: metering_keys.public_key().clone(),
+            tariff,
             expires_at_ms: 99_000,
         };
         let raw_payload = serde_json::json!({
@@ -2568,8 +2625,6 @@ mod tests {
             "paddingBudgetMs": 15,
             "tunnelAddresses": ["10.208.0.2/32"],
             "mtuBytes": 1280,
-            "leaseSecs": 10,
-            "leaseFeeNanos": 1_000,
             "meteringPrivateKeySeedHex": "66".repeat(32),
             "usageVoucherIntervalMs": 1
         });
@@ -2591,7 +2646,52 @@ mod tests {
         assert_eq!(envelope.voucher.body.egress_bytes, 20);
         assert_eq!(
             envelope.earned_fee_nanos,
-            tariff_earned_fee_nanos(1_000, 10, envelope.voucher.body.active_ms)
+            ticket.tariff.earned_fee_nanos(&envelope.voucher.body)
+        );
+    }
+
+    #[test]
+    fn usage_voucher_signer_rejects_wrong_metering_seed() {
+        let session_id = "f69c894aa32726fe586fab520f88ae42d1fbb4ebf3083df057f4e40ca0a11111";
+        let metering_keys = KeyPair::from_seed(vec![0x66; 32], Algorithm::Ed25519);
+        let ticket = VpnHelperTicketV1 {
+            session_id: relay_session_id_from_session_id(session_id),
+            quote_id: [0x22; 32],
+            account_hash: [0x33; 32],
+            relay_id: [0x44; 32],
+            payment_tx_hash: [0x55; 32],
+            metering_public_key: metering_keys.public_key().clone(),
+            tariff: VpnTariffV1 {
+                lease_fee_nanos: 1_000,
+                active_fee_nanos_per_minute: 100,
+                ingress_fee_nanos_per_mib: 7,
+                egress_fee_nanos_per_mib: 11,
+            },
+            expires_at_ms: 99_000,
+        };
+        let raw_payload = serde_json::json!({
+            "sessionId": session_id,
+            "relayEndpoint": "/ip4/127.0.0.1/udp/7777/quic",
+            "exitClass": "standard",
+            "helperTicketHex": ticket.to_hex(&[0xAA; 32]),
+            "relayTlsSpkiSha256Hex": "ab".repeat(32),
+            "paddingBudgetMs": 15,
+            "tunnelAddresses": ["10.208.0.2/32"],
+            "mtuBytes": 1280,
+            "meteringPrivateKeySeedHex": "77".repeat(32),
+            "usageVoucherIntervalMs": 1
+        });
+        let payload = parse_connect_payload(Some(&raw_payload.to_string())).expect("payload");
+
+        let error = match UsageVoucherSigner::from_payload(&payload) {
+            Ok(_) => panic!("wrong seed must fail"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("metering private key does not match helper ticket public key")
         );
     }
 
@@ -2697,15 +2797,11 @@ mod tests {
     }
 
     #[test]
-    fn cli_accepts_run_packet_engine_payload_after_subcommand() {
+    fn cli_rejects_run_packet_engine_payload_argument() {
         let payload = r#"{"sessionId":"session-1","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","relayTlsSpkiSha256Hex":"abababababababababababababababababababababababababababababababab","paddingBudgetMs":15,"routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280,"stateFilePath":"/tmp/state.json","packetEnginePath":"/tmp/engine","appGroupId":"group.org.sora.wallet.demo.vpn"}"#;
-        let cli = Cli::try_parse_from(["sora-vpn-controller", "run-packet-engine", payload])
-            .expect("parse");
-        match cli.command {
-            Command::RunPacketEngine { payload: parsed } => {
-                assert_eq!(parsed.as_deref(), Some(payload));
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
+        Cli::try_parse_from(["sora-vpn-controller", "run-packet-engine", payload])
+            .expect_err("hidden worker payloads must be read from stdin");
+        let cli = Cli::try_parse_from(["sora-vpn-controller", "run-packet-engine"]).expect("parse");
+        assert!(matches!(cli.command, Command::RunPacketEngine));
     }
 }

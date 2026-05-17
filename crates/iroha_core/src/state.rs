@@ -21,8 +21,7 @@ use iroha_crypto::sm::OpenSslProvider;
 #[cfg(feature = "sm")]
 use iroha_crypto::sm::{Sm2PublicKey, SmIntrinsicPolicy};
 use iroha_crypto::{
-    Algorithm, Hash, HashOf, MerkleTree as CanonMerkleTree, PublicKey,
-    blake2::{Blake2b512, digest::Digest as _},
+    Algorithm, Hash, HashOf, MerkleTree as CanonMerkleTree, PublicKey, blake2::Blake2b512,
 };
 use iroha_data_model::{
     IntoKeyValue,
@@ -162,6 +161,7 @@ pub use range_bounds::{
     AsAssetIdAccountCompare, AsAssetIdAccountDefinitionCompare, AssetByAccountBounds,
     AssetByAccountDefinitionBounds, RoleIdByAccountBounds,
 };
+use sha2::{Digest as Sha2Digest, Sha256};
 pub use storage_transactions::TransactionsReadOnly;
 use thiserror::Error as ThisError;
 
@@ -19524,6 +19524,16 @@ impl State {
                 citizen_service: iroha_config::parameters::actual::CitizenServiceDiscipline::default(),
                 viral_incentives: iroha_config::parameters::actual::ViralIncentives::default(),
                 sorafs_pin_policy: iroha_config::parameters::actual::SorafsPinPolicyConstraints::default(),
+                sorafs_pin_fee_asset_id:
+                    iroha_config::parameters::defaults::governance::sorafs_pin_fee::asset_id()
+                        .parse()
+                        .expect("default SoraFS pin fee asset id"),
+                sorafs_pin_fee_treasury_account:
+                    iroha_data_model::account::AccountId::parse_encoded(
+                        &iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account(),
+                    )
+                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                    .expect("default SoraFS pin fee treasury account"),
                 sorafs_pricing: PricingScheduleRecord::default(),
                 sorafs_penalty: iroha_config::parameters::actual::SorafsPenaltyPolicy::default(),
                 sorafs_repair_escalation:
@@ -20460,6 +20470,14 @@ impl State {
     pub fn world_view(&self) -> WorldView<'_> {
         let nexus = self.nexus_snapshot();
         self.world_view_with_nexus(&nexus)
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Insert or replace a native VPN lease directly for deterministic test setup.
+    pub fn insert_vpn_lease_for_testing(&self, record: VpnLeaseRecordV1) {
+        let mut world = self.world.block();
+        world.vpn_leases.insert(record.lease_id, record);
+        world.commit();
     }
 
     /// Create a point-in-time world view using an already-snapshotted Nexus configuration.
@@ -24100,6 +24118,284 @@ pub fn compute_vk_set_hash(world: &impl WorldReadOnly) -> Option<[u8; 32]> {
     compute_vk_set_hash_from_statuses(world, &statuses)
 }
 
+fn zk_policy_put_bytes(hasher: &mut Sha256, bytes: &[u8]) {
+    let len = u64::try_from(bytes.len()).expect("ZK policy field length must fit into u64");
+    Sha2Digest::update(hasher, len.to_be_bytes());
+    Sha2Digest::update(hasher, bytes);
+}
+
+fn zk_policy_put_field(hasher: &mut Sha256, name: &str) {
+    zk_policy_put_bytes(hasher, name.as_bytes());
+}
+
+fn zk_policy_put_bool(hasher: &mut Sha256, name: &str, value: bool) {
+    zk_policy_put_field(hasher, name);
+    Sha2Digest::update(hasher, [u8::from(value)]);
+}
+
+fn zk_policy_put_u8(hasher: &mut Sha256, name: &str, value: u8) {
+    zk_policy_put_field(hasher, name);
+    Sha2Digest::update(hasher, [value]);
+}
+
+fn zk_policy_put_u32(hasher: &mut Sha256, name: &str, value: u32) {
+    zk_policy_put_field(hasher, name);
+    Sha2Digest::update(hasher, value.to_be_bytes());
+}
+
+fn zk_policy_put_u64(hasher: &mut Sha256, name: &str, value: u64) {
+    zk_policy_put_field(hasher, name);
+    Sha2Digest::update(hasher, value.to_be_bytes());
+}
+
+fn zk_policy_put_usize(hasher: &mut Sha256, name: &str, value: usize) {
+    let value = u64::try_from(value).expect("ZK policy usize field must fit into u64");
+    zk_policy_put_u64(hasher, name, value);
+}
+
+fn zk_policy_put_str(hasher: &mut Sha256, name: &str, value: &str) {
+    zk_policy_put_field(hasher, name);
+    zk_policy_put_bytes(hasher, value.as_bytes());
+}
+
+fn zk_policy_put_option_u32(hasher: &mut Sha256, name: &str, value: Option<u32>) {
+    zk_policy_put_field(hasher, name);
+    match value {
+        Some(value) => {
+            Sha2Digest::update(hasher, [1]);
+            Sha2Digest::update(hasher, value.to_be_bytes());
+        }
+        None => Sha2Digest::update(hasher, [0]),
+    }
+}
+
+fn zk_policy_put_option_vk_ref(
+    hasher: &mut Sha256,
+    name: &str,
+    value: &Option<iroha_config::parameters::actual::VerifyingKeyRef>,
+) {
+    zk_policy_put_field(hasher, name);
+    match value {
+        Some(value) => {
+            Sha2Digest::update(hasher, [1]);
+            zk_policy_put_bytes(hasher, value.backend.as_bytes());
+            zk_policy_put_bytes(hasher, value.name.as_bytes());
+        }
+        None => Sha2Digest::update(hasher, [0]),
+    }
+}
+
+fn zk_curve_tag(curve: iroha_config::parameters::actual::ZkCurve) -> &'static str {
+    match curve {
+        iroha_config::parameters::actual::ZkCurve::Pallas => "pallas",
+        iroha_config::parameters::actual::ZkCurve::Pasta => "pasta",
+        iroha_config::parameters::actual::ZkCurve::Goldilocks => "goldilocks",
+        iroha_config::parameters::actual::ZkCurve::Bn254 => "bn254",
+    }
+}
+
+fn halo2_backend_tag(backend: iroha_config::parameters::actual::Halo2Backend) -> &'static str {
+    match backend {
+        iroha_config::parameters::actual::Halo2Backend::Ipa => "ipa",
+    }
+}
+
+/// Compute the ZK policy hash committed in confidential feature digests.
+#[must_use]
+pub fn compute_zk_consensus_policy_hash(
+    zk_config: &iroha_config::parameters::actual::Zk,
+) -> [u8; 32] {
+    let mut h = Sha256::new();
+    zk_policy_put_bytes(&mut h, b"iroha:zk:consensus-policy:v1");
+
+    zk_policy_put_bool(
+        &mut h,
+        "compiled.halo2",
+        cfg!(any(feature = "zk-halo2", feature = "zk-halo2-ipa")),
+    );
+    zk_policy_put_bool(&mut h, "compiled.stark", cfg!(feature = "zk-stark"));
+
+    zk_policy_put_bool(&mut h, "halo2.enabled", zk_config.halo2.enabled);
+    zk_policy_put_str(&mut h, "halo2.curve", zk_curve_tag(zk_config.halo2.curve));
+    zk_policy_put_str(
+        &mut h,
+        "halo2.backend",
+        halo2_backend_tag(zk_config.halo2.backend),
+    );
+    zk_policy_put_u32(&mut h, "halo2.max_k", zk_config.halo2.max_k);
+    zk_policy_put_u32(
+        &mut h,
+        "halo2.verifier_max_batch",
+        zk_config.halo2.verifier_max_batch,
+    );
+    zk_policy_put_usize(
+        &mut h,
+        "halo2.max_envelope_bytes",
+        zk_config.halo2.max_envelope_bytes,
+    );
+    zk_policy_put_usize(
+        &mut h,
+        "halo2.max_proof_bytes",
+        zk_config.halo2.max_proof_bytes,
+    );
+    zk_policy_put_usize(
+        &mut h,
+        "halo2.max_transcript_label_len",
+        zk_config.halo2.max_transcript_label_len,
+    );
+    zk_policy_put_bool(
+        &mut h,
+        "halo2.enforce_transcript_label_ascii",
+        zk_config.halo2.enforce_transcript_label_ascii,
+    );
+
+    zk_policy_put_bool(&mut h, "stark.enabled", zk_config.stark.enabled);
+    zk_policy_put_usize(
+        &mut h,
+        "stark.max_envelope_bytes",
+        zk_config.stark.max_envelope_bytes,
+    );
+    zk_policy_put_usize(
+        &mut h,
+        "stark.max_proof_bytes",
+        zk_config.stark.max_proof_bytes,
+    );
+
+    zk_policy_put_usize(&mut h, "root_history_cap", zk_config.root_history_cap);
+    zk_policy_put_usize(&mut h, "ballot_history_cap", zk_config.ballot_history_cap);
+    zk_policy_put_bool(&mut h, "empty_root_on_empty", zk_config.empty_root_on_empty);
+    zk_policy_put_u8(&mut h, "merkle_depth", zk_config.merkle_depth);
+    zk_policy_put_usize(&mut h, "preverify_max_bytes", zk_config.preverify_max_bytes);
+    zk_policy_put_u64(
+        &mut h,
+        "preverify_budget_bytes",
+        zk_config.preverify_budget_bytes,
+    );
+    zk_policy_put_usize(&mut h, "proof_history_cap", zk_config.proof_history_cap);
+    zk_policy_put_u64(
+        &mut h,
+        "proof_retention_grace_blocks",
+        zk_config.proof_retention_grace_blocks,
+    );
+    zk_policy_put_usize(&mut h, "proof_prune_batch", zk_config.proof_prune_batch);
+    zk_policy_put_u64(
+        &mut h,
+        "bridge_proof_max_range_len",
+        zk_config.bridge_proof_max_range_len,
+    );
+    zk_policy_put_u64(
+        &mut h,
+        "bridge_proof_max_past_age_blocks",
+        zk_config.bridge_proof_max_past_age_blocks,
+    );
+    zk_policy_put_u64(
+        &mut h,
+        "bridge_proof_max_future_drift_blocks",
+        zk_config.bridge_proof_max_future_drift_blocks,
+    );
+    zk_policy_put_option_u32(&mut h, "poseidon_params_id", zk_config.poseidon_params_id);
+    zk_policy_put_option_u32(&mut h, "pedersen_params_id", zk_config.pedersen_params_id);
+    zk_policy_put_option_vk_ref(
+        &mut h,
+        "kaigi_roster_join_vk",
+        &zk_config.kaigi_roster_join_vk,
+    );
+    zk_policy_put_option_vk_ref(
+        &mut h,
+        "kaigi_roster_leave_vk",
+        &zk_config.kaigi_roster_leave_vk,
+    );
+    zk_policy_put_option_vk_ref(&mut h, "kaigi_usage_vk", &zk_config.kaigi_usage_vk);
+    zk_policy_put_u32(
+        &mut h,
+        "max_proof_size_bytes",
+        zk_config.max_proof_size_bytes,
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "max_nullifiers_per_tx",
+        zk_config.max_nullifiers_per_tx,
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "max_commitments_per_tx",
+        zk_config.max_commitments_per_tx,
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "max_confidential_ops_per_block",
+        zk_config.max_confidential_ops_per_block,
+    );
+    zk_policy_put_u64(
+        &mut h,
+        "max_anchor_age_blocks",
+        zk_config.max_anchor_age_blocks,
+    );
+    zk_policy_put_u64(
+        &mut h,
+        "max_proof_bytes_block",
+        zk_config.max_proof_bytes_block,
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "max_verify_calls_per_tx",
+        zk_config.max_verify_calls_per_tx,
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "max_verify_calls_per_block",
+        zk_config.max_verify_calls_per_block,
+    );
+    zk_policy_put_u32(&mut h, "max_public_inputs", zk_config.max_public_inputs);
+    zk_policy_put_u64(&mut h, "reorg_depth_bound", zk_config.reorg_depth_bound);
+    zk_policy_put_u64(
+        &mut h,
+        "policy_transition_delay_blocks",
+        zk_config.policy_transition_delay_blocks,
+    );
+    zk_policy_put_u64(
+        &mut h,
+        "policy_transition_window_blocks",
+        zk_config.policy_transition_window_blocks,
+    );
+    zk_policy_put_u64(
+        &mut h,
+        "tree_roots_history_len",
+        zk_config.tree_roots_history_len,
+    );
+    zk_policy_put_u64(
+        &mut h,
+        "tree_frontier_checkpoint_interval",
+        zk_config.tree_frontier_checkpoint_interval,
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "registry_max_vk_entries",
+        zk_config.registry_max_vk_entries,
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "registry_max_params_entries",
+        zk_config.registry_max_params_entries,
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "registry_max_delta_per_block",
+        zk_config.registry_max_delta_per_block,
+    );
+    zk_policy_put_u64(&mut h, "gas.proof_base", zk_config.gas.proof_base);
+    zk_policy_put_u64(
+        &mut h,
+        "gas.per_public_input",
+        zk_config.gas.per_public_input,
+    );
+    zk_policy_put_u64(&mut h, "gas.per_proof_byte", zk_config.gas.per_proof_byte);
+    zk_policy_put_u64(&mut h, "gas.per_nullifier", zk_config.gas.per_nullifier);
+    zk_policy_put_u64(&mut h, "gas.per_commitment", zk_config.gas.per_commitment);
+
+    Sha2Digest::finalize(h).into()
+}
+
 /// Build the confidential feature digest advertised by blocks and handshake metadata for `height`.
 #[must_use]
 pub fn compute_confidential_feature_digest(
@@ -24145,6 +24441,7 @@ pub fn compute_confidential_feature_digest(
         poseidon_params_id,
         pedersen_params_id,
         Some(iroha_config::parameters::defaults::confidential::RULES_VERSION),
+        Some(compute_zk_consensus_policy_hash(zk_config)),
     )
 }
 
@@ -31406,7 +31703,7 @@ impl StateTransaction<'_, '_> {
                 #[cfg(feature = "telemetry")]
                 host.set_telemetry(self.telemetry.clone());
                 host.set_crypto_config(self.crypto());
-                host.set_halo2_config(&self.zk.halo2);
+                host.set_zk_config(&self.zk);
                 host.set_chain_id(self.chain_id());
                 host.set_public_inputs_from_parameters(self.world.parameters.get());
                 host.set_vrf_epoch_seeds_from_world(&self.world);
@@ -31538,7 +31835,7 @@ impl StateTransaction<'_, '_> {
                     #[cfg(feature = "telemetry")]
                     host.set_telemetry(self.telemetry.clone());
                     host.set_crypto_config(self.crypto());
-                    host.set_halo2_config(&self.zk.halo2);
+                    host.set_zk_config(&self.zk);
                     host.set_chain_id(self.chain_id());
                     host.set_public_inputs_from_parameters(self.world.parameters.get());
                     host.set_vrf_epoch_seeds_from_world(&self.world);
@@ -33147,7 +33444,7 @@ pub(crate) mod deserialize {
         }
     }
 
-    fn default_zk() -> iroha_config::parameters::actual::Zk {
+    pub(super) fn default_zk() -> iroha_config::parameters::actual::Zk {
         iroha_config::parameters::actual::Zk {
             halo2: iroha_config::parameters::actual::Halo2 {
                 enabled: iroha_config::parameters::defaults::zk::halo2::ENABLED,
@@ -33293,6 +33590,15 @@ pub(crate) mod deserialize {
             viral_incentives: iroha_config::parameters::actual::ViralIncentives::default(),
             sorafs_pin_policy:
                 iroha_config::parameters::actual::SorafsPinPolicyConstraints::default(),
+            sorafs_pin_fee_asset_id:
+                iroha_config::parameters::defaults::governance::sorafs_pin_fee::asset_id()
+                    .parse()
+                    .expect("default SoraFS pin fee asset id"),
+            sorafs_pin_fee_treasury_account: iroha_data_model::account::AccountId::parse_encoded(
+                &iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account(),
+            )
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .expect("default SoraFS pin fee treasury account"),
             sorafs_pricing:
                 iroha_data_model::sorafs::pricing::PricingScheduleRecord::launch_default(),
             sorafs_penalty: iroha_config::parameters::actual::SorafsPenaltyPolicy::default(),
@@ -33581,7 +33887,7 @@ mod tests {
     use ivm::{IVM, IVMHost, encoding, pointer_abi::PointerType, syscalls};
     use nonzero_ext::nonzero;
 
-    use super::*;
+    use super::{deserialize::default_zk, *};
     use crate::smartcontracts::ValidQuery;
     #[cfg(feature = "telemetry")]
     use crate::telemetry::StateTelemetry;
@@ -46634,6 +46940,46 @@ mod tests {
         assert_eq!(
             digest.conf_rules_version,
             Some(iroha_config::parameters::defaults::confidential::RULES_VERSION)
+        );
+        assert_eq!(
+            digest.zk_policy_hash,
+            Some(compute_zk_consensus_policy_hash(&view.zk))
+        );
+    }
+
+    #[test]
+    fn zk_policy_hash_ignores_operator_only_timing_and_workers() {
+        let base = default_zk();
+        let mut changed = base.clone();
+        changed.verify_timeout = std::time::Duration::from_nanos(1);
+        changed.halo2.verifier_budget_ms = changed.halo2.verifier_budget_ms.saturating_add(1);
+        changed.halo2.verifier_worker_threads =
+            changed.halo2.verifier_worker_threads.saturating_add(1);
+        changed.halo2.verifier_queue_cap = changed.halo2.verifier_queue_cap.saturating_add(1);
+        changed.halo2.verifier_enqueue_wait_ms =
+            changed.halo2.verifier_enqueue_wait_ms.saturating_add(1);
+        changed.halo2.verifier_retry_ring_cap =
+            changed.halo2.verifier_retry_ring_cap.saturating_add(1);
+        changed.halo2.verifier_retry_max_attempts =
+            changed.halo2.verifier_retry_max_attempts.saturating_add(1);
+        changed.halo2.verifier_retry_tick_ms =
+            changed.halo2.verifier_retry_tick_ms.saturating_add(1);
+
+        assert_eq!(
+            compute_zk_consensus_policy_hash(&base),
+            compute_zk_consensus_policy_hash(&changed)
+        );
+    }
+
+    #[test]
+    fn zk_policy_hash_tracks_consensus_limits() {
+        let base = default_zk();
+        let mut changed = base.clone();
+        changed.halo2.max_proof_bytes = changed.halo2.max_proof_bytes.saturating_add(1);
+
+        assert_ne!(
+            compute_zk_consensus_policy_hash(&base),
+            compute_zk_consensus_policy_hash(&changed)
         );
     }
 

@@ -89,6 +89,6 @@ summary: Outline for SF-6c multi-provider test harness.
 - **Authentication.** Control API binds to loopback and requires a shared
   bearer token (`mock_provider.auth_token`) supplied via config. Test harnesses
   set the `Authorization: Bearer` header; unauthenticated calls return `401`.
-- **Event stream.** The controller optionally exposes a `GET /events` SSE feed
+- **Event stream.** The controller optionally exposes a `GET /v1/events/ws` SSE feed
   streaming provider state transitions (startup, fault injected, token
   exhaustion) so tests can synchronise without polling.

@@ -697,7 +697,7 @@ single checklist when assembling a packet.
 3. Emit the lifecycle proof snapshot and manifest immediately after staging so
    governance reviewers can recompute the digest with the same repo fixtures.
 4. Mirror `RepoAccountEvent::*` SSE payloads for the affected accounts and drop
-   the exported NDJSON in `artifacts/finance/repo/<agreement-id>/events.ndjson`
+   the exported NDJSON in `artifacts/finance/repo/<agreement-id>/v1/events/ws.ndjson`
    before filing the packet.
 5. Once the vote passes, update `hashes.txt` with the GAR identifier,
    configuration hash, and manifest checksum so the council can trace the rollout

@@ -4,9 +4,9 @@
 //! providers together with the collateral and credit settlement policies used by
 //! the deal engine. The schedule is stored on-ledger so governance proposals
 //! can update pricing deterministically without relying on out-of-band config.
-//! Funding flows (credit deposits, settlement, slashing) will be handled by
-//! later roadmap items; this module focuses on the schema and computations
-//! required for pricing, collateral, and low-balance monitoring.
+//! Public pin admission fees are computed here, while provider credit deposits,
+//! settlement, and slashing remain separate ledger flows handled by the deal
+//! engine.
 
 use std::collections::BTreeSet;
 
@@ -316,6 +316,30 @@ impl PricingScheduleRecord {
             tier.storage_price_nano_per_gib_month,
             u128::from(SECONDS_PER_BILLING_MONTH),
         )
+    }
+
+    /// Compute the prepaid storage fee for admitting a public pin.
+    #[must_use]
+    pub fn public_pin_fee_nano(
+        &self,
+        class: StorageClass,
+        content_length_bytes: u64,
+        min_replicas: u16,
+        submitted_epoch: u64,
+        retention_epoch: u64,
+    ) -> u128 {
+        if content_length_bytes == 0 || min_replicas == 0 {
+            return 0;
+        }
+        let bytes_per_gib = u64::try_from(sorafs_deal::BYTES_PER_GIB).unwrap_or(u64::MAX);
+        let gib = content_length_bytes
+            .saturating_add(bytes_per_gib.saturating_sub(1))
+            .saturating_div(bytes_per_gib)
+            .max(1);
+        let replicated_gib = gib.saturating_mul(u64::from(min_replicas));
+        let requested_window = retention_epoch.saturating_sub(submitted_epoch);
+        let billing_window = requested_window.max(self.credit.settlement_window_secs);
+        self.storage_charge_nano(class, replicated_gib, billing_window)
     }
 
     /// Compute egress charges for `egress_gib` volume.

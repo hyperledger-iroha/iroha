@@ -30,7 +30,7 @@ Additional front ends (for example a Tauri shell) can hook into `mochi-core` lat
 - Peer nodes run as separate `irohad` child processes. MOCHI never links the peer as a library, avoiding unstable internal APIs and matching production deployment topologies.
 - Genesis and key material are created through `kagami` invocations with user provided inputs (chain ID, initial accounts, assets).
 - Configuration files are generated from TOML templates, filling in Torii and P2P ports, storage paths, snapshot settings, and trusted peer lists. Generated configs are stored beneath a per-network workspace directory.
-- The supervisor tracks process lifecycles, streams stdout/stderr for log surfaces, and polls `/status`, `/metrics`, and `/configuration` endpoints for health.
+- The supervisor tracks process lifecycles, streams stdout/stderr for log surfaces, and polls `/status`, `/metrics`, and `/v1/configuration` endpoints for health.
 - A thin Torii client layer wraps HTTP and WebSocket calls, leaning on the Iroha Rust client crates where possible to avoid reimplementing SCALE encoding/decoding.
 
 ## User Flows Backed by `mochi-core`
@@ -38,9 +38,9 @@ Additional front ends (for example a Tauri shell) can hook into `mochi-core` lat
 - **Devnet Quickstart**: choose a `Single Peer` or `Four Peer BFT` preset, set the workspace and chain ID, then start, restart, stop, or rebuild the local network from one surface.
 - **Devnet Access**: expose copyable Torii/API endpoints plus development identities so application code can connect to the local network without digging through generated files.
 - **Lifecycle Controls**: start, stop, and restart the devnet; surface live metrics; expose log tails; and reserve advanced profile edits for the Settings dialog.
-- **Live Activity Streams**: subscribe to `/block/stream`, `/events`, and peer logs, keeping rolling in-memory buffers that the UI can auto-attach to running peers.
-- **State Explorer**: run Norito-backed `/query` calls to list domains, accounts, assets, asset definitions, and peers with pagination helpers and metadata summaries.
-- **Transaction Composer**: stage common devnet instructions first, batch them into signed transactions, preview the Norito payload, submit via `/transaction`, and monitor the resulting events.
+- **Live Activity Streams**: subscribe to `/v1/blocks/stream`, `/v1/events/ws`, and peer logs, keeping rolling in-memory buffers that the UI can auto-attach to running peers.
+- **State Explorer**: run Norito-backed `/v1/query` calls to list domains, accounts, assets, asset definitions, and peers with pagination helpers and metadata summaries.
+- **Transaction Composer**: stage common devnet instructions first, batch them into signed transactions, preview the Norito payload, submit via `/v1/pipeline/transactions`, and monitor the resulting events.
 - **Snapshots and Re-Genesis**: orchestrate Kura snapshot export/import, lane resets, wipes, and genesis regeneration for fast local iteration.
 
 ## UI Layer (`mochi-ui`)

@@ -785,7 +785,7 @@ reimplementing the hashing logic, and the same canonical value is preserved when
 pending transactions are replayed from `PendingTransactionQueue`.
 
 Torii returns a Norito-encoded transaction submission receipt (payload +
-signature) on `/transaction` (alias `/v1/pipeline/transactions`). The Android SDK surfaces the raw
+signature) on `/v1/pipeline/transactions`. The Android SDK surfaces the raw
 receipt bytes via `ClientResponse.body()` so callers can decode them with their
 Norito tooling when they need the receipt fields.
 
@@ -1053,7 +1053,7 @@ transport so applications can rely on a single HTTP stack.
 ### Mock Torii Harness
 
 The test suite now includes a lightweight HTTP harness (`src/test/java/org/hyperledger/iroha/android/client/mock/ToriiMockServer.java`)
-that mirrors Torii's `/transaction` submission and `/v1/pipeline/transactions/status` routes. Integration tests such as
+that mirrors Torii's `/v1/pipeline/transactions` submission and `/v1/pipeline/transactions/status` routes. Integration tests such as
 `HttpClientTransportHarnessTests` spin up the server, interact with it via `HttpClientTransport`, and assert on the recorded
 requests/responses, providing end-to-end coverage for retries, headers, and offline queue replays without depending on a real Torii node.
 
@@ -1102,12 +1102,17 @@ Torii issues that exact commitment and returns settlement lineage metadata;
 `settlement.entry_hash` is no longer used as the note commitment. Redemption
 and audit payloads are submitted as direct transaction instructions.
 `OfflineNoteV2Wallet` provides the Java Android one-call app flow for load,
-receive request preparation, P2P pay, accept/audit submission, redeem
-submission, and sync. The wallet keeps issuer, attestation, random, proof,
-store, and direct transaction submission behind public interfaces so Android
-apps can bind them to Torii, Android Keystore, and app-specific persistence;
-`sync()` additionally accepts a transaction-outcome resolver for finalizing
-pending spend, change, and redeem note records after Torii observes the audit or
+receive request preparation, P2P pay, accept, optional audit publication,
+redeem submission, and sync. Offline-to-offline pay/accept is local-final and
+irrevocable: the sender immediately records spent inputs and spendable change,
+while the recipient marks the matched pending output spendable after local
+token and proof verification. No online sync is required for the value transfer.
+`publishAudit` is a separate online evidence-submission step and does not change
+wallet note spendability. The wallet keeps issuer, attestation, random, proof
+provider/verifier, store, and direct transaction submission behind public
+interfaces so Android apps can bind them to Torii, Android Keystore, and
+app-specific persistence; `sync()` additionally accepts a transaction-outcome
+resolver for finalizing redeem-pending note records after Torii observes the
 redeem transaction outcome.
 the core module includes an in-memory store,
 `IrohaOfflineNoteV2TransactionSubmitter`, and

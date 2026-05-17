@@ -134,7 +134,7 @@ pub fn sample_signed_transaction() -> SignedTransaction {
         .sign(key_pair.private_key())
 }
 
-/// Construct a versioned external transaction payload suitable for public `/transaction` tests.
+/// Construct a versioned external transaction payload suitable for public `/v1/pipeline/transactions` tests.
 #[allow(dead_code)]
 pub fn sample_transaction_bytes() -> Vec<u8> {
     sample_signed_transaction().encode_versioned()
@@ -167,7 +167,7 @@ pub fn sample_transaction_entrypoint_bytes() -> Vec<u8> {
     TransactionEntrypoint::External(sample_signed_transaction()).encode_versioned()
 }
 
-/// Construct a signed query payload suitable for public `/query` tests.
+/// Construct a signed query payload suitable for public `/v1/query` tests.
 #[allow(dead_code)]
 pub fn sample_signed_query() -> iroha_data_model::query::SignedQuery {
     let key_pair = KeyPair::random();
@@ -177,7 +177,7 @@ pub fn sample_signed_query() -> iroha_data_model::query::SignedQuery {
         .sign(&key_pair)
 }
 
-/// Construct a versioned signed-query payload suitable for public `/query` tests.
+/// Construct a versioned signed-query payload suitable for public `/v1/query` tests.
 #[allow(dead_code)]
 pub fn sample_query_bytes() -> Vec<u8> {
     sample_signed_query().encode_versioned()

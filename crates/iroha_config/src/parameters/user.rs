@@ -2036,6 +2036,12 @@ pub struct Governance {
     /// SoraFS pin policy constraints enforced during manifest admission.
     #[config(nested)]
     pub sorafs_pin_policy: SorafsPinPolicyConstraints,
+    /// Asset definition used to collect public SoraFS pin fees.
+    #[config(default = "defaults::governance::sorafs_pin_fee::asset_id()")]
+    pub sorafs_pin_fee_asset_id: String,
+    /// Treasury account that receives public SoraFS pin fees.
+    #[config(default = "defaults::governance::sorafs_pin_fee::treasury_account()")]
+    pub sorafs_pin_fee_treasury_account: String,
     /// SoraFS under-delivery penalty policy.
     #[config(nested)]
     pub sorafs_penalty: SorafsPenaltyPolicy,
@@ -2203,6 +2209,9 @@ impl Default for Governance {
             viral_deny_binding_hashes: Vec::new(),
             viral_halt: false,
             sorafs_pin_policy: SorafsPinPolicyConstraints::default(),
+            sorafs_pin_fee_asset_id: defaults::governance::sorafs_pin_fee::asset_id(),
+            sorafs_pin_fee_treasury_account: defaults::governance::sorafs_pin_fee::treasury_account(
+            ),
             sorafs_penalty: SorafsPenaltyPolicy::default(),
             sorafs_repair_escalation: RepairEscalationPolicyV1::default(),
             sorafs_telemetry: SorafsTelemetryPolicy::default(),
@@ -2328,6 +2337,14 @@ impl Governance {
             citizen_service,
             viral_incentives,
             sorafs_pin_policy: self.sorafs_pin_policy.parse(),
+            sorafs_pin_fee_asset_id: self
+                .sorafs_pin_fee_asset_id
+                .parse()
+                .expect("invalid SoraFS pin fee asset id"),
+            sorafs_pin_fee_treasury_account: parse_account_id_literal(
+                &self.sorafs_pin_fee_treasury_account,
+                "invalid SoraFS pin fee treasury account id",
+            ),
             sorafs_pricing: PricingScheduleRecord::launch_default(),
             sorafs_penalty: self.sorafs_penalty.parse(),
             sorafs_repair_escalation: self.sorafs_repair_escalation.parse(),
@@ -14638,6 +14655,9 @@ pub struct SoracloudRuntime {
     /// Mutable Inrou microVM hosting limits.
     #[config(default)]
     pub inrou: SoracloudRuntimeInrou,
+    /// Runtime-originated transaction submission settings.
+    #[config(default)]
+    pub submission: SoracloudRuntimeSubmission,
     /// Outbound egress policy for embedded runtimes.
     #[config(default)]
     pub egress: SoracloudRuntimeEgress,
@@ -14657,6 +14677,7 @@ impl SoracloudRuntime {
             hydration_concurrency: self.hydration_concurrency,
             cache_budgets: self.cache_budgets.parse(),
             inrou: self.inrou.parse(),
+            submission: self.submission.parse(),
             egress,
             hf,
         };
@@ -14673,6 +14694,7 @@ struct SoracloudRuntimeFields {
     hydration_concurrency: Option<NonZeroUsize>,
     cache_budgets: Option<SoracloudRuntimeCacheBudgets>,
     inrou: Option<SoracloudRuntimeInrou>,
+    submission: Option<SoracloudRuntimeSubmission>,
     egress: Option<SoracloudRuntimeEgress>,
     hf: Option<SoracloudRuntimeHuggingFace>,
 }
@@ -14736,6 +14758,12 @@ impl SoracloudRuntimeFields {
                 parser,
                 SoracloudRuntimeInrou::json_deserialize,
             ),
+            "submission" => Self::set_unique(
+                &mut self.submission,
+                "submission",
+                parser,
+                SoracloudRuntimeSubmission::json_deserialize,
+            ),
             "egress" => Self::set_unique(
                 &mut self.egress,
                 "egress",
@@ -14770,6 +14798,7 @@ impl SoracloudRuntimeFields {
                 .unwrap_or(defaults::soracloud_runtime::HYDRATION_CONCURRENCY),
             cache_budgets: self.cache_budgets.unwrap_or_default(),
             inrou: self.inrou.unwrap_or_default(),
+            submission: self.submission.unwrap_or_default(),
             egress: self.egress.unwrap_or_default(),
             hf: self.hf.unwrap_or_default(),
         }
@@ -14863,26 +14892,59 @@ impl SoracloudRuntimeCacheBudgets {
 pub struct SoracloudRuntimeInrou {
     /// Maximum number of Inrou microVMs hosted concurrently.
     #[config(default = "defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS")]
+    #[norito(default = "default_soracloud_runtime_inrou_max_concurrent_vms")]
     pub max_concurrent_vms: NonZeroUsize,
+    /// Whether this validator advertises and materializes local Inrou workloads.
+    #[config(default = "defaults::soracloud_runtime::INROU_ENABLED")]
+    #[norito(default = "default_soracloud_runtime_inrou_enabled")]
+    pub enabled: bool,
     /// Whether this validator should proxy hosted HTTP without materializing replicas.
     #[config(default = "defaults::soracloud_runtime::INROU_PROXY_ONLY")]
+    #[norito(default = "default_soracloud_runtime_inrou_proxy_only")]
     pub proxy_only: bool,
     /// Startup grace window in milliseconds.
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::INROU_START_GRACE_MS))"
     )]
+    #[norito(default = "default_soracloud_runtime_inrou_start_grace_ms")]
     pub start_grace_ms: DurationMs,
     /// Shutdown grace window in milliseconds.
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::INROU_STOP_GRACE_MS))"
     )]
+    #[norito(default = "default_soracloud_runtime_inrou_stop_grace_ms")]
     pub stop_grace_ms: DurationMs,
+}
+
+fn default_soracloud_runtime_inrou_max_concurrent_vms() -> NonZeroUsize {
+    defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS
+}
+
+fn default_soracloud_runtime_inrou_enabled() -> bool {
+    defaults::soracloud_runtime::INROU_ENABLED
+}
+
+fn default_soracloud_runtime_inrou_proxy_only() -> bool {
+    defaults::soracloud_runtime::INROU_PROXY_ONLY
+}
+
+fn default_soracloud_runtime_inrou_start_grace_ms() -> DurationMs {
+    DurationMs(std::time::Duration::from_millis(
+        defaults::soracloud_runtime::INROU_START_GRACE_MS,
+    ))
+}
+
+fn default_soracloud_runtime_inrou_stop_grace_ms() -> DurationMs {
+    DurationMs(std::time::Duration::from_millis(
+        defaults::soracloud_runtime::INROU_STOP_GRACE_MS,
+    ))
 }
 
 impl Default for SoracloudRuntimeInrou {
     fn default() -> Self {
         Self {
             max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
+            enabled: defaults::soracloud_runtime::INROU_ENABLED,
             proxy_only: defaults::soracloud_runtime::INROU_PROXY_ONLY,
             start_grace_ms: DurationMs(std::time::Duration::from_millis(
                 defaults::soracloud_runtime::INROU_START_GRACE_MS,
@@ -14898,9 +14960,28 @@ impl SoracloudRuntimeInrou {
     fn parse(self) -> actual::SoracloudRuntimeInrou {
         actual::SoracloudRuntimeInrou {
             max_concurrent_vms: self.max_concurrent_vms,
+            enabled: self.enabled,
             proxy_only: self.proxy_only,
             start_grace: self.start_grace_ms.get().max(MIN_TIMER_INTERVAL),
             stop_grace: self.stop_grace_ms.get().max(MIN_TIMER_INTERVAL),
+        }
+    }
+}
+
+/// User-level runtime-originated transaction submission settings.
+#[derive(Debug, Clone, Default, ReadConfig, norito::JsonDeserialize)]
+pub struct SoracloudRuntimeSubmission {
+    /// Gas asset definition id used for runtime-originated Soracloud submissions.
+    pub gas_asset_id: Option<String>,
+}
+
+impl SoracloudRuntimeSubmission {
+    fn parse(self) -> actual::SoracloudRuntimeSubmission {
+        actual::SoracloudRuntimeSubmission {
+            gas_asset_id: self
+                .gas_asset_id
+                .map(|asset_id| asset_id.trim().to_owned())
+                .filter(|asset_id| !asset_id.is_empty()),
         }
     }
 }
@@ -20425,9 +20506,14 @@ private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E90
             defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS
         );
         assert_eq!(
+            actual.soracloud_runtime.inrou.enabled,
+            defaults::soracloud_runtime::INROU_ENABLED
+        );
+        assert_eq!(
             actual.soracloud_runtime.inrou.proxy_only,
             defaults::soracloud_runtime::INROU_PROXY_ONLY
         );
+        assert!(actual.soracloud_runtime.submission.gas_asset_id.is_none());
         assert_eq!(
             actual.soracloud_runtime.inrou.start_grace,
             StdDuration::from_millis(defaults::soracloud_runtime::INROU_START_GRACE_MS)
@@ -20473,6 +20559,19 @@ private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E90
             .as_table_mut()
             .expect("soracloud_runtime table");
         runtime.insert("production_mode".into(), Value::Boolean(true));
+        let mut inrou = Table::new();
+        inrou.insert("enabled".into(), Value::Boolean(true));
+        inrou.insert("max_concurrent_vms".into(), Value::Integer(8));
+        inrou.insert("proxy_only".into(), Value::Boolean(false));
+        inrou.insert("start_grace_ms".into(), Value::Integer(30_000));
+        inrou.insert("stop_grace_ms".into(), Value::Integer(10_000));
+        runtime.insert("inrou".into(), Value::Table(inrou));
+        let mut submission = Table::new();
+        submission.insert(
+            "gas_asset_id".into(),
+            Value::String("xor#wonderland".into()),
+        );
+        runtime.insert("submission".into(), Value::Table(submission));
 
         let _ = load_root(table);
     }
@@ -20486,6 +20585,19 @@ private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E90
             .as_table_mut()
             .expect("soracloud_runtime table");
         runtime.insert("production_mode".into(), Value::Boolean(true));
+        let mut inrou = Table::new();
+        inrou.insert("enabled".into(), Value::Boolean(true));
+        inrou.insert("max_concurrent_vms".into(), Value::Integer(8));
+        inrou.insert("proxy_only".into(), Value::Boolean(false));
+        inrou.insert("start_grace_ms".into(), Value::Integer(30_000));
+        inrou.insert("stop_grace_ms".into(), Value::Integer(10_000));
+        runtime.insert("inrou".into(), Value::Table(inrou));
+        let mut submission = Table::new();
+        submission.insert(
+            "gas_asset_id".into(),
+            Value::String("xor#wonderland".into()),
+        );
+        runtime.insert("submission".into(), Value::Table(submission));
         let mut egress = Table::new();
         egress.insert("default_allow".into(), Value::Boolean(false));
         egress.insert("allowed_hosts".into(), Value::Array(Vec::new()));
@@ -20508,6 +20620,41 @@ private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E90
     }
 
     #[test]
+    #[should_panic(expected = "inrou.enabled")]
+    fn soracloud_runtime_production_mode_rejects_disabled_inrou() {
+        let mut table = base_table();
+        let runtime = table
+            .entry("soracloud_runtime")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("soracloud_runtime table");
+        runtime.insert("production_mode".into(), Value::Boolean(true));
+
+        let _ = load_root(table);
+    }
+
+    #[test]
+    #[should_panic(expected = "submission.gas_asset_id")]
+    fn soracloud_runtime_production_mode_requires_submission_gas_asset() {
+        let mut table = base_table();
+        let runtime = table
+            .entry("soracloud_runtime")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("soracloud_runtime table");
+        runtime.insert("production_mode".into(), Value::Boolean(true));
+        let mut inrou = Table::new();
+        inrou.insert("enabled".into(), Value::Boolean(true));
+        inrou.insert("max_concurrent_vms".into(), Value::Integer(8));
+        inrou.insert("proxy_only".into(), Value::Boolean(false));
+        inrou.insert("start_grace_ms".into(), Value::Integer(30_000));
+        inrou.insert("stop_grace_ms".into(), Value::Integer(10_000));
+        runtime.insert("inrou".into(), Value::Table(inrou));
+
+        let _ = load_root(table);
+    }
+
+    #[test]
     #[should_panic(expected = "inrou.proxy_only")]
     fn soracloud_runtime_production_mode_rejects_proxy_only_inrou() {
         let mut table = base_table();
@@ -20523,7 +20670,14 @@ private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E90
         egress.insert("rate_per_minute".into(), Value::Integer(60));
         egress.insert("max_bytes_per_minute".into(), Value::Integer(1_048_576));
         runtime.insert("egress".into(), Value::Table(egress));
+        let mut submission = Table::new();
+        submission.insert(
+            "gas_asset_id".into(),
+            Value::String("xor#wonderland".into()),
+        );
+        runtime.insert("submission".into(), Value::Table(submission));
         let mut inrou = Table::new();
+        inrou.insert("enabled".into(), Value::Boolean(true));
         inrou.insert("max_concurrent_vms".into(), Value::Integer(8));
         inrou.insert("proxy_only".into(), Value::Boolean(true));
         inrou.insert("start_grace_ms".into(), Value::Integer(30_000));
@@ -20604,10 +20758,17 @@ private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E90
 
         let mut inrou = Table::new();
         inrou.insert("max_concurrent_vms".into(), Value::Integer(5));
+        inrou.insert("enabled".into(), Value::Boolean(true));
         inrou.insert("proxy_only".into(), Value::Boolean(true));
         inrou.insert("start_grace_ms".into(), Value::Integer(7_500));
         inrou.insert("stop_grace_ms".into(), Value::Integer(9_500));
         runtime.insert("inrou".into(), Value::Table(inrou));
+        let mut submission = Table::new();
+        submission.insert(
+            "gas_asset_id".into(),
+            Value::String(" xor#wonderland ".to_string()),
+        );
+        runtime.insert("submission".into(), Value::Table(submission));
 
         let mut egress = Table::new();
         egress.insert("default_allow".into(), Value::Boolean(true));
@@ -20693,7 +20854,12 @@ private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E90
             6_144
         );
         assert_eq!(actual.soracloud_runtime.inrou.max_concurrent_vms.get(), 5);
+        assert!(actual.soracloud_runtime.inrou.enabled);
         assert!(actual.soracloud_runtime.inrou.proxy_only);
+        assert_eq!(
+            actual.soracloud_runtime.submission.gas_asset_id.as_deref(),
+            Some("xor#wonderland")
+        );
         assert_eq!(
             actual.soracloud_runtime.inrou.start_grace,
             StdDuration::from_millis(7_500)

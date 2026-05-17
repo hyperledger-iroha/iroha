@@ -25,7 +25,7 @@ translator: manual
 ```
 
 שאילתה (חתומה) — `FindAbiVersion`
-- מסלול: ‏`/query` (מסגרת `SignedQuery` ב־Norito)
+- מסלול: ‏`/v1/query` (מסגרת `SignedQuery` ב־Norito)
 - וריאנט תיבת השאילתה הסינגולרית: `FindAbiVersion`
 - וריאנט הפלט: `AbiVersion`
 

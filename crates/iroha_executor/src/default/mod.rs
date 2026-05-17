@@ -3020,6 +3020,7 @@ mod sorafs_permission_tests {
             sample_manifest_digest(),
             sample_chunker_profile(),
             [0xEF; 32],
+            1_048_576,
             sample_pin_policy(),
             1,
             None,

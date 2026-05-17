@@ -54,7 +54,8 @@ class OfflineNoteV2Test {
         val derivation = obj(chain, "derivation")
         val issueVector = obj(chain, "issue")
         val redeemVector = obj(chain, "redeem")
-        val senderCertificate = certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
+        val payment = obj(fixture, "payment_token")
+        val senderCertificate = certificate(obj(payment, "sender_key_certificate"))
         val senderPayloadBytes = base64Bytes(string(certificates, "sender_payload_base64"))
         val issueBytes = base64Bytes(string(issueVector, "norito_base64"))
         val auditBytes = base64Bytes(string(obj(chain, "audit"), "norito_base64"))
@@ -118,6 +119,8 @@ class OfflineNoteV2Test {
 
         val tokenPreimage = OfflineNoteV2.PaymentTokenIdPreimageV2(
             chainId = string(derivation, "chain_id"),
+            paymentRequestId = string(derivation, "payment_request_id"),
+            createdAtMs = long(payment, "created_at_ms"),
             tokenNonce = hexBytes(string(derivation, "token_nonce_hex")),
             senderKeyCertificatePayloadHash = hexBytes(string(derivation, "sender_key_certificate_payload_hash")),
             inputNullifiers = listOf(hexBytes(string(derivation, "input_nullifier"))),
@@ -236,6 +239,8 @@ class OfflineNoteV2Test {
         val tokenId = OfflineNoteV2.derivePaymentTokenId(
             OfflineNoteV2.PaymentTokenIdPreimageV2(
                 chainId = chainId,
+                paymentRequestId = string(derivation, "payment_request_id"),
+                createdAtMs = long(payment, "created_at_ms"),
                 tokenNonce = hexBytes(string(derivation, "token_nonce_hex")),
                 senderKeyCertificatePayloadHash = hexBytes(string(derivation, "sender_key_certificate_payload_hash")),
                 inputNullifiers = listOf(inputNullifier),
@@ -384,22 +389,25 @@ class OfflineNoteV2Test {
     }
 
     @Test
-    fun paymentTokenCodecRoundTripsJsonTextAndQrFrames() {
+    fun paymentTokenCodecRoundTripsNoritoTextAndQrFrames() {
         val fixture = loadFixture()
+        val derivation = obj(obj(fixture, "chain_vectors"), "derivation")
         val payment = obj(fixture, "payment_token")
         val token = OfflineNoteV2PaymentToken(
+            chainId = string(derivation, "chain_id"),
             paymentRequestId = string(payment, "invoice_id"),
+            tokenNonce = hexBytes(string(derivation, "token_nonce_hex")),
             tokenId = hexBytes(string(payment, "token_id")),
             audit = audit(fixture),
             createdAtMs = long(payment, "created_at_ms"),
         )
 
-        val jsonDecoded = OfflineNoteV2PaymentTokenCodec.decodeJson(
-            OfflineNoteV2PaymentTokenCodec.encodeJson(token)
+        val noritoDecoded = OfflineNoteV2PaymentTokenCodec.decodeNorito(
+            OfflineNoteV2PaymentTokenCodec.encodeNorito(token)
         )
-        assertEquals(token.tokenIdHex(), jsonDecoded.tokenIdHex())
-        assertEquals(token.paymentRequestId, jsonDecoded.paymentRequestId)
-        assertEquals(base64(token.audit.noritoEncoded()), base64(jsonDecoded.audit.noritoEncoded()))
+        assertEquals(token.tokenIdHex(), noritoDecoded.tokenIdHex())
+        assertEquals(token.paymentRequestId, noritoDecoded.paymentRequestId)
+        assertEquals(base64(token.audit.noritoEncoded()), base64(noritoDecoded.audit.noritoEncoded()))
 
         val text = OfflineNoteV2PaymentTokenCodec.encodeText(token)
         assertTrue(text.startsWith(OfflineNoteV2PaymentTokenCodec.TEXT_PREFIX))
@@ -558,13 +566,14 @@ class OfflineNoteV2Test {
             store = senderStore,
             transactionSubmitter = RecordingTransactionSubmitter(),
             proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
             randomSource = QueueRandomSource(
                 listOf(
                     hexBytes(string(derivation, "token_nonce_hex")),
                     hexBytes(string(derivation, "change_note_secret_hex")),
                 )
             ),
-            clock = { 1_700_000_001_100L },
+            clock = { long(payment, "created_at_ms") },
         )
         val recipientSubmitter = RecordingTransactionSubmitter()
         val recipientWallet = OfflineNoteV2Wallet(
@@ -573,6 +582,7 @@ class OfflineNoteV2Test {
             attestationProvider = StaticAttestationProvider(recipientCertificate),
             transactionSubmitter = recipientSubmitter,
             proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
             randomSource = QueueRandomSource(listOf(hexBytes(string(derivation, "recipient_note_secret_hex")))),
             idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
             clock = { 1_700_000_001_200L },
@@ -588,18 +598,21 @@ class OfflineNoteV2Test {
 
         assertEquals(string(derivation, "payment_token_id"), token.tokenIdHex())
         assertEquals(string(chainAudit, "public_inputs_hash"), hex(token.audit.publicInputsHash()))
+        assertEquals(string(derivation, "payment_request_id"), token.paymentRequestId)
         assertEquals(
-            OfflineNoteV2WalletNoteState.SPEND_PENDING,
+            OfflineNoteV2WalletNoteState.SPENT,
             senderStore.findNote(hexBytes(string(derivation, "source_note_commitment")))?.state,
         )
         assertEquals(
-            OfflineNoteV2WalletNoteState.CHANGE_PENDING,
+            OfflineNoteV2WalletNoteState.SPENDABLE,
             senderStore.findNote(hexBytes(string(derivation, "change_output_commitment")))?.state,
         )
 
-        val accepted = recipientWallet.accept(token).get()
+        val accepted = recipientWallet.accept(token)
 
         assertEquals(OfflineNoteV2WalletNoteState.SPENDABLE, accepted.state)
+        assertEquals(0, recipientSubmitter.audits.size)
+        recipientWallet.publishAudit(token).get()
         assertEquals(1, recipientSubmitter.audits.size)
         val redeeming = recipientWallet.redeem(accepted).get()
         assertEquals(OfflineNoteV2WalletNoteState.REDEEM_PENDING, redeeming.state)
@@ -632,6 +645,7 @@ class OfflineNoteV2Test {
             transactionSubmitter = RecordingTransactionSubmitter(),
             syncResolver = syncResolver,
             proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
             randomSource = QueueRandomSource(
                 listOf(
                     hexBytes(string(derivation, "token_nonce_hex")),
@@ -646,6 +660,7 @@ class OfflineNoteV2Test {
             attestationProvider = StaticAttestationProvider(recipientCertificate),
             transactionSubmitter = RecordingTransactionSubmitter(),
             proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
             randomSource = QueueRandomSource(listOf(hexBytes(string(derivation, "recipient_note_secret_hex")))),
             idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
             clock = { 1_700_000_002_100L },
@@ -665,10 +680,7 @@ class OfflineNoteV2Test {
         val spendableChange = senderStore.findNote(hexBytes(string(derivation, "change_output_commitment")))
         assertEquals(OfflineNoteV2WalletNoteState.SPENDABLE, spendableChange?.state)
         assertEquals(
-            listOf(
-                string(derivation, "source_note_commitment"),
-                string(derivation, "change_output_commitment"),
-            ),
+            emptyList(),
             syncResolver.resolvedCommitments,
         )
 
@@ -703,6 +715,7 @@ class OfflineNoteV2Test {
             store = senderStore,
             transactionSubmitter = RecordingTransactionSubmitter(),
             proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
             randomSource = QueueRandomSource(
                 listOf(
                     hexBytes(string(derivation, "token_nonce_hex")),
@@ -717,6 +730,7 @@ class OfflineNoteV2Test {
             attestationProvider = StaticAttestationProvider(recipientCertificate),
             transactionSubmitter = RecordingTransactionSubmitter(),
             proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
             randomSource = QueueRandomSource(listOf(hexBytes(string(derivation, "recipient_note_secret_hex")))),
             idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
             clock = { 1_700_000_002_300L },
@@ -732,9 +746,11 @@ class OfflineNoteV2Test {
             senderWallet.pay(receiveRequest)
         }
 
-        val accepted = recipientWallet.accept(token).join()
+        val accepted = recipientWallet.accept(token)
         assertEquals(OfflineNoteV2WalletNoteState.SPENDABLE, accepted.state)
-        assertFutureFails(recipientWallet.accept(token))
+        assertFailsWith<IllegalStateException> {
+            recipientWallet.accept(token)
+        }
     }
 
     @Test
@@ -750,8 +766,8 @@ class OfflineNoteV2Test {
         val senderStore = InMemoryOfflineNoteV2Store()
         senderStore.upsert(sourceWalletNote(fixture, senderCertificate))
         val senderResolutions = linkedMapOf(
-            string(derivation, "source_note_commitment") to OfflineNoteV2WalletNoteState.SPENDABLE,
-            string(derivation, "change_output_commitment") to OfflineNoteV2WalletNoteState.CANCELLED,
+            string(derivation, "source_note_commitment") to OfflineNoteV2WalletNoteState.SPENT,
+            string(derivation, "change_output_commitment") to OfflineNoteV2WalletNoteState.SPENDABLE,
         )
         val senderWallet = OfflineNoteV2Wallet(
             chainId = string(derivation, "chain_id"),
@@ -761,6 +777,7 @@ class OfflineNoteV2Test {
             transactionSubmitter = RecordingTransactionSubmitter(),
             syncResolver = RecordingSyncResolver(senderResolutions),
             proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
             randomSource = QueueRandomSource(
                 listOf(
                     hexBytes(string(derivation, "token_nonce_hex")),
@@ -781,6 +798,7 @@ class OfflineNoteV2Test {
             transactionSubmitter = RejectingTransactionSubmitter(),
             syncResolver = RecordingSyncResolver(recipientResolutions),
             proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
             randomSource = QueueRandomSource(listOf(hexBytes(string(derivation, "recipient_note_secret_hex")))),
             idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
             clock = { 1_700_000_002_500L },
@@ -792,9 +810,11 @@ class OfflineNoteV2Test {
         )
         val token = senderWallet.pay(receiveRequest)
 
-        assertFutureFails(recipientWallet.accept(token))
+        val accepted = recipientWallet.accept(token)
+        assertEquals(OfflineNoteV2WalletNoteState.SPENDABLE, accepted.state)
+        assertFutureFails(recipientWallet.publishAudit(token))
         assertEquals(
-            OfflineNoteV2WalletNoteState.RECEIVE_PENDING,
+            OfflineNoteV2WalletNoteState.SPENDABLE,
             recipientStore.findNote(hexBytes(string(derivation, "recipient_output_commitment")))?.state,
         )
 
@@ -802,15 +822,15 @@ class OfflineNoteV2Test {
         recipientWallet.sync().join()
 
         assertEquals(
-            OfflineNoteV2WalletNoteState.SPENDABLE,
+            OfflineNoteV2WalletNoteState.SPENT,
             senderStore.findNote(hexBytes(string(derivation, "source_note_commitment")))?.state,
         )
         assertEquals(
-            OfflineNoteV2WalletNoteState.CANCELLED,
+            OfflineNoteV2WalletNoteState.SPENDABLE,
             senderStore.findNote(hexBytes(string(derivation, "change_output_commitment")))?.state,
         )
         assertEquals(
-            OfflineNoteV2WalletNoteState.CANCELLED,
+            OfflineNoteV2WalletNoteState.SPENDABLE,
             recipientStore.findNote(hexBytes(string(derivation, "recipient_output_commitment")))?.state,
         )
 
@@ -827,6 +847,7 @@ class OfflineNoteV2Test {
                 mapOf(string(derivation, "source_note_commitment") to OfflineNoteV2WalletNoteState.SPENDABLE)
             ),
             proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
             randomSource = QueueRandomSource(emptyList()),
             clock = { 1_700_000_002_600L },
         )
@@ -854,26 +875,7 @@ class OfflineNoteV2Test {
         val payment = obj(fixture, "payment_token")
         val audit = audit(fixture)
         val redeem = redeem(fixture)
-        val senderCertificate = certificate(obj(payment, "sender_key_certificate"))
         val recipientCertificate = certificate(obj(payment, "recipient_key_certificate"))
-        val sourceSpendPending = sourceWalletNote(fixture, senderCertificate)
-            .withState(OfflineNoteV2WalletNoteState.SPEND_PENDING, 1_700_000_003_000L)
-        val changePending = OfflineNoteV2WalletNote(
-            chainId = string(derivation, "chain_id"),
-            accountId = accountFromAssetId(string(issueVector, "asset_id")),
-            assetId = string(issueVector, "asset_id"),
-            amount = string(payment, "change_amount"),
-            keyCertificate = senderCertificate,
-            noteCommitment = hexBytes(string(derivation, "change_output_commitment")),
-            noteSecret = hexBytes(string(derivation, "change_note_secret_hex")),
-            origin = OfflineNoteV2.CommitmentOriginV2.P2pOutput(
-                paymentRequestId = string(derivation, "payment_request_id"),
-                outputIndex = 1,
-            ),
-            state = OfflineNoteV2WalletNoteState.CHANGE_PENDING,
-            createdAtMs = 1_700_000_003_000L,
-            updatedAtMs = 1_700_000_003_000L,
-        )
         val redeemPending = OfflineNoteV2WalletNote(
             chainId = string(derivation, "chain_id"),
             accountId = string(payment, "recipient_account_id"),
@@ -913,15 +915,12 @@ class OfflineNoteV2Test {
                 ),
             )
         )
-        assertEquals(OfflineNoteV2WalletNoteState.SPENT, committed.resolve(sourceSpendPending)?.state)
-        assertEquals(OfflineNoteV2WalletNoteState.SPENDABLE, committed.resolve(changePending)?.state)
+        assertEquals(null, committed.resolve(sourceWalletNote(fixture, certificate(obj(payment, "sender_key_certificate")))))
         assertEquals(OfflineNoteV2WalletNoteState.REDEEMED, committed.resolve(redeemPending)?.state)
 
         val rejected = OfflineNoteV2OutcomeIndex()
             .recordRejectedAudit(audit, "audit-rejected")
             .recordRejectedRedeem(redeem, "redeem-rejected")
-        assertEquals(OfflineNoteV2WalletNoteState.SPENDABLE, rejected.resolve(sourceSpendPending)?.state)
-        assertEquals(OfflineNoteV2WalletNoteState.CANCELLED, rejected.resolve(changePending)?.state)
         assertEquals(OfflineNoteV2WalletNoteState.SPENDABLE, rejected.resolve(redeemPending)?.state)
     }
 
@@ -1151,6 +1150,14 @@ class OfflineNoteV2Test {
                     "wallet-redeem-proof".toByteArray(),
                 ),
             )
+    }
+
+    private object BindingProofVerifier : OfflineNoteV2ProofVerifier {
+        override fun verifyAudit(audit: OfflineNoteV2.AuditBundleV2): Boolean =
+            audit.recursiveProof.publicInputsHash().contentEquals(audit.publicInputsHash())
+
+        override fun verifyRedeem(redemption: OfflineNoteV2.RedeemV2): Boolean =
+            redemption.recursiveProof.publicInputsHash().contentEquals(redemption.publicInputsHash())
     }
 
     private class RecordingIssuerClient(

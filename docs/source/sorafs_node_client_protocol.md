@@ -87,12 +87,12 @@ The signature covers the serialized `ProviderAdvertBodyV1` and currently
 supports `Ed25519` (single-signer) with reserved space for future Norito-backed
 multi-signatures.
 
-For operator tooling, the repository ships `sorafs-provider-advert-stub`.
+For operator tooling, the repository ships `sorafs_provider_advert_stub`.
 It validates the inputs, emits the Norito advertisement blob, and produces a
 JSON summary for dashboards:
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-provider-advert-stub -- \
+cargo run -p sorafs_car --bin sorafs_provider_advert_stub -- \
   --emit \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --provider-id=001122... \
@@ -453,15 +453,21 @@ the SLO work in SF-7:
 The end-to-end storage tests follow a deterministic sequence to confirm the API
 and telemetry stay in sync.【crates/iroha_torii/tests/sorafs_discovery.rs:989-1150】
 
-1. `POST /v1/sorafs/storage/pin` with a base64-encoded manifest (`manifest_b64`)
-   and payload (`payload_b64`). A successful pin returns `manifest_id_hex`,
-   `payload_digest_hex`, and the canonical content length.
-2. `POST /v1/sorafs/storage/fetch` using the returned manifest id, an offset,
+1. Register the manifest on-chain with `RegisterPinManifest`; the submitter pays
+   the configured SoraFS public pin fee and the approved registry record stores
+   the manifest digest, chunk digest, content length, policy, fee asset, treasury,
+   and fee amount.
+2. `POST /v1/sorafs/storage/pin` with a base64-encoded manifest (`manifest_b64`)
+   and payload (`payload_b64`). Torii recomputes the chunk plan and admits the
+   ingest only when it matches the approved paid registry record. A successful
+   pin returns `manifest_id_hex`, `payload_digest_hex`, and the canonical content
+   length.
+3. `POST /v1/sorafs/storage/fetch` using the returned manifest id, an offset,
    and a bounded length. The response echoes the request fields and streams the
    chunk data as `data_b64`.
-3. `POST /v1/sorafs/storage/por-sample` to request deterministic PoR leaves.
+4. `POST /v1/sorafs/storage/por-sample` to request deterministic PoR leaves.
    The sampler returns the flattened indices and proofs encoded as JSON maps.
-4. `GET /v1/sorafs/storage/state` to verify the scheduler snapshot. A fully
+5. `GET /v1/sorafs/storage/state` to verify the scheduler snapshot. A fully
    successful cycle drives `pin_queue_depth`, `fetch_inflight`, and
    `por_inflight` back to zero, bumps `fetch_bytes_per_sec` above zero (smoothing
    accounts for elapsed time), and increments `por_samples_success_total` by the
@@ -575,7 +581,7 @@ and submit fetch requests in `max_chunk_span`-bounded slices. The CLI’s
 end-to-end tests cover this flow and expose the resulting provider receipts so
 integrations can assert deterministic scheduling.【crates/sorafs_car/src/multi_fetch.rs:1341-1501】
 
-For audits, run `sorafs-provider-advert-stub --verify --advert=<path> [--now=unix_ts]` to
+For audits, run `sorafs_provider_advert_stub --verify --advert=<path> [--now=unix_ts]` to
 validate signatures, enforce TTL/path/QoS rules, and print a JSON summary of an
 existing advert (optionally with `--json-out` to persist the summary). The JSON
 payload includes `signature_verified=true` when the ed25519 signature matches the

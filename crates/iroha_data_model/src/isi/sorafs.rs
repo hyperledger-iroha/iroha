@@ -10,28 +10,30 @@ use crate::sorafs::{
 };
 
 isi! {
-    /// Register a `SoraFS` manifest digest with the pin registry (pending state).
+    /// Register a `SoraFS` manifest digest with the paid pin registry.
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
-pub struct RegisterPinManifest {
-    /// Canonical manifest digest (BLAKE3-256 of the Norito payload).
-    pub digest: ManifestDigest,
+    pub struct RegisterPinManifest {
+        /// Canonical manifest digest (BLAKE3-256 of the Norito payload).
+        pub digest: ManifestDigest,
         /// Chunker profile handle used to generate the CAR commitments.
         pub chunker: ChunkerProfileHandle,
         /// SHA3-256 digest emitted alongside the chunk metadata report.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub chunk_digest_sha3_256: [u8; 32],
-    /// Requested replication policy.
-    pub policy: PinPolicy,
-    /// Epoch (inclusive) recorded for the submission event.
-    pub submitted_epoch: u64,
-    /// Optional alias binding approved with the manifest.
-    pub alias: Option<ManifestAliasBinding>,
-    /// Optional predecessor manifest digest forming a succession chain.
-    pub successor_of: Option<ManifestDigest>,
-}
+        /// Total content length covered by the manifest.
+        pub content_length: u64,
+        /// Requested replication policy.
+        pub policy: PinPolicy,
+        /// Epoch (inclusive) recorded for the submission event.
+        pub submitted_epoch: u64,
+        /// Optional alias binding approved with the manifest.
+        pub alias: Option<ManifestAliasBinding>,
+        /// Optional predecessor manifest digest forming a succession chain.
+        pub successor_of: Option<ManifestDigest>,
+    }
 }
 
 impl crate::seal::Instruction for RegisterPinManifest {}
@@ -199,6 +201,7 @@ impl RegisterPinManifest {
         digest: ManifestDigest,
         chunker: ChunkerProfileHandle,
         chunk_digest_sha3_256: [u8; 32],
+        content_length: u64,
         policy: PinPolicy,
         submitted_epoch: u64,
         alias: Option<ManifestAliasBinding>,
@@ -208,6 +211,7 @@ impl RegisterPinManifest {
             digest,
             chunker,
             chunk_digest_sha3_256,
+            content_length,
             policy,
             submitted_epoch,
             alias,
@@ -384,6 +388,7 @@ impl_sorafs_decode_from_slice!(RegisterPinManifest {
     digest: ManifestDigest,
     chunker: ChunkerProfileHandle,
     chunk_digest_sha3_256: [u8; 32],
+    content_length: u64,
     policy: PinPolicy,
     submitted_epoch: u64,
     alias: Option<ManifestAliasBinding>,
@@ -615,6 +620,7 @@ mod tests {
                 multihash_code: 31,
             },
             [7_u8; 32],
+            1_048_576,
             PinPolicy {
                 min_replicas: 2,
                 storage_class: StorageClass::Hot,
@@ -639,6 +645,7 @@ mod tests {
             digest(0x11),
             chunker(),
             [0x22; 32],
+            1_048_576,
             pin_policy(),
             42,
             Some(alias()),
@@ -683,6 +690,7 @@ mod tests {
                 digest(0x11),
                 chunker(),
                 [0x22; 32],
+                1_048_576,
                 pin_policy(),
                 42,
                 Some(alias()),

@@ -1860,7 +1860,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 return (response, self.nodeCapabilitiesBody())
-            case "/transaction":
+            case "/v1/pipeline/transactions":
                 XCTAssertEqual(request.httpMethod, "POST")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito, application/json")
@@ -1897,7 +1897,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 return (response, self.nodeCapabilitiesBody())
-            case "/transaction/entrypoint":
+            case "/v1/pipeline/transaction-entrypoints":
                 XCTAssertEqual(request.httpMethod, "POST")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito, application/json")
@@ -1935,7 +1935,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 return (response, self.nodeCapabilitiesBody())
-            case "/transaction":
+            case "/v1/pipeline/transactions":
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito, application/json")
                 let headers = [
@@ -1982,7 +1982,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 return (response, self.nodeCapabilitiesBody(dataModelVersion: 9))
-            case "/transaction":
+            case "/v1/pipeline/transactions":
                 XCTFail("transaction submitted with data model mismatch")
                 let response = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!
                 return (response, Data())
@@ -2017,7 +2017,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 return (response, self.nodeCapabilitiesBody(signedTransactionSchemaHashHex: nil))
-            case "/transaction":
+            case "/v1/pipeline/transactions":
                 XCTFail("transaction submitted with missing schema hash")
                 let response = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!
                 return (response, Data())
@@ -2052,7 +2052,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 return (response, self.nodeCapabilitiesBody(signedTransactionSchemaHashHex: "ABC123"))
-            case "/transaction":
+            case "/v1/pipeline/transactions":
                 XCTFail("transaction submitted with invalid schema hash")
                 let response = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!
                 return (response, Data())
@@ -2088,7 +2088,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 return (response, self.nodeCapabilitiesBody(signedTransactionSchemaHashHex: mismatchedHash))
-            case "/transaction":
+            case "/v1/pipeline/transactions":
                 XCTFail("transaction submitted with schema hash mismatch")
                 let response = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!
                 return (response, Data())
@@ -2129,7 +2129,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "text/plain"])!
                 return (response, Data("missing".utf8))
-            case "/transaction":
+            case "/v1/pipeline/transactions":
                 XCTFail("transaction submitted after missing capabilities")
                 let response = HTTPURLResponse(url: request.url!,
                                                statusCode: 500,
@@ -2173,7 +2173,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Retry-After": "1"])!
                 return (response, Data("rate limited".utf8))
-            case "/transaction":
+            case "/v1/pipeline/transactions":
                 XCTFail("transaction submitted after rate-limited capabilities")
                 let response = HTTPURLResponse(url: request.url!,
                                                statusCode: 500,
@@ -2217,7 +2217,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "text/plain"])!
                 return (response, Data("bad gateway".utf8))
-            case "/transaction":
+            case "/v1/pipeline/transactions":
                 XCTFail("transaction submitted after failed capabilities")
                 let response = HTTPURLResponse(url: request.url!,
                                                statusCode: 500,
@@ -9624,7 +9624,7 @@ id: 88
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 return (response, self.nodeCapabilitiesBody())
-            case "/transaction":
+            case "/v1/pipeline/transactions":
                 XCTAssertEqual(request.httpMethod, "POST")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito, application/json")

@@ -576,7 +576,7 @@ impl GatewayPolicy {
 
         if self.config.enforce_admission {
             let Some(registry) = &self.admission else {
-                return PolicyDecision::Allow;
+                return PolicyDecision::Deny(PolicyViolation::AdmissionUnavailable);
             };
 
             let Some(provider_id) = ctx.provider_id() else {
@@ -892,6 +892,24 @@ mod tests {
         assert!(matches!(
             decision,
             PolicyDecision::Deny(PolicyViolation::ProviderNotAdmitted { .. })
+        ));
+    }
+
+    #[test]
+    fn policy_denies_when_admission_registry_is_unavailable() {
+        let denylist = Arc::new(GatewayDenylist::new());
+        let policy = GatewayPolicy::new_default(None, denylist);
+        let client = ClientFingerprint::from_identifier("client");
+        let provider = sample_provider_id();
+        let ctx = RequestContext::new(&client, SystemTime::now(), Instant::now())
+            .with_provider_id(&provider)
+            .with_manifest_envelope(true);
+
+        let decision = policy.evaluate(&ctx);
+
+        assert!(matches!(
+            decision,
+            PolicyDecision::Deny(PolicyViolation::AdmissionUnavailable)
         ));
     }
 

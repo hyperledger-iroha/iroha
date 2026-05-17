@@ -9210,43 +9210,60 @@ export function extractToriiFeatureConfig(input?: {
   config?: Record<string, unknown>;
 } & Record<string, unknown>): ToriiFeatureConfigSnapshot;
 
-export type SoraCloudStorageClass = "hot" | "warm" | "cold";
+export type SoracloudStorageClass = "hot" | "warm" | "cold";
 
-export interface SoraCloudHfDeployRequestInput {
+export interface SoracloudHfDeployDraftInput {
   repoId: string;
   revision?: string;
   modelName: string;
   serviceName: string;
   apartmentName?: string;
-  storageClass: SoraCloudStorageClass;
+  storageClass: SoracloudStorageClass;
   leaseTermMs: number | bigint | string;
   leaseAssetDefinitionId: string;
   baseFeeNanos: number | bigint | string;
-  privateKeyHex: string;
 }
 
-export interface SoraCloudManifestProvenance {
+export interface SoracloudManifestProvenance {
   signer: string;
   signature: string;
 }
 
-export interface SoraCloudHfDeployRequest {
+export interface SoracloudHfDeployDraft {
   payload: {
     repo_id: string;
     revision?: string;
     model_name: string;
     service_name: string;
     apartment_name?: string;
-    storage_class: SoraCloudStorageClass | { type: string; value?: unknown };
+    storage_class: SoracloudStorageClass | { type: string; value?: unknown };
     lease_term_ms: number;
     lease_asset_definition_id: string;
     base_fee_nanos: string;
   };
-  provenance: SoraCloudManifestProvenance;
-  generated_service_provenance?: SoraCloudManifestProvenance;
-  generated_apartment_provenance?: SoraCloudManifestProvenance;
+  provenancePayloads: {
+    deploy: Record<string, unknown>;
+    generatedService: Record<string, unknown>;
+    generatedApartment?: Record<string, unknown>;
+  };
 }
 
-export function buildSoraCloudHfDeployRequest(
-  input: SoraCloudHfDeployRequestInput,
-): SoraCloudHfDeployRequest;
+export interface SoracloudHfDeployRequest {
+  payload: SoracloudHfDeployDraft["payload"];
+  provenance: SoracloudManifestProvenance;
+  generated_service_provenance: SoracloudManifestProvenance;
+  generated_apartment_provenance?: SoracloudManifestProvenance;
+}
+
+export function buildSoracloudHfDeployDraft(
+  input: SoracloudHfDeployDraftInput,
+): SoracloudHfDeployDraft;
+
+export function assembleSoracloudHfDeployRequest(
+  draft: SoracloudHfDeployDraft,
+  provenances: {
+    deploy: SoracloudManifestProvenance;
+    generatedService: SoracloudManifestProvenance;
+    generatedApartment?: SoracloudManifestProvenance;
+  },
+): SoracloudHfDeployRequest;

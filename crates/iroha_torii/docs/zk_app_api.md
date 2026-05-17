@@ -103,7 +103,7 @@ Access control and rate limiting:
 - `torii.query_rate_per_authority_per_sec` (Option<u32>) and `torii.query_burst_per_authority` (Option<u32>)
   - Per-authority rate limiter for app API endpoints (attachments and prover routes).
 - `torii.tx_rate_per_authority_per_sec` (Option<u32>) and `torii.tx_burst_per_authority` (Option<u32>)
-  - Per-authority transaction submission rate limiter for `/v1/transaction` and other tx-producing endpoints.
+  - Per-authority transaction submission rate limiter for `/v1/pipeline/transactions` and other tx-producing endpoints.
 - `torii.api_allow_cidrs` (list of CIDRs)
   - Requests from these networks bypass the rate limiter (still subject to body size limits and tokens, if enabled).
 
@@ -118,6 +118,10 @@ Tip: These keys map to the `iroha_config::parameters::user::Torii` section and a
 - Storage hygiene: deleting an attachment removes both `.bin` and `.json`; deleting a report removes the corresponding `.json` under `zk_prover/reports`.
 - Payloads: the prover expects `ProofAttachment`/`ProofAttachmentList` payloads (Norito or JSON). ZK1/TLV envelopes are tagged but rejected as top‑level payloads.
 - Key bytes: when a registry entry omits inline VK bytes, the prover loads bytes from `torii.zk_prover_keys_dir` using `<backend>__<name>.vk` naming.
+- VK commitments are domain-separated SHA-256 hashes over the `iroha:zk:v1:vk`
+  domain plus length-prefixed backend and VK bytes. Generic ledger
+  `VerifyProof` requires a registry `vk_ref`; inline VKs are accepted only by
+  specialized proof instructions that explicitly define that policy.
 - Proving keys: for `halo2/ipa`, the IVM prove helper (`/v1/zk/ivm/prove`) loads proving key bytes from the same directory using `<backend>__<name>.pk` naming.
   The `.pk` file must match the resolved verifying key and uses Halo2 `SerdeFormat::Processed` serialization.
   The STARK path (`stark/fri-v1`) does not require a separate `.pk` artifact.

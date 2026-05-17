@@ -114,7 +114,7 @@ public final class DefaultOkHttpWiringTests {
               .build();
 
       try (ToriiEventStream stream =
-          client.openSseStream("/events", ToriiEventStreamOptions.defaultOptions(), listener)) {
+          client.openSseStream("/v1/events/sse", ToriiEventStreamOptions.defaultOptions(), listener)) {
         stream.completion().get(2, TimeUnit.SECONDS);
       }
 
@@ -126,7 +126,7 @@ public final class DefaultOkHttpWiringTests {
 
       final RecordedRequest recorded = server.takeRequest(1, TimeUnit.SECONDS);
       assertNotNull("request not received", recorded);
-      assertEquals("/events", recorded.getPath());
+      assertEquals("/v1/events/sse", recorded.getPath());
       assertEquals("text/event-stream", recorded.getHeader("Accept"));
     }
   }

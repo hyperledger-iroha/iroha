@@ -12,7 +12,7 @@ translator: manual
 
 # בנייה של `SignedQuery` עבור ‎`FindAbiVersion`
 
-הדוגמה הבאה מדגימה כיצד לבנות, לחתום ולקודד מסגרת Norito מסוג `SignedQuery` שמבצעת את השאילתה הסינגולרית `FindAbiVersion`. ניתן לשלוח את הבייטים שנוצרו ב־`POST /query` או להזין אותם ל־CLI בעזרת `query stdin-raw`.
+הדוגמה הבאה מדגימה כיצד לבנות, לחתום ולקודד מסגרת Norito מסוג `SignedQuery` שמבצעת את השאילתה הסינגולרית `FindAbiVersion`. ניתן לשלוח את הבייטים שנוצרו ב־`POST /v1/query` או להזין אותם ל־CLI בעזרת `query stdin-raw`.
 
 צעדים
 - בנו `SingularQueryBox::FindAbiVersion`.
@@ -44,7 +44,7 @@ fn build_signed_query_find_active_abi(authority: AccountId, kp: &KeyPair) -> Vec
 ```
 
 שליחה
-- HTTP גולמי: בצעו `POST /query` עם הבייטים המקודדים כגוף הבקשה.
+- HTTP גולמי: בצעו `POST /v1/query` עם הבייטים המקודדים כגוף הבקשה.
 - CLI: המירו את הבייטים ל־base64 והזינו אל `iroha ledger query stdin-raw`.
 
 פלט

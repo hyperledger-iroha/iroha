@@ -10,7 +10,7 @@ translator: manual
 
 # `FindAbiVersion` 用の SignedQuery を構築する
 
-このスニペットは、コアの単一クエリ `FindAbiVersion` を呼び出す Norito `SignedQuery` を生成・署名・エンコードする手順を示します。生成されたバイト列は `/query` への POST もしくは CLI の `query stdin-raw` にパイプできます。
+このスニペットは、コアの単一クエリ `FindAbiVersion` を呼び出す Norito `SignedQuery` を生成・署名・エンコードする手順を示します。生成されたバイト列は `/v1/query` への POST もしくは CLI の `query stdin-raw` にパイプできます。
 
 手順
 - `SingularQueryBox::FindAbiVersion` を構築する。
@@ -42,7 +42,7 @@ fn build_signed_query_find_active_abi(authority: AccountId, kp: &KeyPair) -> Vec
 ```
 
 送信方法
-- HTTP 生リクエスト: エンコード済みバイト列をボディに入れて `POST /query`。
+- HTTP 生リクエスト: エンコード済みバイト列をボディに入れて `POST /v1/query`。
 - CLI: バイト列を base64 に変換して `iroha ledger query stdin-raw` に渡す。
 
 出力

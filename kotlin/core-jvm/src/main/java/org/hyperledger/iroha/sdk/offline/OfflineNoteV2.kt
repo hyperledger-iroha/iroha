@@ -520,6 +520,8 @@ object OfflineNoteV2 {
     class PaymentTokenIdPreimageV2 @JvmOverloads constructor(
         val domain: String = PAYMENT_TOKEN_ID_DOMAIN,
         val chainId: String,
+        val paymentRequestId: String,
+        val createdAtMs: Long,
         tokenNonce: ByteArray,
         senderKeyCertificatePayloadHash: ByteArray,
         inputNullifiers: List<ByteArray>,
@@ -533,6 +535,7 @@ object OfflineNoteV2 {
         init {
             require(domain == PAYMENT_TOKEN_ID_DOMAIN) { "unsupported payment token id domain" }
             require(chainId.trim().isNotEmpty()) { "chain_id must not be empty" }
+            require(paymentRequestId.trim().isNotEmpty()) { "payment_request_id must not be empty" }
             requireRandomBytes(_tokenNonce, "token_nonce")
             requireHash(_senderKeyCertificatePayloadHash, "sender_key_certificate_payload_hash")
             requireHashes(_inputNullifiers, "input_nullifiers")
@@ -1208,6 +1211,8 @@ object OfflineNoteV2 {
         override fun encode(encoder: NoritoEncoder, value: PaymentTokenIdPreimageV2) {
             writeField(encoder) { writeString(it, value.domain) }
             writeField(encoder) { writeChainId(it, value.chainId) }
+            writeField(encoder) { writeString(it, value.paymentRequestId) }
+            writeField(encoder) { it.writeUInt(value.createdAtMs, 64) }
             writeField(encoder) { writeBytesVec(it, value.tokenNonce()) }
             writeField(encoder) { it.writeBytes(value.senderKeyCertificatePayloadHash()) }
             writeField(encoder) { writeVec(it, value.inputNullifiers()) { out, bytes -> out.writeBytes(bytes) } }
@@ -1218,6 +1223,8 @@ object OfflineNoteV2 {
             PaymentTokenIdPreimageV2(
                 domain = readField(decoder) { readString(it) },
                 chainId = readField(decoder) { readChainId(it) },
+                paymentRequestId = readField(decoder) { readString(it) },
+                createdAtMs = readField(decoder) { it.readUInt(64) },
                 tokenNonce = readField(decoder) { readBytesVec(it) },
                 senderKeyCertificatePayloadHash = readField(decoder) {
                     readHash(it, "sender_key_certificate_payload_hash")

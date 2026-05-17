@@ -227,6 +227,8 @@ public enum OfflineNoteV2Decoding {
             try OfflineNotePaymentTokenIdPreimageV2(
                 domain: readField(&reader, readString),
                 chainId: readField(&reader, readChainId),
+                paymentRequestId: readField(&reader, readString),
+                createdAtMs: readField(&reader) { try $0.readUInt64LE() },
                 tokenNonce: readField(&reader, readBytesVec),
                 senderKeyCertificatePayloadHash: readField(&reader) { child in
                     try readHash(&child, field: "sender_key_certificate_payload_hash")

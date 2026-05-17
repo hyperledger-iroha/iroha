@@ -2517,7 +2517,11 @@ fn method_from_key(key: &str) -> Option<Method> {
 fn should_skip_operation(path: &str, operation: &Map, expose_operator_routes: bool) -> bool {
     if matches!(
         path,
-        "/events" | "/block/stream" | "/p2p" | "/v1/connect/ws" | "/v1/mcp"
+        iroha_torii_shared::uri::SUBSCRIPTION
+            | iroha_torii_shared::uri::BLOCKS_STREAM
+            | "/p2p"
+            | "/v1/connect/ws"
+            | "/v1/mcp"
     ) {
         return true;
     }
@@ -6747,7 +6751,7 @@ async fn dispatch_iroha_transactions_submit(
         app,
         inbound_headers,
         Method::POST,
-        "/transaction",
+        iroha_torii_shared::uri::TRANSACTION,
         arguments.get("headers"),
         body,
         Some(crate::utils::NORITO_MIME_TYPE.to_owned()),
@@ -6773,7 +6777,7 @@ async fn dispatch_iroha_queries_submit(
         app,
         inbound_headers,
         Method::POST,
-        "/query",
+        iroha_torii_shared::uri::QUERY,
         arguments.get("headers"),
         body,
         Some(crate::utils::NORITO_MIME_TYPE.to_owned()),
@@ -13761,7 +13765,7 @@ fn iroha_queries_submit_tool() -> ToolSpec {
             "Submit a versioned SignedQuery encoded as canonical Norito bytes in `body_base64`."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/query".to_owned(),
+        path_template: iroha_torii_shared::uri::QUERY.to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -14022,7 +14026,7 @@ fn iroha_transactions_submit_tool() -> ToolSpec {
         effect: manual_tool_effect_from_name("iroha.transactions.submit"),
         description: "Submit a versioned SignedTransaction encoded as canonical Norito bytes in `body_base64`.".to_owned(),
         method: Method::POST,
-        path_template: "/transaction".to_owned(),
+        path_template: iroha_torii_shared::uri::TRANSACTION.to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -14048,7 +14052,7 @@ fn iroha_transactions_submit_and_wait_tool() -> ToolSpec {
         effect: manual_tool_effect_from_name("iroha.transactions.submit_and_wait"),
         description: "Submit a versioned SignedTransaction from canonical `body_base64` bytes and poll pipeline status until a terminal state (`Committed`/`Applied`/`Rejected`/`Expired` by default).".to_owned(),
         method: Method::POST,
-        path_template: "/transaction".to_owned(),
+        path_template: iroha_torii_shared::uri::TRANSACTION.to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -14483,7 +14487,7 @@ mod tests {
         let explicit_query_tool = sample_tool_at(
             "iroha.queries.submit",
             Method::POST,
-            "/query",
+            iroha_torii_shared::uri::QUERY,
             ToolEffect::Read,
         );
         assert!(is_tool_allowed_by_policy(&cfg, &read_tool));
@@ -14504,7 +14508,9 @@ mod tests {
 
         let query = tools
             .iter()
-            .find(|tool| tool.method == Method::POST && tool.path_template == "/query")
+            .find(|tool| {
+                tool.method == Method::POST && tool.path_template == iroha_torii_shared::uri::QUERY
+            })
             .expect("query tool");
         assert_eq!(query.effect, ToolEffect::Read);
         assert!(is_tool_allowed_by_policy(&read_only_cfg, query));
@@ -14875,11 +14881,11 @@ mod tests {
         let cfg = iroha_config::parameters::actual::ToriiMcp::default();
         let tools = build_tool_specs(&cfg);
         assert!(!tools.is_empty(), "tool registry must not be empty");
-        assert!(
-            tools.iter().all(
-                |tool| tool.path_template != "/events" && !tool.path_template.ends_with("/sse")
-            )
-        );
+        assert!(tools.iter().all(|tool| {
+            tool.path_template != iroha_torii_shared::uri::SUBSCRIPTION
+                && tool.path_template != iroha_torii_shared::uri::BLOCKS_STREAM
+                && !tool.path_template.ends_with("/sse")
+        }));
         assert!(tools.iter().any(|tool| tool.name == "connect.ws.ticket"));
         assert!(
             tools

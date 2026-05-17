@@ -258,11 +258,11 @@ lockstep.
 - Hard limits (configurable defaults):
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. Proofs that exceed `verify_timeout_ms` abort the instruction deterministically (governance ballots emit `proof verification exceeded timeout`, `VerifyProof` returns an error).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Additional quotas ensure liveness: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, and `max_public_inputs` bound block builders; `reorg_depth_bound` (≥ `max_anchor_age_blocks`) governs frontier checkpoint retention.
 - Runtime execution now rejects transactions that exceed these per-transaction or per-block limits, emitting deterministic `InvalidParameter` errors and leaving ledger state unchanged.
 - Mempool prefilters confidential transactions by `vk_id`, proof length, and anchor age before invoking the verifier to keep resource usage bounded.
-- Verification halts deterministically on timeout or bound violation; transactions fail with explicit errors. SIMD backends are optional but do not alter gas accounting.
+- Verification rejects deterministic bound violations with explicit errors. SIMD backends are optional but do not alter gas accounting or validity, and local timeout observations do not change ledger outcomes.
 
 ### Calibration Baselines & Acceptance Gates
 - **Reference platforms.** Calibration runs MUST cover the three hardware profiles below. Runs failing to capture all profiles are rejected during review.
@@ -331,7 +331,7 @@ lockstep.
 - Determinism: randomized transaction shuffling within blocks yields identical Merkle roots and nullifier sets.
 - Reorg resilience: simulate multi-block reorgs with anchors; nullifiers remain stable and stale anchors rejected.
 - Gas invariants: verify identical gas usage across nodes with and without SIMD acceleration.
-- Boundary testing: proofs at size/gas ceilings, max in/out counts, timeout enforcement.
+- Boundary testing: proofs at size/gas ceilings, max in/out counts, and telemetry latency-budget reporting.
 - Lifecycle: governance operations for verifier and parameter activation/deprecation, rotation spend tests.
 - Policy FSM: allowed/disallowed transitions, pending transition delays, and mempool rejection around effective heights.
 - Registry emergencies: emergency withdrawal freezes affected assets at `withdraw_height` and rejects proofs afterwards.
@@ -352,8 +352,8 @@ lockstep.
    - ✅ Execution enforces proof size caps and per-transaction/per-block confidential quotas, rejecting over-budget transactions with deterministic errors.
    - ✅ P2P handshake advertises `ConfidentialFeatureDigest` (backend digest + registry fingerprints) and fails mismatches deterministically via `HandshakeConfidentialMismatch`.
    - ✅ Remove panics in confidential execution paths and add role gating for nodes without matching capability.
-   - ⚪ Enforce verifier timeout budgets and reorg depth bounds for frontier checkpoints.
-     - ✅ Verification timeout budgets enforced; proofs exceeding `verify_timeout_ms` now fail deterministically.
+  - ⚪ Expose verifier timeout budgets and enforce reorg depth bounds for frontier checkpoints.
+     - ✅ Verification timeout budgets are telemetry/operator budgets only; proofs fail deterministically on size, gas, public input, policy, or anchor-age bounds.
      - ✅ Frontier checkpoints now respect `reorg_depth_bound`, pruning checkpoints older than the configured window while keeping deterministic snapshots.
    - Introduce `AssetConfidentialPolicy`, policy FSM, and enforcement gates for mint/transfer/reveal instructions.
    - Commit `conf_features` in block headers and refuse validator participation when registry/parameter digests diverge.

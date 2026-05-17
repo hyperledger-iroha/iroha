@@ -3399,7 +3399,8 @@ mod tests2 {
                 None,
                 None,
                 None,
-                Some(RULES_VERSION)
+                Some(RULES_VERSION),
+                None,
             ))
         );
     }
@@ -4592,7 +4593,7 @@ impl RawGenesisTransaction {
             transactions.push(transaction);
         }
         let confidential_digest =
-            ConfidentialFeatureDigest::new(None, None, None, Some(RULES_VERSION));
+            ConfidentialFeatureDigest::new(None, None, None, Some(RULES_VERSION), None);
         let block = SignedBlock::genesis_with_da_proof_policies(
             transactions,
             genesis_key_pair.private_key(),

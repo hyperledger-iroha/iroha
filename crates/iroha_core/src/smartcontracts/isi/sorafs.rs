@@ -4,6 +4,7 @@ use std::{collections::BTreeSet, str::FromStr, sync::OnceLock};
 use blake3::hash as blake3_hash;
 use iroha_crypto::{Algorithm, PublicKey, Signature};
 use iroha_data_model::{
+    asset::AssetId,
     events::data::sorafs::{SorafsGatewayEvent, SorafsProofHealthAlert},
     isi::error::{InstructionExecutionError, InvalidParameterError},
     metadata::Metadata,
@@ -17,14 +18,14 @@ use iroha_data_model::{
         },
         pin_registry::{
             ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord, ManifestDigest,
-            PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderId, ReplicationOrderRecord,
-            ReplicationOrderStatus, StorageClass,
+            PinFeePayment, PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderId,
+            ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
         },
         pricing::{PricingScheduleRecord, ProviderCreditRecord},
     },
 };
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric::Numeric};
 use mv::storage::{StorageReadOnly, Transaction as StorageTransaction};
 use norito::{
     decode_from_bytes,
@@ -388,6 +389,7 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterPinManifest {
             digest,
             chunker,
             chunk_digest_sha3_256,
+            content_length,
             policy,
             submitted_epoch,
             mut alias,
@@ -422,6 +424,14 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterPinManifest {
             ));
         }
 
+        let pin_fee_payment = collect_public_pin_fee(
+            state_transaction,
+            authority,
+            &policy,
+            content_length,
+            submitted_epoch,
+        )?;
+
         let mut record = PinManifestRecord::new(
             digest,
             chunker,
@@ -432,7 +442,9 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterPinManifest {
             alias.clone(),
             successor_of,
             Metadata::default(),
-        );
+        )
+        .with_content_length(content_length);
+        record.record_pin_fee_payment(pin_fee_payment);
         record.approve(submitted_epoch, None);
 
         if let Some(alias) = &record.alias {
@@ -1075,6 +1087,48 @@ fn build_auto_replication_order(
         deadline_epoch,
         canonical_order,
         status: ReplicationOrderStatus::Pending,
+    })
+}
+
+fn collect_public_pin_fee(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    policy: &PinPolicy,
+    content_length: u64,
+    submitted_epoch: u64,
+) -> Result<PinFeePayment, InstructionExecutionError> {
+    let amount_nano = state_transaction
+        .world
+        .sorafs_pricing
+        .get()
+        .public_pin_fee_nano(
+            policy.storage_class,
+            content_length,
+            policy.min_replicas,
+            submitted_epoch,
+            policy.retention_epoch,
+        );
+    let fee_asset_id = state_transaction.gov.sorafs_pin_fee_asset_id.clone();
+    let treasury_account_id = state_transaction
+        .gov
+        .sorafs_pin_fee_treasury_account
+        .clone();
+    let source_id = AssetId::new(fee_asset_id.clone(), authority.clone());
+    let amount = Numeric::new(amount_nano, 0);
+
+    crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
+        state_transaction,
+        authority,
+        source_id,
+        treasury_account_id.clone(),
+        amount,
+    )?;
+
+    Ok(PinFeePayment {
+        paid_by: authority.clone(),
+        fee_asset_id,
+        treasury_account_id,
+        amount_nano,
     })
 }
 
@@ -2279,12 +2333,13 @@ impl Execute for iroha_data_model::isi::sorafs::UpsertProviderCredit {
 #[cfg(test)]
 mod sorafs_tests {
     use core::str::FromStr;
-    use std::convert::TryInto;
+    use std::{collections::BTreeSet, convert::TryInto};
 
     use blake3::hash as blake3_hash;
     use hex;
-    use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
+    use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, Signature};
     use iroha_data_model::{
+        IntoKeyValue, Registrable,
         isi::{
             error::{InstructionExecutionError, InvalidParameterError},
             sorafs::{
@@ -2298,7 +2353,7 @@ mod sorafs_tests {
         metadata::Metadata,
         name::Name,
         permission::{Permission as AccountPermission, Permissions},
-        prelude::AccountId,
+        prelude::{Account, AccountId, Asset, AssetDefinition, AssetId, Domain},
         query::error::FindError,
         sorafs::{
             capacity::{
@@ -2380,14 +2435,84 @@ mod sorafs_tests {
         iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)
     }
 
+    fn seed_test_call_hash(stx: &mut crate::state::StateTransaction<'_, '_>) {
+        stx.tx_call_hash = Some(Hash::prehashed([0x51; Hash::LENGTH]));
+    }
+
     pub(super) fn make_state() -> State {
         let kura = Kura::blank_kura_for_testing();
         let handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::new(), kura, handle);
+        seed_public_pin_fee_accounts(&mut state);
         seed_sorafs_permissions(&mut state, &alice());
         state.gov.sorafs_telemetry.require_submitter = true;
         state.gov.sorafs_telemetry.submitters = vec![alice()];
         state
+    }
+
+    fn seed_public_pin_fee_accounts(state: &mut State) {
+        let fee_asset_id = state.gov.sorafs_pin_fee_asset_id.clone();
+        if let Some(domain_id) = fee_asset_id.try_domain().cloned() {
+            state
+                .world
+                .domains
+                .insert(domain_id.clone(), Domain::new(domain_id).build(&alice()));
+        }
+        let (account_id, account_value) = Account::new(alice()).build(&alice()).into_key_value();
+        state.world.accounts.insert(account_id, account_value);
+        let (account_id, account_value) = Account::new(bob()).build(&alice()).into_key_value();
+        state.world.accounts.insert(account_id, account_value);
+        let treasury = state.gov.sorafs_pin_fee_treasury_account.clone();
+        let (account_id, account_value) = Account::new(treasury).build(&alice()).into_key_value();
+        state.world.accounts.insert(account_id, account_value);
+
+        let definition = AssetDefinition::numeric(fee_asset_id.clone())
+            .with_name(
+                fee_asset_id
+                    .try_name()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "xor".to_owned()),
+            )
+            .build(&alice());
+        if let Some(domain_id) = fee_asset_id.try_domain().cloned() {
+            state
+                .world
+                .domain_asset_definitions
+                .insert(domain_id, BTreeSet::from([fee_asset_id.clone()]));
+        }
+        let owner = definition.owned_by().clone();
+        state
+            .world
+            .asset_definitions_by_owner
+            .insert(owner, BTreeSet::from([fee_asset_id.clone()]));
+        state
+            .world
+            .asset_definitions
+            .insert(fee_asset_id.clone(), definition);
+        seed_pin_fee_balance(state, &alice(), 10_000_000_000_000);
+        seed_pin_fee_balance(state, &bob(), 10_000_000_000_000);
+        let alice_asset = AssetId::new(fee_asset_id.clone(), alice());
+        let bob_asset = AssetId::new(fee_asset_id.clone(), bob());
+        state.world.asset_definition_holders.insert(
+            fee_asset_id.clone(),
+            BTreeSet::from([alice_asset.account().clone(), bob_asset.account().clone()]),
+        );
+        state.world.asset_definition_assets.insert(
+            fee_asset_id.clone(),
+            BTreeSet::from([alice_asset, bob_asset]),
+        );
+        state
+            .world
+            .asset_definition_nonzero_holders
+            .insert(fee_asset_id, BTreeSet::from([alice(), bob()]));
+    }
+
+    fn seed_pin_fee_balance(state: &mut State, account: &AccountId, amount: u128) {
+        let fee_asset_id = state.gov.sorafs_pin_fee_asset_id.clone();
+        let asset_id = AssetId::new(fee_asset_id, account.clone());
+        let (asset_id, asset_value) =
+            Asset::new(asset_id, Numeric::new(amount, 0)).into_key_value();
+        state.world.assets.insert(asset_id, asset_value);
     }
 
     fn seed_provider_owners(
@@ -2464,6 +2589,12 @@ mod sorafs_tests {
 
     pub(super) fn default_chunk_digest() -> [u8; 32] {
         [0xCD; 32]
+    }
+
+    pub(super) fn default_content_length() -> u64 {
+        BYTES_PER_GIB
+            .try_into()
+            .expect("default GiB byte count fits u64")
     }
 
     pub(super) fn default_policy() -> PinPolicy {
@@ -2543,6 +2674,7 @@ mod sorafs_tests {
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         if let Some(perms) = stx.world.account_permissions.get_mut(&alice()) {
             perms.clear();
         }
@@ -2551,6 +2683,7 @@ mod sorafs_tests {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: None,
@@ -2568,6 +2701,18 @@ mod sorafs_tests {
             .expect("manifest stored");
         assert_eq!(record.submitted_by, alice());
         assert_eq!(record.status, PinStatus::Approved(5));
+        assert_eq!(record.content_length, default_content_length());
+        let payment = record
+            .pin_fee_payment
+            .as_ref()
+            .expect("fee payment recorded");
+        assert_eq!(payment.paid_by, alice());
+        assert_eq!(payment.fee_asset_id, stx.gov.sorafs_pin_fee_asset_id);
+        assert_eq!(
+            payment.treasury_account_id,
+            stx.gov.sorafs_pin_fee_treasury_account
+        );
+        assert!(payment.amount_nano > 0);
     }
 
     #[test]
@@ -2576,6 +2721,7 @@ mod sorafs_tests {
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         remove_permission(&mut stx, "CanApproveSorafsPin");
 
         let approve = ApprovePinManifest {
@@ -2602,6 +2748,7 @@ mod sorafs_tests {
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         remove_permission(&mut stx, "CanRetireSorafsPin");
 
         let retire = RetirePinManifest {
@@ -2627,6 +2774,7 @@ mod sorafs_tests {
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         remove_permission(&mut stx, "CanBindSorafsAlias");
 
         let bind = BindManifestAlias {
@@ -2657,6 +2805,7 @@ mod sorafs_tests {
             digest,
             chunker: default_chunker(),
             chunk_digest_sha3_256: chunk_digest,
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch,
             alias: None,
@@ -2957,6 +3106,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let (provider, declaration) = sample_capacity_record();
         RegisterCapacityDeclaration {
             record: declaration.clone(),
@@ -2989,6 +3139,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         if let Some(perms) = stx.world.account_permissions.get_mut(&alice()) {
             perms.clear();
         }
@@ -3006,6 +3157,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         remove_permission(&mut stx, "CanSubmitSorafsTelemetry");
         let (provider, declaration) = sample_capacity_record();
         RegisterCapacityDeclaration {
@@ -3029,6 +3181,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         remove_permission(&mut stx, "CanFileSorafsCapacityDispute");
 
         let record = CapacityDisputeRecord::new_pending(
@@ -3065,6 +3218,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let (provider, declaration) = capacity_record_with_owner(&alice());
 
         RegisterCapacityDeclaration {
@@ -3098,6 +3252,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let (provider, declaration) = capacity_record_with_owner(&alice());
 
         let instruction = InstructionBox::from(RegisterCapacityDeclaration {
@@ -3120,6 +3275,7 @@ mod sorafs_tests {
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let (_provider, declaration) = capacity_record_with_owner(&alice());
         RegisterCapacityDeclaration {
             record: declaration,
@@ -3145,6 +3301,7 @@ mod sorafs_tests {
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let (provider, declaration) = sample_capacity_record();
         RegisterCapacityDeclaration {
             record: declaration,
@@ -3180,6 +3337,7 @@ mod sorafs_tests {
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let (provider, declaration) = sample_capacity_record();
         RegisterCapacityDeclaration {
             record: declaration,
@@ -3205,6 +3363,7 @@ mod sorafs_tests {
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let (provider, declaration) = sample_capacity_record();
         RegisterCapacityDeclaration {
             record: declaration,
@@ -3236,6 +3395,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let (provider, mut declaration) = sample_capacity_record();
 
         let key = Name::from_str(PROVIDER_OWNER_METADATA_KEY).expect("metadata key");
@@ -3273,6 +3433,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let (provider, declaration) = sample_capacity_record();
         RegisterCapacityDeclaration {
             record: declaration.clone(),
@@ -3305,6 +3466,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let (provider, declaration) = sample_capacity_record();
         RegisterCapacityDeclaration {
             record: declaration.clone(),
@@ -3366,10 +3528,12 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let instruction = RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: None,
@@ -3396,10 +3560,12 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let mut instruction = RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: None,
@@ -3424,10 +3590,12 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let mut instruction = RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: None,
@@ -3452,11 +3620,13 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let alias = default_alias_binding();
         let instruction = RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: Some(alias.clone()),
@@ -3489,12 +3659,14 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let alias = default_alias_binding();
 
         let register = RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: Some(alias.clone()),
@@ -3544,6 +3716,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let (provider, mut declaration) = capacity_record_with_owner(&alice());
         declaration.valid_from_epoch = 4;
         declaration.valid_until_epoch = 20;
@@ -3558,6 +3731,7 @@ mod sorafs_tests {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy,
             submitted_epoch: 5,
             alias: None,
@@ -3589,6 +3763,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         let alias = default_alias_binding();
         let duplicate_alias = alias_binding_for(second_digest(), "sora", "docs", 0, 0);
@@ -3596,6 +3771,7 @@ mod sorafs_tests {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: Some(alias.clone()),
@@ -3609,6 +3785,7 @@ mod sorafs_tests {
             digest: ManifestDigest::new([0xBB; 32]),
             chunker: default_chunker(),
             chunk_digest_sha3_256: [0xEF; 32],
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 6,
             alias: Some(duplicate_alias),
@@ -3634,11 +3811,13 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: None,
@@ -3651,6 +3830,7 @@ mod sorafs_tests {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: [0xEE; 32],
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 6,
             alias: None,
@@ -3673,12 +3853,14 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         let mismatched_alias = alias_binding_for(second_digest(), "sora", "docs", 0, 0);
         let instruction = RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: Some(mismatched_alias),
@@ -3705,6 +3887,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let alias = ManifestAliasBinding {
             name: "Docs".into(),
             namespace: "sora".into(),
@@ -3714,6 +3897,7 @@ mod sorafs_tests {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: Some(alias),
@@ -3740,11 +3924,13 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         RegisterPinManifest {
             digest: second_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: [0xEE; 32],
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 4,
             alias: None,
@@ -3757,6 +3943,7 @@ mod sorafs_tests {
             digest: third_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: [0xEF; 32],
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 6,
             alias: None,
@@ -3779,11 +3966,13 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         let err = RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: None,
@@ -3808,11 +3997,13 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         let err = RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: None,
@@ -3837,12 +4028,14 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         insert_pending_manifest(&mut stx, second_digest(), [0xEE; 32]);
 
         let err = RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: None,
@@ -3867,6 +4060,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         insert_manifest_with_status(
             &mut stx,
             second_digest(),
@@ -3879,6 +4073,7 @@ mod sorafs_tests {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 8,
             alias: None,
@@ -3903,6 +4098,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         insert_manifest_with_status(
             &mut stx,
             second_digest(),
@@ -3915,6 +4111,7 @@ mod sorafs_tests {
             digest: third_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: [0xEF; 32],
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 6,
             alias: None,
@@ -3939,6 +4136,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         insert_manifest_with_status(
             &mut stx,
             second_digest(),
@@ -3958,6 +4156,7 @@ mod sorafs_tests {
             digest: fourth_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: [0xF0; 32],
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 6,
             alias: None,
@@ -3982,10 +4181,12 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: None,
@@ -4034,10 +4235,12 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: None,
@@ -4089,10 +4292,12 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: None,
@@ -4147,10 +4352,12 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: None,
@@ -4195,10 +4402,12 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: None,
@@ -4243,6 +4452,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         let approve = ApprovePinManifest {
             digest: default_digest(),
@@ -4268,10 +4478,12 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: None,
@@ -4305,6 +4517,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
 
         let expected_digest = stx
@@ -4339,6 +4552,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
 
         let expected_digest = stx
@@ -4373,6 +4587,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
 
         let approve = ApprovePinManifest {
@@ -4401,10 +4616,12 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: None,
@@ -4440,6 +4657,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
 
         let approve = ApprovePinManifest {
@@ -4466,6 +4684,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
 
         let approve = ApprovePinManifest {
@@ -4494,10 +4713,12 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: None,
@@ -4533,10 +4754,12 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: None,
@@ -4577,10 +4800,12 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
             chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
             policy: default_policy(),
             submitted_epoch: 5,
             alias: None,
@@ -4611,6 +4836,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
 
@@ -4646,6 +4872,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         register_and_approve_manifest(&mut stx, second_digest(), [0xEE; 32]);
@@ -4682,6 +4909,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
 
@@ -4713,6 +4941,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         remove_permission(&mut stx, "CanIssueSorafsReplicationOrder");
 
         let issue = IssueReplicationOrder {
@@ -4738,6 +4967,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         remove_permission(&mut stx, "CanCompleteSorafsReplicationOrder");
 
         let complete = CompleteReplicationOrder {
@@ -4761,6 +4991,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         remove_permission(&mut stx, "CanSetSorafsPricing");
 
         let schedule = PricingScheduleRecord::launch_default();
@@ -4780,6 +5011,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         remove_permission(&mut stx, "CanUpsertSorafsProviderCredit");
 
         let credit = ProviderCreditRecord::new(
@@ -4809,6 +5041,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
 
@@ -4853,6 +5086,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
 
@@ -4887,6 +5121,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
 
@@ -4929,6 +5164,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
 
@@ -4968,6 +5204,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
 
@@ -5008,6 +5245,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         remove_permission(&mut stx, "CanIssueSorafsReplicationOrder");
 
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
@@ -5039,6 +5277,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
 
@@ -5069,6 +5308,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
 
@@ -5097,6 +5337,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
 
@@ -5142,6 +5383,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
 
@@ -5184,6 +5426,7 @@ mod sorafs_tests {
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
 
@@ -5224,6 +5467,7 @@ mod sorafs_tests {
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
 
@@ -5263,6 +5507,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let (provider, record) = sample_capacity_record();
         let instruction = RegisterCapacityDeclaration {
             record: record.clone(),
@@ -5295,6 +5540,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         let mut declaration = sample_capacity_declaration();
         declaration.metadata = vec![CapacityMetadataEntry {
@@ -5324,6 +5570,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         let (provider, record) = sample_capacity_record();
         RegisterCapacityDeclaration { record }
@@ -5400,6 +5647,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         let (provider, declaration) = sample_capacity_record();
         RegisterCapacityDeclaration {
@@ -5444,6 +5692,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         let (provider, declaration) = sample_capacity_record();
         RegisterCapacityDeclaration {
@@ -5503,6 +5752,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         let (provider, declaration) = sample_capacity_record();
         RegisterCapacityDeclaration {
@@ -5540,6 +5790,7 @@ mod sorafs_tests {
         seed_sorafs_permissions(&mut state, &bob);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         let (provider, declaration) = sample_capacity_record();
         RegisterCapacityDeclaration {
@@ -5575,6 +5826,7 @@ mod sorafs_tests {
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         let (provider, declaration) = capacity_record_with_owner(&bob());
         RegisterCapacityDeclaration {
@@ -5604,6 +5856,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         let (provider, declaration) = sample_capacity_record();
         RegisterCapacityDeclaration {
@@ -5640,6 +5893,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
             utilisation_floor_bps: 9_500,
@@ -5808,6 +6062,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
             utilisation_floor_bps: 9_500,
@@ -5969,6 +6224,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
             utilisation_floor_bps: 7_500,
@@ -6063,6 +6319,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
             utilisation_floor_bps: 7_500,
@@ -6155,6 +6412,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
             utilisation_floor_bps: 7_500,
@@ -6261,6 +6519,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
             utilisation_floor_bps: 7_500,
@@ -6337,6 +6596,7 @@ mod sorafs_tests {
             let state = make_state();
             let mut block = state.block(block_header());
             let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx);
 
             stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
                 utilisation_floor_bps: 7_500,
@@ -6440,6 +6700,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
             utilisation_floor_bps: 7_500,
@@ -6537,6 +6798,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
             utilisation_floor_bps: 7_500,
@@ -6633,6 +6895,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
             utilisation_floor_bps: 7_500,
@@ -6746,6 +7009,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         stx.gov.sorafs_penalty.penalty_bond_bps = 0;
         stx.gov.sorafs_penalty.strike_threshold = u32::MAX;
@@ -6949,6 +7213,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         let (provider, record) = sample_capacity_record();
         RegisterCapacityDeclaration { record }
@@ -7025,6 +7290,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         let mut declaration = sample_capacity_declaration();
         declaration.metadata.push(CapacityMetadataEntry {
@@ -7115,6 +7381,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         let mut declaration = sample_capacity_declaration();
         declaration.metadata.push(CapacityMetadataEntry {
@@ -7233,6 +7500,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
 
         let record = ProviderCreditRecord::new(
             ProviderId::new([0x55; 32]),
@@ -7264,6 +7532,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let (_provider, mut record) = sample_capacity_record();
         record.provider_id = ProviderId::new([0x33; 32]);
         let instruction = RegisterCapacityDeclaration { record };
@@ -7289,6 +7558,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let (_provider, mut record) = sample_capacity_record();
         record.committed_capacity_gib += 1;
         let instruction = RegisterCapacityDeclaration { record };
@@ -7314,6 +7584,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let (_provider, mut record) = sample_capacity_record();
         record.declaration = vec![0xFF];
         let instruction = RegisterCapacityDeclaration { record };
@@ -7339,6 +7610,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let provider = ProviderId::new([0xA1; 32]);
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         ensure_registered_account(&mut stx, &bob(), &domain_id);
@@ -7374,6 +7646,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let provider = ProviderId::new([0xA5; 32]);
         let missing_owner = AccountId::new(KeyPair::random().public_key().clone());
 
@@ -7395,6 +7668,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let provider = ProviderId::new([0xA2; 32]);
         stx.world.provider_owners.insert(provider, alice());
 
@@ -7422,6 +7696,7 @@ mod sorafs_tests {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let provider = ProviderId::new([0xA3; 32]);
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         ensure_registered_account(&mut stx, &alice(), &domain_id);

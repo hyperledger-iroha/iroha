@@ -326,6 +326,26 @@ public enum Halo2OfflineNoteV2Prover {
         return ipaOK && transcript.remainingBytes == 0
     }
 
+    public static func verifyAudit(_ audit: OfflineNoteAuditBundleV2) throws -> Bool {
+        try audit.validateProofBinding()
+        let instanceValues = try OfflineNoteV2InstanceBuilder.auditInstanceValues(for: audit)
+        guard audit.recursiveProof.publicInputsHash == (try instanceValues.publicInputsHash()) else {
+            return false
+        }
+        let proofPayload = try proofPayload(fromOpenVerifyEnvelope: audit.recursiveProof.proof.bytes)
+        return try verifyZK1Payload(proofPayload, publicValues: instanceValues.publicValues)
+    }
+
+    public static func verifyRedeem(_ redemption: OfflineNoteRedeemV2) throws -> Bool {
+        try redemption.validateProofBinding()
+        let instanceValues = try OfflineNoteV2InstanceBuilder.redeemInstanceValues(for: redemption)
+        guard redemption.recursiveProof.publicInputsHash == (try instanceValues.publicInputsHash()) else {
+            return false
+        }
+        let proofPayload = try proofPayload(fromOpenVerifyEnvelope: redemption.recursiveProof.proof.bytes)
+        return try verifyZK1Payload(proofPayload, publicValues: instanceValues.publicValues)
+    }
+
     public static func openVerifyEnvelope(proofPayload: Data) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(OfflineCompactNorito.encodeUInt32(backendTag))
@@ -339,6 +359,66 @@ public enum Halo2OfflineNoteV2Prover {
             payload: writer.data,
             flags: 2
         )
+    }
+
+    private static func proofPayload(fromOpenVerifyEnvelope envelope: Data) throws -> Data {
+        guard let frame = noritoDecodeFrame(envelope),
+              frame.header.schema == noritoSchemaHash(forTypeName: "iroha_data_model::zk::OpenVerifyEnvelope"),
+              frame.header.compression == .none,
+              (frame.header.flags & NoritoHeader.compactLen) != 0
+        else {
+            throw Halo2OfflineNoteV2ProverError.invalidZK1Payload
+        }
+        var reader = OfflineNoritoReader(data: frame.payload)
+        let tag = try field(&reader) { try $0.readUInt32LE() }
+        guard tag == backendTag else {
+            return Data()
+        }
+        let circuit = try field(&reader, readCompactString)
+        guard circuit == circuitID else {
+            return Data()
+        }
+        let vkHash = try field(&reader) { try $0.readBytes(32) }
+        guard vkHash == canonicalVKHash else {
+            return Data()
+        }
+        _ = try field(&reader, readU64BytesVec)
+        let proofPayload = try field(&reader, readU64BytesVec)
+        _ = try field(&reader, readU64BytesVec)
+        guard reader.remaining() == 0, !proofPayload.isEmpty else {
+            throw Halo2OfflineNoteV2ProverError.invalidZK1Payload
+        }
+        return proofPayload
+    }
+
+    private static func field<T>(
+        _ reader: inout OfflineNoritoReader,
+        _ decode: (inout OfflineNoritoReader) throws -> T
+    ) throws -> T {
+        var child = OfflineNoritoReader(data: try reader.readCompactField())
+        let value = try decode(&child)
+        guard child.remaining() == 0 else {
+            throw Halo2OfflineNoteV2ProverError.invalidZK1Payload
+        }
+        return value
+    }
+
+    private static func readCompactString(_ reader: inout OfflineNoritoReader) throws -> String {
+        let length = try reader.readVarint()
+        guard length <= UInt64(Int.max),
+              let value = String(data: try reader.readBytes(Int(length)), encoding: .utf8)
+        else {
+            throw Halo2OfflineNoteV2ProverError.invalidZK1Payload
+        }
+        return value
+    }
+
+    private static func readU64BytesVec(_ reader: inout OfflineNoritoReader) throws -> Data {
+        let length = try reader.readUInt64LE()
+        guard length <= UInt64(Int.max) else {
+            throw Halo2OfflineNoteV2ProverError.invalidZK1Payload
+        }
+        return try reader.readBytes(Int(length))
     }
 
     private static func evaluateQuotientCoefficients(

@@ -2,7 +2,7 @@
 title: Governance App API — Endpoints (Draft)
 ---
 
-Status: draft/sketch to accompany the governance implementation tasks. Shapes may change during implementation. Determinism and RBAC policy are normative constraints; Torii can sign/submit transactions when `authority` and `private_key` are provided, otherwise clients build and submit to `/transaction`.
+Status: draft/sketch to accompany the governance implementation tasks. Shapes may change during implementation. Determinism and RBAC policy are normative constraints; Torii can sign/submit transactions when `authority` and `private_key` are provided, otherwise clients build and submit to `/v1/pipeline/transactions`.
 
 Important: we do not ship a standing council or “default” governance roster. Out of the box, the council endpoints either return an empty/pending state or derive a deterministic fallback from the configured parameters (stake asset, term, committee size) when enabled. Operators must persist their own roster via the governance flows; there is no baked‑in multisig, secret key, or privileged council account in this repository.
 
@@ -11,7 +11,7 @@ Overview
   - `wire_id`: registry identifier for the instruction type
   - `payload_hex`: Norito payload bytes (hex)
 - If `authority` and `private_key` are provided (or `private_key` on ballot DTOs), Torii signs and submits the transaction and still returns `tx_instructions`.
-- Otherwise, clients assemble a SignedTransaction using their authority and chain_id, then sign and POST to `/transaction`.
+- Otherwise, clients assemble a SignedTransaction using their authority and chain_id, then sign and POST to `/v1/pipeline/transactions`.
 - SDK coverage:
 - Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` returns `GovernanceProposalResult` (normalising status/kind fields), `ToriiClient.get_governance_referendum_typed` returns `GovernanceReferendumResult`, `ToriiClient.get_governance_tally_typed` returns `GovernanceTally`, and `ToriiClient.get_governance_locks_typed` returns `GovernanceLocksResult`.
 - Python lightweight client (`iroha_torii_client`): `ToriiClient.finalize_referendum` and `ToriiClient.enact_proposal` return typed `GovernanceInstructionDraft` bundles (wrapping the Torii skeleton `tx_instructions`), avoiding manual JSON parsing when scripts compose Finalize/Enact flows.
@@ -43,7 +43,7 @@ Endpoints
     - only `abi_version = "1"` is accepted, and `abi_hash` must equal the canonical ABI hash for that version (`hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`);
     - `window.upper` must be `>= window.lower`; and
     - `mode`, when supplied, must be `Zk` or `Plain`.
-  - Submission model: this endpoint is draft-first. `authority`/`private_key` are only accepted as a legacy pair and currently fail closed because governance server-side signing is disabled, so clients should consume `tx_instructions`, sign locally, and submit via `/transaction`.
+  - Submission model: this endpoint is draft-first. `authority`/`private_key` are only accepted as a legacy pair and currently fail closed because governance server-side signing is disabled, so clients should consume `tx_instructions`, sign locally, and submit via `/v1/pipeline/transactions`.
 
 Contracts API (deploy)
 - POST `/v1/contracts/deploy`

@@ -958,6 +958,9 @@ fn derive_upload_bundle(manifest: &StageUploadManifest) -> Result<DerivedUploadB
         plaintext_root,
         runtime_format,
         bundle_root,
+        sorafs_manifest_digest: iroha_data_model::sorafs::pin_registry::ManifestDigest::new(
+            [0xA5; 32],
+        ),
         chunk_count: u32::try_from(chunks.len()).unwrap_or(u32::MAX),
         plaintext_bytes,
         ciphertext_bytes,

@@ -264,7 +264,7 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
       optional `asset_id` and `upto_epoch` filters; `canonical I105 rendering` applies to
       the account literal in the response.
   - Lifecycle ISIs use the standard transaction path (Torii
-    `/v1/transactions` or the CLI instruction pipeline). Example Norito JSON
+    `/v1/pipeline/transactions` or the CLI instruction pipeline). Example Norito JSON
     payloads:
 
     ```jsonc

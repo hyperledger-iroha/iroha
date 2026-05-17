@@ -87,7 +87,7 @@ Governance registers the verifier under:
 - `backend tag = BackendTag::Halo2IpaPasta`
 - `curve = "pallas"`
 - `public_inputs_schema_hash = 0xfae4…64d3`
-- `commitment = sha256(backend || vk_bytes)` (32-byte digest)
+- `commitment = sha256("iroha:zk:v1:vk" || len(backend) || backend || len(vk_bytes) || vk_bytes)` (32-byte digest)
 
 The canonical bundle includes an inline verifying key (`key = Some(VerifyingKeyBox { … })`) together with the proof envelope. `vk_len`, `max_proof_bytes`, and optional metadata URIs are populated from the generated artefacts.
 

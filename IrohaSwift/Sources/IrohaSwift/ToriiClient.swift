@@ -14509,7 +14509,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     public func submitTransactionEntrypoint(data: Data,
                                             idempotencyKey: String? = nil) async throws -> ToriiSubmitTransactionResponse? {
-        try await submitNoritoTransactionPayload(path: "/transaction/entrypoint",
+        try await submitNoritoTransactionPayload(path: "/v1/pipeline/transaction-entrypoints",
                                                  data: data,
                                                  idempotencyKey: idempotencyKey)
     }
@@ -14848,9 +14848,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     // MARK: - Async helpers
 
     private func pipelineEndpoints(for _: PipelineEndpointMode) -> (submit: String, status: String) {
-        // Iroha 3 uses /transaction for Norito binary submission
-        // and /v1/pipeline/transactions/status for JSON status queries
-        ("/transaction", "/v1/pipeline/transactions/status")
+        ("/v1/pipeline/transactions", "/v1/pipeline/transactions/status")
     }
 
     private enum HTTPMethod: String {

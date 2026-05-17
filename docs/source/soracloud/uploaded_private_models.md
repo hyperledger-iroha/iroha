@@ -5,12 +5,17 @@ existing Soracloud model plane without inventing a parallel runtime.
 
 ## Design Goal
 
-Add a Soracloud-only uploaded-model system that lets clients:
+Production V1 adds a Soracloud-only uploaded-model registration path that lets
+clients:
 
 - upload their own model repositories;
-- bind a pinned model version to an agent apartment or closed-arena team;
-- run private inference with encrypted inputs and encrypted model/state; and
-- receive public commitments, receipts, pricing, and audit trails.
+- register a pinned, approved SoraFS package as a model artifact and weight
+  version; and
+- query authoritative storage/registry readiness.
+
+Binding uploaded models to apartments, private inference, output release,
+compile jobs, and runtime receipts are intentionally out of scope for production
+V1 until a real deterministic private runtime exists.
 
 This is not a `ram_lfe` feature. `ram_lfe` stays the generic hidden-function
 subsystem documented in `../universal_accounts_guide.md`. Uploaded-model
@@ -31,12 +36,10 @@ The current Soracloud stack already has the right base objects:
 - `SoraCapabilityPolicyV1.allow_model_inference`
   - apartment/service capability flag that should become mandatory for
     apartments bound to uploaded models.
-- `SecretEnvelopeV1` and `CiphertextStateRecordV1`
-  - deterministic encrypted-byte and ciphertext-state carriers.
 - `FheParamSetV1`, `FheExecutionPolicyV1`, `FheGovernanceBundleV1`,
   `DecryptionAuthorityPolicyV1`, and `DecryptionRequestV1`
-  - the policy/governance layer for encrypted execution and controlled output
-    release.
+  - future policy/governance surfaces for encrypted execution and controlled
+    output release.
 - current Torii model routes:
   - `/v1/soracloud/model/weight/{register,promote,rollback,status}`
   - `/v1/soracloud/model/artifact/{register,status}`
@@ -76,26 +79,29 @@ Why this contract:
 - it avoids conflating local-runtime import formats such as GGUF with the
   Soracloud private-runtime contract.
 
-HF shared leases remain useful for shared/public source import workflows, but
-the private uploaded-model path stores encrypted compiled bytes on-chain rather
-than leasing model bytes from a shared source pool.
+HF shared leases remain useful for shared/public source import workflows. The
+uploaded-model path stores model bytes only in SoraFS; chain state stores the
+approved manifest digest, roots, byte counts, and registry/artifact metadata.
 
 ## Production Posture
 
 Soracloud production deployments must enable `soracloud_runtime.production_mode`
 in node configuration and build `irohad` with `embedded-soracloud-runtime`.
-Production mode rejects a config that leaves broad runtime egress open, omits
-egress rate/byte budgets, or enables Hugging Face inference-bridge fallback.
-It also rejects proxy-only Inrou host posture so a node cannot advertise a
-production runtime while refusing local placement work.
+Production mode rejects a config that leaves Inrou disabled, enables proxy-only
+Inrou host posture, omits the explicit runtime submission gas asset, leaves
+broad runtime egress open, omits egress rate/byte budgets, or enables Hugging
+Face inference-bridge fallback. This prevents a node from advertising a
+production runtime while refusing local placement work or relying on ambient
+environment state for production submissions.
 The fallback is disabled by default so a production node cannot silently route
 private-model execution through the hosted bridge path.
 
 Signed Soracloud mutation requests are body-limited before signature
 verification. Use `torii.soracloud_mutation_max_body_bytes` for ordinary
-mutation routes and `torii.soracloud_upload_max_body_bytes` for uploaded-model
-chunk routes. Oversized bodies fail with `413 Payload Too Large` before any
-canonical-request verification work is performed. After signature verification,
+mutation routes and `torii.soracloud_upload_max_body_bytes` for the
+uploaded-model register route. Oversized bodies fail with `413 Payload Too
+Large` before any canonical-request verification work is performed. After
+signature verification,
 signed Soracloud POST routes are also limited by
 `torii.soracloud_mutation_rate_per_account_origin_per_sec`,
 `torii.soracloud_mutation_burst_per_account_origin`, and
@@ -126,9 +132,9 @@ The artifact record remains the deterministic anchor that ties provenance,
 reproducibility metadata, and bundle identity together. The weight record
 remains the promoted-version lineage object.
 
-### 2. Bundle/chunk storage layer
+### 2. Bundle storage-reference layer
 
-Add first-class Soracloud records for encrypted uploaded-model material:
+Add a first-class Soracloud record for uploaded-model storage metadata:
 
 - `SoraUploadedModelBundleV1`
   - `model_id`
@@ -137,32 +143,25 @@ Add first-class Soracloud records for encrypted uploaded-model material:
   - `modalities`
   - `runtime_format`
   - `bundle_root`
+  - `sorafs_manifest_digest`
   - `chunk_count`
   - `plaintext_bytes`
   - `ciphertext_bytes`
   - `compile_profile_hash`
+  - `chunk_manifest_root`
   - `pricing_policy`
   - `decryption_policy_ref`
-- `SoraUploadedModelChunkV1`
-  - `model_id`
-  - `bundle_root`
-  - `ordinal`
-  - `offset_bytes`
-  - `plaintext_len`
-  - `ciphertext_len`
-  - `ciphertext_hash`
-  - encrypted payload (`SecretEnvelopeV1`)
 
 Deterministic rules:
 
-- plaintext bytes are sharded into fixed 4 MiB chunks before encryption;
-- chunk ordering is strict and ordinal-driven;
-- chunk/root digests are stable across replay; and
-- each encrypted shard must stay below the current `SecretEnvelopeV1`
-  ciphertext ceiling of `33,554,432` bytes.
+- local packaging may shard bytes before SoraFS pinning, but only roots, byte
+  counts, and the approved SoraFS `ManifestDigest` are committed to chain state;
+- chunk/root digests are stable metadata only; and
+- core rejects registration unless the referenced SoraFS pin is active and
+  approved.
 
-This milestone stores literal encrypted bytes in chain state through chunk
-records. It does not offload private uploaded-model bytes to SoraFS.
+Production V1 does not store literal encrypted model bytes in chain state and
+does not expose a chain-resident upload-chunk append flow.
 
 Because the chain is public, upload confidentiality has to come from a real
 Soracloud-held recipient key, not from deterministic keys derived from public
@@ -170,9 +169,10 @@ metadata. The desktop should fetch an advertised upload-encryption recipient,
 encrypt chunks under a random per-upload bundle key, and publish only the
 recipient metadata plus wrapped bundle-key envelope alongside the ciphertext.
 
-### 3. Compile/runtime layer
+### 3. Future compile/runtime layer
 
-Add a dedicated private transformer compiler/runtime layer under Soracloud:
+A later release may add a dedicated private transformer compiler/runtime layer
+under Soracloud:
 
 - standardize on BFV-backed deterministic low-precision compiled inference for
   now, because CKKS exists in schema discussion but not in the implemented
@@ -187,13 +187,13 @@ Add a dedicated private transformer compiler/runtime layer under Soracloud:
   - int32 accumulation
   - approved polynomial approximations for non-linearities
 
-This compiler/runtime is separate from `ram_lfe`. It may reuse BFV primitives
-and Soracloud FHE governance objects, but it is not the same execution engine
-or route family.
+This compiler/runtime remains separate from `ram_lfe`. It may reuse BFV
+primitives and Soracloud FHE governance objects, but it is not the same
+execution engine or route family.
 
-### 4. Inference/session layer
+### 4. Future inference/session layer
 
-Add session and checkpoint records for private runs:
+A later release may add session and checkpoint records for private runs:
 
 - `SoraPrivateCompileProfileV1`
   - `family`
@@ -226,14 +226,15 @@ Add session and checkpoint records for private runs:
   - `compute_units`
   - `updated_at_ms`
 
-Private execution means:
+When private execution is reintroduced, it must mean:
 
 - encrypted prompt/image inputs;
 - encrypted model weights and activations;
 - explicit decryption-policy release for output;
 - public runtime receipts and cost accounting.
 
-It does not mean hidden execution without commitments or auditability.
+It must not mean hidden execution without commitments or auditability. Production
+V1 exposes none of these runtime/session routes.
 
 ## Client Responsibilities
 
@@ -250,41 +251,32 @@ text or raw images, for the private path.
 
 ## API and ISI Plan
 
-Keep the existing model registry routes as the canonical registry layer and add
-new upload/runtime routes on top:
+Keep the existing model registry routes as the canonical registry layer. In
+production V1, uploaded model bytes live only in SoraFS and Torii exposes only
+storage/registry readiness:
 
-- `POST /v1/soracloud/model/upload/init`
-- `POST /v1/soracloud/model/upload/chunk`
-- `POST /v1/soracloud/model/upload/finalize`
+- `POST /v1/soracloud/model/upload/register`
 - `GET /v1/soracloud/model/upload/encryption-recipient`
-- `POST /v1/soracloud/model/compile`
-- `POST /v1/soracloud/model/allow`
-- `POST /v1/soracloud/model/run-private`
-- `GET /v1/soracloud/model/run-status`
-- `POST /v1/soracloud/model/decrypt-output`
+- `GET /v1/soracloud/model/upload/status`
 
-Back them with matching Soracloud ISIs:
+The signed register request carries a `SoraUploadedModelBundleV1` that points to
+an approved active SoraFS `ManifestDigest`, plus model-artifact and
+weight-version metadata. Core validates the SoraFS pin before recording the
+Soracloud bundle, registry, and artifact records. It never stores encrypted
+model bytes or upload chunks in world state.
 
-- bundle registration
-- chunk append/finalize
-- compile admission
-- private run start
-- checkpoint record
-- output release
+The flow is:
 
-The flow should be:
+1. the client encrypts and packages model bytes locally;
+2. the client pins the encrypted package through SoraFS;
+3. the client waits until the pin record is active and approved;
+4. `upload/register` records only registry, artifact, roots, byte counts, and
+   digest metadata;
+5. `upload/status` reports registry/storage readiness.
 
-1. upload/init establishes the deterministic bundle session and expected root;
-2. upload/chunk appends encrypted shards in ordinal order;
-3. upload/finalize seals the bundle root and manifest;
-4. compile produces a deterministic private compile profile bound to the
-   admitted bundle;
-5. model/artifact + model/weight registry records reference the uploaded bundle
-   rather than a training job alone;
-6. allow-model binds the uploaded model to an apartment that already admits
-   `allow_model_inference`;
-7. run-private records a session and emits checkpoints/receipts;
-8. decrypt-output releases governed output material.
+Production V1 does not expose compile, allow-model, run-private, run-status, or
+decrypt-output routes. Those stay out of scope until a real deterministic
+private runtime exists.
 
 ## Pricing and Control-Plane Policy
 
@@ -297,28 +289,19 @@ Extend the current Soracloud charging/control-plane behavior:
 
 ## Authorization and Binding Semantics
 
-Upload, compile, and run are separate capabilities and should stay separate in
-the model plane.
+Upload registration is a storage and registry action only.
 
 - uploading a model bundle must not implicitly authorize an apartment to run it;
-- compile success must not implicitly promote a model version to current;
-- apartment binding should be explicit through an `allow-model` style mutation
-  that records:
-  - apartment,
-  - model id,
-  - weight version,
-  - bundle root,
-  - privacy mode,
-  - signer / audit sequence;
-- apartments bound to uploaded models must already admit
-  `allow_model_inference`;
+- no compile profile, private session, or output-release record is created in
+  production V1;
 - mutation routes should continue to require the same Soracloud signed-request
   discipline used by the existing model/artifact/training routes and should be
   guarded by `CanManageSoracloud` or an equally explicit delegated authority
   model.
 
-This prevents "I uploaded it, therefore every private apartment can run it"
-drift and keeps apartment execution policy explicit.
+This prevents "I uploaded it, therefore an apartment can run it" drift and keeps
+execution policy out of production V1 until deterministic runtime support
+exists.
 
 ## Status and Audit Model
 
@@ -330,23 +313,14 @@ Recommended additions:
 - upload status
   - query by `service_name + model_name + weight_version` or by
     `model_id + bundle_root`;
-- compile status
-  - query by `model_id + bundle_root + compile_profile_hash`;
-- private run status
-  - query by `session_id`, with apartment/model/version context included in the
-    response;
-- decrypt-output status
-  - query by `decrypt_request_id`.
+- storage readiness
+  - expose the approved SoraFS manifest digest and recorded roots/byte counts.
 
 Audit should stay on the existing Soracloud global sequence rather than
 creating a second per-feature counter. Add first-class audit events for:
 
-- upload init / finalize
-- chunk append / seal
-- compile admitted / compile rejected
-- apartment model allow / revoke
-- private run start / checkpoint / completion / failure
-- output release / deny
+- upload register / registry finalization
+- the SoraFS pin digest and lifecycle metadata used for the registered bundle
 
 That keeps uploaded-model activity visible in the same authoritative replay and
 operations story as the current service, training, model-weight, model-artifact,
@@ -354,18 +328,16 @@ HF shared-lease, and apartment audit streams.
 
 ## Admission Quotas and State-Growth Limits
 
-Literal encrypted model bytes on-chain are viable only if admission is bounded
-aggressively.
+SoraFS-backed uploaded-model registration is still state growth and availability
+sensitive, so admission remains bounded.
 
 The implementation should define deterministic limits for at least:
 
 - max plaintext bytes per uploaded bundle;
 - max encrypted bytes per bundle;
-- max chunk count per bundle;
-- max concurrent in-flight upload sessions per authority/service;
-- max compile jobs per service/apartment window;
-- max retained checkpoint count per private session;
-- max output-release requests per session.
+- max chunk count metadata per bundle;
+- max concurrent register requests per authority/service; and
+- maximum accepted register-request body size.
 
 Torii and core should reject uploads that exceed those declared limits before
 state amplification occurs. The limits should be configuration-driven where
@@ -373,8 +345,8 @@ appropriate, but validation outcomes must remain deterministic across peers.
 
 ## Replay and Compiler Determinism
 
-The private compiler/runtime path has a higher determinism burden than a normal
-service deployment.
+The future private compiler/runtime path has a higher determinism burden than a
+normal service deployment.
 
 Required invariants:
 
@@ -391,22 +363,20 @@ Required invariants:
   hardware-specific reductions that could change outputs or receipts across
   peers.
 
-Before scaling the admitted family set, land a tiny deterministic fixture for
-each family class and lock compile outputs plus runtime receipts with golden
-tests.
+Before exposing private compile or runtime routes, land tiny deterministic
+fixtures for each family class and lock compile outputs plus runtime receipts
+with golden tests.
 
 ## Remaining Design Gaps Before Code
 
-The largest unresolved implementation questions are now narrowed to concrete
-backend decisions:
+The largest unresolved implementation questions are now narrowed to future
+runtime decisions:
 
-- exact upload/chunk/request DTO shapes and Norito schemas;
-- world-state indexing keys for bundle/chunk/session/checkpoint lookups;
-- quota/default configuration placement in `iroha_config`;
 - whether model/artifact status should become version-oriented rather than
   training-job-oriented when `UserUpload` is present;
-- the precise revocation behavior when an apartment loses
-  `allow_model_inference` or a pinned model version is rolled back.
+- the precise revocation behavior when a pinned SoraFS manifest is retired; and
+- the deterministic private runtime design needed before compile/run/decrypt
+  routes can return.
 
 Those are the next design-to-code bridge items. The architectural placement of
 the feature should now be stable.
@@ -417,36 +387,31 @@ the feature should now be stable.
   - accept canonical HF safetensors repos
   - reject GGUF, ONNX, missing tokenizer/processor assets, unsupported
     architectures, and audio/video multimodal packages
-- chunking:
-  - deterministic bundle roots
-  - stable chunk ordering
-  - exact reconstruction
-  - envelope ceiling enforcement
+- SoraFS storage:
+  - active approved pin required
+  - missing or retired pins rejected
+  - no uploaded-model bytes in world state
 - registry consistency:
-  - bundle/chunk/artifact/weight promotion correctness under replay
-- compiler:
+  - bundle/artifact/weight promotion correctness under replay
+- future compiler:
   - one small fixture each for decoder-only, LLaVA-style, and Qwen2-VL-style
   - rejection for unsupported ops and shapes
-- private runtime:
+- future private runtime:
   - encrypted tiny-fixture end-to-end smoke test with stable receipts and
     threshold output release
 - pricing:
-  - XOR charges for upload, compile, runtime steps, and decryption
+  - XOR charges for upload registration and storage
 - So Ra integration:
-  - upload, compile, publish, bind to team, run closed arena, inspect receipts,
-    save project, reopen, rerun deterministically
+  - encrypt/package, pin through SoraFS, register, inspect readiness
 - safety:
   - no export-gate bypass
   - no narrative auto-propagation
-  - apartment binding fails without `allow_model_inference`
+- private runtime routes remain unavailable in production V1
 
 ## Implementation Slices
 
-1. Add the missing data-model fields and new record types.
-2. Add the new Torii request/response types and route handlers.
-3. Add matching Soracloud ISIs and world-state storage.
-4. Add deterministic bundle/chunk validation and on-chain encrypted-byte
-   storage.
-5. Add a tiny BFV-backed private transformer fixture/runtime path.
-6. Extend CLI model commands to cover upload/compile/private-run flows.
-7. Land So Ra integration once the backend path is authoritative.
+1. Keep SoraFS pin lifecycle and uploaded-model registry status aligned.
+2. Add operator runbooks for packaging, pin approval, and `upload/register`.
+3. Add a real deterministic private transformer runtime before restoring any
+   compile, allow-model, private-run, run-status, or decrypt-output route.
+4. Land So Ra integration around the SoraFS pin/register readiness flow first.

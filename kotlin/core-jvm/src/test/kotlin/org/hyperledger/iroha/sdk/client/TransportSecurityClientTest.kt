@@ -80,7 +80,7 @@ class TransportSecurityClientTest {
             TransportSecurity.requireHttpRequestAllowed(
                 context = "HttpClientTransport",
                 baseUri = URI.create("http://example.com"),
-                targetUri = URI.create("http://example.com/query"),
+                targetUri = URI.create("http://example.com/v1/query"),
                 headers = mapOf(
                     "X-Iroha-Account" to sampleAuthority(0x43),
                     "X-Iroha-Signature" to "deadbeef",
@@ -120,7 +120,7 @@ class TransportSecurityClientTest {
 
         assertFailsWith<IllegalArgumentException> {
             client.openSseStream(
-                "/events",
+                "/v1/events/sse",
                 ToriiEventStreamOptions.defaultOptions(),
                 object : ToriiEventStreamListener {
                     override fun onEvent(event: ServerSentEvent) = Unit

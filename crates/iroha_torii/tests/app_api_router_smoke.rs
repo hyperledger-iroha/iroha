@@ -344,7 +344,7 @@ async fn app_api_router_smoke() {
 }
 
 #[tokio::test]
-async fn contract_routes_ignore_api_token_requirement() {
+async fn contract_routes_honor_api_token_requirement() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = mk_minimal_root_cfg();
     cfg.torii.require_api_token = true;
@@ -418,11 +418,26 @@ async fn contract_routes_ignore_api_token_requirement() {
 
     let app = torii.api_router_for_tests();
 
+    let denied = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(Uri::from_static("/v1/contracts/deploy"))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
     assert_route_is_not_auth_denied(
         app.clone(),
         Request::builder()
             .method("POST")
             .uri(Uri::from_static("/v1/contracts/deploy"))
+            .header("x-api-token", "test-token")
             .header(axum::http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from("{}"))
             .unwrap(),
@@ -434,6 +449,7 @@ async fn contract_routes_ignore_api_token_requirement() {
         Request::builder()
             .method("POST")
             .uri(Uri::from_static("/v1/contracts/deploy-bundle"))
+            .header("x-api-token", "test-token")
             .header(axum::http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from("{}"))
             .unwrap(),
@@ -445,6 +461,7 @@ async fn contract_routes_ignore_api_token_requirement() {
         Request::builder()
             .method("POST")
             .uri(Uri::from_static("/v1/contracts/call"))
+            .header("x-api-token", "test-token")
             .header(axum::http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from("{}"))
             .unwrap(),
@@ -456,6 +473,7 @@ async fn contract_routes_ignore_api_token_requirement() {
         Request::builder()
             .method("POST")
             .uri(Uri::from_static("/v1/contracts/view"))
+            .header("x-api-token", "test-token")
             .header(axum::http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from("{}"))
             .unwrap(),
@@ -467,6 +485,7 @@ async fn contract_routes_ignore_api_token_requirement() {
         Request::builder()
             .method("POST")
             .uri(Uri::from_static("/v1/contracts/view/batch"))
+            .header("x-api-token", "test-token")
             .header(axum::http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from("{}"))
             .unwrap(),
@@ -477,6 +496,7 @@ async fn contract_routes_ignore_api_token_requirement() {
         app.clone(),
         Request::builder()
             .uri(Uri::from_static("/v1/contracts/state"))
+            .header("x-api-token", "test-token")
             .body(axum::body::Body::empty())
             .unwrap(),
     )
@@ -488,6 +508,7 @@ async fn contract_routes_ignore_api_token_requirement() {
                 .uri(Uri::from_static(
                     "/v1/contracts/deploy-bundles/not-a-real-bundle-digest",
                 ))
+                .header("x-api-token", "test-token")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

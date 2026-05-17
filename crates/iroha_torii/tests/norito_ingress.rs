@@ -84,6 +84,19 @@ async fn response_error_envelope(resp: axum::response::Response) -> ErrorEnvelop
     norito::decode_from_bytes(&body).expect("decode error envelope")
 }
 
+#[tokio::test]
+async fn removed_unversioned_norito_routes_are_not_registered() {
+    for path in [
+        "/transaction",
+        "/transaction/entrypoint",
+        "/transactions/batch",
+        "/query",
+    ] {
+        let resp = post_ga_norito(path, Vec::new()).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "path {path}");
+    }
+}
+
 fn assert_versioned_decode_rejection_without_panic(text: &str) {
     assert!(
         text.contains("Could not decode versioned request"),

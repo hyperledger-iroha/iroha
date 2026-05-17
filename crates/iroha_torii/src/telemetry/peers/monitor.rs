@@ -474,10 +474,10 @@ fn decode_peer_config_payload(bytes: &[u8]) -> eyre::Result<PeerConfigSnapshot> 
         Err(err) => {
             let legacy = decode_legacy_peer_config_payload(bytes).map_err(|fallback_err| {
                 eyre!(
-                    "failed to decode /configuration payload: {err}; legacy fallback failed: {fallback_err}"
+                    "failed to decode /v1/configuration payload: {err}; legacy fallback failed: {fallback_err}"
                 )
             })?;
-            iroha_logger::debug!("decoded /configuration payload using legacy fallback");
+            iroha_logger::debug!("decoded /v1/configuration payload using legacy fallback");
             Ok(legacy)
         }
     }
@@ -523,7 +523,7 @@ async fn get_config_with_retry(
         if status == StatusCode::NOT_FOUND {
             iroha_logger::debug!(
                 %status,
-                "peer does not expose /configuration; continuing without config snapshot"
+                "peer does not expose /v1/configuration; continuing without config snapshot"
             );
             return Ok::<_, Report>(PeerConfigSnapshot::default());
         }
@@ -532,7 +532,7 @@ async fn get_config_with_retry(
         {
             iroha_logger::debug!(
                 %status,
-                "peer /configuration requires operator access; continuing without config snapshot"
+                "peer /v1/configuration requires operator access; continuing without config snapshot"
             );
             return Ok::<_, Report>(PeerConfigSnapshot::default());
         }
@@ -557,13 +557,16 @@ async fn get_config_with_retry(
 
 async fn get_peers_periodic(torii_url: &ToriiUrl, tx: mpsc::Sender<Update>) -> ! {
     let client = Client::new();
-    let url = torii_url.0.join("/peers").expect("valid url");
+    let url = torii_url
+        .0
+        .join(iroha_torii_shared::uri::PEERS)
+        .expect("valid url");
 
     let get = || async {
         let response = client.get(url.clone()).send().await?;
         let bytes = response.bytes().await?;
         let peers: Vec<String> = json::from_slice(&bytes)
-            .map_err(|err| eyre!("failed to decode /peers payload: {err}"))?;
+            .map_err(|err| eyre!("failed to decode /v1/peers payload: {err}"))?;
         Ok::<_, Report>(peers)
     };
 
@@ -583,7 +586,7 @@ async fn get_peers_periodic(torii_url: &ToriiUrl, tx: mpsc::Sender<Update>) -> !
                             iroha_logger::warn!(
                                 peer = %peer_repr,
                                 ?err,
-                                "failed to parse peer public key from /peers payload"
+                                "failed to parse peer public key from /v1/peers payload"
                             );
                         }
                     }

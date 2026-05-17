@@ -309,8 +309,8 @@ use iroha_primitives::addr::SocketAddr;
 #[cfg(feature = "app_api")]
 use iroha_primitives::soradns::hosts::taira_mon_pretty_gateway_suffix;
 use iroha_torii_shared::{
-    AccountReadResponse, ErrorEnvelope, PipelineTransactionStatus,
-    PipelineTransactionStatusResponse, QueueErrorEnvelope, QueueErrorSnapshot, uri,
+    AccountReadResponse, AxtErrorDetails, ErrorDetails, ErrorEnvelope, PipelineTransactionStatus,
+    PipelineTransactionStatusResponse, QueueErrorSnapshot, uri,
 };
 use ivm::iso20022::{MsgError, parse_message};
 #[cfg(feature = "app_api")]
@@ -2819,36 +2819,11 @@ async fn enforce_api_token(
     req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
-    if !is_public_contract_api_token_bypass(req.method(), req.uri().path())
-        && let Err(err) = validate_api_token(&app, req.headers())
-    {
+    if let Err(err) = validate_api_token(&app, req.headers()) {
         return Ok(err.into_response());
     }
 
     Ok(next.run(req).await)
-}
-
-fn is_public_contract_api_token_bypass(method: &axum::http::Method, path: &str) -> bool {
-    let is_public_contract_post = matches!(
-        path,
-        "/v1/contracts/deploy"
-            | "/v1/contracts/deploy-bundle"
-            | "/v1/contracts/aliases"
-            | "/v1/contracts/call"
-            | "/v1/contracts/call/simulate"
-            | "/v1/contracts/view"
-            | "/v1/contracts/view/batch"
-    );
-    let is_public_contract_get =
-        path == "/v1/contracts/state" || path.starts_with("/v1/contracts/deploy-bundles/");
-    let is_public_contract_options = is_public_contract_post || is_public_contract_get;
-
-    match *method {
-        axum::http::Method::POST => is_public_contract_post,
-        axum::http::Method::GET => is_public_contract_get,
-        axum::http::Method::OPTIONS => is_public_contract_options,
-        _ => false,
-    }
 }
 
 async fn enforce_api_version(
@@ -19719,18 +19694,20 @@ async fn normalize_torii_proof_record_query_response(response: Response) -> Resp
         }
     };
 
-    let validation = match norito::decode_from_bytes::<iroha_data_model::ValidationFail>(&body) {
-        Ok(validation) => validation,
-        Err(_) => {
-            return Response::from_parts(parts, Body::from(body));
-        }
-    };
+    let missing_proof_record =
+        match norito::decode_from_bytes::<iroha_data_model::ValidationFail>(&body) {
+            Ok(validation) => torii_validation_fail_is_missing_proof_record(&validation),
+            Err(_) => norito::decode_from_bytes::<ErrorEnvelope>(&body)
+                .map(|envelope| envelope.message.contains("ProofRecord not found"))
+                .unwrap_or(false),
+        };
 
-    if torii_validation_fail_is_missing_proof_record(&validation) {
+    if missing_proof_record {
         return (
             StatusCode::NOT_FOUND,
-            utils::NoritoBody(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            utils::NoritoBody(ErrorEnvelope::new(
+                "proof_record_not_found",
+                "ProofRecord not found",
             )),
         )
             .into_response();
@@ -34485,16 +34462,8 @@ impl Torii {
                     get(soracloud::handle_model_artifact_status),
                 )
                 .route(
-                    "/v1/soracloud/model/upload/init",
-                    post(soracloud::handle_uploaded_model_init),
-                )
-                .route(
-                    "/v1/soracloud/model/upload/chunk",
-                    post(soracloud::handle_uploaded_model_chunk),
-                )
-                .route(
-                    "/v1/soracloud/model/upload/finalize",
-                    post(soracloud::handle_uploaded_model_finalize),
+                    "/v1/soracloud/model/upload/register",
+                    post(soracloud::handle_uploaded_model_register),
                 )
                 .route(
                     "/v1/soracloud/model/upload/encryption-recipient",
@@ -34503,34 +34472,6 @@ impl Torii {
                 .route(
                     "/v1/soracloud/model/upload/status",
                     get(soracloud::handle_uploaded_model_status),
-                )
-                .route(
-                    "/v1/soracloud/model/compile",
-                    post(soracloud::handle_private_compile),
-                )
-                .route(
-                    "/v1/soracloud/model/compile/status",
-                    get(soracloud::handle_private_compile_status),
-                )
-                .route(
-                    "/v1/soracloud/model/allow",
-                    post(soracloud::handle_uploaded_model_allow),
-                )
-                .route(
-                    "/v1/soracloud/model/run-private",
-                    post(soracloud::handle_private_inference_run),
-                )
-                .route(
-                    "/v1/soracloud/model/run-private/finalize",
-                    post(soracloud::handle_private_inference_run_finalize),
-                )
-                .route(
-                    "/v1/soracloud/model/run-status",
-                    get(soracloud::handle_private_inference_status),
-                )
-                .route(
-                    "/v1/soracloud/model/decrypt-output",
-                    post(soracloud::handle_private_inference_checkpoint),
                 )
                 .route("/v1/soracloud/hf/deploy", post(soracloud::handle_hf_deploy))
                 .route("/v1/soracloud/hf/status", get(soracloud::handle_hf_status))
@@ -38325,7 +38266,24 @@ impl IntoResponse for Error {
                     iroha_data_model::ValidationFail::AxtReject(ctx) => Some(ctx.clone()),
                     _ => None,
                 };
-                let mut response = (status, utils::NoritoBody(err)).into_response();
+                let mut details = ErrorDetails {
+                    reject_code: offline_reason.clone(),
+                    ..Default::default()
+                };
+                details.axt = axt.as_ref().map(|ctx| AxtErrorDetails {
+                    code: Some(ctx.reason.code().to_owned()),
+                    reason: Some(ctx.reason.label().to_owned()),
+                    snapshot_version: (ctx.snapshot_version > 0).then_some(ctx.snapshot_version),
+                    dataspace: ctx.dataspace.map(|dsid| dsid.as_u64()),
+                    lane: ctx.lane.map(|lane| lane.as_u32()),
+                    next_min_handle_era: ctx.next_min_handle_era,
+                    next_min_sub_nonce: ctx.next_min_sub_nonce,
+                });
+                let mut envelope = ErrorEnvelope::new("query_validation_failed", err.to_string());
+                if !details.is_empty() {
+                    envelope = envelope.with_details(details);
+                }
+                let mut response = (status, utils::NoritoBody(envelope)).into_response();
                 let headers = response.headers_mut();
                 if let Some(ctx) = axt {
                     headers.insert(
@@ -38415,12 +38373,18 @@ impl IntoResponse for Error {
                 endpoint,
                 retry_after_secs,
             } => {
-                let payload = crate::json_object(vec![
-                    crate::json_entry("error", "rate_limited"),
-                    crate::json_entry("endpoint", endpoint),
-                    crate::json_entry("retry_after_secs", retry_after_secs),
-                ]);
-                let mut resp = utils::JsonBody(payload).into_response();
+                let payload = ErrorEnvelope::new(
+                    "proof_rate_limited",
+                    format!(
+                        "proof endpoint `{endpoint}` throttled; retry after {retry_after_secs}s"
+                    ),
+                )
+                .with_details(ErrorDetails {
+                    endpoint: Some(endpoint.to_owned()),
+                    retry_after_seconds: Some(retry_after_secs),
+                    ..Default::default()
+                });
+                let mut resp = utils::NoritoBody(payload).into_response();
                 *resp.status_mut() = StatusCode::TOO_MANY_REQUESTS;
                 if let Ok(header) = HeaderValue::from_str(&retry_after_secs.to_string()) {
                     resp.headers_mut()
@@ -38430,7 +38394,7 @@ impl IntoResponse for Error {
             }
             Self::LaneLifecycle { reason } => (
                 StatusCode::BAD_REQUEST,
-                utils::NoritoBody(iroha_data_model::ValidationFail::NotPermitted(reason)),
+                utils::NoritoBody(ErrorEnvelope::new("lane_lifecycle_error", reason)),
             )
                 .into_response(),
             Self::PushIntoQueue {
@@ -38476,9 +38440,13 @@ impl IntoResponse for Error {
             }
             Self::AcceptTransaction(err) => {
                 let (code, detail) = accept_transaction_metadata(&err);
+                let details = ErrorDetails {
+                    reject_code: Some(code.to_owned()),
+                    ..Default::default()
+                };
                 let mut response = (
                     StatusCode::BAD_REQUEST,
-                    utils::NoritoBody(ErrorEnvelope::new(code, detail)),
+                    utils::NoritoBody(ErrorEnvelope::new(code, detail).with_details(details)),
                 )
                     .into_response();
                 if let Ok(header) = HeaderValue::from_str(code) {
@@ -55387,10 +55355,11 @@ pub(crate) mod tests_runtime_handlers {
             .expect("response body")
             .to_bytes();
         let payload =
-            norito::decode_from_bytes::<QueueErrorEnvelope>(&body).expect("queue error envelope");
+            norito::decode_from_bytes::<ErrorEnvelope>(&body).expect("queue error envelope");
         assert_eq!(payload.code, "queue_confidential_policy_rejected");
-        assert_eq!(payload.retry_after_seconds, None);
-        assert_eq!(payload.queue.state, "healthy");
+        let details = payload.details.expect("queue error details");
+        assert_eq!(details.retry_after_seconds, None);
+        assert_eq!(details.queue.expect("queue snapshot").state, "healthy");
     }
 
     #[test]
@@ -55884,7 +55853,7 @@ impl Error {
     fn queue_error_envelope(
         err: &queue::Error,
         backpressure: queue::BackpressureState,
-    ) -> QueueErrorEnvelope {
+    ) -> ErrorEnvelope {
         let (code, message) = Self::queue_error_summary(err);
         let saturated = backpressure.is_saturated();
         let retry_after_seconds = match err {
@@ -55893,10 +55862,10 @@ impl Error {
             | queue::Error::MaximumTransactionsPerUser => Some(1),
             _ => None,
         };
-        QueueErrorEnvelope {
-            code: code.to_owned(),
-            message: message.to_owned(),
-            queue: QueueErrorSnapshot {
+        let (reject_code, _detail) = queue_rejection_metadata(err);
+        ErrorEnvelope::new(code, message).with_details(ErrorDetails {
+            reject_code: Some(reject_code.to_owned()),
+            queue: Some(QueueErrorSnapshot {
                 state: if saturated {
                     "saturated".to_owned()
                 } else {
@@ -55905,9 +55874,10 @@ impl Error {
                 queued: backpressure.queued() as u64,
                 capacity: backpressure.capacity().get() as u64,
                 saturated,
-            },
+            }),
             retry_after_seconds,
-        }
+            ..Default::default()
+        })
     }
 }
 
@@ -59894,14 +59864,9 @@ mod tests {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("body bytes");
-        let validation: ValidationFail =
-            norito::decode_from_bytes(&body).expect("validation fail payload");
-        assert!(matches!(
-            validation,
-            ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::NotFound
-            )
-        ));
+        let envelope: ErrorEnvelope =
+            norito::decode_from_bytes(&body).expect("error envelope payload");
+        assert_eq!(envelope.code, "proof_record_not_found");
     }
 
     #[tokio::test]
@@ -60138,6 +60103,18 @@ mod tests {
                 .and_then(|v| v.to_str().ok()),
             Some("2")
         );
+        let body = executor::block_on(http_body_util::BodyExt::collect(response.into_body()))
+            .expect("response body")
+            .to_bytes();
+        let envelope: ErrorEnvelope =
+            norito::decode_from_bytes(&body).expect("error envelope payload");
+        let axt = envelope
+            .details
+            .and_then(|details| details.axt)
+            .expect("axt details");
+        assert_eq!(axt.code.as_deref(), Some("AXT_HANDLE_ERA"));
+        assert_eq!(axt.dataspace, Some(7));
+        assert_eq!(axt.lane, Some(3));
     }
 
     #[tokio::test]
@@ -61238,19 +61215,14 @@ mod tests {
             .await
             .unwrap()
             .to_bytes();
-        use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
-
-        let validation: ValidationFail =
-            norito::decode_from_bytes(&body).expect("validation fail payload");
-        match validation {
-            ValidationFail::QueryFailed(QueryExecutionFail::Conversion(message)) => {
-                assert!(
-                    message.to_lowercase().contains("invalid"),
-                    "unexpected conversion message: {message}"
-                );
-            }
-            other => panic!("unexpected validation error: {other:?}"),
-        }
+        let envelope: ErrorEnvelope =
+            norito::decode_from_bytes(&body).expect("error envelope payload");
+        assert_eq!(envelope.code, "query_validation_failed");
+        assert!(
+            envelope.message.to_lowercase().contains("invalid"),
+            "unexpected error message: {}",
+            envelope.message
+        );
     }
 
     #[tokio::test]
@@ -61272,14 +61244,14 @@ mod tests {
             .await
             .unwrap()
             .to_bytes();
-        use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
-
-        let validation: ValidationFail =
-            norito::decode_from_bytes(&body).expect("validation fail payload");
-        assert!(matches!(
-            validation,
-            ValidationFail::QueryFailed(QueryExecutionFail::Conversion(_))
-        ));
+        let envelope: ErrorEnvelope =
+            norito::decode_from_bytes(&body).expect("error envelope payload");
+        assert_eq!(envelope.code, "query_validation_failed");
+        assert!(
+            envelope.message.contains("Conversion"),
+            "unexpected error message: {}",
+            envelope.message
+        );
     }
 
     #[tokio::test]
@@ -61767,60 +61739,6 @@ mod tests {
         assert!(validate_api_token(state, &configured_headers).is_ok());
     }
 
-    #[test]
-    fn public_contract_api_token_bypass_matches_declared_surface() {
-        use axum::http::Method;
-
-        assert!(is_public_contract_api_token_bypass(
-            &Method::POST,
-            "/v1/contracts/deploy"
-        ));
-        assert!(is_public_contract_api_token_bypass(
-            &Method::POST,
-            "/v1/contracts/deploy-bundle"
-        ));
-        assert!(is_public_contract_api_token_bypass(
-            &Method::POST,
-            "/v1/contracts/aliases"
-        ));
-        assert!(is_public_contract_api_token_bypass(
-            &Method::POST,
-            "/v1/contracts/call"
-        ));
-        assert!(is_public_contract_api_token_bypass(
-            &Method::POST,
-            "/v1/contracts/call/simulate"
-        ));
-        assert!(is_public_contract_api_token_bypass(
-            &Method::POST,
-            "/v1/contracts/view"
-        ));
-        assert!(is_public_contract_api_token_bypass(
-            &Method::POST,
-            "/v1/contracts/view/batch"
-        ));
-        assert!(is_public_contract_api_token_bypass(
-            &Method::GET,
-            "/v1/contracts/state"
-        ));
-        assert!(is_public_contract_api_token_bypass(
-            &Method::GET,
-            "/v1/contracts/deploy-bundles/test-digest"
-        ));
-        assert!(is_public_contract_api_token_bypass(
-            &Method::OPTIONS,
-            "/v1/contracts/deploy"
-        ));
-        assert!(!is_public_contract_api_token_bypass(
-            &Method::POST,
-            "/v1/contracts/call/multisig/propose"
-        ));
-        assert!(!is_public_contract_api_token_bypass(
-            &Method::POST,
-            "/v1/operator/auth/login/options"
-        ));
-    }
-
     #[tokio::test]
     #[cfg(feature = "telemetry")]
     async fn norito_rpc_gate_records_metrics() {
@@ -62060,7 +61978,7 @@ mod tests {
 
         let router = Router::new()
             .route("/v1/soracloud/test", post(probe))
-            .route("/v1/soracloud/model/upload/chunk", post(probe))
+            .route("/v1/soracloud/model/upload/register", post(probe))
             .layer(axum::middleware::from_fn_with_state(
                 app.clone(),
                 enforce_soracloud_signed_mutation_request,
@@ -62085,7 +62003,7 @@ mod tests {
 
         let upload = axum::http::Request::builder()
             .method(axum::http::Method::POST)
-            .uri("/v1/soracloud/model/upload/chunk")
+            .uri("/v1/soracloud/model/upload/register")
             .body(Body::from(body))
             .expect("request");
         let upload_response = router.oneshot(upload).await.expect("response");
@@ -62173,7 +62091,7 @@ mod tests {
             "model"
         );
         assert_eq!(
-            super::soracloud_signed_mutation_route_group("/v1/soracloud/model/upload/chunk"),
+            super::soracloud_signed_mutation_route_group("/v1/soracloud/model/upload/register"),
             "upload"
         );
         assert_eq!(

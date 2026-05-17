@@ -1,8 +1,33 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-05-16
+Last updated: 2026-05-17
 
 Completed history lives in `status.md`. This file should only track unfinished work.
+
+## SoraFS paid pin validation follow-ups
+
+- Rerun the focused SoraFS data-model, core pin-registry, Torii storage-pin, and
+  gateway policy suites once the current dirty-tree Cargo blockers are cleared.
+  Include positive paid pin ingest, missing/tampered fee metadata, unknown
+  chunker profile rejection, manifest envelope validation, admission fail-closed,
+  and streaming CAR range coverage.
+
+## ZK audit validation follow-ups
+
+- Rerun the focused ZK hardening corridor once the current dirty-tree
+  `iroha_data_model` Kaigi/FastPQ JSON, SoraNet VPN, and SoraFS pricing compile
+  blockers are resolved. Cover the policy-hash state tests, generic
+  `VerifyProof` registry-only tests, P2P confidential digest tests, and IVM
+  CoreHost STARK/Halo2 guardrail tests with the relevant ZK features enabled.
+
+## Soracloud production follow-ups
+
+- Design and implement a real deterministic private uploaded-model runtime
+  before reintroducing compile, allow-model, run-private, run-status, or
+  decrypt-output production routes.
+- Add operator documentation for the SoraFS pin-and-register upload workflow,
+  including approved-pin evidence, runtime submission gas-asset config, and
+  external signing of JavaScript Soracloud provenance payloads.
 
 ## TradFi ISO 20022 interop follow-ups
 
@@ -231,6 +256,12 @@ Completed history lives in `status.md`. This file should only track unfinished w
     bytes so the static OpenAPI manifest can be regenerated and verified.
 - Carry the FastPQ V1 verifier/AXT binding hardening through the next clean
   validation corridor.
+  - Rerun the focused FASTPQ/Kura checks once the unrelated dirty
+    `iroha_data_model` SoraNet VPN and SoraFS pricing compile errors are
+    resolved. The 2026-05-17 implementation binds proof-carried roots,
+    lookup products, FRI roots/challenges, and query openings to a
+    batch-recomputed canonical CPU backend artifact, and persists verified
+    runtime FASTPQ proof snapshots into existing Kura pipeline sidecars.
   - `cargo test -p fastpq_prover --lib`,
     `cargo check -p fastpq_prover --bins --lib`, and
     `cargo check -p iroha_core --lib` are green as of 2026-05-02.
@@ -288,12 +319,20 @@ Completed history lives in `status.md`. This file should only track unfinished w
   deployment corridor.
   - The Torii/relay/helper control plane now requires XOR quote payments,
     non-operator escrow custody, client usage vouchers, one-use helper tickets,
-    and relay TLS pinning.
+    relay TLS pinning, helper-ticket-bound metering keys, and tariff-derived
+    relay settlement.
   - Native lease escrow ISIs, WSV lease records, verified tariff settlement,
     relay/helper streaming voucher debt-window enforcement, Torii native
     `OpenVpnLeaseEscrow` quote skeletons, and Torii native `SettleVpnLease`
     receipt skeleton responses through the generic `tx_instructions`
-    tooling convention are implemented.
+    tooling convention are implemented. Torii receipt settlement now reloads
+    authoritative lease state from WSV instead of relying on process-local
+    VPN session caches.
+  - Relay/backend deployment now uses `vpn.backend_endpoint`; Unix sockets are
+    the default privileged path, while TCP requires a shared bootstrap secret
+    and Norito MAC envelopes with timestamp/nonce replay checks.
+  - Hidden helper workers now receive connect payloads over stdin and batch
+    local traffic-state persistence.
   - Relay operators can set `vpn.receipt_spool_dir` to persist the exact
     `/v1/vpn/receipts` request body for voucher-backed sessions, so settlement
     no longer depends on reconstructing receipt bytes from logs.
@@ -303,9 +342,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - The JavaScript, C#, Swift, Python, Kotlin/JVM, and Java Android Torii
     clients now expose the quote-first open flow and operator receipt
     submission helpers with native instruction skeletons.
-  - Next, run a public relay/helper/Torii canary that opens a native XOR VPN
-    lease from the wallet flow, submits a spooled operator receipt, and signs the
-    returned `SettleVpnLease` transaction.
+  - Next, finish the focused Cargo validation once the current shared target
+    locks clear, then run a public relay/helper/Torii canary that opens a native
+    XOR VPN lease from the wallet flow, submits a spooled operator receipt, and
+    signs the returned `SettleVpnLease` transaction.
 - Carry the IVM/Kotodama vector and syscall hardening through the next clean
   validation corridor.
   - `cargo test -p ivm_abi`,
@@ -471,6 +511,11 @@ Completed history lives in `status.md`. This file should only track unfinished w
     and `cargo test -p iroha_torii tool_effects --lib` with
     `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-continue`. Fold the slice into the
     next workspace clippy/test corridor when validation budget allows.
+- Carry the Torii first-release API cleanup through a clean Cargo validation
+  corridor once the current dirty-tree `iroha_data_model` VPN/SoraFS compile
+  blockers are resolved. The route/API/error-envelope implementation is in
+  place and formatting/static diff checks are green; focused Cargo tests could
+  not reach Torii because `iroha_data_model` fails first.
 - Carry the Iroha Connect hardening through the remaining SDK and workspace
   validation corridor.
   - P2P session claims, hashed token storage, focused Rust checks, JavaScript

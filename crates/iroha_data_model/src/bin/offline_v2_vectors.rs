@@ -161,6 +161,8 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
     let token_id_preimage = OfflineNotePaymentTokenIdPreimageV2 {
         domain: OFFLINE_NOTE_V2_PAYMENT_TOKEN_ID_DOMAIN.to_owned(),
         chain_id: chain_id.clone(),
+        payment_request_id: INVOICE_ID.to_owned(),
+        created_at_ms: CREATED_AT_MS,
         token_nonce: token_nonce.clone(),
         sender_key_certificate_payload_hash: sender_certificate_payload_hash,
         input_nullifiers: vec![input_nullifier],

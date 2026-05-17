@@ -11,7 +11,7 @@ translation_last_reviewed: 2026-02-07
 
 # Query JSON Envelope
 
-Iroha exposes a Norito-based `/query` endpoint that accepts signed frames. For
+Iroha exposes a Norito-based `/v1/query` endpoint that accepts signed frames. For
 interactive tooling (CLI, scripting) it is convenient to author the request as
 JSON and let the tooling convert it into a signed `SignedQuery`. The
 `iroha_data_model::query::json` module defines the canonical envelope used by
@@ -119,7 +119,7 @@ ensure deterministic signatures.
 ## CLI usage
 
 The CLI reads the envelope from stdin, signs the request with the configured
-account, and submits it to `/query`:
+account, and submits it to `/v1/query`:
 
 ```shell
 $ cargo run -p iroha_cli -- query stdin <<'JSON'

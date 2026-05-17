@@ -5332,6 +5332,7 @@ fn submit_manifest_via_transaction_endpoint(
         digest: ManifestDigest::new(*manifest_digest.as_bytes()),
         chunker,
         chunk_digest_sha3_256: chunk_digest,
+        content_length: manifest.content_length,
         policy,
         submitted_epoch,
         alias,

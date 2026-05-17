@@ -207,6 +207,15 @@ public final class OfflineNoteV2KeychainStore: OfflineNoteV2Store {
         backing = OfflineNoteV2KeychainBacking(configuration: configuration)
     }
 
+    public func mutateNotes<T>(_ body: (inout [String: OfflineNoteV2WalletNote]) throws -> T) throws -> T {
+        try lock.withLock {
+            var notes = try loadNotes()
+            let result = try body(&notes)
+            try saveNotes(notes)
+            return result
+        }
+    }
+
     public func listNotes() throws -> [OfflineNoteV2WalletNote] {
         try lock.withLock {
             try loadNotes().values.sorted {
@@ -225,10 +234,8 @@ public final class OfflineNoteV2KeychainStore: OfflineNoteV2Store {
     }
 
     public func upsert(_ note: OfflineNoteV2WalletNote) throws {
-        try lock.withLock {
-            var notes = try loadNotes()
+        try mutateNotes { notes in
             notes[note.noteCommitmentHex] = note
-            try saveNotes(notes)
         }
     }
 

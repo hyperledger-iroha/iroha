@@ -117,6 +117,8 @@ final class OfflineNoteV2Tests: XCTestCase {
 
         let tokenPreimage = try OfflineNotePaymentTokenIdPreimageV2(
             chainId: derivation.chainId,
+            paymentRequestId: derivation.paymentRequestId,
+            createdAtMs: fixture.paymentToken.createdAtMs,
             tokenNonce: Self.hex(derivation.tokenNonceHex),
             senderKeyCertificatePayloadHash: Self.hex(derivation.senderKeyCertificatePayloadHash),
             inputNullifiers: [Self.hex(derivation.inputNullifier)],
@@ -176,21 +178,23 @@ final class OfflineNoteV2Tests: XCTestCase {
         )
     }
 
-    func testOfflineNoteV2PaymentTokenCodecRoundTripsJsonTextAndQrFrames() throws {
+    func testOfflineNoteV2PaymentTokenCodecRoundTripsNoritoTextAndQrFrames() throws {
         let fixture = try Self.loadFixture()
         let token = OfflineNoteV2PaymentToken(
+            chainId: fixture.chainVectors.derivation.chainId,
             paymentRequestId: fixture.paymentToken.invoiceId,
+            tokenNonce: try Self.hex(fixture.chainVectors.derivation.tokenNonceHex),
             tokenId: try Self.hex(fixture.paymentToken.tokenId),
             audit: try Self.audit(fixture),
             createdAtMs: fixture.paymentToken.createdAtMs
         )
 
-        let jsonDecoded = try OfflineNoteV2PaymentTokenCodec.decodeJson(
-            OfflineNoteV2PaymentTokenCodec.encodeJson(token)
+        let noritoDecoded = try OfflineNoteV2PaymentTokenCodec.decodeNorito(
+            OfflineNoteV2PaymentTokenCodec.encodeNorito(token)
         )
-        XCTAssertEqual(jsonDecoded.tokenIdHex, token.tokenIdHex)
-        XCTAssertEqual(jsonDecoded.paymentRequestId, token.paymentRequestId)
-        XCTAssertEqual(try jsonDecoded.audit.noritoEncoded(), try token.audit.noritoEncoded())
+        XCTAssertEqual(noritoDecoded.tokenIdHex, token.tokenIdHex)
+        XCTAssertEqual(noritoDecoded.paymentRequestId, token.paymentRequestId)
+        XCTAssertEqual(try noritoDecoded.audit.noritoEncoded(), try token.audit.noritoEncoded())
 
         let text = try OfflineNoteV2PaymentTokenCodec.encodeText(token)
         XCTAssertTrue(text.hasPrefix(OfflineNoteV2PaymentTokenCodec.textPrefix))
@@ -286,6 +290,8 @@ final class OfflineNoteV2Tests: XCTestCase {
 
         let tokenId = try OfflineNotePaymentTokenIdPreimageV2(
             chainId: derivation.chainId,
+            paymentRequestId: derivation.paymentRequestId,
+            createdAtMs: fixture.paymentToken.createdAtMs,
             tokenNonce: Self.hex(derivation.tokenNonceHex),
             senderKeyCertificatePayloadHash: Self.hex(derivation.senderKeyCertificatePayloadHash),
             inputNullifiers: [inputNullifier],
@@ -466,7 +472,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
         let recipientCertificate = try Self.certificate(fixture.paymentToken.recipientKeyCertificate)
         let senderStore = InMemoryOfflineNoteV2Store()
-        senderStore.upsert(try Self.sourceWalletNote(fixture, certificate: senderCertificate))
+        try senderStore.upsert(try Self.sourceWalletNote(fixture, certificate: senderCertificate))
         let senderWallet = OfflineNoteV2Wallet(
             chainId: derivation.chainId,
             accountId: Self.accountId(fromAssetId: fixture.chainVectors.issue.assetId),
@@ -474,12 +480,13 @@ final class OfflineNoteV2Tests: XCTestCase {
             store: senderStore,
             transactionSubmitter: RecordingTransactionSubmitter(),
             proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
             randomSource: QueueRandomSource(values: [
                 try Self.hex(derivation.tokenNonceHex),
                 try Self.hex(derivation.changeNoteSecretHex)
             ]),
             idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
-            clock: { 1_700_000_001_100 }
+            clock: { fixture.paymentToken.createdAtMs }
         )
         let recipientSubmitter = RecordingTransactionSubmitter()
         let recipientWallet = OfflineNoteV2Wallet(
@@ -488,6 +495,7 @@ final class OfflineNoteV2Tests: XCTestCase {
             attestationProvider: StaticAttestationProvider(certificate: recipientCertificate),
             transactionSubmitter: recipientSubmitter,
             proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
             randomSource: QueueRandomSource(values: [
                 try Self.hex(derivation.recipientNoteSecretHex)
             ]),
@@ -505,12 +513,15 @@ final class OfflineNoteV2Tests: XCTestCase {
 
         XCTAssertEqual(token.tokenIdHex, derivation.paymentTokenId)
         XCTAssertEqual(try token.audit.publicInputsHash().hexLowercased(), fixture.chainVectors.audit.publicInputsHash)
-        XCTAssertEqual(senderStore.findNote(noteCommitment: try Self.hex(derivation.sourceNoteCommitment))?.state, .spendPending)
-        XCTAssertEqual(senderStore.findNote(noteCommitment: try Self.hex(derivation.changeOutputCommitment))?.state, .changePending)
+        XCTAssertEqual(token.paymentRequestId, derivation.paymentRequestId)
+        XCTAssertEqual(try senderStore.findNote(noteCommitment: try Self.hex(derivation.sourceNoteCommitment))?.state, .spent)
+        XCTAssertEqual(try senderStore.findNote(noteCommitment: try Self.hex(derivation.changeOutputCommitment))?.state, .spendable)
 
-        let accepted = try await recipientWallet.accept(token)
+        let accepted = try recipientWallet.accept(token)
 
         XCTAssertEqual(accepted.state, .spendable)
+        XCTAssertEqual(recipientSubmitter.audits.count, 0)
+        try await recipientWallet.publishAudit(token)
         XCTAssertEqual(recipientSubmitter.audits.count, 1)
         let redeeming = try await recipientWallet.redeem(accepted)
         XCTAssertEqual(redeeming.state, .redeemPending)
@@ -527,7 +538,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
         let recipientCertificate = try Self.certificate(fixture.paymentToken.recipientKeyCertificate)
         let senderStore = InMemoryOfflineNoteV2Store()
-        senderStore.upsert(try Self.sourceWalletNote(fixture, certificate: senderCertificate))
+        try senderStore.upsert(try Self.sourceWalletNote(fixture, certificate: senderCertificate))
         let syncResolver = RecordingSyncResolver(resolutions: [
             derivation.sourceNoteCommitment: .spent,
             derivation.changeOutputCommitment: .spendable
@@ -540,6 +551,7 @@ final class OfflineNoteV2Tests: XCTestCase {
             transactionSubmitter: RecordingTransactionSubmitter(),
             syncResolver: syncResolver,
             proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
             randomSource: QueueRandomSource(values: [
                 try Self.hex(derivation.tokenNonceHex),
                 try Self.hex(derivation.changeNoteSecretHex)
@@ -553,6 +565,7 @@ final class OfflineNoteV2Tests: XCTestCase {
             attestationProvider: StaticAttestationProvider(certificate: recipientCertificate),
             transactionSubmitter: RecordingTransactionSubmitter(),
             proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
             randomSource: QueueRandomSource(values: [
                 try Self.hex(derivation.recipientNoteSecretHex)
             ]),
@@ -567,13 +580,10 @@ final class OfflineNoteV2Tests: XCTestCase {
         _ = try senderWallet.pay(receiveRequest)
         _ = try await senderWallet.sync()
 
-        XCTAssertEqual(senderStore.findNote(noteCommitment: try Self.hex(derivation.sourceNoteCommitment))?.state, .spent)
-        let spendableChange = senderStore.findNote(noteCommitment: try Self.hex(derivation.changeOutputCommitment))
+        XCTAssertEqual(try senderStore.findNote(noteCommitment: try Self.hex(derivation.sourceNoteCommitment))?.state, .spent)
+        let spendableChange = try senderStore.findNote(noteCommitment: try Self.hex(derivation.changeOutputCommitment))
         XCTAssertEqual(spendableChange?.state, .spendable)
-        XCTAssertEqual(Set(syncResolver.resolvedCommitments), Set([
-            derivation.sourceNoteCommitment,
-            derivation.changeOutputCommitment
-        ]))
+        XCTAssertEqual(syncResolver.resolvedCommitments, [])
 
         syncResolver.resolutions[derivation.changeOutputCommitment] = .redeemed
         let redeeming = try await senderWallet.redeem(try XCTUnwrap(spendableChange))
@@ -581,7 +591,7 @@ final class OfflineNoteV2Tests: XCTestCase {
 
         _ = try await senderWallet.sync()
 
-        XCTAssertEqual(senderStore.findNote(noteCommitment: try Self.hex(derivation.changeOutputCommitment))?.state, .redeemed)
+        XCTAssertEqual(try senderStore.findNote(noteCommitment: try Self.hex(derivation.changeOutputCommitment))?.state, .redeemed)
     }
 
     func testOfflineNoteV2WalletRejectsDuplicateTokenAndAlreadyPendingInputs() async throws {
@@ -590,7 +600,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
         let recipientCertificate = try Self.certificate(fixture.paymentToken.recipientKeyCertificate)
         let senderStore = InMemoryOfflineNoteV2Store()
-        senderStore.upsert(try Self.sourceWalletNote(fixture, certificate: senderCertificate))
+        try senderStore.upsert(try Self.sourceWalletNote(fixture, certificate: senderCertificate))
         let senderWallet = OfflineNoteV2Wallet(
             chainId: derivation.chainId,
             accountId: Self.accountId(fromAssetId: fixture.chainVectors.issue.assetId),
@@ -598,6 +608,7 @@ final class OfflineNoteV2Tests: XCTestCase {
             store: senderStore,
             transactionSubmitter: RecordingTransactionSubmitter(),
             proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
             randomSource: QueueRandomSource(values: [
                 try Self.hex(derivation.tokenNonceHex),
                 try Self.hex(derivation.changeNoteSecretHex)
@@ -611,6 +622,7 @@ final class OfflineNoteV2Tests: XCTestCase {
             attestationProvider: StaticAttestationProvider(certificate: recipientCertificate),
             transactionSubmitter: RecordingTransactionSubmitter(),
             proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
             randomSource: QueueRandomSource(values: [
                 try Self.hex(derivation.recipientNoteSecretHex)
             ]),
@@ -626,9 +638,9 @@ final class OfflineNoteV2Tests: XCTestCase {
 
         XCTAssertThrowsError(try senderWallet.pay(receiveRequest))
 
-        let accepted = try await recipientWallet.accept(token)
+        let accepted = try recipientWallet.accept(token)
         XCTAssertEqual(accepted.state, .spendable)
-        await XCTAssertThrowsErrorAsync(try await recipientWallet.accept(token)) { _ in }
+        XCTAssertThrowsError(try recipientWallet.accept(token))
     }
 
     func testOfflineNoteV2WalletSyncReconcilesFailedAuditAndRedeemOutcomes() async throws {
@@ -637,7 +649,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
         let recipientCertificate = try Self.certificate(fixture.paymentToken.recipientKeyCertificate)
         let senderStore = InMemoryOfflineNoteV2Store()
-        senderStore.upsert(try Self.sourceWalletNote(fixture, certificate: senderCertificate))
+        try senderStore.upsert(try Self.sourceWalletNote(fixture, certificate: senderCertificate))
         let senderWallet = OfflineNoteV2Wallet(
             chainId: derivation.chainId,
             accountId: Self.accountId(fromAssetId: fixture.chainVectors.issue.assetId),
@@ -649,6 +661,7 @@ final class OfflineNoteV2Tests: XCTestCase {
                 derivation.changeOutputCommitment: .cancelled
             ]),
             proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
             randomSource: QueueRandomSource(values: [
                 try Self.hex(derivation.tokenNonceHex),
                 try Self.hex(derivation.changeNoteSecretHex)
@@ -667,6 +680,7 @@ final class OfflineNoteV2Tests: XCTestCase {
                 derivation.recipientOutputCommitment: .cancelled
             ]),
             proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
             randomSource: QueueRandomSource(values: [
                 try Self.hex(derivation.recipientNoteSecretHex)
             ]),
@@ -680,25 +694,27 @@ final class OfflineNoteV2Tests: XCTestCase {
         )
         let token = try senderWallet.pay(receiveRequest)
 
-        await XCTAssertThrowsErrorAsync(try await recipientWallet.accept(token)) { _ in }
+        let accepted = try recipientWallet.accept(token)
+        XCTAssertEqual(accepted.state, .spendable)
+        await XCTAssertThrowsErrorAsync(try await recipientWallet.publishAudit(token)) { _ in }
         XCTAssertEqual(
-            recipientStore.findNote(noteCommitment: try Self.hex(derivation.recipientOutputCommitment))?.state,
-            .receivePending
+            try recipientStore.findNote(noteCommitment: try Self.hex(derivation.recipientOutputCommitment))?.state,
+            .spendable
         )
 
         _ = try await senderWallet.sync()
         _ = try await recipientWallet.sync()
 
-        XCTAssertEqual(senderStore.findNote(noteCommitment: try Self.hex(derivation.sourceNoteCommitment))?.state, .spendable)
-        XCTAssertEqual(senderStore.findNote(noteCommitment: try Self.hex(derivation.changeOutputCommitment))?.state, .cancelled)
+        XCTAssertEqual(try senderStore.findNote(noteCommitment: try Self.hex(derivation.sourceNoteCommitment))?.state, .spent)
+        XCTAssertEqual(try senderStore.findNote(noteCommitment: try Self.hex(derivation.changeOutputCommitment))?.state, .spendable)
         XCTAssertEqual(
-            recipientStore.findNote(noteCommitment: try Self.hex(derivation.recipientOutputCommitment))?.state,
-            .cancelled
+            try recipientStore.findNote(noteCommitment: try Self.hex(derivation.recipientOutputCommitment))?.state,
+            .spendable
         )
 
         let redeemStore = InMemoryOfflineNoteV2Store()
         let redeemNote = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
-        redeemStore.upsert(redeemNote)
+        try redeemStore.upsert(redeemNote)
         let redeemWallet = OfflineNoteV2Wallet(
             chainId: derivation.chainId,
             accountId: Self.accountId(fromAssetId: fixture.chainVectors.issue.assetId),
@@ -709,46 +725,26 @@ final class OfflineNoteV2Tests: XCTestCase {
                 derivation.sourceNoteCommitment: .spendable
             ]),
             proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
             randomSource: QueueRandomSource(values: []),
             idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
             clock: { 1_700_000_002_600 }
         )
 
         await XCTAssertThrowsErrorAsync(try await redeemWallet.redeem(redeemNote)) { _ in }
-        XCTAssertEqual(redeemStore.findNote(noteCommitment: try Self.hex(derivation.sourceNoteCommitment))?.state, .redeemPending)
+        XCTAssertEqual(try redeemStore.findNote(noteCommitment: try Self.hex(derivation.sourceNoteCommitment))?.state, .redeemPending)
 
         _ = try await redeemWallet.sync()
 
-        XCTAssertEqual(redeemStore.findNote(noteCommitment: try Self.hex(derivation.sourceNoteCommitment))?.state, .spendable)
+        XCTAssertEqual(try redeemStore.findNote(noteCommitment: try Self.hex(derivation.sourceNoteCommitment))?.state, .spendable)
     }
 
     func testOfflineNoteV2OutcomeIndexResolvesCommittedAndRejectedExplorerInstructions() throws {
         let fixture = try Self.loadFixture()
         let derivation = fixture.chainVectors.derivation
-        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
         let recipientCertificate = try Self.certificate(fixture.paymentToken.recipientKeyCertificate)
         let audit = try Self.audit(fixture)
         let redeem = try Self.redeem(fixture)
-        let changeOutput = fixture.paymentToken.outputClaims[1]
-
-        let sourceSpendPending = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
-            .withState(.spendPending, updatedAtMs: 1_700_000_003_000)
-        let changePending = try OfflineNoteV2WalletNote(
-            chainId: derivation.chainId,
-            accountId: changeOutput.accountId,
-            assetId: "\(changeOutput.assetDefinitionId)#\(changeOutput.accountId)",
-            amount: changeOutput.amount,
-            keyCertificate: senderCertificate,
-            noteCommitment: Self.hex(derivation.changeOutputCommitment),
-            noteSecret: Self.hex(derivation.changeNoteSecretHex),
-            origin: .p2pOutput(OfflineNoteP2pOutputOriginV2(
-                paymentRequestId: derivation.paymentRequestId,
-                outputIndex: 1
-            )),
-            state: .changePending,
-            createdAtMs: 1_700_000_002_000,
-            updatedAtMs: 1_700_000_003_000
-        )
         let redeemPending = try OfflineNoteV2WalletNote(
             chainId: derivation.chainId,
             accountId: fixture.paymentToken.recipientAccountId,
@@ -781,14 +777,6 @@ final class OfflineNoteV2Tests: XCTestCase {
             ),
         ])
 
-        XCTAssertEqual(try committed.resolve(sourceSpendPending), OfflineNoteV2SyncResolution(
-            state: .spent,
-            transactionHashHex: "audit-tx"
-        ))
-        XCTAssertEqual(try committed.resolve(changePending), OfflineNoteV2SyncResolution(
-            state: .spendable,
-            transactionHashHex: "audit-tx"
-        ))
         XCTAssertEqual(try committed.resolve(redeemPending), OfflineNoteV2SyncResolution(
             state: .redeemed,
             transactionHashHex: "redeem-tx"
@@ -798,14 +786,6 @@ final class OfflineNoteV2Tests: XCTestCase {
             .recordRejectedAudit(audit, transactionHashHex: "audit-rejected")
             .recordRejectedRedeem(redeem, transactionHashHex: "redeem-rejected")
 
-        XCTAssertEqual(try rejected.resolve(sourceSpendPending), OfflineNoteV2SyncResolution(
-            state: .spendable,
-            transactionHashHex: "audit-rejected"
-        ))
-        XCTAssertEqual(try rejected.resolve(changePending), OfflineNoteV2SyncResolution(
-            state: .cancelled,
-            transactionHashHex: "audit-rejected"
-        ))
         XCTAssertEqual(try rejected.resolve(redeemPending), OfflineNoteV2SyncResolution(
             state: .spendable,
             transactionHashHex: "redeem-rejected"
@@ -1622,6 +1602,16 @@ final class OfflineNoteV2Tests: XCTestCase {
                 publicInputsHash: redemption.publicInputsHash(),
                 proofBytes: Data("wallet-redeem-proof".utf8)
             )
+        }
+    }
+
+    private struct BindingProofVerifier: OfflineNoteV2ProofVerifier {
+        func verifyAudit(_ audit: OfflineNoteAuditBundleV2) throws -> Bool {
+            try audit.recursiveProof.publicInputsHash == audit.publicInputsHash()
+        }
+
+        func verifyRedeem(_ redemption: OfflineNoteRedeemV2) throws -> Bool {
+            try redemption.recursiveProof.publicInputsHash == redemption.publicInputsHash()
         }
     }
 

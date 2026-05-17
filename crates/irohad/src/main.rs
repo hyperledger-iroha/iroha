@@ -5006,6 +5006,7 @@ impl Iroha {
             Arc::clone(&state),
             local_validator_account_id.clone(),
             config.common.key_pair.clone(),
+            config.soracloud_runtime.submission.gas_asset_id.clone(),
         ));
         let runtime_manager = SoracloudRuntimeManager::new(
             soracloud_runtime::SoracloudRuntimeManagerConfig::from_runtime_config(
@@ -5050,6 +5051,7 @@ impl Iroha {
         if let Some((_h, child)) = iroha_core::fastpq::lane::start_with_backpressure(
             &zk_cfg.fastpq,
             Some(queue_backpressure),
+            Some(kura.clone()),
         ) {
             supervisor.monitor(Child::new(child, OnShutdown::Wait(Duration::from_secs(1))));
         }

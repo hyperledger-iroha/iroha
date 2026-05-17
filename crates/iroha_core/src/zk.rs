@@ -115,21 +115,6 @@ where
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-#[doc(hidden)]
-pub fn ensure_halo2_max_degree(min_degree: usize) {
-    let current = std::env::var("MAX_DEGREE")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(0);
-    if current < min_degree {
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var("MAX_DEGREE", min_degree.to_string());
-        }
-    }
-}
-
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn read_verifying_key<C, R>(
     reader: &mut R,
 ) -> io::Result<halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>>
@@ -322,7 +307,6 @@ pub fn offline_note_v2_recursive_vk_box() -> Result<VerifyingKeyBox, String> {
 fn build_offline_note_v2_recursive_vk_box() -> Result<VerifyingKeyBox, halo2_proofs::plonk::Error> {
     use halo2_proofs::plonk::keygen_vk;
 
-    ensure_halo2_max_degree(1024);
     let params = pasta_params_new(OFFLINE_NOTE_V2_RECURSIVE_V1_IPA_K);
     let circuit = pasta_tiny::OfflineNoteV2SemanticV1::default();
     let vk = keygen_vk(&params, &circuit)?;
@@ -622,25 +606,30 @@ pub fn offline_note_v2_audit_instance_values(
     })
 }
 
-/// Compute a stable 32-byte hash of the proof payload along with backend ID.
-pub fn hash_proof(proof: &ProofBox) -> [u8; 32] {
+fn hash_domain_separated_payload(domain: &[u8], backend: &str, bytes: &[u8]) -> [u8; 32] {
+    let backend_len = u64::try_from(backend.len()).expect("backend length must fit into u64");
+    let bytes_len = u64::try_from(bytes.len()).expect("payload length must fit into u64");
     let mut h = Sha256::new();
-    // Include backend ident string and raw bytes.
-    h.update(proof.backend.as_bytes());
-    h.update(&proof.bytes);
+    h.update(domain);
+    h.update(backend_len.to_be_bytes());
+    h.update(backend.as_bytes());
+    h.update(bytes_len.to_be_bytes());
+    h.update(bytes);
     h.finalize().into()
 }
 
-/// Compute a stable 32-byte hash of the verifying key payload along with backend ID.
+/// Compute a stable, domain-separated 32-byte hash of the proof payload.
+pub fn hash_proof(proof: &ProofBox) -> [u8; 32] {
+    hash_domain_separated_payload(b"iroha:zk:v1:proof", &proof.backend, &proof.bytes)
+}
+
+/// Compute a stable, domain-separated 32-byte hash of the verifying key payload.
 pub fn hash_vk(vk: &VerifyingKeyBox) -> [u8; 32] {
     hash_vk_bytes(&vk.backend, &vk.bytes)
 }
 
-fn hash_vk_bytes(backend: &str, bytes: &[u8]) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update(backend.as_bytes());
-    h.update(bytes);
-    h.finalize().into()
+pub(crate) fn hash_vk_bytes(backend: &str, bytes: &[u8]) -> [u8; 32] {
+    hash_domain_separated_payload(b"iroha:zk:v1:vk", backend, bytes)
 }
 
 /// Returns `true` when `backend` denotes the native STARK/FRI verifier family.
@@ -10316,11 +10305,6 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
         return reject("empty verifying key bytes");
     }
 
-    // Confidential v2 circuits inline nested Poseidon expressions; clamping the
-    // quotient degree at 64 yields proofs that can be generated but later fail
-    // verification because the effective circuit degree is truncated too low.
-    ensure_halo2_max_degree(1024);
-
     let params: PastaParams = match zkparse::params_any(vk_box.bytes.as_slice()) {
         Some(p) => p,
         None => return reject("missing/invalid IPAK parameters in verifying key envelope"),
@@ -11668,6 +11652,20 @@ mod tests {
         let p1 = ProofBox::new("halo2/pasta".into(), vec![1, 2, 3, 4]);
         let p2 = ProofBox::new("halo2/pasta".into(), vec![1, 2, 3, 4]);
         assert_eq!(hash_proof(&p1), hash_proof(&p2));
+    }
+
+    #[test]
+    fn proof_and_vk_hash_domains_are_distinct() {
+        let proof = ProofBox::new("halo2/pasta".into(), vec![1, 2, 3, 4]);
+        let vk = VerifyingKeyBox::new("halo2/pasta".into(), vec![1, 2, 3, 4]);
+        assert_ne!(hash_proof(&proof), hash_vk(&vk));
+    }
+
+    #[test]
+    fn proof_hash_length_prefixes_backend_and_payload() {
+        let p1 = ProofBox::new("ab".into(), b"cdef".to_vec());
+        let p2 = ProofBox::new("abc".into(), b"def".to_vec());
+        assert_ne!(hash_proof(&p1), hash_proof(&p2));
     }
 
     #[test]

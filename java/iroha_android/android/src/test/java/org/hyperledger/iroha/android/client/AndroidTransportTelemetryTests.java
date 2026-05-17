@@ -101,7 +101,7 @@ public final class AndroidTransportTelemetryTests {
           ToriiEventStreamClient.builder().setBaseUri(baseUri).addObserver(observer).build();
       final RecordingSseListener listener = new RecordingSseListener();
       try (ToriiEventStream stream =
-          client.openSseStream("/events", ToriiEventStreamOptions.defaultOptions(), listener)) {
+          client.openSseStream("/v1/events/sse", ToriiEventStreamOptions.defaultOptions(), listener)) {
         stream.completion().get(2, TimeUnit.SECONDS);
       }
 
@@ -110,7 +110,7 @@ public final class AndroidTransportTelemetryTests {
       final String expectedHash =
           telemetryOptions.redaction().hashAuthority(baseUri.getAuthority()).orElse(null);
       assertEquals(expectedHash, requestRecord.authorityHash());
-      assertEquals("/events", requestRecord.route());
+      assertEquals("/v1/events/sse", requestRecord.route());
       assertEquals("GET", requestRecord.method());
       assertEquals(expectedHash, responseRecord.authorityHash());
       assertEquals(200, responseRecord.statusCode().orElseThrow());

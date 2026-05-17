@@ -68,5 +68,6 @@ fn next_port() -> u16 {
 
 mod p2p;
 mod p2p_caps;
+mod p2p_consensus_caps;
 mod p2p_puzzle;
 mod p2p_trust_gossip;

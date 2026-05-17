@@ -682,7 +682,7 @@ paketi yığarkən tək yoxlama siyahısı.| Həyat dövrü addımı | Tələb o
 3. Yaşayış dövrünü sübut edən snapshot göndərin və səhnələşdirildikdən dərhal sonra manifest edin
    idarəetmə rəyçiləri eyni repo qurğuları ilə həzmi yenidən hesablaya bilərlər.
 4. Təsirə məruz qalan hesablar üçün `RepoAccountEvent::*` SSE faydalı yüklərini əks etdirin və silin
-   `artifacts/finance/repo/<agreement-id>/events.ndjson`-də ixrac edilmiş NDJSON
+   `artifacts/finance/repo/<agreement-id>/v1/events/ws.ndjson`-də ixrac edilmiş NDJSON
    paketi təqdim etməzdən əvvəl.
 5. Səsvermə başa çatdıqdan sonra `hashes.txt`-i GAR identifikatoru ilə yeniləyin,
    konfiqurasiya hash və manifest yoxlama məbləği, beləliklə şura təqdimatı izləyə bilsin

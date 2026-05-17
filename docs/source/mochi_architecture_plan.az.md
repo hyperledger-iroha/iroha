@@ -44,9 +44,9 @@ Quraşdırma və istifadə təlimatları üçün [MOCHI Quickstart](mochi/quicks
 
 ## `mochi-core` tərəfindən dəstəklənən istifadəçi axınları- **Şəbəkə Yaratma Sihirbazı**: tək və ya dörd həmyaşıdlı profili seçin, kataloqları seçin və şəxsiyyətlər və genezis yaratmaq üçün `kagami`-ə zəng edin.
 - **Lifecycle Controls**: start, stop, restart həmyaşıdları; səth canlı ölçüləri; log quyruqlarını ifşa etmək; iş vaxtı konfiqurasiyasının son nöqtələrini dəyişdirin (məsələn, log səviyyələri).
-- **Blok və Hadisə Axınları**: UI panelləri üçün yaddaşda yuvarlanan bufer saxlayaraq `/block/stream` və `/events`-ə abunə olun.
-- **State Explorer**: domenləri, hesabları, aktivləri və aktiv təriflərini sadalamaq üçün Norito tərəfindən dəstəklənən `/query` zənglərini səhifələşdirmə köməkçiləri və metadata xülasələri ilə işə salın.
-- **Transaction Composer**: nanə/köçürmə təlimatı layihələrini səhnələşdirin, onları imzalanmış əməliyyatlara yığın, Norito faydalı yükünü nəzərdən keçirin, `/transaction` vasitəsilə təqdim edin və nəticədə baş verən hadisələrə nəzarət edin; tonoz imzalama qarmaqları gələcək iterasiya olaraq qalır.
+- **Blok və Hadisə Axınları**: UI panelləri üçün yaddaşda yuvarlanan bufer saxlayaraq `/v1/blocks/stream` və `/v1/events/ws`-ə abunə olun.
+- **State Explorer**: domenləri, hesabları, aktivləri və aktiv təriflərini sadalamaq üçün Norito tərəfindən dəstəklənən `/v1/query` zənglərini səhifələşdirmə köməkçiləri və metadata xülasələri ilə işə salın.
+- **Transaction Composer**: nanə/köçürmə təlimatı layihələrini səhnələşdirin, onları imzalanmış əməliyyatlara yığın, Norito faydalı yükünü nəzərdən keçirin, `/v1/pipeline/transactions` vasitəsilə təqdim edin və nəticədə baş verən hadisələrə nəzarət edin; tonoz imzalama qarmaqları gələcək iterasiya olaraq qalır.
 - **Snapshots və Re-Genesis**: Kura snapshot ixrac/idxalını təşkil edin, dükanları silin və tez sıfırlamalar üçün genezis materialını bərpa edin.
 
 ## UI Layeri (`mochi-ui`)

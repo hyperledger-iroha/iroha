@@ -5,7 +5,7 @@ use norito::codec::{Decode, Encode};
 
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{account::AccountId, metadata::Metadata};
+use crate::{account::AccountId, asset::AssetDefinitionId, metadata::Metadata};
 
 /// Canonical BLAKE3-256 digest of a `sorafs_manifest::ManifestV1`.
 #[derive(
@@ -183,6 +183,21 @@ impl PinStatus {
     }
 }
 
+/// XOR fee payment recorded when a public pin manifest is admitted.
+#[allow(missing_copy_implementations)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct PinFeePayment {
+    /// Account whose balance paid for the public pin.
+    pub paid_by: AccountId,
+    /// Asset definition used to collect the fee.
+    pub fee_asset_id: AssetDefinitionId,
+    /// Account that received the fee.
+    pub treasury_account_id: AccountId,
+    /// Fee amount in nano-XOR.
+    pub amount_nano: u128,
+}
+
 /// Registry record capturing the lifecycle of a manifest pin request.
 #[allow(missing_copy_implementations)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -195,6 +210,8 @@ pub struct PinManifestRecord {
     /// SHA3-256 digest of the ordered chunk metadata emitted during build.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub chunk_digest_sha3_256: [u8; 32],
+    /// Total payload length covered by the manifest.
+    pub content_length: u64,
     /// Replication policy bound to the manifest.
     pub policy: PinPolicy,
     /// Submitter that initiated the pin request.
@@ -219,6 +236,9 @@ pub struct PinManifestRecord {
         norito(with = "crate::json_helpers::fixed_bytes::option")
     )]
     pub council_envelope_digest: Option<[u8; 32]>,
+    /// Public pin fee payment metadata, present only after on-chain fee collection.
+    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    pub pin_fee_payment: Option<PinFeePayment>,
 }
 
 impl PinManifestRecord {
@@ -240,6 +260,7 @@ impl PinManifestRecord {
             digest,
             chunker,
             chunk_digest_sha3_256,
+            content_length: 0,
             policy,
             submitted_by,
             submitted_epoch,
@@ -249,7 +270,20 @@ impl PinManifestRecord {
             status: PinStatus::Pending,
             retirement_reason: None,
             council_envelope_digest: None,
+            pin_fee_payment: None,
         }
+    }
+
+    /// Attach the total content length represented by the manifest.
+    #[must_use]
+    pub fn with_content_length(mut self, content_length: u64) -> Self {
+        self.content_length = content_length;
+        self
+    }
+
+    /// Record the public pin fee payment associated with this manifest.
+    pub fn record_pin_fee_payment(&mut self, payment: PinFeePayment) {
+        self.pin_fee_payment = Some(payment);
     }
 
     /// Transition the record into an approved state with the provided epoch and envelope digest.

@@ -28,7 +28,7 @@ Iroha は決定性を確保するため、読み取り専用クエリを捕捉�
 
 ### リクエスト単位の上書き
 
-`/query` エンドポイントはモード制御用に予約されたクエリパラメータを受け付けます。
+`/v1/query` エンドポイントはモード制御用に予約されたクエリパラメータを受け付けます。
 
 - `cursor_mode`: `ephemeral` | `stored`
 - `gas_units`: 整数。`pipeline.query_stored_min_gas_units > 0` かつ `cursor_mode=stored` の場合に必須。充足しない場合、バリデーションエラーとなります。

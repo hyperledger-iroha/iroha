@@ -73,7 +73,7 @@ Nexus マイルストンの一部として、四半期ごとの監査で検証�
 
 | Gap ID | 不足シグナル | オーナー | リリース目標 | ノート |
 | --- | --- | --- | --- | --- |
-| `GAP-TELEM-001` | `torii_lane_admission_latency_seconds{lane_id,endpoint}` ヒストグラム | `@torii-sdk` | 2026.2 | 2025-12-04 に `/transaction` 等のレーン別レイテンシを導入済み。残りの経路はレーンルーティング導入時に実装。 |
+| `GAP-TELEM-001` | `torii_lane_admission_latency_seconds{lane_id,endpoint}` ヒストグラム | `@torii-sdk` | 2026.2 | 2025-12-04 に `/v1/pipeline/transactions` 等のレーン別レイテンシを導入済み。残りの経路はレーンルーティング導入時に実装。 |
 | `GAP-TELEM-002` | 設定リロード時の `nexus_config_diff_total{knob,profile}` カウンタ | `@nexus-core` | 2026.1 | `StateTelemetry::record_nexus_config_diff` により実装済み。テレメトリ資料にアラート例とログ確認手順を追記済み。 |
 | `GAP-TELEM-003` | `TelemetryEvent::AuditOutcome`（トレース ID／高さ／レビュア） | `@telemetry-ops` | 2026.1 | `Telemetry::record_audit_outcome` が `nexus.audit.outcome` を発行し、`dashboards/alerts/nexus_audit_rules.yml` が失敗ステータスを監視。欠落イベントは `scripts/telemetry/check_nexus_audit_outcome.py` を TRACE/CI に組み込んで 30 分以内を強制し、成果物を保存する。【crates/iroha_core/src/telemetry.rs:3056】【docs/source/telemetry.ja.md:99】 |
 | `GAP-TELEM-004` | `nexus_lane_configured_total`（ノードごとのレーン数） | `@telemetry-ops` | 2026.1 | 実装済み。`StateTelemetry::set_nexus_catalogs` からゲージが更新され、Prometheus の `nexus_lane_configured_total` を監視すれば監査前に誤設定を検知できる。テレメトリガイドにアラート例を追記済み。 |

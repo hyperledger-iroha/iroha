@@ -34,7 +34,7 @@ let digest = manifest.digest().expect("hash manifest");
 
 ### CLI helper
 
-The `sorafs-manifest-stub` binary emits chunk metadata and a manifest stub for
+The `sorafs_manifest_stub` binary emits chunk metadata and a manifest stub for
 the provided input. It accepts alias claims, governance signatures, metadata,
 and can optionally write the encoded Norito payload to disk. The tool now emits
 spec-compliant CARv2 archives and will compute both the CAR **payload** digest,
@@ -42,7 +42,7 @@ the full archive digest/size, and the raw CID for you (it verifies any values
 you pass via `--car-digest`/`--car-size`/`--car-cid`).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub \
+cargo run -p sorafs_car --bin sorafs_manifest_stub \
   ./docs.tar \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --min-replicas=3 \
@@ -122,12 +122,12 @@ multi-source downloaders can feed directly into the SoraFS fetch orchestrator.
 To inspect the registered chunker profiles (and their IDs), run:
 
 ```
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- --list-chunker-profiles
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- --list-chunker-profiles
 ```
 
 ### Provider advert helper
 
-`sorafs-provider-advert-stub` assembles a `ProviderAdvertV1` payload for
+`sorafs_provider_advert_stub` assembles a `ProviderAdvertV1` payload for
 storage nodes. It validates TTLs, QoS parameters, path-diversity policies, and
 signatures before writing the Norito bytes and a JSON summary. You can either
 provide an existing signature/public key or let the CLI sign with an Ed25519
@@ -135,7 +135,7 @@ secret key via `--signing-key-file` (seed/expanded key) or `--signing-key=hex`.
 Example:
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-provider-advert-stub -- \
+cargo run -p sorafs_car --bin sorafs_provider_advert_stub -- \
   --emit \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --provider-id=001122... \

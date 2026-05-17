@@ -4,6 +4,7 @@
 //! of relying on `serde_json`) to keep the toolchain consistent with on-wire
 //! serialization.
 
+use iroha_torii_shared::uri;
 use norito::json::{Map, Value};
 
 pub(crate) const TOOL_EFFECT_EXTENSION: &str = "x-iroha-tool-effect";
@@ -24,11 +25,11 @@ fn info_section(license: Value) -> Value {
     info.insert(
         "description".into(),
         Value::String(
-            "HTTP surface for Torii. App endpoints accept optional canonical signing headers X-Iroha-Account/X-Iroha-Signature/X-Iroha-Timestamp-Ms/X-Iroha-Nonce, except Offline V2 issuer POSTs, which use JSON body auth."
+            "HTTP surface for Torii. Public blockchain reads are available without canonical request signing when they address public state; private dataspace and account-scoped views require canonical signing and permission checks."
                 .to_owned(),
         ),
     );
-    info.insert("version".into(), Value::String("0.0.0-dev".to_owned()));
+    info.insert("version".into(), Value::String("1.0".to_owned()));
     info.insert("license".into(), license);
     Value::Object(info)
 }
@@ -1083,7 +1084,7 @@ fn system_paths() -> Map {
         )),
     );
     paths.insert(
-        "/api_version".to_owned(),
+        uri::API_VERSION.to_owned(),
         Value::Object(text_get_operation(
             "System",
             "Fetch the active API version.",
@@ -1102,7 +1103,7 @@ fn system_paths() -> Map {
         )),
     );
     paths.insert(
-        "/peers".to_owned(),
+        uri::PEERS.to_owned(),
         Value::Object(json_get_operation(
             "System",
             "List online peers.",
@@ -1112,7 +1113,7 @@ fn system_paths() -> Map {
         )),
     );
     paths.insert(
-        "/configuration".to_owned(),
+        uri::CONFIGURATION.to_owned(),
         Value::Object({
             let get_op = json_get_operation(
                 "System",
@@ -1140,7 +1141,7 @@ fn system_paths() -> Map {
         }),
     );
     paths.insert(
-        "/schema".to_owned(),
+        uri::SCHEMA.to_owned(),
         Value::Object(json_get_operation(
             "System",
             "Fetch the data model schema snapshot.",
@@ -1272,7 +1273,7 @@ fn operator_auth_paths() -> Map {
 fn transaction_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/transaction".to_owned(),
+        uri::TRANSACTION.to_owned(),
         Value::Object(binary_post_operation(
             "Transactions",
             "Submit a versioned signed transaction.",
@@ -1281,11 +1282,20 @@ fn transaction_paths() -> Map {
         )),
     );
     paths.insert(
-        "/transaction/entrypoint".to_owned(),
+        uri::TRANSACTION_ENTRYPOINT.to_owned(),
         Value::Object(binary_post_operation(
             "Transactions",
             "Submit a versioned transaction entrypoint.",
             "Submit a versioned TransactionEntrypoint encoded as Norito bytes. This route accepts sealed commitment/reveal entrypoints and other non-legacy transaction envelopes.",
+            "#/components/schemas/JsonValue",
+        )),
+    );
+    paths.insert(
+        uri::TRANSACTIONS_BATCH.to_owned(),
+        Value::Object(binary_post_operation(
+            "Transactions",
+            "Submit a batch of versioned signed transactions.",
+            "Submit a Norito-encoded batch of SignedTransaction payloads.",
             "#/components/schemas/JsonValue",
         )),
     );
@@ -1454,7 +1464,7 @@ fn transaction_paths() -> Map {
 fn query_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/query".to_owned(),
+        uri::QUERY.to_owned(),
         Value::Object(binary_post_operation(
             "Queries",
             "Submit a signed query.",
@@ -1484,7 +1494,7 @@ fn stream_paths() -> Map {
         )),
     );
     paths.insert(
-        "/events".to_owned(),
+        uri::SUBSCRIPTION.to_owned(),
         Value::Object(text_get_operation(
             "Streams",
             "Connect to the event WebSocket.",
@@ -1493,7 +1503,7 @@ fn stream_paths() -> Map {
         )),
     );
     paths.insert(
-        "/block/stream".to_owned(),
+        uri::BLOCKS_STREAM.to_owned(),
         Value::Object(text_get_operation(
             "Streams",
             "Connect to the block stream WebSocket.",
@@ -6280,7 +6290,7 @@ fn is_operator_operation(method: &str, path: &str) -> bool {
     path.starts_with("/v1/operator/")
         || matches!(
             path,
-            "/configuration"
+            uri::CONFIGURATION
                 | "/v1/internal/torii/proxy"
                 | "/v1/nexus/lane-lifecycle"
                 | "/v1/sumeragi/evidence"
@@ -6296,7 +6306,7 @@ fn is_read_operation(method: &str, path: &str) -> bool {
         || (method == "post"
             && matches!(
                 path,
-                "/query"
+                uri::QUERY
                     | "/v1/accounts/query"
                     | "/v1/aliases/by_account"
                     | "/v1/aliases/resolve"
@@ -6326,7 +6336,7 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/nfts/query"
                     | "/v1/proofs/query"
                     | "/v1/rwas/query"
-                    | "/v1/transactions/status"
+                    | "/v1/pipeline/transactions/status"
                     | "/v1/zk/roots"
                     | "/v1/zk/verify"
                     | "/v1/zk/verify-batch"
@@ -10569,6 +10579,11 @@ fn shared_error_schema() -> Value {
             "message": {
                 "type": "string",
                 "description": "Human readable error message."
+            },
+            "details": {
+                "type": ["object", "null"],
+                "description": "Optional machine-readable error context such as queue pressure, retry hints, rejection codes, endpoint names, or AXT metadata.",
+                "additionalProperties": true
             }
         }
     })
@@ -10682,10 +10697,16 @@ mod tests {
         assert!(paths.contains_key("/v1/nexus/public_lanes/{lane_id}/stake"));
         assert!(paths.contains_key("/v1/repo/agreements"));
         assert!(paths.contains_key("/v1/repo/agreements/query"));
-        assert!(paths.contains_key("/transaction"));
-        assert!(paths.contains_key("/transaction/entrypoint"));
-        assert!(paths.contains_key("/query"));
-        assert!(paths.contains_key("/events"));
+        assert!(paths.contains_key(uri::TRANSACTION));
+        assert!(paths.contains_key(uri::TRANSACTION_ENTRYPOINT));
+        assert!(paths.contains_key(uri::TRANSACTIONS_BATCH));
+        assert!(paths.contains_key(uri::QUERY));
+        assert!(paths.contains_key(uri::SUBSCRIPTION));
+        assert!(!paths.contains_key("/transaction"));
+        assert!(!paths.contains_key("/transaction/entrypoint"));
+        assert!(!paths.contains_key("/transactions/batch"));
+        assert!(!paths.contains_key("/query"));
+        assert!(!paths.contains_key("/events"));
         assert!(paths.contains_key("/v1/da/ingest"));
         assert!(paths.contains_key("/v1/connect/session"));
         assert!(paths.contains_key("/v1/vpn/profile"));
@@ -10850,7 +10871,7 @@ mod tests {
         }
 
         let query = paths
-            .get("/query")
+            .get(uri::QUERY)
             .and_then(Value::as_object)
             .and_then(|path| path.get("post"))
             .and_then(Value::as_object)
@@ -11553,17 +11574,17 @@ mod tests {
             PathCase {
                 label: "transactions",
                 builder: transaction_paths,
-                expected: "/transaction",
+                expected: uri::TRANSACTION,
             },
             PathCase {
                 label: "queries",
                 builder: query_paths,
-                expected: "/query",
+                expected: uri::QUERY,
             },
             PathCase {
                 label: "streams",
                 builder: stream_paths,
-                expected: "/events",
+                expected: uri::SUBSCRIPTION,
             },
             PathCase {
                 label: "connect",

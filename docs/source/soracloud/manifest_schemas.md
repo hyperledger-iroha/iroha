@@ -1,6 +1,6 @@
-# SoraCloud V1 Manifest Schemas
+# Soracloud V1 Manifest Schemas
 
-This page defines the first deterministic Norito schemas for SoraCloud
+This page defines the first deterministic Norito schemas for Soracloud
 deployment on Iroha 3:
 
 - `SoraContainerManifestV1`
@@ -78,11 +78,9 @@ These manifests are designed for the `IVM` + custom Sora Container Runtime
 - `CiphertextStateRecordV1` captures ciphertext-native state entries that
   combine public metadata (content type, policy tags, commitment, payload size)
   with a `SecretEnvelopeV1`.
-- User-uploaded private model bundles should build on these ciphertext-native
-  records:
-  encrypted weight/config/processor chunks live in state, while model registry,
-  weight lineage, compile profiles, inference sessions, and checkpoints remain
-  first-class Soracloud records.
+- User-uploaded model bundles reference approved active SoraFS manifests.
+  Model bytes do not live in chain state; Soracloud records keep only registry,
+  weight lineage, roots, byte counts, and SoraFS digest metadata in V1.
 
 ## Versioning
 
@@ -104,7 +102,7 @@ These manifests are designed for the `IVM` + custom Sora Container Runtime
 - `CIPHERTEXT_STATE_RECORD_VERSION_V1 = 1`
 
 Validation rejects unsupported versions with
-`SoraCloudManifestError::UnsupportedVersion`.
+`SoracloudManifestError::UnsupportedVersion`.
 
 ## Deterministic Validation Rules (V1)
 

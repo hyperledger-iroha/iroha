@@ -587,33 +587,10 @@ fn chunk_profile_for_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, eyr
         }
         Ok(descriptor.profile)
     } else {
-        let min_size = usize::try_from(manifest.chunking.min_size)
-            .map_err(|_| eyre::eyre!("manifest min_size exceeds supported range"))?;
-        let target_size = usize::try_from(manifest.chunking.target_size)
-            .map_err(|_| eyre::eyre!("manifest target_size exceeds supported range"))?;
-        let max_size = usize::try_from(manifest.chunking.max_size)
-            .map_err(|_| eyre::eyre!("manifest max_size exceeds supported range"))?;
-        let profile = ChunkProfile {
-            min_size,
-            target_size,
-            max_size,
-            break_mask: u64::from(manifest.chunking.break_mask),
-        };
-        if profile.min_size == 0
-            || profile.target_size == 0
-            || profile.max_size == 0
-            || profile.break_mask == 0
-        {
-            return Err(eyre::eyre!(
-                "manifest chunking profile parameters must be non-zero"
-            ));
-        }
-        if profile.min_size > profile.target_size || profile.target_size > profile.max_size {
-            return Err(eyre::eyre!(
-                "manifest chunking profile sizes must satisfy min <= target <= max"
-            ));
-        }
-        Ok(profile)
+        Err(eyre::eyre!(
+            "manifest chunker profile id {} is not registered",
+            manifest.chunking.profile_id.0
+        ))
     }
 }
 
@@ -2458,7 +2435,7 @@ mod tests {
     }
 
     #[test]
-    fn chunk_profile_for_manifest_rejects_out_of_order_sizes() {
+    fn chunk_profile_for_manifest_rejects_unknown_profile_id() {
         let fixtures =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0");
         let manifest_bytes =
@@ -2472,7 +2449,7 @@ mod tests {
         manifest.chunking.break_mask = 1;
         let err = chunk_profile_for_manifest(&manifest).expect_err("should reject profile");
         assert!(
-            err.to_string().contains("min <= target <= max"),
+            err.to_string().contains("is not registered"),
             "unexpected error: {err}"
         );
     }

@@ -44,9 +44,9 @@ Qo'shimcha old qismlar (masalan, Tauri qobig'i) keyinchalik nazoratchi mantig'in
 
 ## `mochi-core` tomonidan qo'llab-quvvatlangan foydalanuvchi oqimlari- **Tarmoq yaratish ustasi**: bitta yoki to‘rt tengdoshli profilni tanlang, kataloglarni tanlang va `kagami` raqamiga qo‘ng‘iroq qiling va identifikator va genezisni yarating.
 - **Lifecycle Controls**: boshlash, to'xtatish, tengdoshlarni qayta ishga tushirish; sirt jonli ko'rsatkichlari; log dumlarini ochish; ish vaqti konfiguratsiyasining so'nggi nuqtalarini almashtirish (masalan, jurnal darajalari).
-- **Bloklash va hodisalar oqimi**: `/block/stream` va `/events` ga obuna bo‘ling, UI panellari uchun xotiradagi buferni saqlang.
-- **State Explorer**: Norito tomonidan qoʻllab-quvvatlanadigan `/query` qoʻngʻiroqlarini ishga tushiring va domenlar, hisoblar, aktivlar va aktiv taʼriflarini sahifalash yordamchilari va metamaʼlumotlar xulosalari bilan roʻyxatga oling.
-- **Transaction Composer**: zarb qilish/o‘tkazish yo‘riqnomasi qoralamalarini sahnalashtiring, ularni imzolangan tranzaktsiyalarga to‘plang, Norito foydali yukini ko‘rib chiqing, `/transaction` orqali yuboring va natijada sodir bo‘lgan voqealarni kuzatib boring; tonoz imzolash ilgaklari kelajakdagi iteratsiya bo'lib qolmoqda.
+- **Bloklash va hodisalar oqimi**: `/v1/blocks/stream` va `/v1/events/ws` ga obuna bo‘ling, UI panellari uchun xotiradagi buferni saqlang.
+- **State Explorer**: Norito tomonidan qoʻllab-quvvatlanadigan `/v1/query` qoʻngʻiroqlarini ishga tushiring va domenlar, hisoblar, aktivlar va aktiv taʼriflarini sahifalash yordamchilari va metamaʼlumotlar xulosalari bilan roʻyxatga oling.
+- **Transaction Composer**: zarb qilish/o‘tkazish yo‘riqnomasi qoralamalarini sahnalashtiring, ularni imzolangan tranzaktsiyalarga to‘plang, Norito foydali yukini ko‘rib chiqing, `/v1/pipeline/transactions` orqali yuboring va natijada sodir bo‘lgan voqealarni kuzatib boring; tonoz imzolash ilgaklari kelajakdagi iteratsiya bo'lib qolmoqda.
 - **Snapshots va Re-Genesis**: Kura snapshotlarini eksport/import qilish, doʻkonlarni oʻchirish va tez tiklash uchun genezis materialini qayta tiklash.
 
 ## UI qatlami (`mochi-ui`)

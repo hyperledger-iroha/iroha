@@ -137,7 +137,7 @@ WAL-format queue shared with Rust/Swift.
 
 `HttpClientTransport`
 (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/HttpClientTransport.java`)
-implements `/transaction` (alias `/v1/pipeline/transactions`), `/v1/pipeline/transactions/status`, and
+implements `/v1/pipeline/transactions`, `/v1/pipeline/transactions/status`, and
 SoraFS gateway helpers on top of `java.net.http.HttpClient`. Core entry points:
 
 ```java
@@ -237,7 +237,7 @@ TransactionPayload payload = TransactionPayload.builder()
 
 TransactionPayload decoded =
     rpcClient.callTransaction(
-        "/norito/v1/transactions/submit",
+        "/v1/pipeline/transactions",
         payload,
         new NoritoJavaCodecAdapter(),
         NoritoRpcRequestOptions.defaultOptions());

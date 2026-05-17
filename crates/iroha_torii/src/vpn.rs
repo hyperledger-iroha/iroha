@@ -9,7 +9,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use iroha_config::client_api::ConfigGetDTO;
-use iroha_core::kiso::KisoHandle;
+use iroha_core::{kiso::KisoHandle, state::WorldReadOnly};
 use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey};
 use iroha_data_model::{
     ValidationFail,
@@ -21,11 +21,13 @@ use iroha_data_model::{
     name::Name,
     query::error::QueryExecutionFail,
     soranet::vpn::{
-        VPN_DEFAULT_TUNNEL_MTU_BYTES, VpnExitClassV1, VpnHelperTicketV1, VpnSessionReceiptV1,
-        VpnTariffV1, VpnUsageVoucherV1, derive_vpn_session_address_plan_v1,
+        VPN_DEFAULT_TUNNEL_MTU_BYTES, VpnExitClassV1, VpnHelperTicketV1, VpnLeaseRecordV1,
+        VpnLeaseStatusV1, VpnQuotePolicyV1, VpnSessionReceiptV1, VpnTariffV1, VpnUsageVoucherV1,
+        derive_vpn_session_address_plan_v1,
     },
     transaction::{Executable, SignedTransaction, TransactionEntrypoint},
 };
+use mv::storage::StorageReadOnly;
 
 use crate::{Error, SharedAppState};
 
@@ -582,6 +584,8 @@ fn build_helper_ticket_hex(
         account_hash: account_hash(&record.account_id),
         relay_id: relay_id_from_endpoint(&record.relay_endpoint),
         payment_tx_hash: decode_hex_32(&record.payment_tx_hash, "payment_tx_hash")?,
+        metering_public_key: record.metering_public_key.clone(),
+        tariff: record.tariff,
         expires_at_ms,
     }
     .to_hex(secret))
@@ -630,6 +634,26 @@ fn settle_lease_instruction(
     tx_instr_from_box(instruction)
 }
 
+fn quote_policy_from_record(record: &VpnQuoteRecord) -> VpnQuotePolicyV1 {
+    VpnQuotePolicyV1 {
+        exit_class: VpnExitClassV1::try_from_label(&record.exit_class)
+            .expect("quote exit class is normalized"),
+        relay_endpoint: record.relay_endpoint.clone(),
+        lease_secs: record.lease_secs,
+        meter_family: record.meter_family.clone(),
+        fee_asset_id: record.fee_asset_id.clone(),
+        escrow_account_id: record.escrow_account_id.clone(),
+        route_pushes: record.route_pushes.clone(),
+        excluded_routes: record.excluded_routes.clone(),
+        dns_servers: record.dns_servers.clone(),
+        tunnel_addresses: record.tunnel_addresses.clone(),
+        mtu_bytes: record.mtu_bytes,
+        flow_label_bits: record.flow_label_bits,
+        padding_budget_ms: record.padding_budget_ms,
+        relay_tls_spki_sha256_hex: record.relay_tls_spki_sha256_hex.clone(),
+    }
+}
+
 fn open_lease_instruction(record: &VpnQuoteRecord) -> Result<VpnTxInstructionDto, Error> {
     let lease_id = decode_hex_32(&record.quote_id, "quote_id")?;
     let asset_definition = parse_fee_asset_definition(&record.fee_asset_id)?;
@@ -643,6 +667,7 @@ fn open_lease_instruction(record: &VpnQuoteRecord) -> Result<VpnTxInstructionDto
         asset_definition,
         record.tariff.lease_fee_numeric(),
         record.tariff,
+        quote_policy_from_record(record),
         record.quote_expires_at_ms,
         record.settlement_grace_ms,
     )
@@ -650,14 +675,14 @@ fn open_lease_instruction(record: &VpnQuoteRecord) -> Result<VpnTxInstructionDto
     Ok(tx_instr_from_box(instruction))
 }
 
-fn settlement_lease_id(
+fn settlement_lease_id_from_request_or_receipt(
     request: &VpnReceiptSubmitRequestDto,
-    record: &VpnSessionRecord,
+    relay_receipt: &VpnSessionReceiptV1,
 ) -> Result<([u8; 32], String), Error> {
     let lease_id_hex = request.lease_id_hex.trim();
     if lease_id_hex.is_empty() {
-        let fallback = default_lease_id_hex(record);
-        return Ok((decode_hex_32(&fallback, "lease_id_hex")?, fallback));
+        let fallback = hex::encode(relay_receipt.quote_id);
+        return Ok((relay_receipt.quote_id, fallback));
     }
     let lease_id = decode_hex_32(lease_id_hex, "lease_id_hex")?;
     Ok((
@@ -952,15 +977,31 @@ fn list_receipts_for_account(
     app: &SharedAppState,
     account_id: &AccountId,
 ) -> Vec<VpnReceiptResponseDto> {
-    app.vpn_receipts
+    let mut records = app
+        .vpn_receipts
         .get(&account_id.to_string())
-        .map(|entry| {
-            entry
-                .iter()
-                .map(receipt_response_from_record)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
+        .map(|entry| entry.iter().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let cached_lease_ids = records
+        .iter()
+        .map(|record| record.lease_id_hex.clone())
+        .collect::<HashSet<_>>();
+    let world = app.state.world_view();
+    for (_, lease) in world.vpn_leases().iter() {
+        if &lease.client_account_id != account_id {
+            continue;
+        }
+        let lease_id_hex = hex::encode(lease.lease_id);
+        if cached_lease_ids.contains(&lease_id_hex) {
+            continue;
+        }
+        if let Some(record) = receipt_record_from_settled_lease(lease) {
+            records.push(record);
+        }
+    }
+    records.sort_by(|left, right| right.disconnected_at_ms.cmp(&left.disconnected_at_ms));
+    records.truncate(MAX_RECEIPTS_PER_ACCOUNT);
+    records.iter().map(receipt_response_from_record).collect()
 }
 
 fn external_signed_transaction_results(
@@ -1048,6 +1089,7 @@ fn open_lease_matches_quote(
         && open.asset_definition == asset_definition
         && open.lease_fee == quote.tariff.lease_fee_numeric()
         && open.tariff == quote.tariff
+        && open.quote_policy == quote_policy_from_record(quote)
         && open.expires_at_ms == quote.quote_expires_at_ms
         && open.settlement_grace_ms == quote.settlement_grace_ms)
 }
@@ -1117,17 +1159,83 @@ fn decode_norito_hex<T: norito::codec::Decode>(raw: &str, field: &str) -> Result
     Ok(decoded)
 }
 
-fn session_record_for_relay_receipt(
-    app: &SharedAppState,
-    relay_receipt: &VpnSessionReceiptV1,
-) -> Option<VpnSessionRecord> {
-    app.vpn_sessions.iter().find_map(|entry| {
-        let record = entry.value();
-        if relay_session_id_from_session_id(&record.session_id) == relay_receipt.session_id {
-            Some(record.clone())
-        } else {
-            None
-        }
+fn lease_record_by_id(app: &SharedAppState, lease_id: &[u8; 32]) -> Option<VpnLeaseRecordV1> {
+    let world = app.state.world_view();
+    world.vpn_leases().get(lease_id).cloned()
+}
+
+fn session_id_hex_from_lease(record: &VpnLeaseRecordV1) -> String {
+    hex::encode(record.quote_id)
+}
+
+fn session_record_from_lease(record: &VpnLeaseRecordV1) -> VpnSessionRecord {
+    let policy = &record.quote_policy;
+    VpnSessionRecord {
+        session_id: session_id_hex_from_lease(record),
+        account_id: record.client_account_id.clone(),
+        exit_class: policy.exit_class.as_label().to_owned(),
+        relay_endpoint: policy.relay_endpoint.clone(),
+        lease_secs: policy.lease_secs,
+        expires_at_ms: record.expires_at_ms,
+        connected_at_ms: record.opened_at_ms,
+        meter_family: policy.meter_family.clone(),
+        quote_id: hex::encode(record.quote_id),
+        payment_reference: hex::encode(record.quote_id),
+        payment_tx_hash: hex::encode(record.open_tx_hash),
+        fee_asset_id: policy.fee_asset_id.clone(),
+        escrow_account_id: policy.escrow_account_id.clone(),
+        operator_account_id: record.operator_account_id.clone(),
+        lease_fee_nanos: record.lease_fee_nanos,
+        tariff: record.tariff,
+        flow_label_bits: policy.flow_label_bits,
+        padding_budget_ms: policy.padding_budget_ms,
+        relay_tls_spki_sha256_hex: policy.relay_tls_spki_sha256_hex.clone(),
+        metering_public_key: record.metering_public_key.clone(),
+        route_pushes: policy.route_pushes.clone(),
+        excluded_routes: policy.excluded_routes.clone(),
+        dns_servers: policy.dns_servers.clone(),
+        tunnel_addresses: policy.tunnel_addresses.clone(),
+        mtu_bytes: policy.mtu_bytes,
+        helper_ticket_hex: String::new(),
+        bytes_in: 0,
+        bytes_out: 0,
+    }
+}
+
+fn receipt_record_from_settled_lease(record: &VpnLeaseRecordV1) -> Option<VpnReceiptRecord> {
+    if record.status != VpnLeaseStatusV1::Settled {
+        return None;
+    }
+    let relay_receipt = record.settled_relay_receipt?;
+    let session = session_record_from_lease(record);
+    let connected_at_ms = relay_receipt.started_at_ms.max(record.opened_at_ms);
+    let disconnected_at_ms = record.settled_at_ms.unwrap_or(relay_receipt.ended_at_ms);
+    let duration_ms = relay_receipt
+        .ended_at_ms
+        .saturating_sub(relay_receipt.started_at_ms);
+    Some(VpnReceiptRecord {
+        session_id: session.session_id,
+        account_id: session.account_id,
+        exit_class: session.exit_class,
+        relay_endpoint: session.relay_endpoint,
+        meter_family: session.meter_family,
+        connected_at_ms,
+        disconnected_at_ms,
+        duration_ms,
+        bytes_in: relay_receipt.ingress_bytes,
+        bytes_out: relay_receipt.egress_bytes,
+        status: "settled".to_owned(),
+        receipt_source: "wsv".to_owned(),
+        quote_id: session.quote_id,
+        payment_tx_hash: session.payment_tx_hash,
+        fee_asset_id: session.fee_asset_id,
+        escrow_account_id: session.escrow_account_id,
+        operator_account_id: session.operator_account_id,
+        lease_fee_nanos: record.lease_fee_nanos,
+        earned_fee_nanos: record.earned_fee_nanos,
+        refunded_fee_nanos: record.refunded_fee_nanos,
+        lease_id_hex: hex::encode(record.lease_id),
+        settle_lease_instruction: None,
     })
 }
 
@@ -1497,16 +1605,26 @@ pub(crate) async fn handle_submit_vpn_receipt(
 
     let current_ms = now_ms();
     let _vpn_guard = app.vpn_state_lock.lock().await;
-    prune_expired_sessions(&app, current_ms);
-    let record = session_record_for_relay_receipt(&app, &relay_receipt)
-        .ok_or_else(|| not_permitted_error("vpn receipt does not match an active session"))?;
+    let (lease_id, lease_id_hex) =
+        settlement_lease_id_from_request_or_receipt(&request, &relay_receipt)?;
+    let lease_record = lease_record_by_id(&app, &lease_id).ok_or_else(|| {
+        not_permitted_error("vpn receipt does not match an on-chain native VPN lease")
+    })?;
+    if lease_record.status != VpnLeaseStatusV1::Active {
+        return Err(not_permitted_error("vpn lease is not active"));
+    }
+    if current_ms > lease_record.refund_available_at_ms() {
+        return Err(not_permitted_error(
+            "vpn lease settlement grace window expired",
+        ));
+    }
+    let record = session_record_from_lease(&lease_record);
     if signed_account != record.operator_account_id {
         return Err(not_permitted_error(
             "vpn receipt submission must be signed by the configured operator account",
         ));
     }
     verify_relay_receipt_for_session(&record, &relay_receipt, &voucher)?;
-    let (lease_id, lease_id_hex) = settlement_lease_id(&request, &record)?;
     app.vpn_sessions.remove(&record.session_id);
     let receipt = build_settled_receipt_record(
         &record,
@@ -1671,6 +1789,68 @@ mod tests {
         }
     }
 
+    fn lease_record_from_session_record(
+        record: &VpnSessionRecord,
+        status: VpnLeaseStatusV1,
+        relay_receipt: Option<VpnSessionReceiptV1>,
+    ) -> VpnLeaseRecordV1 {
+        let lease_id = decode_hex_32(&record.quote_id, "quote").expect("quote id");
+        let relay_receipt_hash = relay_receipt.map(|receipt| receipt.hash());
+        let client_voucher_hash = relay_receipt.map(|receipt| receipt.client_voucher_hash);
+        let earned_fee_nanos = relay_receipt
+            .map(|receipt| receipt.earned_fee_nanos)
+            .unwrap_or_default();
+        VpnLeaseRecordV1 {
+            lease_id,
+            session_id: relay_session_id_from_session_id(&record.session_id),
+            quote_id: lease_id,
+            client_account_id: record.account_id.clone(),
+            operator_account_id: record.operator_account_id.clone(),
+            metering_public_key: record.metering_public_key.clone(),
+            asset_definition: parse_fee_asset_definition(&record.fee_asset_id).expect("fee asset"),
+            lease_fee: record.tariff.lease_fee_numeric(),
+            lease_fee_nanos: record.lease_fee_nanos,
+            custody_account_id: record.escrow_account_id.clone(),
+            relay_id: relay_id_from_endpoint(&record.relay_endpoint),
+            tariff: record.tariff,
+            quote_policy: VpnQuotePolicyV1 {
+                exit_class: VpnExitClassV1::try_from_label(&record.exit_class).expect("exit class"),
+                relay_endpoint: record.relay_endpoint.clone(),
+                lease_secs: record.lease_secs,
+                meter_family: record.meter_family.clone(),
+                fee_asset_id: record.fee_asset_id.clone(),
+                escrow_account_id: record.escrow_account_id.clone(),
+                route_pushes: record.route_pushes.clone(),
+                excluded_routes: record.excluded_routes.clone(),
+                dns_servers: record.dns_servers.clone(),
+                tunnel_addresses: record.tunnel_addresses.clone(),
+                mtu_bytes: record.mtu_bytes,
+                flow_label_bits: record.flow_label_bits,
+                padding_budget_ms: record.padding_budget_ms,
+                relay_tls_spki_sha256_hex: record.relay_tls_spki_sha256_hex.clone(),
+            },
+            open_tx_hash: decode_hex_32(&record.payment_tx_hash, "payment").expect("payment hash"),
+            status,
+            opened_at_ms: record.connected_at_ms,
+            expires_at_ms: record.expires_at_ms,
+            settlement_grace_ms: 60_000,
+            settled_at_ms: (status == VpnLeaseStatusV1::Settled).then(|| {
+                relay_receipt
+                    .map(|receipt| receipt.ended_at_ms)
+                    .unwrap_or(record.expires_at_ms)
+            }),
+            refunded_at_ms: None,
+            highest_voucher_sequence: relay_receipt
+                .map(|receipt| receipt.highest_voucher_sequence)
+                .unwrap_or_default(),
+            client_voucher_hash,
+            relay_receipt_hash,
+            settled_relay_receipt: relay_receipt,
+            earned_fee_nanos,
+            refunded_fee_nanos: record.lease_fee_nanos.saturating_sub(earned_fee_nanos),
+        }
+    }
+
     async fn read_json<T>(response: axum::response::Response) -> T
     where
         T: norito::json::JsonDeserializeOwned,
@@ -1773,21 +1953,40 @@ mod tests {
             relay_id_from_endpoint(&record.relay_endpoint),
             parsed.relay_id
         );
+        assert_eq!(record.metering_public_key, parsed.metering_public_key);
+        assert_eq!(record.tariff, parsed.tariff);
         assert_eq!(expires_at_ms, parsed.expires_at_ms);
     }
 
     #[test]
     fn settlement_lease_id_accepts_explicit_prefixed_hex() {
-        let account = account_id_for(&KeyPair::random());
-        let record = sample_session_record(&account);
         let request = VpnReceiptSubmitRequestDto {
             relay_receipt_hex: String::new(),
             client_voucher_hex: String::new(),
             lease_id_hex: format!("0x{}", "33".repeat(32)),
         };
+        let relay_receipt = VpnSessionReceiptV1 {
+            session_id: [0x11; 16],
+            quote_id: [0x22; 32],
+            payment_tx_hash: [0x44; 32],
+            account_hash: [0x55; 32],
+            relay_id: [0x33; 32],
+            ingress_bytes: 0,
+            egress_bytes: 0,
+            cover_bytes: 0,
+            uptime_secs: 0,
+            started_at_ms: 0,
+            ended_at_ms: 0,
+            exit_class: VpnExitClassV1::Standard,
+            meter_hash: [0x66; 32],
+            earned_fee_nanos: 0,
+            highest_voucher_sequence: 0,
+            client_voucher_hash: [0u8; 32],
+        };
 
         let (lease_id, normalized_hex) =
-            settlement_lease_id(&request, &record).expect("explicit lease id");
+            settlement_lease_id_from_request_or_receipt(&request, &relay_receipt)
+                .expect("explicit lease id");
 
         assert_eq!(lease_id, [0x33; 32]);
         assert_eq!(normalized_hex, "33".repeat(32));
@@ -2036,6 +2235,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_vpn_receipts_reconstructs_settled_records_from_wsv() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let key_pair = KeyPair::random();
+        let account = account_id_for(&key_pair);
+        let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
+        let record = sample_session_record(&account);
+        let relay_receipt = VpnSessionReceiptV1 {
+            session_id: relay_session_id_from_session_id(&record.session_id),
+            quote_id: decode_hex_32(&record.quote_id, "quote").expect("quote"),
+            payment_tx_hash: decode_hex_32(&record.payment_tx_hash, "payment").expect("payment"),
+            account_hash: account_hash(&account),
+            relay_id: relay_id_from_endpoint(&record.relay_endpoint),
+            ingress_bytes: 128,
+            egress_bytes: 256,
+            cover_bytes: 0,
+            uptime_secs: 10,
+            started_at_ms: record.connected_at_ms,
+            ended_at_ms: record.connected_at_ms + 10_000,
+            exit_class: VpnExitClassV1::Standard,
+            meter_hash: [0x44; 32],
+            earned_fee_nanos: 100,
+            highest_voucher_sequence: 7,
+            client_voucher_hash: [0x55; 32],
+        };
+        app.state
+            .insert_vpn_lease_for_testing(lease_record_from_session_record(
+                &record,
+                VpnLeaseStatusV1::Settled,
+                Some(relay_receipt),
+            ));
+
+        let method = Method::GET;
+        let uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
+        let headers = signed_app_headers(&account, &key_pair, &method, &uri, &[]);
+        let response = handle_list_vpn_receipts(app, &method, &uri, &headers)
+            .await
+            .expect("receipts")
+            .into_response();
+        let body: VpnReceiptListResponseDto = read_json(response).await;
+
+        assert_eq!(body.total, 1);
+        assert_eq!(body.items[0].receipt_source, "wsv");
+        assert_eq!(body.items[0].status, "settled");
+        assert_eq!(body.items[0].earned_fee_nanos, 100);
+    }
+
+    #[tokio::test]
     async fn vpn_address_allocator_avoids_collisions_across_active_sessions() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
         let first_keys = KeyPair::random();
@@ -2131,6 +2377,17 @@ mod tests {
             create_quote_for_account(app.clone(), &user, &user_keys, "standard").await;
         let session =
             create_session_for_quote(app.clone(), &user, &user_keys, &quote, &metering_keys).await;
+        let active_record = app
+            .vpn_sessions
+            .get(&session.session_id)
+            .expect("active session")
+            .clone();
+        app.state
+            .insert_vpn_lease_for_testing(lease_record_from_session_record(
+                &active_record,
+                VpnLeaseStatusV1::Active,
+                None,
+            ));
 
         let relay_session_id = relay_session_id_from_session_id(&session.session_id);
         let quote_id = decode_hex_32(&session.quote_id, "quote").expect("quote id");
@@ -2184,6 +2441,7 @@ mod tests {
         let method = Method::POST;
         let uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
         let headers = signed_app_headers(&operator, &operator_keys, &method, &uri, body.as_ref());
+        app.vpn_sessions.clear();
 
         let response =
             handle_submit_vpn_receipt(app.clone(), &method, &uri, &headers, body.as_ref())

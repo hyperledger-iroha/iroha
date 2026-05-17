@@ -297,7 +297,8 @@ impl Prover {
     /// # Errors
     ///
     /// Propagates errors from [`trace_commitment`] and from the configured
-    /// backend implementation.
+    /// backend implementation. The generated proof is verified against the
+    /// canonical CPU verifier path before being returned.
     pub fn prove(&self, batch: &TransitionBatch) -> Result<Proof> {
         let commitment = trace_commitment(&self.params, batch)?;
         let ordering = ordering::ordering_hash(batch)?;
@@ -308,7 +309,9 @@ impl Prover {
         let artifact = self
             .backend
             .prove(batch, &public_io, PROTOCOL_VERSION, params_version)?;
-        materialise_proof(commitment, public_io, artifact, params_version)
+        let proof = materialise_proof(commitment, public_io, artifact, params_version)?;
+        verify(batch, &proof)?;
+        Ok(proof)
     }
 }
 
@@ -375,6 +378,14 @@ pub fn verify_with_limits(
     let expected_public_io =
         build_public_io(batch, expected_ordering, expected_permission_hashes.clone());
     ensure_public_io_matches(&expected_public_io, &proof.public_io)?;
+    let expected_artifact = expected_backend_artifact(
+        batch,
+        &expected_public_io,
+        params,
+        proof.protocol_version,
+        proof.params_version,
+    )?;
+    ensure_artifact_matches_proof(&expected_artifact, proof)?;
 
     let trace_root =
         field_norito::core::from_bytes(&proof.trace_root).ok_or(Error::TraceRootMismatch)?;
@@ -518,6 +529,9 @@ pub fn verify_with_limits(
         if query.chunk_values.get(chunk_offset).copied() != Some(query.value) {
             return Err(Error::QueryMismatch { index: pos });
         }
+        if expected_artifact.query_openings.get(pos).copied() != Some((query.index, query.value)) {
+            return Err(Error::QueryMismatch { index: pos });
+        }
         if query.merkle_path.len() != lde_path_len {
             return Err(Error::QueryMerklePathMismatch { index: pos });
         }
@@ -593,6 +607,86 @@ pub fn verify_with_limits(
                 arity: params.fri.arity,
             },
         )?;
+    }
+    Ok(())
+}
+
+fn expected_backend_artifact(
+    batch: &TransitionBatch,
+    public_io: &PublicIO,
+    params: StarkParameterSet,
+    protocol_version: u16,
+    params_version: u16,
+) -> Result<BackendArtifact> {
+    let config = BackendConfig::new(params)
+        .with_execution_mode(ExecutionMode::Cpu)
+        .with_poseidon_mode(PoseidonExecutionMode::Cpu);
+    StarkBackend::new(config).prove(batch, public_io, protocol_version, params_version)
+}
+
+fn ensure_artifact_matches_proof(artifact: &BackendArtifact, proof: &Proof) -> Result<()> {
+    if proof.trace_root != field_norito::core::to_bytes(artifact.trace_root) {
+        return Err(Error::TraceRootMismatch);
+    }
+    if proof.lookup_root != field_norito::core::to_bytes(artifact.lookup_root) {
+        return Err(Error::LookupRootMismatch);
+    }
+    if proof.air_trace_root != field_norito::core::to_bytes(artifact.air_trace_root) {
+        return Err(Error::AirTraceRootMismatch);
+    }
+    if proof.air_composition_root != field_norito::core::to_bytes(artifact.air_composition_root) {
+        return Err(Error::AirCompositionRootMismatch);
+    }
+    if proof.lde_domain_size != artifact.lde_domain_size {
+        return Err(Error::QueryCountMismatch {
+            expected: usize::try_from(artifact.lde_domain_size).unwrap_or(usize::MAX),
+            actual: usize::try_from(proof.lde_domain_size).unwrap_or(usize::MAX),
+        });
+    }
+    if proof.lookup_grand_product != artifact.lookup_grand_product {
+        return Err(Error::LookupGrandProductMismatch);
+    }
+    if proof.lookup_challenge != artifact.lookup_challenge {
+        return Err(Error::LookupChallengeMismatch);
+    }
+    if proof.alphas.len() != artifact.alphas.len() {
+        return Err(Error::AirChallengeCountMismatch {
+            expected: artifact.alphas.len(),
+            actual: proof.alphas.len(),
+        });
+    }
+    for (idx, (expected, actual)) in artifact.alphas.iter().zip(&proof.alphas).enumerate() {
+        if expected != actual {
+            return Err(Error::FriChallengeMismatch { round: idx });
+        }
+    }
+    let expected_layers = artifact
+        .fri_layers
+        .iter()
+        .copied()
+        .map(field_norito::core::to_bytes)
+        .collect::<Vec<_>>();
+    if proof.fri_layers.len() != expected_layers.len() {
+        return Err(Error::FriLayerLengthMismatch {
+            expected: expected_layers.len(),
+            actual: proof.fri_layers.len(),
+        });
+    }
+    for (round, (expected, actual)) in expected_layers.iter().zip(&proof.fri_layers).enumerate() {
+        if expected != actual {
+            return Err(Error::FriLayerMismatch { round });
+        }
+    }
+    if proof.betas.len() != artifact.fri_betas.len() {
+        return Err(Error::FriChallengeLengthMismatch {
+            expected: artifact.fri_betas.len(),
+            actual: proof.betas.len(),
+        });
+    }
+    for (round, (expected, actual)) in artifact.fri_betas.iter().zip(&proof.betas).enumerate() {
+        if expected != actual {
+            return Err(Error::FriChallengeMismatch { round });
+        }
     }
     Ok(())
 }
@@ -2005,10 +2099,7 @@ mod tests {
         let mut proof = prover.prove(&batch).unwrap();
         proof.trace_root[0] ^= 0xAA;
         let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::TraceRootMismatch | Error::LookupChallengeMismatch
-        ));
+        assert!(matches!(err, Error::TraceRootMismatch));
     }
 
     #[test]
@@ -2019,6 +2110,21 @@ mod tests {
         proof.trace_commitment = Hash::new(b"tampered-fastpq-commitment");
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::CommitmentMismatch));
+    }
+
+    #[test]
+    fn verify_rejects_relabelled_proof_from_different_batch() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let source = sample_batch_with_size(8);
+        let target = sample_batch_with_size(9);
+        let mut proof = prover.prove(&source).unwrap();
+        let target_proof = prover.prove(&target).unwrap();
+        proof.trace_commitment = target_proof.trace_commitment;
+        proof.public_io = target_proof.public_io;
+
+        let err = verify(&target, &proof).unwrap_err();
+
+        assert!(matches!(err, Error::TraceRootMismatch));
     }
 
     #[test]
@@ -2142,7 +2248,7 @@ mod tests {
         let mut proof = prover.prove(&batch).unwrap();
         proof.lookup_grand_product = proof.lookup_grand_product.wrapping_add(1);
         let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(err, Error::FriChallengeMismatch { .. }));
+        assert!(matches!(err, Error::LookupGrandProductMismatch));
     }
 
     #[test]
@@ -2152,10 +2258,7 @@ mod tests {
         let mut proof = prover.prove(&batch).unwrap();
         proof.lookup_root[0] ^= 0xAA;
         let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::LookupRootMismatch | Error::LookupChallengeMismatch
-        ));
+        assert!(matches!(err, Error::LookupRootMismatch));
     }
 
     #[test]
@@ -2468,10 +2571,7 @@ mod tests {
         let mut proof = prover.prove(&batch).unwrap();
         proof.air_composition_root[0] ^= 0x01;
         let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::AirCompositionRootMismatch | Error::FriChallengeMismatch { .. }
-        ));
+        assert!(matches!(err, Error::AirCompositionRootMismatch));
     }
 
     #[test]
@@ -2481,12 +2581,7 @@ mod tests {
         let mut proof = prover.prove(&batch).unwrap();
         proof.air_trace_root[0] ^= 0x01;
         let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::AirTraceRootMismatch
-                | Error::FriChallengeMismatch { .. }
-                | Error::AirMerklePathMismatch { .. }
-        ));
+        assert!(matches!(err, Error::AirTraceRootMismatch));
     }
 
     #[test]

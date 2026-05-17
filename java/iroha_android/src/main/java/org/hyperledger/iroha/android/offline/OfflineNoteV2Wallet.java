@@ -20,6 +20,7 @@ public final class OfflineNoteV2Wallet {
   private final OfflineNoteV2TransactionSubmitter transactionSubmitter;
   private final OfflineNoteV2SyncResolver syncResolver;
   private final OfflineNoteV2ProofProvider proofProvider;
+  private final OfflineNoteV2ProofVerifier proofVerifier;
   private final OfflineNoteV2RandomSource randomSource;
   private final OfflineNoteV2IdGenerator idGenerator;
   private final LongSupplier clock;
@@ -37,6 +38,7 @@ public final class OfflineNoteV2Wallet {
         null,
         null,
         new NativeOfflineNoteV2ProofProvider(),
+        new Halo2OfflineNoteV2ProofVerifier(),
         new SecureOfflineNoteV2RandomSource(),
         new UuidOfflineNoteV2IdGenerator(),
         System::currentTimeMillis);
@@ -62,6 +64,34 @@ public final class OfflineNoteV2Wallet {
         transactionSubmitter,
         null,
         proofProvider,
+        new Halo2OfflineNoteV2ProofVerifier(),
+        randomSource,
+        idGenerator,
+        clock);
+  }
+
+  public OfflineNoteV2Wallet(
+      final String chainId,
+      final String accountId,
+      final OfflineNoteV2AttestationProvider attestationProvider,
+      final OfflineNoteV2Store store,
+      final OfflineNoteV2IssuerClient issuerClient,
+      final OfflineNoteV2TransactionSubmitter transactionSubmitter,
+      final OfflineNoteV2ProofProvider proofProvider,
+      final OfflineNoteV2ProofVerifier proofVerifier,
+      final OfflineNoteV2RandomSource randomSource,
+      final OfflineNoteV2IdGenerator idGenerator,
+      final LongSupplier clock) {
+    this(
+        chainId,
+        accountId,
+        attestationProvider,
+        store,
+        issuerClient,
+        transactionSubmitter,
+        null,
+        proofProvider,
+        proofVerifier,
         randomSource,
         idGenerator,
         clock);
@@ -79,6 +109,34 @@ public final class OfflineNoteV2Wallet {
       final OfflineNoteV2RandomSource randomSource,
       final OfflineNoteV2IdGenerator idGenerator,
       final LongSupplier clock) {
+    this(
+        chainId,
+        accountId,
+        attestationProvider,
+        store,
+        issuerClient,
+        transactionSubmitter,
+        syncResolver,
+        proofProvider,
+        new Halo2OfflineNoteV2ProofVerifier(),
+        randomSource,
+        idGenerator,
+        clock);
+  }
+
+  public OfflineNoteV2Wallet(
+      final String chainId,
+      final String accountId,
+      final OfflineNoteV2AttestationProvider attestationProvider,
+      final OfflineNoteV2Store store,
+      final OfflineNoteV2IssuerClient issuerClient,
+      final OfflineNoteV2TransactionSubmitter transactionSubmitter,
+      final OfflineNoteV2SyncResolver syncResolver,
+      final OfflineNoteV2ProofProvider proofProvider,
+      final OfflineNoteV2ProofVerifier proofVerifier,
+      final OfflineNoteV2RandomSource randomSource,
+      final OfflineNoteV2IdGenerator idGenerator,
+      final LongSupplier clock) {
     this.chainId = requireNonBlank(chainId, "chainId");
     this.accountId = requireNonBlank(accountId, "accountId");
     this.attestationProvider = Objects.requireNonNull(attestationProvider, "attestationProvider");
@@ -87,6 +145,7 @@ public final class OfflineNoteV2Wallet {
     this.transactionSubmitter = transactionSubmitter;
     this.syncResolver = syncResolver;
     this.proofProvider = Objects.requireNonNull(proofProvider, "proofProvider");
+    this.proofVerifier = Objects.requireNonNull(proofVerifier, "proofVerifier");
     this.randomSource = Objects.requireNonNull(randomSource, "randomSource");
     this.idGenerator = Objects.requireNonNull(idGenerator, "idGenerator");
     this.clock = Objects.requireNonNull(clock, "clock");
@@ -187,6 +246,8 @@ public final class OfflineNoteV2Wallet {
     if (!chainId.equals(receiveRequest.chainId())) {
       throw new IllegalArgumentException("receive request chainId does not match wallet chainId");
     }
+    rejectReusedReceiveRequest(receiveRequest.paymentRequestId());
+    final long createdAtMs = clock.getAsLong();
     final BigDecimal requestedAmount = decimal(receiveRequest.canonicalAmount());
     final List<OfflineNoteV2WalletNote> selected =
         selectSpendableNotes(receiveRequest.assetDefinitionId(), requestedAmount);
@@ -231,7 +292,6 @@ public final class OfflineNoteV2Wallet {
       final byte[] changeCommitment =
           deriveNoteCommitment(
               senderCertificate, changeAssetId, changeAmountString, changeSecret, changeOrigin);
-      final long now = clock.getAsLong();
       changeNote =
           new OfflineNoteV2WalletNote(
               chainId,
@@ -242,9 +302,9 @@ public final class OfflineNoteV2Wallet {
               changeCommitment,
               changeSecret,
               changeOrigin,
-              OfflineNoteV2WalletNoteState.CHANGE_PENDING,
-              now,
-              now);
+              OfflineNoteV2WalletNoteState.SPENDABLE,
+              createdAtMs,
+              createdAtMs);
       outputClaims.add(
           new OfflineNoteV2.AuditOutputClaimV2(
               changeCommitment, senderCertificate, changeAssetId, changeNote.canonicalAmount()));
@@ -256,7 +316,13 @@ public final class OfflineNoteV2Wallet {
     final byte[] tokenId =
         OfflineNoteV2.derivePaymentTokenId(
             new OfflineNoteV2.PaymentTokenIdPreimageV2(
-                chainId, tokenNonce, senderCertificateHash, inputNullifiers, outputCommitments));
+                chainId,
+                receiveRequest.paymentRequestId(),
+                createdAtMs,
+                tokenNonce,
+                senderCertificateHash,
+                inputNullifiers,
+                outputCommitments));
     final OfflineNoteV2.AuditBundleV2 draft =
         new OfflineNoteV2.AuditBundleV2(
             tokenId,
@@ -269,54 +335,94 @@ public final class OfflineNoteV2Wallet {
     final OfflineNoteV2.AuditBundleV2 audit =
         draft.replacingRecursiveProof(proofProvider.proveAudit(draft));
     audit.validateProofBinding();
-    final long now = clock.getAsLong();
-    for (final OfflineNoteV2WalletNote note : selected) {
-      store.upsert(note.withState(OfflineNoteV2WalletNoteState.SPEND_PENDING, now));
+    if (!proofVerifier.verifyAudit(audit)) {
+      throw new IllegalArgumentException("Offline Note V2 recursive audit proof verification failed");
     }
-    if (changeNote != null) {
-      store.upsert(changeNote);
-    }
+    final OfflineNoteV2WalletNote finalChangeNote = changeNote;
+    store.mutateNotes(notes -> {
+      for (final OfflineNoteV2WalletNote note : selected) {
+        final OfflineNoteV2WalletNote current = notes.get(note.noteCommitmentHex());
+        if (current == null || current.state() != OfflineNoteV2WalletNoteState.SPENDABLE) {
+          throw new IllegalArgumentException("selected Offline Note V2 input changed state");
+        }
+      }
+      if (finalChangeNote != null && notes.containsKey(finalChangeNote.noteCommitmentHex())) {
+        throw new IllegalArgumentException("Offline Note V2 change note already exists");
+      }
+      for (final OfflineNoteV2WalletNote note : selected) {
+        notes.put(note.noteCommitmentHex(), note.withState(OfflineNoteV2WalletNoteState.SPENT, createdAtMs));
+      }
+      if (finalChangeNote != null) {
+        notes.put(finalChangeNote.noteCommitmentHex(), finalChangeNote);
+      }
+      return null;
+    });
     return new OfflineNoteV2PaymentToken(
-        receiveRequest.paymentRequestId(), tokenId, audit, now);
+        chainId, receiveRequest.paymentRequestId(), tokenNonce, tokenId, audit, createdAtMs);
   }
 
-  public CompletableFuture<OfflineNoteV2WalletNote> accept(
-      final OfflineNoteV2PaymentToken paymentToken) {
-    if (transactionSubmitter == null) {
-      return failedFuture(new IllegalStateException(
-          "Offline Note V2 transaction submitter is required for accept"));
-    }
-    Objects.requireNonNull(paymentToken, "paymentToken").audit().validateProofBinding();
-    OfflineNoteV2.AuditOutputClaimV2 matched = null;
-    for (final OfflineNoteV2.AuditOutputClaimV2 claim : paymentToken.audit().outputClaims()) {
-      final OfflineNoteV2WalletNote note = store.findNote(claim.noteCommitment());
-      if (note != null && note.state() == OfflineNoteV2WalletNoteState.RECEIVE_PENDING) {
-        matched = claim;
-        break;
+  private void rejectReusedReceiveRequest(final String paymentRequestId) {
+    for (final OfflineNoteV2WalletNote note : store.listNotes()) {
+      if (note.state() == OfflineNoteV2WalletNoteState.RECEIVE_PENDING) {
+        continue;
+      }
+      if (note.origin() instanceof OfflineNoteV2.CommitmentOriginV2.P2pOutput origin
+          && origin.paymentRequestId().equals(paymentRequestId)) {
+        throw new IllegalArgumentException(
+            "Offline Note V2 receive request has already been used locally");
       }
     }
-    if (matched == null) {
-      return failedFuture(new IllegalStateException("payment token has no pending output for this wallet"));
+  }
+
+  public OfflineNoteV2WalletNote accept(final OfflineNoteV2PaymentToken paymentToken) {
+    validatePaymentToken(Objects.requireNonNull(paymentToken, "paymentToken"));
+    if (!proofVerifier.verifyAudit(paymentToken.audit())) {
+      throw new IllegalArgumentException("Offline Note V2 recursive audit proof verification failed");
     }
-    final OfflineNoteV2WalletNote pending = store.findNote(matched.noteCommitment());
-    if (pending == null) {
-      return failedFuture(new IllegalStateException("pending receive note is missing"));
+    return store.mutateNotes(notes -> {
+      for (int index = 0; index < paymentToken.audit().outputClaims().size(); index++) {
+        final OfflineNoteV2.AuditOutputClaimV2 output = paymentToken.audit().outputClaims().get(index);
+        final OfflineNoteV2WalletNote pending =
+            notes.get(OfflineNoteV2Wallet.hexLower(output.noteCommitment()));
+        if (pending == null || pending.state() != OfflineNoteV2WalletNoteState.RECEIVE_PENDING) {
+          continue;
+        }
+        if (!pending.assetId().equals(output.assetId())
+            || !pending.canonicalAmount().equals(output.canonicalAmount())
+            || !Arrays.equals(output.keyCertificate().payloadHash(), pending.keyCertificate().payloadHash())) {
+          throw new IllegalArgumentException("payment token output does not match receive request");
+        }
+        if (!(pending.origin() instanceof OfflineNoteV2.CommitmentOriginV2.P2pOutput)) {
+          throw new IllegalArgumentException("payment token output origin must be P2P");
+        }
+        final OfflineNoteV2.CommitmentOriginV2.P2pOutput origin =
+            (OfflineNoteV2.CommitmentOriginV2.P2pOutput) pending.origin();
+        if (!origin.paymentRequestId().equals(paymentToken.paymentRequestId())
+            || origin.outputIndex() != index) {
+          throw new IllegalArgumentException("payment token output origin does not match receive request");
+        }
+        final OfflineNoteV2WalletNote accepted =
+            pending.withState(OfflineNoteV2WalletNoteState.SPENDABLE, clock.getAsLong());
+        notes.put(pending.noteCommitmentHex(), accepted);
+        return accepted;
+      }
+      throw new IllegalStateException("payment token has no pending output for this wallet");
+    });
+  }
+
+  public CompletableFuture<ClientResponse> publishAudit(final OfflineNoteV2PaymentToken paymentToken) {
+    if (transactionSubmitter == null) {
+      return failedFuture(new IllegalStateException(
+          "Offline Note V2 transaction submitter is required for audit publication"));
     }
-    if (!pending.assetId().equals(matched.assetId())) {
-      throw new IllegalArgumentException("payment token output asset does not match receive request");
-    }
-    if (!pending.canonicalAmount().equals(matched.canonicalAmount())) {
-      throw new IllegalArgumentException("payment token output amount does not match receive request");
-    }
-    if (!Arrays.equals(matched.keyCertificate().payloadHash(), pending.keyCertificate().payloadHash())) {
-      throw new IllegalArgumentException("payment token output key certificate does not match receive request");
+    validatePaymentToken(Objects.requireNonNull(paymentToken, "paymentToken"));
+    if (!proofVerifier.verifyAudit(paymentToken.audit())) {
+      return failedFuture(new IllegalArgumentException(
+          "Offline Note V2 recursive audit proof verification failed"));
     }
     return transactionSubmitter.submitAudit(paymentToken.audit()).thenApply(response -> {
       ensureSuccess(response);
-      final OfflineNoteV2WalletNote accepted =
-          pending.withState(OfflineNoteV2WalletNoteState.SPENDABLE, clock.getAsLong());
-      store.upsert(accepted);
-      return accepted;
+      return response;
     });
   }
 
@@ -348,9 +454,21 @@ public final class OfflineNoteV2Wallet {
     final OfflineNoteV2.RedeemV2 redemption =
         draft.replacingRecursiveProof(proofProvider.proveRedeem(draft));
     redemption.validateProofBinding();
+    if (!proofVerifier.verifyRedeem(redemption)) {
+      throw new IllegalArgumentException("Offline Note V2 recursive redeem proof verification failed");
+    }
     final OfflineNoteV2WalletNote pending =
-        current.withState(OfflineNoteV2WalletNoteState.REDEEM_PENDING, clock.getAsLong());
-    store.upsert(pending);
+        store.mutateNotes(notes -> {
+          final OfflineNoteV2WalletNote latest =
+              notes.containsKey(current.noteCommitmentHex()) ? notes.get(current.noteCommitmentHex()) : current;
+          if (latest.state() != OfflineNoteV2WalletNoteState.SPENDABLE) {
+            throw new IllegalArgumentException("only spendable Offline Note V2 notes can be redeemed");
+          }
+          final OfflineNoteV2WalletNote updated =
+              latest.withState(OfflineNoteV2WalletNoteState.REDEEM_PENDING, clock.getAsLong());
+          notes.put(latest.noteCommitmentHex(), updated);
+          return updated;
+        });
     return transactionSubmitter.submitRedeem(redemption).thenApply(response -> {
       ensureSuccess(response);
       return pending;
@@ -428,6 +546,27 @@ public final class OfflineNoteV2Wallet {
             note.noteSecret()));
   }
 
+  private void validatePaymentToken(final OfflineNoteV2PaymentToken paymentToken) {
+    if (!chainId.equals(paymentToken.chainId())) {
+      throw new IllegalArgumentException("payment token chainId does not match wallet chainId");
+    }
+    paymentToken.audit().validateProofBinding();
+    final byte[] expectedTokenId =
+        OfflineNoteV2.derivePaymentTokenId(
+            new OfflineNoteV2.PaymentTokenIdPreimageV2(
+                paymentToken.chainId(),
+                paymentToken.paymentRequestId(),
+                paymentToken.createdAtMs(),
+                paymentToken.tokenNonce(),
+                paymentToken.audit().senderKeyCertificate().payloadHash(),
+                paymentToken.audit().inputNullifiers(),
+                paymentToken.audit().outputCommitments()));
+    if (!Arrays.equals(paymentToken.audit().tokenId(), paymentToken.tokenId())
+        || !Arrays.equals(paymentToken.tokenId(), expectedTokenId)) {
+      throw new IllegalArgumentException("Offline Note V2 payment token id does not match bound token metadata");
+    }
+  }
+
   private byte[] random32() {
     final byte[] bytes = randomSource.nextBytes(32);
     if (bytes.length != 32) {
@@ -454,10 +593,7 @@ public final class OfflineNoteV2Wallet {
   }
 
   private static boolean isPendingState(final OfflineNoteV2WalletNoteState state) {
-    return state == OfflineNoteV2WalletNoteState.RECEIVE_PENDING
-        || state == OfflineNoteV2WalletNoteState.CHANGE_PENDING
-        || state == OfflineNoteV2WalletNoteState.SPEND_PENDING
-        || state == OfflineNoteV2WalletNoteState.REDEEM_PENDING;
+    return state == OfflineNoteV2WalletNoteState.REDEEM_PENDING;
   }
 
   private static String walletAssetId(final String assetDefinitionId, final String accountId) {

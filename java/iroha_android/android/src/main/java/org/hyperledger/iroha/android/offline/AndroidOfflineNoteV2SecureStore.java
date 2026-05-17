@@ -11,7 +11,9 @@ import java.util.Base64;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import javax.crypto.Cipher;
@@ -52,14 +54,16 @@ public final class AndroidOfflineNoteV2SecureStore implements OfflineNoteV2Store
   }
 
   @Override
+  public synchronized <T> T mutateNotes(final Mutation<T> mutation) {
+    final Map<String, OfflineNoteV2WalletNote> notes = loadNotes();
+    final T result = mutation.apply(notes);
+    saveNotes(notes);
+    return result;
+  }
+
+  @Override
   public synchronized List<OfflineNoteV2WalletNote> listNotes() {
-    final List<OfflineNoteV2WalletNote> notes = new ArrayList<>();
-    for (final String commitmentHex : indexSnapshot()) {
-      final String encrypted = preferences.getString(noteKey(commitmentHex), null);
-      if (encrypted != null) {
-        notes.add(OfflineNoteV2WalletNoteJsonCodec.decode(decrypt(encrypted)));
-      }
-    }
+    final List<OfflineNoteV2WalletNote> notes = new ArrayList<>(loadNotes().values());
     notes.sort(
         Comparator.comparingLong(OfflineNoteV2WalletNote::createdAtMs)
             .thenComparing(OfflineNoteV2WalletNote::noteCommitmentHex));
@@ -68,27 +72,16 @@ public final class AndroidOfflineNoteV2SecureStore implements OfflineNoteV2Store
 
   @Override
   public synchronized OfflineNoteV2WalletNote findNote(final byte[] noteCommitment) {
-    final String encrypted =
-        preferences.getString(noteKey(OfflineNoteV2Wallet.hexLower(noteCommitment)), null);
-    return encrypted == null ? null : OfflineNoteV2WalletNoteJsonCodec.decode(decrypt(encrypted));
+    return loadNotes().get(OfflineNoteV2Wallet.hexLower(noteCommitment));
   }
 
   @Override
   public synchronized void upsert(final OfflineNoteV2WalletNote note) {
     Objects.requireNonNull(note, "note");
-    final String commitmentHex = note.noteCommitmentHex();
-    final Set<String> index = indexSnapshot();
-    index.add(commitmentHex);
-    final boolean written =
-        preferences
-            .edit()
-            .putString(
-                noteKey(commitmentHex), encrypt(OfflineNoteV2WalletNoteJsonCodec.encode(note)))
-            .putStringSet(INDEX_KEY, index)
-            .commit();
-    if (!written) {
-      throw new IllegalStateException("failed to persist Offline Note V2 wallet note");
-    }
+    mutateNotes(notes -> {
+      notes.put(note.noteCommitmentHex(), note);
+      return null;
+    });
   }
 
   public synchronized void delete(final byte[] noteCommitment) {
@@ -115,6 +108,35 @@ public final class AndroidOfflineNoteV2SecureStore implements OfflineNoteV2Store
 
   private Set<String> indexSnapshot() {
     return new HashSet<>(preferences.getStringSet(INDEX_KEY, Collections.<String>emptySet()));
+  }
+
+  private Map<String, OfflineNoteV2WalletNote> loadNotes() {
+    final Map<String, OfflineNoteV2WalletNote> notes = new LinkedHashMap<>();
+    for (final String commitmentHex : indexSnapshot()) {
+      final String encrypted = preferences.getString(noteKey(commitmentHex), null);
+      if (encrypted != null) {
+        notes.put(commitmentHex, OfflineNoteV2WalletNoteJsonCodec.decode(decrypt(encrypted)));
+      }
+    }
+    return notes;
+  }
+
+  private void saveNotes(final Map<String, OfflineNoteV2WalletNote> notes) {
+    final SharedPreferences.Editor editor = preferences.edit();
+    final Set<String> oldIndex = indexSnapshot();
+    final Set<String> newIndex = new HashSet<>(notes.keySet());
+    for (final String oldCommitment : oldIndex) {
+      if (!newIndex.contains(oldCommitment)) {
+        editor.remove(noteKey(oldCommitment));
+      }
+    }
+    for (final Map.Entry<String, OfflineNoteV2WalletNote> entry : notes.entrySet()) {
+      editor.putString(noteKey(entry.getKey()), encrypt(OfflineNoteV2WalletNoteJsonCodec.encode(entry.getValue())));
+    }
+    editor.putStringSet(INDEX_KEY, newIndex);
+    if (!editor.commit()) {
+      throw new IllegalStateException("failed to persist Offline Note V2 wallet notes");
+    }
   }
 
   private String encrypt(final byte[] plaintext) {

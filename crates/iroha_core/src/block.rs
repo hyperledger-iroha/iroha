@@ -2974,8 +2974,8 @@ pub(crate) mod valid {
 
     /// Test-only harness for legacy block-time mailbox execution.
     ///
-    /// Production replay must not depend on a local SoraCloud runtime. Runtime
-    /// effects must be persisted through explicit SoraCloud ISIs in committed
+    /// Production replay must not depend on a local Soracloud runtime. Runtime
+    /// effects must be persisted through explicit Soracloud ISIs in committed
     /// transactions so Kura replay reconstructs the same WSV on every peer.
     #[cfg(test)]
     fn execute_soracloud_mailbox_runtime(state_block: &mut StateBlock<'_>) {

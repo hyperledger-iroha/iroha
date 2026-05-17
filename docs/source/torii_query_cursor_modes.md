@@ -18,7 +18,7 @@ Mode selection is configurable and can be overridden per request.
 
 ### Per-request Overrides
 
-The `/query` endpoint accepts optional query-string parameters (reserved for mode control):
+The `/v1/query` endpoint accepts optional query-string parameters (reserved for mode control):
 
 - `cursor_mode`: `ephemeral` | `stored`
 - `gas_units`: integer; required when `pipeline.query_stored_min_gas_units > 0` and `cursor_mode=stored`. When insufficient, the server rejects the request with a validation error.

@@ -1,4 +1,4 @@
-//! Canonical fixture and roundtrip checks for `SoraCloud` V1 manifests.
+//! Canonical fixture and roundtrip checks for `Soracloud` V1 manifests.
 
 use std::{
     collections::BTreeMap,
@@ -9,9 +9,9 @@ use std::{
 };
 
 use iroha_crypto::Hash;
-use iroha_data_model::soracloud::SoraCloudManifestError;
 #[cfg(feature = "json")]
 use iroha_data_model::soracloud::SoraInrouManifestV1;
+use iroha_data_model::soracloud::SoracloudManifestError;
 use iroha_data_model::{
     Decode, Encode,
     soracloud::{
@@ -659,7 +659,7 @@ fn state_binding_rejects_relative_key_prefix() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "key_prefix",
             ..
         }
@@ -678,7 +678,7 @@ fn state_binding_rejects_item_limit_above_total_limit() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "max_item_bytes",
             ..
         }
@@ -696,7 +696,7 @@ fn state_binding_rejects_plaintext_confidential_state() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "encryption",
             ..
         }
@@ -870,7 +870,7 @@ fn container_manifest_fixture_rejects_inrou_metadata_for_ivm_runtime() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField { field: "inrou", .. }
+        SoracloudManifestError::InvalidField { field: "inrou", .. }
     ));
 }
 
@@ -895,7 +895,7 @@ fn container_manifest_fixture_rejects_inrou_runtime_without_metadata() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField { field: "inrou", .. }
+        SoracloudManifestError::InvalidField { field: "inrou", .. }
     ));
 }
 
@@ -930,7 +930,7 @@ fn container_manifest_rejects_duplicate_required_config_names() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "required_config_names",
             ..
         }
@@ -948,7 +948,7 @@ fn container_manifest_rejects_duplicate_required_secret_names() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "required_secret_names",
             ..
         }
@@ -966,7 +966,7 @@ fn container_manifest_rejects_required_config_path_traversal() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "required_config_names",
             ..
         }
@@ -987,7 +987,7 @@ fn container_manifest_rejects_export_for_undeclared_required_config() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "config_exports",
             ..
         }
@@ -1016,7 +1016,7 @@ fn container_manifest_rejects_duplicate_config_export_env_targets() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "config_exports",
             ..
         }
@@ -1038,7 +1038,7 @@ fn container_manifest_rejects_invalid_config_export_env_target() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "config_exports",
             ..
         }
@@ -1060,7 +1060,7 @@ fn container_manifest_rejects_invalid_config_export_file_target() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "config_exports",
             ..
         }
@@ -1089,7 +1089,7 @@ fn container_manifest_rejects_duplicate_config_export_file_targets() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "config_exports",
             ..
         }
@@ -1107,7 +1107,7 @@ fn container_manifest_rejects_relative_healthcheck_path() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "lifecycle.healthcheck_path",
             ..
         }
@@ -1169,7 +1169,7 @@ fn service_manifest_rejects_empty_service_version() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::EmptyField {
+        SoracloudManifestError::EmptyField {
             field: "service_version",
             ..
         }
@@ -1187,7 +1187,7 @@ fn service_manifest_rejects_rollout_canary_percent_over_100() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "rollout.canary_percent",
             ..
         }
@@ -1205,7 +1205,7 @@ fn service_manifest_rejects_empty_route_host() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::EmptyField {
+        SoracloudManifestError::EmptyField {
             field: "route.host",
             ..
         }
@@ -1223,7 +1223,7 @@ fn service_manifest_rejects_relative_route_path_prefix() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "route.path_prefix",
             ..
         }
@@ -1241,7 +1241,7 @@ fn service_manifest_rejects_deterministic_service_without_handlers() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::EmptyField {
+        SoracloudManifestError::EmptyField {
             field: "handlers",
             ..
         }
@@ -1259,7 +1259,7 @@ fn service_manifest_rejects_blank_quota_class() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::EmptyField {
+        SoracloudManifestError::EmptyField {
             field: "quota_class",
             ..
         }
@@ -1283,7 +1283,7 @@ fn service_manifest_rejects_deterministic_service_with_lease_volume() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "lease_volumes",
             ..
         }
@@ -1301,7 +1301,7 @@ fn service_manifest_rejects_duplicate_state_binding_names() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::DuplicateStateBinding { .. }
+        SoracloudManifestError::DuplicateStateBinding { .. }
     ));
 }
 
@@ -1316,7 +1316,7 @@ fn service_manifest_rejects_duplicate_handler_names() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::DuplicateHandler { .. }
+        SoracloudManifestError::DuplicateHandler { .. }
     ));
 }
 
@@ -1331,7 +1331,7 @@ fn service_handler_rejects_empty_entrypoint() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::EmptyField {
+        SoracloudManifestError::EmptyField {
             field: "entrypoint",
             ..
         }
@@ -1349,7 +1349,7 @@ fn service_handler_rejects_relative_route_path() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "route_path",
             ..
         }
@@ -1367,7 +1367,7 @@ fn service_handler_rejects_uncertified_asset_handler() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "certified_response",
             ..
         }
@@ -1390,7 +1390,7 @@ fn service_handler_rejects_mailbox_on_query_handler() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "mailbox",
             ..
         }
@@ -1408,7 +1408,7 @@ fn service_handler_rejects_update_without_mailbox() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "mailbox",
             ..
         }
@@ -1429,7 +1429,7 @@ fn mailbox_contract_rejects_tiny_message_limit() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "max_message_bytes",
             ..
         }
@@ -1447,7 +1447,7 @@ fn service_manifest_rejects_artifact_referencing_unknown_handler() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "artifacts.handler_name",
             ..
         }
@@ -1465,7 +1465,7 @@ fn artifact_ref_rejects_empty_path() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::EmptyField {
+        SoracloudManifestError::EmptyField {
             field: "artifact_path",
             ..
         }
@@ -1483,7 +1483,7 @@ fn artifact_ref_rejects_control_character_path() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "artifact_path",
             ..
         }
@@ -1551,7 +1551,7 @@ fn deployment_bundle_fixture_rejects_container_drift_without_reference_update() 
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "service.container.manifest_hash",
             ..
         }
@@ -1588,7 +1588,7 @@ fn deployment_bundle_fixture_rejects_public_route_without_healthcheck() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "container.lifecycle.healthcheck_path",
             ..
         }
@@ -1607,7 +1607,7 @@ fn deployment_bundle_rejects_mutable_binding_without_state_write_capability() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "container.capabilities.allow_state_writes",
             ..
         }
@@ -1629,7 +1629,7 @@ fn deployment_bundle_rejects_update_handler_without_state_write_capability() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "container.capabilities.allow_state_writes",
             ..
         }
@@ -1651,7 +1651,7 @@ fn deployment_bundle_rejects_http_service_with_ivm_runtime() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "container.runtime",
             ..
         }
@@ -1683,7 +1683,7 @@ fn deployment_bundle_rejects_http_service_without_root_lease_volume() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "service.lease_volumes",
             ..
         }
@@ -1705,7 +1705,7 @@ fn deployment_bundle_rejects_http_service_without_shared_lease_volume() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "service.lease_volumes",
             ..
         }
@@ -1731,7 +1731,7 @@ fn deployment_bundle_rejects_inrou_http_service_without_ssh_key() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "container.inrou.ssh_authorized_keys",
             ..
         }
@@ -1750,7 +1750,7 @@ fn deployment_bundle_rejects_http_service_replica_count_over_quota() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "service.replicas",
             ..
         }
@@ -1770,7 +1770,7 @@ fn deployment_bundle_rejects_http_service_task_limit_over_quota() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "container.resources.max_tasks",
             ..
         }
@@ -1795,7 +1795,7 @@ fn deployment_bundle_rejects_http_service_lease_bytes_over_quota() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "service.lease_volumes",
             ..
         }
@@ -1816,7 +1816,7 @@ fn deployment_bundle_fixture_rejects_expected_schema_version_drift() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::InvalidField {
+        SoracloudManifestError::InvalidField {
             field: "container.expected_schema_version",
             ..
         }
@@ -1836,7 +1836,7 @@ fn deployment_bundle_fixture_rejects_top_level_schema_version_drift() {
 
     assert!(matches!(
         error,
-        SoraCloudManifestError::UnsupportedVersion {
+        SoracloudManifestError::UnsupportedVersion {
             manifest: "sora deployment bundle",
             expected: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
             ..

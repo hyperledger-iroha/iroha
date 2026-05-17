@@ -3152,22 +3152,6 @@ pub mod isi {
                 Some(&vk_box),
                 &state_transaction.zk,
             );
-            let timeout_budget = state_transaction.zk.verify_timeout;
-            if timeout_budget > Duration::ZERO && verify_report.elapsed > timeout_budget {
-                state_transaction.world.emit_events(Some(
-                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                            referendum_id: self.election_id.clone(),
-                            reason: "proof verification exceeded timeout".into(),
-                        },
-                    ),
-                ));
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "proof verification exceeded timeout".into(),
-                    ),
-                ));
-            }
             if !verify_report.ok {
                 let _ = governance_slash_percent(
                     &self.election_id,
@@ -6743,6 +6727,13 @@ pub mod isi {
                 expects_envelope,
                 envelope_meta.as_ref(),
             )?;
+            if attachment.vk_inline.is_some() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "generic VerifyProof requires a registered verifying key reference".into(),
+                    ),
+                ));
+            }
 
             state_transaction.register_confidential_proof(proof.bytes.len())?;
 
@@ -7014,106 +7005,77 @@ pub mod isi {
         envelope: Option<&ZkOpenVerifyEnvelope>,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<Option<[u8; 32]>, Error> {
-        match (&attachment.vk_ref, &attachment.vk_inline) {
-            (None, None) => {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "proof attachments must include exactly one verifying key (inline or reference)"
-                            .into(),
-                    ),
-                ));
-            }
-            (Some(_), Some(_)) => {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "proof attachments must not mix inline and referenced verifying keys"
-                            .into(),
-                    ),
-                ));
-            }
-            _ => {}
+        let Some(id @ VerifyingKeyId { .. }) = &attachment.vk_ref else {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "proof attachments must include a verifying key reference".into(),
+                ),
+            ));
+        };
+        if attachment.vk_inline.is_some() {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "generic VerifyProof does not accept inline verifying keys".into(),
+                ),
+            ));
         }
-        let inline_commitment = if let Some(vk) = &attachment.vk_inline {
-            if vk.backend != attachment.backend {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "verifying key backend mismatch".into(),
-                ));
-            }
-            let inline_commit = hash_vk(vk);
-            if let Some(env) = envelope {
-                if env.vk_hash != [0u8; 32] && env.vk_hash != inline_commit {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "inline verifying key commitment mismatch".into(),
-                    ));
-                }
-            }
-            Some(inline_commit)
-        } else {
-            None
-        };
-        let vk_commitment = if let Some(id @ VerifyingKeyId { .. }) = &attachment.vk_ref {
-            let Some(rec) = state_transaction.world.verifying_keys.get(id) else {
-                return Err(FindError::Permission(Box::new(Permission::new(
-                    "VerifyingKeyMissing".into(),
-                    iroha_primitives::json::Json::from(
-                        format!("{}::{}", id.backend, id.name).as_str(),
-                    ),
-                )))
-                .into());
-            };
-            if rec.status != ConfidentialStatus::Active {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "verifying key is not active".into(),
-                ));
-            }
-            if rec.gas_schedule_id.is_none() {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "verifying key missing gas_schedule_id".into(),
-                ));
-            }
-            let circuit_key = (rec.circuit_id.clone(), rec.version);
-            match state_transaction
-                .world
-                .verifying_keys_by_circuit
-                .get(&circuit_key)
-            {
-                Some(mapped) if mapped == id => {}
-                _ => {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "verifying key circuit/version not active".into(),
-                    ));
-                }
-            }
-            if let Some(env) = envelope {
-                if !circuit_id_matches(
-                    attachment.backend.as_str(),
-                    &rec.circuit_id,
-                    &env.circuit_id,
-                ) {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "verifying key circuit mismatch".into(),
-                    ));
-                }
-                if rec.public_inputs_schema_hash != [0u8; 32] {
-                    let observed_hash: [u8; 32] = CryptoHash::new(&env.public_inputs).into();
-                    if rec.public_inputs_schema_hash != observed_hash {
-                        return Err(InstructionExecutionError::InvariantViolation(
-                            "public inputs schema hash mismatch".into(),
-                        ));
-                    }
-                }
-                if env.vk_hash != [0u8; 32] && env.vk_hash != rec.commitment {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "verifying key commitment mismatch".into(),
-                    ));
-                }
-            }
-            Some(rec.commitment)
-        } else {
-            inline_commitment
-        };
 
-        Ok(vk_commitment)
+        let Some(rec) = state_transaction.world.verifying_keys.get(id) else {
+            return Err(FindError::Permission(Box::new(Permission::new(
+                "VerifyingKeyMissing".into(),
+                iroha_primitives::json::Json::from(format!("{}::{}", id.backend, id.name).as_str()),
+            )))
+            .into());
+        };
+        if rec.status != ConfidentialStatus::Active {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "verifying key is not active".into(),
+            ));
+        }
+        if rec.gas_schedule_id.is_none() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "verifying key missing gas_schedule_id".into(),
+            ));
+        }
+        let circuit_key = (rec.circuit_id.clone(), rec.version);
+        match state_transaction
+            .world
+            .verifying_keys_by_circuit
+            .get(&circuit_key)
+        {
+            Some(mapped) if mapped == id => {}
+            _ => {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "verifying key circuit/version not active".into(),
+                ));
+            }
+        }
+        if let Some(env) = envelope {
+            if !circuit_id_matches(
+                attachment.backend.as_str(),
+                &rec.circuit_id,
+                &env.circuit_id,
+            ) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "verifying key circuit mismatch".into(),
+                ));
+            }
+            if rec.public_inputs_schema_hash != [0u8; 32] {
+                let observed_hash: [u8; 32] = CryptoHash::new(&env.public_inputs).into();
+                if rec.public_inputs_schema_hash != observed_hash {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "public inputs schema hash mismatch".into(),
+                    ));
+                }
+            }
+            if env.vk_hash != [0u8; 32] && env.vk_hash != rec.commitment {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "verifying key commitment mismatch".into(),
+                ));
+            }
+        }
+
+        Ok(Some(rec.commitment))
     }
 
     fn ensure_unique_proof(
@@ -7140,7 +7102,6 @@ pub mod isi {
         proof: &iroha_data_model::proof::ProofBox,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(bool, Duration), Error> {
-        let timeout_budget = state_transaction.zk.verify_timeout;
         if let Some(preverified) = state_transaction.lookup_preverified_proof(proof) {
             return Ok((preverified, Duration::ZERO));
         }
@@ -7153,7 +7114,13 @@ pub mod isi {
         }
 
         let vk_box = match (&attachment.vk_inline, &attachment.vk_ref) {
-            (Some(vk_inline), None) => Some(vk_inline.clone()),
+            (Some(_), _) => {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "generic VerifyProof does not accept inline verifying keys".into(),
+                    ),
+                ));
+            }
             (None, Some(id)) => {
                 let record = state_transaction
                     .world
@@ -7192,11 +7159,6 @@ pub mod isi {
             vk_box.as_ref(),
             &state_transaction.zk,
         );
-        if timeout_budget > Duration::ZERO && report.elapsed > timeout_budget {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract("proof verification exceeded timeout".into()),
-            ));
-        }
         Ok((report.ok, report.elapsed))
     }
 
@@ -8554,14 +8516,6 @@ pub mod isi {
                 Some(&vk_box),
                 &state_transaction.zk,
             );
-            let timeout_budget = state_transaction.zk.verify_timeout;
-            if timeout_budget > Duration::ZERO && report.elapsed > timeout_budget {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "transfer proof verification exceeded timeout".into(),
-                    ),
-                ));
-            }
             if !report.ok {
                 if state_transaction.trust_committed_execution_results {
                     iroha_logger::warn!(
@@ -8841,14 +8795,6 @@ pub mod isi {
                 Some(&vk_box),
                 &state_transaction.zk,
             );
-            let timeout_budget = state_transaction.zk.verify_timeout;
-            if timeout_budget > Duration::ZERO && report.elapsed > timeout_budget {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "unshield proof verification exceeded timeout".into(),
-                    ),
-                ));
-            }
             if !report.ok {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "invalid unshield proof".into(),
@@ -9401,14 +9347,6 @@ pub mod isi {
                 Some(&vk_box),
                 &state_transaction.zk,
             );
-            let timeout_budget = state_transaction.zk.verify_timeout;
-            if timeout_budget > Duration::ZERO && report.elapsed > timeout_budget {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "ballot proof verification exceeded timeout".into(),
-                    ),
-                ));
-            }
             if !report.ok {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "invalid ballot proof".into(),
@@ -9531,14 +9469,6 @@ pub mod isi {
                 Some(&vk_box),
                 &state_transaction.zk,
             );
-            let timeout_budget = state_transaction.zk.verify_timeout;
-            if timeout_budget > Duration::ZERO && report.elapsed > timeout_budget {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "tally proof verification exceeded timeout".into(),
-                    ),
-                ));
-            }
             if !report.ok {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "invalid tally proof".into(),
@@ -18419,6 +18349,56 @@ pub mod isi {
                 .expect_err("missing envelope should reject proof");
             let msg = smart_contract_error_message(err);
             assert!(msg.contains("OpenVerifyEnvelope"), "unexpected msg: {msg}");
+        }
+
+        #[test]
+        fn verify_proof_rejects_inline_verifying_key() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let exec = Executor::default();
+
+            let mut stx = block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.apply();
+
+            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![5, 4, 3]);
+            let envelope = OpenVerifyEnvelope {
+                backend: BackendTag::Halo2IpaPasta,
+                circuit_id: "circuit_inline".to_string(),
+                vk_hash: hash_vk(&vk_box),
+                public_inputs: Vec::new(),
+                proof_bytes: vec![1, 2, 3],
+                aux: Vec::new(),
+            };
+            let proof_box = ProofBox::new(
+                "halo2/ipa".into(),
+                norito::to_bytes(&envelope).expect("encode"),
+            );
+            let attachment =
+                ProofAttachment::new_inline("halo2/ipa".into(), proof_box, vk_box.clone());
+
+            let mut stx_verify = block.transaction();
+            let verify: InstructionBox =
+                iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
+            let err = exec
+                .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+                .expect_err("inline verifying keys should reject generic VerifyProof");
+            let msg = smart_contract_error_message(err);
+            assert!(
+                msg.contains("registered verifying key reference"),
+                "unexpected msg: {msg}"
+            );
         }
 
         #[test]

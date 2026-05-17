@@ -247,7 +247,7 @@ pub struct VerifyingKeyRecord {
     /// Stable hash of the public input schema to detect witness layout changes.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub public_inputs_schema_hash: [u8; 32],
-    /// 32-byte commitment of the verifying key bytes (stable hash of `backend || bytes`).
+    /// 32-byte domain-separated commitment of the verifying key bytes and backend.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub commitment: [u8; 32],
     /// Length of the verifying key in bytes (if published off-ledger).

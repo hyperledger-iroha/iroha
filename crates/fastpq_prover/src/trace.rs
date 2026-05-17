@@ -1515,12 +1515,7 @@ pub fn column_hashes(trace: &Trace, params: &StarkParameterSet) -> Result<Column
     }
 
     let planner = Planner::new(params);
-    let mode = if cfg!(feature = "fastpq-gpu") {
-        ExecutionMode::Auto.resolve()
-    } else {
-        ExecutionMode::Cpu
-    };
-
+    let mode = ExecutionMode::Cpu;
     let coefficients = trace_coefficients(trace, &planner, ExecutionMode::Cpu);
 
     Ok(hash_columns_from_coefficients(

@@ -192,6 +192,8 @@ pub mod soracloud_runtime {
     pub const MODEL_WEIGHT_CACHE_BUDGET_BYTES: NonZeroU64 = nonzero!(4_096_u64 * 1024 * 1024);
     /// Default concurrent Inrou microVMs allowed on one node.
     pub const INROU_MAX_CONCURRENT_VMS: NonZeroUsize = nonzero!(8_usize);
+    /// Whether this node advertises local Inrou hosting by default.
+    pub const INROU_ENABLED: bool = false;
     /// Default hosted-runtime posture for Inrou nodes.
     pub const INROU_PROXY_ONLY: bool = false;
     /// Default startup grace window in milliseconds for Inrou microVMs.
@@ -3459,6 +3461,19 @@ pub mod governance {
         pub const MAX_REPLICAS_CEILING: Option<u16> = Some(5);
         /// Optional maximum retention epoch (inclusive); `None` disables the cap.
         pub const MAX_RETENTION_EPOCH: Option<u64> = None;
+    }
+
+    /// Default SoraFS public pin fee configuration.
+    pub mod sorafs_pin_fee {
+        /// XOR asset definition used to collect public pin fees.
+        pub fn asset_id() -> String {
+            super::super::nexus::fees::fee_asset_id()
+        }
+
+        /// Treasury account that receives public pin fees.
+        pub fn treasury_account() -> String {
+            super::super::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string()
+        }
     }
 
     /// Default SoraFS under-delivery penalty policy thresholds.

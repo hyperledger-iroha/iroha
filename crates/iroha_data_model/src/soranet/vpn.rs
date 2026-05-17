@@ -13,7 +13,7 @@ use core::fmt::Write as FmtWrite;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use blake3;
-use iroha_crypto::{PublicKey, Signature};
+use iroha_crypto::{Algorithm, PublicKey, Signature};
 use iroha_primitives::numeric::Numeric;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -28,7 +28,7 @@ pub const VPN_CELL_LEN: usize = 1_024;
 /// Magic prefix used by helper-authenticated VPN tickets.
 pub const VPN_HELPER_TICKET_MAGIC: &[u8; 8] = b"SVPNHT1\0";
 /// Fixed byte length of a helper-authenticated VPN ticket.
-pub const VPN_HELPER_TICKET_LEN: usize = 192;
+pub const VPN_HELPER_TICKET_LEN: usize = 256;
 /// Magic prefix for VPN control cells that carry client-signed usage vouchers.
 pub const VPN_USAGE_VOUCHER_CONTROL_MAGIC: &[u8; 8] = b"SVPNUV1\0";
 /// Default MTU advertised to Sora VPN clients and local tunnel helpers.
@@ -614,6 +614,11 @@ pub struct VpnCoverPlanEntryV1 {
 
 /// Exit class advertised for billing/telemetry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(tag = "exit_class", content = "value", rename_all = "kebab-case")]
 pub enum VpnExitClassV1 {
     /// Standard exit class (balanced latency/bandwidth).
     Standard,
@@ -798,6 +803,44 @@ pub struct VpnTariffV1 {
     pub egress_fee_nanos_per_mib: u64,
 }
 
+/// Durable quote policy needed to reconstruct VPN sessions and receipts from WSV.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct VpnQuotePolicyV1 {
+    /// Exit class selected by the client and priced by the quote.
+    pub exit_class: VpnExitClassV1,
+    /// Relay endpoint advertised to the client.
+    pub relay_endpoint: String,
+    /// Lease duration advertised for this quote, in seconds.
+    pub lease_secs: u64,
+    /// Meter family label used by Torii and relay accounting.
+    pub meter_family: String,
+    /// Fee asset identifier as exposed by the client API.
+    pub fee_asset_id: String,
+    /// Escrow account identifier as exposed by the client API.
+    pub escrow_account_id: AccountId,
+    /// Routes pushed into the client tunnel configuration.
+    pub route_pushes: Vec<String>,
+    /// Client-side routes excluded from the tunnel.
+    pub excluded_routes: Vec<String>,
+    /// DNS resolvers pushed into the client tunnel configuration.
+    pub dns_servers: Vec<String>,
+    /// Client tunnel addresses assigned by Torii.
+    pub tunnel_addresses: Vec<String>,
+    /// Tunnel MTU advertised to the client.
+    pub mtu_bytes: u64,
+    /// VPN flow-label width fixed by the quote.
+    pub flow_label_bits: u8,
+    /// Per-cell padding budget in milliseconds fixed by the quote.
+    pub padding_budget_ms: u16,
+    /// Optional relay TLS SPKI pin advertised to the client.
+    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    pub relay_tls_spki_sha256_hex: Option<String>,
+}
+
 impl VpnTariffV1 {
     const MILLIS_PER_MINUTE: u128 = 60_000;
     const BYTES_PER_MIB: u128 = 1_048_576;
@@ -894,6 +937,8 @@ pub struct VpnLeaseRecordV1 {
     pub relay_id: RelayId,
     /// Deterministic usage tariff fixed at lease opening.
     pub tariff: VpnTariffV1,
+    /// Durable quote policy fixed at lease opening.
+    pub quote_policy: VpnQuotePolicyV1,
     /// Hash of the transaction that opened and funded this lease.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub open_tx_hash: [u8; 32],
@@ -925,6 +970,9 @@ pub struct VpnLeaseRecordV1 {
         norito(with = "crate::json_helpers::fixed_bytes::option")
     )]
     pub relay_receipt_hash: Option<[u8; 32]>,
+    /// Full relay receipt accepted during settlement.
+    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    pub settled_relay_receipt: Option<VpnSessionReceiptV1>,
     /// Nano-XOR released to the relay.
     pub earned_fee_nanos: u64,
     /// Nano-XOR refunded to the client.
@@ -941,6 +989,10 @@ impl VpnLeaseRecordV1 {
 
 /// Billing and telemetry receipt emitted by an exit gateway.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct VpnSessionReceiptV1 {
     /// Session identifier (client-assigned, 16 bytes).
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
@@ -992,7 +1044,7 @@ impl VpnSessionReceiptV1 {
 }
 
 /// Helper-authenticated ticket carried by the local VPN controller when opening a relay session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VpnHelperTicketV1 {
     /// Session identifier bound to the tunnel runtime.
     pub session_id: [u8; 16],
@@ -1004,6 +1056,10 @@ pub struct VpnHelperTicketV1 {
     pub relay_id: RelayId,
     /// Committed XOR escrow payment transaction hash.
     pub payment_tx_hash: [u8; 32],
+    /// Ed25519 public key authorized to sign cumulative usage vouchers.
+    pub metering_public_key: PublicKey,
+    /// Deterministic usage tariff fixed by the native lease.
+    pub tariff: VpnTariffV1,
     /// Absolute expiry time in milliseconds since the Unix epoch.
     pub expires_at_ms: u64,
 }
@@ -1025,6 +1081,30 @@ impl VpnHelperTicketV1 {
         cursor += self.relay_id.len();
         bytes[cursor..cursor + self.payment_tx_hash.len()].copy_from_slice(&self.payment_tx_hash);
         cursor += self.payment_tx_hash.len();
+        let (algorithm, metering_payload) = self.metering_public_key.to_bytes();
+        assert_eq!(
+            algorithm,
+            Algorithm::Ed25519,
+            "VPN helper tickets require Ed25519 metering keys"
+        );
+        assert_eq!(
+            metering_payload.len(),
+            32,
+            "Ed25519 public keys must be 32-byte payloads"
+        );
+        bytes[cursor..cursor + 32].copy_from_slice(metering_payload);
+        cursor += 32;
+        bytes[cursor..cursor + 8].copy_from_slice(&self.tariff.lease_fee_nanos.to_be_bytes());
+        cursor += 8;
+        bytes[cursor..cursor + 8]
+            .copy_from_slice(&self.tariff.active_fee_nanos_per_minute.to_be_bytes());
+        cursor += 8;
+        bytes[cursor..cursor + 8]
+            .copy_from_slice(&self.tariff.ingress_fee_nanos_per_mib.to_be_bytes());
+        cursor += 8;
+        bytes[cursor..cursor + 8]
+            .copy_from_slice(&self.tariff.egress_fee_nanos_per_mib.to_be_bytes());
+        cursor += 8;
         bytes[cursor..cursor + 8].copy_from_slice(&self.expires_at_ms.to_be_bytes());
         cursor += 8;
         let mac = helper_ticket_mac(secret, &bytes[..cursor]);
@@ -1079,6 +1159,22 @@ impl VpnHelperTicketV1 {
         let mut payment_tx_hash = [0u8; 32];
         payment_tx_hash.copy_from_slice(&bytes[cursor..cursor + 32]);
         cursor += 32;
+        let metering_public_key =
+            PublicKey::from_bytes(Algorithm::Ed25519, &bytes[cursor..cursor + 32])
+                .map_err(|_| VpnHelperTicketError::InvalidMeteringPublicKey)?;
+        cursor += 32;
+        let mut lease_fee_nanos = [0u8; 8];
+        lease_fee_nanos.copy_from_slice(&bytes[cursor..cursor + 8]);
+        cursor += 8;
+        let mut active_fee_nanos_per_minute = [0u8; 8];
+        active_fee_nanos_per_minute.copy_from_slice(&bytes[cursor..cursor + 8]);
+        cursor += 8;
+        let mut ingress_fee_nanos_per_mib = [0u8; 8];
+        ingress_fee_nanos_per_mib.copy_from_slice(&bytes[cursor..cursor + 8]);
+        cursor += 8;
+        let mut egress_fee_nanos_per_mib = [0u8; 8];
+        egress_fee_nanos_per_mib.copy_from_slice(&bytes[cursor..cursor + 8]);
+        cursor += 8;
         let mut expires = [0u8; 8];
         expires.copy_from_slice(&bytes[cursor..cursor + 8]);
         cursor += 8;
@@ -1099,6 +1195,13 @@ impl VpnHelperTicketV1 {
             account_hash,
             relay_id,
             payment_tx_hash,
+            metering_public_key,
+            tariff: VpnTariffV1 {
+                lease_fee_nanos: u64::from_be_bytes(lease_fee_nanos),
+                active_fee_nanos_per_minute: u64::from_be_bytes(active_fee_nanos_per_minute),
+                ingress_fee_nanos_per_mib: u64::from_be_bytes(ingress_fee_nanos_per_mib),
+                egress_fee_nanos_per_mib: u64::from_be_bytes(egress_fee_nanos_per_mib),
+            },
             expires_at_ms,
         })
     }
@@ -1138,6 +1241,8 @@ pub enum VpnHelperTicketError {
     InvalidMagic,
     /// Helper ticket MAC did not verify against the shared secret.
     InvalidMac,
+    /// Helper ticket did not contain a valid Ed25519 metering public key.
+    InvalidMeteringPublicKey,
     /// Helper ticket was minted for a different relay id.
     InvalidRelay,
     /// Helper ticket has already been redeemed.
@@ -1164,6 +1269,9 @@ impl fmt::Display for VpnHelperTicketError {
             }
             Self::InvalidMagic => f.write_str("vpn helper ticket magic prefix is invalid"),
             Self::InvalidMac => f.write_str("vpn helper ticket MAC verification failed"),
+            Self::InvalidMeteringPublicKey => {
+                f.write_str("vpn helper ticket metering public key is invalid")
+            }
             Self::InvalidRelay => {
                 f.write_str("vpn helper ticket relay id does not match this relay")
             }
@@ -1332,7 +1440,7 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     use hex::FromHex;
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Algorithm, KeyPair};
     use norito::{
         derive::{JsonDeserialize, JsonSerialize},
         json::{self, to_string_pretty},
@@ -1343,12 +1451,20 @@ mod tests {
     const FIXTURE_PATH: &str = "../../IrohaSwift/Tests/IrohaSwiftTests/Fixtures/vpn_vectors.json";
 
     fn sample_helper_ticket(expires_at_ms: u64) -> VpnHelperTicketV1 {
+        let metering_key_pair = KeyPair::from_seed(vec![0x66; 32], Algorithm::Ed25519);
         VpnHelperTicketV1 {
             session_id: [0xAB; 16],
             quote_id: [0xBC; 32],
             account_hash: [0xCD; 32],
             relay_id: [0xDE; 32],
             payment_tx_hash: [0xEF; 32],
+            metering_public_key: metering_key_pair.public_key().clone(),
+            tariff: VpnTariffV1 {
+                lease_fee_nanos: 1_000,
+                active_fee_nanos_per_minute: 100,
+                ingress_fee_nanos_per_mib: 10,
+                egress_fee_nanos_per_mib: 20,
+            },
             expires_at_ms,
         }
     }
@@ -1417,6 +1533,24 @@ mod tests {
         let parsed_hex = VpnHelperTicketV1::parse_hex(&hex, &secret, 1_699_999_999_000)
             .expect("helper ticket hex should verify");
         assert_eq!(ticket, parsed_hex);
+    }
+
+    #[test]
+    fn helper_ticket_rejects_old_length_ticket() {
+        let secret = [0x42; 32];
+        let ticket = sample_helper_ticket(1_700_000_000_000);
+        let bytes = ticket.to_bytes(&secret);
+        let old_len = bytes[..192].to_vec();
+
+        let err = VpnHelperTicketV1::parse(&old_len, &secret, 1_699_999_999_000)
+            .expect_err("old ticket length must fail");
+        assert_eq!(
+            VpnHelperTicketError::InvalidLength {
+                expected: VPN_HELPER_TICKET_LEN,
+                actual: 192,
+            },
+            err
+        );
     }
 
     #[test]

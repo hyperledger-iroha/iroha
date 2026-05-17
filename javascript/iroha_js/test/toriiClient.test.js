@@ -5846,10 +5846,6 @@ test("submitTransaction rejects unavailable pipeline submit", async () => {
       assert.equal(init.method, "POST");
       return createResponse({ status: 405 });
     }
-    if (url === `${BASE_URL}/transaction`) {
-      assert.equal(init.method, "POST");
-      return createResponse({ status: 405 });
-    }
     throw new Error(`Unexpected URL ${url}`);
   };
   try {
@@ -5858,7 +5854,6 @@ test("submitTransaction rejects unavailable pipeline submit", async () => {
     assert.deepEqual(seenUrls, [
       `${BASE_URL}/v1/node/capabilities`,
       `${BASE_URL}/v1/pipeline/transactions`,
-      `${BASE_URL}/transaction`,
     ]);
     assert.equal(nativeEncodeCalls, 0);
   } finally {
@@ -5870,7 +5865,7 @@ test("submitTransaction rejects unavailable pipeline submit", async () => {
   }
 });
 
-test("submitTransaction falls back to the public route when pipeline submit returns 405", async () => {
+test("submitTransaction does not fall back to removed public submit route", async () => {
   const payload = new Uint8Array([0xfa, 0xce]);
   const seenUrls = [];
   const originalBinding = globalThis.__IROHA_NATIVE_BINDING__;
@@ -5918,28 +5913,14 @@ test("submitTransaction falls back to the public route when pipeline submit retu
       assert.equal(init.method, "POST");
       return createResponse({ status: 405 });
     }
-    if (url === `${BASE_URL}/transaction`) {
-      assert.equal(init.method, "POST");
-      assert.equal(init.headers["Content-Type"], "application/x-norito");
-      assert.equal(init.headers.Accept, "application/x-norito, application/json");
-      assert.ok(Buffer.isBuffer(init.body));
-      assert.deepEqual([...init.body.values()], [0x01, 0xfa, 0xce]);
-      return createResponse({
-        status: 202,
-        jsonData: { ok: true, route: "public" },
-        headers: { "content-type": "application/json" },
-      });
-    }
     throw new Error(`Unexpected URL ${url}`);
   };
   try {
     const client = new ToriiClient(BASE_URL, { fetchImpl });
-    const response = await client.submitTransaction(payload);
-    assert.deepEqual(response, { ok: true, route: "public" });
+    await assert.rejects(() => client.submitTransaction(payload), /405/);
     assert.deepEqual(seenUrls, [
       `${BASE_URL}/v1/node/capabilities`,
       `${BASE_URL}/v1/pipeline/transactions`,
-      `${BASE_URL}/transaction`,
     ]);
     assert.equal(nativeEncodeCalls, 0);
   } finally {

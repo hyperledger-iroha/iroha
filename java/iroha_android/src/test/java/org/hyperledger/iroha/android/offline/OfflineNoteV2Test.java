@@ -41,7 +41,7 @@ public final class OfflineNoteV2Test {
     nativeHalo2ProverProducesVerifyingPayloadWhenRequested();
     nativeHalo2ProverPerformanceWhenRequested();
     qrFixtureUsesSdkTextPrefix();
-    paymentTokenCodecRoundTripsJsonTextAndQrFrames();
+    paymentTokenCodecRoundTripsNoritoTextAndQrFrames();
     walletNoteJsonCodecRoundTripsFixtureNote();
     walletLoadDerivesCommitmentBeforeIssuerSubmission();
     toriiIssuerClientBodySignsRefillAndIssuesWalletCommitment();
@@ -94,8 +94,9 @@ public final class OfflineNoteV2Test {
     final Map<String, Object> derivation = obj(chain, "derivation");
     final Map<String, Object> issueVector = obj(chain, "issue");
     final Map<String, Object> redeemVector = obj(chain, "redeem");
+    final Map<String, Object> payment = obj(fixture, "payment_token");
     final OfflineNoteV2.KeyCertificateV2 senderCertificate =
-        certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
+        certificate(obj(payment, "sender_key_certificate"));
     final byte[] senderPayloadBytes = base64Bytes(string(certificates, "sender_payload_base64"));
     final byte[] issueBytes = base64Bytes(string(issueVector, "norito_base64"));
     final byte[] auditBytes = base64Bytes(string(obj(chain, "audit"), "norito_base64"));
@@ -172,6 +173,8 @@ public final class OfflineNoteV2Test {
     final OfflineNoteV2.PaymentTokenIdPreimageV2 tokenPreimage =
         new OfflineNoteV2.PaymentTokenIdPreimageV2(
             string(derivation, "chain_id"),
+            string(derivation, "payment_request_id"),
+            longValue(payment, "created_at_ms"),
             hexBytes(string(derivation, "token_nonce_hex")),
             hexBytes(string(derivation, "sender_key_certificate_payload_hash")),
             Collections.singletonList(hexBytes(string(derivation, "input_nullifier"))),
@@ -295,6 +298,8 @@ public final class OfflineNoteV2Test {
         OfflineNoteV2.derivePaymentTokenId(
             new OfflineNoteV2.PaymentTokenIdPreimageV2(
                 chainId,
+                string(derivation, "payment_request_id"),
+                longValue(payment, "created_at_ms"),
                 hexBytes(string(derivation, "token_nonce_hex")),
                 hexBytes(string(derivation, "sender_key_certificate_payload_hash")),
                 Collections.singletonList(inputNullifier),
@@ -446,24 +451,27 @@ public final class OfflineNoteV2Test {
     assertEquals("iroha:qr1:", string(fountain, "frame_prefix"), "fountain QR prefix");
   }
 
-  private static void paymentTokenCodecRoundTripsJsonTextAndQrFrames() throws Exception {
+  private static void paymentTokenCodecRoundTripsNoritoTextAndQrFrames() throws Exception {
     final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> derivation = obj(obj(fixture, "chain_vectors"), "derivation");
     final Map<String, Object> payment = obj(fixture, "payment_token");
     final OfflineNoteV2PaymentToken token =
         new OfflineNoteV2PaymentToken(
+            string(derivation, "chain_id"),
             string(payment, "invoice_id"),
+            hexBytes(string(derivation, "token_nonce_hex")),
             hexBytes(string(payment, "token_id")),
             audit(fixture),
             longValue(payment, "created_at_ms"));
 
-    final OfflineNoteV2PaymentToken jsonDecoded =
-        OfflineNoteV2PaymentTokenCodec.decodeJson(OfflineNoteV2PaymentTokenCodec.encodeJson(token));
-    assertEquals(token.tokenIdHex(), jsonDecoded.tokenIdHex(), "json token id");
-    assertEquals(token.paymentRequestId(), jsonDecoded.paymentRequestId(), "json payment request id");
+    final OfflineNoteV2PaymentToken noritoDecoded =
+        OfflineNoteV2PaymentTokenCodec.decodeNorito(OfflineNoteV2PaymentTokenCodec.encodeNorito(token));
+    assertEquals(token.tokenIdHex(), noritoDecoded.tokenIdHex(), "norito token id");
+    assertEquals(token.paymentRequestId(), noritoDecoded.paymentRequestId(), "norito payment request id");
     assertEquals(
         base64(token.audit().noritoEncoded()),
-        base64(jsonDecoded.audit().noritoEncoded()),
-        "json audit norito");
+        base64(noritoDecoded.audit().noritoEncoded()),
+        "norito audit");
 
     final String text = OfflineNoteV2PaymentTokenCodec.encodeText(token);
     assertTrue(
@@ -552,6 +560,7 @@ public final class OfflineNoteV2Test {
             issuerClient,
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
             new QueueRandomSource(
                 Collections.singletonList(hexBytes(string(derivation, "source_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
@@ -680,12 +689,13 @@ public final class OfflineNoteV2Test {
             null,
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
             new QueueRandomSource(
                 Arrays.asList(
                     hexBytes(string(derivation, "token_nonce_hex")),
                     hexBytes(string(derivation, "change_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
-            () -> 1_700_000_001_100L);
+            () -> longValue(payment, "created_at_ms"));
     final RecordingTransactionSubmitter recipientSubmitter = new RecordingTransactionSubmitter();
     final OfflineNoteV2Wallet recipientWallet =
         new OfflineNoteV2Wallet(
@@ -696,6 +706,7 @@ public final class OfflineNoteV2Test {
             null,
             recipientSubmitter,
             BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
             new QueueRandomSource(
                 Collections.singletonList(hexBytes(string(derivation, "recipient_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
@@ -714,24 +725,30 @@ public final class OfflineNoteV2Test {
 
     assertEquals(string(derivation, "payment_token_id"), token.tokenIdHex(), "payment token id");
     assertEquals(
+        string(derivation, "payment_request_id"),
+        token.paymentRequestId(),
+        "payment request id");
+    assertEquals(
         string(chainAudit, "public_inputs_hash"),
         hex(token.audit().publicInputsHash()),
         "audit public inputs hash");
     assertEquals(
-        OfflineNoteV2WalletNoteState.SPEND_PENDING.name(),
+        OfflineNoteV2WalletNoteState.SPENT.name(),
         senderStore.findNote(hexBytes(string(derivation, "source_note_commitment"))).state().name(),
         "source note state");
     assertEquals(
-        OfflineNoteV2WalletNoteState.CHANGE_PENDING.name(),
+        OfflineNoteV2WalletNoteState.SPENDABLE.name(),
         senderStore.findNote(hexBytes(string(derivation, "change_output_commitment"))).state().name(),
         "change note state");
 
-    final OfflineNoteV2WalletNote accepted = recipientWallet.accept(token).get();
+    final OfflineNoteV2WalletNote accepted = recipientWallet.accept(token);
 
     assertEquals(
         OfflineNoteV2WalletNoteState.SPENDABLE.name(),
         accepted.state().name(),
         "accepted note state");
+    assertEquals(0L, recipientSubmitter.audits.size(), "audit submit count before publish");
+    recipientWallet.publishAudit(token).get();
     assertEquals(1L, recipientSubmitter.audits.size(), "audit submit count");
     final OfflineNoteV2WalletNote redeeming = recipientWallet.redeem(accepted).get();
     assertEquals(
@@ -774,6 +791,7 @@ public final class OfflineNoteV2Test {
             new RecordingTransactionSubmitter(),
             syncResolver,
             BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
             new QueueRandomSource(
                 Arrays.asList(
                     hexBytes(string(derivation, "token_nonce_hex")),
@@ -789,6 +807,7 @@ public final class OfflineNoteV2Test {
             null,
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
             new QueueRandomSource(
                 Collections.singletonList(hexBytes(string(derivation, "recipient_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
@@ -811,15 +830,7 @@ public final class OfflineNoteV2Test {
         OfflineNoteV2WalletNoteState.SPENDABLE.name(),
         spendableChange.state().name(),
         "synced change note state");
-    assertEquals(2L, syncResolver.resolvedCommitments.size(), "sync resolver commitment count");
-    assertEquals(
-        string(derivation, "source_note_commitment"),
-        syncResolver.resolvedCommitments.get(0),
-        "sync resolver source commitment");
-    assertEquals(
-        string(derivation, "change_output_commitment"),
-        syncResolver.resolvedCommitments.get(1),
-        "sync resolver change commitment");
+    assertEquals(0L, syncResolver.resolvedCommitments.size(), "sync resolver commitment count");
 
     resolutions.put(
         string(derivation, "change_output_commitment"), OfflineNoteV2WalletNoteState.REDEEMED);
@@ -859,6 +870,7 @@ public final class OfflineNoteV2Test {
             null,
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
             new QueueRandomSource(
                 Arrays.asList(
                     hexBytes(string(derivation, "token_nonce_hex")),
@@ -874,6 +886,7 @@ public final class OfflineNoteV2Test {
             null,
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
             new QueueRandomSource(
                 Collections.singletonList(hexBytes(string(derivation, "recipient_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
@@ -888,12 +901,12 @@ public final class OfflineNoteV2Test {
     assertThrows(
         () -> senderWallet.pay(receiveRequest), "already pending input payment should throw");
 
-    final OfflineNoteV2WalletNote accepted = recipientWallet.accept(token).get();
+    final OfflineNoteV2WalletNote accepted = recipientWallet.accept(token);
     assertEquals(
         OfflineNoteV2WalletNoteState.SPENDABLE.name(),
         accepted.state().name(),
         "accepted note state");
-    assertFutureFails(recipientWallet.accept(token), "duplicate token replay should fail");
+    assertThrows(() -> recipientWallet.accept(token), "duplicate token replay should fail");
   }
 
   private static void walletSyncReconcilesFailedAuditAndRedeemOutcomes() throws Exception {
@@ -911,9 +924,9 @@ public final class OfflineNoteV2Test {
     senderStore.upsert(sourceWalletNote(fixture, senderCertificate));
     final Map<String, OfflineNoteV2WalletNoteState> senderResolutions = new LinkedHashMap<>();
     senderResolutions.put(
-        string(derivation, "source_note_commitment"), OfflineNoteV2WalletNoteState.SPENDABLE);
+        string(derivation, "source_note_commitment"), OfflineNoteV2WalletNoteState.SPENT);
     senderResolutions.put(
-        string(derivation, "change_output_commitment"), OfflineNoteV2WalletNoteState.CANCELLED);
+        string(derivation, "change_output_commitment"), OfflineNoteV2WalletNoteState.SPENDABLE);
     final OfflineNoteV2Wallet senderWallet =
         new OfflineNoteV2Wallet(
             string(derivation, "chain_id"),
@@ -924,6 +937,7 @@ public final class OfflineNoteV2Test {
             new RecordingTransactionSubmitter(),
             new RecordingSyncResolver(senderResolutions),
             BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
             new QueueRandomSource(
                 Arrays.asList(
                     hexBytes(string(derivation, "token_nonce_hex")),
@@ -944,6 +958,7 @@ public final class OfflineNoteV2Test {
             new RejectingTransactionSubmitter(),
             new RecordingSyncResolver(recipientResolutions),
             BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
             new QueueRandomSource(
                 Collections.singletonList(hexBytes(string(derivation, "recipient_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
@@ -955,27 +970,32 @@ public final class OfflineNoteV2Test {
             string(chainRedeem, "amount"));
     final OfflineNoteV2PaymentToken token = senderWallet.pay(receiveRequest);
 
-    assertFutureFails(recipientWallet.accept(token), "failed audit submit should fail accept");
+    final OfflineNoteV2WalletNote accepted = recipientWallet.accept(token);
     assertEquals(
-        OfflineNoteV2WalletNoteState.RECEIVE_PENDING.name(),
+        OfflineNoteV2WalletNoteState.SPENDABLE.name(),
+        accepted.state().name(),
+        "accepted note state");
+    assertFutureFails(recipientWallet.publishAudit(token), "failed audit submit should fail publish");
+    assertEquals(
+        OfflineNoteV2WalletNoteState.SPENDABLE.name(),
         recipientStore.findNote(hexBytes(string(derivation, "recipient_output_commitment"))).state().name(),
-        "failed audit leaves receive pending");
+        "failed audit leaves accepted note spendable");
 
     senderWallet.sync().get();
     recipientWallet.sync().get();
 
     assertEquals(
-        OfflineNoteV2WalletNoteState.SPENDABLE.name(),
+        OfflineNoteV2WalletNoteState.SPENT.name(),
         senderStore.findNote(hexBytes(string(derivation, "source_note_commitment"))).state().name(),
-        "failed audit restores input note");
+        "failed audit leaves input spent");
     assertEquals(
-        OfflineNoteV2WalletNoteState.CANCELLED.name(),
+        OfflineNoteV2WalletNoteState.SPENDABLE.name(),
         senderStore.findNote(hexBytes(string(derivation, "change_output_commitment"))).state().name(),
-        "failed audit cancels change note");
+        "failed audit leaves change spendable");
     assertEquals(
-        OfflineNoteV2WalletNoteState.CANCELLED.name(),
+        OfflineNoteV2WalletNoteState.SPENDABLE.name(),
         recipientStore.findNote(hexBytes(string(derivation, "recipient_output_commitment"))).state().name(),
-        "failed audit cancels receive note");
+        "failed audit leaves recipient spendable");
 
     final InMemoryOfflineNoteV2Store redeemStore = new InMemoryOfflineNoteV2Store();
     final OfflineNoteV2WalletNote redeemNote = sourceWalletNote(fixture, senderCertificate);
@@ -993,6 +1013,7 @@ public final class OfflineNoteV2Test {
             new RejectingTransactionSubmitter(),
             new RecordingSyncResolver(redeemResolutions),
             BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
             new QueueRandomSource(Collections.emptyList()),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
             () -> 1_700_000_002_600L);
@@ -1020,27 +1041,8 @@ public final class OfflineNoteV2Test {
     final Map<String, Object> payment = obj(fixture, "payment_token");
     final OfflineNoteV2.AuditBundleV2 audit = audit(fixture);
     final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
-    final OfflineNoteV2.KeyCertificateV2 senderCertificate =
-        certificate(obj(payment, "sender_key_certificate"));
     final OfflineNoteV2.KeyCertificateV2 recipientCertificate =
         certificate(obj(payment, "recipient_key_certificate"));
-    final OfflineNoteV2WalletNote sourceSpendPending =
-        sourceWalletNote(fixture, senderCertificate)
-            .withState(OfflineNoteV2WalletNoteState.SPEND_PENDING, 1_700_000_003_000L);
-    final OfflineNoteV2WalletNote changePending =
-        new OfflineNoteV2WalletNote(
-            string(derivation, "chain_id"),
-            accountFromAssetId(string(issueVector, "asset_id")),
-            string(issueVector, "asset_id"),
-            string(payment, "change_amount"),
-            senderCertificate,
-            hexBytes(string(derivation, "change_output_commitment")),
-            hexBytes(string(derivation, "change_note_secret_hex")),
-            new OfflineNoteV2.CommitmentOriginV2.P2pOutput(
-                string(derivation, "payment_request_id"), 1),
-            OfflineNoteV2WalletNoteState.CHANGE_PENDING,
-            1_700_000_003_000L,
-            1_700_000_003_000L);
     final OfflineNoteV2WalletNote redeemPending =
         new OfflineNoteV2WalletNote(
             string(derivation, "chain_id"),
@@ -1073,14 +1075,10 @@ public final class OfflineNoteV2Test {
                     rawInstructionPair(
                         OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA,
                         wirePayloadBytes(OfflineNoteV2.redeemInstruction(redeem))))));
-    assertEquals(
-        OfflineNoteV2WalletNoteState.SPENT.name(),
-        committed.resolve(sourceSpendPending).state().name(),
-        "committed audit input");
-    assertEquals(
-        OfflineNoteV2WalletNoteState.SPENDABLE.name(),
-        committed.resolve(changePending).state().name(),
-        "committed audit output");
+    assertTrue(
+        committed.resolve(sourceWalletNote(fixture, certificate(obj(payment, "sender_key_certificate"))))
+            == null,
+        "audit outcomes do not mutate local-final notes");
     assertEquals(
         OfflineNoteV2WalletNoteState.REDEEMED.name(),
         committed.resolve(redeemPending).state().name(),
@@ -1090,14 +1088,6 @@ public final class OfflineNoteV2Test {
         new OfflineNoteV2OutcomeIndex()
             .recordRejectedAudit(audit, "audit-rejected")
             .recordRejectedRedeem(redeem, "redeem-rejected");
-    assertEquals(
-        OfflineNoteV2WalletNoteState.SPENDABLE.name(),
-        rejected.resolve(sourceSpendPending).state().name(),
-        "rejected audit input");
-    assertEquals(
-        OfflineNoteV2WalletNoteState.CANCELLED.name(),
-        rejected.resolve(changePending).state().name(),
-        "rejected audit output");
     assertEquals(
         OfflineNoteV2WalletNoteState.SPENDABLE.name(),
         rejected.resolve(redeemPending).state().name(),
@@ -1365,6 +1355,21 @@ public final class OfflineNoteV2Test {
           new OfflineNoteV2.ProofBox(
               OfflineNoteV2.RECURSIVE_BACKEND,
               "wallet-redeem-proof".getBytes(StandardCharsets.UTF_8)));
+    }
+  }
+
+  private enum BindingProofVerifier implements OfflineNoteV2ProofVerifier {
+    INSTANCE;
+
+    @Override
+    public boolean verifyAudit(final OfflineNoteV2.AuditBundleV2 audit) {
+      return Arrays.equals(audit.recursiveProof().publicInputsHash(), audit.publicInputsHash());
+    }
+
+    @Override
+    public boolean verifyRedeem(final OfflineNoteV2.RedeemV2 redemption) {
+      return Arrays.equals(
+          redemption.recursiveProof().publicInputsHash(), redemption.publicInputsHash());
     }
   }
 
@@ -1667,7 +1672,7 @@ public final class OfflineNoteV2Test {
   private static void assertThrows(final Runnable action, final String message) {
     try {
       action.run();
-    } catch (final IllegalArgumentException expected) {
+    } catch (final RuntimeException expected) {
       return;
     }
     throw new AssertionError(message);

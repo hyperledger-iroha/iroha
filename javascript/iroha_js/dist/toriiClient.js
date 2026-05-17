@@ -3634,17 +3634,11 @@ export class ToriiClient {
       body: pipelinePayload,
       retryProfile: "pipeline",
     };
-    let response = await this._request(
+    const response = await this._request(
       "POST",
       "/v1/pipeline/transactions",
       requestOptions,
     );
-    if (response.status === 404 || response.status === 405) {
-      response = await this._request("POST", "/transaction", {
-        ...requestOptions,
-        body: pipelinePayload,
-      });
-    }
     await this._expectStatus(response, [200, 201, 202, 204]);
     const route = this._extractSubmissionRoute(response);
     const contentType = this._getHeader(response, "content-type");
