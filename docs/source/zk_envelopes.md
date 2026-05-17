@@ -253,7 +253,7 @@ Verifier behavior (native STARK)
 	- `ProofBox.bytes` (outer payload): Norito `OpenVerifyEnvelope` with:
 	  - `backend = BackendTag::Stark`
 	  - `circuit_id = "stark/fri-v1/<profile>:<circuit>"` (application-level identifier)
-	  - `vk_hash = sha256(backend || vk_bytes)`
+	  - `vk_hash = sha256("iroha:zk:v1:vk" || len(backend) || backend || len(vk_bytes) || vk_bytes)`
 	  - `public_inputs = schema descriptor bytes` (stable policy-defined layout commitment)
 	  - `proof_bytes = norito(StarkFriOpenProofV1 { version, public_inputs, envelope_bytes })`
 	- `StarkFriOpenProofV1.public_inputs` carries the concrete public input values
@@ -360,7 +360,7 @@ Verifying key registry entries (`VerifyingKeyRecord`) for the tally circuit use:
 | `circuit_id`                | `halo2/pasta/vote-bool-commit-merkle8-v1`                    |
 | `curve`                     | `pallas`                                                     |
 | `public_inputs_schema_hash` | `0xfae4…64d3` (see above)                                    |
-| `commitment`                | `sha256(backend || vk_bytes)`                                |
+| `commitment`                | `sha256("iroha:zk:v1:vk" || len(backend) || backend || len(vk_bytes) || vk_bytes)` |
 | `vk_len` / `max_proof_bytes`| Derived from the bundled `.zk1` artefacts                    |
 | `key`                       | Inline `VerifyingKeyBox` wrapping the ZK1-encoded verifier   |
 
@@ -378,7 +378,7 @@ The command writes `vote_tally_vk.zk1`, `vote_tally_proof.zk1`, and `vote_tally_
   "circuit_id": "halo2/pasta/vote-bool-commit-merkle8-v1",
   "vk_len": <length of verifying key bytes>,
   "proof_len": <length of proof envelope bytes>,
-  "vk_commitment_hex": "<sha256 backend||vk_bytes>",
+  "vk_commitment_hex": "<domain-separated sha256 vk commitment>",
   "public_inputs_schema_hash_hex": "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3",
   "commit_hex": "20574662a58708e02e0000000000000000000000000000000000000000000000",
   "root_hex": "b63752ff429362c3a9b3cd5966c23567fdb757ce3b38af724b9303a5ea2f5817"

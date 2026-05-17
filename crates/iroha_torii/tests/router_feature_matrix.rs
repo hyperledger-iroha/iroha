@@ -33,7 +33,7 @@ const OPENAPI_CANDIDATES: &[&str] = &[
     "/openapi",
     "/swagger.json",
     "/swagger/v1/swagger.json",
-    "/schema",
+    iroha_torii_shared::uri::SCHEMA,
 ];
 
 async fn fetch_generated_openapi(app: &axum::Router) -> Option<String> {
@@ -292,7 +292,7 @@ async fn router_builds_under_current_features() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(Uri::from_static("/peers"))
+                .uri(Uri::from_static(iroha_torii_shared::uri::PEERS))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

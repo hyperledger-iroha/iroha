@@ -667,9 +667,6 @@ _最后通过 `python3 scripts/inventory_env_toggles.py --json docs/source/agent
 - 测试：板条箱/ivm/tests/i18n.rs:13 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 - 测试：板条箱/ivm/tests/i18n.rs:71 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 
-## MAX_DEGREE（产品：1）
-
-- 产品：板条箱/iroha_core/src/zk.rs:106 — `let current = std::env::var("MAX_DEGREE")`
 
 ## MOCHI_CONFIG（产品：1）
 

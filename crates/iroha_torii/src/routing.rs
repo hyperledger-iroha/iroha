@@ -3933,7 +3933,7 @@ pub async fn handle_list_vk(
 #[derive(
     Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
 )]
-/// Optional query-string overrides for `/query` endpoint.
+/// Optional query-string overrides for `/v1/query` endpoint.
 pub struct QueryOptions {
     /// Override cursor mode: "ephemeral" or "stored".
     pub cursor_mode: Option<String>,
@@ -6590,10 +6590,10 @@ mod sccp_message_backend_tests {
 
 #[cfg(feature = "app_api")]
 fn hash_bridge_proof_payload(backend: &str, payload: &[u8]) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update(backend.as_bytes());
-    h.update(payload);
-    h.finalize().into()
+    iroha_core::zk::hash_proof(&iroha_data_model::proof::ProofBox::new(
+        backend.to_owned(),
+        payload.to_vec(),
+    ))
 }
 
 #[cfg(feature = "app_api")]
@@ -21192,7 +21192,7 @@ mod vk_record_input_tests {
         assert_eq!(record.vk_bytes_cid.as_deref(), Some("ipfs://vk_bytes"));
         assert_eq!(record.activation_height, Some(100));
         assert_eq!(record.withdraw_height, Some(300));
-        assert!(record.key.is_some(), "inline vk should be preserved");
+        assert!(record.key.is_some(), "stored vk bytes should be preserved");
         assert_eq!(record.gas_schedule_id.as_deref(), Some("sched_default"));
     }
 
@@ -23709,6 +23709,8 @@ pub struct RegisterPinManifestDto {
     pub manifest_digest_hex: String,
     /// SHA3-256 digest of chunk metadata (hex-encoded, optional 0x prefix accepted).
     pub chunk_digest_sha3_256_hex: String,
+    /// Total content length covered by the manifest.
+    pub content_length: u64,
     /// Epoch (inclusive) recorded for submission.
     pub submitted_epoch: u64,
     /// Optional gas asset id to attach to the server-built registration transaction.
@@ -23797,6 +23799,14 @@ pub struct RegisterPinManifestResponseDto {
     pub chunker_handle: String,
     /// Epoch supplied during submission.
     pub submitted_epoch: u64,
+    /// Total content length submitted for fee calculation.
+    pub content_length: u64,
+    /// Public pin fee expected by the current pricing schedule, in nano-XOR.
+    pub pin_fee_nano: u128,
+    /// Asset definition used to collect the public pin fee.
+    pub pin_fee_asset_id: String,
+    /// Treasury account that receives the public pin fee.
+    pub pin_fee_treasury_account_id: String,
     /// Alias binding that was submitted (if any).
     #[norito(default)]
     pub alias: Option<PinAliasDto>,
@@ -25593,6 +25603,7 @@ pub async fn handle_post_sorafs_register_manifest(
         digest: iroha_data_model::sorafs::pin_registry::ManifestDigest::new(manifest_digest_bytes),
         chunker: chunker_handle.clone(),
         chunk_digest_sha3_256: chunk_digest,
+        content_length: req.content_length,
         policy,
         submitted_epoch: req.submitted_epoch,
         alias: alias_binding,
@@ -25613,6 +25624,16 @@ pub async fn handle_post_sorafs_register_manifest(
         .with_instructions([dm::InstructionBox::from(isi)])
         .sign(&req.private_key.0);
 
+    let pin_fee_nano = state.gov.sorafs_pricing.public_pin_fee_nano(
+        policy.storage_class,
+        req.content_length,
+        policy.min_replicas,
+        req.submitted_epoch,
+        policy.retention_epoch,
+    );
+    let pin_fee_asset_id = state.gov.sorafs_pin_fee_asset_id.to_string();
+    let pin_fee_treasury_account_id = state.gov.sorafs_pin_fee_treasury_account.to_string();
+
     handle_transaction_with_metrics(
         chain_id,
         queue,
@@ -25630,6 +25651,10 @@ pub async fn handle_post_sorafs_register_manifest(
             descriptor.namespace, descriptor.name, descriptor.semver
         ),
         submitted_epoch: req.submitted_epoch,
+        content_length: req.content_length,
+        pin_fee_nano,
+        pin_fee_asset_id,
+        pin_fee_treasury_account_id,
         alias: req.alias.clone(),
         successor_of_hex: req.successor_of_hex.clone(),
     };
@@ -28231,6 +28256,7 @@ mod sorafs_pin_tests {
             pin_policy: pin_policy_dto,
             manifest_digest_hex,
             chunk_digest_sha3_256_hex: hex::encode([0xCD; 32]),
+            content_length: manifest.content_length,
             submitted_epoch: 5,
             gas_asset_id: None,
             alias: None,
@@ -28302,6 +28328,7 @@ mod sorafs_pin_tests {
             pin_policy: pin_policy_dto,
             manifest_digest_hex,
             chunk_digest_sha3_256_hex: hex::encode([0xCD; 32]),
+            content_length: manifest.content_length,
             submitted_epoch: 5,
             gas_asset_id: None,
             alias: Some(PinAliasDto {
@@ -41457,16 +41484,34 @@ mod app_api_integration_tests {
                 .into(),
         );
         let issuer = AccountId::new(iroha_crypto::KeyPair::random().public_key().clone());
+        let policy = iroha_data_model::sorafs::pin_registry::PinPolicy::default();
+        let content_length = manifest.content_length;
+        let amount_nano = state.view().world().sorafs_pricing().public_pin_fee_nano(
+            policy.storage_class,
+            content_length,
+            policy.min_replicas,
+            5,
+            policy.retention_epoch,
+        );
         let mut manifest_record = iroha_data_model::sorafs::pin_registry::PinManifestRecord::new(
             manifest_digest.clone(),
             default_projection_registry_chunker_handle(),
             [0xAB; 32],
-            iroha_data_model::sorafs::pin_registry::PinPolicy::default(),
+            policy,
             issuer.clone(),
             5,
             None,
             None,
             iroha_data_model::metadata::Metadata::default(),
+        )
+        .with_content_length(content_length);
+        manifest_record.record_pin_fee_payment(
+            iroha_data_model::sorafs::pin_registry::PinFeePayment {
+                paid_by: issuer.clone(),
+                fee_asset_id: state.gov.sorafs_pin_fee_asset_id.clone(),
+                treasury_account_id: state.gov.sorafs_pin_fee_treasury_account.clone(),
+                amount_nano,
+            },
         );
         manifest_record.approve(7, None);
         tx.world_mut_for_testing()
@@ -41985,7 +42030,6 @@ mod query_endpoint_tests {
             state::{State, World},
         };
         use iroha_data_model::prelude as dm;
-        use sha2::{Digest as _, Sha256};
 
         // Minimal in-memory state
         let state = Arc::new(iroha_core::state::State::new_for_testing(
@@ -42009,17 +42053,36 @@ mod query_endpoint_tests {
         type Ident = String;
         let backend: Ident = "groth16/bn254".into();
         let bytes = b"torii_proof_smoke".to_vec();
-        let proof = proof::ProofBox::new(backend.clone(), bytes.clone());
+        let proof = proof::ProofBox::new(backend.clone(), bytes);
+        let vk_id = proof::VerifyingKeyId::new(backend.clone(), "torii_proof_smoke_vk");
+        let vk_box = proof::VerifyingKeyBox::new(backend.clone(), vec![0xAA, 0xBB]);
+        let vk_commitment = iroha_core::zk::hash_vk(&vk_box);
+        let mut vk_record = proof::VerifyingKeyRecord::new_with_owner(
+            1,
+            "torii_proof_smoke",
+            None,
+            "test",
+            iroha_data_model::zk::BackendTag::Groth16,
+            "bn254",
+            [0; 32],
+            vk_commitment,
+        );
+        vk_record.vk_len = u32::try_from(vk_box.bytes.len()).expect("fixture vk length fits");
+        vk_record.max_proof_bytes = 1024;
+        vk_record.gas_schedule_id = Some("groth16_default".into());
+        vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+        vk_record.key = Some(vk_box);
+        stx.world
+            .verifying_keys_mut_for_testing()
+            .insert(vk_id.clone(), vk_record);
+        stx.world
+            .verifying_keys_by_circuit_mut_for_testing()
+            .insert(("torii_proof_smoke".into(), 1), vk_id.clone());
         let attachment = proof::ProofAttachment {
             backend: backend.clone(),
             proof: proof.clone(),
-            // Inline a minimal verifying key so the attachment passes validation.
-            vk_ref: None,
-            vk_inline: Some(proof::VerifyingKeyBox::new(
-                backend.clone(),
-                vec![0xAA, 0xBB],
-            )),
-            vk_commitment: None,
+            vk_ref: vk_id,
+            vk_commitment: Some(vk_commitment),
             envelope_hash: None,
             lane_privacy: None,
         };
@@ -42050,11 +42113,7 @@ mod query_endpoint_tests {
         let _ = block.commit();
 
         // Compute expected ProofId string (same as core hash_proof)
-        let mut h = Sha256::new();
-        h.update(backend.as_str().as_bytes());
-        h.update(&bytes);
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(&h.finalize());
+        let arr = iroha_core::zk::hash_proof(&proof);
         let pid = proof::ProofId {
             backend,
             proof_hash: arr,

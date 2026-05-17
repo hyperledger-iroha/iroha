@@ -215,7 +215,7 @@ La documentación anula las configuraciones regionales en el runbook de operacio
 - Limites duros (configurables por defecto):
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. Pruebas que exceden `verify_timeout_ms` abortan la instrucción de forma determinista (ballots de Governance emiten `proof verification exceeded timeout`, `VerifyProof` retorna error).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Cuotas adicionales aseguran vida útil: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, y `max_public_inputs` acotan block builders; `reorg_depth_bound` (>= `max_anchor_age_blocks`) gobierna la retención de puntos de control fronterizos.
 - La ejecución runtime ahora rechaza transacciones que exceden estos límites por transacción o por bloque, emitiendo errores `InvalidParameter` deterministas y dejando el estado del libro mayor sin cambios.
 - Mempool prefiltro transacciones confidenciales por `vk_id`, longitud de prueba y edad de anclaje antes de invocar el verificador para mantener acotado el uso de recursos.- La verificación se detiene de forma determinista en tiempo de espera o violación de límites; las transacciones fallan con errores explícitos. Los backends SIMD son opcionales pero no alteran la contabilidad de gas.
@@ -304,7 +304,7 @@ La documentación anula las configuraciones regionales en el runbook de operacio
    - [x] El handshake P2P anuncia `ConfidentialFeatureDigest` (digest de backend + huellas dactilares de registro) y falla desajustes de forma determinista vía `HandshakeConfidentialMismatch`.
    - [x] Remover pánicos en caminos de ejecucion confidencial y agregar role gating para nodos sin soporte.
    - [ ] Aplicar presupuestos de tiempo de espera de verificador y límites de profundidad de reorganización para puntos de control fronterizos.
-     - [x] Presupuestos de tiempo de espera de verificación aplicados; pruebas que exceden `verify_timeout_ms` ahora fallan deterministamente.
+     - Verification timeout budgets are telemetry/operator budgets only; proofs fail deterministically on size, gas, public input, policy, or anchor-age bounds.
      - [x] Frontier checkpoints ahora respetan `reorg_depth_bound`, podando checkpoints mas antiguos que la ventana configurada mientras mantienen instantáneas deterministas.
    - Introducir `AssetConfidentialPolicy`, política FSM y puertas de cumplimiento para instrucciones mint/transfer/reveal.
    - Comprómetro `conf_features` en encabezados de bloque y rechazar participación de validadores cuando los resúmenes de registro/parámetros divergen.2. **Fase M1 - Registros y parámetros**

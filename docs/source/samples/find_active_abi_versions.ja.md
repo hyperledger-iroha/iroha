@@ -23,7 +23,7 @@ Norito JSON レスポンス例（初回リリース・単一 ABI）
 ```
 
 クエリ（署名付き） — `FindAbiVersion`
-- 経路: `/query`（Norito でエンコードされた `SignedQuery`）
+- 経路: `/v1/query`（Norito でエンコードされた `SignedQuery`）
 - 単一クエリボックスのバリアント: `FindAbiVersion`
 - 出力バリアント: `AbiVersion`
 

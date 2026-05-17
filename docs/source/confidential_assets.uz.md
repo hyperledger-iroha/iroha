@@ -248,7 +248,7 @@ qulflangan qadam.
 - Qattiq chegaralar (sozlanishi mumkin bo'lgan standart):
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` dan oshgan dalillar ko'rsatmani aniq bekor qiladi (boshqaruv byulletenlari `proof verification exceeded timeout` chiqaradi, `VerifyProof` xatoni qaytaradi).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Qo'shimcha kvotalar jonlilikni ta'minlaydi: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block` va `max_public_inputs` bog'langan blok quruvchilar; `reorg_depth_bound` (≥ `max_anchor_age_blocks`) chegara nazorat punktini saqlashni boshqaradi.
 - Ish vaqtining bajarilishi endi ushbu tranzaksiya yoki blok limitlaridan oshib ketadigan tranzaktsiyalarni rad etadi, deterministik `InvalidParameter` xatolarini chiqaradi va daftar holatini o'zgarishsiz qoldiradi.
 - Mempool resursdan foydalanishni chegaralangan holda saqlash uchun tekshirgichni chaqirishdan oldin maxfiy tranzaktsiyalarni `vk_id`, isbot uzunligi va langar yoshi bo'yicha oldindan filtrlaydi.

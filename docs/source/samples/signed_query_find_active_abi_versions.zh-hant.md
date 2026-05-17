@@ -11,7 +11,7 @@ translation_last_reviewed: 2026-02-07
 
 # Constructing a SignedQuery for `FindAbiVersion`
 
-This snippet shows how to build, sign, and encode a Norito `SignedQuery` that calls the core singular query `FindAbiVersion`. The resulting bytes can be POSTed to `/query` or piped to the CLI `query stdin-raw`.
+This snippet shows how to build, sign, and encode a Norito `SignedQuery` that calls the core singular query `FindAbiVersion`. The resulting bytes can be POSTed to `/v1/query` or piped to the CLI `query stdin-raw`.
 
 Steps
 - Build a `SingularQueryBox::FindAbiVersion`.
@@ -43,7 +43,7 @@ fn build_signed_query_find_active_abi(authority: AccountId, kp: &KeyPair) -> Vec
 ```
 
 Submitting
-- Raw HTTP: `POST /query` with the encoded bytes as the request body.
+- Raw HTTP: `POST /v1/query` with the encoded bytes as the request body.
 - CLI: base64‑encode the bytes and pipe to `iroha ledger query stdin-raw`.
 
 Output

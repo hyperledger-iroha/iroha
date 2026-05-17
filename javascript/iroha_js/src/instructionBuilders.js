@@ -1103,8 +1103,6 @@ function normalizeProofAttachment(value, name) {
     !Array.isArray(rawProof);
 
   let verifyRef = source.verifyingKeyRef ?? source.vkRef ?? source.vk_ref;
-  let verifyInline =
-    source.verifyingKeyInline ?? source.vkInline ?? source.vk_inline;
   let commitmentInput =
     source.verifyingKeyCommitment ?? source.vkCommitment ?? source.vk_commitment;
   let envelopeInput =
@@ -1126,11 +1124,6 @@ function normalizeProofAttachment(value, name) {
       source.vkRef ??
       source.vk_ref ??
       source.vk_reference;
-    verifyInline ??=
-      source.verifyingKeyInline ??
-      source.vkInline ??
-      source.vk_inline ??
-      source.inline_vk;
     commitmentInput ??=
       source.verifyingKeyCommitment ??
       source.vkCommitment ??
@@ -1159,29 +1152,16 @@ function normalizeProofAttachment(value, name) {
     };
   }
 
-  if (!verifyRef && !verifyInline) {
+  if (!verifyRef) {
     fail(
       ValidationErrorCode.INVALID_OBJECT,
-      `${name} must include verifyingKeyRef or verifyingKeyInline`,
+      `${name} must include verifyingKeyRef`,
       name,
     );
   }
 
   const payload = { backend, proof: proofBox };
-  if (verifyRef) {
-    payload.vk_ref = normalizeVerifyingKeyId(verifyRef, `${name}.verifyingKeyRef`);
-  } else {
-    const inline = assertPlainObject(verifyInline, `${name}.verifyingKeyInline`);
-    const inlineBackend = assertString(
-      inline.backend ?? inline.backendId,
-      `${name}.verifyingKeyInline.backend`,
-    );
-    const inlineBytes = inline.bytes ?? inline.bytes_b64 ?? inline.bytesBase64;
-    payload.vk_inline = {
-      backend: inlineBackend,
-      bytes: normalizeByteArray(inlineBytes, `${name}.verifyingKeyInline.bytes`),
-    };
-  }
+  payload.vk_ref = normalizeVerifyingKeyId(verifyRef, `${name}.verifyingKeyRef`);
 
   const commitment = normalizeOptionalFixedBytes(
     commitmentInput,

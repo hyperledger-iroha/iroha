@@ -682,7 +682,7 @@ paketni yig'ishda yagona nazorat ro'yxati.| Hayotiy aylanish bosqichi | Kerakli 
 3. Yashash siklini isbotlovchi snapshotni chiqaring va sahnalashtirgandan so'ng darhol namoyon bo'ling
    boshqaruv sharhlovchilari dayjestni bir xil repo moslamalari bilan qayta hisoblashlari mumkin.
 4. Ta'sir qilingan hisoblar uchun `RepoAccountEvent::*` SSE foydali yuklarini aks ettirish va tushirish
-   eksport qilingan NDJSON `artifacts/finance/repo/<agreement-id>/events.ndjson`
+   eksport qilingan NDJSON `artifacts/finance/repo/<agreement-id>/v1/events/ws.ndjson`
    paketni topshirishdan oldin.
 5. Ovoz berish tugagach, `hashes.txt` ni GAR identifikatori bilan yangilang,
    konfiguratsiya xeshini va manifest nazorat summasini belgilang, shunda kengash ishlab chiqarishni kuzatishi mumkin

@@ -667,9 +667,6 @@ _最終更新は `python3 scripts/inventory_env_toggles.py --json docs/source/ag
 - テスト: crates/ivm/tests/i18n.rs:13 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 - テスト: crates/ivm/tests/i18n.rs:71 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 
-## MAX_DEGREE (結果: 1)
-
-- prod: crates/iroha_core/src/zk.rs:106 — `let current = std::env::var("MAX_DEGREE")`
 
 ## MOCHI_CONFIG (prod: 1)
 

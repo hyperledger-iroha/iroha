@@ -1242,13 +1242,16 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 ..A::Halo2::default()
             },
             fastpq: A::Fastpq {
-                execution_mode: A::FastpqExecutionMode::Auto,
+                execution_mode: A::FastpqExecutionMode::Cpu,
+                poseidon_mode: A::FastpqPoseidonMode::Cpu,
+                proof_sidecar_queue_cap: fastpq::PROOF_SIDECAR_QUEUE_CAP,
+                proof_sidecar_max_bytes: fastpq::PROOF_SIDECAR_MAX_BYTES,
+                proof_sidecar_max_retries: fastpq::PROOF_SIDECAR_MAX_RETRIES,
                 device_class: None,
                 chip_family: None,
                 gpu_kind: None,
                 metal_queue_fanout: None,
                 metal_queue_column_threshold: None,
-                poseidon_mode: A::FastpqPoseidonMode::Auto,
                 metal_max_in_flight: fastpq::METAL_MAX_IN_FLIGHT,
                 metal_threadgroup_width: fastpq::METAL_THREADGROUP_WIDTH,
                 metal_trace: fastpq::METAL_TRACE,
@@ -1332,6 +1335,13 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 ),
             },
             sorafs_pin_policy: A::SorafsPinPolicyConstraints::default(),
+            sorafs_pin_fee_asset_id: defaults::governance::sorafs_pin_fee::asset_id()
+                .parse()
+                .expect("valid default SoraFS pin fee asset id"),
+            sorafs_pin_fee_treasury_account:
+                AccountId::parse_encoded(&defaults::governance::sorafs_pin_fee::treasury_account())
+                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                    .expect("valid default SoraFS pin fee treasury account"),
             alias_teu_minimum: defaults::governance::alias_teu_minimum(),
             alias_frontier_telemetry: defaults::governance::alias_frontier_telemetry(),
             debug_trace_pipeline: defaults::governance::DEBUG_TRACE_PIPELINE,

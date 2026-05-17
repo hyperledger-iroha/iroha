@@ -103,7 +103,7 @@ public final class AndroidClientFactoryTests {
       final RecordingSseListener sseListener = new RecordingSseListener();
       final ToriiEventStream stream =
           eventClient.openSseStream(
-              "/events", ToriiEventStreamOptions.defaultOptions(), sseListener);
+              "/v1/events/sse", ToriiEventStreamOptions.defaultOptions(), sseListener);
       assertTrue(sseListener.await(2, TimeUnit.SECONDS));
       stream.completion().get(1, TimeUnit.SECONDS);
       stream.close();

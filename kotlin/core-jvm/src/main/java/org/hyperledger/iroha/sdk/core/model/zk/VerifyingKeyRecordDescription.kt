@@ -11,7 +11,7 @@ import kotlin.io.encoding.ExperimentalEncodingApi
  * `UpdateVerifyingKey` instructions.
  *
  * The factory method enforces the same invariants as the server-side DTO handling:
- * either inline verifying key bytes must be provided or the commitment + length
+ * either embedded verifying key bytes must be provided or the commitment + length
  * pair must be supplied. Gas schedule identifiers are required, and
  * optional fields default to sensible values when omitted.
  */
@@ -39,7 +39,7 @@ class VerifyingKeyRecordDescription private constructor(
 
     /**
      * Serialises the record into Norito-style arguments using the provided backend identifier for
-     * inline verifying key bytes.
+     * embedded verifying key bytes.
      */
     fun toArguments(backend: String): Map<String, String> {
         val args = linkedMapOf<String, String>()

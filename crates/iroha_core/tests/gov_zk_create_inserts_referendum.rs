@@ -14,7 +14,7 @@ use iroha_data_model::{
     asset::AssetDefinition,
     block::BlockHeader,
     confidential::ConfidentialStatus,
-    domain::{Domain, DomainId},
+    domain::Domain,
     isi::{verifying_keys, zk::CreateElection},
     permission::Permission,
     prelude::Grant,
@@ -33,7 +33,7 @@ fn create_election_inserts_referendum_with_configured_window() {
     let query_handle = LiveQueryStore::start_test();
     let alice_id = iroha_test_samples::ALICE_ID.clone();
     let domain_id: iroha_data_model::domain::DomainId =
-        DomainId::try_new("wonderland", "universal").expect("domain");
+        iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain");
     let domain = Domain::new(domain_id.clone()).build(&alice_id);
     let account = Account::new(alice_id.clone()).build(&alice_id);
     let world = World::with([domain], [account], Vec::<AssetDefinition>::new());

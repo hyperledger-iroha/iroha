@@ -42,8 +42,7 @@ use iroha_data_model::{
 use iroha_logger::prelude::*;
 pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
 use iroha_torii_shared::{
-    AccountReadResponse, ErrorEnvelope, PipelineTransactionStatusResponse, QueueErrorEnvelope,
-    uri as torii_uri,
+    AccountReadResponse, ErrorEnvelope, PipelineTransactionStatusResponse, uri as torii_uri,
 };
 use iroha_version::codec::EncodeVersioned;
 use norito::{
@@ -6043,10 +6042,7 @@ fn decode_norito_error_body(response: &Response<Vec<u8>>) -> Option<String> {
 
     let body = response.body();
     if let Ok(envelope) = decode_from_bytes::<ErrorEnvelope>(body) {
-        return Some(format!("{}: {}", envelope.code(), envelope.message()));
-    }
-    if let Ok(envelope) = decode_from_bytes::<QueueErrorEnvelope>(body) {
-        return Some(format!("{}: {}", envelope.code, envelope.message));
+        return Some(format_error_envelope(&envelope));
     }
     if let Ok(validation_fail) = decode_from_bytes::<ValidationFail>(body) {
         let detail = match &validation_fail {
@@ -6057,6 +6053,34 @@ fn decode_norito_error_body(response: &Response<Vec<u8>>) -> Option<String> {
         return Some(detail);
     }
     None
+}
+
+fn format_error_envelope(envelope: &ErrorEnvelope) -> String {
+    let mut message = format!("{}: {}", envelope.code(), envelope.message());
+    let Some(details) = envelope.details.as_ref() else {
+        return message;
+    };
+    if let Some(reject_code) = details.reject_code.as_deref() {
+        message.push_str(&format!("; reject_code={reject_code}"));
+    }
+    if let Some(queue) = details.queue.as_ref() {
+        message.push_str(&format!(
+            "; queue={} queued={}/{} saturated={}",
+            queue.state, queue.queued, queue.capacity, queue.saturated
+        ));
+    }
+    if let Some(retry_after_seconds) = details.retry_after_seconds {
+        message.push_str(&format!("; retry_after_seconds={retry_after_seconds}"));
+    }
+    if let Some(endpoint) = details.endpoint.as_deref() {
+        message.push_str(&format!("; endpoint={endpoint}"));
+    }
+    if let Some(axt) = details.axt.as_ref() {
+        if let Some(code) = axt.code.as_deref() {
+            message.push_str(&format!("; axt_code={code}"));
+        }
+    }
+    message
 }
 
 impl ResponseReport {
@@ -20132,23 +20156,24 @@ mod response_report {
     }
 
     #[test]
-    fn with_msg_decodes_shared_queue_error_envelope() {
-        let envelope = QueueErrorEnvelope {
-            code: "queue_full".to_owned(),
-            message: "transaction queue is at capacity".to_owned(),
-            queue: iroha_torii_shared::QueueErrorSnapshot {
-                state: "saturated".to_owned(),
-                queued: 24,
-                capacity: 24,
-                saturated: true,
-            },
-            retry_after_seconds: Some(1),
-        };
+    fn with_msg_decodes_shared_error_envelope_queue_details() {
+        let envelope = ErrorEnvelope::new("queue_full", "transaction queue is at capacity")
+            .with_details(iroha_torii_shared::ErrorDetails {
+                reject_code: Some("PRTRY:QUEUE_FULL".to_owned()),
+                queue: Some(iroha_torii_shared::QueueErrorSnapshot {
+                    state: "saturated".to_owned(),
+                    queued: 24,
+                    capacity: 24,
+                    saturated: true,
+                }),
+                retry_after_seconds: Some(1),
+                endpoint: None,
+                axt: None,
+            });
         let body = to_bytes(&envelope).expect("encode queue error envelope");
         let response = Response::builder()
             .status(StatusCode::TOO_MANY_REQUESTS)
             .header(http::header::CONTENT_TYPE, APPLICATION_NORITO)
-            .header("x-iroha-reject-code", "PRTRY:QUEUE_FULL")
             .body(body)
             .unwrap();
         let report = match ResponseReport::with_msg("Unexpected transaction response", &response) {
@@ -20158,6 +20183,8 @@ mod response_report {
         let text = report.0.to_string();
         assert!(text.contains("PRTRY:QUEUE_FULL"));
         assert!(text.contains("queue_full"));
+        assert!(text.contains("queued=24/24"));
+        assert!(text.contains("retry_after_seconds=1"));
         assert!(text.contains("transaction queue is at capacity"));
     }
 

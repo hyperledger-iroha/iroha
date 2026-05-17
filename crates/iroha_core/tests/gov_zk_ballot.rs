@@ -72,7 +72,7 @@ fn new_state() -> State {
     let alice_id = (*ALICE_ID).clone();
     let bob_id = (*BOB_ID).clone();
     let domain_id: iroha_data_model::domain::DomainId =
-        DomainId::try_new("wonderland", "universal").expect("domain");
+        iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain");
     let domain = Domain::new(domain_id.clone()).build(&alice_id);
     let alice = Account::new(alice_id.clone()).build(&alice_id);
     let bob = Account::new(bob_id.clone()).build(&bob_id);

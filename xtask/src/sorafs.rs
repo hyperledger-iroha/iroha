@@ -5461,6 +5461,7 @@ fn pin_fixture_register_and_approve(
         digest,
         chunker: pin_fixture_default_chunker(),
         chunk_digest_sha3_256: chunk_digest,
+        content_length: 1_048_576,
         policy: pin_fixture_default_policy(),
         submitted_epoch: 5,
         alias: None,

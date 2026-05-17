@@ -362,6 +362,7 @@ private enum SorafsBridgeBootstrap {
         }
     }
 
+    #if os(macOS)
     private static func buildBridgeWithCargo(at repoRoot: URL) throws -> URL? {
         let bridgeTargetDir = repoRoot.appendingPathComponent("target/swift-sorafs-bridge", isDirectory: true)
         let releasePath = bridgeTargetDir.appendingPathComponent("release/libconnect_norito_bridge.dylib")
@@ -409,6 +410,15 @@ private enum SorafsBridgeBootstrap {
             throw ParityHarnessError.unzipFailed(message)
         }
     }
+    #else
+    private static func buildBridgeWithCargo(at repoRoot: URL) throws -> URL? {
+        nil
+    }
+
+    private static func unzipArchive(at zipURL: URL, into directory: URL) throws {
+        throw XCTSkip("unzip-based bridge materialization requires macOS Process support")
+    }
+    #endif
 }
 
 // MARK: - Fixtures and payloads

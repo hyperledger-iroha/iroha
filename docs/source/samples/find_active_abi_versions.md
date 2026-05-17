@@ -13,7 +13,7 @@ Example Norito JSON response (first release; fixed ABI)
 ```
 
 Query (signed) — `FindAbiVersion`
-- Route: `/query` (Norito-encoded `SignedQuery`)
+- Route: `/v1/query` (Norito-encoded `SignedQuery`)
 - Singular query box variant: `FindAbiVersion`
 - Output variant: `AbiVersion`
 

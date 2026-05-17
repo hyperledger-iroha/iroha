@@ -231,7 +231,7 @@ mod tests {
     use super::*;
     use crate::{plonk::FixedQuery, poly::Rotation};
     use halo2curves::pasta::Fp;
-    use proptest::collection::{vec, SizeRange};
+    use proptest::collection::{SizeRange, vec};
     use proptest::prelude::*;
 
     prop_compose! {

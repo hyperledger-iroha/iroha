@@ -667,9 +667,6 @@ _མཐའ་མཇུག་ `python3 scripts/inventory_env_toggles.py --json do
 - བརྟག་དཔྱད།: ཀེརེཊསི/ཨཝ་ཨེམ་/བརྟག་དཔྱད།/i18n.s:13 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 - བརྟག་དཔྱད།: ཀྲེ་ཊི།/i18n.s:71 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 
-## MAX_DEGREE (prod: 1).
-
-- པྲོཌ་: ཀྲེ་ཊི།
 
 ## MOCHI_CONFIG (prod: 1).
 

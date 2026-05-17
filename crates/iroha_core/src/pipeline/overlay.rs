@@ -1190,7 +1190,7 @@ where
             #[cfg(feature = "telemetry")]
             host.set_telemetry(state_ro.metrics().clone());
             host.set_crypto_config(state_ro.crypto());
-            host.set_halo2_config(&state_ro.zk().halo2);
+            host.set_zk_config(state_ro.zk());
             host.set_chain_id(state_ro.chain_id());
             host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
                 .map_err(OverlayBuildError::IvmRun)?;
@@ -1303,7 +1303,7 @@ where
             #[cfg(feature = "telemetry")]
             host.set_telemetry(state_ro.metrics().clone());
             host.set_crypto_config(state_ro.crypto());
-            host.set_halo2_config(&state_ro.zk().halo2);
+            host.set_zk_config(state_ro.zk());
             host.set_chain_id(state_ro.chain_id());
             host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
                 .map_err(OverlayBuildError::IvmRun)?;
@@ -1588,7 +1588,7 @@ where
             #[cfg(feature = "telemetry")]
             host.set_telemetry(state_ro.metrics().clone());
             host.set_crypto_config(state_ro.crypto());
-            host.set_halo2_config(&state_ro.zk().halo2);
+            host.set_zk_config(state_ro.zk());
             host.set_chain_id(state_ro.chain_id());
             host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
                 .map_err(OverlayBuildError::IvmRun)?;
@@ -1702,7 +1702,7 @@ where
             #[cfg(feature = "telemetry")]
             host.set_telemetry(state_ro.metrics().clone());
             host.set_crypto_config(state_ro.crypto());
-            host.set_halo2_config(&state_ro.zk().halo2);
+            host.set_zk_config(state_ro.zk());
             host.set_chain_id(state_ro.chain_id());
             host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
                 .map_err(OverlayBuildError::IvmRun)?;
@@ -1912,7 +1912,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             #[cfg(feature = "telemetry")]
             host.set_telemetry(state_ro.metrics().clone());
             host.set_crypto_config(state_ro.crypto());
-            host.set_halo2_config(&state_ro.zk().halo2);
+            host.set_zk_config(state_ro.zk());
             host.set_chain_id(state_ro.chain_id());
             host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
                 .map_err(OverlayBuildError::IvmRun)?;
@@ -5039,7 +5039,7 @@ where
     #[cfg(feature = "telemetry")]
     host.set_telemetry(state_ro.metrics().clone());
     host.set_crypto_config(state_ro.crypto());
-    host.set_halo2_config(&state_ro.zk().halo2);
+    host.set_zk_config(state_ro.zk());
     host.set_chain_id(state_ro.chain_id());
     host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
         .map_err(OverlayBuildError::IvmRun)?;
@@ -5162,16 +5162,7 @@ where
     }
 
     // Require VK references for governance-controlled circuit selection.
-    let vk_id: &VerifyingKeyId = attachment.vk_ref.as_ref().ok_or_else(|| {
-        OverlayBuildError::ZkProof(
-            "Executable::IvmProved requires a verifying key reference (vk_ref)".to_owned(),
-        )
-    })?;
-    if attachment.vk_inline.is_some() {
-        return Err(OverlayBuildError::ZkProof(
-            "Executable::IvmProved does not accept inline verifying keys".to_owned(),
-        ));
-    }
+    let vk_id: &VerifyingKeyId = &attachment.vk_ref;
 
     let vk_record = state_ro
         .world()
@@ -5350,11 +5341,6 @@ where
         Some(vk_box),
         zk_cfg,
     );
-    if zk_cfg.verify_timeout > std::time::Duration::ZERO && report.elapsed > zk_cfg.verify_timeout {
-        return Err(OverlayBuildError::ZkProof(
-            "proof verification exceeded timeout".to_owned(),
-        ));
-    }
     if !report.ok {
         return Err(OverlayBuildError::ZkProof("proof rejected".to_owned()));
     }
@@ -5498,7 +5484,7 @@ where
     #[cfg(feature = "telemetry")]
     host.set_telemetry(state_ro.metrics().clone());
     host.set_crypto_config(state_ro.crypto());
-    host.set_halo2_config(&state_ro.zk().halo2);
+    host.set_zk_config(state_ro.zk());
     host.set_chain_id(state_ro.chain_id());
     host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
         .map_err(OverlayBuildError::IvmRun)?;

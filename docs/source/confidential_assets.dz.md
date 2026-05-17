@@ -248,7 +248,7 @@ Grafana གིས་ ཡིག་དཔར་རྐྱབས་ཡོད་པ�
 - ཧརཌི་ཚད་གཞི་ (རིམ་སྒྲིག་འབད་བཏུབ་པའི་སྔོན་སྒྲིག་):
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. Sumeragi ལས་ལྷག་པའི་བདེན་ཁུངས་ཚུ་གིས་ བཀོད་རྒྱ་གཏན་འབེབས་བཟོ་ཐོག་ལས་ (གཞུང་གི་ཚོགས་རྒྱན་ཚུ་གིས་ `proof verification exceeded timeout`, `VerifyProof` འཛོལ་བ་སླར་ལོག་འབདཝ་ཨིན།)
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - ཁ་སྐོང་བསྡོམས་རྩིས་འདི་ འཚོ་བ་ངེས་གཏན་བཟོཝ་ཨིན། `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, དང་ `max_public_inputs` བཀག་ཆ་བཀག་ཆ་འབད་མི་ཚུ་ ; `reorg_depth_bound` (≥ `max_anchor_age_blocks`) གིས་ མཐའ་མཚམས་ཀྱི་ བརྟག་ཞིབ་ས་ཚིགས་བཀག་ཆ་འབདཝ་ཨིན།
 - རཱན་ཊའིམ་ལག་ལེན་འཐབ་མི་འདི་གིས་ ད་ལྟོ་ ཚོང་འབྲེལ་རེ་ལུ་ ཡང་ན་ བཀག་ཆ་རེ་ལུ་ ཚད་གཞི་ལས་ལྷག་སྟེ་ཡོད་མི་ ཚོང་འབྲེལ་ཚུ་ ངོས་ལེན་འབདཝ་ཨིནམ་ད་ དེ་གིས་ གཏན་འབེབས་ `InvalidParameter` འཛོལ་བ་ཚུ་ ཕྱིར་འཐེན་འབད་དེ་ ལག་དེབ་གནས་སྟངས་བསྒྱུར་བཅོས་མ་འབད་བས།
 - ཐོན་ཁུངས་ལག་ལེན་འདི་ མཐའ་མཚམས་བཞག་ནིའི་དོན་ལུ་ བདེན་བཤད་འབད་མི་འདི་ འབོད་བརྡ་མ་འབད་བའི་ཧེ་མ་ `vk_id` དང་ བདེན་ཁུངས་རིང་ཚད་ དེ་ལས་ ཨེན་ཀོར་གྱི་ལོ་ཚད་ཚུ་གིས་ གསང་བའི་ཚོང་འབྲེལ་ཚུ་ མེམ་པུལ་ མེམ་པུ་གིས་ བརྡ་ཚིག།

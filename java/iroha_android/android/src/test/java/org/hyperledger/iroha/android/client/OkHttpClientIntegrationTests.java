@@ -74,7 +74,7 @@ public final class OkHttpClientIntegrationTests {
       assertEquals(202, submitResponse.statusCode());
       assertEquals(SignedTransactionHasher.hashHex(transaction), submitResponse.hashHex().orElse(null));
       final RecordedRequest submit = server.takeRequest();
-      assertEquals("/transaction", submit.getPath());
+      assertEquals("/v1/pipeline/transactions", submit.getPath());
       assertEquals("POST", submit.getMethod());
       assertEquals("application/x-norito", submit.getHeader("Content-Type"));
       assertEquals("application/x-norito, application/json", submit.getHeader("Accept"));

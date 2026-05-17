@@ -120,6 +120,7 @@ export async function checkOpenApiSignatures(options = {}) {
   for (const entry of manifest.entries) {
     const label = typeof entry?.label === 'string' ? entry.label : null;
     const displayLabel = label ?? '(unknown)';
+    const unsignedAllowed = label ? allowUnsigned.includes(label) : false;
     const entryIssues = [];
     if (label) {
       if (entryLabels.has(label)) {
@@ -128,17 +129,6 @@ export async function checkOpenApiSignatures(options = {}) {
         entryLabels.add(label);
       }
     }
-    if (allowUnsigned.includes(label)) {
-      if (entryIssues.length > 0) {
-        summary.issues.push({
-          label: displayLabel,
-          errors: entryIssues,
-        });
-      } else {
-        summary.skippedLabels.push(displayLabel);
-      }
-      continue;
-    }
     if (!entry || typeof entry !== 'object') {
       summary.issues.push({
         label: displayLabel,
@@ -146,7 +136,8 @@ export async function checkOpenApiSignatures(options = {}) {
       });
       continue;
     }
-    if (!entry.signed) {
+    const requiresSignature = Boolean(entry.signed) || !unsignedAllowed;
+    if (!entry.signed && requiresSignature) {
       entryIssues.push('entry is not flagged as signed');
     }
     const entryBytes = typeof entry.bytes === 'number' ? entry.bytes : null;
@@ -158,13 +149,13 @@ export async function checkOpenApiSignatures(options = {}) {
       publicKey: normalizeHex(entry.signaturePublicKeyHex),
       signature: normalizeHex(entry.signatureHex),
     };
-    if (!entrySignature.algorithm) {
+    if (requiresSignature && !entrySignature.algorithm) {
       entryIssues.push('versions entry missing signatureAlgorithm');
     }
-    if (!entrySignature.publicKey) {
+    if (requiresSignature && !entrySignature.publicKey) {
       entryIssues.push('versions entry missing signaturePublicKeyHex');
     }
-    if (!entrySignature.signature) {
+    if (requiresSignature && !entrySignature.signature) {
       entryIssues.push('versions entry missing signatureHex');
     }
     if (
@@ -206,7 +197,7 @@ export async function checkOpenApiSignatures(options = {}) {
     }
 
     const manifestPath = normalizeRelative(entry.manifestPath);
-    if (!manifestPath) {
+    if (!manifestPath && requiresSignature) {
       entryIssues.push('missing manifest path');
     }
 
@@ -268,7 +259,9 @@ export async function checkOpenApiSignatures(options = {}) {
         }
         const signature = artifact.signature;
         if (!signature) {
-          entryIssues.push('manifest missing artifact.signature');
+          if (requiresSignature) {
+            entryIssues.push('manifest missing artifact.signature');
+          }
         } else {
           const manifestSignatureAlgorithm = normalizeAlgorithm(signature.algorithm);
           if (!manifestSignatureAlgorithm) {
@@ -343,6 +336,8 @@ export async function checkOpenApiSignatures(options = {}) {
         label: displayLabel,
         errors: entryIssues,
       });
+    } else if (unsignedAllowed && !entry.signed) {
+      summary.skippedLabels.push(displayLabel);
     } else {
       summary.checkedLabels.push(displayLabel);
     }

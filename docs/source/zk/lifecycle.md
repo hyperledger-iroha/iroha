@@ -6,7 +6,7 @@ This document captures how verifying keys (VKs) and zero-knowledge proof envelop
 
 1. **Authoritative VK creation** – An operator or compiler artefact produces a verifying key and its 32-byte commitment. VKs are versioned and namespaced by backend (`backend::name`).
 2. **Admission through Torii** – Operators post signed governance instructions to Torii (`/v1/zk/vk/*`). Accepted transactions register or update the VK registry that is stored on-chain and replicated across peers.
-3. **Contract/runtime usage** – Transactions and smart contracts reference VKs by `(backend, name)` or embed an inline VK payload. Execution resolves VK commitments during proof verification.
+3. **Contract/runtime usage** – Generic proof verification references VKs by `(backend, name)` through `vk_ref`. Specialized proof ISIs may carry proof-specific VK material only where their instruction binds it to a registered verifier commitment. Execution resolves VK commitments during proof verification.
 4. **Proof verification** – Clients submit proofs (`/v1/zk/verify` or `/v1/zk/submit-proof`). Verification runs inside `iroha_core::zk` during transaction execution. Successful verifications materialise `ProofRecord`s that can be queried via Torii (`/v1/zk/proofs*`).
 5. **Background reporting** – The optional Torii prover worker (`torii.zk_prover_enabled=true`) scans attachments, verifies `ProofAttachment` payloads, and exports telemetry describing proof sizes and processing latency. Reports are deleted automatically after the configured TTL.
 
@@ -31,15 +31,15 @@ This document captures how verifying keys (VKs) and zero-knowledge proof envelop
 - `iroha_cli app zk vk deprecate --json path/to/deprecate.json`
 - `iroha_cli app zk vk get --backend halo2/ipa --name vk_transfer`
 
-The JSON DTOs mirror the `iroha_data_model::proof` payloads. Inline VK bytes remain base64-encoded, while commitments are lowercase hex strings.
+The JSON DTOs mirror the `iroha_data_model::proof` payloads. Embedded VK record bytes remain base64-encoded, while commitments are lowercase hex strings.
 
 ## Proof lifecycle
 
 ### Submission & verification
 
 - Proof envelopes are accepted via `/v1/zk/verify` (synchronous) or `/v1/zk/submit-proof` (for later inspection). Both accept either Norito-encoded envelopes or JSON DTOs.
-- During transaction execution, `iroha_core::smartcontracts::isi::zk::VerifyProof` hashes the proof bytes together with the backend name, derives a `ProofId`, and ensures the proof is unique across the ledger.
-- The verifier resolves VK commitments from either the inline payload, the referenced `(backend, name)` pair, or both. Backends registered under `debug/*` bypass cryptographic checks for development.
+- During transaction execution, `iroha_core::smartcontracts::isi::zk::VerifyProof` computes a domain-separated, length-prefixed proof hash from the backend name and proof bytes, derives a `ProofId`, and ensures the proof is unique across the ledger.
+- Generic `VerifyProof` resolves VK commitments from the referenced `(backend, name)` pair only. The referenced record must be active, gas-scheduled, active for its circuit/version, and bound to the proof envelope's circuit, schema, and `vk_hash`.
 - The resulting `ProofRecord` stores:
   - `backend` and `proof_hash`
   - `status` (`Submitted`, `Verified`, `Rejected`)

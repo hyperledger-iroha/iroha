@@ -251,7 +251,7 @@ SPDX-License-Identifier: Apache-2.0
 - النطاق المسموح به (افتراضات قابلة للضبط):
 -`max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`، `max_commitments_per_tx = 8`، `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`، `max_anchor_age_blocks = 10_000`. البراهين التي تجاوزت `verify_timeout_ms` للتحكم في هتميا (تصويتات التورم `proof verification exceeded timeout` و`VerifyProof` تعيد خطا).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - حجز مضمون صحي: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, و `max_public_inputs` تحد بناء الكتل؛ `reorg_depth_bound` (≥ `max_anchor_age_blocks`) يتحكم في الاحتفاظ بنقاط التفتيش الحدودية.
 - رفض المعاملات التي تتجاوز هذه الحدود لكل الحدود او لكل كتلة، ويصدر اخطاء `InvalidParameter` حتمية مع بقاء حالة دفتر الأستاذ دون تغيير.
 - يرش ميمبول التعاملات السرية مسبقة الصنع `vk_id` وطول الإثبات وعمر مرساة قبل الاتصال المتحقق من الوكالة على حدود الموارد.

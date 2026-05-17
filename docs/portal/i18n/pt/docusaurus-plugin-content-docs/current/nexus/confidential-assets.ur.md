@@ -228,7 +228,7 @@ Substituições locais کو runbook de operações میں documento کریں؛ j
 - Limites rígidos (padrões configuráveis):
 -`max_proof_size_bytes = 262_144`.
 -`max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
--`verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` سے زیادہ instrução de provas کو determinística طور پر abortar کرتے ہیں (cédulas de governança `proof verification exceeded timeout` emitem کرتے ہیں, `VerifyProof` retorno de erro کرتا ہے)۔
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Cotas adicionais de vivacidade garantem کرتے ہیں: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, اور `max_public_inputs` construtores de blocos کو vinculados کرتے ہیں؛ `reorg_depth_bound` (≥ `max_anchor_age_blocks`) controle de retenção de ponto de verificação de fronteira کرتا ہے۔
 - Tempo de execução اب por transação یا limites por bloco excedem کرنے والی transações rejeitadas کرتا ہے, erros determinísticos `InvalidParameter` emitem کرتا ہے اور estado do razão inalterado رہتی ہے۔
 - Mempool `vk_id`, comprimento da prova, idade da âncora کے ذریعے transações confidenciais کو pré-filtro کرتا ہے, verificador invocar کرنے سے پہلے uso de recursos limitado رکھتا ہے۔
@@ -319,7 +319,7 @@ Substituições locais کو runbook de operações میں documento کریں؛ j
    - ✅ Handshake P2P `ConfidentialFeatureDigest` (backend digest + impressões digitais do registro) anunciar کرتا ہے اور incompatibilidades کو `HandshakeConfidentialMismatch` کے ذریعے falha determinística کرتا ہے۔
    - ✅ Caminhos de execução confidenciais میں panics remove کئے گئے اور nós não suportados کیلئے role gating add کیا گیا۔
    - ⚪ Orçamentos de tempo limite do verificador e pontos de verificação de fronteira کیلئے reorganizar limites de profundidade impor کرنا۔
-     - ✅ Orçamentos de tempo limite de verificação aplicados ہوئے؛ `verify_timeout_ms` سے تجاوز کرنے والی provas e falha determinística ہوتی ہیں۔
+     - Verification timeout budgets are telemetry/operator budgets only; proofs fail deterministically on size, gas, public input, policy, or anchor-age bounds.
      - ✅ Pontos de verificação de fronteira اب `reorg_depth_bound` respeito کرتے ہیں، janela configurada سے پرانے pontos de verificação podar کرتے ہوئے instantâneos determinísticos برقرار رکھتے ہیں۔
    - `AssetConfidentialPolicy`, política FSM، اور instruções de cunhagem/transferência/revelação کیلئے portões de aplicação introduzem کریں۔
    - Cabeçalhos de bloco میں `conf_features` commit کریں اور resumos de registro/parâmetro divergem ہونے پر participação do validador recusar کریں۔

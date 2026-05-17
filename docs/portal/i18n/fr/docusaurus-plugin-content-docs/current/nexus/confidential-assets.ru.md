@@ -208,7 +208,7 @@ Les grands livres confidentiels doivent conserver l'histoire officielle pour doc
 - Limites limites (définies pour la mise en service) :
 -`max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. Preuves, превышающие `verify_timeout_ms`, детерминированно прерывают инструкцию (gouvernance-голосования эмитят `proof verification exceeded timeout`, `VerifyProof` возвращает ошибку).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Les mots-clés supplémentaires utilisés sont : `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block` et `max_public_inputs` pour les constructeurs de blocs ; `reorg_depth_bound` (≥ `max_anchor_age_blocks`) met en place des points de contrôle aux frontières de rétention.
 - Le temps d'exécution permet d'ouvrir les transactions, de définir ces limites par transaction ou par bloc, et de déterminer les limites `InvalidParameter` et non. изменяя состояние grand livre.
 - Mempool pré-filtre les transactions confidentielles sur `vk_id`, la preuve en ligne et l'ancre de votre vérificateur, qui organisent la vérification ressources.- Vérifiez que le délai d'attente est défini ou que les limites sont définies ; Les transitions sont effectuées avec vos clients. Les backends SIMD sont fonctionnels et ne prennent pas en charge la comptabilité.

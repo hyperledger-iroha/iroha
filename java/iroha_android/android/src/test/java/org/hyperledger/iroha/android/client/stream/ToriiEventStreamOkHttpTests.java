@@ -32,7 +32,7 @@ public final class ToriiEventStreamOkHttpTests {
 
       final RecordingListener listener = new RecordingListener();
       final ToriiEventStream stream =
-          client.openSseStream("/events", ToriiEventStreamOptions.defaultOptions(), listener);
+          client.openSseStream("/v1/events/sse", ToriiEventStreamOptions.defaultOptions(), listener);
 
       stream.completion().get(2, TimeUnit.SECONDS);
       assertTrue(listener.events.size() >= 2);

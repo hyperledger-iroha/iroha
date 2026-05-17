@@ -1622,7 +1622,7 @@ pub struct UnshieldArgs {
     /// Spent nullifiers (comma-separated list of 64-hex strings)
     #[arg(long, value_name = "HEX32[,HEX32,...]")]
     inputs: String,
-    /// Proof attachment JSON file describing { backend, `proof_b64`, `vk_ref{backend,name}`, `vk_inline{backend,bytes_b64}`, optional `vk_commitment_hex` }
+    /// Proof attachment JSON file describing { backend, `proof_b64`, `vk_ref{backend,name}`, optional `vk_commitment_hex` }
     #[arg(long, value_name = "PATH")]
     proof_json: std::path::PathBuf,
     /// Optional Merkle root hint (hex, 64 chars)
@@ -1647,7 +1647,7 @@ fn parse_hex_string(hex_str: &str) -> eyre::Result<Vec<u8>> {
 fn build_proof_attachment_from_json(
     v: &norito::json::Value,
 ) -> eyre::Result<iroha::data_model::proof::ProofAttachment> {
-    use iroha::data_model::proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId};
+    use iroha::data_model::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
     let backend = v
         .get("backend")
         .and_then(|x| x.as_str())
@@ -1660,9 +1660,7 @@ fn build_proof_attachment_from_json(
         .decode(proof_b64)
         .map_err(|e| eyre::eyre!("invalid proof_b64: {e}"))?;
     let proof = ProofBox::new(backend.into(), proof_bytes);
-    // vk_ref or vk_inline
     let vk_ref = v.get("vk_ref").and_then(|x| x.as_object());
-    let vk_inline = v.get("vk_inline").and_then(|x| x.as_object());
     let mut att = if let Some(obj) = vk_ref {
         let b = obj
             .get("backend")
@@ -1674,22 +1672,8 @@ fn build_proof_attachment_from_json(
             .ok_or_else(|| eyre::eyre!("vk_ref.name missing"))?;
         let id = VerifyingKeyId::new(b, name);
         ProofAttachment::new_ref(backend.into(), proof, id)
-    } else if let Some(obj) = vk_inline {
-        let b = obj
-            .get("backend")
-            .and_then(|x| x.as_str())
-            .ok_or_else(|| eyre::eyre!("vk_inline.backend missing"))?;
-        let bytes_b64 = obj
-            .get("bytes_b64")
-            .and_then(|x| x.as_str())
-            .ok_or_else(|| eyre::eyre!("vk_inline.bytes_b64 missing"))?;
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(bytes_b64)
-            .map_err(|e| eyre::eyre!("invalid vk_inline.bytes_b64: {e}"))?;
-        let vk = VerifyingKeyBox::new(b.into(), bytes);
-        ProofAttachment::new_inline(backend.into(), proof, vk)
     } else {
-        return Err(eyre::eyre!("either vk_ref or vk_inline must be provided"));
+        return Err(eyre::eyre!("vk_ref must be provided"));
     };
     if let Some(hex) = v.get("vk_commitment_hex").and_then(|x| x.as_str()) {
         let bytes = hex::decode(hex).map_err(|e| eyre::eyre!("invalid vk_commitment_hex: {e}"))?;
@@ -1723,32 +1707,8 @@ mod tests {
         assert_eq!(att.backend.as_str(), "halo2/ipa");
         assert_eq!(att.proof.backend.as_str(), "halo2/ipa");
         assert_eq!(att.proof.bytes, b"Hello");
-        assert!(att.vk_ref.is_some());
-        assert!(att.vk_inline.is_none());
+        assert_eq!(att.vk_ref.name.as_str(), "vk_transfer");
         assert_eq!(att.vk_commitment.unwrap(), [0u8; 32]);
-    }
-
-    #[test]
-    fn build_proof_attachment_from_json_vk_inline() {
-        // vk bytes = [1,2,3,4] -> AQIDBA==
-        let vk_b64 = "AQIDBA==";
-        // proof bytes = [5,6] -> BQY=
-        let proof_b64 = "BQY=";
-        let json = format!(
-            r#"{{
-                "backend": "halo2/ipa",
-                "proof_b64": "{proof_b64}",
-                "vk_inline": {{ "backend": "halo2/ipa", "bytes_b64": "{vk_b64}" }}
-            }}"#
-        );
-        let v = norito::json::from_str(&json).expect("vk_inline json");
-        let att = build_proof_attachment_from_json(&v).expect("ok");
-        assert_eq!(att.proof.bytes, vec![5u8, 6u8]);
-        assert!(att.vk_inline.is_some());
-        assert!(att.vk_ref.is_none());
-        let vk = att.vk_inline.as_ref().unwrap();
-        assert_eq!(vk.backend.as_str(), "halo2/ipa");
-        assert_eq!(vk.bytes, vec![1u8, 2u8, 3u8, 4u8]);
     }
 
     #[test]
@@ -1958,7 +1918,9 @@ fn parse_commitment_hex(value: &str) -> Result<[u8; 32]> {
     parse_hex32_str(value, "commitment_hex")
 }
 
-fn build_vk_record(payload: &VkSubmissionJson) -> Result<iroha::data_model::proof::VerifyingKeyRecord> {
+fn build_vk_record(
+    payload: &VkSubmissionJson,
+) -> Result<iroha::data_model::proof::VerifyingKeyRecord> {
     use iroha::data_model::{
         confidential::ConfidentialStatus,
         proof::{VerifyingKeyBox, VerifyingKeyRecord},
@@ -1967,7 +1929,10 @@ fn build_vk_record(payload: &VkSubmissionJson) -> Result<iroha::data_model::proo
     use iroha_core::zk::hash_vk;
 
     if let Some(ref status_value) = payload.status {
-        if !matches!(*status_value, ConfidentialStatus::Active | ConfidentialStatus::Proposed) {
+        if !matches!(
+            *status_value,
+            ConfidentialStatus::Active | ConfidentialStatus::Proposed
+        ) {
             eyre::bail!("status must be Active or Proposed");
         }
     }
@@ -2023,8 +1988,10 @@ fn build_vk_record(payload: &VkSubmissionJson) -> Result<iroha::data_model::proo
         b if b.contains("stark") => BackendTag::Stark,
         _ => BackendTag::Unsupported,
     };
-    let schema_hash =
-        parse_hex32_str(&payload.public_inputs_schema_hex, "public_inputs_schema_hex")?;
+    let schema_hash = parse_hex32_str(
+        &payload.public_inputs_schema_hex,
+        "public_inputs_schema_hex",
+    )?;
     let gas_schedule_id = payload
         .gas_schedule_id
         .clone()

@@ -69,13 +69,10 @@ fn zk_transfer_and_unshield_emit_proof_hash_in_metadata() {
     // 1) ZkTransfer emits zk.transfer.last with proof_hash
     let transfer_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let pr_transfer = transfer_fixture.proof_box("halo2/ipa");
-    let vk_transfer = transfer_fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture verifying key");
-    let attach_t = iroha_data_model::proof::ProofAttachment::new_inline(
+    let attach_t = iroha_data_model::proof::ProofAttachment::new_ref(
         "halo2/ipa".into(),
         pr_transfer.clone(),
-        vk_transfer,
+        iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "transfer_vk"),
     );
     let expected_hash_transfer = zk::hash_proof(&pr_transfer);
     let tx = iroha_data_model::isi::zk::ZkTransfer::new(
@@ -117,13 +114,10 @@ fn zk_transfer_and_unshield_emit_proof_hash_in_metadata() {
     let mut stx2 = block2.transaction();
     let unshield_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let pr_unshield = unshield_fixture.proof_box("halo2/ipa");
-    let vk_unshield = unshield_fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture verifying key");
-    let attach_u = iroha_data_model::proof::ProofAttachment::new_inline(
+    let attach_u = iroha_data_model::proof::ProofAttachment::new_ref(
         "halo2/ipa".into(),
         pr_unshield.clone(),
-        vk_unshield,
+        iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "unshield_vk"),
     );
     let expected_hash_unshield = zk::hash_proof(&pr_unshield);
     let un = iroha_data_model::isi::zk::Unshield::new(

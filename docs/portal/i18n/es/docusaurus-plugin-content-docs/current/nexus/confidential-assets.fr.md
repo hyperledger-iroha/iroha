@@ -214,7 +214,7 @@ Documente las anulaciones locales en el runbook de operaciones; Las políticas d
 - Limites dures (configurables por defecto):
 -`max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. Les pruebas depassant `verify_timeout_ms` abortent l instrucción determinista (votos de gobierno emettent `proof verification exceeded timeout`, `VerifyProof` retourne une erreur).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Cuotas adicionales que aseguran la vida útil: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block` y `max_public_inputs` nacen de los constructores de bloques; `reorg_depth_bound` (>= `max_anchor_age_blocks`) rige la retención de los puntos de control fronterizos.
 - El tiempo de ejecución rechaza el mantenimiento de las transacciones que superan los límites de la transacción o del bloque, generando errores `InvalidParameter` determinados y deja intacto el estado del libro mayor.- Mempool prefiltra las transacciones confidenciales según `vk_id`, longitud de prueba y edad de anclaje antes de llamar al verificador para nacer en el uso de los recursos.
 - La verificación s arrete deterministiquement sur timeout ou violation de borne; les transactions echouent avec des erreurs explicites. Los backends SIMD son opcionales pero no modifican la compatibilidad del gas.

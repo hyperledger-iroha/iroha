@@ -48,8 +48,8 @@ pub mod prelude {
         vpn::{
             VPN_CELL_LEN, VpnCellClassV1, VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1, VpnCellV1,
             VpnControlPlaneV1, VpnCoverPlanEntryV1, VpnCoverScheduleV1, VpnExitClassV1,
-            VpnFlowLabelV1, VpnLeaseRecordV1, VpnLeaseStatusV1, VpnPaddedCellV1, VpnRouteV1,
-            VpnSessionReceiptV1, VpnTariffV1, VpnUsageVoucherBodyV1, VpnUsageVoucherV1,
+            VpnFlowLabelV1, VpnLeaseRecordV1, VpnLeaseStatusV1, VpnPaddedCellV1, VpnQuotePolicyV1,
+            VpnRouteV1, VpnSessionReceiptV1, VpnTariffV1, VpnUsageVoucherBodyV1, VpnUsageVoucherV1,
         },
     };
 }

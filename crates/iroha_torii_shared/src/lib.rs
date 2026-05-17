@@ -11,14 +11,14 @@ pub mod da;
 /// Shared QR Code encoder used by Torii and CLI offline flows.
 pub mod qr;
 
-/// Latest Torii API version advertised by default (`major.minor`).
-pub const API_VERSION_DEFAULT: &str = "1.1";
+/// First-release Torii API version advertised by default (`major.minor`).
+pub const API_VERSION_DEFAULT: &str = "1.0";
 /// Supported Torii API versions in ascending order (`major.minor`).
-pub const API_VERSION_SUPPORTED: &[&str] = &["1.0", API_VERSION_DEFAULT];
+pub const API_VERSION_SUPPORTED: &[&str] = &[API_VERSION_DEFAULT];
 /// Minimum Torii API version required for proof/staking/fee endpoints.
 pub const API_MIN_PROOF_VERSION: &str = API_VERSION_DEFAULT;
 /// Optional unix timestamp when the oldest supported Torii API version sunsets.
-pub const API_VERSION_SUNSET_UNIX: Option<u64> = Some(1_893_456_000);
+pub const API_VERSION_SUNSET_UNIX: Option<u64> = None;
 
 /// Header carrying the requested Torii API version (semantic `major.minor`).
 pub const HEADER_API_VERSION: &str = "x-iroha-api-version";
@@ -27,13 +27,13 @@ pub mod uri {
     //! URI that Torii uses to route incoming requests.
 
     /// Query URI is used to handle incoming Query requests.
-    pub const QUERY: &str = "/query";
-    /// Transaction URI is used to handle incoming ISI requests.
-    pub const TRANSACTION: &str = "/transaction";
+    pub const QUERY: &str = "/v1/query";
+    /// Transaction URI is used to handle incoming signed transaction requests.
+    pub const TRANSACTION: &str = "/v1/pipeline/transactions";
     /// Transaction entrypoint URI is used to handle sealed and non-external submissions.
-    pub const TRANSACTION_ENTRYPOINT: &str = "/transaction/entrypoint";
+    pub const TRANSACTION_ENTRYPOINT: &str = "/v1/pipeline/transaction-entrypoints";
     /// Batched transaction URI is used to handle multiple signed transaction submissions.
-    pub const TRANSACTIONS_BATCH: &str = "/transactions/batch";
+    pub const TRANSACTIONS_BATCH: &str = "/v1/pipeline/transactions/batch";
     /// Health URI is used to handle incoming Healthcheck requests.
     pub const HEALTH: &str = "/health";
     /// URI used to fetch a window of block headers (newest first, optional `from`/`limit`).
@@ -49,17 +49,19 @@ pub mod uri {
     /// URI used to fetch a validator-set snapshot by block height.
     pub const SUMERAGI_VALIDATOR_SET_BY_HEIGHT: &str = "/v1/sumeragi/validator-sets/{height}";
     /// Peers URI is used to find all peers in the network
-    pub const PEERS: &str = "/peers";
+    pub const PEERS: &str = "/v1/peers";
     /// The web socket uri used to subscribe to block and transactions statuses.
-    pub const SUBSCRIPTION: &str = "/events";
+    pub const SUBSCRIPTION: &str = "/v1/events/ws";
     /// URI for inspecting proof retention state and pruning candidates.
     pub const PROOF_RETENTION_STATUS: &str = "/v1/proofs/retention";
+    /// URI used to fetch FASTPQ proof sidecars for a committed block height.
+    pub const PIPELINE_FASTPQ_PROOFS: &str = "/v1/pipeline/recovery/{height}/fastpq-proofs";
     /// The web socket uri used to subscribe to blocks stream.
-    pub const BLOCKS_STREAM: &str = "/block/stream";
+    pub const BLOCKS_STREAM: &str = "/v1/blocks/stream";
     /// Debug endpoint exposing cached AXT proof state per dataspace.
     pub const AXT_PROOF_CACHE_STATUS: &str = "/v1/debug/axt/cache";
     /// The URI for local config changing inspecting
-    pub const CONFIGURATION: &str = "/configuration";
+    pub const CONFIGURATION: &str = "/v1/configuration";
     /// URI for applying Nexus lane lifecycle plans (add/retire lanes at runtime).
     pub const NEXUS_LANE_LIFECYCLE: &str = "/v1/nexus/lifecycle";
     /// URI to report status for administration
@@ -68,9 +70,9 @@ pub mod uri {
     ///  Guidance](https://prometheus.io/docs/instrumenting/writing_exporters/).
     pub const METRICS: &str = "/metrics";
     /// URI for retrieving the schema with which Iroha was built.
-    pub const SCHEMA: &str = "/schema";
+    pub const SCHEMA: &str = "/v1/schema";
     /// URI for getting the API version currently used
-    pub const API_VERSION: &str = "/api_version";
+    pub const API_VERSION: &str = "/v1/api/version";
     /// URI for listing supported Torii API versions and the default.
     pub const API_VERSIONS: &str = "/v1/api/versions";
     /// URI for getting cpu profile
@@ -149,38 +151,6 @@ pub mod uri {
     pub const RUNTIME_UPGRADES_CANCEL: &str = "/v1/runtime/upgrades/cancel/{id}";
 }
 
-/// Canonical Torii error envelope returned for HTTP API failures.
-#[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
-pub struct ErrorEnvelope {
-    /// Stable error code string.
-    pub code: String,
-    /// Human-readable error detail.
-    pub message: String,
-}
-
-impl ErrorEnvelope {
-    /// Construct a new error envelope.
-    #[must_use]
-    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            code: code.into(),
-            message: message.into(),
-        }
-    }
-
-    /// Stable error code string.
-    #[must_use]
-    pub fn code(&self) -> &str {
-        &self.code
-    }
-
-    /// Human-readable error detail.
-    #[must_use]
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-}
-
 /// Queue pressure snapshot returned with transaction queue rejections.
 #[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
 pub struct QueueErrorSnapshot {
@@ -194,19 +164,122 @@ pub struct QueueErrorSnapshot {
     pub saturated: bool,
 }
 
-/// Structured queue rejection payload returned by Torii.
-#[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
-pub struct QueueErrorEnvelope {
-    /// Stable queue rejection code (`queue_full`, `per_user_queue_limit`, ...).
-    pub code: String,
-    /// Human-readable queue rejection detail.
-    pub message: String,
-    /// Queue pressure snapshot at rejection time.
-    pub queue: QueueErrorSnapshot,
-    /// Suggested retry delay in seconds for transient queue errors.
+/// AXT rejection metadata returned with validation failures when available.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, Default,
+)]
+pub struct AxtErrorDetails {
+    /// Stable AXT rejection code.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// Human-readable AXT rejection label.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// AXT policy snapshot version used to reject the request.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub snapshot_version: Option<u64>,
+    /// Dataspace id involved in the rejection.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub dataspace: Option<u64>,
+    /// Lane id involved in the rejection.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub lane: Option<u32>,
+    /// Minimum handle era a client should use for retry.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub next_min_handle_era: Option<u64>,
+    /// Minimum sub-nonce a client should use for retry.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub next_min_sub_nonce: Option<u64>,
+}
+
+/// Structured metadata carried by [`ErrorEnvelope`].
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, Default,
+)]
+pub struct ErrorDetails {
+    /// ISO-20022-style or Torii-local rejection code when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub reject_code: Option<String>,
+    /// Queue pressure snapshot at transaction rejection time.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub queue: Option<QueueErrorSnapshot>,
+    /// Suggested retry delay in seconds for transient errors.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub retry_after_seconds: Option<u64>,
+    /// Endpoint associated with throttling or version failures.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    /// AXT rejection metadata when validation failed under AXT policy.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub axt: Option<AxtErrorDetails>,
+}
+
+impl ErrorDetails {
+    /// Return whether this details payload carries any structured fields.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.reject_code.is_none()
+            && self.queue.is_none()
+            && self.retry_after_seconds.is_none()
+            && self.endpoint.is_none()
+            && self.axt.is_none()
+    }
+}
+
+/// Canonical Torii error envelope returned for HTTP API failures.
+#[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
+pub struct ErrorEnvelope {
+    /// Stable error code string.
+    pub code: String,
+    /// Human-readable error detail.
+    pub message: String,
+    /// Optional machine-readable context for this error.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub details: Option<ErrorDetails>,
+}
+
+impl ErrorEnvelope {
+    /// Construct a new error envelope.
+    #[must_use]
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            details: None,
+        }
+    }
+
+    /// Attach structured details to an error envelope.
+    #[must_use]
+    pub fn with_details(mut self, details: ErrorDetails) -> Self {
+        self.details = Some(details);
+        self
+    }
+
+    /// Stable error code string.
+    #[must_use]
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    /// Human-readable error detail.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
 }
 
 /// Supported Torii API versions and defaults exposed over `/v1/api/versions`.
@@ -318,8 +391,8 @@ mod tests {
     };
 
     use super::{
-        AccountReadResponse, ErrorEnvelope, PipelineTransactionStatus,
-        PipelineTransactionStatusResponse, QueueErrorEnvelope, QueueErrorSnapshot,
+        AccountReadResponse, ErrorDetails, ErrorEnvelope, PipelineTransactionStatus,
+        PipelineTransactionStatusResponse, QueueErrorSnapshot,
     };
 
     #[test]
@@ -330,28 +403,45 @@ mod tests {
     }
 
     #[test]
-    fn queue_error_envelope_roundtrip_preserves_fields() {
-        let envelope = QueueErrorEnvelope {
-            code: "queue_full".to_owned(),
-            message: "transaction queue is at capacity".to_owned(),
-            queue: QueueErrorSnapshot {
-                state: "saturated".to_owned(),
-                queued: 24,
-                capacity: 24,
-                saturated: true,
-            },
-            retry_after_seconds: Some(1),
-        };
-        let bytes = norito::to_bytes(&envelope).expect("encode queue envelope");
-        let decoded: QueueErrorEnvelope =
-            norito::decode_from_bytes(&bytes).expect("decode queue envelope");
+    fn error_envelope_roundtrip_preserves_queue_details() {
+        let envelope = ErrorEnvelope::new("queue_full", "transaction queue is at capacity")
+            .with_details(ErrorDetails {
+                reject_code: Some("TX_QUEUE_FULL".to_owned()),
+                queue: Some(QueueErrorSnapshot {
+                    state: "saturated".to_owned(),
+                    queued: 24,
+                    capacity: 24,
+                    saturated: true,
+                }),
+                retry_after_seconds: Some(1),
+                ..Default::default()
+            });
+        let bytes = norito::to_bytes(&envelope).expect("encode error envelope");
+        let decoded: ErrorEnvelope =
+            norito::decode_from_bytes(&bytes).expect("decode error envelope");
         assert_eq!(decoded.code, "queue_full");
         assert_eq!(decoded.message, "transaction queue is at capacity");
-        assert_eq!(decoded.queue.state, "saturated");
-        assert_eq!(decoded.queue.queued, 24);
-        assert_eq!(decoded.queue.capacity, 24);
-        assert!(decoded.queue.saturated);
-        assert_eq!(decoded.retry_after_seconds, Some(1));
+        let details = decoded.details.expect("error details");
+        assert_eq!(details.reject_code.as_deref(), Some("TX_QUEUE_FULL"));
+        assert_eq!(details.retry_after_seconds, Some(1));
+        let queue = details.queue.expect("queue details");
+        assert_eq!(queue.state, "saturated");
+        assert_eq!(queue.queued, 24);
+        assert_eq!(queue.capacity, 24);
+        assert!(queue.saturated);
+    }
+
+    #[test]
+    fn error_details_is_empty_tracks_optional_fields() {
+        let mut details = ErrorDetails::default();
+        assert!(details.is_empty());
+        details.queue = Some(QueueErrorSnapshot {
+            state: "saturated".to_owned(),
+            queued: 24,
+            capacity: 24,
+            saturated: true,
+        });
+        assert!(!details.is_empty());
     }
 
     #[test]

@@ -55,8 +55,11 @@ fn zk_roots_get_respects_cap_and_max() {
             ..cfg::Halo2::default()
         },
         fastpq: cfg::Fastpq {
-            execution_mode: cfg::FastpqExecutionMode::Auto,
-            poseidon_mode: cfg::FastpqPoseidonMode::Auto,
+            execution_mode: cfg::FastpqExecutionMode::Cpu,
+            poseidon_mode: cfg::FastpqPoseidonMode::Cpu,
+            proof_sidecar_queue_cap: defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
+            proof_sidecar_max_bytes: defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
+            proof_sidecar_max_retries: defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
             device_class: None,
             chip_family: None,
             gpu_kind: None,

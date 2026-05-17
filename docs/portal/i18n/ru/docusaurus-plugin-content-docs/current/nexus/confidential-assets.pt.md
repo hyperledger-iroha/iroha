@@ -235,7 +235,7 @@ Documente переопределяет localis no Runbook de Operacoes; Поли
 - Ограничения продолжительности (конфигурация по умолчанию):
 - `max_proof_size_bytes = 262_144`.
 - И18НИ00000284Х, И18НИ00000285Х, И18НИ00000286Х.
-- И18НИ00000287Х, И18НИ00000288Х. Доказательства, которые исключают `verify_timeout_ms`, прерывают детерминированные инструкции (бюллетени по управлению эмитентом `proof verification exceeded timeout`, `VerifyProof` возвращаются с ошибкой).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Дополнительные квоты гарантируют работоспособность: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, e `max_public_inputs` для построителей блоков лимитов; `reorg_depth_bound` (>= `max_anchor_age_blocks`) управляет удержанием пограничных контрольно-пропускных пунктов.
 - При выполнении транзакций перед выполнением транзакций, которые превышают ограничения для транзакций или блоков, возникают ошибки `InvalidParameter`, определенные и управляемые или изменяющиеся в реестре.
 - В памяти предварительной фильтрации транзакций, конфиденциальной для `vk_id`, есть подтверждение и указание привязки перед вызовом или верификатором для использования ограниченных повторов.

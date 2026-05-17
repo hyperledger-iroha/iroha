@@ -4,11 +4,11 @@ This note summarises the authorization and abuse controls around SoraFS control-
 
 ## Surfaces and tokens
 
-- `RegisterPinManifest` is public on the universal lane. Submission relies on the standard Nexus XOR-denominated transaction fee schedule instead of a dedicated SoraFS permission token, activates the manifest immediately, and auto-issues the minimum replication order whenever active capacity declarations can satisfy the manifest policy.
+- `RegisterPinManifest` is public on the universal lane. Submission collects the SoraFS public pin fee from the submitter into the governance treasury, records the fee metadata on the pin record, activates the manifest immediately, and auto-issues the minimum replication order whenever active capacity declarations can satisfy the manifest policy.
 - The remaining SoraFS instructions are gated by dedicated tokens: pin approve/retire/alias, capacity declare/telemetry/dispute, replication order issue/complete, pricing set, and provider credit upsert. `ApprovePinManifest` remains available to attach or ratify the council envelope on an already active manifest.
 - Provider→account bindings must be present before issuing replication orders or submitting capacity telemetry; use the governance config seed or the `RegisterProviderOwner`/`UnregisterProviderOwner` instructions to manage bindings.
 - Repair worker endpoints (`/v1/sorafs/audit/repair/{claim,heartbeat,complete,fail}`) require signed `RepairWorkerSignaturePayloadV1` requests from a worker account (i105 account id/signatory key) that holds `CanOperateSorafsRepair { provider_id }`. The signed payload includes `manifest_digest` and must match `manifest_digest_hex` in the request; provider owners are auto-granted this permission and may delegate it via `GrantPermission`; revoke with `RevokePermission` during rotation.
-- The SoraFS storage pin API (`/v1/sorafs/storage/pin`) enforces bearer tokens, CIDR allow-lists, and a token-bucket limit from `sorafs.storage.pin`.
+- The SoraFS storage pin API (`/v1/sorafs/storage/pin`) requires a matching approved paid pin registry record for the manifest digest, chunk profile, content length, policy, chunk plan digest, and fee payer. The recorded fee asset, treasury, and amount are treated as the committed on-chain receipt, so later governance pricing or treasury changes do not invalidate an already-paid manifest. It no longer treats bearer tokens or CIDR allow-lists as the source of admission authority; quota limits still apply before ingest.
 - SoraNet privacy ingest endpoints (`/v1/soranet/privacy/{event,share}`) require `X-SoraNet-Privacy-Token` (or `X-API-Token`), a non-empty CIDR allow-list, and the token/burst limits under `torii.soranet_privacy_ingest`; requests outside the namespace or over budget are rejected before metrics ingestion.
 
 ## Telemetry submitters and provider overrides
@@ -19,15 +19,11 @@ This note summarises the authorization and abuse controls around SoraFS control-
 
 ## Torii ingress guards
 
-- `sorafs.storage.pin`: require token, allowed CIDRs, and the optional ban-aware rate limit. Tokens are carried in `Authorization: Bearer …` or `X-SoraFS-Pin-Token`.
+- `sorafs.storage.pin`: legacy token and CIDR fields remain parseable for old configs, but storage pin admission is paid-registry based. Keep operational rate limits enabled so a valid paid pin cannot be replayed into an unbounded local ingest burst.
 - `torii.soranet_privacy_ingest`: disabled by default; enabling requires a token list and CIDR scope (empty list denies). The rate limiter uses `rate_per_sec`/`burst`, keyed by token/IP, and emits `soranet_privacy_ingest_reject_total{endpoint,reason}` on rejects.
 - Sample configuration:
 
 ```toml
-[sorafs.storage.pin]
-require_token = true
-tokens = ["pin-prod-token"]
-allow_cidrs = ["10.10.0.0/16"]
 [sorafs.storage.pin.rate_limit]
 max_requests = 30
 window = "60s"
@@ -50,7 +46,7 @@ per_provider_submitters = { "deadbeef..." = ["<i105-account-id>"] }
 
 ## CLI/REST quick reference
 
-- Register a pin manifest with the CLI. The manifest submitter must cover the normal Nexus transaction fee, and must still carry the alias proof when required:
+- Register a pin manifest with the CLI. The manifest submitter must hold the configured SoraFS pin-fee asset as well as the normal transaction fee asset, and must still carry the alias proof when required:
   ```bash
   iroha_cli app sorafs pin register \
     --manifest /var/lib/sorafs/manifests/pin.to \
@@ -75,7 +71,7 @@ per_provider_submitters = { "deadbeef..." = ["<i105-account-id>"] }
 1. Bind provider owners in genesis or via `RegisterProviderOwner`; confirm with the provider-owner query before accepting telemetry.
 2. Set `governance.sorafs_telemetry.submitters` and any `per_provider_submitters` overrides; keep `require_nonce=true` unless running a controlled replay drill.
 3. Delegate `CanOperateSorafsRepair` to repair worker accounts before enabling automation, and rotate by revoking the permission plus reissuing worker keys (no admin-only bypass for repair actions).
-4. Provision pin tokens and CIDR scopes under `sorafs.storage.pin`; rehearse the rate-limit/ban response with a staging token before rotating production values.
+4. Confirm submitters are funded with the configured SoraFS public pin-fee asset and that `governance.sorafs_pin_fee_*` points at the expected treasury before opening storage ingest.
 5. Enable `torii.soranet_privacy_ingest` only after populating `tokens` and `allow_cidrs`; rotate credentials by reloading the config and watch `soranet_privacy_ingest_reject_total` for namespace/token rejects.
 6. Verify ingress with a signed sample request (e.g., `curl -H "X-SoraNet-Privacy-Token: privacy-prod-token" …/v1/soranet/privacy/event`) and confirm the endpoint returns `202 Accepted`.
 7. Monitor `soranet_privacy_ingest_reject_total{reason}`, `soranet_privacy_throttles_total`, and the SoraFS quota metrics to catch abuse early; keep the checklist alongside change tickets for token/allow-list rotations.

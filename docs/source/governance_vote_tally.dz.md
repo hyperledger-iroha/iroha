@@ -106,7 +106,7 @@ public_inputs_schema_hash = 0xfae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be960
 - `backend tag = BackendTag::Halo2IpaPasta`
 - `curve = "pallas"`
 - `public_inputs_schema_hash = 0xfae4…64d3`
-- `commitment = sha256(backend || vk_bytes)` (32-byte བཞུ་ཚུགས།)
+- `commitment = zk_hash_vk(backend, vk_bytes)` (domain-separated length-prefixed SHA-256 digest using domain `iroha:zk:v1:vk`)
 
 ཀེ་ནོ་ནིག་བཱན་ཌལ་ནང་ བདེན་ཁུངས་ཅན་གྱི་ཡིག་ཤུབས་དང་གཅིག་ཁར་ ནང་ཐིག་བདེན་དཔྱད་ལྡེ་མིག་ (`key = Some(VerifyingKeyBox { … })`) ཚུ་ཚུདཔ་ཨིན། `vk_len`, `max_proof_bytes`, དང་ གདམ་ཁའི་མེ་ཊ་ཌེ་ཊ་ URIs ཚུ་ བཟོ་བཏོན་འབད་ཡོད་པའི་ ཅ་རྙིང་ཚུ་ལས་ མི་རློབས་བཙུགསཔ་ཨིན།
 

@@ -25,9 +25,8 @@ use iroha_data_model::{
         SoraHfPlacementRecordV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseStatusV1,
         SoraHfSourceStatusV1, SoraHttpServiceEconomicsV1, SoraInrouGuestIsaV1, SoraInrouGuestOsV1,
         SoraInrouRuntimeBackendV1, SoraLeaseVolumeKindV1, SoraLifecycleHooksV1,
-        SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1, SoraPrivateInferenceCheckpointV1,
-        SoraPrivateInferenceSessionStatusV1, SoraResourceLimitsV1, SoraRolloutPolicyV1,
-        SoraRouteTargetV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
+        SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1, SoraResourceLimitsV1,
+        SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
         SoraServiceDeploymentStateV1, SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1,
         SoraServiceHandlerV1, SoraServiceHealthStatusV1, SoraServiceLeaseStatusV1,
         SoraServiceMailboxMessageV1, SoraServiceManifestV1, SoraServiceRuntimeStateV1,
@@ -535,7 +534,7 @@ pub struct SoracloudRuntimeServicePlan {
     pub supports_host_read_config: bool,
     /// Whether ordinary handlers on this revision can read authoritative secret envelopes.
     pub supports_host_read_secret_envelope: bool,
-    /// Whether this revision exposes at least one private runtime handler that can read raw secret payload bytes.
+    /// Whether this revision exposes at least one handler allowed to read raw secret payload bytes.
     pub supports_private_secret_payload_reads: bool,
     /// Local directory where the revision plan is materialized.
     pub materialization_dir: String,
@@ -1249,52 +1248,6 @@ pub struct SoracloudApartmentExecutionResult {
     pub result_commitment: Hash,
 }
 
-/// Runtime-owned private-inference action executed against authoritative Soracloud state.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SoracloudPrivateInferenceExecutionAction {
-    /// Start deterministic private execution and produce an awaiting-decryption checkpoint.
-    Start,
-    /// Release output for an already materialized awaiting-decryption checkpoint.
-    Release {
-        /// Decryption request that authorizes release of the checkpoint output.
-        decrypt_request_id: String,
-    },
-}
-
-/// Shared request envelope for deterministic uploaded-model private inference execution.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SoracloudPrivateInferenceExecutionRequest {
-    /// Authoritative height pinned for the private execution.
-    pub observed_height: u64,
-    /// Latest committed block hash visible to the runtime.
-    pub observed_block_hash: Option<Hash>,
-    /// Apartment targeted by the private execution.
-    pub apartment_name: String,
-    /// Expected apartment process generation.
-    pub process_generation: u64,
-    /// Stable private session identifier.
-    pub session_id: String,
-    /// Requested runtime action.
-    pub action: SoracloudPrivateInferenceExecutionAction,
-    /// Deterministic commitment over the private-runtime request.
-    pub request_commitment: Hash,
-}
-
-/// Shared result for deterministic uploaded-model private inference execution.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SoracloudPrivateInferenceExecutionResult {
-    /// Terminal or intermediate session status produced by the runtime.
-    pub status: SoraPrivateInferenceSessionStatusV1,
-    /// Updated session receipt root.
-    pub receipt_root: Hash,
-    /// Updated cumulative XOR nanos charged for the session.
-    pub xor_cost_nanos: u128,
-    /// Deterministic checkpoint emitted by the runtime.
-    pub checkpoint: SoraPrivateInferenceCheckpointV1,
-    /// Deterministic commitment over the runtime outcome.
-    pub result_commitment: Hash,
-}
-
 /// Shared execution interface for the embedded Soracloud runtime.
 pub trait SoracloudRuntime: SoracloudRuntimeReadHandle {
     /// Execute a deterministic local read against the committed runtime snapshot.
@@ -1314,12 +1267,6 @@ pub trait SoracloudRuntime: SoracloudRuntimeReadHandle {
         &self,
         request: SoracloudApartmentExecutionRequest,
     ) -> Result<SoracloudApartmentExecutionResult, SoracloudRuntimeExecutionError>;
-
-    /// Execute deterministic private uploaded-model runtime progression.
-    fn execute_private_inference(
-        &self,
-        request: SoracloudPrivateInferenceExecutionRequest,
-    ) -> Result<SoracloudPrivateInferenceExecutionResult, SoracloudRuntimeExecutionError>;
 }
 
 /// Shared Soracloud runtime trait object used by the core replicated execution path.

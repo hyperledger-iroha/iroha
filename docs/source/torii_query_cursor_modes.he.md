@@ -30,7 +30,7 @@ Iroha מריצה שאילתות לקריאה על צילום מצב (`StateView`
 
 ### עקיפות לכל בקשה
 
-נקודת הקצה `/query` מקבלת פרמטרים (ב-query string) השמורים לשליטת המצב:
+נקודת הקצה `/v1/query` מקבלת פרמטרים (ב-query string) השמורים לשליטת המצב:
 
 - `cursor_mode`: `ephemeral` | `stored`
 - `gas_units`: מספר שלם; נדרש כאשר `pipeline.query_stored_min_gas_units > 0` ו-`cursor_mode=stored`. בהיעדר כמות מספקת, השרת ידחה את הבקשה עם שגיאת ולידציה.

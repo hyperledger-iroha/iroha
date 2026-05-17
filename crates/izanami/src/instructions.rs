@@ -2658,6 +2658,7 @@ impl ChaosState {
                 digest: manifest_digest,
                 chunker,
                 chunk_digest_sha3_256: chunk_digest,
+                content_length: 1_073_741_824,
                 policy: PinPolicy::default(),
                 submitted_epoch: manifest_epoch,
                 alias: None,

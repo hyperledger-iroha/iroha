@@ -59,7 +59,7 @@ use iroha_data_model::{
     nft::NftId,
     peer::PeerId,
     prelude::{AccountId, ChainId},
-    proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
+    proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
     repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     transaction::{
@@ -6932,16 +6932,16 @@ impl TransactionBuilder {
         audit_path: Vec<Option<Vec<u8>>>,
         proof_backend: &str,
         proof_bytes: &[u8],
-        verifying_key_bytes: &[u8],
+        verifying_key_name: &str,
     ) -> PyResult<()> {
         if leaf.len() != 32 {
             return Err(PyValueError::new_err(
                 "leaf must be a 32-byte hash (pre-hashed commitment leaf)",
             ));
         }
-        if verifying_key_bytes.is_empty() {
+        if verifying_key_name.trim().is_empty() {
             return Err(PyValueError::new_err(
-                "verifying_key_bytes must not be empty",
+                "verifying_key_name must not be empty",
             ));
         }
         let backend = Ident::from_str(proof_backend).map_err(|err| {
@@ -6975,10 +6975,10 @@ impl TransactionBuilder {
         )
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
 
-        let mut attachment = ProofAttachment::new_inline(
+        let mut attachment = ProofAttachment::new_ref(
             backend.clone(),
             ProofBox::new(backend.clone(), proof_bytes.to_vec()),
-            VerifyingKeyBox::new(backend, verifying_key_bytes.to_vec()),
+            VerifyingKeyId::new(backend, verifying_key_name.trim()),
         );
         attachment.lane_privacy = Some(privacy_proof);
         self.attachments.push(attachment);

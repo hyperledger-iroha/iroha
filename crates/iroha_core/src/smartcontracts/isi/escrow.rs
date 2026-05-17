@@ -1834,8 +1834,10 @@ mod tests {
                 crate::zk::ZK_BACKEND_HALO2_IPA.into(),
                 proof_bytes,
             ),
-            vk_ref: None,
-            vk_inline: None,
+            vk_ref: iroha_data_model::proof::VerifyingKeyId::new(
+                crate::zk::ZK_BACKEND_HALO2_IPA,
+                "anonymous_escrow",
+            ),
             vk_commitment: None,
             envelope_hash: None,
             lane_privacy: None,
@@ -2084,8 +2086,7 @@ mod tests {
         let dummy_proof = ProofAttachment {
             backend: "dummy".into(),
             proof: iroha_data_model::proof::ProofBox::new("dummy".into(), Vec::new()),
-            vk_ref: None,
-            vk_inline: None,
+            vk_ref: iroha_data_model::proof::VerifyingKeyId::new("dummy", "dummy"),
             vk_commitment: None,
             envelope_hash: None,
             lane_privacy: None,

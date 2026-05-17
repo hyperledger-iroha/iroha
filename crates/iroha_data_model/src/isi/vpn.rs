@@ -25,6 +25,8 @@ isi! {
         pub lease_fee: iroha_primitives::numeric::Numeric,
         /// Deterministic tariff used to recompute earned fees.
         pub tariff: crate::soranet::vpn::VpnTariffV1,
+        /// Durable quote policy used to rebuild Torii VPN responses from WSV.
+        pub quote_policy: crate::soranet::vpn::VpnQuotePolicyV1,
         /// Absolute service expiry timestamp in milliseconds since the Unix epoch.
         pub expires_at_ms: u64,
         /// Additional settlement grace window after expiry, in milliseconds.
@@ -46,6 +48,7 @@ impl OpenVpnLeaseEscrow {
         asset_definition: crate::asset::AssetDefinitionId,
         lease_fee: iroha_primitives::numeric::Numeric,
         tariff: crate::soranet::vpn::VpnTariffV1,
+        quote_policy: crate::soranet::vpn::VpnQuotePolicyV1,
         expires_at_ms: u64,
         settlement_grace_ms: u64,
     ) -> Self {
@@ -59,6 +62,7 @@ impl OpenVpnLeaseEscrow {
             asset_definition,
             lease_fee,
             tariff,
+            quote_policy,
             expires_at_ms,
             settlement_grace_ms,
         }
@@ -163,6 +167,9 @@ impl<'a> norito::core::DecodeFromSlice<'a> for OpenVpnLeaseEscrow {
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
+        let quote_policy = super::decode_aos_canonical_field::<
+            crate::soranet::vpn::VpnQuotePolicyV1,
+        >(super::read_aos_field(bytes, &mut offset, flags)?, flags)?;
         let expires_at_ms = super::decode_aos_canonical_field::<u64>(
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
@@ -186,6 +193,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for OpenVpnLeaseEscrow {
                 asset_definition,
                 lease_fee,
                 tariff,
+                quote_policy,
                 expires_at_ms,
                 settlement_grace_ms,
             },
@@ -258,8 +266,8 @@ mod tests {
         asset::AssetDefinitionId,
         domain::DomainId,
         soranet::vpn::{
-            VpnExitClassV1, VpnSessionReceiptV1, VpnTariffV1, VpnUsageVoucherBodyV1,
-            VpnUsageVoucherV1,
+            VpnExitClassV1, VpnQuotePolicyV1, VpnSessionReceiptV1, VpnTariffV1,
+            VpnUsageVoucherBodyV1, VpnUsageVoucherV1,
         },
     };
 
@@ -286,6 +294,25 @@ mod tests {
             active_fee_nanos_per_minute: 60,
             ingress_fee_nanos_per_mib: 100,
             egress_fee_nanos_per_mib: 200,
+        }
+    }
+
+    fn quote_policy(account_id: &AccountId) -> VpnQuotePolicyV1 {
+        VpnQuotePolicyV1 {
+            exit_class: VpnExitClassV1::Standard,
+            relay_endpoint: "/dns/relay.example/udp/9443/quic".to_owned(),
+            lease_secs: 600,
+            meter_family: "soranet.vpn.standard".to_owned(),
+            fee_asset_id: "xor#universal.universal".to_owned(),
+            escrow_account_id: account_id.clone(),
+            route_pushes: vec!["0.0.0.0/0".to_owned()],
+            excluded_routes: Vec::new(),
+            dns_servers: vec!["1.1.1.1".to_owned()],
+            tunnel_addresses: vec!["10.208.0.2/32".to_owned()],
+            mtu_bytes: 1_280,
+            flow_label_bits: 24,
+            padding_budget_ms: 15,
+            relay_tls_spki_sha256_hex: Some("ab".repeat(32)),
         }
     }
 
@@ -362,16 +389,18 @@ mod tests {
     #[test]
     fn vpn_decode_from_slice_roundtrips() {
         let voucher = usage_voucher();
+        let escrow_account = account(0x42);
         assert_slice_roundtrip(OpenVpnLeaseEscrow::new(
             [0xAA; 32],
             [0x11; 16],
             [0x22; 32],
             [0x33; 32],
-            account(0x42),
+            escrow_account.clone(),
             public_key(0x43),
             asset_definition(),
             tariff().lease_fee_numeric(),
             tariff(),
+            quote_policy(&escrow_account),
             1_700_000_600_000,
             60_000,
         ));
@@ -386,6 +415,7 @@ mod tests {
     #[test]
     fn vpn_registry_decodes_type_names() {
         let voucher = usage_voucher();
+        let escrow_account = account(0x42);
         let registry = crate::isi::InstructionRegistry::new()
             .register_slice::<OpenVpnLeaseEscrow>()
             .register_slice::<SettleVpnLease>()
@@ -398,11 +428,12 @@ mod tests {
                 [0x11; 16],
                 [0x22; 32],
                 [0x33; 32],
-                account(0x42),
+                escrow_account.clone(),
                 public_key(0x43),
                 asset_definition(),
                 tariff().lease_fee_numeric(),
                 tariff(),
+                quote_policy(&escrow_account),
                 1_700_000_600_000,
                 60_000,
             ),

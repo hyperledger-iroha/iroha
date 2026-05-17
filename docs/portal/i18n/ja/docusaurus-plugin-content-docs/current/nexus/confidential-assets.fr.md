@@ -247,7 +247,7 @@ Documentez は、Runbook の操作で locaux をオーバーライドします�
 - 期間の制限 (デフォルト設定可能):
 - `max_proof_size_bytes = 262_144`。
 - `max_nullifiers_per_tx = 8`、`max_commitments_per_tx = 8`、`max_confidential_ops_per_block = 256`。
-- `verify_timeout_ms = 750`、`max_anchor_age_blocks = 10_000`。 `verify_timeout_ms` が指示の決定を中止したことを証明します (投票用紙ガバナンスが `proof verification exceeded timeout`、`VerifyProof` がエラーを返します)。
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - 活性を保証する割り当て追加: `max_proof_bytes_block`、`max_verify_calls_per_tx`、`max_verify_calls_per_block`、および `max_public_inputs` 生まれのブロック ビルダー。 `reorg_depth_bound` (>= `max_anchor_age_blocks`) 国境のチェックポイントを保持します。
 - L 実行ランタイムは、トランザクションを拒否し、ブロック全体のトランザクションを制限します。また、エラー `InvalidParameter` は、元帳が完全な状態であることを決定します。
 - `vk_id` によるトランザクションの機密情報を事前に管理し、リソースの使用状況を事前に確認し、安全性を確保します。

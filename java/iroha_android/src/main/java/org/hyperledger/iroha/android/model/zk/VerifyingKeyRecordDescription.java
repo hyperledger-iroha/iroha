@@ -14,7 +14,7 @@ import java.util.Objects;
  * {@code UpdateVerifyingKey} instructions.
  *
  * <p>The builder enforces the same invariants as the server-side DTO handling:
- * either inline verifying key bytes must be provided or the commitment + length
+ * either embedded verifying key bytes must be provided or the commitment + length
  * pair must be supplied. Gas schedule identifiers are required, and the builder
  * defaults optional fields to sensible values when omitted.
  */
@@ -143,7 +143,7 @@ public final class VerifyingKeyRecordDescription {
 
   /**
     * Serialises the record into Norito-style arguments using the provided backend identifier for
-    * inline verifying key bytes.
+    * embedded verifying key bytes.
     */
   public Map<String, String> toArguments(final String backend) {
     Objects.requireNonNull(backend, "backend");

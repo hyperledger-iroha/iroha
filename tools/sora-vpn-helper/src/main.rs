@@ -1,10 +1,12 @@
+#![allow(unexpected_cfgs)]
+
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::{
     env,
     ffi::OsStr,
     fs,
-    io::{self, Write as _},
+    io::{self, Read as _, Write as _},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, ExitCode, Stdio},
@@ -21,25 +23,26 @@ use blake3::hash as blake3_hash;
 use clap::{Parser, Subcommand};
 use hex::FromHexError;
 use iroha_crypto::{
-    Algorithm, KeyPair, Signature,
+    Algorithm, KeyPair, PublicKey, Signature,
     soranet::handshake::{
         DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
         RuntimeParams, build_client_hello, client_handle_relay_hello,
     },
 };
-use iroha_data_model::{
-    Encode,
-    soranet::vpn::{
-        VPN_CELL_LEN, VPN_HELPER_TICKET_LEN, VPN_HELPER_TICKET_MAGIC,
-        VPN_USAGE_VOUCHER_CONTROL_MAGIC, VpnCellClassV1, VpnCellError, VpnCellFlagsV1,
-        VpnCellHeaderV1, VpnCellV1, VpnFlowLabelV1, VpnHelperTicketV1, VpnPaddedCellV1,
-        VpnUsageVoucherBodyV1, VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1,
-    },
+use iroha_data_model::soranet::vpn::{
+    VPN_CELL_LEN, VPN_HELPER_TICKET_LEN, VPN_HELPER_TICKET_MAGIC, VPN_USAGE_VOUCHER_CONTROL_MAGIC,
+    VpnCellClassV1, VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1, VpnCellV1, VpnFlowLabelV1,
+    VpnHelperTicketV1, VpnPaddedCellV1, VpnTariffV1, VpnUsageVoucherBodyV1,
+    VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1,
 };
 use nix::{
     errno::Errno,
     sys::signal::{self, Signal},
     unistd::Pid,
+};
+use norito::{
+    codec::{Decode, Encode},
+    json::{self, Map as JsonMap, Number as JsonNumber, Value as JsonValue},
 };
 use quinn::{
     self, ClientConfig, ConnectError, Connection, ConnectionError, Endpoint, IdleTimeout,
@@ -53,7 +56,6 @@ use rustls::{
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
     pki_types::CertificateDer,
 };
-use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use tokio::{
@@ -72,9 +74,14 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 const CONTROLLER_KIND: &str = "linux-helperd";
 const PACKET_LEN_PREFIX_BYTES: usize = 2;
+const CONNECT_PAYLOAD_FRAME_MAGIC: &[u8; 8] = b"SVPNCP1\0";
+const STATE_FILE_FRAME_MAGIC: &[u8; 8] = b"SVPNST1\0";
 const DEFAULT_ROUTE_CMD: &str = "ip";
 const DEFAULT_ROUTE_SHOW_PREFIX: [&str; 2] = ["-o", "route"];
 const DEFAULT_USAGE_VOUCHER_INTERVAL_MS: u64 = 1_000;
+static PENDING_BYTES_IN: AtomicU64 = AtomicU64::new(0);
+static PENDING_BYTES_OUT: AtomicU64 = AtomicU64::new(0);
+static LAST_TRAFFIC_FLUSH_MS: AtomicU64 = AtomicU64::new(0);
 #[cfg(target_os = "linux")]
 const LINUX_IFF_TUN: nix::libc::c_short = 0x0001;
 #[cfg(target_os = "linux")]
@@ -105,17 +112,12 @@ enum Command {
     Disconnect,
     Repair,
     #[command(hide = true)]
-    RunTunnel {
-        payload: Option<String>,
-    },
+    RunTunnel,
     #[command(hide = true)]
-    RunPacketEngine {
-        payload: Option<String>,
-    },
+    RunPacketEngine,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default)]
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 struct State {
     installed: bool,
     active: bool,
@@ -156,51 +158,39 @@ impl Default for State {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 struct ConnectPayload {
     session_id: String,
     relay_endpoint: String,
     exit_class: String,
     helper_ticket_hex: String,
-    #[serde(alias = "relay_tls_spki_sha256_hex")]
     relay_tls_spki_sha256_hex: String,
-    #[serde(alias = "padding_budget_ms")]
     padding_budget_ms: u16,
-    #[serde(default)]
     route_pushes: Vec<String>,
-    #[serde(default)]
     excluded_routes: Vec<String>,
-    #[serde(default)]
     dns_servers: Vec<String>,
-    #[serde(default)]
     tunnel_addresses: Vec<String>,
     mtu_bytes: u64,
-    #[serde(default)]
     lease_secs: u64,
-    #[serde(default)]
     lease_fee_nanos: u64,
-    #[serde(default)]
     metering_private_key_seed_hex: Option<String>,
-    #[serde(default = "default_usage_voucher_interval_ms")]
     usage_voucher_interval_ms: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq, Default)]
 struct AppliedNetworkState {
     interface_name: String,
     dns_backend: Option<DnsBackendState>,
     excluded_route_snapshots: Vec<ExcludedRouteSnapshot>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 enum DnsBackendState {
     Resolved { interface_name: String },
     ResolvConf { backup_path: String },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 struct ExcludedRouteSnapshot {
     cidr: String,
     family: IpFamily,
@@ -209,7 +199,7 @@ struct ExcludedRouteSnapshot {
 
 type RouteViaDev = (Option<String>, Option<String>);
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Encode, Decode, PartialEq, Eq)]
 enum IpFamily {
     V4,
     V6,
@@ -227,6 +217,13 @@ impl IpFamily {
         match self {
             Self::V4 => 32,
             Self::V6 => 128,
+        }
+    }
+
+    const fn as_json_label(self) -> &'static str {
+        match self {
+            Self::V4 => "V4",
+            Self::V6 => "V6",
         }
     }
 }
@@ -314,8 +311,6 @@ struct UsageVoucherSigner {
     sequence: u64,
     started_at: Instant,
     last_emitted_at: Instant,
-    lease_fee_nanos: u64,
-    lease_secs: u64,
     interval: Duration,
 }
 
@@ -391,15 +386,15 @@ fn run(cli: Cli) -> Result<(), ControllerError> {
         Command::Connect { payload } => connect_command(payload.as_deref()),
         Command::Disconnect => disconnect_command("idle"),
         Command::Repair => repair_command(),
-        Command::RunTunnel { payload } => {
-            let payload = parse_connect_payload(payload.as_deref())?;
+        Command::RunTunnel => {
+            let payload = read_connect_payload_from_stdin()?;
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
             runtime.block_on(run_tunnel_command(payload))
         }
-        Command::RunPacketEngine { payload } => {
-            let payload = parse_connect_payload(payload.as_deref())?;
+        Command::RunPacketEngine => {
+            let payload = read_connect_payload_from_stdin()?;
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
@@ -424,16 +419,18 @@ fn connect_command(raw_payload: Option<&str>) -> Result<(), ControllerError> {
     persist_state(&state)?;
 
     let current_exe = env::current_exe()?;
-    let child = ProcessCommand::new(current_exe)
+    let payload_frame = encode_connect_payload_frame(&payload);
+    let mut child = ProcessCommand::new(current_exe)
         .arg("run-tunnel")
-        .arg(
-            serde_json::to_string(&payload)
-                .map_err(|error| ControllerError::InvalidPayload(error.to_string()))?,
-        )
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
+    child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| ControllerError::State("failed to open worker stdin".to_owned()))?
+        .write_all(payload_frame.as_slice())?;
     let child_pid = child.id();
     state.pid = Some(child_pid);
     persist_state(&state)?;
@@ -1282,12 +1279,6 @@ impl UsageVoucherSigner {
         let Some(seed_hex) = payload.metering_private_key_seed_hex.as_deref() else {
             return Ok(None);
         };
-        if payload.lease_fee_nanos == 0 || payload.lease_secs == 0 {
-            return Err(ControllerError::InvalidPayload(
-                "leaseSecs and leaseFeeNanos are required when meteringPrivateKeySeedHex is set"
-                    .to_owned(),
-            ));
-        }
         let seed = parse_fixed_hex_32(seed_hex, "metering private key seed")?;
         let ticket = decode_helper_ticket_metadata(payload.helper_ticket_hex.as_str())?;
         let expected_session_id = relay_session_id_from_session_id(payload.session_id.as_str());
@@ -1297,6 +1288,11 @@ impl UsageVoucherSigner {
             ));
         }
         let key_pair = KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519);
+        if key_pair.public_key() != &ticket.metering_public_key {
+            return Err(ControllerError::InvalidPayload(
+                "metering private key does not match helper ticket public key".to_owned(),
+            ));
+        }
         let now = Instant::now();
         Ok(Some(Self {
             key_pair,
@@ -1304,8 +1300,6 @@ impl UsageVoucherSigner {
             sequence: 0,
             started_at: now,
             last_emitted_at: now,
-            lease_fee_nanos: payload.lease_fee_nanos,
-            lease_secs: payload.lease_secs,
             interval: Duration::from_millis(payload.usage_voucher_interval_ms.max(1)),
         }))
     }
@@ -1336,11 +1330,7 @@ impl UsageVoucherSigner {
             client_public_key: self.key_pair.public_key().clone(),
             body,
         };
-        let earned_fee_nanos = tariff_earned_fee_nanos(
-            self.lease_fee_nanos,
-            self.lease_secs,
-            voucher.body.active_ms,
-        );
+        let earned_fee_nanos = self.ticket.tariff.earned_fee_nanos(&voucher.body);
         self.sequence = self.sequence.saturating_add(1);
         self.last_emitted_at = Instant::now();
         VpnUsageVoucherEnvelopeV1 {
@@ -1393,21 +1383,6 @@ async fn send_usage_voucher_control_cell(
     Ok(())
 }
 
-fn tariff_active_fee_nanos_per_minute(lease_fee_nanos: u64, lease_secs: u64) -> u64 {
-    let numerator = u128::from(lease_fee_nanos).saturating_mul(60);
-    let denominator = u128::from(lease_secs.max(1));
-    u64::try_from(numerator.div_ceil(denominator)).unwrap_or(u64::MAX)
-}
-
-fn tariff_earned_fee_nanos(lease_fee_nanos: u64, lease_secs: u64, active_ms: u64) -> u64 {
-    let active_fee_nanos_per_minute =
-        tariff_active_fee_nanos_per_minute(lease_fee_nanos, lease_secs);
-    let earned = u128::from(active_ms)
-        .saturating_mul(u128::from(active_fee_nanos_per_minute))
-        .div_ceil(60_000);
-    u64::try_from(earned.min(u128::from(lease_fee_nanos))).unwrap_or(u64::MAX)
-}
-
 fn decode_helper_ticket_metadata(hex_ticket: &str) -> Result<VpnHelperTicketV1, ControllerError> {
     let bytes = decode_hex(hex_ticket)?;
     if bytes.len() != VPN_HELPER_TICKET_LEN || !bytes.starts_with(VPN_HELPER_TICKET_MAGIC) {
@@ -1431,6 +1406,27 @@ fn decode_helper_ticket_metadata(hex_ticket: &str) -> Result<VpnHelperTicketV1, 
     let mut payment_tx_hash = [0u8; 32];
     payment_tx_hash.copy_from_slice(&bytes[cursor..cursor + 32]);
     cursor += 32;
+    let metering_public_key =
+        PublicKey::from_bytes(Algorithm::Ed25519, &bytes[cursor..cursor + 32]).map_err(
+            |error| {
+                ControllerError::InvalidPayload(format!(
+                    "helperTicketHex has invalid metering public key: {error}"
+                ))
+            },
+        )?;
+    cursor += 32;
+    let mut lease_fee_nanos = [0u8; 8];
+    lease_fee_nanos.copy_from_slice(&bytes[cursor..cursor + 8]);
+    cursor += 8;
+    let mut active_fee_nanos_per_minute = [0u8; 8];
+    active_fee_nanos_per_minute.copy_from_slice(&bytes[cursor..cursor + 8]);
+    cursor += 8;
+    let mut ingress_fee_nanos_per_mib = [0u8; 8];
+    ingress_fee_nanos_per_mib.copy_from_slice(&bytes[cursor..cursor + 8]);
+    cursor += 8;
+    let mut egress_fee_nanos_per_mib = [0u8; 8];
+    egress_fee_nanos_per_mib.copy_from_slice(&bytes[cursor..cursor + 8]);
+    cursor += 8;
     let mut expires_at = [0u8; 8];
     expires_at.copy_from_slice(&bytes[cursor..cursor + 8]);
     Ok(VpnHelperTicketV1 {
@@ -1439,6 +1435,13 @@ fn decode_helper_ticket_metadata(hex_ticket: &str) -> Result<VpnHelperTicketV1, 
         account_hash,
         relay_id,
         payment_tx_hash,
+        metering_public_key,
+        tariff: VpnTariffV1 {
+            lease_fee_nanos: u64::from_be_bytes(lease_fee_nanos),
+            active_fee_nanos_per_minute: u64::from_be_bytes(active_fee_nanos_per_minute),
+            ingress_fee_nanos_per_mib: u64::from_be_bytes(ingress_fee_nanos_per_mib),
+            egress_fee_nanos_per_mib: u64::from_be_bytes(egress_fee_nanos_per_mib),
+        },
         expires_at_ms: u64::from_be_bytes(expires_at),
     })
 }
@@ -1613,11 +1616,37 @@ fn add_traffic_bytes(bytes_in: u64, bytes_out: u64) -> Result<(), ControllerErro
     if bytes_in == 0 && bytes_out == 0 {
         return Ok(());
     }
+    PENDING_BYTES_IN.fetch_add(bytes_in, Ordering::Relaxed);
+    PENDING_BYTES_OUT.fetch_add(bytes_out, Ordering::Relaxed);
+    flush_traffic_bytes_if_due(false)
+}
+
+fn flush_traffic_bytes_if_due(force: bool) -> Result<(), ControllerError> {
+    let now_ms = unix_now_ms();
+    let last_ms = LAST_TRAFFIC_FLUSH_MS.load(Ordering::Relaxed);
+    if !force && last_ms != 0 && now_ms.saturating_sub(last_ms) < 1_000 {
+        return Ok(());
+    }
+    let bytes_in = PENDING_BYTES_IN.swap(0, Ordering::Relaxed);
+    let bytes_out = PENDING_BYTES_OUT.swap(0, Ordering::Relaxed);
+    if bytes_in == 0 && bytes_out == 0 {
+        LAST_TRAFFIC_FLUSH_MS.store(now_ms, Ordering::Relaxed);
+        return Ok(());
+    }
     let mut state = current_state();
     state.bytes_in = state.bytes_in.saturating_add(bytes_in);
     state.bytes_out = state.bytes_out.saturating_add(bytes_out);
-    persist_state(&state)?;
+    if let Err(error) = persist_state(&state) {
+        PENDING_BYTES_IN.fetch_add(bytes_in, Ordering::Relaxed);
+        PENDING_BYTES_OUT.fetch_add(bytes_out, Ordering::Relaxed);
+        return Err(error);
+    }
+    LAST_TRAFFIC_FLUSH_MS.store(now_ms, Ordering::Relaxed);
     Ok(())
+}
+
+fn flush_traffic_bytes() -> Result<(), ControllerError> {
+    flush_traffic_bytes_if_due(true)
 }
 
 fn cleanup_persisted_network(state: &mut State) -> Result<(), ControllerError> {
@@ -2030,6 +2059,7 @@ fn update_terminal_state(
     relay_endpoint: &str,
     message: String,
 ) -> Result<(), ControllerError> {
+    flush_traffic_bytes()?;
     let mut state = current_state();
     state.active = active;
     state.repair_required = repair_required;
@@ -2054,10 +2084,10 @@ fn current_state() -> State {
 
 fn load_state() -> State {
     let path = state_path();
-    let Ok(raw) = fs::read_to_string(path) else {
+    let Ok(bytes) = fs::read(path) else {
         return State::default();
     };
-    serde_json::from_str::<State>(&raw).unwrap_or_default()
+    decode_state_frame(&bytes).unwrap_or_default()
 }
 
 fn persist_state(state: &State) -> Result<(), ControllerError> {
@@ -2065,17 +2095,177 @@ fn persist_state(state: &State) -> Result<(), ControllerError> {
     if let Some(parent) = Path::new(&path).parent() {
         fs::create_dir_all(parent)?;
     }
-    let bytes = serde_json::to_vec(state)
-        .map_err(|error| ControllerError::State(format!("failed to encode state: {error}")))?;
+    let bytes = encode_state_frame(state);
     write_private_file(path.as_path(), &bytes)?;
     Ok(())
 }
 
 fn print_state(state: &State) -> Result<(), ControllerError> {
-    let rendered = serde_json::to_string(state)
+    let rendered = json::to_json(&state_json_value(state))
         .map_err(|error| ControllerError::State(format!("failed to render state: {error}")))?;
     println!("{rendered}");
     Ok(())
+}
+
+fn encode_state_frame(state: &State) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(STATE_FILE_FRAME_MAGIC.len() + 256);
+    bytes.extend_from_slice(STATE_FILE_FRAME_MAGIC);
+    bytes.extend_from_slice(&state.encode());
+    bytes
+}
+
+fn decode_state_frame(bytes: &[u8]) -> Result<State, ControllerError> {
+    if !bytes.starts_with(STATE_FILE_FRAME_MAGIC) {
+        return Err(ControllerError::State(
+            "state file is not a v1 Norito state frame".to_owned(),
+        ));
+    }
+    let mut payload = &bytes[STATE_FILE_FRAME_MAGIC.len()..];
+    let state = State::decode(&mut payload)
+        .map_err(|error| ControllerError::State(format!("failed to decode state: {error}")))?;
+    if !payload.is_empty() {
+        return Err(ControllerError::State(
+            "state file has trailing bytes after Norito payload".to_owned(),
+        ));
+    }
+    Ok(state)
+}
+
+fn encode_connect_payload_frame(payload: &ConnectPayload) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(CONNECT_PAYLOAD_FRAME_MAGIC.len() + 512);
+    bytes.extend_from_slice(CONNECT_PAYLOAD_FRAME_MAGIC);
+    bytes.extend_from_slice(&payload.encode());
+    bytes
+}
+
+fn decode_connect_payload_frame(bytes: &[u8]) -> Result<ConnectPayload, ControllerError> {
+    if !bytes.starts_with(CONNECT_PAYLOAD_FRAME_MAGIC) {
+        return Err(ControllerError::InvalidPayload(
+            "worker stdin is not a v1 Norito connect-payload frame".to_owned(),
+        ));
+    }
+    let mut payload = &bytes[CONNECT_PAYLOAD_FRAME_MAGIC.len()..];
+    let decoded = ConnectPayload::decode(&mut payload).map_err(|error| {
+        ControllerError::InvalidPayload(format!("failed to decode connect payload: {error}"))
+    })?;
+    if !payload.is_empty() {
+        return Err(ControllerError::InvalidPayload(
+            "connect-payload frame has trailing bytes".to_owned(),
+        ));
+    }
+    validate_connect_payload(decoded)
+}
+
+fn state_json_value(state: &State) -> JsonValue {
+    let mut map = JsonMap::new();
+    insert_bool(&mut map, "installed", state.installed);
+    insert_bool(&mut map, "active", state.active);
+    insert_string(&mut map, "controller_kind", &state.controller_kind);
+    insert_string_option(&mut map, "interface_name", state.interface_name.as_deref());
+    insert_string_option(
+        &mut map,
+        "network_service",
+        state.network_service.as_deref(),
+    );
+    insert_string(&mut map, "version", &state.version);
+    insert_string_option(
+        &mut map,
+        "controller_path",
+        state.controller_path.as_deref(),
+    );
+    insert_bool(&mut map, "repair_required", state.repair_required);
+    insert_u64(&mut map, "bytes_in", state.bytes_in);
+    insert_u64(&mut map, "bytes_out", state.bytes_out);
+    insert_string(&mut map, "message", &state.message);
+    match state.pid {
+        Some(pid) => insert_u64(&mut map, "pid", u64::from(pid)),
+        None => {
+            map.insert("pid".to_owned(), JsonValue::Null);
+        }
+    }
+    insert_string_option(&mut map, "session_id", state.session_id.as_deref());
+    insert_string_option(&mut map, "relay_endpoint", state.relay_endpoint.as_deref());
+    map.insert(
+        "applied_network".to_owned(),
+        state
+            .applied_network
+            .as_ref()
+            .map(applied_network_json_value)
+            .unwrap_or(JsonValue::Null),
+    );
+    JsonValue::Object(map)
+}
+
+fn applied_network_json_value(state: &AppliedNetworkState) -> JsonValue {
+    let mut map = JsonMap::new();
+    insert_string(&mut map, "interface_name", &state.interface_name);
+    map.insert(
+        "dns_backend".to_owned(),
+        state
+            .dns_backend
+            .as_ref()
+            .map(dns_backend_json_value)
+            .unwrap_or(JsonValue::Null),
+    );
+    map.insert(
+        "excluded_route_snapshots".to_owned(),
+        JsonValue::Array(
+            state
+                .excluded_route_snapshots
+                .iter()
+                .map(excluded_route_snapshot_json_value)
+                .collect(),
+        ),
+    );
+    JsonValue::Object(map)
+}
+
+fn dns_backend_json_value(state: &DnsBackendState) -> JsonValue {
+    let mut map = JsonMap::new();
+    match state {
+        DnsBackendState::Resolved { interface_name } => {
+            insert_string(&mut map, "kind", "resolved");
+            insert_string(&mut map, "interface_name", interface_name);
+        }
+        DnsBackendState::ResolvConf { backup_path } => {
+            insert_string(&mut map, "kind", "resolv-conf");
+            insert_string(&mut map, "backup_path", backup_path);
+        }
+    }
+    JsonValue::Object(map)
+}
+
+fn excluded_route_snapshot_json_value(snapshot: &ExcludedRouteSnapshot) -> JsonValue {
+    let mut map = JsonMap::new();
+    insert_string(&mut map, "cidr", &snapshot.cidr);
+    insert_string(&mut map, "family", snapshot.family.as_json_label());
+    insert_string_option(
+        &mut map,
+        "previous_route",
+        snapshot.previous_route.as_deref(),
+    );
+    JsonValue::Object(map)
+}
+
+fn insert_string(map: &mut JsonMap, key: &str, value: &str) {
+    map.insert(key.to_owned(), JsonValue::String(value.to_owned()));
+}
+
+fn insert_string_option(map: &mut JsonMap, key: &str, value: Option<&str>) {
+    map.insert(
+        key.to_owned(),
+        value
+            .map(|value| JsonValue::String(value.to_owned()))
+            .unwrap_or(JsonValue::Null),
+    );
+}
+
+fn insert_bool(map: &mut JsonMap, key: &str, value: bool) {
+    map.insert(key.to_owned(), JsonValue::Bool(value));
+}
+
+fn insert_u64(map: &mut JsonMap, key: &str, value: u64) {
+    map.insert(key.to_owned(), JsonValue::Number(JsonNumber::from(value)));
 }
 
 fn state_path() -> PathBuf {
@@ -2086,12 +2276,12 @@ fn state_path() -> PathBuf {
 
 fn default_state_path() -> PathBuf {
     if let Some(runtime_dir) = env::var_os("XDG_RUNTIME_DIR") {
-        return PathBuf::from(runtime_dir).join("sora-vpn-controller/state.json");
+        return PathBuf::from(runtime_dir).join("sora-vpn-controller/state.norito");
     }
     if let Some(home) = env::var_os("HOME") {
-        return PathBuf::from(home).join(".local/state/sora-vpn-controller/state.json");
+        return PathBuf::from(home).join(".local/state/sora-vpn-controller/state.norito");
     }
-    PathBuf::from("/var/lib/sora-vpn-controller/state.json")
+    PathBuf::from("/var/lib/sora-vpn-controller/state.norito")
 }
 
 fn write_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -2213,8 +2403,62 @@ fn parse_fixed_hex_32(value: &str, label: &str) -> Result<[u8; 32], ControllerEr
 
 fn parse_connect_payload(raw_payload: Option<&str>) -> Result<ConnectPayload, ControllerError> {
     let raw_payload = raw_payload.ok_or(ControllerError::MissingPayload)?;
-    let payload = serde_json::from_str::<ConnectPayload>(raw_payload)
+    let value: JsonValue = json::from_str(raw_payload)
         .map_err(|error| ControllerError::InvalidPayload(error.to_string()))?;
+    let object = value.as_object().ok_or_else(|| {
+        ControllerError::InvalidPayload("connect payload must be a JSON object".to_owned())
+    })?;
+    let payload = ConnectPayload {
+        session_id: require_json_string(object, &["sessionId", "session_id"], "sessionId")?,
+        relay_endpoint: require_json_string(
+            object,
+            &["relayEndpoint", "relay_endpoint"],
+            "relayEndpoint",
+        )?,
+        exit_class: optional_json_string(object, &["exitClass", "exit_class"])?.unwrap_or_default(),
+        helper_ticket_hex: require_json_string(
+            object,
+            &["helperTicketHex", "helper_ticket_hex"],
+            "helperTicketHex",
+        )?,
+        relay_tls_spki_sha256_hex: require_json_string(
+            object,
+            &["relayTlsSpkiSha256Hex", "relay_tls_spki_sha256_hex"],
+            "relayTlsSpkiSha256Hex",
+        )?,
+        padding_budget_ms: require_json_u16(
+            object,
+            &["paddingBudgetMs", "padding_budget_ms"],
+            "paddingBudgetMs",
+        )?,
+        route_pushes: optional_json_string_array(object, &["routePushes", "route_pushes"])?,
+        excluded_routes: optional_json_string_array(
+            object,
+            &["excludedRoutes", "excluded_routes"],
+        )?,
+        dns_servers: optional_json_string_array(object, &["dnsServers", "dns_servers"])?,
+        tunnel_addresses: optional_json_string_array(
+            object,
+            &["tunnelAddresses", "tunnel_addresses"],
+        )?,
+        mtu_bytes: require_json_u64(object, &["mtuBytes", "mtu_bytes"], "mtuBytes")?,
+        lease_secs: optional_json_u64(object, &["leaseSecs", "lease_secs"])?.unwrap_or_default(),
+        lease_fee_nanos: optional_json_u64(object, &["leaseFeeNanos", "lease_fee_nanos"])?
+            .unwrap_or_default(),
+        metering_private_key_seed_hex: optional_json_string(
+            object,
+            &["meteringPrivateKeySeedHex", "metering_private_key_seed_hex"],
+        )?,
+        usage_voucher_interval_ms: optional_json_u64(
+            object,
+            &["usageVoucherIntervalMs", "usage_voucher_interval_ms"],
+        )?
+        .unwrap_or_else(default_usage_voucher_interval_ms),
+    };
+    validate_connect_payload(payload)
+}
+
+fn validate_connect_payload(payload: ConnectPayload) -> Result<ConnectPayload, ControllerError> {
     if payload.session_id.trim().is_empty() {
         return Err(ControllerError::InvalidPayload(
             "sessionId must not be empty".to_owned(),
@@ -2250,6 +2494,105 @@ fn parse_connect_payload(raw_payload: Option<&str>) -> Result<ConnectPayload, Co
         ));
     }
     Ok(payload)
+}
+
+fn read_connect_payload_from_stdin() -> Result<ConnectPayload, ControllerError> {
+    let mut raw_payload = Vec::new();
+    io::stdin().read_to_end(&mut raw_payload)?;
+    decode_connect_payload_frame(&raw_payload)
+}
+
+fn json_field<'a>(object: &'a JsonMap, keys: &[&str]) -> Option<&'a JsonValue> {
+    keys.iter().find_map(|key| object.get(*key))
+}
+
+fn require_json_string(
+    object: &JsonMap,
+    keys: &[&str],
+    label: &str,
+) -> Result<String, ControllerError> {
+    optional_json_string(object, keys)?.ok_or_else(|| {
+        ControllerError::InvalidPayload(format!("{label} must be a string and must be present"))
+    })
+}
+
+fn optional_json_string(
+    object: &JsonMap,
+    keys: &[&str],
+) -> Result<Option<String>, ControllerError> {
+    let Some(value) = json_field(object, keys) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    value
+        .as_str()
+        .map(|value| Some(value.to_owned()))
+        .ok_or_else(|| ControllerError::InvalidPayload(format!("{} must be a string", keys[0])))
+}
+
+fn require_json_u16(object: &JsonMap, keys: &[&str], label: &str) -> Result<u16, ControllerError> {
+    let value = require_json_u64(object, keys, label)?;
+    u16::try_from(value)
+        .map_err(|_| ControllerError::InvalidPayload(format!("{label} must fit into a u16")))
+}
+
+fn require_json_u64(object: &JsonMap, keys: &[&str], label: &str) -> Result<u64, ControllerError> {
+    optional_json_u64(object, keys)?.ok_or_else(|| {
+        ControllerError::InvalidPayload(format!("{label} must be an unsigned integer and present"))
+    })
+}
+
+fn optional_json_u64(object: &JsonMap, keys: &[&str]) -> Result<Option<u64>, ControllerError> {
+    let Some(value) = json_field(object, keys) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    if let Some(value) = value.as_u64() {
+        return Ok(Some(value));
+    }
+    if let Some(raw) = value.as_str() {
+        return raw.parse::<u64>().map(Some).map_err(|error| {
+            ControllerError::InvalidPayload(format!(
+                "{} must be an unsigned integer: {error}",
+                keys[0]
+            ))
+        });
+    }
+    Err(ControllerError::InvalidPayload(format!(
+        "{} must be an unsigned integer",
+        keys[0]
+    )))
+}
+
+fn optional_json_string_array(
+    object: &JsonMap,
+    keys: &[&str],
+) -> Result<Vec<String>, ControllerError> {
+    let Some(value) = json_field(object, keys) else {
+        return Ok(Vec::new());
+    };
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    let Some(values) = value.as_array() else {
+        return Err(ControllerError::InvalidPayload(format!(
+            "{} must be an array of strings",
+            keys[0]
+        )));
+    };
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            value.as_str().map(ToOwned::to_owned).ok_or_else(|| {
+                ControllerError::InvalidPayload(format!("{}[{index}] must be a string", keys[0]))
+            })
+        })
+        .collect()
 }
 
 fn parse_multiaddr(addr: &str) -> Result<ParsedMultiaddr, ControllerError> {
@@ -2527,6 +2870,37 @@ mod tests {
     }
 
     #[test]
+    fn connect_payload_worker_frame_roundtrips_as_norito() {
+        let payload = parse_connect_payload(Some(
+            r#"{"session_id":"session-1","relay_endpoint":"/ip4/127.0.0.1/udp/7777/quic","exit_class":"standard","helper_ticket_hex":"aa","relay_tls_spki_sha256_hex":"abababababababababababababababababababababababababababababababab","padding_budget_ms":15,"tunnel_addresses":["10.208.0.2/32"],"mtu_bytes":1280}"#,
+        ))
+        .expect("payload");
+        let frame = encode_connect_payload_frame(&payload);
+
+        assert!(frame.starts_with(CONNECT_PAYLOAD_FRAME_MAGIC));
+        assert_eq!(
+            decode_connect_payload_frame(&frame).expect("decode frame"),
+            payload
+        );
+    }
+
+    #[test]
+    fn state_frame_roundtrips_as_norito() {
+        let state = State {
+            active: true,
+            session_id: Some("session-1".to_owned()),
+            relay_endpoint: Some("/ip4/127.0.0.1/udp/7777/quic".to_owned()),
+            bytes_in: 7,
+            bytes_out: 9,
+            ..State::default()
+        };
+        let frame = encode_state_frame(&state);
+
+        assert!(frame.starts_with(STATE_FILE_FRAME_MAGIC));
+        assert_eq!(decode_state_frame(&frame).expect("decode state"), state);
+    }
+
+    #[test]
     fn decode_hex_accepts_prefixed_values() {
         let decoded = decode_hex("0x0A0b").expect("hex");
         assert_eq!(decoded, vec![0x0A, 0x0B]);
@@ -2534,12 +2908,21 @@ mod tests {
 
     #[test]
     fn helper_ticket_metadata_decodes_without_secret() {
+        let metering_keys = KeyPair::from_seed(vec![0x66; 32], Algorithm::Ed25519);
+        let tariff = VpnTariffV1 {
+            lease_fee_nanos: 1_000,
+            active_fee_nanos_per_minute: 100,
+            ingress_fee_nanos_per_mib: 7,
+            egress_fee_nanos_per_mib: 11,
+        };
         let ticket = VpnHelperTicketV1 {
             session_id: [0x11; 16],
             quote_id: [0x22; 32],
             account_hash: [0x33; 32],
             relay_id: [0x44; 32],
             payment_tx_hash: [0x55; 32],
+            metering_public_key: metering_keys.public_key().clone(),
+            tariff,
             expires_at_ms: 99_000,
         };
         let encoded = ticket.to_hex(&[0xAA; 32]);
@@ -2551,29 +2934,30 @@ mod tests {
     #[test]
     fn usage_voucher_signer_builds_signed_cumulative_voucher() {
         let session_id = "f69c894aa32726fe586fab520f88ae42d1fbb4ebf3083df057f4e40ca0a11111";
+        let metering_keys = KeyPair::from_seed(vec![0x66; 32], Algorithm::Ed25519);
+        let tariff = VpnTariffV1 {
+            lease_fee_nanos: 1_000,
+            active_fee_nanos_per_minute: 6_000,
+            ingress_fee_nanos_per_mib: 3,
+            egress_fee_nanos_per_mib: 5,
+        };
         let ticket = VpnHelperTicketV1 {
             session_id: relay_session_id_from_session_id(session_id),
             quote_id: [0x22; 32],
             account_hash: [0x33; 32],
             relay_id: [0x44; 32],
             payment_tx_hash: [0x55; 32],
+            metering_public_key: metering_keys.public_key().clone(),
+            tariff,
             expires_at_ms: 99_000,
         };
-        let raw_payload = serde_json::json!({
-            "sessionId": session_id,
-            "relayEndpoint": "/ip4/127.0.0.1/udp/7777/quic",
-            "exitClass": "standard",
-            "helperTicketHex": ticket.to_hex(&[0xAA; 32]),
-            "relayTlsSpkiSha256Hex": "ab".repeat(32),
-            "paddingBudgetMs": 15,
-            "tunnelAddresses": ["10.208.0.2/32"],
-            "mtuBytes": 1280,
-            "leaseSecs": 10,
-            "leaseFeeNanos": 1_000,
-            "meteringPrivateKeySeedHex": "66".repeat(32),
-            "usageVoucherIntervalMs": 1
-        });
-        let payload = parse_connect_payload(Some(&raw_payload.to_string())).expect("payload");
+        let raw_payload = format!(
+            r#"{{"sessionId":"{session_id}","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"{}","relayTlsSpkiSha256Hex":"{}","paddingBudgetMs":15,"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280,"meteringPrivateKeySeedHex":"{}","usageVoucherIntervalMs":1}}"#,
+            ticket.to_hex(&[0xAA; 32]),
+            "ab".repeat(32),
+            "66".repeat(32)
+        );
+        let payload = parse_connect_payload(Some(&raw_payload)).expect("payload");
         let mut signer = UsageVoucherSigner::from_payload(&payload)
             .expect("signer")
             .expect("enabled signer");
@@ -2591,7 +2975,46 @@ mod tests {
         assert_eq!(envelope.voucher.body.egress_bytes, 20);
         assert_eq!(
             envelope.earned_fee_nanos,
-            tariff_earned_fee_nanos(1_000, 10, envelope.voucher.body.active_ms)
+            ticket.tariff.earned_fee_nanos(&envelope.voucher.body)
+        );
+    }
+
+    #[test]
+    fn usage_voucher_signer_rejects_wrong_metering_seed() {
+        let session_id = "f69c894aa32726fe586fab520f88ae42d1fbb4ebf3083df057f4e40ca0a11111";
+        let metering_keys = KeyPair::from_seed(vec![0x66; 32], Algorithm::Ed25519);
+        let ticket = VpnHelperTicketV1 {
+            session_id: relay_session_id_from_session_id(session_id),
+            quote_id: [0x22; 32],
+            account_hash: [0x33; 32],
+            relay_id: [0x44; 32],
+            payment_tx_hash: [0x55; 32],
+            metering_public_key: metering_keys.public_key().clone(),
+            tariff: VpnTariffV1 {
+                lease_fee_nanos: 1_000,
+                active_fee_nanos_per_minute: 100,
+                ingress_fee_nanos_per_mib: 7,
+                egress_fee_nanos_per_mib: 11,
+            },
+            expires_at_ms: 99_000,
+        };
+        let raw_payload = format!(
+            r#"{{"sessionId":"{session_id}","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"{}","relayTlsSpkiSha256Hex":"{}","paddingBudgetMs":15,"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280,"meteringPrivateKeySeedHex":"{}","usageVoucherIntervalMs":1}}"#,
+            ticket.to_hex(&[0xAA; 32]),
+            "ab".repeat(32),
+            "77".repeat(32)
+        );
+        let payload = parse_connect_payload(Some(&raw_payload)).expect("payload");
+
+        let error = match UsageVoucherSigner::from_payload(&payload) {
+            Ok(_) => panic!("wrong seed must fail"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("metering private key does not match helper ticket public key")
         );
     }
 
@@ -2697,15 +3120,11 @@ mod tests {
     }
 
     #[test]
-    fn cli_accepts_run_packet_engine_payload_after_subcommand() {
-        let payload = r#"{"sessionId":"session-1","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","relayTlsSpkiSha256Hex":"abababababababababababababababababababababababababababababababab","paddingBudgetMs":15,"routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280,"stateFilePath":"/tmp/state.json","packetEnginePath":"/tmp/engine","appGroupId":"group.org.sora.wallet.demo.vpn"}"#;
-        let cli = Cli::try_parse_from(["sora-vpn-controller", "run-packet-engine", payload])
-            .expect("parse");
-        match cli.command {
-            Command::RunPacketEngine { payload: parsed } => {
-                assert_eq!(parsed.as_deref(), Some(payload));
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
+    fn cli_rejects_run_packet_engine_payload_argument() {
+        let payload = r#"{"sessionId":"session-1","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","relayTlsSpkiSha256Hex":"abababababababababababababababababababababababababababababababab","paddingBudgetMs":15,"routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280,"stateFilePath":"/tmp/state.norito","packetEnginePath":"/tmp/engine","appGroupId":"group.org.sora.wallet.demo.vpn"}"#;
+        Cli::try_parse_from(["sora-vpn-controller", "run-packet-engine", payload])
+            .expect_err("hidden worker payloads must be read from stdin");
+        let cli = Cli::try_parse_from(["sora-vpn-controller", "run-packet-engine"]).expect("parse");
+        assert!(matches!(cli.command, Command::RunPacketEngine));
     }
 }

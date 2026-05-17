@@ -2260,8 +2260,9 @@ const transferTx = buildZkTransferTransaction({
 });
 ```
 
-`ProofAttachmentInput` also accepts inline verifying keys via
-`verifyingKeyInline`, plus optional `verifyingKeyCommitment` digests. Election
+`ProofAttachmentInput` requires `verifyingKeyRef`; embedded key bytes are not
+accepted by generic proof attachments. It also supports optional
+`verifyingKeyCommitment` digests. Election
 builders (`buildCreateElectionTransaction`, `buildSubmitBallotTransaction`, and
 `buildFinalizeElectionTransaction`) share the same helpers so ballot ciphertexts
 and Halo2 proofs stay canonical across SDKs. See `index.d.ts` for the

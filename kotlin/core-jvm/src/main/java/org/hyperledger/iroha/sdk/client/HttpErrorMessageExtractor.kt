@@ -19,6 +19,24 @@ internal object HttpErrorMessageExtractor {
     }
 
     @JvmStatic
+    fun extractRejectCode(
+        headers: Map<String, List<String>>?,
+        headerName: String?,
+        body: ByteArray?,
+    ): String? {
+        val fromHeader = extractRejectCode(headers, headerName)
+        if (fromHeader != null) return fromHeader
+        if (body == null || body.isEmpty()) return null
+        val text = String(body, StandardCharsets.UTF_8).trim()
+        if (text.isEmpty()) return null
+        return try {
+            extractStructuredRejectCode(JsonParser.parse(text))
+        } catch (_: RuntimeException) {
+            null
+        }
+    }
+
+    @JvmStatic
     fun extractMessage(body: ByteArray?): String? {
         if (body == null || body.isEmpty()) return null
         val text = String(body, StandardCharsets.UTF_8).trim()
@@ -58,6 +76,39 @@ internal object HttpErrorMessageExtractor {
             if (nested != null) return nested
         }
         return null
+    }
+
+    private fun extractStructuredRejectCode(value: Any?): String? {
+        if (value is List<*>) {
+            for (entry in value) {
+                val nested = extractStructuredRejectCode(entry)
+                if (nested != null) return nested
+            }
+            return null
+        }
+        if (value !is Map<*, *>) return null
+        for (key in arrayOf("reject_code", "rejectCode")) {
+            val direct = coerceNonBlankString(getCaseInsensitiveValue(value, key))
+            if (direct != null) return direct
+        }
+        val details = getCaseInsensitiveValue(value, "details")
+        if (details is Map<*, *>) {
+            for (key in arrayOf("reject_code", "rejectCode")) {
+                val nested = coerceNonBlankString(getCaseInsensitiveValue(details, key))
+                if (nested != null) return nested
+            }
+            val axt = getCaseInsensitiveValue(details, "axt")
+            if (axt is Map<*, *>) {
+                val axtCode = coerceNonBlankString(getCaseInsensitiveValue(axt, "code"))
+                if (axtCode != null) return axtCode
+            }
+        }
+        return null
+    }
+
+    private fun coerceNonBlankString(value: Any?): String? {
+        val text = value?.toString()?.trim() ?: return null
+        return if (text.isEmpty()) null else text
     }
 
     private fun getCaseInsensitiveValue(map: Map<*, *>, candidateKey: String): Any? {

@@ -2320,7 +2320,7 @@ impl Executor {
         }
         #[cfg(feature = "zk-preverify")]
         {
-            use iroha_data_model::proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId};
+            use iroha_data_model::proof::{ProofAttachment, ProofAttachmentList};
 
             let namespace_hint = md
                 .get("contract_alias")
@@ -2362,26 +2362,10 @@ impl Executor {
                     backend,
                     proof,
                     vk_ref,
-                    vk_inline,
                     vk_commitment,
                     ..
                 } in list_sorted.into_iter()
                 {
-                    match (&vk_ref, &vk_inline) {
-                        (None, None) => {
-                            return Err(ValidationFail::NotPermitted(
-                                "proof attachments must include exactly one verifying key (inline or reference)"
-                                    .to_owned(),
-                            ));
-                        }
-                        (Some(_), Some(_)) => {
-                            return Err(ValidationFail::NotPermitted(
-                                "proof attachments must not mix inline and referenced verifying keys"
-                                    .to_owned(),
-                            ));
-                        }
-                        _ => {}
-                    }
                     // Sanity: proof.backend should match attachment backend
                     if proof.backend != backend {
                         return Err(ValidationFail::NotPermitted(
@@ -2389,61 +2373,41 @@ impl Executor {
                         ));
                     }
 
-                    // If an inline VK is provided, ensure backend matches as a cheap sanity check
-                    if let Some(ref vk) = vk_inline {
-                        if vk.backend != backend {
-                            return Err(ValidationFail::NotPermitted(
-                                "verifying key backend mismatch".to_owned(),
-                            ));
-                        }
+                    // If a VK reference is provided without a commitment, check existence in
+                    // WSV. If a commitment is provided, skip the lookup to keep pre-verify
+                    // stateless and cheap.
+                    if vk_commitment.is_none()
+                        && state_transaction
+                            .world
+                            .verifying_keys
+                            .get(&vk_ref)
+                            .is_none()
+                    {
+                        return Err(ValidationFail::NotPermitted(format!(
+                            "referenced verifying key missing: {}::{}",
+                            vk_ref.backend, vk_ref.name
+                        )));
                     }
 
-                    // If a VK reference is provided but neither inline VK nor commitment
-                    // are present, check existence in WSV. If a commitment is provided,
-                    // skip the lookup to keep pre-verify stateless and cheap.
-                    if let Some(ref id @ VerifyingKeyId { .. }) = vk_ref {
-                        if vk_inline.is_none() && vk_commitment.is_none() {
-                            if state_transaction.world.verifying_keys.get(id).is_none() {
-                                return Err(ValidationFail::NotPermitted(format!(
-                                    "referenced verifying key missing: {}::{}",
-                                    id.backend, id.name
-                                )));
-                            }
-                        }
-                    }
-
-                    // Perform lightweight pre-verify (dedup + tag sanity). Inline VK is passed
-                    // for future use; current implementation ignores it.
-                    // Compute optional commitment for deduplication: prefer inline VK hash,
-                    // else use provided attachment commitment when present.
-                    let mut commit = vk_commitment;
-                    if commit.is_none() {
-                        if let Some(ref vk) = vk_inline {
-                            commit = Some(crate::zk::hash_vk(vk));
-                        }
-                    }
+                    // Perform lightweight pre-verify (dedup + tag sanity).
                     let (expected_commitment, vk_active) =
-                        if let Some(ref id @ VerifyingKeyId { .. }) = vk_ref {
-                            if let Some(rec) = state_transaction.world.verifying_keys.get(id) {
-                                if let Some(ns_hint) = namespace_hint.as_deref() {
-                                    if !rec.namespace.is_empty() && rec.namespace != ns_hint {
-                                        return Err(ValidationFail::NotPermitted(
-                                            "verifying key namespace/manifest mismatch".to_owned(),
-                                        ));
-                                    }
+                        if let Some(rec) = state_transaction.world.verifying_keys.get(&vk_ref) {
+                            if let Some(ns_hint) = namespace_hint.as_deref() {
+                                if !rec.namespace.is_empty() && rec.namespace != ns_hint {
+                                    return Err(ValidationFail::NotPermitted(
+                                        "verifying key namespace/manifest mismatch".to_owned(),
+                                    ));
                                 }
-                                (Some(rec.commitment), rec.is_active())
-                            } else {
-                                (None, false)
                             }
+                            (Some(rec.commitment), rec.is_active())
                         } else {
-                            (vk_commitment, true)
+                            (vk_commitment, false)
                         };
                     let res = state_transaction.preverify_proof(
                         &proof,
-                        vk_inline.as_ref(),
+                        None,
                         state_transaction.zk.preverify_budget_bytes,
-                        commit,
+                        vk_commitment,
                         expected_commitment,
                         vk_active,
                     );
@@ -2670,7 +2634,7 @@ impl Executor {
                 // logical "current time" seen by `current_time_ms()`.
                 host.set_block_time_ms(tx_creation_time_ms);
                 host.set_crypto_config(Arc::clone(&state_transaction.crypto));
-                host.set_halo2_config(&state_transaction.zk.halo2);
+                host.set_zk_config(&state_transaction.zk);
                 host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
                 host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
                 host.set_query_state(state_transaction);
@@ -2898,7 +2862,7 @@ impl Executor {
                     CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts))
                 };
                 host.set_crypto_config(Arc::clone(&state_transaction.crypto));
-                host.set_halo2_config(&state_transaction.zk.halo2);
+                host.set_zk_config(&state_transaction.zk);
                 host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
                 host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
                 host.set_query_state(state_transaction);
@@ -5909,18 +5873,40 @@ mod tests {
     #[test]
     fn preverify_and_dedup_across_transactions_in_block() {
         use iroha_data_model::{
-            proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
+            proof::{
+                ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox, VerifyingKeyId,
+                VerifyingKeyRecord,
+            },
             transaction::{Executable, TransactionBuilder},
         };
         use iroha_schema::Ident;
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 
-        let (sink_id, _sink_kp) = gen_account_in("wonderland");
-        let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
+        let (_sink_id, _sink_kp) = gen_account_in("wonderland");
+        let (_sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let world = World::with([domain], [alice_account], []);
+        let mut world = World::with([domain], [alice_account], []);
+        let backend: Ident = "halo2/ipa".parse().expect("backend ident");
+        let vk = VerifyingKeyBox::new(backend.clone(), vec![4u8, 5, 6]);
+        let vk_id = VerifyingKeyId::new(backend.clone(), "vk_preverify");
+        let vk_commitment = crate::zk::hash_vk(&vk);
+        let mut vk_record = VerifyingKeyRecord::new_with_owner(
+            1,
+            "preverify",
+            None,
+            "test",
+            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            "pasta",
+            [0; 32],
+            vk_commitment,
+        );
+        vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+        vk_record.vk_len = u32::try_from(vk.bytes.len()).expect("fixture vk length fits");
+        vk_record.max_proof_bytes = 1024;
+        vk_record.key = Some(vk);
+        world.verifying_keys.insert(vk_id.clone(), vk_record);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
@@ -5928,10 +5914,9 @@ mod tests {
         let mut block = state.block(block_header);
 
         // Build attachments with mock proof payloads
-        let backend: Ident = "halo2/ipa".parse().expect("backend ident");
         let proof = ProofBox::new(backend.clone(), vec![1u8, 2, 3]);
-        let vk = VerifyingKeyBox::new(backend.clone(), vec![4u8, 5, 6]);
-        let attachment = ProofAttachment::new_inline(backend, proof, vk);
+        let mut attachment = ProofAttachment::new_ref(backend, proof, vk_id);
+        attachment.vk_commitment = Some(vk_commitment);
         let attachments = ProofAttachmentList(vec![attachment.clone()]);
         let attachments_dup = ProofAttachmentList(vec![attachment]);
 

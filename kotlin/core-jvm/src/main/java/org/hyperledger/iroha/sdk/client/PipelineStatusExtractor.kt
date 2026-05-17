@@ -82,6 +82,15 @@ internal object PipelineStatusExtractor {
                 return reason
             }
         }
+        val details = record["details"]
+        if (details is Map<*, *>) {
+            for (key in REJECTION_REASON_KEYS) {
+                val reason = coerceReason(details[key])
+                if (reason.isPresent) {
+                    return reason
+                }
+            }
+        }
         return Optional.empty()
     }
 }

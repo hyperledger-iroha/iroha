@@ -22,14 +22,12 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_core::soracloud_runtime::{
     HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_TICKS,
     SoracloudApartmentAutonomyExecutionSummaryV1, SoracloudApartmentExecutionRequest,
-    SoracloudLocalReadKind, SoracloudPrivateInferenceExecutionAction,
-    SoracloudPrivateInferenceExecutionRequest, SoracloudPrivateInferenceExecutionResult,
-    SoracloudRuntimeHfSourcePlan, SoracloudRuntimeHfSourceStatus,
+    SoracloudLocalReadKind, SoracloudRuntimeHfSourcePlan, SoracloudRuntimeHfSourceStatus,
     SoracloudUploadedModelEncryptionRecipient, build_soracloud_hf_generated_agent_manifest,
     build_soracloud_hf_generated_service_bundle, soracloud_hf_generated_source_binding,
 };
 use iroha_core::state::{StateReadOnly, WorldReadOnly};
-use iroha_crypto::{Hash, HashOf, PublicKey, Signature};
+use iroha_crypto::{Hash, PublicKey, Signature};
 use iroha_data_model::{
     Encode,
     account::AccountId,
@@ -54,19 +52,16 @@ use iroha_data_model::{
         SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1,
         SoraHfSourceRecordV1, SoraHfSourceStatusV1, SoraLeaseVolumeBindingV1,
         SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1,
-        SoraModelHostCapabilityRecordV1, SoraModelPrivacyModeV1, SoraModelProvenanceKindV1,
-        SoraModelRegistryV1, SoraModelWeightActionV1, SoraModelWeightAuditEventV1,
-        SoraModelWeightVersionRecordV1, SoraNetworkPolicyV1, SoraPrivateCompileProfileV1,
-        SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionStatusV1,
-        SoraPrivateInferenceSessionV1, SoraRolloutStageV1, SoraRuntimeReceiptV1,
-        SoraServiceAuditEventV1, SoraServiceConfigEntryV1, SoraServiceDeploymentStateV1,
-        SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceLeaseStatusV1,
-        SoraServiceLifecycleActionV1, SoraServiceRolloutStateV1, SoraServiceSecretEntryV1,
-        SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
-        SoraStateMutationOperationV1, SoraTlsModeV1, SoraTrainingJobActionV1,
-        SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1, SoraTrainingJobStatusV1,
-        SoraUploadedModelBindingV1, SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
-        SoraUploadedModelEncryptionRecipientV1, encode_agent_artifact_allow_provenance_payload,
+        SoraModelHostCapabilityRecordV1, SoraModelProvenanceKindV1, SoraModelRegistryV1,
+        SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
+        SoraNetworkPolicyV1, SoraRolloutStageV1, SoraRuntimeReceiptV1, SoraServiceAuditEventV1,
+        SoraServiceConfigEntryV1, SoraServiceDeploymentStateV1, SoraServiceExecutionPlaneV1,
+        SoraServiceHandlerClassV1, SoraServiceLeaseStatusV1, SoraServiceLifecycleActionV1,
+        SoraServiceRolloutStateV1, SoraServiceSecretEntryV1, SoraStateBindingV1,
+        SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateMutationOperationV1, SoraTlsModeV1,
+        SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
+        SoraTrainingJobStatusV1, SoraUploadedModelBundleV1, SoraUploadedModelEncryptionRecipientV1,
+        encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
         encode_agent_message_send_provenance_payload,
@@ -85,20 +80,15 @@ use iroha_data_model::{
         encode_model_host_withdraw_provenance_payload,
         encode_model_weight_promote_provenance_payload,
         encode_model_weight_register_provenance_payload,
-        encode_model_weight_rollback_provenance_payload,
-        encode_private_compile_profile_provenance_payload,
-        encode_private_inference_output_release_provenance_payload,
-        encode_private_inference_start_provenance_payload, encode_rollback_provenance_payload,
+        encode_model_weight_rollback_provenance_payload, encode_rollback_provenance_payload,
         encode_rollout_provenance_payload, encode_set_service_config_provenance_payload,
         encode_set_service_secret_provenance_payload, encode_state_mutation_provenance_payload,
         encode_training_job_checkpoint_provenance_payload,
         encode_training_job_retry_provenance_payload, encode_training_job_start_provenance_payload,
-        encode_uploaded_model_allow_provenance_payload,
         encode_uploaded_model_bundle_register_provenance_payload,
-        encode_uploaded_model_chunk_append_provenance_payload,
         encode_uploaded_model_finalize_provenance_payload,
     },
-    sorafs::pin_registry::StorageClass,
+    sorafs::pin_registry::{PinStatus, StorageClass},
 };
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
@@ -140,7 +130,6 @@ const MODEL_WEIGHT_MAX_DATASET_REF_BYTES: usize = 512;
 const MODEL_WEIGHT_MAX_REASON_BYTES: usize = 512;
 const MODEL_ARTIFACT_STATUS_SCHEMA_VERSION_V1: u16 = 1;
 const UPLOADED_MODEL_STATUS_SCHEMA_VERSION_V1: u16 = 1;
-const PRIVATE_INFERENCE_STATUS_SCHEMA_VERSION_V1: u16 = 1;
 const HF_SHARED_LEASE_STATUS_SCHEMA_VERSION_V1: u16 = 1;
 const HF_REPO_ID_MAX_BYTES: usize = 256;
 const HF_REVISION_MAX_BYTES: usize = 160;
@@ -306,43 +295,7 @@ pub(crate) enum ModelArtifactAction {
 )]
 #[norito(tag = "action", content = "value")]
 pub(crate) enum UploadedModelAction {
-    Init,
-    Chunk,
-    Finalize,
-    Compile,
-}
-
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    NoritoDeserialize,
-    NoritoSerialize,
-)]
-#[norito(tag = "action", content = "value")]
-pub(crate) enum UploadedModelBindingAction {
-    Allow,
-}
-
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    NoritoDeserialize,
-    NoritoSerialize,
-)]
-#[norito(tag = "action", content = "value")]
-pub(crate) enum PrivateInferenceAction {
-    Start,
-    OutputRelease,
+    Register,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -998,36 +951,6 @@ pub(crate) struct SignedModelArtifactRegisterRequest {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-pub(crate) struct UploadedModelBundleInitPayload {
-    pub bundle: SoraUploadedModelBundleV1,
-}
-
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-pub(crate) struct SignedUploadedModelBundleInitRequest {
-    pub payload: UploadedModelBundleInitPayload,
-    pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
-}
-
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-pub(crate) struct UploadedModelChunkPayload {
-    pub chunk: SoraUploadedModelChunkV1,
-}
-
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-pub(crate) struct SignedUploadedModelChunkRequest {
-    pub payload: UploadedModelChunkPayload,
-    pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
-}
-
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 pub(crate) struct UploadedModelFinalizePayload {
     pub service_name: String,
     pub model_name: String,
@@ -1035,7 +958,6 @@ pub(crate) struct UploadedModelFinalizePayload {
     pub artifact_id: String,
     pub weight_version: String,
     pub bundle_root: Hash,
-    pub privacy_mode: SoraModelPrivacyModeV1,
     pub weight_artifact_hash: Hash,
     pub dataset_ref: String,
     pub training_config_hash: Hash,
@@ -1044,92 +966,26 @@ pub(crate) struct UploadedModelFinalizePayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-pub(crate) struct SignedUploadedModelFinalizeRequest {
-    pub payload: UploadedModelFinalizePayload,
-    pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
-}
-
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-pub(crate) struct PrivateCompilePayload {
-    pub service_name: String,
-    pub model_id: String,
-    pub weight_version: String,
-    pub bundle_root: Hash,
-    pub compile_profile: SoraPrivateCompileProfileV1,
-}
-
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-pub(crate) struct SignedPrivateCompileRequest {
-    pub payload: PrivateCompilePayload,
-    pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
-}
-
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-pub(crate) struct UploadedModelAllowPayload {
-    pub apartment_name: String,
-    pub service_name: String,
+pub(crate) struct UploadedModelRegisterPayload {
+    pub bundle: SoraUploadedModelBundleV1,
     pub model_name: String,
-    pub model_id: String,
     pub artifact_id: String,
-    pub weight_version: String,
-    pub bundle_root: Hash,
-    pub compile_profile_hash: Hash,
-    pub privacy_mode: SoraModelPrivacyModeV1,
-    pub require_model_inference: bool,
+    pub weight_artifact_hash: Hash,
+    pub dataset_ref: String,
+    pub training_config_hash: Hash,
+    pub reproducibility_hash: Hash,
+    pub provenance_attestation_hash: Hash,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-pub(crate) struct SignedUploadedModelAllowRequest {
-    pub payload: UploadedModelAllowPayload,
-    pub provenance: ManifestProvenance,
+pub(crate) struct SignedUploadedModelRegisterRequest {
+    pub payload: UploadedModelRegisterPayload,
+    pub bundle_provenance: ManifestProvenance,
+    pub finalize_provenance: ManifestProvenance,
     #[norito(default)]
     pub authority: Option<AccountId>,
     #[norito(default)]
     pub private_key: Option<ExposedPrivateKey>,
-}
-
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-pub(crate) struct PrivateInferenceRunPayload {
-    pub session: SoraPrivateInferenceSessionV1,
-}
-
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-pub(crate) struct SignedPrivateInferenceRunRequest {
-    pub payload: PrivateInferenceRunPayload,
-    pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
-}
-
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-pub(crate) struct PrivateInferenceOutputReleasePayload {
-    pub session_id: String,
-    pub decrypt_request_id: String,
-}
-
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-pub(crate) struct SignedPrivateInferenceOutputReleaseRequest {
-    pub payload: PrivateInferenceOutputReleasePayload,
-    pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
-}
-
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-pub(crate) struct PrivateInferenceFinalizeRequest {
-    pub session_id: String,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -1532,28 +1388,13 @@ pub(crate) struct ModelArtifactStatusEntry {
     pub consumed_by_version: Option<String>,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
-    pub private_bundle_root: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub compile_profile_hash: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub chunk_manifest_root: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub privacy_mode: Option<iroha_data_model::soracloud::SoraModelPrivacyModeV1>,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 pub(crate) struct UploadedModelStatusResponse {
     pub schema_version: u16,
     pub bundle: SoraUploadedModelBundleV1,
-    pub uploaded_chunk_count: u32,
-    #[norito(default)]
-    pub chunk_ordinals: Vec<u32>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub compile_profile: Option<SoraPrivateCompileProfileV1>,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub artifact: Option<ModelArtifactStatusEntry>,
@@ -1568,30 +1409,6 @@ pub(crate) struct UploadedModelEncryptionRecipientResponse {
 pub(crate) struct UploadedModelMutationResponse {
     pub action: UploadedModelAction,
     pub status: UploadedModelStatusResponse,
-    pub signed_by: String,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-pub(crate) struct UploadedModelBindingMutationResponse {
-    pub action: UploadedModelBindingAction,
-    pub apartment_name: String,
-    pub binding: SoraUploadedModelBindingV1,
-    pub signed_by: String,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-pub(crate) struct PrivateInferenceStatusResponse {
-    pub schema_version: u16,
-    pub session: SoraPrivateInferenceSessionV1,
-    pub checkpoint_count: u32,
-    #[norito(default)]
-    pub checkpoints: Vec<SoraPrivateInferenceCheckpointV1>,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-pub(crate) struct PrivateInferenceMutationResponse {
-    pub action: PrivateInferenceAction,
-    pub status: PrivateInferenceStatusResponse,
     pub signed_by: String,
 }
 
@@ -1716,13 +1533,6 @@ pub(crate) struct UploadedModelStatusQuery {
     pub model_name: Option<String>,
     #[norito(default)]
     pub bundle_root: Option<Hash>,
-    #[norito(default)]
-    pub compile_profile_hash: Option<Hash>,
-}
-
-#[derive(Clone, Debug, JsonDeserialize)]
-pub(crate) struct PrivateInferenceStatusQuery {
-    pub session_id: String,
 }
 
 #[derive(Clone, Debug, JsonDeserialize)]
@@ -2299,16 +2109,7 @@ struct ModelArtifactState {
     consumed_by_version: Option<String>,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
-    private_bundle_root: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    compile_profile_hash: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     chunk_manifest_root: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    privacy_mode: Option<iroha_data_model::soracloud::SoraModelPrivacyModeV1>,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -3957,10 +3758,7 @@ fn model_artifact_status_entry(
         provenance_attestation_hash: artifact.provenance_attestation_hash,
         registered_sequence: artifact.registered_sequence,
         consumed_by_version: artifact.consumed_by_version.clone(),
-        private_bundle_root: artifact.private_bundle_root,
-        compile_profile_hash: artifact.compile_profile_hash,
         chunk_manifest_root: artifact.chunk_manifest_root,
-        privacy_mode: artifact.privacy_mode,
     }
 }
 
@@ -4057,10 +3855,7 @@ fn authoritative_model_artifact_status_entry(
         provenance_attestation_hash: artifact.provenance_attestation_hash,
         registered_sequence: artifact.registered_sequence,
         consumed_by_version: artifact.consumed_by_version.clone(),
-        private_bundle_root: artifact.private_bundle_root,
-        compile_profile_hash: artifact.compile_profile_hash,
         chunk_manifest_root: artifact.chunk_manifest_root,
-        privacy_mode: artifact.privacy_mode,
     }
 }
 
@@ -4720,111 +4515,34 @@ fn verify_model_artifact_register_signature(
     Ok(())
 }
 
-fn verify_uploaded_model_bundle_init_signature(
-    request: &SignedUploadedModelBundleInitRequest,
+fn verify_uploaded_model_register_signature(
+    request: &SignedUploadedModelRegisterRequest,
 ) -> Result<(), SoracloudError> {
-    let payload = encode_uploaded_model_bundle_init_signature_payload(&request.payload)?;
+    if request.bundle_provenance.signer != request.finalize_provenance.signer {
+        return Err(SoracloudError::unauthorized(
+            "uploaded model register bundle and finalize provenance signers must match",
+        ));
+    }
+    let bundle_payload = encode_uploaded_model_register_bundle_signature_payload(&request.payload)?;
     request
-        .provenance
+        .bundle_provenance
         .signature
-        .verify(&request.provenance.signer, &payload)
+        .verify(&request.bundle_provenance.signer, &bundle_payload)
         .map_err(|_| {
             SoracloudError::unauthorized(
-                "uploaded model init provenance signature verification failed",
+                "uploaded model register bundle provenance signature verification failed",
             )
         })?;
-    Ok(())
-}
 
-fn verify_uploaded_model_chunk_signature(
-    request: &SignedUploadedModelChunkRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_uploaded_model_chunk_signature_payload(&request.payload)?;
+    let finalize_payload =
+        encode_uploaded_model_register_finalize_signature_payload(&request.payload)?;
     request
-        .provenance
+        .finalize_provenance
         .signature
-        .verify(&request.provenance.signer, &payload)
+        .verify(&request.finalize_provenance.signer, &finalize_payload)
         .map_err(|_| {
             SoracloudError::unauthorized(
-                "uploaded model chunk provenance signature verification failed",
-            )
-        })?;
-    Ok(())
-}
-
-fn verify_uploaded_model_finalize_signature(
-    request: &SignedUploadedModelFinalizeRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_uploaded_model_finalize_signature_payload(&request.payload)?;
-    request
-        .provenance
-        .signature
-        .verify(&request.provenance.signer, &payload)
-        .map_err(|_| {
-            SoracloudError::unauthorized(
-                "uploaded model finalize provenance signature verification failed",
-            )
-        })?;
-    Ok(())
-}
-
-fn verify_private_compile_signature(
-    request: &SignedPrivateCompileRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_private_compile_signature_payload(&request.payload)?;
-    request
-        .provenance
-        .signature
-        .verify(&request.provenance.signer, &payload)
-        .map_err(|_| {
-            SoracloudError::unauthorized("private compile provenance signature verification failed")
-        })?;
-    Ok(())
-}
-
-fn verify_uploaded_model_allow_signature(
-    request: &SignedUploadedModelAllowRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_uploaded_model_allow_signature_payload(&request.payload)?;
-    request
-        .provenance
-        .signature
-        .verify(&request.provenance.signer, &payload)
-        .map_err(|_| {
-            SoracloudError::unauthorized(
-                "uploaded model allow provenance signature verification failed",
-            )
-        })?;
-    Ok(())
-}
-
-fn verify_private_inference_run_signature(
-    request: &SignedPrivateInferenceRunRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_private_inference_run_signature_payload(&request.payload)?;
-    request
-        .provenance
-        .signature
-        .verify(&request.provenance.signer, &payload)
-        .map_err(|_| {
-            SoracloudError::unauthorized(
-                "private inference run provenance signature verification failed",
-            )
-        })?;
-    Ok(())
-}
-
-fn verify_private_inference_output_release_signature(
-    request: &SignedPrivateInferenceOutputReleaseRequest,
-) -> Result<(), SoracloudError> {
-    let payload = encode_private_inference_output_release_signature_payload(&request.payload)?;
-    request
-        .provenance
-        .signature
-        .verify(&request.provenance.signer, &payload)
-        .map_err(|_| {
-            SoracloudError::unauthorized(
-                "private inference output release provenance signature verification failed",
+                "uploaded model register finalize provenance signature verification failed",
             )
         })?;
     Ok(())
@@ -5272,39 +4990,28 @@ fn encode_model_artifact_register_signature_payload(
     })
 }
 
-fn encode_uploaded_model_bundle_init_signature_payload(
-    payload: &UploadedModelBundleInitPayload,
+fn encode_uploaded_model_register_bundle_signature_payload(
+    payload: &UploadedModelRegisterPayload,
 ) -> Result<Vec<u8>, SoracloudError> {
     encode_uploaded_model_bundle_register_provenance_payload(payload.bundle.clone()).map_err(
         |err| {
             SoracloudError::internal(format!(
-                "failed to encode uploaded model init payload: {err}"
+                "failed to encode uploaded model register bundle payload: {err}"
             ))
         },
     )
 }
 
-fn encode_uploaded_model_chunk_signature_payload(
-    payload: &UploadedModelChunkPayload,
-) -> Result<Vec<u8>, SoracloudError> {
-    encode_uploaded_model_chunk_append_provenance_payload(payload.chunk.clone()).map_err(|err| {
-        SoracloudError::internal(format!(
-            "failed to encode uploaded model chunk payload: {err}"
-        ))
-    })
-}
-
-fn encode_uploaded_model_finalize_signature_payload(
-    payload: &UploadedModelFinalizePayload,
+fn encode_uploaded_model_register_finalize_signature_payload(
+    payload: &UploadedModelRegisterPayload,
 ) -> Result<Vec<u8>, SoracloudError> {
     encode_uploaded_model_finalize_provenance_payload(
-        payload.service_name.as_str(),
+        payload.bundle.service_name.as_ref(),
         payload.model_name.as_str(),
-        payload.model_id.as_str(),
+        payload.bundle.model_id.as_str(),
         payload.artifact_id.as_str(),
-        payload.weight_version.as_str(),
-        payload.bundle_root,
-        payload.privacy_mode,
+        payload.bundle.weight_version.as_str(),
+        payload.bundle.bundle_root,
         payload.weight_artifact_hash,
         payload.dataset_ref.as_str(),
         payload.training_config_hash,
@@ -5313,68 +5020,7 @@ fn encode_uploaded_model_finalize_signature_payload(
     )
     .map_err(|err| {
         SoracloudError::internal(format!(
-            "failed to encode uploaded model finalize payload: {err}"
-        ))
-    })
-}
-
-fn encode_private_compile_signature_payload(
-    payload: &PrivateCompilePayload,
-) -> Result<Vec<u8>, SoracloudError> {
-    encode_private_compile_profile_provenance_payload(
-        payload.service_name.as_str(),
-        payload.model_id.as_str(),
-        payload.weight_version.as_str(),
-        payload.bundle_root,
-        payload.compile_profile.clone(),
-    )
-    .map_err(|err| {
-        SoracloudError::internal(format!("failed to encode private compile payload: {err}"))
-    })
-}
-
-fn encode_uploaded_model_allow_signature_payload(
-    payload: &UploadedModelAllowPayload,
-) -> Result<Vec<u8>, SoracloudError> {
-    encode_uploaded_model_allow_provenance_payload(
-        payload.apartment_name.as_str(),
-        payload.service_name.as_str(),
-        payload.model_name.as_str(),
-        payload.model_id.as_str(),
-        payload.artifact_id.as_str(),
-        payload.weight_version.as_str(),
-        payload.bundle_root,
-        payload.compile_profile_hash,
-        payload.privacy_mode,
-        payload.require_model_inference,
-    )
-    .map_err(|err| {
-        SoracloudError::internal(format!(
-            "failed to encode uploaded model allow payload: {err}"
-        ))
-    })
-}
-
-fn encode_private_inference_run_signature_payload(
-    payload: &PrivateInferenceRunPayload,
-) -> Result<Vec<u8>, SoracloudError> {
-    encode_private_inference_start_provenance_payload(payload.session.clone()).map_err(|err| {
-        SoracloudError::internal(format!(
-            "failed to encode private inference run payload: {err}"
-        ))
-    })
-}
-
-fn encode_private_inference_output_release_signature_payload(
-    payload: &PrivateInferenceOutputReleasePayload,
-) -> Result<Vec<u8>, SoracloudError> {
-    encode_private_inference_output_release_provenance_payload(
-        payload.session_id.as_str(),
-        payload.decrypt_request_id.as_str(),
-    )
-    .map_err(|err| {
-        SoracloudError::internal(format!(
-            "failed to encode private inference output release payload: {err}"
+            "failed to encode uploaded model register finalize payload: {err}"
         ))
     })
 }
@@ -6366,27 +6012,10 @@ fn authoritative_uploaded_model_status_response(
                 "uploaded model `{model_id}` version `{weight_version}` not found for service `{service_name}`"
             ))
         })?;
-    let mut chunks = world
-        .soracloud_uploaded_model_chunks()
-        .iter()
-        .filter_map(|(_key, chunk)| {
-            (chunk.service_name.as_ref() == service_name.as_str()
-                && chunk.model_id == model_id
-                && chunk.weight_version == weight_version)
-                .then(|| chunk.clone())
-        })
-        .collect::<Vec<_>>();
-    chunks.sort_by_key(|chunk| chunk.ordinal);
-    let chunk_ordinals = chunks.iter().map(|chunk| chunk.ordinal).collect::<Vec<_>>();
-    let compile_profile = world
-        .soracloud_private_compile_profiles()
-        .get(&bundle.compile_profile_hash)
-        .cloned();
     let artifact = world.soracloud_model_artifacts().iter().find_map(
         |((stored_service, _artifact_id), record)| {
             (stored_service == &service_name
                 && record.weight_version.as_deref() == Some(weight_version.as_str())
-                && record.private_bundle_root == Some(bundle.bundle_root)
                 && record
                     .source_provenance
                     .as_ref()
@@ -6398,17 +6027,38 @@ fn authoritative_uploaded_model_status_response(
     Ok(UploadedModelStatusResponse {
         schema_version: UPLOADED_MODEL_STATUS_SCHEMA_VERSION_V1,
         bundle,
-        uploaded_chunk_count: u32::try_from(chunk_ordinals.len()).unwrap_or(u32::MAX),
-        chunk_ordinals,
-        compile_profile,
         artifact,
     })
+}
+
+fn require_active_sorafs_uploaded_model_pin(
+    app: &SharedAppState,
+    bundle: &SoraUploadedModelBundleV1,
+) -> Result<(), SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let Some(pin) = world.pin_manifests().get(&bundle.sorafs_manifest_digest) else {
+        return Err(SoracloudError::conflict(format!(
+            "SoraFS manifest {:?} for uploaded model `{}` version `{}` is not registered",
+            bundle.sorafs_manifest_digest, bundle.model_id, bundle.weight_version
+        )));
+    };
+    match pin.status {
+        PinStatus::Approved(_) => Ok(()),
+        PinStatus::Pending => Err(SoracloudError::conflict(format!(
+            "SoraFS manifest {:?} for uploaded model `{}` version `{}` is not approved",
+            bundle.sorafs_manifest_digest, bundle.model_id, bundle.weight_version
+        ))),
+        PinStatus::Retired(epoch) => Err(SoracloudError::conflict(format!(
+            "SoraFS manifest {:?} for uploaded model `{}` version `{}` retired at epoch {epoch}",
+            bundle.sorafs_manifest_digest, bundle.model_id, bundle.weight_version
+        ))),
+    }
 }
 
 fn authoritative_uploaded_model_status_from_query(
     app: &SharedAppState,
     query: &UploadedModelStatusQuery,
-    require_compile_profile: bool,
 ) -> Result<UploadedModelStatusResponse, SoracloudError> {
     let service_name: Name = query
         .service_name
@@ -6437,13 +6087,6 @@ fn authoritative_uploaded_model_status_from_query(
                 "uploaded model `{model_id}` version `{weight_version}` bundle_root does not match query"
             )));
         }
-        if let Some(compile_profile_hash) = query.compile_profile_hash
-            && bundle.compile_profile_hash != compile_profile_hash
-        {
-            return Err(SoracloudError::conflict(format!(
-                "uploaded model `{model_id}` version `{weight_version}` compile_profile_hash does not match query"
-            )));
-        }
         model_id
     } else {
         let model_name = query.model_name.as_deref().ok_or_else(|| {
@@ -6463,12 +6106,21 @@ fn authoritative_uploaded_model_status_from_query(
                         .source_provenance
                         .as_ref()
                         .is_some_and(|provenance| provenance.kind == SoraModelProvenanceKindV1::UserUpload)
-                    && query
-                        .bundle_root
-                        .is_none_or(|bundle_root| record.private_bundle_root == Some(bundle_root))
-                    && query
-                        .compile_profile_hash
-                        .is_none_or(|compile_profile_hash| record.compile_profile_hash == Some(compile_profile_hash)))
+                    && query.bundle_root.is_none_or(|bundle_root| {
+                        record
+                            .source_provenance
+                            .as_ref()
+                            .and_then(|provenance| {
+                                world
+                                    .soracloud_uploaded_model_bundles()
+                                    .get(&(
+                                        service_name.clone(),
+                                        provenance.id.clone(),
+                                        weight_version.clone(),
+                                    ))
+                            })
+                            .is_some_and(|bundle| bundle.bundle_root == bundle_root)
+                    }))
                 .then(|| record.source_provenance.as_ref().map(|provenance| provenance.id.clone()))
                 .flatten()
             })
@@ -6479,52 +6131,7 @@ fn authoritative_uploaded_model_status_from_query(
             })?
     };
 
-    let response = authoritative_uploaded_model_status_response(
-        app,
-        &service_name,
-        &model_id,
-        &weight_version,
-    )?;
-    if require_compile_profile && response.compile_profile.is_none() {
-        return Err(SoracloudError::not_found(format!(
-            "compile profile not yet admitted for uploaded model `{model_id}` version `{weight_version}`"
-        )));
-    }
-    Ok(response)
-}
-
-fn authoritative_private_inference_status_response(
-    app: &SharedAppState,
-    session_id: &str,
-) -> Result<PrivateInferenceStatusResponse, SoracloudError> {
-    let session_id = parse_training_job_id(session_id)?;
-    let state_view = app.state.view();
-    let world = state_view.world();
-    let session = world
-        .soracloud_private_inference_sessions()
-        .iter()
-        .find_map(|((_apartment_name, stored_session_id), session)| {
-            (stored_session_id == &session_id).then(|| session.clone())
-        })
-        .ok_or_else(|| {
-            SoracloudError::not_found(format!(
-                "private session `{session_id}` not found in authoritative Soracloud state"
-            ))
-        })?;
-    let mut checkpoints = world
-        .soracloud_private_inference_checkpoints()
-        .iter()
-        .filter_map(|((stored_session_id, _step), checkpoint)| {
-            (stored_session_id == &session_id).then(|| checkpoint.clone())
-        })
-        .collect::<Vec<_>>();
-    checkpoints.sort_by_key(|checkpoint| checkpoint.step);
-    Ok(PrivateInferenceStatusResponse {
-        schema_version: PRIVATE_INFERENCE_STATUS_SCHEMA_VERSION_V1,
-        session,
-        checkpoint_count: u32::try_from(checkpoints.len()).unwrap_or(u32::MAX),
-        checkpoints,
-    })
+    authoritative_uploaded_model_status_response(app, &service_name, &model_id, &weight_version)
 }
 
 fn authoritative_hf_shared_lease_status_response(
@@ -11185,192 +10792,72 @@ pub(crate) async fn handle_model_artifact_status(
     }
 }
 
-pub(crate) async fn handle_uploaded_model_init(
+pub(crate) async fn handle_uploaded_model_register(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<SignedUploadedModelBundleInitRequest>,
+    NoritoJson(request): NoritoJson<SignedUploadedModelRegisterRequest>,
 ) -> Response {
     let remote_ip = remote.ip();
     if let Err(err) = crate::check_access(
         &app,
         &headers,
         Some(remote_ip),
-        "v1/soracloud/model/upload/init",
+        "v1/soracloud/model/upload/register",
     )
     .await
     {
         return err.into_response();
     }
 
-    if let Err(err) = verify_uploaded_model_bundle_init_signature(&request) {
+    if let Err(err) = verify_uploaded_model_register_signature(&request) {
+        return err.into_response();
+    }
+    if let Err(err) = require_active_sorafs_uploaded_model_pin(&app, &request.payload.bundle) {
         return err.into_response();
     }
     let signer = match require_soracloud_mutation_signer(
         &headers,
-        &request.provenance,
+        &request.bundle_provenance,
         request.authority,
         request.private_key,
     ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
-    let service_name = request.payload.bundle.service_name.to_string();
+
+    let service_name = request.payload.bundle.service_name.clone();
+    let service_label = service_name.to_string();
     let model_id = request.payload.bundle.model_id.clone();
     let weight_version = request.payload.bundle.weight_version.clone();
-    let signed_by = request.provenance.signer.to_string();
-    match submit_confirm_and_respond(
-        &app,
-        signer,
+    let signed_by = request.bundle_provenance.signer.to_string();
+    let finalize_payload = request.payload.clone();
+    let instructions = vec![
         InstructionBox::from(isi::soracloud::RegisterSoracloudUploadedModelBundle {
             bundle: request.payload.bundle,
-            provenance: request.provenance,
+            provenance: request.bundle_provenance,
         }),
-        "/v1/soracloud/model/upload/init",
-        move |app, _baseline| {
-            authoritative_uploaded_model_status_response(
-                app,
-                &service_name,
-                &model_id,
-                &weight_version,
-            )
-            .map(|status| UploadedModelMutationResponse {
-                action: UploadedModelAction::Init,
-                status,
-                signed_by,
-            })
-        },
-    )
-    .await
-    {
-        Ok(response) => response,
-        Err(err) => err.into_response(),
-    }
-}
-
-pub(crate) async fn handle_uploaded_model_chunk(
-    State(app): State<SharedAppState>,
-    headers: HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<SignedUploadedModelChunkRequest>,
-) -> Response {
-    let remote_ip = remote.ip();
-    if let Err(err) = crate::check_access(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/soracloud/model/upload/chunk",
-    )
-    .await
-    {
-        return err.into_response();
-    }
-
-    if let Err(err) = verify_uploaded_model_chunk_signature(&request) {
-        return err.into_response();
-    }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
-        Ok(signer) => signer,
-        Err(err) => return err.into_response(),
-    };
-    let service_name = request.payload.chunk.service_name.to_string();
-    let model_id = request.payload.chunk.model_id.clone();
-    let weight_version = request.payload.chunk.weight_version.clone();
-    let signed_by = request.provenance.signer.to_string();
-    match submit_confirm_and_respond(
-        &app,
-        signer,
-        InstructionBox::from(isi::soracloud::AppendSoracloudUploadedModelChunk {
-            chunk: request.payload.chunk,
-            provenance: request.provenance,
-        }),
-        "/v1/soracloud/model/upload/chunk",
-        move |app, _baseline| {
-            authoritative_uploaded_model_status_response(
-                app,
-                &service_name,
-                &model_id,
-                &weight_version,
-            )
-            .map(|status| UploadedModelMutationResponse {
-                action: UploadedModelAction::Chunk,
-                status,
-                signed_by,
-            })
-        },
-    )
-    .await
-    {
-        Ok(response) => response,
-        Err(err) => err.into_response(),
-    }
-}
-
-pub(crate) async fn handle_uploaded_model_finalize(
-    State(app): State<SharedAppState>,
-    headers: HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<SignedUploadedModelFinalizeRequest>,
-) -> Response {
-    let remote_ip = remote.ip();
-    if let Err(err) = crate::check_access(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/soracloud/model/upload/finalize",
-    )
-    .await
-    {
-        return err.into_response();
-    }
-
-    if let Err(err) = verify_uploaded_model_finalize_signature(&request) {
-        return err.into_response();
-    }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
-        Ok(signer) => signer,
-        Err(err) => return err.into_response(),
-    };
-    let service_name: Name = match request.payload.service_name.parse() {
-        Ok(service_name) => service_name,
-        Err(err) => {
-            return SoracloudError::bad_request(format!("invalid service_name: {err}"))
-                .into_response();
-        }
-    };
-    let service_label = service_name.to_string();
-    let model_id = request.payload.model_id.clone();
-    let weight_version = request.payload.weight_version.clone();
-    let signed_by = request.provenance.signer.to_string();
-    match submit_confirm_and_respond(
-        &app,
-        signer,
         InstructionBox::from(isi::soracloud::FinalizeSoracloudUploadedModelBundle {
             service_name,
-            model_name: request.payload.model_name,
-            model_id: request.payload.model_id,
-            artifact_id: request.payload.artifact_id,
-            weight_version: request.payload.weight_version,
-            bundle_root: request.payload.bundle_root,
-            privacy_mode: request.payload.privacy_mode,
-            weight_artifact_hash: request.payload.weight_artifact_hash,
-            dataset_ref: request.payload.dataset_ref,
-            training_config_hash: request.payload.training_config_hash,
-            reproducibility_hash: request.payload.reproducibility_hash,
-            provenance_attestation_hash: request.payload.provenance_attestation_hash,
-            provenance: request.provenance,
+            model_name: finalize_payload.model_name,
+            model_id: finalize_payload.bundle.model_id,
+            artifact_id: finalize_payload.artifact_id,
+            weight_version: finalize_payload.bundle.weight_version,
+            bundle_root: finalize_payload.bundle.bundle_root,
+            weight_artifact_hash: finalize_payload.weight_artifact_hash,
+            dataset_ref: finalize_payload.dataset_ref,
+            training_config_hash: finalize_payload.training_config_hash,
+            reproducibility_hash: finalize_payload.reproducibility_hash,
+            provenance_attestation_hash: finalize_payload.provenance_attestation_hash,
+            provenance: request.finalize_provenance,
         }),
-        "/v1/soracloud/model/upload/finalize",
+    ];
+
+    match submit_confirm_and_respond_instructions(
+        &app,
+        signer,
+        instructions,
+        "/v1/soracloud/model/upload/register",
         move |app, _baseline| {
             authoritative_uploaded_model_status_response(
                 app,
@@ -11379,7 +10866,7 @@ pub(crate) async fn handle_uploaded_model_finalize(
                 &weight_version,
             )
             .map(|status| UploadedModelMutationResponse {
-                action: UploadedModelAction::Finalize,
+                action: UploadedModelAction::Register,
                 status,
                 signed_by,
             })
@@ -11388,305 +10875,6 @@ pub(crate) async fn handle_uploaded_model_finalize(
     .await
     {
         Ok(response) => response,
-        Err(err) => err.into_response(),
-    }
-}
-
-pub(crate) async fn handle_private_compile(
-    State(app): State<SharedAppState>,
-    headers: HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<SignedPrivateCompileRequest>,
-) -> Response {
-    let remote_ip = remote.ip();
-    if let Err(err) = crate::check_access(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/soracloud/model/compile",
-    )
-    .await
-    {
-        return err.into_response();
-    }
-
-    if let Err(err) = verify_private_compile_signature(&request) {
-        return err.into_response();
-    }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
-        Ok(signer) => signer,
-        Err(err) => return err.into_response(),
-    };
-    let service_name: Name = match request.payload.service_name.parse() {
-        Ok(service_name) => service_name,
-        Err(err) => {
-            return SoracloudError::bad_request(format!("invalid service_name: {err}"))
-                .into_response();
-        }
-    };
-    let service_label = service_name.to_string();
-    let model_id = request.payload.model_id.clone();
-    let weight_version = request.payload.weight_version.clone();
-    let signed_by = request.provenance.signer.to_string();
-    match submit_confirm_and_respond(
-        &app,
-        signer,
-        InstructionBox::from(isi::soracloud::AdmitSoracloudPrivateCompileProfile {
-            service_name,
-            model_id: request.payload.model_id,
-            weight_version: request.payload.weight_version,
-            bundle_root: request.payload.bundle_root,
-            compile_profile: request.payload.compile_profile,
-            provenance: request.provenance,
-        }),
-        "/v1/soracloud/model/compile",
-        move |app, _baseline| {
-            authoritative_uploaded_model_status_response(
-                app,
-                &service_label,
-                &model_id,
-                &weight_version,
-            )
-            .map(|status| UploadedModelMutationResponse {
-                action: UploadedModelAction::Compile,
-                status,
-                signed_by,
-            })
-        },
-    )
-    .await
-    {
-        Ok(response) => response,
-        Err(err) => err.into_response(),
-    }
-}
-
-pub(crate) async fn handle_uploaded_model_allow(
-    State(app): State<SharedAppState>,
-    headers: HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<SignedUploadedModelAllowRequest>,
-) -> Response {
-    let remote_ip = remote.ip();
-    if let Err(err) =
-        crate::check_access(&app, &headers, Some(remote_ip), "v1/soracloud/model/allow").await
-    {
-        return err.into_response();
-    }
-
-    if let Err(err) = verify_uploaded_model_allow_signature(&request) {
-        return err.into_response();
-    }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
-        Ok(signer) => signer,
-        Err(err) => return err.into_response(),
-    };
-    let apartment_name: Name = match request.payload.apartment_name.parse() {
-        Ok(apartment_name) => apartment_name,
-        Err(err) => {
-            return SoracloudError::bad_request(format!("invalid apartment_name: {err}"))
-                .into_response();
-        }
-    };
-    let service_name: Name = match request.payload.service_name.parse() {
-        Ok(service_name) => service_name,
-        Err(err) => {
-            return SoracloudError::bad_request(format!("invalid service_name: {err}"))
-                .into_response();
-        }
-    };
-    let apartment_label = apartment_name.to_string();
-    let signed_by = request.provenance.signer.to_string();
-    match submit_confirm_and_respond(
-        &app,
-        signer,
-        InstructionBox::from(isi::soracloud::AllowSoracloudUploadedModel {
-            apartment_name,
-            service_name,
-            model_name: request.payload.model_name,
-            model_id: request.payload.model_id,
-            artifact_id: request.payload.artifact_id,
-            weight_version: request.payload.weight_version,
-            bundle_root: request.payload.bundle_root,
-            compile_profile_hash: request.payload.compile_profile_hash,
-            privacy_mode: request.payload.privacy_mode,
-            require_model_inference: request.payload.require_model_inference,
-            provenance: request.provenance,
-        }),
-        "/v1/soracloud/model/allow",
-        move |app, _baseline| {
-            let state_view = app.state.view();
-            let world = state_view.world();
-            let record = world
-                .soracloud_agent_apartments()
-                .get(&apartment_label)
-                .cloned()
-                .ok_or_else(|| {
-                    SoracloudError::not_found(format!(
-                        "agent apartment `{apartment_label}` not found in authoritative Soracloud state"
-                    ))
-                })?;
-            let binding = record.uploaded_model_binding.ok_or_else(|| {
-                SoracloudError::conflict(format!(
-                    "agent apartment `{apartment_label}` has no uploaded model binding"
-                ))
-            })?;
-            Ok(UploadedModelBindingMutationResponse {
-                action: UploadedModelBindingAction::Allow,
-                apartment_name: apartment_label,
-                binding,
-                signed_by,
-            })
-        },
-    )
-    .await
-    {
-        Ok(response) => response,
-        Err(err) => err.into_response(),
-    }
-}
-
-pub(crate) async fn handle_private_inference_run(
-    State(app): State<SharedAppState>,
-    headers: HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<SignedPrivateInferenceRunRequest>,
-) -> Response {
-    let remote_ip = remote.ip();
-    if let Err(err) = crate::check_access(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/soracloud/model/run-private",
-    )
-    .await
-    {
-        return err.into_response();
-    }
-
-    if let Err(err) = verify_private_inference_run_signature(&request) {
-        return err.into_response();
-    }
-    if app.soracloud_runtime.is_none() {
-        return SoracloudError::conflict("private uploaded-model runtime is not available")
-            .into_response();
-    }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
-        Ok(signer) => signer,
-        Err(err) => return err.into_response(),
-    };
-    match submit_confirm_and_respond::<(), _>(
-        &app,
-        signer,
-        InstructionBox::from(isi::soracloud::StartSoracloudPrivateInference {
-            session: request.payload.session,
-            provenance: request.provenance,
-        }),
-        "/v1/soracloud/model/run-private",
-        |_app, _baseline| {
-            Err(SoracloudError::internal(
-                "private inference start returns a draft response".to_owned(),
-            ))
-        },
-    )
-    .await
-    {
-        Ok(response) => response,
-        Err(err) => return err.into_response(),
-    }
-}
-
-pub(crate) async fn handle_private_inference_run_finalize(
-    State(app): State<SharedAppState>,
-    headers: HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<PrivateInferenceFinalizeRequest>,
-) -> Response {
-    let remote_ip = remote.ip();
-    if let Err(err) = crate::check_access(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/soracloud/model/run-private",
-    )
-    .await
-    {
-        return err.into_response();
-    }
-    if app.soracloud_runtime.is_none() {
-        return SoracloudError::conflict("private uploaded-model runtime is not available")
-            .into_response();
-    }
-    let signer = match require_soracloud_request_signer(&headers) {
-        Ok(signer) => signer,
-        Err(err) => return err.into_response(),
-    };
-    let session_id = match parse_training_job_id(&request.session_id) {
-        Ok(session_id) => session_id,
-        Err(err) => return err.into_response(),
-    };
-    let runtime_execution = match execute_runtime_private_inference(
-        &app,
-        &session_id,
-        SoracloudPrivateInferenceExecutionAction::Start,
-    ) {
-        Ok(execution) => execution,
-        Err(error_message) => {
-            match failed_private_inference_runtime_result(&app, &session_id, &error_message) {
-                Ok(execution) => execution,
-                Err(err) => return err.into_response(),
-            }
-        }
-    };
-    soracloud_draft_response(
-        &signer,
-        vec![InstructionBox::from(
-            isi::soracloud::RecordSoracloudPrivateInferenceCheckpoint {
-                session_id,
-                status: runtime_execution.status,
-                receipt_root: runtime_execution.receipt_root,
-                xor_cost_nanos: runtime_execution.xor_cost_nanos,
-                checkpoint: runtime_execution.checkpoint,
-            },
-        )],
-    )
-}
-
-pub(crate) async fn handle_private_inference_status(
-    State(app): State<SharedAppState>,
-    headers: HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoQuery(query): NoritoQuery<PrivateInferenceStatusQuery>,
-) -> Response {
-    let remote_ip = remote.ip();
-    if let Err(err) = crate::check_access(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/soracloud/model/run-status",
-    )
-    .await
-    {
-        return err.into_response();
-    }
-
-    match authoritative_private_inference_status_response(&app, &query.session_id) {
-        Ok(response) => JsonBody(response).into_response(),
         Err(err) => err.into_response(),
     }
 }
@@ -11741,95 +10929,10 @@ pub(crate) async fn handle_uploaded_model_status(
         return err.into_response();
     }
 
-    match authoritative_uploaded_model_status_from_query(&app, &query, false) {
+    match authoritative_uploaded_model_status_from_query(&app, &query) {
         Ok(response) => JsonBody(response).into_response(),
         Err(err) => err.into_response(),
     }
-}
-
-pub(crate) async fn handle_private_compile_status(
-    State(app): State<SharedAppState>,
-    headers: HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoQuery(query): NoritoQuery<UploadedModelStatusQuery>,
-) -> Response {
-    let remote_ip = remote.ip();
-    if let Err(err) = crate::check_access(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/soracloud/model/compile/status",
-    )
-    .await
-    {
-        return err.into_response();
-    }
-
-    match authoritative_uploaded_model_status_from_query(&app, &query, true) {
-        Ok(response) => JsonBody(response).into_response(),
-        Err(err) => err.into_response(),
-    }
-}
-
-pub(crate) async fn handle_private_inference_checkpoint(
-    State(app): State<SharedAppState>,
-    headers: HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<SignedPrivateInferenceOutputReleaseRequest>,
-) -> Response {
-    let remote_ip = remote.ip();
-    if let Err(err) = crate::check_access(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/soracloud/model/decrypt-output",
-    )
-    .await
-    {
-        return err.into_response();
-    }
-
-    if let Err(err) = verify_private_inference_output_release_signature(&request) {
-        return err.into_response();
-    }
-    if app.soracloud_runtime.is_none() {
-        return SoracloudError::conflict("private uploaded-model runtime is not available")
-            .into_response();
-    }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
-        Ok(signer) => signer,
-        Err(err) => return err.into_response(),
-    };
-    let session_id = request.payload.session_id.clone();
-    let runtime_execution = match execute_runtime_private_inference(
-        &app,
-        &session_id,
-        SoracloudPrivateInferenceExecutionAction::Release {
-            decrypt_request_id: request.payload.decrypt_request_id.clone(),
-        },
-    ) {
-        Ok(execution) => execution,
-        Err(error_message) => {
-            return SoracloudError::conflict(error_message).into_response();
-        }
-    };
-    soracloud_draft_response(
-        &signer,
-        vec![InstructionBox::from(
-            isi::soracloud::RecordSoracloudPrivateInferenceCheckpoint {
-                session_id,
-                status: runtime_execution.status,
-                receipt_root: runtime_execution.receipt_root,
-                xor_cost_nanos: runtime_execution.xor_cost_nanos,
-                checkpoint: runtime_execution.checkpoint,
-            },
-        )],
-    )
 }
 
 pub(crate) async fn handle_hf_deploy(
@@ -13167,176 +12270,6 @@ fn execute_runtime_agent_autonomy_run(
     .map_err(|error| error.message)
 }
 
-fn private_inference_runtime_request_commitment(
-    session_id: &str,
-    action: &SoracloudPrivateInferenceExecutionAction,
-) -> Hash {
-    let (action_label, decrypt_request_id) = match action {
-        SoracloudPrivateInferenceExecutionAction::Start => ("start", None),
-        SoracloudPrivateInferenceExecutionAction::Release { decrypt_request_id } => {
-            ("release", Some(decrypt_request_id.as_str()))
-        }
-    };
-    Hash::new(
-        norito::to_bytes(&(session_id, action_label, decrypt_request_id))
-            .expect("private inference runtime request commitment encoding should be infallible"),
-    )
-}
-
-fn execute_runtime_private_inference(
-    app: &SharedAppState,
-    session_id: &str,
-    action: SoracloudPrivateInferenceExecutionAction,
-) -> Result<SoracloudPrivateInferenceExecutionResult, String> {
-    let runtime = app
-        .soracloud_runtime
-        .as_ref()
-        .ok_or_else(|| "private uploaded-model runtime is not available".to_owned())?;
-    let state_view = app.state.view();
-    let session = state_view
-        .world()
-        .soracloud_private_inference_sessions()
-        .iter()
-        .find_map(|((_apartment_name, stored_session_id), session)| {
-            (stored_session_id == session_id).then(|| session.clone())
-        })
-        .ok_or_else(|| {
-            format!("private session `{session_id}` was committed without a readable authoritative record")
-        })?;
-    let apartment_name = session.apartment.to_string();
-    let apartment_record = state_view
-        .world()
-        .soracloud_agent_apartments()
-        .get(apartment_name.as_str())
-        .cloned()
-        .ok_or_else(|| {
-            format!(
-                "private session `{session_id}` apartment `{apartment_name}` is missing from authoritative Soracloud state"
-            )
-        })?;
-    let observed_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
-    let observed_block_hash = state_view.latest_block_hash().map(Hash::from);
-    drop(state_view);
-
-    let request = SoracloudPrivateInferenceExecutionRequest {
-        observed_height,
-        observed_block_hash,
-        apartment_name: apartment_name.clone(),
-        process_generation: apartment_record.process_generation,
-        session_id: session_id.to_owned(),
-        request_commitment: private_inference_runtime_request_commitment(session_id, &action),
-        action,
-    };
-    runtime.execute_private_inference(request).map_err(|error| {
-        format!(
-            "runtime execution for private session `{session_id}` apartment `{apartment_name}` failed: {}",
-            error.message
-        )
-    })
-}
-
-fn failed_private_inference_runtime_result(
-    app: &SharedAppState,
-    session_id: &str,
-    error_message: &str,
-) -> Result<SoracloudPrivateInferenceExecutionResult, SoracloudError> {
-    let state_view = app.state.view();
-    let world = state_view.world();
-    let session = world
-        .soracloud_private_inference_sessions()
-        .iter()
-        .find_map(|((_apartment_name, stored_session_id), session)| {
-            (stored_session_id == session_id).then(|| session.clone())
-        })
-        .ok_or_else(|| {
-            SoracloudError::not_found(format!(
-                "private session `{session_id}` not found in authoritative Soracloud state"
-            ))
-        })?;
-    let bundle_key = (
-        session.service_name.as_ref().to_owned(),
-        session.model_id.clone(),
-        session.weight_version.clone(),
-    );
-    let bundle = world
-        .soracloud_uploaded_model_bundles()
-        .get(&bundle_key)
-        .cloned()
-        .ok_or_else(|| {
-            SoracloudError::not_found(format!(
-                "uploaded model bundle `{}` version `{}` not found for session `{session_id}`",
-                session.model_id, session.weight_version
-            ))
-        })?;
-    let latest_step = world
-        .soracloud_private_inference_checkpoints()
-        .iter()
-        .filter(|((stored_session_id, _step), _checkpoint)| stored_session_id == session_id)
-        .map(|((_stored_session_id, step), _checkpoint)| *step)
-        .max()
-        .unwrap_or(0);
-    let step = latest_step.saturating_add(1);
-    let compute_units = u64::from(session.token_budget).max(1).min(16);
-    let updated_at_ms = state_view
-        .latest_block()
-        .map(|block| u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(1)
-        .max(1);
-    let ciphertext_state_root = Hash::new(Encode::encode(&(
-        "soracloud.private.failure.ciphertext.v1",
-        session.session_id.as_str(),
-        session.bundle_root,
-        step,
-        error_message,
-    )));
-    let receipt_hash = Hash::new(Encode::encode(&(
-        "soracloud.private.failure.receipt.v1",
-        session.session_id.as_str(),
-        step,
-        error_message,
-        ciphertext_state_root,
-    )));
-    let xor_cost_nanos = session.xor_cost_nanos.saturating_add(
-        bundle
-            .pricing_policy
-            .runtime_step_xor_nanos
-            .saturating_mul(u128::from(compute_units)),
-    );
-    let receipt_root = Hash::new(Encode::encode(&(
-        "soracloud.private.failure.root.v1",
-        session.session_id.as_str(),
-        step,
-        error_message,
-        xor_cost_nanos,
-        receipt_hash,
-    )));
-    let checkpoint = SoraPrivateInferenceCheckpointV1 {
-        schema_version: iroha_data_model::soracloud::SORA_PRIVATE_INFERENCE_CHECKPOINT_VERSION_V1,
-        session_id: session.session_id.clone(),
-        step,
-        ciphertext_state_root,
-        receipt_hash,
-        decrypt_request_id: format!("{session_id}:failed:{step}"),
-        released_token: None,
-        compute_units,
-        updated_at_ms,
-    };
-    Ok(SoracloudPrivateInferenceExecutionResult {
-        status: SoraPrivateInferenceSessionStatusV1::Failed,
-        receipt_root,
-        xor_cost_nanos,
-        result_commitment: Hash::new(Encode::encode(&(
-            "soracloud.private.failure.result.v1",
-            session.session_id.as_str(),
-            error_message,
-            receipt_root,
-            xor_cost_nanos,
-            checkpoint.clone(),
-        ))),
-        checkpoint,
-    })
-}
-
 fn build_authoritative_agent_runtime_receipt_instruction(
     app: &SharedAppState,
     runtime_execution: &AgentRuntimeExecutionSummary,
@@ -13740,15 +12673,12 @@ mod tests {
             SoraContainerManifestV1, SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1,
             SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1,
             SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1, SoraHfSourceStatusV1,
-            SoraModelPrivacyModeV1, SoraModelProvenanceKindV1, SoraModelProvenanceRefV1,
-            SoraPrivateCompileProfileV1, SoraPrivateInferenceCheckpointV1,
-            SoraPrivateInferenceSessionStatusV1, SoraPrivateInferenceSessionV1, SoraRouteTargetV1,
+            SoraModelProvenanceKindV1, SoraModelProvenanceRefV1, SoraRouteTargetV1,
             SoraRouteVisibilityV1, SoraServiceAuditEventV1, SoraServiceConfigEntryV1,
             SoraServiceDeploymentStateV1, SoraServiceHandlerV1, SoraServiceLifecycleActionV1,
             SoraServiceManifestV1, SoraServiceSecretEntryV1, SoraServiceStateEntryV1,
             SoraStateEncryptionV1, SoraTlsModeV1, SoraUploadedModelBundleV1,
-            SoraUploadedModelChunkV1, SoraUploadedModelPricingPolicyV1,
-            SoraUploadedModelRuntimeFormatV1,
+            SoraUploadedModelPricingPolicyV1, SoraUploadedModelRuntimeFormatV1,
         },
         sorafs::pin_registry::StorageClass,
     };
@@ -13798,17 +12728,6 @@ mod tests {
             &self,
             _request: SoracloudApartmentExecutionRequest,
         ) -> Result<SoracloudApartmentExecutionResult, SoracloudRuntimeExecutionError> {
-            Err(SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                "test hf runtime handle exposes only the runtime snapshot",
-            ))
-        }
-
-        fn execute_private_inference(
-            &self,
-            _request: SoracloudPrivateInferenceExecutionRequest,
-        ) -> Result<SoracloudPrivateInferenceExecutionResult, SoracloudRuntimeExecutionError>
-        {
             Err(SoracloudRuntimeExecutionError::new(
                 SoracloudRuntimeExecutionErrorKind::Unavailable,
                 "test hf runtime handle exposes only the runtime snapshot",
@@ -14080,7 +12999,6 @@ mod tests {
             mailbox_queue: Vec::new(),
             autonomy_budget_ceiling_units: 100,
             autonomy_budget_remaining_units: 75,
-            uploaded_model_binding: None,
             artifact_allowlist: BTreeMap::new(),
             autonomy_run_history: vec![run],
         }
@@ -15748,10 +14666,7 @@ mod tests {
                     provenance_attestation_hash: Hash::new(b"prov"),
                     registered_sequence: 8,
                     consumed_by_version: Some("v2".to_string()),
-                    private_bundle_root: None,
-                    compile_profile_hash: None,
                     chunk_manifest_root: None,
-                    privacy_mode: None,
                 },
             );
 
@@ -15785,19 +14700,6 @@ mod tests {
         runtime.block_on(async move {
             let mut world = World::default();
             let service_name: Name = "web_portal".parse().expect("service name");
-            let compile_profile = SoraPrivateCompileProfileV1 {
-                schema_version:
-                    iroha_data_model::soracloud::SORA_PRIVATE_COMPILE_PROFILE_VERSION_V1,
-                family: "decoder-only".to_string(),
-                quantization: "int8-int16-int32".to_string(),
-                opset_version: "private-ir.v1".to_string(),
-                max_context: 4096,
-                max_images: 1,
-                vision_patch_policy: "text-image".to_string(),
-                fhe_param_set: "bfv-small".to_string(),
-                execution_policy: "deterministic".to_string(),
-            };
-            let compile_profile_hash: Hash = HashOf::new(&compile_profile).into();
             let bundle_root = Hash::new(b"bundle-root");
             let chunk_manifest_root = Hash::new(b"chunk-manifest-root");
 
@@ -15818,12 +14720,15 @@ mod tests {
                         family: "decoder-only".to_string(),
                         modalities: vec!["text".to_string(), "image".to_string()],
                         plaintext_root: Hash::new(b"plaintext-root"),
-                        runtime_format: SoraUploadedModelRuntimeFormatV1::SoracloudPrivateIr,
+                        runtime_format: SoraUploadedModelRuntimeFormatV1::HuggingFaceSafetensors,
                         bundle_root,
+                        sorafs_manifest_digest:
+                            iroha_data_model::sorafs::pin_registry::ManifestDigest::new(
+                                [0xA5; 32],
+                            ),
                         chunk_count: 1,
                         plaintext_bytes: 16,
                         ciphertext_bytes: 24,
-                        compile_profile_hash,
                         chunk_manifest_root,
                         upload_recipient:
                             iroha_data_model::soracloud::SoraUploadedModelEncryptionRecipientV1 {
@@ -15850,44 +14755,10 @@ mod tests {
                             },
                         pricing_policy: SoraUploadedModelPricingPolicyV1 {
                             storage_xor_nanos: 1,
-                            compile_xor_nanos: 2,
-                            runtime_step_xor_nanos: 3,
-                            decrypt_release_xor_nanos: 4,
                         },
                         decryption_policy_ref: "policy-1".to_string(),
                     },
                 );
-            world
-                .soracloud_uploaded_model_chunks_mut_for_testing()
-                .insert(
-                    "web_portal::upload-1::v1::0".to_string(),
-                    SoraUploadedModelChunkV1 {
-                        schema_version:
-                            iroha_data_model::soracloud::SORA_UPLOADED_MODEL_CHUNK_VERSION_V1,
-                        service_name: service_name.clone(),
-                        model_id: "upload-1".to_string(),
-                        weight_version: "v1".to_string(),
-                        bundle_root,
-                        ordinal: 0,
-                        offset_bytes: 0,
-                        plaintext_len: 16,
-                        ciphertext_len: 24,
-                        ciphertext_hash: Hash::new(b"ciphertext"),
-                        encrypted_payload: SecretEnvelopeV1 {
-                            schema_version: iroha_data_model::soracloud::SECRET_ENVELOPE_VERSION_V1,
-                            encryption: SecretEnvelopeEncryptionV1::ClientCiphertext,
-                            key_id: "kms://test".to_string(),
-                            key_version: NonZeroU32::new(1).expect("non-zero key version"),
-                            nonce: vec![1, 2, 3, 4],
-                            ciphertext: vec![0; 24],
-                            commitment: Hash::new(b"commitment"),
-                            aad_digest: None,
-                        },
-                    },
-                );
-            world
-                .soracloud_private_compile_profiles_mut_for_testing()
-                .insert(compile_profile_hash, compile_profile.clone());
             world.soracloud_model_artifacts_mut_for_testing().insert(
                 (service_name.as_ref().to_owned(), "artifact-1".to_string()),
                 iroha_data_model::soracloud::SoraModelArtifactRecordV1 {
@@ -15910,10 +14781,7 @@ mod tests {
                     provenance_attestation_hash: Hash::new(b"prov"),
                     registered_sequence: 11,
                     consumed_by_version: Some("v1".to_string()),
-                    private_bundle_root: Some(bundle_root),
-                    compile_profile_hash: Some(compile_profile_hash),
                     chunk_manifest_root: Some(chunk_manifest_root),
-                    privacy_mode: Some(SoraModelPrivacyModeV1::PrivateExecution),
                 },
             );
 
@@ -15921,9 +14789,7 @@ mod tests {
             let response =
                 authoritative_uploaded_model_status_response(&app, "web_portal", "upload-1", "v1")
                     .map_err(|err| eyre::eyre!("uploaded model status query failed: {err:?}"))?;
-            assert_eq!(response.uploaded_chunk_count, 1);
-            assert_eq!(response.chunk_ordinals, vec![0]);
-            assert!(response.compile_profile.is_some());
+            assert_eq!(response.bundle.sorafs_manifest_digest.as_bytes(), &[0xA5; 32]);
             assert_eq!(
                 response
                     .artifact
@@ -15931,66 +14797,6 @@ mod tests {
                     .map(|artifact| artifact.artifact_id.as_str()),
                 Some("artifact-1")
             );
-            Ok(())
-        })
-    }
-
-    #[test]
-    fn authoritative_private_inference_status_reads_world_state() -> Result<(), eyre::Report> {
-        use iroha_core::state::World;
-
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-
-        runtime.block_on(async move {
-            let mut world = World::default();
-            let apartment: Name = "arena_suite".parse().expect("apartment");
-            let service_name: Name = "web_portal".parse().expect("service");
-            world
-                .soracloud_private_inference_sessions_mut_for_testing()
-                .insert(
-                    (apartment.as_ref().to_owned(), "session-1".to_string()),
-                    SoraPrivateInferenceSessionV1 {
-                        schema_version:
-                            iroha_data_model::soracloud::SORA_PRIVATE_INFERENCE_SESSION_VERSION_V1,
-                        session_id: "session-1".to_string(),
-                        apartment: apartment.clone(),
-                        service_name,
-                        model_id: "upload-1".to_string(),
-                        weight_version: "v1".to_string(),
-                        bundle_root: Hash::new(b"bundle-root"),
-                        input_commitments: vec![Hash::new(b"input-1")],
-                        token_budget: 256,
-                        image_budget: 1,
-                        status: SoraPrivateInferenceSessionStatusV1::AwaitingDecryption,
-                        receipt_root: Hash::new(b"receipt-root"),
-                        xor_cost_nanos: 512,
-                    },
-                );
-            world
-                .soracloud_private_inference_checkpoints_mut_for_testing()
-                .insert(
-                    ("session-1".to_string(), 1),
-                    SoraPrivateInferenceCheckpointV1 {
-                        schema_version: iroha_data_model::soracloud::SORA_PRIVATE_INFERENCE_CHECKPOINT_VERSION_V1,
-                        session_id: "session-1".to_string(),
-                        step: 1,
-                        ciphertext_state_root: Hash::new(b"ciphertext-root"),
-                        receipt_hash: Hash::new(b"receipt-hash"),
-                        decrypt_request_id: "decrypt-1".to_string(),
-                        released_token: Some("42".to_string()),
-                        compute_units: 64,
-                        updated_at_ms: 1,
-                    },
-                );
-
-            let app = mk_app_state_for_tests_with_world(world);
-            let response = authoritative_private_inference_status_response(&app, "session-1")
-                .map_err(|err| eyre::eyre!("private inference status query failed: {err:?}"))?;
-            assert_eq!(response.session.model_id, "upload-1");
-            assert_eq!(response.checkpoint_count, 1);
-            assert_eq!(response.checkpoints[0].decrypt_request_id, "decrypt-1");
             Ok(())
         })
     }
@@ -17366,7 +16172,6 @@ mod tests {
                     autonomy_budget_remaining_units: AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS,
                     artifact_allowlist: BTreeMap::new(),
                     autonomy_run_history: Vec::new(),
-                    uploaded_model_binding: None,
                 },
             );
             let app = mk_app_state_for_tests_with_world(world);
@@ -18411,7 +17216,6 @@ mod tests {
                     mailbox_queue: Vec::new(),
                     autonomy_budget_ceiling_units: 100,
                     autonomy_budget_remaining_units: 75,
-                    uploaded_model_binding: None,
                     artifact_allowlist: BTreeMap::new(),
                     autonomy_run_history: vec![run.clone()],
                     manifest,

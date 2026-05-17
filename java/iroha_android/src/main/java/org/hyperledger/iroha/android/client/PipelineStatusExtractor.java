@@ -89,6 +89,16 @@ final class PipelineStatusExtractor {
         return reason;
       }
     }
+    final Object details = record.get("details");
+    if (details instanceof Map<?, ?>) {
+      final Map<?, ?> detailsMap = (Map<?, ?>) details;
+      for (final String key : REJECTION_REASON_KEYS) {
+        final Optional<String> reason = coerceReason(detailsMap.get(key));
+        if (reason.isPresent()) {
+          return reason;
+        }
+      }
+    }
     final Optional<String> parsedFromStatus = parseReasonFromStatus(record.get("status"));
     if (parsedFromStatus.isPresent()) {
       return parsedFromStatus;

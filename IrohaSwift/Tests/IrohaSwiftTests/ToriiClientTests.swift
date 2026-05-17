@@ -30,6 +30,7 @@ private final class StubURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+#if os(macOS)
 private final class ToriiMockProcess {
     private let process: Process
     private let stdoutPipe: Pipe
@@ -238,6 +239,7 @@ final class ToriiMockProcessTests: XCTestCase {
         process.waitUntilExit()
     }
 }
+#endif
 
 private final class StubGatewayFetcher: SorafsGatewayFetching, @unchecked Sendable {
     var capturedPlan: ToriiJSONValue?
@@ -1860,7 +1862,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 return (response, self.nodeCapabilitiesBody())
-            case "/transaction":
+            case "/v1/pipeline/transactions":
                 XCTAssertEqual(request.httpMethod, "POST")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito, application/json")
@@ -1897,7 +1899,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 return (response, self.nodeCapabilitiesBody())
-            case "/transaction/entrypoint":
+            case "/v1/pipeline/transaction-entrypoints":
                 XCTAssertEqual(request.httpMethod, "POST")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito, application/json")
@@ -1935,7 +1937,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 return (response, self.nodeCapabilitiesBody())
-            case "/transaction":
+            case "/v1/pipeline/transactions":
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito, application/json")
                 let headers = [
@@ -1982,7 +1984,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 return (response, self.nodeCapabilitiesBody(dataModelVersion: 9))
-            case "/transaction":
+            case "/v1/pipeline/transactions":
                 XCTFail("transaction submitted with data model mismatch")
                 let response = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!
                 return (response, Data())
@@ -2017,7 +2019,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 return (response, self.nodeCapabilitiesBody(signedTransactionSchemaHashHex: nil))
-            case "/transaction":
+            case "/v1/pipeline/transactions":
                 XCTFail("transaction submitted with missing schema hash")
                 let response = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!
                 return (response, Data())
@@ -2052,7 +2054,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 return (response, self.nodeCapabilitiesBody(signedTransactionSchemaHashHex: "ABC123"))
-            case "/transaction":
+            case "/v1/pipeline/transactions":
                 XCTFail("transaction submitted with invalid schema hash")
                 let response = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!
                 return (response, Data())
@@ -2088,7 +2090,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 return (response, self.nodeCapabilitiesBody(signedTransactionSchemaHashHex: mismatchedHash))
-            case "/transaction":
+            case "/v1/pipeline/transactions":
                 XCTFail("transaction submitted with schema hash mismatch")
                 let response = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!
                 return (response, Data())
@@ -2129,7 +2131,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "text/plain"])!
                 return (response, Data("missing".utf8))
-            case "/transaction":
+            case "/v1/pipeline/transactions":
                 XCTFail("transaction submitted after missing capabilities")
                 let response = HTTPURLResponse(url: request.url!,
                                                statusCode: 500,
@@ -2173,7 +2175,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Retry-After": "1"])!
                 return (response, Data("rate limited".utf8))
-            case "/transaction":
+            case "/v1/pipeline/transactions":
                 XCTFail("transaction submitted after rate-limited capabilities")
                 let response = HTTPURLResponse(url: request.url!,
                                                statusCode: 500,
@@ -2217,7 +2219,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "text/plain"])!
                 return (response, Data("bad gateway".utf8))
-            case "/transaction":
+            case "/v1/pipeline/transactions":
                 XCTFail("transaction submitted after failed capabilities")
                 let response = HTTPURLResponse(url: request.url!,
                                                statusCode: 500,
@@ -2508,6 +2510,7 @@ final class ToriiClientTests: XCTestCase {
         let quoteId = String(repeating: "11", count: 32)
         let paymentHash = String(repeating: "22", count: 32)
         let meteringKey = String(repeating: "33", count: 32)
+        let helperTicketHex = "5356504e48543100" + String(repeating: "00", count: 248)
         var callCount = 0
         StubURLProtocol.handler = { request in
             callCount += 1
@@ -2546,7 +2549,7 @@ final class ToriiClientTests: XCTestCase {
                 "dns_servers": [],
                 "tunnel_addresses": ["10.208.0.2/32"],
                 "mtu_bytes": 1280,
-                "helper_ticket_hex": "abcd",
+                "helper_ticket_hex": helperTicketHex,
                 "bytes_in": "0",
                 "bytes_out": "0",
                 "status": "active"
@@ -2564,6 +2567,7 @@ final class ToriiClientTests: XCTestCase {
         let fetched = try await client.getVpnSession(sessionId: quoteId)
         XCTAssertEqual(created.sessionId, quoteId)
         XCTAssertEqual(fetched?.paymentTransactionHash, paymentHash)
+        XCTAssertEqual(created.helperTicketHex, helperTicketHex)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -9624,7 +9628,7 @@ id: 88
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 return (response, self.nodeCapabilitiesBody())
-            case "/transaction":
+            case "/v1/pipeline/transactions":
                 XCTAssertEqual(request.httpMethod, "POST")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito, application/json")
@@ -10140,6 +10144,50 @@ id: 88
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testGetTransactionStatusHttpErrorUsesEnvelopeDetailsRejectCode() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 429,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            let body = """
+            {
+              "code": "queue_full",
+              "message": "transaction queue is at capacity",
+              "details": {
+                "reject_code": "TX_QUEUE_FULL",
+                "retry_after_seconds": 1,
+                "queue": {
+                  "state": "saturated",
+                  "queued": 128,
+                  "capacity": 128,
+                  "saturated": true
+                }
+              }
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        do {
+            _ = try await makeClient().getTransactionStatus(hashHex: "deadbeef")
+            XCTFail("expected status failure")
+        } catch let error as ToriiClientError {
+            guard case let .httpStatus(code, message, rejectCode) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(code, 429)
+            XCTAssertEqual(rejectCode, "TX_QUEUE_FULL")
+            XCTAssertEqual(message, "transaction queue is at capacity")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testGetTransactionStatusHttpErrorUsesPlainTextBody() async throws {
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
@@ -10424,6 +10472,7 @@ id: 88
     }
 }
 
+#if os(macOS)
 final class ToriiClientIntegrationTests: XCTestCase {
     private var mock: ToriiMockProcess?
 
@@ -11022,6 +11071,7 @@ final class ToriiClientIntegrationTests: XCTestCase {
         )
     }
 }
+#endif
 
 private struct TxStatusErrorContractCase {
     let id: String

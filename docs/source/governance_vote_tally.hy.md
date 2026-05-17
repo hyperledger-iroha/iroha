@@ -99,7 +99,7 @@ public_inputs_schema_hash = 0xfae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be960
 - `backend tag = BackendTag::Halo2IpaPasta`
 - `curve = "pallas"`
 - `public_inputs_schema_hash = 0xfae4…64d3`
-- `commitment = sha256(backend || vk_bytes)` (32 բայթ ամփոփում)
+- `commitment = zk_hash_vk(backend, vk_bytes)` (32 բայթ ամփոփում)
 
 Կանոնական փաթեթը ներառում է ներկառուցված հաստատող բանալի (`key = Some(VerifyingKeyBox { … })`) ապացույցի ծրարի հետ միասին: `vk_len`, `max_proof_bytes` և կամընտիր մետատվյալների URI-ները համալրված են ստեղծված արտեֆակտներից:
 

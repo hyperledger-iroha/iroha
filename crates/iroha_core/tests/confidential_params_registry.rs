@@ -12,7 +12,6 @@ use iroha_data_model::{
     Registrable, ValidationFail,
     block::BlockHeader,
     confidential::{ConfidentialParamsId, ConfidentialStatus, PedersenParams, PoseidonParams},
-    domain::DomainId,
     isi::{
         confidential,
         error::{InstructionExecutionError, InvalidParameterError},
@@ -27,7 +26,7 @@ use nonzero_ext::nonzero;
 
 fn fresh_state() -> State {
     let domain_id: iroha_data_model::domain::DomainId =
-        DomainId::try_new("wonderland", "universal").expect("domain");
+        iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain");
     let domain: Domain = Domain::new(domain_id).build(&ALICE_ID);
     let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let world = World::with([domain], [account], []);

@@ -215,7 +215,7 @@ La documentation remplace les paramètres régionaux dans le runbook d'opératio
 - Limites duros (configurables par défaut) :
 -`max_proof_size_bytes = 262_144`.
 -`max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. Preuves que dépasser `verify_timeout_ms` a interrompu l'instruction de forme déterministe (les bulletins de vote de gouvernance émis en `proof verification exceeded timeout`, `VerifyProof` renvoient une erreur).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Cuotas adicionales aseguran vivacity: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, et `max_public_inputs` acotan block builders ; `reorg_depth_bound` (>= `max_anchor_age_blocks`) gère la rétention des points de contrôle frontaliers.
 - L'exécution du runtime ahora rechaza transacciones qui dépassent ces limites de transaction ou de blocage, émet des erreurs `InvalidParameter` déterministes et dejando l'état du grand livre sans changement.
 - Mémoire préfiltrée pour les transactions confidentielles par `vk_id`, longitude de preuve et date d'ancrage avant d'invoquer le vérificateur pour maintenir l'utilisation des ressources en compte.- La vérification est déterminée par une forme déterminée en cas de dépassement de délai ou de violation des limites ; les transactions tombent avec des erreurs explicites. Les backends SIMD sont optionnels mais ne modifient pas la comptabilité du gaz.
@@ -304,7 +304,7 @@ La documentation remplace les paramètres régionaux dans le runbook d'opératio
    - [x] La poignée de main P2P annonce `ConfidentialFeatureDigest` (résumé du backend + empreintes digitales du registre) et il y a des incompatibilités de forme déterminées via `HandshakeConfidentialMismatch`.
    - [x] Remover panique sur les chemins d'éjection confidentiels et ajoute un rôle de contrôle pour les nœuds sans support.
    - [ ] Appliquer les présupposés de délai d'attente du vérificateur et les limites de profondeur de réorganisation pour les points de contrôle frontaliers.
-     - [x] Présupposés de délai d'attente de vérification appliqué ; preuves qui dépassent `verify_timeout_ms` maintenant fallan deterministamente.
+     - Verification timeout budgets are telemetry/operator budgets only; proofs fail deterministically on size, gas, public input, policy, or anchor-age bounds.
      - [x] Points de contrôle frontaliers maintenant respetan `reorg_depth_bound`, je peux utiliser des points de contrôle plus anciens que la fenêtre configurée pour garder des instantanés déterministes.
    - Introduire `AssetConfidentialPolicy`, la politique FSM et les portes d'application pour les instructions d'émission/transfert/révélation.
    - Comprometer `conf_features` dans les en-têtes de blocage et la participation des validateurs lorsque les résumés de registre/paramètres divergent.2. **Phase M1 - Registres et paramètres**

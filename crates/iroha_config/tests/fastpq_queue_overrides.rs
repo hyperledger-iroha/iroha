@@ -58,6 +58,26 @@ fn metal_queue_overrides_parse_from_env() {
     assert!(cfg.zk.fastpq.metal_trace);
     assert!(cfg.zk.fastpq.metal_debug_enum);
     assert!(cfg.zk.fastpq.metal_debug_fused);
+    assert_eq!(
+        cfg.zk.fastpq.execution_mode,
+        iroha_config::parameters::actual::FastpqExecutionMode::Cpu
+    );
+    assert_eq!(
+        cfg.zk.fastpq.poseidon_mode,
+        iroha_config::parameters::actual::FastpqPoseidonMode::Cpu
+    );
+    assert_eq!(
+        cfg.zk.fastpq.proof_sidecar_queue_cap,
+        iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP
+    );
+    assert_eq!(
+        cfg.zk.fastpq.proof_sidecar_max_bytes.get(),
+        iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES.get()
+    );
+    assert_eq!(
+        cfg.zk.fastpq.proof_sidecar_max_retries,
+        iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES
+    );
 }
 
 #[test]

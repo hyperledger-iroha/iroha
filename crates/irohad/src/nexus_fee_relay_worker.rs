@@ -15,8 +15,7 @@ use std::{
 
 use eyre::{Result, WrapErr};
 use iroha_config::parameters::actual::{
-    Fastpq, FastpqExecutionMode, FastpqPoseidonMode,
-    NexusRelayWorker as NexusRelayWorkerConfig,
+    Fastpq, FastpqExecutionMode, FastpqPoseidonMode, NexusRelayWorker as NexusRelayWorkerConfig,
 };
 use iroha_core::{
     queue::Queue,
@@ -289,14 +288,8 @@ impl NexusFeeRelayWorker {
 
         self.update_relay_status(key, DurableWorkStatus::Proving, Some(envelope.clone()))?;
         let current_height = self.committed_height();
-        let expiry_slot = current_height.saturating_add(
-            self.state
-                .view()
-                .nexus
-                .axt
-                .replay_retention_slots
-                .get(),
-        );
+        let expiry_slot =
+            current_height.saturating_add(self.state.view().nexus.axt.replay_retention_slots.get());
         let (proven_envelope, proof_blob) =
             match prove_lane_relay_envelope(&envelope, expiry_slot, current_height, &self.fastpq) {
                 Ok(proven) => proven,
@@ -436,9 +429,8 @@ impl NexusFeeRelayWorker {
             }
             let json: Json = norito::decode_from_bytes(payload)
                 .wrap_err("decode verified lane relay record JSON payload")?;
-            let record: VerifiedLaneRelayRecord =
-                norito::json::from_slice(json.get().as_bytes())
-                    .wrap_err("decode verified lane relay record")?;
+            let record: VerifiedLaneRelayRecord = norito::json::from_slice(json.get().as_bytes())
+                .wrap_err("decode verified lane relay record")?;
             records.insert(record.relay_ref.relay_state_key(), record);
         }
         Ok(records)
@@ -483,14 +475,8 @@ impl NexusFeeRelayWorker {
         budget_work.last_height = current_height;
         self.store_budget_work(budget_work.clone())?;
 
-        let expiry_slot = current_height.saturating_add(
-            self.state
-                .view()
-                .nexus
-                .axt
-                .replay_retention_slots
-                .get(),
-        );
+        let expiry_slot =
+            current_height.saturating_add(self.state.view().nexus.axt.replay_retention_slots.get());
         let proof_blob = match prove_fee_budget(
             &budget_work.sponsor_account_id,
             &budget_work.fee_asset_id,
@@ -550,9 +536,11 @@ impl NexusFeeRelayWorker {
             return Ok(work);
         }
 
-        let manifest_root = self.manifest_root_for(DataSpaceId::UNIVERSAL).ok_or_else(|| {
-            eyre::eyre!("no non-zero universal AXT manifest root for Nexus fee budget proof")
-        })?;
+        let manifest_root = self
+            .manifest_root_for(DataSpaceId::UNIVERSAL)
+            .ok_or_else(|| {
+                eyre::eyre!("no non-zero universal AXT manifest root for Nexus fee budget proof")
+            })?;
         let verified_balance = self.sponsor_fee_balance(sponsor, fee_asset_id)?;
         Ok(DurableBudgetWork {
             sponsor_account_id: sponsor.clone(),
@@ -663,7 +651,11 @@ impl NexusFeeRelayWorker {
         u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX)
     }
 
-    fn submit_instruction(&self, instruction: InstructionBox, endpoint: &'static str) -> Result<()> {
+    fn submit_instruction(
+        &self,
+        instruction: InstructionBox,
+        endpoint: &'static str,
+    ) -> Result<()> {
         let tx = TransactionBuilder::new((*self.chain_id).clone(), self.authority.clone())
             .with_instructions([instruction])
             .with_metadata(worker_submission_metadata(endpoint))
@@ -812,7 +804,10 @@ fn prove_lane_relay_envelope(
             &[relay_ref_bytes.as_slice()],
         ),
         Hash::new(manifest_root),
-        worker_digest(b"nexus-fee-relay:lane-relay-perm-root:v1", &[&manifest_root]),
+        worker_digest(
+            b"nexus-fee-relay:lane-relay-perm-root:v1",
+            &[&manifest_root],
+        ),
         worker_digest(
             b"nexus-fee-relay:lane-relay-tx-set:v1",
             &[claim_digest.as_ref()],
@@ -849,10 +844,12 @@ fn prove_lane_relay_envelope(
         expiry_slot: Some(expiry_slot),
     };
     let proven_envelope =
-        envelope.clone().with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
-            proof_digest: Hash::new(proof_blob.payload.as_slice()),
-            verified_at_height,
-        }));
+        envelope
+            .clone()
+            .with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+                proof_digest: Hash::new(proof_blob.payload.as_slice()),
+                verified_at_height,
+            }));
     Ok((proven_envelope, proof_blob))
 }
 
@@ -879,8 +876,7 @@ fn prove_fee_budget(
         b"nexus-fee-relay:budget-witness:v1",
         &[sponsor_text.as_bytes(), balance_text.as_bytes()],
     );
-    let policy_commitment =
-        worker_digest(b"nexus-fee-relay:budget-policy:v1", &[&manifest_root]);
+    let policy_commitment = worker_digest(b"nexus-fee-relay:budget-policy:v1", &[&manifest_root]);
     let dsid = DataSpaceId::UNIVERSAL;
     let binding = AxtFastpqBinding {
         parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_owned(),
@@ -991,7 +987,6 @@ fn prover_from_config(fastpq: &Fastpq) -> Result<fastpq_prover::Prover> {
 
 fn map_execution_mode(mode: FastpqExecutionMode) -> fastpq_prover::ExecutionMode {
     match mode {
-        FastpqExecutionMode::Auto => fastpq_prover::ExecutionMode::Auto,
         FastpqExecutionMode::Cpu => fastpq_prover::ExecutionMode::Cpu,
         FastpqExecutionMode::Gpu => fastpq_prover::ExecutionMode::Gpu,
     }
@@ -999,7 +994,6 @@ fn map_execution_mode(mode: FastpqExecutionMode) -> fastpq_prover::ExecutionMode
 
 fn map_poseidon_mode(mode: FastpqPoseidonMode) -> fastpq_prover::PoseidonExecutionMode {
     match mode {
-        FastpqPoseidonMode::Auto => fastpq_prover::PoseidonExecutionMode::Auto,
         FastpqPoseidonMode::Cpu => fastpq_prover::PoseidonExecutionMode::Cpu,
         FastpqPoseidonMode::Gpu => fastpq_prover::PoseidonExecutionMode::Gpu,
     }
@@ -1038,6 +1032,12 @@ mod tests {
         Fastpq {
             execution_mode: FastpqExecutionMode::Cpu,
             poseidon_mode: FastpqPoseidonMode::Cpu,
+            proof_sidecar_queue_cap:
+                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
+            proof_sidecar_max_bytes:
+                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
+            proof_sidecar_max_retries:
+                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
             device_class: None,
             chip_family: None,
             gpu_kind: None,
@@ -1081,8 +1081,7 @@ mod tests {
     #[test]
     fn lane_relay_worker_proof_verifies_and_binds_claim() -> Result<()> {
         let envelope = sample_envelope([0x42; 32]);
-        let (proven, proof_blob) =
-            prove_lane_relay_envelope(&envelope, 20, 7, &test_fastpq())?;
+        let (proven, proof_blob) = prove_lane_relay_envelope(&envelope, 20, 7, &test_fastpq())?;
         proven.verify_fastpq_proof_material()?;
         let proof_envelope: AxtProofEnvelope = norito::decode_from_bytes(&proof_blob.payload)?;
         let verified = fastpq_prover::verify_axt_proof_envelope(&proof_envelope)?;

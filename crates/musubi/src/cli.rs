@@ -769,6 +769,7 @@ impl PublishArgs {
                 generated_sorafs.digest,
                 generated_sorafs.chunker.clone(),
                 generated_sorafs.chunk_digest_sha3_256,
+                generated_sorafs.payload.len() as u64,
                 generated_sorafs.pin_policy,
                 0,
                 None,

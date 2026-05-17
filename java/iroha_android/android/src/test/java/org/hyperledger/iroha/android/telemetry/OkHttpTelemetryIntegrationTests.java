@@ -127,7 +127,7 @@ public final class OkHttpTelemetryIntegrationTests {
               .addObserver(observer)
               .build();
       try (ToriiEventStream stream =
-          client.openSseStream("/events", ToriiEventStreamOptions.defaultOptions(), listener)) {
+          client.openSseStream("/v1/events/sse", ToriiEventStreamOptions.defaultOptions(), listener)) {
         stream.completion().get(1, TimeUnit.SECONDS);
       }
 
@@ -141,7 +141,7 @@ public final class OkHttpTelemetryIntegrationTests {
               .hashAuthority(server.getHostName() + ":" + server.getPort())
               .orElseThrow(() -> new IllegalStateException("missing authority hash"));
       assert expectedHash.equals(record.authorityHash()) : "SSE authority hash mismatch";
-      assert "/events".equals(record.route()) : "SSE route mismatch";
+      assert "/v1/events/sse".equals(record.route()) : "SSE route mismatch";
       assert "GET".equals(record.method()) : "SSE should use GET";
     }
   }

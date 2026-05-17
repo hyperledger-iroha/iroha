@@ -646,14 +646,14 @@ pub struct Args {
     /// Enable Sora Nexus feature profile (`SoraFS`, `SoraNet` handshake, multi-lane consensus)
     #[arg(long, env = "IROHA_SORA_PROFILE")]
     pub sora: bool,
-    /// Override FASTPQ prover execution mode (`auto`, `cpu`, or `gpu`).
+    /// Override FASTPQ prover execution mode (`cpu` or `gpu`).
     #[arg(
         long = "fastpq-execution-mode",
         value_name = "MODE",
         value_parser = parse_fastpq_execution_mode
     )]
     pub fastpq_execution_mode: Option<FastpqExecutionMode>,
-    /// Override the FASTPQ Poseidon pipeline mode (`auto`, `cpu`, or `gpu`).
+    /// Override the FASTPQ Poseidon pipeline mode (`cpu` or `gpu`).
     #[arg(
         long = "fastpq-poseidon-mode",
         value_name = "MODE",
@@ -3729,6 +3729,7 @@ impl Iroha {
                 ))
             })
             .change_context(StartError::InitKura)?;
+        kura.configure_fastpq_proof_sidecar_limits(&config.zk.fastpq);
         let child = Kura::start(kura.clone(), supervisor.shutdown_signal());
         supervisor.monitor(child);
 
@@ -5006,6 +5007,7 @@ impl Iroha {
             Arc::clone(&state),
             local_validator_account_id.clone(),
             config.common.key_pair.clone(),
+            config.soracloud_runtime.submission.gas_asset_id.clone(),
         ));
         let runtime_manager = SoracloudRuntimeManager::new(
             soracloud_runtime::SoracloudRuntimeManagerConfig::from_runtime_config(
@@ -5050,6 +5052,7 @@ impl Iroha {
         if let Some((_h, child)) = iroha_core::fastpq::lane::start_with_backpressure(
             &zk_cfg.fastpq,
             Some(queue_backpressure),
+            Some(kura.clone()),
         ) {
             supervisor.monitor(Child::new(child, OnShutdown::Wait(Duration::from_secs(1))));
         }
@@ -7775,19 +7778,17 @@ fn main() {
 
 fn parse_fastpq_execution_mode(value: &str) -> Result<FastpqExecutionMode, String> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "auto" => Ok(FastpqExecutionMode::Auto),
         "cpu" => Ok(FastpqExecutionMode::Cpu),
         "gpu" => Ok(FastpqExecutionMode::Gpu),
-        _ => Err("expected MODE to be one of: auto, cpu, gpu".to_string()),
+        _ => Err("expected MODE to be one of: cpu, gpu".to_string()),
     }
 }
 
 fn parse_fastpq_poseidon_mode(value: &str) -> Result<FastpqPoseidonMode, String> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "auto" => Ok(FastpqPoseidonMode::Auto),
         "cpu" => Ok(FastpqPoseidonMode::Cpu),
         "gpu" => Ok(FastpqPoseidonMode::Gpu),
-        _ => Err("expected MODE to be one of: auto, cpu, gpu".to_string()),
+        _ => Err("expected MODE to be one of: cpu, gpu".to_string()),
     }
 }
 
@@ -7904,7 +7905,6 @@ fn fastpq_poseidon_word_preflight_enabled(
     match config.poseidon_mode {
         FastpqPoseidonMode::Cpu => false,
         FastpqPoseidonMode::Gpu => true,
-        FastpqPoseidonMode::Auto => !matches!(config.execution_mode, FastpqExecutionMode::Cpu),
     }
 }
 
@@ -8999,8 +8999,14 @@ mod tests {
         #[test]
         fn maps_metal_overrides_from_config() {
             let cfg = Fastpq {
-                execution_mode: FastpqExecutionMode::Auto,
-                poseidon_mode: FastpqPoseidonMode::Auto,
+                execution_mode: FastpqExecutionMode::Cpu,
+                poseidon_mode: FastpqPoseidonMode::Cpu,
+                proof_sidecar_queue_cap:
+                    iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
+                proof_sidecar_max_bytes:
+                    iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
+                proof_sidecar_max_retries:
+                    iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
                 device_class: None,
                 chip_family: None,
                 gpu_kind: None,
@@ -9025,8 +9031,14 @@ mod tests {
         #[test]
         fn poseidon_word_preflight_respects_fastpq_config() {
             let mut cfg = Fastpq {
-                execution_mode: FastpqExecutionMode::Auto,
-                poseidon_mode: FastpqPoseidonMode::Auto,
+                execution_mode: FastpqExecutionMode::Cpu,
+                poseidon_mode: FastpqPoseidonMode::Cpu,
+                proof_sidecar_queue_cap:
+                    iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
+                proof_sidecar_max_bytes:
+                    iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
+                proof_sidecar_max_retries:
+                    iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
                 device_class: None,
                 chip_family: None,
                 gpu_kind: None,
@@ -9039,8 +9051,6 @@ mod tests {
                 metal_debug_fused: false,
             };
 
-            assert!(fastpq_poseidon_word_preflight_enabled(&cfg));
-            cfg.execution_mode = FastpqExecutionMode::Cpu;
             assert!(!fastpq_poseidon_word_preflight_enabled(&cfg));
             cfg.poseidon_mode = FastpqPoseidonMode::Gpu;
             assert!(fastpq_poseidon_word_preflight_enabled(&cfg));

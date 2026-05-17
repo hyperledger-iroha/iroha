@@ -62,9 +62,7 @@ public enum OfflineNoteV2WalletNoteJsonCodec {
         )) else {
             throw OfflineNoteV2WalletNoteJsonCodecError.invalidField("note_secret_base64")
         }
-        guard let state = OfflineNoteV2WalletNoteState(rawValue: try string(object["state"], field: "state")) else {
-            throw OfflineNoteV2WalletNoteJsonCodecError.invalidField("state")
-        }
+        let state = try decodeState(try string(object["state"], field: "state"))
         return try OfflineNoteV2WalletNote(
             chainId: string(object["chain_id"], field: "chain_id"),
             accountId: string(object["account_id"], field: "account_id"),
@@ -117,6 +115,20 @@ public enum OfflineNoteV2WalletNoteJsonCodec {
             ))
         default:
             throw OfflineNoteV2WalletNoteJsonCodecError.invalidField("origin.type")
+        }
+    }
+
+    private static func decodeState(_ raw: String) throws -> OfflineNoteV2WalletNoteState {
+        if let state = OfflineNoteV2WalletNoteState(rawValue: raw) {
+            return state
+        }
+        switch raw {
+        case "spendPending", "SPEND_PENDING":
+            return .spent
+        case "changePending", "CHANGE_PENDING":
+            return .spendable
+        default:
+            throw OfflineNoteV2WalletNoteJsonCodecError.invalidField("state")
         }
     }
 
@@ -198,6 +210,11 @@ public final class OfflineNoteV2KeychainStore: OfflineNoteV2Store {
         let notes: [StoredNote]
     }
 
+    private struct StoredMetadata: Codable, Equatable {
+        let version: Int
+        let revision: Int
+    }
+
     private let label: String
     private let backing: OfflineNoteV2KeychainBacking
     private let lock = NSLock()
@@ -205,6 +222,15 @@ public final class OfflineNoteV2KeychainStore: OfflineNoteV2Store {
     public init(label rawLabel: String = "default", configuration: Configuration = .default) throws {
         label = try Self.sanitize(label: rawLabel)
         backing = OfflineNoteV2KeychainBacking(configuration: configuration)
+    }
+
+    public func mutateNotes<T>(_ body: (inout [String: OfflineNoteV2WalletNote]) throws -> T) throws -> T {
+        try lock.withLock {
+            var notes = try loadNotes()
+            let result = try body(&notes)
+            try saveNotes(notes)
+            return result
+        }
     }
 
     public func listNotes() throws -> [OfflineNoteV2WalletNote] {
@@ -225,10 +251,8 @@ public final class OfflineNoteV2KeychainStore: OfflineNoteV2Store {
     }
 
     public func upsert(_ note: OfflineNoteV2WalletNote) throws {
-        try lock.withLock {
-            var notes = try loadNotes()
+        try mutateNotes { notes in
             notes[note.noteCommitmentHex] = note
-            try saveNotes(notes)
         }
     }
 
@@ -242,14 +266,28 @@ public final class OfflineNoteV2KeychainStore: OfflineNoteV2Store {
 
     public func clear() throws {
         try lock.withLock {
+            if let metadata = try loadMetadata() {
+                try backing.delete(label: collectionLabel(revision: metadata.revision))
+            }
+            try backing.delete(label: metadataLabel)
             try backing.delete(label: label)
         }
     }
 
     private func loadNotes() throws -> [String: OfflineNoteV2WalletNote] {
+        if let metadata = try loadMetadata() {
+            guard let data = try backing.load(label: collectionLabel(revision: metadata.revision)) else {
+                throw OfflineNoteV2KeychainStoreError.corrupt("collection revision is missing")
+            }
+            return try decodeCollection(data)
+        }
         guard let data = try backing.load(label: label) else {
             return [:]
         }
+        return try decodeCollection(data)
+    }
+
+    private func decodeCollection(_ data: Data) throws -> [String: OfflineNoteV2WalletNote] {
         do {
             let collection = try JSONDecoder().decode(StoredCollection.self, from: data)
             guard collection.version == 1 else {
@@ -288,10 +326,45 @@ public final class OfflineNoteV2KeychainStore: OfflineNoteV2Store {
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
+        let previousRevision = try loadMetadata()?.revision
+        let revision = (previousRevision ?? 0) + 1
         try backing.save(
-            label: label,
+            label: collectionLabel(revision: revision),
             data: encoder.encode(StoredCollection(version: 1, notes: stored))
         )
+        if let previousRevision {
+            try backing.delete(label: collectionLabel(revision: previousRevision))
+        }
+        try backing.save(
+            label: metadataLabel,
+            data: encoder.encode(StoredMetadata(version: 1, revision: revision))
+        )
+        try backing.delete(label: label)
+    }
+
+    private func loadMetadata() throws -> StoredMetadata? {
+        guard let data = try backing.load(label: metadataLabel) else {
+            return nil
+        }
+        do {
+            let metadata = try JSONDecoder().decode(StoredMetadata.self, from: data)
+            guard metadata.version == 1, metadata.revision > 0 else {
+                throw OfflineNoteV2KeychainStoreError.corrupt("unsupported metadata")
+            }
+            return metadata
+        } catch let storeError as OfflineNoteV2KeychainStoreError {
+            throw storeError
+        } catch {
+            throw OfflineNoteV2KeychainStoreError.corrupt("failed to decode metadata: \(error)")
+        }
+    }
+
+    private var metadataLabel: String {
+        "\(label).meta"
+    }
+
+    private func collectionLabel(revision: Int) -> String {
+        "\(label).rev.\(revision)"
     }
 
     private static func sanitize(label: String) throws -> String {

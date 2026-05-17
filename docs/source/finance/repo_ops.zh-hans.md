@@ -682,7 +682,7 @@ evidence guarantees that every repo change satisfies the roadmap F1 governance
 3. 在暂存后立即发出生命周期证明快照和清单，以便
    治理审核者可以使用相同的回购协议重新计算摘要。
 4. 镜像受影响帐户的 `RepoAccountEvent::*` SSE 负载并删除
-   `artifacts/finance/repo/<agreement-id>/events.ndjson` 中导出的 NDJSON
+   `artifacts/finance/repo/<agreement-id>/v1/events/ws.ndjson` 中导出的 NDJSON
    在归档数据包之前。
 5. 投票通过后，用 GAR 标识符更新 `hashes.txt`，
    配置哈希和清单校验和，以便理事会可以跟踪部署

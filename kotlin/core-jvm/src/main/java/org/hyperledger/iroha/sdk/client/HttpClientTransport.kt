@@ -38,7 +38,7 @@ import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 /**
  * HTTP-based client implementation that will forward transactions to an Iroha Torii endpoint.
  *
- * Serialization and endpoint construction follow the `/transaction` Torii route.
+ * Serialization and endpoint construction follow the `/v1/pipeline/transactions` Torii route.
  * Network execution is delegated to [HttpTransportExecutor] so tests can run without making
  * outbound calls.
  */
@@ -593,7 +593,12 @@ class HttpClientTransport(
 
         private fun buildRetryErrorCode(lastResponse: ClientResponse?, lastError: Throwable?): String = lastResponse?.statusCode?.toString() ?: lastError?.javaClass?.simpleName ?: "unknown"
         private fun resolveRoute(request: TransportRequest?): String = request?.uri?.rawPath ?: ""
-        private fun extractRejectCode(response: TransportResponse?): String? = if (response == null) null else HttpErrorMessageExtractor.extractRejectCode(response.headers, "x-iroha-reject-code")
+        private fun extractRejectCode(response: TransportResponse?): String? =
+            if (response == null) null else HttpErrorMessageExtractor.extractRejectCode(
+                response.headers,
+                "x-iroha-reject-code",
+                response.body,
+            )
         private fun extractTransactionHash(response: TransportResponse?): String? {
             if (response == null) return null
             for (headerName in listOf("x-iroha-transaction-hash", "x-iroha-tx-hash")) {

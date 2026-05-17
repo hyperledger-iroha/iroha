@@ -40,7 +40,7 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let domain_id: iroha_data_model::domain::DomainId =
-        DomainId::try_new("wonderland", "universal").expect("domain");
+        iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let world = iroha_core::state::World::with([domain], [account], []);
@@ -95,9 +95,8 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
     };
     create.execute(&ALICE_ID, &mut stx).expect("create ok");
 
-    // Finalize with tally [4] and inline VK
-    let att =
-        ProofAttachment::new_inline("halo2/ipa".into(), fixture.proof_box("halo2/ipa"), vk_box);
+    // Finalize with tally [4] and the registered VK reference.
+    let att = ProofAttachment::new_ref("halo2/ipa".into(), fixture.proof_box("halo2/ipa"), vk_id);
     let fin = FinalizeElection {
         election_id: "ref-final".to_string(),
         tally: vec![4],

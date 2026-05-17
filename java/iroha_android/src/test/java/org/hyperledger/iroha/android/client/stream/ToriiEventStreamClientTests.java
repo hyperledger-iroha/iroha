@@ -60,7 +60,7 @@ public final class ToriiEventStreamClientTests {
               .setTransportExecutor(new UrlConnectionTransportExecutor())
               .build();
       final ToriiEventStream stream =
-          client.openSseStream("/events", ToriiEventStreamOptions.defaultOptions(), listener);
+          client.openSseStream("/v1/events/sse", ToriiEventStreamOptions.defaultOptions(), listener);
       if (!listener.await(2, TimeUnit.SECONDS)) {
         throw new AssertionError("did not receive expected events");
       }
@@ -90,7 +90,7 @@ public final class ToriiEventStreamClientTests {
               .setTransportExecutor(new UrlConnectionTransportExecutor())
               .build();
       final ToriiEventStream stream =
-          client.openSseStream("/events", ToriiEventStreamOptions.defaultOptions(), listener);
+          client.openSseStream("/v1/events/sse", ToriiEventStreamOptions.defaultOptions(), listener);
       if (!listener.await(2, TimeUnit.SECONDS)) {
         throw new AssertionError("retry test did not receive events");
       }
@@ -117,7 +117,7 @@ public final class ToriiEventStreamClientTests {
               .setTransportExecutor(new UrlConnectionTransportExecutor())
               .build();
       final ToriiEventStream stream =
-          client.openSseStream("/events", ToriiEventStreamOptions.defaultOptions(), listener);
+          client.openSseStream("/v1/events/sse", ToriiEventStreamOptions.defaultOptions(), listener);
       if (!listener.await(2, TimeUnit.SECONDS)) {
         throw new AssertionError("close test did not receive initial event");
       }
@@ -141,7 +141,7 @@ public final class ToriiEventStreamClientTests {
             .addObserver(observer)
             .build();
     final ToriiEventStream stream =
-        client.openSseStream("/events", ToriiEventStreamOptions.defaultOptions(), listener);
+        client.openSseStream("/v1/events/sse", ToriiEventStreamOptions.defaultOptions(), listener);
     stream.close();
     stream.completion().get(1, TimeUnit.SECONDS);
     if (!pending.isCancelled()) {
@@ -169,7 +169,7 @@ public final class ToriiEventStreamClientTests {
             .addObserver(observer)
             .build();
     final ToriiEventStream stream =
-        client.openSseStream("/events", ToriiEventStreamOptions.defaultOptions(), listener);
+        client.openSseStream("/v1/events/sse", ToriiEventStreamOptions.defaultOptions(), listener);
     try {
       stream.completion().get(1, TimeUnit.SECONDS);
     } catch (Exception ignored) {
@@ -207,7 +207,7 @@ public final class ToriiEventStreamClientTests {
             .build();
     final ToriiEventStream stream =
         client.openSseStream(
-            "/events?kind=blocks", ToriiEventStreamOptions.defaultOptions(), listener);
+            "/v1/events/sse?kind=blocks", ToriiEventStreamOptions.defaultOptions(), listener);
     stream.completion().get(1, TimeUnit.SECONDS);
 
     if (observer.requestCount != 1 || observer.responseCount != 1 || observer.failureCount != 0) {
@@ -223,7 +223,7 @@ public final class ToriiEventStreamClientTests {
     if (customHeader == null || !customHeader.contains("true")) {
       throw new AssertionError("default headers not propagated to request");
     }
-    if (!recorded.uri().toString().equals("http://example.com/base/events?kind=blocks")) {
+    if (!recorded.uri().toString().equals("http://example.com/base/v1/events/sse?kind=blocks")) {
       throw new AssertionError("unexpected SSE target URI: " + recorded.uri());
     }
     if (listener.events.isEmpty() || !"ok".equals(listener.events.get(0).data())) {
@@ -243,7 +243,7 @@ public final class ToriiEventStreamClientTests {
             .putDefaultHeader("Authorization", "Bearer token")
             .build();
     try {
-      client.openSseStream("/events", ToriiEventStreamOptions.defaultOptions(), event -> {});
+      client.openSseStream("/v1/events/sse", ToriiEventStreamOptions.defaultOptions(), event -> {});
     } catch (final IllegalArgumentException expected) {
       assert expected.getMessage().contains("refuses insecure transport")
           : "expected insecure transport rejection";
@@ -276,7 +276,7 @@ public final class ToriiEventStreamClientTests {
     final Duration timeout = Duration.ofSeconds(5);
     final ToriiEventStreamOptions options =
         ToriiEventStreamOptions.builder().setTimeout(timeout).build();
-    final ToriiEventStream stream = client.openSseStream("/events", options, listener);
+    final ToriiEventStream stream = client.openSseStream("/v1/events/sse", options, listener);
     stream.completion().get(1, TimeUnit.SECONDS);
 
     final TransportRequest recorded =
@@ -313,7 +313,7 @@ public final class ToriiEventStreamClientTests {
           URI.create(
               "http://" + address.getHostString() + ":" + Integer.toUnsignedString(address.getPort()));
       final SseServer wrapper = new SseServer(server, baseUri, handler);
-      server.createContext("/events", wrapper::handleExchange);
+      server.createContext("/v1/events/sse", wrapper::handleExchange);
       server.start();
       return wrapper;
     }

@@ -177,13 +177,11 @@ private final class PipelineURLProtocol: URLProtocol {
     }
 
     private static func isSubmitPath(_ path: String) -> Bool {
-        path.hasSuffix("/transaction")
-            || path.hasSuffix("/v1/pipeline/transactions")
-            || path.hasSuffix("/v1/transactions")
+        path.hasSuffix("/v1/pipeline/transactions")
     }
 
     private static func isStatusPath(_ path: String) -> Bool {
-        path.hasSuffix("/v1/pipeline/transactions/status") || path.hasSuffix("/v1/transactions/status")
+        path.hasSuffix("/v1/pipeline/transactions/status")
     }
 
     private static func isNodeCapabilitiesPath(_ path: String) -> Bool {

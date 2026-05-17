@@ -1,10 +1,10 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Tests for the pipeline recovery endpoint: `/v1/pipeline/recovery/{height}`.
+//! Tests for the pipeline recovery endpoints.
 
 use axum::{Router, routing::get};
 use http_body_util::{BodyExt as _, Full};
 use iroha_config::parameters::actual::LaneConfig;
-use iroha_core::kura::{Kura, PipelineDagSnapshot, PipelineRecoverySidecar};
+use iroha_core::kura::{FastpqProofSnapshot, Kura, PipelineDagSnapshot, PipelineRecoverySidecar};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::BlockHeader;
 use tower::ServiceExt as _; // for Router::oneshot
@@ -38,36 +38,83 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
     .expect("kura init");
 
     // Wire only the tested route, mimicking the closure in lib.rs
-    let app = Router::new().route(
-        "/v1/pipeline/recovery/{height}",
-        get({
-            let kura = kura.clone();
-            move |axum::extract::Path(height): axum::extract::Path<u64>| async move {
-                kura.read_pipeline_metadata(height).map_or_else(
-                    || {
-                        Err(iroha_torii::Error::Query(
+    let app = Router::new()
+        .route(
+            "/v1/pipeline/recovery/{height}",
+            get({
+                let kura = kura.clone();
+                move |axum::extract::Path(height): axum::extract::Path<u64>| async move {
+                    kura.read_pipeline_metadata(height).map_or_else(
+                        || {
+                            Err(iroha_torii::Error::Query(
+                                iroha_data_model::ValidationFail::QueryFailed(
+                                    iroha_data_model::query::error::QueryExecutionFail::NotFound,
+                                ),
+                            ))
+                        },
+                        |sidecar| {
+                            let json = sidecar.to_json_value();
+                            let serialized = norito::json::to_json_pretty(&json)
+                                .expect("serialize pipeline metadata");
+                            let body = Full::from(serialized.into_bytes());
+                            Ok::<_, iroha_torii::Error>(
+                                axum::http::Response::builder()
+                                    .status(axum::http::StatusCode::OK)
+                                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                                    .body(body)
+                                    .unwrap(),
+                            )
+                        },
+                    )
+                }
+            }),
+        )
+        .route(
+            "/v1/pipeline/recovery/{height}/fastpq-proofs",
+            get({
+                let kura = kura.clone();
+                move |axum::extract::Path(height): axum::extract::Path<u64>| async move {
+                    let Some(sidecar) = kura.read_pipeline_metadata(height) else {
+                        return Err(iroha_torii::Error::Query(
                             iroha_data_model::ValidationFail::QueryFailed(
                                 iroha_data_model::query::error::QueryExecutionFail::NotFound,
                             ),
-                        ))
-                    },
-                    |sidecar| {
-                        let json = sidecar.to_json_value();
-                        let serialized = norito::json::to_json_pretty(&json)
-                            .expect("serialize pipeline metadata");
-                        let body = Full::from(serialized.into_bytes());
-                        Ok::<_, iroha_torii::Error>(
-                            axum::http::Response::builder()
-                                .status(axum::http::StatusCode::OK)
-                                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                                .body(body)
-                                .unwrap(),
-                        )
-                    },
-                )
-            }
-        }),
-    );
+                        ));
+                    };
+                    let mut root = norito::json::Map::new();
+                    root.insert(
+                        "height".to_string(),
+                        norito::json::to_value(&sidecar.height).expect("serialize height"),
+                    );
+                    root.insert(
+                        "block_hash".to_string(),
+                        norito::json::to_value(&sidecar.block_hash.to_string())
+                            .expect("serialize block hash"),
+                    );
+                    root.insert(
+                        "proofs".to_string(),
+                        norito::json::Value::Array(
+                            sidecar
+                                .fastpq_proofs
+                                .iter()
+                                .map(FastpqProofSnapshot::to_json_value)
+                                .collect(),
+                        ),
+                    );
+                    let serialized =
+                        norito::json::to_json_pretty(&norito::json::Value::Object(root))
+                            .expect("serialize FASTPQ proofs");
+                    let body = Full::from(serialized.into_bytes());
+                    Ok::<_, iroha_torii::Error>(
+                        axum::http::Response::builder()
+                            .status(axum::http::StatusCode::OK)
+                            .header(axum::http::header::CONTENT_TYPE, "application/json")
+                            .body(body)
+                            .unwrap(),
+                    )
+                }
+            }),
+        );
 
     // Prepare a sidecar for height=1
     let mut fingerprint = [0u8; 32];
@@ -104,6 +151,62 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
         Some(block_hash_str.as_str())
     );
 
+    let req_fastpq_empty = http::Request::builder()
+        .method("GET")
+        .uri("/v1/pipeline/recovery/1/fastpq-proofs")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp_fastpq_empty = app.clone().oneshot(req_fastpq_empty).await.unwrap();
+    assert_eq!(resp_fastpq_empty.status(), http::StatusCode::OK);
+    let resp_body = resp_fastpq_empty
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let v: norito::json::Value = norito::json::from_slice(&resp_body).unwrap();
+    assert_eq!(v.get("proofs").and_then(|x| x.as_array()).unwrap().len(), 0);
+
+    let proof = b"fastpq-proof".to_vec();
+    let mut sidecar_with_proof = sidecar;
+    sidecar_with_proof.fastpq_proofs.push(FastpqProofSnapshot {
+        height: 1,
+        block_hash,
+        entry_hash: Hash::prehashed([0x11; 32]),
+        batch_index: 0,
+        parameter: "fastpq-lane-balanced".to_string(),
+        transition_count: 0,
+        trace_commitment: Hash::new(b"trace-commitment"),
+        proof_digest: Hash::new(&proof),
+        batch: fastpq_prover::TransitionBatch::new(
+            "fastpq-lane-balanced",
+            fastpq_prover::PublicInputs::default(),
+        ),
+        proof,
+    });
+    kura.write_pipeline_metadata(&sidecar_with_proof);
+
+    let req_fastpq_populated = http::Request::builder()
+        .method("GET")
+        .uri("/v1/pipeline/recovery/1/fastpq-proofs")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp_fastpq_populated = app.clone().oneshot(req_fastpq_populated).await.unwrap();
+    assert_eq!(resp_fastpq_populated.status(), http::StatusCode::OK);
+    let resp_body = resp_fastpq_populated
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let v: norito::json::Value = norito::json::from_slice(&resp_body).unwrap();
+    let proofs = v.get("proofs").and_then(|x| x.as_array()).unwrap();
+    assert_eq!(proofs.len(), 1);
+    assert_eq!(
+        proofs[0].get("parameter").and_then(|x| x.as_str()),
+        Some("fastpq-lane-balanced")
+    );
+
     // Query missing height
     let req_missing = http::Request::builder()
         .method("GET")
@@ -112,4 +215,12 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
         .unwrap();
     let resp_missing = app.clone().oneshot(req_missing).await.unwrap();
     assert_eq!(resp_missing.status(), http::StatusCode::NOT_FOUND);
+
+    let req_fastpq_missing = http::Request::builder()
+        .method("GET")
+        .uri("/v1/pipeline/recovery/2/fastpq-proofs")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp_fastpq_missing = app.clone().oneshot(req_fastpq_missing).await.unwrap();
+    assert_eq!(resp_fastpq_missing.status(), http::StatusCode::NOT_FOUND);
 }

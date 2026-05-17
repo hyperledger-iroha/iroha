@@ -682,7 +682,7 @@ artifacts/finance/repo/<agreement-id>/governance/
 3. 在暫存後立即發出生命週期證明快照和清單，以便
    治理審查者可以使用相同的回購協議重新計算摘要。
 4. 鏡像受影響帳戶的 `RepoAccountEvent::*` SSE 負載並刪除
-   `artifacts/finance/repo/<agreement-id>/events.ndjson` 中導出的 NDJSON
+   `artifacts/finance/repo/<agreement-id>/v1/events/ws.ndjson` 中導出的 NDJSON
    在歸檔數據包之前。
 5. 投票通過後，用 GAR 標識符更新 `hashes.txt`，
    配置哈希和清單校驗和，以便理事會可以跟踪部署

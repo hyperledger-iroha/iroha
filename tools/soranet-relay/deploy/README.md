@@ -146,12 +146,24 @@ consensus.
 
 ## VPN backend daemon
 
-When `vpn.backend_addr` is set in the relay configuration, `soranet-relay`
-expects a local TCP backend process to be listening on that socket. The new
-`sora-vpn-backend` binary in `tools/sora-vpn-backend` provides that relay-side
-bridge for Linux hosts:
+When `vpn.backend_endpoint` is set in the relay configuration, `soranet-relay`
+bridges helper-authenticated VPN traffic to that local privileged endpoint. The
+default endpoint is the permissioned Unix socket
+`unix:/tmp/sora-vpn-backend.sock`. TCP remains available as `tcp://host:port`,
+but both the relay and backend must configure the same 32-byte
+`vpn.backend_bootstrap_secret_hex` / `SORANET_VPN_BACKEND_BOOTSTRAP_SECRET_HEX`
+value so bootstrap frames carry a valid keyed MAC. The `sora-vpn-backend`
+binary in `tools/sora-vpn-backend` provides that relay-side bridge for Linux
+hosts:
 
-- It listens on `SORANET_VPN_BACKEND_LISTEN_ADDR` (default `127.0.0.1:19090`).
+- It listens on `SORANET_VPN_BACKEND_ENDPOINT` (default
+  `unix:/tmp/sora-vpn-backend.sock`).
+- Unix-socket endpoints are chmodded to `0660` and peer credentials are checked
+  against `SORANET_VPN_BACKEND_ALLOWED_UID` / `SORANET_VPN_BACKEND_ALLOWED_GID`
+  (defaulting to the backend process uid/gid on Linux).
+- TCP endpoints require `SORANET_VPN_BACKEND_BOOTSTRAP_SECRET_HEX`; bootstrap
+  frames are Norito envelopes with timestamp, nonce, and keyed MAC, and the
+  backend rejects stale timestamps, bad MACs, and replayed nonces.
 - It derives a per-session Linux `tun` interface name from
   `SORANET_VPN_BACKEND_INTERFACE` (used as an interface prefix, default
   `svpn`).
@@ -164,8 +176,9 @@ bridge for Linux hosts:
 Typical relay deployments should either:
 
 1. Run `sora-vpn-backend` as a companion service on the same host and point
-   `vpn.backend_addr` at its listen socket.
-2. Keep `vpn.backend_addr` unset if the relay is not meant to terminate VPN
+   `vpn.backend_endpoint` at its Unix socket, or at a TCP endpoint with a
+   matching bootstrap secret when TCP is explicitly required.
+2. Keep helper-ticket access disabled if the relay is not meant to terminate VPN
    traffic.
 
 The backend now supports concurrent sessions on one daemon instance, but it

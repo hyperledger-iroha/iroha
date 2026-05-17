@@ -152,7 +152,7 @@ public final class OfflineToriiClient {
                 future.completeExceptionally(error);
                 return;
               }
-              final String rejectCode = extractRejectCode(response.headers());
+              final String rejectCode = extractRejectCode(response.headers(), response.body());
               final String bodyPreview = decodeBodyPreview(response.body());
               final ClientResponse clientResponse =
                   new ClientResponse(
@@ -192,8 +192,8 @@ public final class OfflineToriiClient {
     return future;
   }
 
-  private static String extractRejectCode(final Map<String, List<String>> headers) {
-    return HttpErrorMessageExtractor.extractRejectCode(headers, "x-iroha-reject-code");
+  private static String extractRejectCode(final Map<String, List<String>> headers, final byte[] body) {
+    return HttpErrorMessageExtractor.extractRejectCode(headers, "x-iroha-reject-code", body);
   }
 
   private static String decodeBodyPreview(final byte[] payload) {

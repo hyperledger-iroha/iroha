@@ -62,7 +62,7 @@ public final class OfflineNoteV2WalletNoteJsonCodec {
         Base64.getDecoder()
             .decode(asString(object.get("note_secret_base64"), "note_secret_base64")),
         decodeOrigin(asObject(object.get("origin"), "origin")),
-        OfflineNoteV2WalletNoteState.valueOf(asString(object.get("state"), "state")),
+        decodeState(asString(object.get("state"), "state")),
         asLong(object.get("created_at_ms"), "created_at_ms"),
         asLong(object.get("updated_at_ms"), "updated_at_ms"));
   }
@@ -103,6 +103,16 @@ public final class OfflineNoteV2WalletNoteJsonCodec {
           Math.toIntExact(asLong(payload.get("output_index"), "origin.output_index")));
     }
     throw new IllegalArgumentException("unknown Offline Note V2 commitment origin type: " + type);
+  }
+
+  private static OfflineNoteV2WalletNoteState decodeState(final String state) {
+    if ("SPEND_PENDING".equals(state) || "spendPending".equals(state)) {
+      return OfflineNoteV2WalletNoteState.SPENT;
+    }
+    if ("CHANGE_PENDING".equals(state) || "changePending".equals(state)) {
+      return OfflineNoteV2WalletNoteState.SPENDABLE;
+    }
+    return OfflineNoteV2WalletNoteState.valueOf(state);
   }
 
   @SuppressWarnings("unchecked")

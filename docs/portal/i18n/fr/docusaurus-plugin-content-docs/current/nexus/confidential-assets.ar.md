@@ -218,7 +218,7 @@ Utilisez la fonction `GET /v1/confidential/assets/{definition_id}/transitions` p
 - حدود صارمة (افتراضات قابلة للضبط):
 -`max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. preuves التي تتجاوز `verify_timeout_ms` تقطع التعليمة حتميا (تصويتات الحوكمة تصدر `proof verification exceeded timeout` و`VerifyProof` يعيد خطا).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Exemples de constructeurs : `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block` et `max_public_inputs`. `reorg_depth_bound` (≥ `max_anchor_age_blocks`) يتحكم في احتفاظ postes de contrôle frontaliers.
 - يرفض runtime المعاملات التي تتجاوز هذه الحدود لكل معاملة او لكل كتلة، ويصدر اخطاء `InvalidParameter` حتمية مع ابقاء حالة ledger دون تغيير.
 - يرشح mempool المعاملات السرية مسبقا حسب `vk_id` et proof وعمر Anchor قبل استدعاء Verifier للحفاظ على حدود الموارد.

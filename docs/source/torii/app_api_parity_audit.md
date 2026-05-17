@@ -24,7 +24,7 @@ feature-gated route builders (`add_app_api_routes`, `add_contracts_and_vk_routes
 
 ### Auth & canonical signing
 
-- App-facing GET/POST endpoints accept optional canonical request headers (`X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, `X-Iroha-Nonce`) built from `METHOD\n/path\nsorted_query\nsha256(body)\n<timestamp_ms>\n<nonce>`; Torii validates freshness/replay resistance before wrapping them into `QueryRequestWithAuthority`, so they mirror `/query` without accepting stale or replayed signatures.
+- App-facing GET/POST endpoints accept optional canonical request headers (`X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, `X-Iroha-Nonce`) built from `METHOD\n/path\nsorted_query\nsha256(body)\n<timestamp_ms>\n<nonce>`; Torii validates freshness/replay resistance before wrapping them into `QueryRequestWithAuthority`, so they mirror `/v1/query` without accepting stale or replayed signatures.
 - SDK helpers ship in all primary clients:
   - JS/TS: `buildCanonicalRequestHeaders({ accountId, method, path, query, body, privateKey, timestampMs?, nonce? })` from `canonicalRequest.js`.
   - Swift: `CanonicalRequest.signingHeaders(accountId:method:path:query:body:signer:timestampMs:nonce:)` and `ToriiCanonicalRequest.buildHeaders(...)`.

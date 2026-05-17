@@ -149,7 +149,7 @@ pub mod smart_contract;
 pub mod sns;
 /// Viral social incentive records and escrows.
 pub mod social;
-/// SoraCloud manifests for deterministic service hosting.
+/// Soracloud manifests for deterministic service hosting.
 pub mod soracloud;
 /// SoraFS data structures (pin registry, manifests).
 pub mod sorafs;

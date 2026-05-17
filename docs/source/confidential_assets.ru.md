@@ -248,7 +248,7 @@ Swift SDK теперь могут генерировать инструкции 
 - Жесткие ограничения (настраиваемые значения по умолчанию):
 - `max_proof_size_bytes = 262_144`.
 - И18НИ00000277Х, И18НИ00000278Х, И18НИ00000279Х.
-- И18НИ00000280Х, И18НИ00000281Х. Доказательства, превышающие `verify_timeout_ms`, детерминированно прерывают выполнение инструкции (бюллетени управления выдают `proof verification exceeded timeout`, `VerifyProof` возвращает ошибку).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Дополнительные квоты обеспечивают жизнеспособность: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block` и `max_public_inputs` построители привязанных блоков; `reorg_depth_bound` (≥ `max_anchor_age_blocks`) регулирует сохранение пограничных контрольно-пропускных пунктов.
 - Выполнение во время выполнения теперь отклоняет транзакции, которые превышают эти ограничения на транзакцию или блок, выдавая детерминированные ошибки `InvalidParameter` и оставляя состояние реестра неизменным.
 - Mempool предварительно фильтрует конфиденциальные транзакции по `vk_id`, длине доказательства и возрасту привязки перед вызовом верификатора, чтобы ограничить использование ресурсов.

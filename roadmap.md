@@ -1,8 +1,32 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-05-16
+Last updated: 2026-05-17
 
 Completed history lives in `status.md`. This file should only track unfinished work.
+
+## SoraFS paid pin validation follow-ups
+
+- Rerun the full SoraFS data-model, core pin-registry, Torii storage-pin, and
+  gateway policy suites under the next long validation budget. Focused coverage
+  is now green for the paid-pin adversarial cases; remaining breadth should
+  include historical fee receipt acceptance after governance pricing changes,
+  manifest envelope validation, admission fail-closed, streaming CAR range
+  coverage, and SDK validation once Java is available.
+
+## ZK audit validation follow-ups
+
+- Broaden the remaining ZK validation beyond the focused cleanup corridor:
+  run policy-hash state tests, P2P confidential digest tests, and IVM CoreHost
+  STARK/Halo2 guardrail tests with the relevant ZK features enabled, then fold
+  the full workspace ZK corridor into the next long validation budget.
+
+## Soracloud production follow-ups
+
+- Design and implement a real deterministic private uploaded-model runtime
+  before adding any private execution production route family.
+- Add operator documentation for the SoraFS pin-and-register upload workflow,
+  including approved-pin evidence, runtime submission gas-asset config, and
+  external signing of JavaScript Soracloud provenance payloads.
 
 ## TradFi ISO 20022 interop follow-ups
 
@@ -229,18 +253,20 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - An operator still needs to provide either the OpenAPI signing key or a
     detached Ed25519 signature envelope for the exact canonical `torii.json`
     bytes so the static OpenAPI manifest can be regenerated and verified.
-- Carry the FastPQ V1 verifier/AXT binding hardening through the next clean
-  validation corridor.
-  - `cargo test -p fastpq_prover --lib`,
-    `cargo check -p fastpq_prover --bins --lib`, and
-    `cargo check -p iroha_core --lib` are green as of 2026-05-02.
-    Focused verifier slices `verify_rejects`, `verify_limits`, and
-    `verify_fri_query_chain` are also green.
-  - The V1 verifier now applies a proof-size ceiling before canonical replay
-    work, rejects batch/proof parameter mismatch, enforces the exact FRI layer
-    schedule for the proof domain and arity, and requires arity-sized sampled
-    FRI round openings. It also checks canonical LDE chunk lengths,
-    LDE/AIR/FRI Merkle path depths, and terminal FRI leaf shapes before replay.
+- Carry the FastPQ V1 release hardening through the remaining broad validation
+  corridor.
+  - The 2026-05-17 implementation removes prover-scale CPU replay from
+    verification, validates proof-carried roots/transcript challenges/Merkle
+    openings/AIR rows/lookup-product binding/FRI query chains from proof
+    content, defaults production runtime config to explicit `cpu`, fails
+    explicit `gpu` startup closed when preflight is unavailable, bounds Kura
+    FASTPQ proof sidecar persistence, adds sidecar telemetry, exposes
+    `/v1/pipeline/recovery/{height}/fastpq-proofs`, and adds AXT packaging
+    helpers for already-bound batches.
+  - Focused `fastpq_prover`, `iroha_config`, `iroha_core fastpq`, and Torii
+    recovery endpoint checks are green as of 2026-05-17 with
+    `CARGO_TARGET_DIR=target/codex-fastpq-release`. The remaining open work is
+    only to fold the slice into the next full workspace clippy/test corridor.
   - AXT proof envelopes now require FastPQ V1 verifier labels at both the
     production FastPQ binding layer and the standalone IVM host envelope-shape
     layer. DefaultHost, CoreHost, and WSVHost reject raw proof bytes and
@@ -288,12 +314,20 @@ Completed history lives in `status.md`. This file should only track unfinished w
   deployment corridor.
   - The Torii/relay/helper control plane now requires XOR quote payments,
     non-operator escrow custody, client usage vouchers, one-use helper tickets,
-    and relay TLS pinning.
+    relay TLS pinning, helper-ticket-bound metering keys, and tariff-derived
+    relay settlement.
   - Native lease escrow ISIs, WSV lease records, verified tariff settlement,
     relay/helper streaming voucher debt-window enforcement, Torii native
     `OpenVpnLeaseEscrow` quote skeletons, and Torii native `SettleVpnLease`
     receipt skeleton responses through the generic `tx_instructions`
-    tooling convention are implemented.
+    tooling convention are implemented. Torii active-session lookup and receipt
+    settlement now reload authoritative lease state from WSV instead of relying
+    on process-local VPN session caches.
+  - Relay/backend deployment now uses `vpn.backend_endpoint`; Unix sockets are
+    the default privileged path, while TCP requires a shared bootstrap secret
+    and Norito MAC envelopes with timestamp/nonce replay checks.
+  - Hidden helper workers now receive magic-prefixed Norito connect-payload
+    frames over stdin and batch magic-prefixed Norito traffic-state persistence.
   - Relay operators can set `vpn.receipt_spool_dir` to persist the exact
     `/v1/vpn/receipts` request body for voucher-backed sessions, so settlement
     no longer depends on reconstructing receipt bytes from logs.
@@ -303,9 +337,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - The JavaScript, C#, Swift, Python, Kotlin/JVM, and Java Android Torii
     clients now expose the quote-first open flow and operator receipt
     submission helpers with native instruction skeletons.
-  - Next, run a public relay/helper/Torii canary that opens a native XOR VPN
-    lease from the wallet flow, submits a spooled operator receipt, and signs the
-    returned `SettleVpnLease` transaction.
+  - Next, finish the focused Cargo validation once the current shared target
+    locks clear, then run a public relay/helper/Torii canary that opens a native
+    XOR VPN lease from the wallet flow, submits a spooled operator receipt, and
+    signs the returned `SettleVpnLease` transaction.
 - Carry the IVM/Kotodama vector and syscall hardening through the next clean
   validation corridor.
   - `cargo test -p ivm_abi`,
@@ -471,6 +506,15 @@ Completed history lives in `status.md`. This file should only track unfinished w
     and `cargo test -p iroha_torii tool_effects --lib` with
     `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-continue`. Fold the slice into the
     next workspace clippy/test corridor when validation budget allows.
+- Carry the Torii first-release API cleanup through the remaining release
+  corridor.
+  - The route/API/error-envelope implementation, focused Rust sidecar/client
+    tests, Swift/Python/Kotlin/JVM/Java Android/JavaScript client regressions,
+    JS native/dist rebuild, formatting, and whitespace checks are green as of
+    2026-05-17. Static OpenAPI JSON snapshots are refreshed in unsigned mode;
+    the remaining blocker is operator regeneration of the signed OpenAPI
+    manifest with the signing key or detached signature envelope, then the next
+    full workspace test/clippy corridor.
 - Carry the Iroha Connect hardening through the remaining SDK and workspace
   validation corridor.
   - P2P session claims, hashed token storage, focused Rust checks, JavaScript
@@ -488,6 +532,11 @@ Completed history lives in `status.md`. This file should only track unfinished w
     corridor when validation budget allows.
 - Carry Offline V2 real-proof support through the remaining release corridor.
   - The native bridge prover FFI focused corridor is green as of 2026-04-30. Fold it into a broader `cargo test -p iroha_core --lib`, SDK test, and workspace clippy corridor when validation budget allows.
+  - Offline-to-offline SDK local-final semantics, trusted Ed25519 issuer
+    certificate verification, and Android rollback fail-closed storage checks
+    are green as of 2026-05-17 across Swift, Kotlin/JVM, Java Android, iOS
+    simulator XCTest, and Android emulator instrumentation. Fold this into the
+    next full workspace test/clippy corridor when validation budget allows.
   - The pure Swift Offline V2 prover hot path is green as of 2026-05-01 with
     subsecond median native audit/redeem proofs on macOS arm64. Keep that
     benchmark in the next iOS-device corridor and broaden Swift package

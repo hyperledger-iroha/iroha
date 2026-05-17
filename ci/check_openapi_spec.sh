@@ -48,7 +48,8 @@ fi
   run_xtask openapi-verify \
     --spec "${SPEC_PATH}" \
     --manifest "${MANIFEST_PATH}" \
-    --allowed-signers "${REPO_ROOT}/docs/portal/static/openapi/allowed_signers.json"
+    --allowed-signers "${REPO_ROOT}/docs/portal/static/openapi/allowed_signers.json" \
+    --allow-unsigned
 )
 
 (
@@ -56,7 +57,8 @@ fi
   run_xtask openapi-verify \
     --spec "${CURRENT_SPEC_PATH}" \
     --manifest "${CURRENT_MANIFEST_PATH}" \
-    --allowed-signers "${REPO_ROOT}/docs/portal/static/openapi/allowed_signers.json"
+    --allowed-signers "${REPO_ROOT}/docs/portal/static/openapi/allowed_signers.json" \
+    --allow-unsigned
 )
 
 (

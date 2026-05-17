@@ -17,8 +17,7 @@ isi! {
     /// cryptographic verification are provided by `iroha_core` under feature
     /// flags; this data model type acts as a transport envelope.
     pub struct VerifyProof {
-        /// Proof attachment containing the proof and either a VK reference
-        /// or an inline verifying key.
+        /// Proof attachment containing the proof and a VK registry reference.
         pub attachment: crate::proof::ProofAttachment,
     }
 }
@@ -565,7 +564,7 @@ mod tests {
     use crate::{
         domain::DomainId,
         name::Name,
-        proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId},
+        proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     };
 
     fn account(seed: u8) -> AccountId {
@@ -590,10 +589,10 @@ mod tests {
 
     fn proof_attachment() -> ProofAttachment {
         let backend = backend();
-        ProofAttachment::new_inline(
+        ProofAttachment::new_ref(
             backend.clone(),
             ProofBox::new(backend.clone(), vec![1, 2, 3, 4]),
-            VerifyingKeyBox::new(backend, vec![5, 6, 7]),
+            VerifyingKeyId::new(backend, "vk_test"),
         )
     }
 

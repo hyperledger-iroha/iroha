@@ -20,7 +20,7 @@ local testing and CI.
 - `manifest submit` — POST manifests (and optional alias proofs) to Torii,
   recomputing the chunk digest from a plan when provided; when the dedicated
   `/v1/sorafs/pin/register` route is unavailable, the CLI falls back to a
-  signed `/transaction` submit automatically and waits for a terminal pipeline
+  signed `/v1/pipeline/transactions` submit automatically and waits for a terminal pipeline
   status so queued-but-rejected publishes do not look successful.
 - `proof verify` — validate CAR responses against a manifest and emit the
   PoR-ready digests required for registry admission.
@@ -121,7 +121,7 @@ If you need deterministic fixtures to diff against, grab the bundle under
 Key behaviours:
 
 - Transaction fallback confirmation: when `manifest submit` has to use the
-  generic `/transaction` endpoint, it polls `/v1/pipeline/transactions/status`
+  generic `/v1/pipeline/transactions` endpoint, it polls `/v1/pipeline/transactions/status`
   until the transaction reaches `Committed`/`Applied` or fails with
   `Rejected`/`Expired`. Rejections surface the explorer message when Torii
   exposes `/v1/explorer/transactions/{hash}`.
@@ -256,7 +256,7 @@ cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
   `--alias-proof` together. The command fails fast if any component is missing.
 - If `<torii-url>/v1/sorafs/pin/register` is not routed on the target node, the
   CLI automatically derives `chain_id` from the read-side registry endpoints and
-  submits the same `RegisterPinManifest` instruction through `/transaction`.
+  submits the same `RegisterPinManifest` instruction through `/v1/pipeline/transactions`.
 - Non-success HTTP responses bubble up as errors with the original body so CI
   can halt on policy violations.
 

@@ -25,8 +25,10 @@ use iroha_data_model::{
         LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, ProofBlob, TouchManifest,
     },
 };
-use norito::to_bytes;
-use serde::{Deserialize, Serialize};
+use norito::{
+    derive::{JsonDeserialize, JsonSerialize},
+    json, to_bytes,
+};
 use sha2::{Digest, Sha256};
 
 #[derive(Parser)]
@@ -53,22 +55,22 @@ enum Command {
     },
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, JsonDeserialize)]
 struct MeasureInput {
-    #[serde(default)]
+    #[norito(default)]
     dataspace: String,
-    #[serde(default)]
+    #[norito(default)]
     verifier_id: String,
-    #[serde(default)]
+    #[norito(default)]
     verifier_version: String,
     claim_types: Vec<String>,
-    #[serde(default)]
+    #[norito(default)]
     fixtures: Vec<ProofRequest>,
-    #[serde(default)]
+    #[norito(default)]
     parameter: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, JsonSerialize)]
 struct MeasureOutput {
     dataspace: String,
     measurement_mode: String,
@@ -77,7 +79,7 @@ struct MeasureOutput {
     benchmarks: BTreeMap<String, BenchmarkResult>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, JsonSerialize)]
 struct BenchmarkResult {
     sample_count: usize,
     proof_bytes_p50: usize,
@@ -90,16 +92,16 @@ struct BenchmarkResult {
     verifier_version: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, JsonDeserialize)]
 struct ProofRequest {
-    #[serde(default)]
+    #[norito(default)]
     parameter: String,
     source_dsid: u64,
-    #[serde(default)]
+    #[norito(default)]
     source_dataspace: String,
-    #[serde(default)]
+    #[norito(default)]
     source_receipt_id: String,
-    #[serde(default)]
+    #[norito(default)]
     target_dsids: Vec<u64>,
     source_tx_commitment: String,
     claim_type: String,
@@ -107,42 +109,42 @@ struct ProofRequest {
     witness_commitment: String,
     policy_commitment: String,
     verified_effect_type: String,
-    #[serde(default)]
+    #[norito(default)]
     corridor: String,
-    #[serde(default)]
+    #[norito(default)]
     verifier_id: String,
-    #[serde(default)]
+    #[norito(default)]
     verifier_version: String,
-    #[serde(default)]
+    #[norito(default)]
     source_lane_id: u32,
-    #[serde(default = "default_relay_block_height")]
+    #[norito(default = "default_relay_block_height")]
     relay_block_height: u64,
     batch_base64: String,
-    #[serde(default)]
+    #[norito(default)]
     effect_binding: Option<EffectBindingRequest>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, JsonDeserialize, JsonSerialize)]
 struct EffectBindingRequest {
-    #[serde(default)]
+    #[norito(default)]
     destination_domain: Option<String>,
-    #[serde(default)]
+    #[norito(default)]
     destination_account_id: Option<String>,
-    #[serde(default)]
+    #[norito(default)]
     vault_account_id: Option<String>,
-    #[serde(default)]
+    #[norito(default)]
     issuance_account_id: Option<String>,
-    #[serde(default)]
+    #[norito(default)]
     source_asset_definition_id: Option<String>,
-    #[serde(default)]
+    #[norito(default)]
     destination_asset_definition_id: Option<String>,
-    #[serde(default)]
+    #[norito(default)]
     source_amount_i64: Option<i64>,
-    #[serde(default)]
+    #[norito(default)]
     destination_amount_i64: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, JsonSerialize)]
 struct ProofResponse {
     passed: bool,
     parameter: String,
@@ -162,7 +164,7 @@ struct ProofResponse {
     relay_ref: RelayRefJson,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, JsonSerialize)]
 struct RelayRefJson {
     dataspace_id: u64,
     lane_id: u32,
@@ -170,13 +172,13 @@ struct RelayRefJson {
     settlement_hash: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, JsonDeserialize)]
 struct VerifyInput {
     request: ProofRequest,
     proof_bytes_base64: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, JsonSerialize)]
 struct VerifyResponse {
     passed: bool,
     parameter: String,
@@ -212,15 +214,15 @@ fn main() -> Result<(), String> {
     }
 }
 
-fn read_json<T: for<'de> Deserialize<'de>>(path: &PathBuf) -> Result<T, String> {
+fn read_json<T: json::JsonDeserialize>(path: &PathBuf) -> Result<T, String> {
     let raw = fs::read_to_string(path)
         .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
-    serde_json::from_str(&raw).map_err(|err| format!("failed to parse {}: {err}", path.display()))
+    json::from_str(&raw).map_err(|err| format!("failed to parse {}: {err}", path.display()))
 }
 
-fn print_json<T: Serialize>(payload: &T) -> Result<(), String> {
-    let encoded = serde_json::to_string_pretty(payload)
-        .map_err(|err| format!("json encode failed: {err}"))?;
+fn print_json<T: json::JsonSerialize>(payload: &T) -> Result<(), String> {
+    let encoded =
+        json::to_string_pretty(payload).map_err(|err| format!("json encode failed: {err}"))?;
     println!("{encoded}");
     Ok(())
 }

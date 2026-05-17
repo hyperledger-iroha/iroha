@@ -108,6 +108,33 @@ class RecordingSession(requests.Session):
         return self._responses.pop(0)
 
 
+def test_expect_status_surfaces_error_envelope_details() -> None:
+    response = StubResponse(
+        429,
+        {
+            "code": "queue_full",
+            "message": "transaction queue is at capacity",
+            "details": {
+                "reject_code": "TX_QUEUE_FULL",
+                "retry_after_seconds": 1,
+                "queue": {
+                    "state": "saturated",
+                    "queued": 128,
+                    "capacity": 128,
+                    "saturated": True,
+                },
+            },
+        },
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        ToriiClient._expect_status(response, (200,))
+
+    message = str(exc.value)
+    assert "transaction queue is at capacity" in message
+    assert "reject_code=TX_QUEUE_FULL" in message
+
+
 VPN_ACCOUNT = "vpn-user@paynet"
 VPN_OPERATOR = "vpn-operator@paynet"
 VPN_ESCROW = "vpn-escrow@paynet"
@@ -115,6 +142,7 @@ VPN_QUOTE_ID = "11" * 32
 VPN_PAYMENT_HASH = "22" * 32
 VPN_METERING_KEY = "33" * 32
 VPN_LEASE_ID = VPN_QUOTE_ID
+VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00" * 248
 
 
 def _vpn_instruction(wire_id: str = "OpenVpnLeaseEscrow") -> Dict[str, str]:
@@ -204,7 +232,7 @@ def _vpn_session_payload() -> Dict[str, Any]:
         "dns_servers": quote_payload["dns_servers"],
         "tunnel_addresses": quote_payload["tunnel_addresses"],
         "mtu_bytes": quote_payload["mtu_bytes"],
-        "helper_ticket_hex": "55" * 32,
+        "helper_ticket_hex": VPN_HELPER_TICKET_HEX,
         "bytes_in": 0,
         "bytes_out": 0,
         "status": "connected",

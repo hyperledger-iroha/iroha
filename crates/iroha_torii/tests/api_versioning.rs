@@ -51,15 +51,15 @@ async fn default_version_is_advertised() {
     let header = headers
         .get(HEADER_API_VERSION)
         .and_then(|value| value.to_str().ok());
-    assert_eq!(header, Some("1.1"));
+    assert_eq!(header, Some("1.0"));
     let supported = headers
         .get("x-iroha-api-supported")
         .and_then(|value| value.to_str().ok());
-    assert_eq!(supported, Some("1.0, 1.1"));
+    assert_eq!(supported, Some("1.0"));
     let min_proof = headers
         .get("x-iroha-api-min-proof-version")
         .and_then(|value| value.to_str().ok());
-    assert_eq!(min_proof, Some("1.1"));
+    assert_eq!(min_proof, Some("1.0"));
     let sunset = headers
         .get("x-iroha-api-sunset-unix")
         .and_then(|value| value.to_str().ok());
@@ -118,9 +118,9 @@ async fn api_versions_endpoint_lists_supported_versions() {
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let info: iroha_torii_shared::ApiVersionInfo = norito::decode_from_bytes(&body).unwrap();
-    assert_eq!(info.default, "1.1");
-    assert_eq!(info.supported, vec!["1.0", "1.1"]);
-    assert_eq!(info.min_proof_version, "1.1");
+    assert_eq!(info.default, "1.0");
+    assert_eq!(info.supported, vec!["1.0"]);
+    assert_eq!(info.min_proof_version, "1.0");
     assert_eq!(
         info.sunset_unix,
         iroha_torii_shared::API_VERSION_SUNSET_UNIX
@@ -128,7 +128,7 @@ async fn api_versions_endpoint_lists_supported_versions() {
 }
 
 #[tokio::test]
-async fn proof_endpoints_reject_old_api_version() {
+async fn proof_endpoints_accept_first_release_api_version() {
     let app = build_router();
 
     let response = app
@@ -147,15 +147,7 @@ async fn proof_endpoints_reject_old_api_version() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&body).unwrap();
-    assert_eq!(payload.code, "torii_api_version_too_old");
-    assert!(
-        payload.message.contains("minimum `1.1`"),
-        "expected minimum version message, got {}",
-        payload.message
-    );
+    assert_ne!(response.status(), StatusCode::UPGRADE_REQUIRED);
 }
 
 fn build_router() -> axum::Router {

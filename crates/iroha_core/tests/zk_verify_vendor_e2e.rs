@@ -87,7 +87,7 @@ fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
     // Minimal state
     let authority: AccountId = ALICE_ID.clone();
     let domain_id: iroha_data_model::domain::DomainId =
-        DomainId::try_new("wonderland", "universal").expect("domain");
+        iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain");
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
     let world = iroha_core::state::World::with([domain], [account], Vec::<AssetDefinition>::new());
@@ -162,7 +162,7 @@ fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
         start_ts: 0,
         end_ts: 0,
         vk_ballot: vk_id.clone(),
-        vk_tally: vk_id,
+        vk_tally: vk_id.clone(),
         domain_tag: "zkvote".to_string(),
     }
     .execute(&authority, &mut stx)
@@ -173,10 +173,10 @@ fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
     let sb = iroha_data_model::isi::zk::SubmitBallot {
         election_id: "election1".to_string(),
         ciphertext: commit_bytes.to_vec(),
-        ballot_proof: iroha_data_model::proof::ProofAttachment::new_inline(
+        ballot_proof: iroha_data_model::proof::ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ballot_fixture.proof_box("halo2/ipa"),
-            ballot_vk,
+            vk_id.clone(),
         ),
         nullifier,
     };

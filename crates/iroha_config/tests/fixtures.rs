@@ -530,13 +530,10 @@ fn minimal_config_snapshot() {
                 },
                 api_versions: [
                     "1.0",
-                    "1.1",
                 ],
-                api_version_default: "1.1",
-                api_min_proof_version: "1.1",
-                api_version_sunset_unix: Some(
-                    1893456000,
-                ),
+                api_version_default: "1.0",
+                api_min_proof_version: "1.0",
+                api_version_sunset_unix: None,
                 max_content_len: Bytes(
                     64000000,
                 ),
@@ -1141,9 +1138,13 @@ fn minimal_config_snapshot() {
                 },
                 inrou: SoracloudRuntimeInrou {
                     max_concurrent_vms: 8,
+                    enabled: false,
                     proxy_only: false,
                     start_grace: 30s,
                     stop_grace: 10s,
+                },
+                submission: SoracloudRuntimeSubmission {
+                    gas_asset_id: None,
                 },
                 egress: SoracloudRuntimeEgress {
                     default_allow: false,
@@ -2058,8 +2059,13 @@ fn minimal_config_snapshot() {
                     enforce_transcript_label_ascii: true,
                 },
                 fastpq: Fastpq {
-                    execution_mode: Auto,
-                    poseidon_mode: Auto,
+                    execution_mode: Cpu,
+                    poseidon_mode: Cpu,
+                    proof_sidecar_queue_cap: 1024,
+                    proof_sidecar_max_bytes: Bytes(
+                        1048576,
+                    ),
+                    proof_sidecar_max_retries: 16,
                     device_class: None,
                     chip_family: None,
                     gpu_kind: None,

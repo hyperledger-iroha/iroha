@@ -3102,19 +3102,6 @@
         }
       ]
     },
-    "MAX_DEGREE": {
-      "counts": {
-        "prod": 1
-      },
-      "paths": [
-        {
-          "context": "let current = std::env::var(\"MAX_DEGREE\")",
-          "line": 106,
-          "path": "crates/iroha_core/src/zk.rs",
-          "scope": "prod"
-        }
-      ]
-    },
     "MOCHI_CONFIG": {
       "counts": {
         "prod": 1

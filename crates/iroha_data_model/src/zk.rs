@@ -63,7 +63,7 @@ pub struct OpenVerifyEnvelope {
     pub backend: BackendTag,
     /// Circuit identifier string (backend-specific; opaque to host).
     pub circuit_id: String,
-    /// Verifying-key hash (`sha256(backend || vk_bytes)`) if known; all zeros if inline.
+    /// Domain-separated verifying-key hash if known; all zeros if inline.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub vk_hash: [u8; 32],
     /// Public-input metadata bytes (opaque; backend-specific canonical encoding).

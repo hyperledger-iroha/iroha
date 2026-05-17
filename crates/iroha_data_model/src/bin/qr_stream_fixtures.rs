@@ -62,9 +62,9 @@ fn build_fixture(
                 iroha_data_model::qr_stream::QrStreamFrameKind::Data => "data",
                 iroha_data_model::qr_stream::QrStreamFrameKind::Parity => "parity",
             };
-            json::json!({
-                "kind": kind,
-                "bytes_hex": encode(frame.encode()),
+            norito::json!({
+                "kind": (kind),
+                "bytes_hex": (encode(frame.encode())),
             })
         })
         .collect::<Vec<_>>();
@@ -76,16 +76,16 @@ fn build_fixture(
         QrPayloadKind::Unspecified => "unspecified",
     };
 
-    Ok(json::json!({
+    Ok(norito::json!({
         "fixture_version": 1,
-        "payload_hex": encode(payload),
+        "payload_hex": (encode(payload)),
         "options": {
-            "chunk_size": chunk_size as u64,
-            "parity_group": parity_group as u64,
-            "payload_kind": payload_kind_label,
+            "chunk_size": (chunk_size as u64),
+            "parity_group": (parity_group as u64),
+            "payload_kind": (payload_kind_label),
         },
-        "envelope_hex": encode(envelope.encode()),
-        "frames": frames_value,
+        "envelope_hex": (encode(envelope.encode())),
+        "frames": (frames_value),
     }))
 }
 

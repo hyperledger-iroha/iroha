@@ -248,7 +248,7 @@ pas de verrouillage.
 - Limites strictes (valeurs par défaut configurables) :
 -`max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. Les preuves qui dépassent `verify_timeout_ms` abandonnent l'instruction de manière déterministe (les bulletins de vote de gouvernance émettent `proof verification exceeded timeout`, `VerifyProof` renvoie une erreur).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Des quotas supplémentaires garantissent la vivacité : générateurs de blocs liés `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block` et `max_public_inputs` ; `reorg_depth_bound` (≥ `max_anchor_age_blocks`) régit le maintien des points de contrôle frontaliers.
 - L'exécution du runtime rejette désormais les transactions qui dépassent ces limites par transaction ou par bloc, émettant des erreurs déterministes `InvalidParameter` et laissant l'état du grand livre inchangé.
 - Mempool préfiltre les transactions confidentielles par `vk_id`, la longueur de la preuve et l'âge d'ancrage avant d'appeler le vérificateur pour limiter l'utilisation des ressources.

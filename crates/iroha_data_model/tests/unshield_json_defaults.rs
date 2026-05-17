@@ -5,7 +5,7 @@ use iroha_data_model::{
     asset::AssetDefinitionId,
     isi::zk::Unshield,
     prelude::DomainId,
-    proof::{ProofAttachment, ProofBox, VerifyingKeyBox},
+    proof::{ProofAttachment, ProofBox, VerifyingKeyId},
 };
 
 fn json_value<T: norito::json::JsonSerialize + ?Sized>(value: &T) -> norito::json::Value {
@@ -29,10 +29,10 @@ fn unshield_json_defaults_missing_outputs_to_empty() {
         DomainId::try_new("wonderland", "universal").expect("domain"),
         "rose".parse().expect("asset name"),
     );
-    let proof = ProofAttachment::new_inline(
+    let proof = ProofAttachment::new_ref(
         "halo2/ipa".into(),
         ProofBox::new("halo2/ipa".into(), vec![0xAA]),
-        VerifyingKeyBox::new("halo2/ipa".into(), vec![0xBB]),
+        VerifyingKeyId::new("halo2/ipa", "unshield_vk"),
     );
     let payload = json_object([
         ("asset", json_value(&asset.to_string())),

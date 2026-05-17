@@ -302,7 +302,7 @@ impl norito::json::JsonDeserialize for ConfidentialStatus {
     }
 }
 
-/// Digest advertising the active confidential feature set (verifier keys and parameters).
+/// Digest advertising the active confidential feature set (verifier keys, parameters, and policy).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
 #[cfg_attr(
@@ -327,6 +327,12 @@ pub struct ConfidentialFeatureDigest {
     pub pedersen_params_id: Option<u32>,
     /// Version of the confidential ruleset encoded in manifests and policies.
     pub conf_rules_version: Option<u32>,
+    /// Hash of the ZK consensus policy that affects proof admission and verification.
+    #[cfg_attr(
+        feature = "json",
+        norito(with = "crate::json_helpers::fixed_bytes::option")
+    )]
+    pub zk_policy_hash: Option<[u8; 32]>,
 }
 
 impl ConfidentialFeatureDigest {
@@ -337,12 +343,14 @@ impl ConfidentialFeatureDigest {
         poseidon_params_id: Option<u32>,
         pedersen_params_id: Option<u32>,
         conf_rules_version: Option<u32>,
+        zk_policy_hash: Option<[u8; 32]>,
     ) -> Self {
         Self {
             vk_set_hash,
             poseidon_params_id,
             pedersen_params_id,
             conf_rules_version,
+            zk_policy_hash,
         }
     }
 
@@ -353,6 +361,7 @@ impl ConfidentialFeatureDigest {
             && self.poseidon_params_id.is_none()
             && self.pedersen_params_id.is_none()
             && self.conf_rules_version.is_none()
+            && self.zk_policy_hash.is_none()
     }
 }
 
@@ -361,7 +370,7 @@ pub const CONFIDENTIAL_RULES_VERSION: u32 = 1;
 
 /// Default digest advertising only the confidential ruleset version.
 pub const DEFAULT_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
-    ConfidentialFeatureDigest::new(None, None, None, Some(CONFIDENTIAL_RULES_VERSION));
+    ConfidentialFeatureDigest::new(None, None, None, Some(CONFIDENTIAL_RULES_VERSION), None);
 
 /// Identifier for confidential parameter registries (Pedersen/Poseidon).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]

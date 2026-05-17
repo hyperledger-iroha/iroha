@@ -264,7 +264,7 @@ Swift SDK-ууд одоо JSON цавуугүйгээр бамбай заавр�
 - Хатуу хязгаар (тохируулж болох өгөгдмөл):
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms`-ээс хэтэрсэн нотлох баримтууд зааврыг тодорхой хэмжээгээр цуцалдаг (засаглалын саналын хуудас `proof verification exceeded timeout`, `VerifyProof` алдаа гаргадаг).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Нэмэлт квотууд нь амьдрах чадварыг баталгаажуулдаг: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, `max_public_inputs` блок бүтээгчид; `reorg_depth_bound` (≥ `max_anchor_age_blocks`) хилийн шалган нэвтрүүлэх цэгийг хадгалах асуудлыг зохицуулдаг.
 - Ажиллах цагийн гүйцэтгэл нь одоо эдгээр гүйлгээ тус бүр эсвэл блок бүрийн хязгаараас хэтэрсэн гүйлгээг үгүйсгэж, `InvalidParameter` тодорхойлогч алдаа гаргаж, бүртгэлийн төлөвийг өөрчлөхгүй.
 - Mempool нөөцийн ашиглалтыг хязгаарлахын тулд баталгаажуулагчийг дуудахаасаа өмнө нууц гүйлгээг `vk_id`, баталгааны урт, зангууны насаар урьдчилан шүүдэг.

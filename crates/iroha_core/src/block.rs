@@ -2974,8 +2974,8 @@ pub(crate) mod valid {
 
     /// Test-only harness for legacy block-time mailbox execution.
     ///
-    /// Production replay must not depend on a local SoraCloud runtime. Runtime
-    /// effects must be persisted through explicit SoraCloud ISIs in committed
+    /// Production replay must not depend on a local Soracloud runtime. Runtime
+    /// effects must be persisted through explicit Soracloud ISIs in committed
     /// transactions so Kura replay reconstructs the same WSV on every peer.
     #[cfg(test)]
     fn execute_soracloud_mailbox_runtime(state_block: &mut StateBlock<'_>) {
@@ -10983,10 +10983,9 @@ pub(crate) mod valid {
             soracloud_runtime::{
                 SoracloudApartmentExecutionRequest, SoracloudApartmentExecutionResult,
                 SoracloudDeterministicStateMutation, SoracloudLocalReadRequest,
-                SoracloudLocalReadResponse, SoracloudPrivateInferenceExecutionRequest,
-                SoracloudPrivateInferenceExecutionResult, SoracloudRuntime,
-                SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind,
-                SoracloudRuntimeReadHandle, SoracloudRuntimeSnapshot,
+                SoracloudLocalReadResponse, SoracloudRuntime, SoracloudRuntimeExecutionError,
+                SoracloudRuntimeExecutionErrorKind, SoracloudRuntimeReadHandle,
+                SoracloudRuntimeSnapshot,
             },
             state::{State, World},
             sumeragi::network_topology::{Topology, test_topology_with_keys},
@@ -11073,17 +11072,6 @@ pub(crate) mod valid {
                 Err(SoracloudRuntimeExecutionError::new(
                     SoracloudRuntimeExecutionErrorKind::Unavailable,
                     "local reads are not used in this test runtime",
-                ))
-            }
-
-            fn execute_private_inference(
-                &self,
-                _request: SoracloudPrivateInferenceExecutionRequest,
-            ) -> Result<SoracloudPrivateInferenceExecutionResult, SoracloudRuntimeExecutionError>
-            {
-                Err(SoracloudRuntimeExecutionError::new(
-                    SoracloudRuntimeExecutionErrorKind::Unavailable,
-                    "private inference is not used in this test runtime",
                 ))
             }
 

@@ -667,9 +667,6 @@ _Соңғы рет `python3 scripts/inventory_env_toggles.py --json docs/source/
 - сынақ: жәшіктер/ivm/tests/i18n.rs:13 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 - сынақ: жәшіктер/ivm/tests/i18n.rs:71 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 
-## MAX_DEGREE (өнім: 1)
-
-- өнім: crates/iroha_core/src/zk.rs:106 — `let current = std::env::var("MAX_DEGREE")`
 
 ## MOCHI_CONFIG (өнім: 1)
 

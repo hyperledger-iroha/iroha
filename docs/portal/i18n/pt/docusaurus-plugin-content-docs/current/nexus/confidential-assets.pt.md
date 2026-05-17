@@ -247,7 +247,7 @@ Documento substitui locais no runbook de operações; políticas de governança 
 - Limites duros (padrões configuráveis):
 -`max_proof_size_bytes = 262_144`.
 -`max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
--`verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. Provas que excedem `verify_timeout_ms` abortam a instrução deterministicamente (cédulas de governança emitem `proof verification exceeded timeout`, `VerifyProof` retorna erro).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Cotas adicionais garantindo vivacidade: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, e `max_public_inputs` limitam construtores de blocos; `reorg_depth_bound` (>= `max_anchor_age_blocks`) governa a retenção de postos de controle de fronteira.
 - A execução runtime agora rejeita transações que excedem esses limites por transação ou por bloco, emitindo erros `InvalidParameter` deterministas e mantendo o estado do razão inalterado.
 - Mempool pré-filtra transações temporárias por `vk_id`, tamanho de prova e idade de âncora antes de invocar o verificador para manter o uso de recursos limitados.
@@ -345,7 +345,7 @@ Documento substitui locais no runbook de operações; políticas de governança 
    - [x] Handshake P2P anuncia `ConfidentialFeatureDigest` (backend digest + impressões digitais de registro) e falha mismatches deterministicamente via `HandshakeConfidentialMismatch`.
    - [x] Remover panics em caminhos de execução confidenciais e adicionar role gating para nós incompativeis.
    - [ ] Aplicar orçamentos de timeout do verificador e limites de profundidade de reorganização para checkpoints de fronteira.
-     - [x] Orçamentos de timeout de verificação aplicados; provas que excedem `verify_timeout_ms` agora falham deterministicamente.
+     - Verification timeout budgets are telemetry/operator budgets only; proofs fail deterministically on size, gas, public input, policy, or anchor-age bounds.
      - [x] Frontier checkpoints agora respeitam `reorg_depth_bound`, podando checkpoints mais antigos que a janela configurada e mantendo snapshots deterministas.
    - Introduzir `AssetConfidentialPolicy`, política FSM e portões de execução para instruções mint/transfer/reveal.
    - Commit `conf_features` nos cabeçalhos do bloco e recusar participação de validadores quando resumos de registro/parâmetros divergem.

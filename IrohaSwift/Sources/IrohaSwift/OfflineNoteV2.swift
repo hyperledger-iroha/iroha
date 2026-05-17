@@ -391,6 +391,8 @@ public struct OfflineNoteInputNullifierPreimageV2: Equatable, Sendable {
 public struct OfflineNotePaymentTokenIdPreimageV2: Equatable, Sendable {
     public let domain: String
     public let chainId: String
+    public let paymentRequestId: String
+    public let createdAtMs: UInt64
     public let tokenNonce: Data
     public let senderKeyCertificatePayloadHash: Data
     public let inputNullifiers: [Data]
@@ -398,6 +400,8 @@ public struct OfflineNotePaymentTokenIdPreimageV2: Equatable, Sendable {
 
     public init(domain: String = OfflineNoteV2Constants.paymentTokenIdDomain,
                 chainId: String,
+                paymentRequestId: String,
+                createdAtMs: UInt64,
                 tokenNonce: Data,
                 senderKeyCertificatePayloadHash: Data,
                 inputNullifiers: [Data],
@@ -412,6 +416,9 @@ public struct OfflineNotePaymentTokenIdPreimageV2: Equatable, Sendable {
         guard !chainId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw OfflineNoritoError.invalidMetadata("chain_id")
         }
+        guard !paymentRequestId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw OfflineNoritoError.invalidMetadata("payment_request_id")
+        }
         try OfflineNoteV2Validation.validateRandomBytes(tokenNonce, field: "token_nonce")
         try OfflineNoteV2Validation.validateHash(
             senderKeyCertificatePayloadHash,
@@ -425,6 +432,8 @@ public struct OfflineNotePaymentTokenIdPreimageV2: Equatable, Sendable {
         )
         self.domain = domain
         self.chainId = chainId
+        self.paymentRequestId = paymentRequestId
+        self.createdAtMs = createdAtMs
         self.tokenNonce = tokenNonce
         self.senderKeyCertificatePayloadHash = senderKeyCertificatePayloadHash
         self.inputNullifiers = inputNullifiers
@@ -1137,6 +1146,8 @@ enum OfflineNoteV2Encoding {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(OfflineCompactNorito.encodeString(preimage.domain))
         writer.writeField(encodeChainId(preimage.chainId))
+        writer.writeField(OfflineCompactNorito.encodeString(preimage.paymentRequestId))
+        writer.writeField(OfflineCompactNorito.encodeUInt64(preimage.createdAtMs))
         writer.writeField(encodeBytesVec(preimage.tokenNonce))
         writer.writeField(try OfflineCompactNorito.encodeHash(preimage.senderKeyCertificatePayloadHash))
         writer.writeField(try encodeVec(preimage.inputNullifiers, encode: OfflineCompactNorito.encodeHash))

@@ -213,7 +213,11 @@ class ToriiOfflineNoteV2IssuerClient @JvmOverloads constructor(
                 future.completeExceptionally(error)
                 return@whenComplete
             }
-            val rejectCode = HttpErrorMessageExtractor.extractRejectCode(response.headers, "x-iroha-reject-code")
+            val rejectCode = HttpErrorMessageExtractor.extractRejectCode(
+                response.headers,
+                "x-iroha-reject-code",
+                response.body,
+            )
             val bodyPreview = HttpErrorMessageExtractor.extractMessage(response.body)
             val clientResponse = ClientResponse(response.statusCode, response.body, response.message, null, rejectCode)
             if (response.statusCode < 200 || response.statusCode >= 300) {

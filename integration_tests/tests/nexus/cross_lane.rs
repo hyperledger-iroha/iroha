@@ -22,7 +22,7 @@ use iroha_data_model::{
         LaneRelayError, LaneStorageProfile, compute_settlement_hash,
     },
     peer::PeerId,
-    proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
+    proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
 };
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use norito::{core as norito_core, json};
@@ -118,10 +118,10 @@ fn lane_privacy_proof_attachment_roundtrips() -> Result<()> {
         vec![Some(sibling)],
     )?;
 
-    let mut attachment = ProofAttachment::new_inline(
+    let mut attachment = ProofAttachment::new_ref(
         "lane/privacy".parse()?,
         ProofBox::new("lane/privacy".parse()?, vec![0x01, 0x02]),
-        VerifyingKeyBox::new("lane/privacy".parse()?, vec![0xAA, 0xBB]),
+        VerifyingKeyId::new("lane/privacy", "lane_privacy_vk"),
     );
     attachment.lane_privacy = Some(privacy);
     let list = ProofAttachmentList(vec![attachment]);

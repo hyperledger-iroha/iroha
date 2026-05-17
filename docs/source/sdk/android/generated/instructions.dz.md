@@ -1089,7 +1089,7 @@ Alias binding payload approved alongside a manifest.
 
 ## `iroha_data_model::isi::sorafs::RegisterPinManifest`
 
-> Schema summary: struct fields: digest: ManifestDigest, chunker: ChunkerProfileHandle, chunk_digest_sha3_256: Array<u8, 32>, policy: PinPolicy, submitted_epoch: u64, alias: Option<ManifestAliasBinding>, successor_of: Option<ManifestDigest>.
+> Schema summary: struct fields: digest: ManifestDigest, chunker: ChunkerProfileHandle, chunk_digest_sha3_256: Array<u8, 32>, content_length: u64, policy: PinPolicy, submitted_epoch: u64, alias: Option<ManifestAliasBinding>, successor_of: Option<ManifestDigest>.
 
 - Rust type: `iroha_data_model::isi::sorafs::RegisterPinManifest`
 - Schema hash: `7fa6a5b7e48dcdaa7fa6a5b7e48dcdaa`
@@ -1101,6 +1101,7 @@ Alias binding payload approved alongside a manifest.
 | `digest` | `ManifestDigest` |
 | `chunker` | `ChunkerProfileHandle` |
 | `chunk_digest_sha3_256` | `Array<u8, 32>` |
+| `content_length` | `u64` |
 | `policy` | `PinPolicy` |
 | `submitted_epoch` | `u64` |
 | `alias` | `Option<ManifestAliasBinding>` |

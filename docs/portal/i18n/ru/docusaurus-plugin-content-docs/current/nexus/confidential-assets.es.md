@@ -235,7 +235,7 @@ Documenta переопределяет локали в рабочем списк
 - Ограничивает длительность (конфигурируемые по умолчанию):
 - `max_proof_size_bytes = 262_144`.
 - И18НИ00000284Х, И18НИ00000285Х, И18НИ00000286Х.
-- И18НИ00000287Х, И18НИ00000288Х. Proofs que exceden `verify_timeout_ms` abortan la instruccion de forma determinista (ballots de governance emiten `proof verification exceeded timeout`, `VerifyProof` retorna error).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Дополнительная живость: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, y `max_public_inputs` строители блоков acotan; `reorg_depth_bound` (>= `max_anchor_age_blocks`) обеспечивает удержание пограничных контрольно-пропускных пунктов.
 - La ejecucion runtime ahora rechaza transacciones que exceden estos limites por transaccion o por bloque, emitiendo errores `InvalidParameter` deterministas y dejando el estado del ledger sin cambios.
 - Mempool prefiltro transacciones confidenciales por `vk_id`, longitud de proof y edad de anchor antes de invocar el verificador para mantener acotado el uso de recursos.

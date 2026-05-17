@@ -7,6 +7,7 @@ use std::{
     borrow::Cow,
     convert::{Infallible, TryInto},
     fs,
+    io::{self, Read, Write},
     net::SocketAddr,
     num::NonZeroU32,
     sync::atomic::{AtomicU64, Ordering},
@@ -29,23 +30,28 @@ use futures::StreamExt;
 use hex::{ToHex, encode};
 use http::header::{AGE, CACHE_CONTROL, HeaderName, RETRY_AFTER, WARNING};
 use hyper::body::Body as HyperBody;
-use iroha_core::state::{StateReadOnly, WorldReadOnly};
-use iroha_crypto::HashOf;
+use iroha_core::{
+    smartcontracts::isi::sorafs::manifest_pin_policy_constraints_from_config,
+    state::{StateReadOnly, WorldReadOnly},
+};
+use iroha_crypto::{Algorithm, HashOf, PublicKey, Signature};
 use iroha_data_model::{
     ChainId,
     block::BlockHeader,
     da::{ingest::DaStripeLayout, manifest::ChunkRole},
     soracloud::SoraRouteVisibilityV1,
+    sorafs::pin_registry::{ManifestDigest, PinManifestRecord, PinStatus},
 };
 use iroha_logger::{debug, error, warn};
 use mv::storage::StorageReadOnly;
 use norito::derive::JsonDeserialize;
 use norito::json::{self, Map, Number, Value};
+#[cfg(test)]
+use sorafs_car::verifier::CarVerifier;
 use sorafs_car::{
-    CarBuildPlan, CarChunk, CarWriter, FileEntry, FilePlan,
-    fetch_plan::chunk_fetch_specs_to_json,
-    por_json::sample_to_map,
-    verifier::{CarVerifier, CarVerifyError},
+    CarBuildPlan, CarChunk, CarStreamingWriter, FileEntry, FilePlan,
+    compute_chunk_plan_digest_sha3, fetch_plan::chunk_fetch_specs_to_json, por_json::sample_to_map,
+    verifier::CarVerifyError,
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
@@ -58,12 +64,15 @@ use sorafs_manifest::{
     chunker_registry,
     por::{AuditVerdictV1, PorChallengeV1, PorProofV1},
     potr::{PotrReceiptV1, PotrSignatureAlgorithm, PotrSignatureV1, PotrStatus},
+    validate_manifest,
 };
 use sorafs_node::{
     NodeStorageError, PorTrackerError,
     capacity::CapacityUsageSnapshot,
     metering::{FeeProjection, MeteringSnapshot},
-    store::{ChunkRoleMetadata, StorageError as StorageBackendError, StoredManifest},
+    store::{
+        ChunkFileRecord, ChunkRoleMetadata, StorageError as StorageBackendError, StoredManifest,
+    },
     telemetry::TelemetryError,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -76,10 +85,9 @@ use crate::{
     routing::MaybeTelemetry,
     sorafs::{
         AdmissionRegistry, AliasCacheEnforcement, AliasCachePolicyExt, AliasCachePolicyHttpExt,
-        AliasProofEvaluationExt, AliasProofState, BLINDED_CID_LEN, CacheDecision,
-        PinSubmissionPolicy, QuotaExceeded, SorafsAction, StreamTokenConcurrencyPermit,
-        StreamTokenHeaderError, StreamTokenIssuerError, StreamTokenQuotaExceeded, TokenOverrides,
-        decode_token_base64,
+        AliasProofEvaluationExt, AliasProofState, BLINDED_CID_LEN, CacheDecision, QuotaExceeded,
+        SorafsAction, StreamTokenConcurrencyPermit, StreamTokenHeaderError, StreamTokenIssuerError,
+        StreamTokenQuotaExceeded, TokenOverrides, decode_token_base64,
         discovery::{
             AdvertError, AdvertIngest, AdvertIngestResult, AdvertWarning, ProviderAdvertCache,
             capability_name,
@@ -90,7 +98,6 @@ use crate::{
             PerceptualObservation, PolicyViolation, RateLimitError, RequestContext,
             SORA_TLS_STATE_HEADER,
         },
-        pin::PinAuthError,
         registry::{
             CapacitySnapshot, GovernanceSummary, ManifestLineageSummary, PinRegistryMetricsSummary,
             PinRegistrySnapshot, RegistryAlias, RegistryError, RegistryManifest,
@@ -2825,6 +2832,131 @@ fn build_plan_for_storage_pin_request(
     Ok(plan)
 }
 
+fn dm_storage_class_from_manifest(
+    class: sorafs_manifest::StorageClass,
+) -> iroha_data_model::sorafs::pin_registry::StorageClass {
+    match class {
+        sorafs_manifest::StorageClass::Hot => {
+            iroha_data_model::sorafs::pin_registry::StorageClass::Hot
+        }
+        sorafs_manifest::StorageClass::Warm => {
+            iroha_data_model::sorafs::pin_registry::StorageClass::Warm
+        }
+        sorafs_manifest::StorageClass::Cold => {
+            iroha_data_model::sorafs::pin_registry::StorageClass::Cold
+        }
+    }
+}
+
+fn paid_pin_record_for_manifest(
+    state: &SharedAppState,
+    digest: ManifestDigest,
+    manifest: &ManifestV1,
+    plan: &CarBuildPlan,
+) -> ApiResult<PinManifestRecord> {
+    let state_view = state.state.view();
+    let Some(record) = state_view.world().pin_manifests().get(&digest).cloned() else {
+        return Err(json_error(
+            StatusCode::PAYMENT_REQUIRED,
+            format!(
+                "manifest {} has no paid pin registry record",
+                hex::encode(digest.as_bytes())
+            ),
+        )
+        .into());
+    };
+
+    if record.digest != digest {
+        return Err(json_error(
+            StatusCode::CONFLICT,
+            "paid pin registry record digest does not match the requested manifest",
+        )
+        .into());
+    }
+
+    match record.status {
+        PinStatus::Approved(_) => {}
+        PinStatus::Retired(_) => {
+            return Err(json_error(
+                StatusCode::FORBIDDEN,
+                format!("manifest {} is retired", hex::encode(digest.as_bytes())),
+            )
+            .into());
+        }
+        PinStatus::Pending => {
+            return Err(json_error(
+                StatusCode::PAYMENT_REQUIRED,
+                format!(
+                    "manifest {} is not approved for pinning",
+                    hex::encode(digest.as_bytes())
+                ),
+            )
+            .into());
+        }
+    }
+
+    let profile_matches = record.chunker.profile_id == manifest.chunking.profile_id.0
+        && record.chunker.namespace == manifest.chunking.namespace
+        && record.chunker.name == manifest.chunking.name
+        && record.chunker.semver == manifest.chunking.semver
+        && record.chunker.multihash_code == manifest.chunking.multihash_code;
+    if !profile_matches {
+        return Err(json_error(
+            StatusCode::CONFLICT,
+            "manifest chunker profile does not match the paid pin record",
+        )
+        .into());
+    }
+
+    let policy_matches = record.policy.min_replicas == manifest.pin_policy.min_replicas
+        && record.policy.retention_epoch == manifest.pin_policy.retention_epoch
+        && record.policy.storage_class
+            == dm_storage_class_from_manifest(manifest.pin_policy.storage_class);
+    if !policy_matches {
+        return Err(json_error(
+            StatusCode::CONFLICT,
+            "manifest pin policy does not match the paid pin record",
+        )
+        .into());
+    }
+
+    if record.content_length != manifest.content_length
+        || record.content_length != plan.content_length
+    {
+        return Err(json_error(
+            StatusCode::CONFLICT,
+            "manifest content length does not match the paid pin record",
+        )
+        .into());
+    }
+
+    let chunk_digest = compute_chunk_plan_digest_sha3(&plan.chunks);
+    if record.chunk_digest_sha3_256 != chunk_digest {
+        return Err(json_error(
+            StatusCode::CONFLICT,
+            "chunk plan digest does not match the paid pin record",
+        )
+        .into());
+    }
+
+    let Some(payment) = record.pin_fee_payment.as_ref() else {
+        return Err(json_error(
+            StatusCode::PAYMENT_REQUIRED,
+            "paid pin registry record is missing fee payment metadata",
+        )
+        .into());
+    };
+    if payment.paid_by != record.submitted_by {
+        return Err(json_error(
+            StatusCode::PAYMENT_REQUIRED,
+            "paid pin registry record payer does not match the manifest submitter",
+        )
+        .into());
+    }
+
+    Ok(record)
+}
+
 #[derive(Debug, Clone)]
 struct ResolvedSiteHost {
     hostname: String,
@@ -4200,17 +4332,12 @@ pub(crate) async fn handle_get_sorafs_denylist_pack(
 #[cfg(feature = "app_api")]
 pub(crate) async fn handle_post_sorafs_storage_pin(
     State(state): State<SharedAppState>,
-    headers: HeaderMap,
-    ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    _headers: HeaderMap,
+    ConnectInfo(_remote): ConnectInfo<SocketAddr>,
     JsonOnly(req): JsonOnly<StoragePinRequestDto>,
 ) -> Response {
     if !state.sorafs_node.is_enabled() {
         return storage_disabled_response();
-    }
-    let canonical_remote =
-        crate::limits::ingress_remote_ip(&headers, Some(remote.ip()), &state.trusted_proxy_nets);
-    if let Err(err) = state.sorafs_pin_policy.enforce(&headers, canonical_remote) {
-        return pin_auth_error_response(err);
     }
     let provider_id = state
         .sorafs_node
@@ -4240,6 +4367,23 @@ pub(crate) async fn handle_post_sorafs_storage_pin(
             return json_error(
                 StatusCode::BAD_REQUEST,
                 format!("invalid manifest payload: {err}"),
+            );
+        }
+    };
+    let manifest_constraints =
+        manifest_pin_policy_constraints_from_config(&state.state.gov.sorafs_pin_policy);
+    if let Err(err) = validate_manifest(&manifest, &manifest_constraints) {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            format!("manifest validation failed: {err}"),
+        );
+    }
+    let manifest_digest = match ManifestDigest::from_manifest(&manifest) {
+        Ok(digest) => digest,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to compute manifest digest: {err}"),
             );
         }
     };
@@ -4292,6 +4436,10 @@ pub(crate) async fn handle_post_sorafs_storage_pin(
             return json_error(StatusCode::BAD_REQUEST, err);
         }
     };
+
+    if let Err(err) = paid_pin_record_for_manifest(&state, manifest_digest, &manifest, &plan) {
+        return err.into_response();
+    }
 
     let stripe_layout = if let Some(layout) = req.stripe_layout {
         if layout.total_stripes == 0 || layout.shards_per_stripe == 0 {
@@ -4885,13 +5033,150 @@ fn enforce_stream_token_for_request(
     Ok((concurrency_guard, token.body))
 }
 
-fn manifest_envelope_present(headers: &HeaderMap) -> bool {
-    let has_full_envelope = headers
+#[cfg(feature = "app_api")]
+fn validate_chunk_files_and_payload_digest(
+    chunks: &[ChunkFileRecord],
+) -> Result<blake3::Hash, io::Error> {
+    let mut payload_hasher = blake3::Hasher::new();
+    let mut buffer = [0_u8; 64 * 1024];
+
+    for chunk in chunks {
+        let mut file = fs::File::open(&chunk.path)?;
+        let mut remaining = u64::from(chunk.length);
+        let mut chunk_hasher = blake3::Hasher::new();
+        while remaining > 0 {
+            let read_len = usize::try_from(remaining.min(buffer.len() as u64))
+                .expect("buffer-bounded read length fits usize");
+            let read = file.read(&mut buffer[..read_len])?;
+            if read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "stored chunk ended before the declared length",
+                ));
+            }
+            let bytes = &buffer[..read];
+            chunk_hasher.update(bytes);
+            payload_hasher.update(bytes);
+            remaining -= read as u64;
+        }
+
+        let actual = chunk_hasher.finalize();
+        if actual.as_bytes() != &chunk.digest {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "stored chunk digest does not match the manifest",
+            ));
+        }
+    }
+
+    Ok(payload_hasher.finalize())
+}
+
+#[cfg(feature = "app_api")]
+struct ChunkFilesReader {
+    chunks: Vec<ChunkFileRecord>,
+    next_index: usize,
+    current: Option<(fs::File, u64)>,
+}
+
+#[cfg(feature = "app_api")]
+impl ChunkFilesReader {
+    fn new(chunks: Vec<ChunkFileRecord>) -> Self {
+        Self {
+            chunks,
+            next_index: 0,
+            current: None,
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+impl Read for ChunkFilesReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+
+        loop {
+            if matches!(self.current.as_ref(), Some((_, 0))) {
+                self.current = None;
+                continue;
+            }
+
+            if self.current.is_some() {
+                let (read, finished) = {
+                    let (file, remaining) = self
+                        .current
+                        .as_mut()
+                        .expect("current chunk reader is present");
+                    let read_len = usize::try_from((*remaining).min(buffer.len() as u64))
+                        .expect("buffer-bounded read length fits usize");
+                    let read = file.read(&mut buffer[..read_len])?;
+                    if read == 0 {
+                        return Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "stored chunk ended before the declared length",
+                        ));
+                    }
+                    *remaining -= read as u64;
+                    (read, *remaining == 0)
+                };
+                if finished {
+                    self.current = None;
+                }
+                return Ok(read);
+            }
+
+            let Some(chunk) = self.chunks.get(self.next_index) else {
+                return Ok(0);
+            };
+            self.next_index += 1;
+            self.current = Some((fs::File::open(&chunk.path)?, u64::from(chunk.length)));
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+struct StreamingBodyWriter {
+    sender: mpsc::Sender<Result<Bytes, Infallible>>,
+}
+
+#[cfg(feature = "app_api")]
+impl Write for StreamingBodyWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        self.sender
+            .blocking_send(Ok(Bytes::copy_from_slice(buffer)))
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "response body closed"))?;
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn manifest_envelope_valid(
+    headers: &HeaderMap,
+    manifest: &StoredManifest,
+    record: Option<&PinManifestRecord>,
+) -> bool {
+    if let Some(envelope_b64) = headers
         .get(HEADER_SORA_MANIFEST_ENVELOPE)
-        .map(|value| !value.as_bytes().is_empty())
-        .unwrap_or(false);
-    if has_full_envelope {
-        return true;
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let Some(record) = record else {
+            return false;
+        };
+        let envelope = match BASE64_STANDARD.decode(envelope_b64.as_bytes()) {
+            Ok(bytes) => bytes,
+            Err(_) => return false,
+        };
+        return validate_manifest_envelope_bytes(record, &envelope);
     }
 
     let proof_b64 = headers
@@ -4929,11 +5214,88 @@ fn manifest_envelope_present(headers: &HeaderMap) -> bool {
             Ok(bytes) => bytes,
             Err(_) => return false,
         };
-        if decoded != bundle.binding.manifest_cid {
+        if decoded != bundle.binding.manifest_cid
+            || decoded.as_slice() != manifest.manifest_digest()
+        {
             return false;
         }
+    } else if bundle.binding.manifest_cid.as_slice() != manifest.manifest_digest() {
+        return false;
     }
     true
+}
+
+fn validate_manifest_envelope_bytes(record: &PinManifestRecord, envelope: &[u8]) -> bool {
+    let parsed: Value = match json::from_slice(envelope) {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    let Some(obj) = parsed.as_object() else {
+        return false;
+    };
+
+    let expected_manifest_hex = hex::encode(record.digest.as_bytes());
+    if obj.get("manifest_blake3").and_then(Value::as_str) != Some(expected_manifest_hex.as_str()) {
+        return false;
+    }
+    let expected_chunk_hex = hex::encode(record.chunk_digest_sha3_256);
+    if obj.get("chunk_digest_sha3_256").and_then(Value::as_str) != Some(expected_chunk_hex.as_str())
+    {
+        return false;
+    }
+    let canonical_profile = record.chunker.to_handle();
+    if obj.get("profile").and_then(Value::as_str) != Some(canonical_profile.as_str()) {
+        return false;
+    }
+    if let Some(stored_digest) = record.council_envelope_digest
+        && blake3_hash(envelope).as_bytes() != &stored_digest
+    {
+        return false;
+    }
+
+    let Some(signatures) = obj.get("signatures").and_then(Value::as_array) else {
+        return false;
+    };
+    if signatures.is_empty() {
+        return false;
+    }
+    signatures
+        .iter()
+        .all(|entry| validate_manifest_envelope_signature(entry, record.digest.as_bytes()))
+}
+
+fn validate_manifest_envelope_signature(entry: &Value, message: &[u8]) -> bool {
+    let Some(algorithm) = entry.get("algorithm").and_then(Value::as_str) else {
+        return false;
+    };
+    if !algorithm.eq_ignore_ascii_case("ed25519") {
+        return false;
+    }
+    let Some(signer_hex) = entry.get("signer").and_then(Value::as_str) else {
+        return false;
+    };
+    let Ok(signer_bytes) = hex::decode(signer_hex) else {
+        return false;
+    };
+    let Ok(public_key) = PublicKey::from_bytes(Algorithm::Ed25519, &signer_bytes) else {
+        return false;
+    };
+    if let Some(multihash) = entry.get("signer_multihash").and_then(Value::as_str)
+        && multihash != public_key.to_string()
+    {
+        return false;
+    }
+    let Some(signature_hex) = entry.get("signature").and_then(Value::as_str) else {
+        return false;
+    };
+    let Ok(signature_bytes) = hex::decode(signature_hex) else {
+        return false;
+    };
+    if signature_bytes.len() != 64 {
+        return false;
+    }
+    let signature = Signature::from_bytes(&signature_bytes);
+    signature.verify(&public_key, message).is_ok()
 }
 
 fn parse_policy_tags_header(headers: &HeaderMap, name: &str) -> Vec<String> {
@@ -5213,10 +5575,21 @@ fn enforce_gateway_policy_for_request(
     let fingerprint = gateway_client_fingerprint(remote, headers, &state.trusted_proxy_nets);
     let now = SystemTime::now();
     let monotonic_now = Instant::now();
+    let pin_record = state
+        .state
+        .view()
+        .world()
+        .pin_manifests()
+        .get(&ManifestDigest::new(*manifest.manifest_digest()))
+        .cloned();
     let mut context = RequestContext::new(&fingerprint, now, monotonic_now)
         .with_manifest_digest(manifest.manifest_digest())
         .with_content_cid(manifest.manifest_cid())
-        .with_manifest_envelope(manifest_envelope_present(headers))
+        .with_manifest_envelope(manifest_envelope_valid(
+            headers,
+            manifest,
+            pin_record.as_ref(),
+        ))
         .with_remote_addr(remote);
 
     if let Some(host) = headers
@@ -5808,37 +6181,62 @@ mod gateway_policy_violation_tests {
     }
 
     #[test]
-    fn manifest_envelope_detection_covers_required_paths() {
-        let mut headers = HeaderMap::new();
-        assert!(!manifest_envelope_present(&headers));
+    fn manifest_envelope_validation_requires_signed_registry_metadata() {
+        let private =
+            iroha_crypto::PrivateKey::from_bytes(Algorithm::Ed25519, &[0x11; 32]).expect("key");
+        let keypair = iroha_crypto::KeyPair::from_private_key(private).expect("keypair");
+        let record = PinManifestRecord::new(
+            ManifestDigest::new([0x21; 32]),
+            iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
+                profile_id: 1,
+                namespace: "sorafs".to_owned(),
+                name: "sf1".to_owned(),
+                semver: "1.0.0".to_owned(),
+                multihash_code: sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            },
+            [0x22; 32],
+            iroha_data_model::sorafs::pin_registry::PinPolicy::default(),
+            iroha_data_model::account::AccountId::new(keypair.public_key().clone()),
+            5,
+            None,
+            None,
+            iroha_data_model::metadata::Metadata::default(),
+        )
+        .with_content_length(1);
+        let signature = Signature::new(keypair.private_key(), record.digest.as_bytes());
+        let mut sig_entry = Map::new();
+        sig_entry.insert("algorithm".into(), Value::from("ed25519"));
+        sig_entry.insert(
+            "signer".into(),
+            Value::from(hex::encode(keypair.public_key().to_bytes().1)),
+        );
+        sig_entry.insert(
+            "signature".into(),
+            Value::from(hex::encode(signature.payload())),
+        );
+        let mut envelope = Map::new();
+        envelope.insert(
+            "manifest_blake3".into(),
+            Value::from(hex::encode(record.digest.as_bytes())),
+        );
+        envelope.insert(
+            "chunk_digest_sha3_256".into(),
+            Value::from(hex::encode(record.chunk_digest_sha3_256)),
+        );
+        envelope.insert("profile".into(), Value::from(record.chunker.to_handle()));
+        envelope.insert(
+            "signatures".into(),
+            Value::Array(vec![Value::Object(sig_entry)]),
+        );
+        let encoded = norito::json::to_vec(&Value::Object(envelope.clone())).expect("json");
+        assert!(validate_manifest_envelope_bytes(&record, &encoded));
 
-        headers.insert(
-            HeaderName::from_static(HEADER_SORA_MANIFEST_ENVELOPE),
-            HeaderValue::from_static("ZW52"),
+        envelope.insert(
+            "chunk_digest_sha3_256".into(),
+            Value::from(hex::encode([0; 32])),
         );
-        assert!(manifest_envelope_present(&headers));
-
-        let mut proof_headers = HeaderMap::new();
-        proof_headers.insert(
-            HeaderName::from_static(HEADER_SORA_PROOF),
-            alias_proof_header("alias/test"),
-        );
-        proof_headers.insert(
-            HeaderName::from_static(HEADER_SORA_NAME),
-            HeaderValue::from_static("alias/test"),
-        );
-        assert!(manifest_envelope_present(&proof_headers));
-
-        let mut mismatched = HeaderMap::new();
-        mismatched.insert(
-            HeaderName::from_static(HEADER_SORA_PROOF),
-            alias_proof_header("alias/test"),
-        );
-        mismatched.insert(
-            HeaderName::from_static(HEADER_SORA_NAME),
-            HeaderValue::from_static("alias/other"),
-        );
-        assert!(!manifest_envelope_present(&mismatched));
+        let mismatched = norito::json::to_vec(&Value::Object(envelope)).expect("json");
+        assert!(!validate_manifest_envelope_bytes(&record, &mismatched));
     }
 }
 
@@ -6175,7 +6573,10 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
             .chunking
             .aliases
             .iter()
-            .any(|candidate| candidate.eq_ignore_ascii_case(alias));
+            .any(|candidate| candidate.eq_ignore_ascii_case(alias))
+            || manifest_payload.alias_claims.iter().any(|claim| {
+                format!("{}/{}", claim.namespace, claim.name).eq_ignore_ascii_case(alias)
+            });
         if !alias_matches {
             drop(stream_token_guard);
             return gateway_refusal_response(
@@ -6214,8 +6615,6 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
         }
     };
 
-    let full_plan = manifest.to_car_plan_with_hint(chunk_profile, taikai_hint.clone());
-
     let chunk_slice = match manifest.chunk_slice(byte_range.start, length as usize) {
         Ok(slice) => slice,
         Err(StorageBackendError::RangeOutOfBounds { .. }) => {
@@ -6233,19 +6632,6 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
         }
     };
 
-    let range_payload = match state.sorafs_node.read_payload_range(
-        &storage_manifest_id,
-        byte_range.start,
-        length as usize,
-    ) {
-        Ok(bytes) => bytes,
-        Err(err) => return node_storage_error_response(err),
-    };
-
-    record_storage_metrics(&state);
-
-    debug_assert_eq!(range_payload.len() as u64, length);
-
     let mut range_chunks = Vec::with_capacity(chunk_slice.chunk_count());
     let mut relative_offset = 0u64;
     for record in &chunk_slice.chunks {
@@ -6257,34 +6643,27 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
         });
         relative_offset += u64::from(record.length);
     }
+    if relative_offset != length {
+        error!(
+            expected = length,
+            actual = relative_offset,
+            "chunk slice length mismatch while assembling CAR range"
+        );
+        drop(stream_token_guard);
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "chunk slice length mismatch",
+        );
+    }
 
-    let sub_plan = CarBuildPlan {
-        chunk_profile,
-        payload_digest: blake3_hash(&range_payload),
-        content_length: length,
-        chunks: range_chunks,
-        files: vec![FilePlan {
-            path: Vec::new(),
-            first_chunk: 0,
-            chunk_count: chunk_slice.chunk_count(),
-            size: length,
-        }],
-    };
-
-    let mut car_bytes = Vec::new();
-    let writer = match CarWriter::new(&sub_plan, &range_payload) {
-        Ok(writer) => writer,
-        Err(err) => {
-            error!(?err, "failed to initialise CAR writer for range response");
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to assemble CAR range",
+    let payload_digest = match validate_chunk_files_and_payload_digest(&chunk_slice.chunks) {
+        Ok(digest) => digest,
+        Err(err) if err.kind() == io::ErrorKind::InvalidData => {
+            error!(
+                ?err,
+                manifest_id = manifest_id_hex,
+                "stored chunk digest mismatch"
             );
-        }
-    };
-    if let Err(err) = writer.write_to(&mut car_bytes) {
-        error!(?err, "failed to write CAR range response");
-        if matches!(err, sorafs_car::CarWriteError::DigestMismatch { .. }) {
             drop(stream_token_guard);
             const DIGEST_MISMATCH_REASON: &str =
                 "car verification failed due to mismatched chunk digest";
@@ -6299,58 +6678,43 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
                 [("error_kind", Value::from("chunk_digest_mismatch"))],
             );
         }
-        return json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "failed to assemble CAR range",
-        );
-    }
-
-    let report = match CarVerifier::verify_block_car(
-        &manifest_payload,
-        &full_plan,
-        &car_bytes,
-        Some(byte_range.start..=byte_range.end_inclusive),
-    ) {
-        Ok(report) => report,
         Err(err) => {
             error!(
                 ?err,
                 manifest_id = manifest_id_hex,
-                "CAR range verification failed"
+                "failed to read stored chunk files"
             );
             drop(stream_token_guard);
-            return car_verification_refusal(
-                &state,
-                &manifest_profile,
-                provider_id.as_ref(),
-                TELEMETRY_ENDPOINT_CAR_RANGE,
-                err,
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to assemble CAR range",
             );
         }
     };
-    if report.payload_bytes != length {
-        error!(
-            expected = length,
-            actual = report.payload_bytes,
-            "CAR verification payload length mismatch"
-        );
-        return json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "verified CAR payload length mismatch",
-        );
-    }
+
+    record_storage_metrics(&state);
+
+    let sub_plan = CarBuildPlan {
+        chunk_profile,
+        payload_digest,
+        content_length: length,
+        chunks: range_chunks,
+        files: vec![FilePlan {
+            path: Vec::new(),
+            first_chunk: 0,
+            chunk_count: chunk_slice.chunk_count(),
+            size: length,
+        }],
+    };
+
     #[cfg(debug_assertions)]
-    debug_assert_eq!(report.chunk_indices.len(), expected_chunk_count);
+    debug_assert_eq!(chunk_slice.chunk_count(), expected_chunk_count);
     #[cfg(not(debug_assertions))]
     let _ = expected_chunk_count;
-    let verified_chunk_count = report.chunk_indices.len();
+    let verified_chunk_count = chunk_slice.chunk_count();
 
     let mut response_headers = HeaderMap::new();
     response_headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(MIME_CAR));
-    response_headers.insert(
-        header::CONTENT_LENGTH,
-        header_value(&car_bytes.len().to_string(), "Content-Length"),
-    );
     response_headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
     let content_range = format!(
         "bytes {}-{}/{}",
@@ -6404,7 +6768,7 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
     let response_status = StatusCode::PARTIAL_CONTENT;
     let latency_ms = request_timer.elapsed().as_secs_f64() * 1_000.0;
     #[cfg(feature = "telemetry")]
-    let payload_bytes = u64::try_from(car_bytes.len()).unwrap_or(u64::MAX);
+    let payload_bytes = length;
     #[cfg(feature = "telemetry")]
     {
         let provider_hex = provider_id.as_ref().map(encode);
@@ -6478,9 +6842,30 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
         }
     }
 
-    drop(stream_token_guard);
+    let (body_tx, body_rx) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let writer_plan = sub_plan;
+    let writer_chunks = chunk_slice.chunks;
+    let writer_manifest_id = manifest_id_hex.clone();
+    tokio::task::spawn_blocking(move || {
+        let _stream_token_guard = stream_token_guard;
+        let mut reader = ChunkFilesReader::new(writer_chunks);
+        let mut body_writer = StreamingBodyWriter { sender: body_tx };
+        let writer = CarStreamingWriter::new(&writer_plan);
+        if let Err(err) = writer.write_from_reader(&mut reader, &mut body_writer) {
+            error!(
+                ?err,
+                manifest_id = writer_manifest_id,
+                "failed to stream CAR range response"
+            );
+        }
+    });
 
-    (response_status, response_headers, car_bytes).into_response()
+    (
+        response_status,
+        response_headers,
+        Body::from_stream(ReceiverStream::new(body_rx)),
+    )
+        .into_response()
 }
 
 #[cfg(feature = "app_api")]
@@ -8236,27 +8621,6 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, JsonBody(response)).into_response()
 }
 
-fn pin_auth_error_response(err: PinAuthError) -> Response {
-    match err {
-        PinAuthError::TokenRequired => json_error(StatusCode::UNAUTHORIZED, "pin token required"),
-        PinAuthError::InvalidToken => json_error(StatusCode::FORBIDDEN, "invalid pin token"),
-        PinAuthError::IpNotAllowed => {
-            json_error(StatusCode::FORBIDDEN, "client not allowed for storage pin")
-        }
-        PinAuthError::RateLimited { retry_after } => {
-            let mut response = json_error(
-                StatusCode::TOO_MANY_REQUESTS,
-                "storage pin rate limit exceeded",
-            );
-            let secs = retry_after.as_secs().max(1);
-            if let Ok(value) = HeaderValue::from_str(&secs.to_string()) {
-                response.headers_mut().insert(RETRY_AFTER, value);
-            }
-            response
-        }
-    }
-}
-
 fn storage_pin_quota_response(err: QuotaExceeded) -> Response {
     let mut response = json_error(
         StatusCode::TOO_MANY_REQUESTS,
@@ -8652,49 +9016,14 @@ pub(crate) fn chunk_profile_for_manifest(manifest: &ManifestV1) -> ApiResult<Chu
         }
         Ok(descriptor.profile)
     } else {
-        let min_size = usize::try_from(manifest.chunking.min_size).map_err(|_| {
-            json_error(
-                StatusCode::BAD_REQUEST,
-                "manifest min_size exceeds supported range",
-            )
-        })?;
-        let target_size = usize::try_from(manifest.chunking.target_size).map_err(|_| {
-            json_error(
-                StatusCode::BAD_REQUEST,
-                "manifest target_size exceeds supported range",
-            )
-        })?;
-        let max_size = usize::try_from(manifest.chunking.max_size).map_err(|_| {
-            json_error(
-                StatusCode::BAD_REQUEST,
-                "manifest max_size exceeds supported range",
-            )
-        })?;
-        let profile = ChunkProfile {
-            min_size,
-            target_size,
-            max_size,
-            break_mask: u64::from(manifest.chunking.break_mask),
-        };
-        if profile.min_size == 0
-            || profile.target_size == 0
-            || profile.max_size == 0
-            || profile.break_mask == 0
-        {
-            return Err(json_error(
-                StatusCode::BAD_REQUEST,
-                "manifest chunking profile parameters must be non-zero",
-            )
-            .into());
-        }
-        if profile.min_size > profile.target_size || profile.target_size > profile.max_size {
-            return Err(json_error(
-                StatusCode::BAD_REQUEST,
-                "manifest chunking profile sizes must satisfy min <= target <= max",
-            )
-            .into());
-        }
-        Ok(profile)
+        Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "manifest chunker profile id {} is not registered",
+                manifest.chunking.profile_id.0
+            ),
+        )
+        .into())
     }
 }
 
@@ -8706,7 +9035,7 @@ mod chunk_profile_tests {
     use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy};
 
     #[test]
-    fn chunk_profile_for_manifest_rejects_out_of_order_sizes() {
+    fn chunk_profile_for_manifest_rejects_unknown_profile_id() {
         let payload = b"chunk-profile-fixture";
         let content_length = payload.len() as u64;
         let mut manifest = ManifestBuilder::new()
@@ -9190,7 +9519,7 @@ mod advert_tests {
         str::FromStr,
         sync::{
             Arc,
-            atomic::{AtomicUsize, Ordering},
+            atomic::{AtomicU64, AtomicUsize, Ordering},
         },
     };
 
@@ -9211,7 +9540,7 @@ mod advert_tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use iroha_crypto::{Hash, PublicKey};
+    use iroha_crypto::{Hash, KeyPair, PublicKey};
     use iroha_data_model::{
         Encode,
         account::AccountId,
@@ -9227,13 +9556,12 @@ mod advert_tests {
             capacity::{CapacityDeclarationRecord, ProviderId},
             pin_registry::{
                 ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasRecord, ManifestDigest,
-                PinManifestRecord, PinPolicy as RegistryPinPolicy, PinStatus, ReplicationOrderId,
-                ReplicationOrderRecord, ReplicationOrderStatus,
+                PinFeePayment, PinManifestRecord, PinPolicy as RegistryPinPolicy, PinStatus,
+                ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus,
             },
         },
     };
     use iroha_primitives::json::Json;
-    use nonzero_ext::nonzero;
     use norito::to_bytes;
     use sorafs_manifest::{
         AdvertEndpoint, AdvertSignature, AliasClaim, AvailabilityTier, CapabilityTlv,
@@ -9296,6 +9624,7 @@ mod advert_tests {
             .car_digest(blake3::hash(payload).into())
             .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
+            .governance(test_governance_proofs())
             .build()
             .expect("manifest");
         let chunker_handle = format!(
@@ -9483,6 +9812,7 @@ mod advert_tests {
     #[tokio::test]
     async fn pin_registry_metrics_summary_tracks_counts() {
         let state = make_state();
+        let pricing = state.view().world().sorafs_pricing().clone();
         let mut block = state.block(default_block_header());
         let mut tx = block.transaction();
 
@@ -9490,18 +9820,34 @@ mod advert_tests {
         let chunker_handle = default_chunker_handle();
         let chunk_digest = [0xAA; 32];
         let issuer = test_account();
+        let policy = RegistryPinPolicy::default();
+        let content_length = 1024;
+        let amount_nano = pricing.public_pin_fee_nano(
+            policy.storage_class,
+            content_length,
+            policy.min_replicas,
+            5,
+            policy.retention_epoch,
+        );
 
         let mut manifest_record = PinManifestRecord::new(
             manifest_digest.clone(),
             chunker_handle.clone(),
             chunk_digest,
-            RegistryPinPolicy::default(),
+            policy,
             issuer.clone(),
             5,
             None,
             None,
             Metadata::default(),
-        );
+        )
+        .with_content_length(content_length);
+        manifest_record.record_pin_fee_payment(PinFeePayment {
+            paid_by: issuer.clone(),
+            fee_asset_id: state.gov.sorafs_pin_fee_asset_id.clone(),
+            treasury_account_id: state.gov.sorafs_pin_fee_treasury_account.clone(),
+            amount_nano,
+        });
         manifest_record.approve(7, None);
         tx.world_mut_for_testing()
             .pin_manifests_mut_for_testing()
@@ -9692,6 +10038,7 @@ mod advert_tests {
         manifest: &ManifestV1,
         provider_id: [u8; 32],
     ) {
+        let pricing = state.view().world().sorafs_pricing().clone();
         let mut block = state.block(default_block_header());
         let mut tx = block.transaction();
 
@@ -9702,17 +10049,33 @@ mod advert_tests {
                 .into(),
         );
         let issuer = test_account();
+        let policy = registry_policy_for_manifest(manifest);
+        let content_length = manifest.content_length;
+        let amount_nano = pricing.public_pin_fee_nano(
+            policy.storage_class,
+            content_length,
+            policy.min_replicas,
+            5,
+            policy.retention_epoch,
+        );
         let mut manifest_record = PinManifestRecord::new(
             manifest_digest.clone(),
             default_chunker_handle(),
             [0xAB; 32],
-            RegistryPinPolicy::default(),
+            policy,
             issuer.clone(),
             5,
             None,
             None,
             Metadata::default(),
-        );
+        )
+        .with_content_length(content_length);
+        manifest_record.record_pin_fee_payment(PinFeePayment {
+            paid_by: issuer.clone(),
+            fee_asset_id: state.gov.sorafs_pin_fee_asset_id.clone(),
+            treasury_account_id: state.gov.sorafs_pin_fee_treasury_account.clone(),
+            amount_nano,
+        });
         manifest_record.approve(7, None);
         tx.world_mut_for_testing()
             .pin_manifests_mut_for_testing()
@@ -9751,7 +10114,16 @@ mod advert_tests {
     }
 
     fn default_block_header() -> BlockHeader {
-        BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)
+        static TEST_BLOCK_HEIGHT: AtomicU64 = AtomicU64::new(1);
+        let height = TEST_BLOCK_HEIGHT.fetch_add(1, Ordering::Relaxed);
+        BlockHeader::new(
+            std::num::NonZeroU64::new(height).expect("test block height is non-zero"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        )
     }
 
     fn default_chunker_handle() -> ChunkerProfileHandle {
@@ -9763,6 +10135,142 @@ mod advert_tests {
             semver: descriptor.semver.to_owned(),
             multihash_code: descriptor.multihash_code,
         }
+    }
+
+    fn chunker_handle_for_manifest(manifest: &ManifestV1) -> ChunkerProfileHandle {
+        ChunkerProfileHandle {
+            profile_id: manifest.chunking.profile_id.0,
+            namespace: manifest.chunking.namespace.clone(),
+            name: manifest.chunking.name.clone(),
+            semver: manifest.chunking.semver.clone(),
+            multihash_code: manifest.chunking.multihash_code,
+        }
+    }
+
+    fn registry_policy_for_manifest(manifest: &ManifestV1) -> RegistryPinPolicy {
+        RegistryPinPolicy {
+            min_replicas: manifest.pin_policy.min_replicas,
+            storage_class: dm_storage_class_from_manifest(manifest.pin_policy.storage_class),
+            retention_epoch: manifest.pin_policy.retention_epoch,
+        }
+    }
+
+    fn test_governance_proofs() -> sorafs_manifest::GovernanceProofs {
+        sorafs_manifest::GovernanceProofs {
+            council_signatures: vec![CouncilSignature {
+                signer: [0x11; 32],
+                signature: vec![0x22; 64],
+            }],
+        }
+    }
+
+    fn plan_for_pin_payload(manifest: &ManifestV1, payload: &[u8]) -> CarBuildPlan {
+        let profile = chunk_profile_for_manifest(manifest).expect("registered chunk profile");
+        CarBuildPlan::single_file_with_profile(payload, profile).expect("pin payload plan")
+    }
+
+    fn seed_paid_pin_record_for_plan_with_mutation(
+        state: &SharedAppState,
+        manifest: &ManifestV1,
+        plan: &CarBuildPlan,
+        mutate: impl FnOnce(&mut PinManifestRecord),
+    ) {
+        let mut block = state.state.block(default_block_header());
+        let mut tx = block.transaction();
+        let manifest_digest = ManifestDigest::new(
+            manifest
+                .digest()
+                .expect("compute manifest digest for paid pin seed")
+                .into(),
+        );
+        let policy = registry_policy_for_manifest(manifest);
+        let amount_nano = state
+            .state
+            .view()
+            .world()
+            .sorafs_pricing()
+            .public_pin_fee_nano(
+                policy.storage_class,
+                plan.content_length,
+                policy.min_replicas,
+                5,
+                policy.retention_epoch,
+            );
+        let mut manifest_record = PinManifestRecord::new(
+            manifest_digest.clone(),
+            chunker_handle_for_manifest(manifest),
+            compute_chunk_plan_digest_sha3(&plan.chunks),
+            policy,
+            test_account(),
+            5,
+            None,
+            None,
+            Metadata::default(),
+        )
+        .with_content_length(plan.content_length);
+        manifest_record.record_pin_fee_payment(PinFeePayment {
+            paid_by: test_account(),
+            fee_asset_id: state.state.gov.sorafs_pin_fee_asset_id.clone(),
+            treasury_account_id: state.state.gov.sorafs_pin_fee_treasury_account.clone(),
+            amount_nano,
+        });
+        manifest_record.approve(5, None);
+        mutate(&mut manifest_record);
+        tx.world_mut_for_testing()
+            .pin_manifests_mut_for_testing()
+            .insert(manifest_digest, manifest_record);
+        tx.apply();
+        block.commit().expect("commit paid pin seed block");
+    }
+
+    fn seed_paid_pin_record_for_plan(
+        state: &SharedAppState,
+        manifest: &ManifestV1,
+        plan: &CarBuildPlan,
+    ) {
+        seed_paid_pin_record_for_plan_with_mutation(state, manifest, plan, |_| {});
+    }
+
+    fn seed_paid_pin_record_for_payload(
+        state: &SharedAppState,
+        manifest: &ManifestV1,
+        payload: &[u8],
+    ) -> CarBuildPlan {
+        let plan = plan_for_pin_payload(manifest, payload);
+        seed_paid_pin_record_for_plan(state, manifest, &plan);
+        plan
+    }
+
+    fn storage_pin_request_for_payload(
+        manifest: &ManifestV1,
+        payload: &[u8],
+    ) -> StoragePinRequestDto {
+        StoragePinRequestDto {
+            manifest_b64: base64::engine::general_purpose::STANDARD
+                .encode(norito::to_bytes(manifest).expect("encode manifest")),
+            payload_b64: base64::engine::general_purpose::STANDARD.encode(payload),
+            ..Default::default()
+        }
+    }
+
+    async fn assert_storage_pin_error_contains(
+        response: axum::response::Response,
+        expected_status: StatusCode,
+        expected_message: &str,
+    ) {
+        assert_eq!(response.status(), expected_status);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect body");
+        let value: Value = norito::json::from_slice(&body).expect("decode error body");
+        let message = value
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            message.contains(expected_message),
+            "expected error containing `{expected_message}`, got: {message}"
+        );
     }
 
     fn test_account() -> AccountId {
@@ -10124,6 +10632,7 @@ mod advert_tests {
         let mut gateway_config = app.sorafs_gateway_config.clone();
         gateway_config.enforce_capabilities = true;
         gateway_config.enforce_admission = false;
+        gateway_config.require_manifest_envelope = false;
         app.sorafs_gateway_config = gateway_config;
         let components =
             build_sorafs_gateway_security(&app.sorafs_gateway_config, app.sorafs_admission.clone());
@@ -10146,7 +10655,7 @@ mod advert_tests {
     }
 
     fn manifest_for_payload(seed: u8, payload: &[u8]) -> ManifestV1 {
-        let mut manifest = ManifestBuilder::new()
+        let manifest = ManifestBuilder::new()
             .root_cid(vec![seed; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -10157,6 +10666,7 @@ mod advert_tests {
             .car_digest(blake3::hash(payload).into())
             .car_size(payload.len() as u64)
             .pin_policy(PinPolicy::default())
+            .governance(test_governance_proofs())
             .push_alias(AliasClaim {
                 name: "test".into(),
                 namespace: "alias".into(),
@@ -10164,7 +10674,6 @@ mod advert_tests {
             })
             .build()
             .expect("manifest");
-        manifest.chunking.aliases.push("alias/test".to_string());
         manifest
     }
 
@@ -10782,6 +11291,7 @@ mod advert_tests {
 
         inner.sorafs_node = node;
         let app = Arc::new(inner);
+        seed_paid_pin_record_for_payload(&app, &manifest, &payload);
 
         let request = StoragePinRequestDto {
             manifest_b64,
@@ -10811,33 +11321,13 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn storage_pin_requires_token_and_respects_allowlist_and_rate_limit() {
-        use std::num::NonZeroU32;
-
-        use iroha_config::parameters::actual::{
-            SorafsGatewayRateLimit as GatewayRateLimitCfg, SorafsStoragePin as PinCfg,
-        };
-
+    async fn storage_pin_requires_paid_registry_record() {
         let app = mk_app_state_for_tests();
-        let mut inner = Arc::try_unwrap(app)
-            .unwrap_or_else(|_| panic!("unique app state for pin policy mutation"));
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         let (node, _dir) = sorafs_node_with_temp_storage();
         inner.sorafs_node = node;
+        let state = Arc::new(inner);
 
-        let mut pin_cfg = PinCfg {
-            require_token: true,
-            ..Default::default()
-        };
-        pin_cfg.tokens.insert("secret-token".to_string());
-        pin_cfg.allow_cidrs = vec!["10.0.0.0/8".to_string(), "127.0.0.0/8".to_string()];
-        pin_cfg.rate_limit = GatewayRateLimitCfg {
-            max_requests: Some(NonZeroU32::new(1).expect("non-zero max_requests")),
-            window: Duration::from_secs(60),
-            ban: None,
-        };
-        inner.sorafs_pin_policy =
-            PinSubmissionPolicy::from_config(&pin_cfg).expect("valid pin policy");
-        // Build a reusable pin request.
         let payload = vec![0xCD; 128];
         let manifest = manifest_for_payload(0x33, &payload);
         let request = StoragePinRequestDto {
@@ -10846,86 +11336,357 @@ mod advert_tests {
             payload_b64: base64::engine::general_purpose::STANDARD.encode(payload),
             ..Default::default()
         };
-        let app = Arc::new(inner);
-        let loopback = ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080)));
-        let denied_ip = ConnectInfo(SocketAddr::from(([192, 0, 2, 1], 8081)));
 
-        // Missing token → 401
         let response = handle_post_sorafs_storage_pin(
-            State(app.clone()),
+            State(state),
             HeaderMap::new(),
-            loopback.clone(),
-            JsonOnly(request.clone()),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-
-        // Wrong token → 403
-        let mut wrong_headers = HeaderMap::new();
-        wrong_headers.insert(
-            header::AUTHORIZATION,
-            HeaderValue::from_static("Bearer wrong-token"),
-        );
-        let response = handle_post_sorafs_storage_pin(
-            State(app.clone()),
-            wrong_headers,
-            loopback.clone(),
-            JsonOnly(request.clone()),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-
-        // Valid token but disallowed IP → 403
-        let mut allowed_headers = HeaderMap::new();
-        allowed_headers.insert(
-            header::AUTHORIZATION,
-            HeaderValue::from_static("Bearer secret-token"),
-        );
-        let response = handle_post_sorafs_storage_pin(
-            State(app.clone()),
-            allowed_headers.clone(),
-            denied_ip,
-            JsonOnly(request.clone()),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-
-        // First allowed request succeeds.
-        let response = handle_post_sorafs_storage_pin(
-            State(app.clone()),
-            allowed_headers.clone(),
-            loopback.clone(),
-            JsonOnly(request.clone()),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-
-        // Second request from same client hits rate limit → 429 with Retry-After.
-        let response = handle_post_sorafs_storage_pin(
-            State(app.clone()),
-            allowed_headers,
-            loopback,
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))),
             JsonOnly(request),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-        let retry_after = response
-            .headers()
-            .get(RETRY_AFTER)
-            .and_then(|value| value.to_str().ok());
+        assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect body");
+        let value: Value = norito::json::from_slice(&body).expect("decode error body");
+        let message = value
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         assert!(
-            retry_after.is_some(),
-            "retry-after header should be present when rate limited"
+            message.contains("paid pin registry record"),
+            "unexpected error message: {message}"
         );
     }
 
     #[tokio::test]
-    async fn storage_pin_rate_limit_uses_forwarded_client_ip_from_trusted_proxy() {
-        use std::num::NonZeroU32;
+    async fn storage_pin_rejects_paid_record_missing_fee_payment_metadata() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
 
-        use iroha_config::parameters::actual::{
-            SorafsGatewayRateLimit as GatewayRateLimitCfg, SorafsStoragePin as PinCfg,
-        };
+        let payload = b"paid record missing fee metadata".to_vec();
+        let manifest = manifest_for_payload(0x34, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.pin_fee_payment = None;
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8084))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(
+            response,
+            StatusCode::PAYMENT_REQUIRED,
+            "missing fee payment metadata",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_paid_record_payer_mismatch() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"paid record payer mismatch".to_vec();
+        let manifest = manifest_for_payload(0x35, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record
+                .pin_fee_payment
+                .as_mut()
+                .expect("seeded payment")
+                .paid_by = AccountId::new(KeyPair::random().public_key().clone());
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8085))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(
+            response,
+            StatusCode::PAYMENT_REQUIRED,
+            "payer does not match",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_paid_record_submitter_mismatch() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"paid record submitter mismatch".to_vec();
+        let manifest = manifest_for_payload(0x35, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.submitted_by = AccountId::new(KeyPair::random().public_key().clone());
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8094))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(
+            response,
+            StatusCode::PAYMENT_REQUIRED,
+            "payer does not match",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_paid_record_content_length_mismatch() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"paid record content length mismatch".to_vec();
+        let manifest = manifest_for_payload(0x36, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.content_length = record.content_length.saturating_add(1);
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8086))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(response, StatusCode::CONFLICT, "content length").await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_pending_paid_record_even_with_fee_metadata() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"pending paid record must not pin".to_vec();
+        let manifest = manifest_for_payload(0x37, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.status = PinStatus::Pending;
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8087))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(
+            response,
+            StatusCode::PAYMENT_REQUIRED,
+            "not approved for pinning",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_retired_paid_record_even_with_fee_metadata() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"retired paid record must not pin".to_vec();
+        let manifest = manifest_for_payload(0x38, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.retire(6, Some("adversarial retirement".to_owned()));
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8088))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(response, StatusCode::FORBIDDEN, "retired").await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_paid_record_chunker_profile_mismatch() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"chunker profile mismatch".to_vec();
+        let manifest = manifest_for_payload(0x39, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.chunker.semver = "9.9.9".to_owned();
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8089))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(response, StatusCode::CONFLICT, "chunker profile").await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_paid_record_chunker_multihash_mismatch() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"chunker multihash mismatch".to_vec();
+        let manifest = manifest_for_payload(0x39, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.chunker.multihash_code = record.chunker.multihash_code.saturating_add(1);
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8095))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(response, StatusCode::CONFLICT, "chunker profile").await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_paid_record_policy_mismatch() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"pin policy mismatch".to_vec();
+        let manifest = manifest_for_payload(0x3A, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.policy.min_replicas = record.policy.min_replicas.saturating_add(1);
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8090))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(response, StatusCode::CONFLICT, "pin policy").await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_paid_record_storage_class_mismatch() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"pin policy storage class mismatch".to_vec();
+        let manifest = manifest_for_payload(0x3B, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.policy.storage_class =
+                iroha_data_model::sorafs::pin_registry::StorageClass::Cold;
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8091))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(response, StatusCode::CONFLICT, "pin policy").await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_paid_record_retention_epoch_mismatch() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"pin policy retention epoch mismatch".to_vec();
+        let manifest = manifest_for_payload(0x3C, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.policy.retention_epoch = record.policy.retention_epoch.saturating_add(1);
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8092))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(response, StatusCode::CONFLICT, "pin policy").await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_paid_record_digest_mismatch() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"paid record digest mismatch".to_vec();
+        let manifest = manifest_for_payload(0x3D, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.digest = ManifestDigest::new([0xFE; 32]);
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8093))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(response, StatusCode::CONFLICT, "digest").await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_accepts_paid_record_without_legacy_pin_token() {
+        use iroha_config::parameters::actual::SorafsStoragePin as PinCfg;
 
         let app = mk_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app)
@@ -10938,105 +11699,30 @@ mod advert_tests {
             require_token: true,
             ..Default::default()
         };
-        pin_cfg.tokens.insert("secret-token".to_string());
         pin_cfg.allow_cidrs = vec!["203.0.113.0/24".to_string()];
-        pin_cfg.rate_limit = GatewayRateLimitCfg {
-            max_requests: Some(NonZeroU32::new(1).expect("non-zero max_requests")),
-            window: Duration::from_secs(60),
-            ban: None,
-        };
         inner.sorafs_pin_policy =
-            PinSubmissionPolicy::from_config(&pin_cfg).expect("valid pin policy");
+            sorafs::PinSubmissionPolicy::from_config(&pin_cfg).expect("valid pin policy");
 
-        let make_request = |seed: u8| StoragePinRequestDto {
-            manifest_b64: {
-                let payload = vec![seed; 64];
-                let manifest = manifest_for_payload(seed, &payload);
-                base64::engine::general_purpose::STANDARD
-                    .encode(norito::to_bytes(&manifest).expect("encode manifest"))
-            },
-            payload_b64: {
-                let payload = vec![seed; 64];
-                base64::engine::general_purpose::STANDARD.encode(payload)
-            },
+        let payload = vec![0x44; 64];
+        let manifest = manifest_for_payload(0x44, &payload);
+        let request = StoragePinRequestDto {
+            manifest_b64: base64::engine::general_purpose::STANDARD
+                .encode(norito::to_bytes(&manifest).expect("encode manifest")),
+            payload_b64: base64::engine::general_purpose::STANDARD.encode(&payload),
             ..Default::default()
         };
-        let request_a = make_request(0x44);
-        let request_b = make_request(0x45);
-        let request_c = make_request(0x46);
-        let request_d = make_request(0x47);
 
         let app = Arc::new(inner);
-        let trusted_proxy = ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080)));
-        let untrusted_remote = ConnectInfo(SocketAddr::from(([198, 51, 100, 10], 8080)));
-
-        let mut forwarded_a = HeaderMap::new();
-        forwarded_a.insert(
-            header::AUTHORIZATION,
-            HeaderValue::from_static("Bearer secret-token"),
-        );
-        forwarded_a.insert(
-            HeaderName::from_static(crate::limits::REMOTE_ADDR_HEADER),
-            HeaderValue::from_static("203.0.113.10"),
-        );
-
-        let mut forwarded_b = HeaderMap::new();
-        forwarded_b.insert(
-            header::AUTHORIZATION,
-            HeaderValue::from_static("Bearer secret-token"),
-        );
-        forwarded_b.insert(
-            HeaderName::from_static(crate::limits::REMOTE_ADDR_HEADER),
-            HeaderValue::from_static("203.0.113.11"),
-        );
+        seed_paid_pin_record_for_payload(&app, &manifest, &payload);
 
         let response = handle_post_sorafs_storage_pin(
             State(app.clone()),
-            forwarded_a.clone(),
-            trusted_proxy.clone(),
-            JsonOnly(request_a),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([198, 51, 100, 10], 8080))),
+            JsonOnly(request),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-
-        let response = handle_post_sorafs_storage_pin(
-            State(app.clone()),
-            forwarded_b,
-            trusted_proxy.clone(),
-            JsonOnly(request_b),
-        )
-        .await;
-        assert_eq!(
-            response.status(),
-            StatusCode::OK,
-            "distinct forwarded client IPs should not share one rate-limit bucket"
-        );
-
-        let response = handle_post_sorafs_storage_pin(
-            State(app.clone()),
-            forwarded_a.clone(),
-            trusted_proxy,
-            JsonOnly(request_c),
-        )
-        .await;
-        assert_eq!(
-            response.status(),
-            StatusCode::TOO_MANY_REQUESTS,
-            "reusing the same forwarded client IP should hit the same bucket"
-        );
-
-        let response = handle_post_sorafs_storage_pin(
-            State(app),
-            forwarded_a,
-            untrusted_remote,
-            JsonOnly(request_d),
-        )
-        .await;
-        assert_eq!(
-            response.status(),
-            StatusCode::FORBIDDEN,
-            "untrusted peers must not spoof the forwarded client IP header"
-        );
     }
 
     #[tokio::test]
@@ -11068,8 +11754,10 @@ mod advert_tests {
             .car_digest(blake3::hash(payload).into())
             .car_size(payload.len() as u64)
             .pin_policy(PinPolicy::default())
+            .governance(test_governance_proofs())
             .build()
             .expect("manifest");
+        seed_paid_pin_record_for_payload(&state, &manifest, payload);
 
         let manifest_b64 = base64::engine::general_purpose::STANDARD
             .encode(norito::to_bytes(&manifest).expect("encode manifest"));
@@ -11165,6 +11853,7 @@ mod advert_tests {
             .car_digest(blake3::hash(payload).into())
             .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
+            .governance(test_governance_proofs())
             .build()
             .expect("manifest");
 
@@ -11934,18 +12623,14 @@ mod advert_tests {
                 data: index_bytes.to_vec(),
             },
         ];
-        let (_site_plan, payload) = CarBuildPlan::from_files_with_profile(
+        let (site_plan, payload) = CarBuildPlan::from_files_with_profile(
             files.clone(),
             sorafs_chunker::ChunkProfile::DEFAULT,
         )
         .expect("directory plan");
 
         let blob_manifest = manifest_for_payload(0xD6, &payload);
-        let mut site_manifest = manifest_for_payload(0xD6, &payload);
-        site_manifest
-            .chunking
-            .aliases
-            .push("alias/preferred-site".to_owned());
+        let site_manifest = manifest_for_payload(0xD6, &payload);
         let content_cid = encode_content_cid(&site_manifest.root_cid);
 
         let blob_plan = CarBuildPlan::single_file(&payload).expect("single-file plan");
@@ -11955,6 +12640,7 @@ mod advert_tests {
 
         inner.sorafs_node = node;
         let state = Arc::new(inner);
+        seed_paid_pin_record_for_plan(&state, &site_manifest, &site_plan);
 
         let manifest_b64 = base64::engine::general_purpose::STANDARD
             .encode(norito::to_bytes(&site_manifest).expect("encode manifest"));
@@ -12566,6 +13252,7 @@ mod advert_tests {
             .car_digest(blake3::hash(payload).into())
             .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
+            .governance(test_governance_proofs())
             .build()
             .expect("manifest");
         let request = StoragePinRequestDto {
@@ -12574,6 +13261,7 @@ mod advert_tests {
             payload_b64: BASE64_STANDARD.encode(payload),
             ..Default::default()
         };
+        seed_paid_pin_record_for_payload(&state, &manifest, payload);
 
         let response = handle_post_sorafs_storage_pin(
             State(state),
@@ -12724,6 +13412,7 @@ mod advert_tests {
             .car_digest(blake3::hash(payload).into())
             .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
+            .governance(test_governance_proofs())
             .build()
             .expect("manifest");
 
@@ -12796,6 +13485,7 @@ mod advert_tests {
             .car_digest(blake3::hash(payload).into())
             .car_size(payload.len() as u64)
             .pin_policy(PinPolicy::default())
+            .governance(test_governance_proofs())
             .build()
             .expect("manifest");
 
@@ -12813,6 +13503,7 @@ mod advert_tests {
             payload_b64,
             ..Default::default()
         };
+        seed_paid_pin_record_for_payload(&state, &manifest, payload);
         let response = handle_post_sorafs_storage_pin(
             State(state.clone()),
             HeaderMap::new(),
@@ -13140,6 +13831,7 @@ mod advert_tests {
             payload_b64,
             ..Default::default()
         };
+        seed_paid_pin_record_for_payload(&state, &manifest, &payload);
 
         let pin_response = handle_post_sorafs_storage_pin(
             State(state.clone()),
@@ -13511,6 +14203,7 @@ mod advert_tests {
             .car_digest(blake3::hash(&payload).into())
             .car_size(payload.len() as u64)
             .pin_policy(PinPolicy::default())
+            .governance(test_governance_proofs())
             .build()
             .expect("manifest");
 
@@ -13545,6 +14238,7 @@ mod advert_tests {
             stripe_layout: Some(stripe_layout),
             chunk_roles: Some(chunk_roles.clone()),
         };
+        seed_paid_pin_record_for_plan(&state, &manifest, &plan);
 
         let response = handle_post_sorafs_storage_pin(
             State(state.clone()),
@@ -13608,6 +14302,7 @@ mod advert_tests {
             }),
             chunk_roles: Some(Vec::new()),
         };
+        seed_paid_pin_record_for_payload(&state, &manifest, &payload);
 
         let response = handle_post_sorafs_storage_pin(
             State(state.clone()),
@@ -13659,6 +14354,7 @@ mod advert_tests {
             payload_b64,
             ..Default::default()
         };
+        seed_paid_pin_record_for_payload(&state, &manifest, &payload);
         let first_response = handle_post_sorafs_storage_pin(
             State(state.clone()),
             HeaderMap::new(),
@@ -13676,6 +14372,7 @@ mod advert_tests {
             payload_b64: base64::engine::general_purpose::STANDARD.encode(&second_payload),
             ..Default::default()
         };
+        seed_paid_pin_record_for_payload(&state, &second_manifest, &second_payload);
         let second_response = handle_post_sorafs_storage_pin(
             State(state.clone()),
             HeaderMap::new(),
@@ -13713,6 +14410,7 @@ mod advert_tests {
             .car_digest(blake3::hash(b"noop").into())
             .car_size(4)
             .pin_policy(PinPolicy::default())
+            .governance(test_governance_proofs())
             .build()
             .expect("manifest");
         let manifest_b64 = base64::engine::general_purpose::STANDARD
@@ -13736,7 +14434,7 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn storage_pin_requires_token_when_policy_enabled() {
+    async fn storage_pin_legacy_token_policy_no_longer_blocks_paid_pin() {
         let app = mk_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         let (node, _dir) = sorafs_node_with_temp_storage();
@@ -13756,6 +14454,7 @@ mod advert_tests {
         let manifest_b64 =
             base64::engine::general_purpose::STANDARD.encode(norito::to_bytes(&manifest).unwrap());
         let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&payload);
+        seed_paid_pin_record_for_payload(&state, &manifest, &payload);
 
         let request = StoragePinRequestDto {
             manifest_b64: manifest_b64.clone(),
@@ -13770,40 +14469,15 @@ mod advert_tests {
             JsonOnly(request),
         )
         .await;
-        assert_eq!(missing_token.status(), StatusCode::UNAUTHORIZED);
-
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::AUTHORIZATION,
-            HeaderValue::from_static("Bearer sorafs-secret"),
-        );
-        let valid_request = StoragePinRequestDto {
-            manifest_b64,
-            payload_b64,
-            ..Default::default()
-        };
-        let ok_response = handle_post_sorafs_storage_pin(
-            State(state.clone()),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8081))),
-            JsonOnly(valid_request),
-        )
-        .await;
-        assert_eq!(ok_response.status(), StatusCode::OK);
+        assert_eq!(missing_token.status(), StatusCode::OK);
     }
 
     #[tokio::test]
-    async fn storage_pin_rate_limits_repeated_requests() {
+    async fn storage_pin_rejects_paid_record_chunk_digest_mismatch() {
         let app = mk_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         let (node, _dir) = sorafs_node_with_temp_storage();
         inner.sorafs_node = node;
-        let mut pin_cfg = iroha_config::parameters::actual::SorafsStoragePin::default();
-        pin_cfg.rate_limit.max_requests = Some(NonZeroU32::new(1).expect("nonzero"));
-        pin_cfg.rate_limit.window = Duration::from_secs(5);
-        pin_cfg.allow_cidrs.push("127.0.0.0/8".to_owned());
-        inner.sorafs_pin_policy =
-            sorafs::PinSubmissionPolicy::from_config(&pin_cfg).expect("pin policy");
         let state = Arc::new(inner);
 
         let payload = b"pin rate limit payload".to_vec();
@@ -13816,6 +14490,9 @@ mod advert_tests {
             payload_b64: payload_b64.clone(),
             ..Default::default()
         };
+        let wrong_payload = b"pin rate limit payloae".to_vec();
+        let wrong_plan = plan_for_pin_payload(&manifest, &wrong_payload);
+        seed_paid_pin_record_for_plan(&state, &manifest, &wrong_plan);
 
         let first = handle_post_sorafs_storage_pin(
             State(state.clone()),
@@ -13824,31 +14501,58 @@ mod advert_tests {
             JsonOnly(request),
         )
         .await;
-        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(first.status(), StatusCode::CONFLICT);
+        let body = body::to_bytes(first.into_body(), usize::MAX)
+            .await
+            .expect("collect body");
+        let value: Value = norito::json::from_slice(&body).expect("decode error body");
+        let message = value
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            message.contains("chunk plan digest"),
+            "unexpected error message: {message}"
+        );
+    }
 
-        let second_request = StoragePinRequestDto {
+    #[tokio::test]
+    async fn storage_pin_accepts_paid_record_after_fee_governance_changes() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"pin fee mismatch payload".to_vec();
+        let manifest = manifest_for_payload(0x57, &payload);
+        let manifest_b64 =
+            base64::engine::general_purpose::STANDARD.encode(norito::to_bytes(&manifest).unwrap());
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&payload);
+        seed_paid_pin_record_for_payload(&state, &manifest, &payload);
+
+        let mut inner =
+            Arc::try_unwrap(state).unwrap_or_else(|_| panic!("unique app state after seed"));
+        let replacement_treasury = AccountId::new(KeyPair::random().public_key().clone());
+        Arc::get_mut(&mut inner.state)
+            .expect("unique core state after seed")
+            .gov
+            .sorafs_pin_fee_treasury_account = replacement_treasury;
+        let state = Arc::new(inner);
+
+        let request = StoragePinRequestDto {
             manifest_b64,
             payload_b64,
             ..Default::default()
         };
-        let second = handle_post_sorafs_storage_pin(
-            State(state.clone()),
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
             HeaderMap::new(),
             ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8082))),
-            JsonOnly(second_request),
+            JsonOnly(request),
         )
         .await;
-        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
-        let retry_after = second
-            .headers()
-            .get(RETRY_AFTER)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|raw| raw.parse::<u64>().ok())
-            .unwrap_or_default();
-        assert!(
-            retry_after > 0,
-            "retry-after header should be set on rate limit responses"
-        );
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -13883,6 +14587,7 @@ mod advert_tests {
             payload_b64: payload_b64.clone(),
             ..Default::default()
         };
+        seed_paid_pin_record_for_payload(&state, &manifest, &payload);
 
         let first = handle_post_sorafs_storage_pin(
             State(state.clone()),
@@ -13898,6 +14603,7 @@ mod advert_tests {
             payload_b64,
             ..Default::default()
         };
+        seed_paid_pin_record_for_payload(&state, &manifest, &payload);
         let second = handle_post_sorafs_storage_pin(
             State(state.clone()),
             HeaderMap::new(),
@@ -14597,6 +15303,7 @@ mod advert_tests {
             .car_digest(blake3::hash(payload).into())
             .car_size(payload.len() as u64)
             .pin_policy(PinPolicy::default())
+            .governance(test_governance_proofs())
             .build()
             .expect("manifest");
 
@@ -14608,6 +15315,7 @@ mod advert_tests {
             payload_b64,
             ..Default::default()
         };
+        seed_paid_pin_record_for_payload(&state, &manifest, payload);
 
         let response = handle_post_sorafs_storage_pin(
             State(state.clone()),
@@ -14692,6 +15400,7 @@ mod advert_tests {
             payload_b64,
             ..Default::default()
         };
+        seed_paid_pin_record_for_payload(&state, &manifest, payload);
 
         let pin_response = handle_post_sorafs_storage_pin(
             State(state.clone()),
@@ -14838,6 +15547,7 @@ mod advert_tests {
             .car_digest(blake3::hash(payload).into())
             .car_size(payload.len() as u64)
             .pin_policy(PinPolicy::default())
+            .governance(test_governance_proofs())
             .build()
             .expect("manifest");
 
@@ -14849,6 +15559,7 @@ mod advert_tests {
             payload_b64,
             ..Default::default()
         };
+        seed_paid_pin_record_for_payload(&state, &manifest, payload);
 
         let response = handle_post_sorafs_storage_pin(
             State(state.clone()),
@@ -14989,6 +15700,7 @@ mod advert_tests {
             .car_digest(blake3::hash(payload).into())
             .car_size(payload.len() as u64)
             .pin_policy(PinPolicy::default())
+            .governance(test_governance_proofs())
             .build()
             .expect("manifest");
 
@@ -15000,6 +15712,7 @@ mod advert_tests {
             payload_b64,
             ..Default::default()
         };
+        seed_paid_pin_record_for_payload(&state, &manifest, payload);
 
         let pin_response = handle_post_sorafs_storage_pin(
             State(state.clone()),

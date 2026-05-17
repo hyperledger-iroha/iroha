@@ -231,7 +231,7 @@ SPDX-License-Identifier: Apache-2.0
 - سخت حدود (حسب ضرورت ڈیفالٹ اقدار):
 - `max_proof_size_bytes = 262_144`۔
 - `max_nullifiers_per_tx = 8` ، `max_commitments_per_tx = 8` ، `max_confidential_ops_per_block = 256`۔
-- `verify_timeout_ms = 750` ، `max_anchor_age_blocks = 10_000`۔ `verify_timeout_ms` سے زیادہ ثبوتوں سے تعی .ن سے ہدایت کو ختم کرتے ہیں (گورننس ووٹ جاری کرتا ہے `proof verification exceeded timeout` ، `VerifyProof` ایک غلطی لوٹاتا ہے)۔
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - اضافی کوٹے زندہ رہنے کو یقینی بناتے ہیں: `max_proof_bytes_block` ، `max_verify_calls_per_tx` ، `max_verify_calls_per_block` ، اور `max_public_inputs` حد بلڈ بلڈرز ؛ `reorg_depth_bound` (≥ `max_anchor_age_blocks`) برقرار رکھنے کے فرنٹیئر چوکیوں کو کنٹرول کرتا ہے۔
 -رن ٹائم اب ان لین دین کو مسترد کرتا ہے جو ان فی ٹرانزیکشن یا فی بلاک کی حدود سے تجاوز کرتے ہیں ، جو عزم کی غلطیوں کو خارج کرتے ہیں `InvalidParameter` اور لیجر اسٹیٹ کو تبدیل نہیں کرتے ہیں۔
 - میمپول پری فلٹرز حساس لین دین `vk_id` کے ذریعہ ، ثبوت کی لمبائی اور اینکر عمر کے ذریعہ وسائل کی کھپت کو محدود کرنے کے لئے تصدیق کنندہ کو کال کرنے سے پہلے۔
@@ -327,7 +327,7 @@ SPDX-License-Identifier: Apache-2.0
    - ✅ P2P ہینڈ شیک نے `ConfidentialFeatureDigest` (پسدید ڈائجسٹ + رجسٹری فنگر پرنٹ) کا اعلان کیا اور `HandshakeConfidentialMismatch` کے ذریعہ اخلاقی طور پر مماثلت کو مسترد کردیا۔
    - position خفیہ عملدرآمد کے راستوں میں گھبراہٹ کو ہٹا دیا گیا اور متضاد نوڈس کے لئے رول گیٹنگ شامل کیا۔
    - syrifer سرحدی چوکیوں کے لئے تصدیق کنندہ کے لئے ٹائم آؤٹ بجٹ کا اطلاق کریں اور ریورج گہرائی کی حدیں۔
-     - تصدیق کے لئے ٹائم آؤٹ بجٹ کا اطلاق ہوتا ہے۔ `verify_timeout_ms` سے زیادہ ثبوت اب عزم کے ساتھ گرتے ہیں۔
+     - Verification timeout budgets are telemetry/operator budgets only; proofs fail deterministically on size, gas, public input, policy, or anchor-age bounds.
      - ✅ فرنٹیئر چوکیاں اب `reorg_depth_bound` کا احترام کرتی ہیں ، جب ڈٹرمینسٹک اسنیپ شاٹس کی بچت کرتے وقت مخصوص ونڈو سے پرانی چوکیوں کو ہٹا دیتے ہیں۔
    - ٹکسال/منتقلی/انکشاف ہدایات کے لئے `AssetConfidentialPolicy` ، پالیسی FSM اور انفورسمنٹ گیٹس درج کریں۔
    - بلاک ہیڈرز میں `conf_features` کا ارتکاب کریں اور اگر کوئی رجسٹری/پیرامیٹر ہضم ہو تو تضاد کو ہضم کرتا ہے۔

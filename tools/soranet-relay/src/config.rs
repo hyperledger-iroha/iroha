@@ -43,6 +43,7 @@ const ML_KEM_768_PUBLIC_LEN: usize = 1_184;
 const ML_KEM_768_SECRET_LEN: usize = 2_400;
 
 const DEFAULT_PRIVACY_BUCKET_SECS: u64 = 60;
+const DEFAULT_VPN_BACKEND_ENDPOINT: &str = "unix:/tmp/sora-vpn-backend.sock";
 const DEFAULT_PRIVACY_MIN_HANDSHAKES: u64 = 12;
 const DEFAULT_PRIVACY_FLUSH_DELAY_BUCKETS: u64 = 1;
 const DEFAULT_PRIVACY_FORCE_FLUSH_BUCKETS: u64 = 6;
@@ -510,9 +511,14 @@ pub struct VpnConfig {
     /// Optional 32-byte shared secret (hex) used to verify helper-authenticated VPN tickets.
     #[norito(default)]
     pub helper_ticket_secret_hex: Option<String>,
-    /// Optional local backend socket used to bridge helper-authenticated VPN traffic.
+    /// Local backend endpoint used to bridge helper-authenticated VPN traffic.
+    ///
+    /// Supported forms are `unix:/absolute/path` and `tcp://host:port`.
     #[norito(default)]
-    pub backend_addr: Option<String>,
+    pub backend_endpoint: Option<String>,
+    /// Optional 32-byte shared secret (hex) used to authenticate TCP backend bootstrap frames.
+    #[norito(default)]
+    pub backend_bootstrap_secret_hex: Option<String>,
     /// Optional on-disk spool directory for operator-submitted VPN settlement artifacts.
     #[norito(default)]
     pub receipt_spool_dir: Option<PathBuf>,
@@ -541,7 +547,8 @@ impl Default for VpnConfig {
             route_push: Vec::new(),
             dns_overrides: Vec::new(),
             helper_ticket_secret_hex: None,
-            backend_addr: None,
+            backend_endpoint: None,
+            backend_bootstrap_secret_hex: None,
             receipt_spool_dir: None,
             usage_voucher_debt_window_bytes: default_vpn_usage_voucher_debt_window_bytes(),
             cover: VpnCoverTrafficConfig::default(),
@@ -616,7 +623,20 @@ impl VpnConfig {
                 "vpn.helper_ticket_secret_hex must be set when vpn.enabled is true".to_string(),
             ));
         }
-        let backend_addr = self.parse_backend_addr()?;
+        let backend_endpoint = self.parse_backend_endpoint()?;
+        let backend_bootstrap_secret_hex = self.parse_backend_bootstrap_secret_hex()?;
+        if matches!(
+            backend_endpoint
+                .as_deref()
+                .and_then(|endpoint| parse_vpn_backend_endpoint(endpoint).ok()),
+            Some(VpnBackendEndpoint::Tcp(_))
+        ) && backend_bootstrap_secret_hex.is_none()
+        {
+            return Err(ConfigError::Vpn(
+                "vpn.backend_bootstrap_secret_hex must be set when vpn.backend_endpoint uses tcp://"
+                    .to_string(),
+            ));
+        }
         self.exit_class = self.exit_class.trim().to_owned();
         if let Err(error) = VpnExitClassV1::try_from_label(&self.exit_class) {
             return Err(ConfigError::Vpn(format!(
@@ -626,7 +646,8 @@ impl VpnConfig {
         self.route_push = routes.into_iter().map(|route| route.cidr.clone()).collect();
         self.dns_overrides = dns_overrides;
         self.helper_ticket_secret_hex = helper_ticket_secret_hex;
-        self.backend_addr = backend_addr;
+        self.backend_endpoint = backend_endpoint;
+        self.backend_bootstrap_secret_hex = backend_bootstrap_secret_hex;
         Ok(())
     }
 
@@ -733,20 +754,39 @@ impl VpnConfig {
         Ok(Some(trimmed.to_ascii_lowercase()))
     }
 
-    pub(crate) fn parse_backend_addr(&self) -> Result<Option<String>, ConfigError> {
-        let Some(addr) = self.backend_addr.as_ref() else {
+    pub(crate) fn parse_backend_endpoint(&self) -> Result<Option<String>, ConfigError> {
+        let trimmed = self
+            .backend_endpoint
+            .as_deref()
+            .map(str::trim)
+            .filter(|endpoint| !endpoint.is_empty())
+            .unwrap_or(DEFAULT_VPN_BACKEND_ENDPOINT);
+        let endpoint = parse_vpn_backend_endpoint(trimmed)?;
+        Ok(Some(endpoint.to_string()))
+    }
+
+    pub(crate) fn parse_backend_bootstrap_secret_hex(&self) -> Result<Option<String>, ConfigError> {
+        let Some(secret) = self.backend_bootstrap_secret_hex.as_ref() else {
             return Ok(None);
         };
-        let trimmed = addr.trim();
+        let trimmed = secret
+            .trim()
+            .trim_start_matches("0x")
+            .trim_start_matches("0X");
         if trimmed.is_empty() {
             return Ok(None);
         }
-        let parsed = trimmed.parse::<SocketAddr>().map_err(|err| {
+        let decoded = hex::decode(trimmed).map_err(|err| {
             ConfigError::Vpn(format!(
-                "vpn.backend_addr must be a valid socket address: {err}"
+                "vpn.backend_bootstrap_secret_hex must be valid hex: {err}"
             ))
         })?;
-        Ok(Some(parsed.to_string()))
+        if decoded.len() != 32 {
+            return Err(ConfigError::Vpn(
+                "vpn.backend_bootstrap_secret_hex must decode to 32 bytes".to_string(),
+            ));
+        }
+        Ok(Some(trimmed.to_ascii_lowercase()))
     }
 
     pub(crate) fn parse_receipt_spool_dir(&self) -> Option<PathBuf> {
@@ -765,11 +805,67 @@ impl VpnConfig {
         Some(bytes)
     }
 
-    pub fn backend_socket_addr(&self) -> Option<SocketAddr> {
-        self.backend_addr
-            .as_ref()
-            .map(|addr| addr.parse().expect("validated vpn.backend_addr to parse"))
+    pub fn backend_endpoint(&self) -> Option<VpnBackendEndpoint> {
+        self.backend_endpoint.as_ref().map(|endpoint| {
+            parse_vpn_backend_endpoint(endpoint).expect("validated vpn.backend_endpoint to parse")
+        })
     }
+
+    pub fn backend_bootstrap_secret_bytes(&self) -> Option<[u8; 32]> {
+        let secret = self.backend_bootstrap_secret_hex.as_ref()?;
+        let decoded =
+            hex::decode(secret).expect("validated vpn.backend_bootstrap_secret_hex to decode");
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(&decoded);
+        Some(bytes)
+    }
+}
+
+/// Parsed local VPN backend endpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VpnBackendEndpoint {
+    /// Permissioned Unix-domain socket endpoint.
+    Unix(PathBuf),
+    /// TCP endpoint protected by a bootstrap MAC.
+    Tcp(String),
+}
+
+impl fmt::Display for VpnBackendEndpoint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unix(path) => write!(f, "unix:{}", path.display()),
+            Self::Tcp(addr) => write!(f, "tcp://{addr}"),
+        }
+    }
+}
+
+fn parse_vpn_backend_endpoint(endpoint: &str) -> Result<VpnBackendEndpoint, ConfigError> {
+    if let Some(path) = endpoint.strip_prefix("unix:") {
+        let path = path.trim();
+        if path.is_empty() || !path.starts_with('/') {
+            return Err(ConfigError::Vpn(
+                "vpn.backend_endpoint unix endpoints must use unix:/absolute/path".to_string(),
+            ));
+        }
+        return Ok(VpnBackendEndpoint::Unix(PathBuf::from(path)));
+    }
+    if let Some(addr) = endpoint.strip_prefix("tcp://") {
+        let addr = addr.trim();
+        let Some((host, port)) = addr.rsplit_once(':') else {
+            return Err(ConfigError::Vpn(
+                "vpn.backend_endpoint tcp endpoints must use tcp://host:port".to_string(),
+            ));
+        };
+        if host.trim().is_empty() || port.parse::<u16>().is_err() {
+            return Err(ConfigError::Vpn(
+                "vpn.backend_endpoint tcp endpoints must use tcp://host:port".to_string(),
+            ));
+        }
+        return Ok(VpnBackendEndpoint::Tcp(addr.to_owned()));
+    }
+    Err(ConfigError::Vpn(
+        "vpn.backend_endpoint must start with unix:/path or tcp://host:port".to_string(),
+    ))
 }
 
 /// Billing/telemetry settings for VPN sessions.
@@ -4034,37 +4130,66 @@ mod tests {
     }
 
     #[test]
-    fn vpn_backend_addr_normalizes_socket_addr() {
+    fn vpn_backend_endpoint_normalizes_unix_endpoint() {
         let mut cfg = VpnConfig {
             enabled: true,
             helper_ticket_secret_hex: Some("ab".repeat(32)),
-            backend_addr: Some(" 127.0.0.1:19090 ".to_string()),
+            backend_endpoint: Some(" unix:/tmp/sora-vpn-backend.sock ".to_string()),
             ..VpnConfig::default()
         };
         cfg.validate().expect("vpn config should validate");
-        assert_eq!(cfg.backend_addr, Some("127.0.0.1:19090".to_string()));
         assert_eq!(
-            cfg.backend_socket_addr(),
-            Some("127.0.0.1:19090".parse().expect("socket addr"))
+            cfg.backend_endpoint,
+            Some("unix:/tmp/sora-vpn-backend.sock".to_string())
+        );
+        assert_eq!(
+            cfg.backend_endpoint(),
+            Some(VpnBackendEndpoint::Unix(PathBuf::from(
+                "/tmp/sora-vpn-backend.sock"
+            )))
         );
     }
 
     #[test]
-    fn vpn_backend_addr_rejects_invalid_socket_addr() {
+    fn vpn_backend_endpoint_requires_tcp_secret() {
         let mut cfg = VpnConfig {
             enabled: true,
             helper_ticket_secret_hex: Some("ab".repeat(32)),
-            backend_addr: Some("not-a-socket".to_string()),
+            backend_endpoint: Some("tcp://127.0.0.1:19090".to_string()),
             ..VpnConfig::default()
         };
         let err = cfg
             .validate()
-            .expect_err("expected backend addr validation failure");
+            .expect_err("expected tcp bootstrap secret validation failure");
+        assert!(
+            matches!(err, ConfigError::Vpn(message) if message.contains("backend_bootstrap_secret_hex"))
+        );
+
+        cfg.backend_bootstrap_secret_hex = Some("cd".repeat(32));
+        cfg.validate().expect("tcp endpoint with secret");
+        assert_eq!(
+            cfg.backend_endpoint(),
+            Some(VpnBackendEndpoint::Tcp("127.0.0.1:19090".to_string()))
+        );
+        assert_eq!(cfg.backend_bootstrap_secret_bytes(), Some([0xCD; 32]));
+    }
+
+    #[test]
+    fn vpn_backend_endpoint_rejects_invalid_endpoint() {
+        let mut cfg = VpnConfig {
+            enabled: true,
+            helper_ticket_secret_hex: Some("ab".repeat(32)),
+            backend_endpoint: Some("not-a-socket".to_string()),
+            ..VpnConfig::default()
+        };
+        let err = cfg
+            .validate()
+            .expect_err("expected backend endpoint validation failure");
         match err {
             ConfigError::Vpn(message) => {
                 assert!(
-                    message.contains("backend_addr"),
-                    "unexpected vpn backend addr error: {message}"
+                    message.contains("backend_endpoint"),
+                    "unexpected vpn backend endpoint error: {message}"
                 );
             }
             other => panic!("unexpected error {other:?}"),

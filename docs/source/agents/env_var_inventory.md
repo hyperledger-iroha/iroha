@@ -674,10 +674,6 @@ Total references: **505** · Unique variables: **137**
 - test: crates/ivm/tests/i18n.rs:13 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 - test: crates/ivm/tests/i18n.rs:71 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 
-## MAX_DEGREE (prod: 1)
-
-- prod: crates/iroha_core/src/zk.rs:106 — `let current = std::env::var("MAX_DEGREE")`
-
 ## MOCHI_CONFIG (prod: 1)
 
 - prod: mochi/mochi-ui-egui/src/config.rs:325 — `if let Some(value) = env::var_os("MOCHI_CONFIG").filter(|value| !value.is_empty()) {`

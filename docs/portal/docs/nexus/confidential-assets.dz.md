@@ -268,7 +268,7 @@ SPDX-License-Identifier: Apache-2.0
 - ཧརཌི་ཚད་གཞི་ (རིམ་སྒྲིག་འབད་བཏུབ་པའི་སྔོན་སྒྲིག་):
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. I18NI0000002666X གིས་ བཀོད་རྒྱ་གཏན་འབེབས་ཀྱི་ཐོག་ལས་ (གཞུང་གི་ཚོགས་རྒྱན་ཚུ་ `proof verification exceeded timeout`, `VerifyProof` གིས་ འཛོལ་བ་ཅིག་སླར་ལོག་འབདཝ་ཨིན།)
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - ཁ་སྐོང་ཚད་གཞི་ཚུ་ འཚོ་བ་ངེས་གཏན་བཟོཝ་ཨིན། `max_proof_bytes_block`, `max_verify_calls_per_tx`, I18NI000000271X, དང་ `max_public_inputs` བཀག་ཆ་བཀག་ཆ་འབད་མི་ཚུ།; `reorg_depth_bound` (≥ `max_anchor_age_blocks`) གིས་ མཐའ་མཚམས་ཀྱི་ བརྟག་ཞིབ་ས་ཚིགས་བཀག་ཆ་འབདཝ་ཨིན།
 - རཱན་ཊའི་ལག་ལེན་གྱིས་ ད་ལྟོ་ འ་ནི་ཚོང་འབྲེལ་ཡང་ན་ བཀག་ཆ་རེ་ལུ་ ཚད་གཞི་ལས་ལྷག་སྟེ་ཡོད་མི་ ཚོང་འབྲེལ་ཚུ་ ངོས་ལེན་འབདཝ་ཨིནམ་ད་ དེ་གིས་ གཏན་འབེབས་ I18NI000000275X འཛོལ་བ་ཚུ་ ཕྱིར་འཐེན་འབད་དེ་ ལག་དེབ་གནས་སྟངས་བསྒྱུར་བཅོས་མ་འབད་བས།
 - ཐོན་ཁུངས་ལག་ལེན་འདི་ མཐའ་མཚམས་བཞག་ནིའི་དོན་ལུ་ བདེན་བཤད་འབད་མི་འདི་ འབོད་བརྡ་མ་འབད་བའི་ཧེ་མ་ `vk_id` དང་ བདེན་ཁུངས་རིང་ཚད་ དེ་ལས་ ཨེན་ཀོར་གྱི་ལོ་ཚད་ཚུ་གིས་ གསང་བ་གི་ཚོང་འབྲེལ་ཚུ་ མེམ་པུལ་ མེམ་པུལ་ མེམ་པུལ་ མེམ་པུ་གིས་ བརྡ་ཚིག

@@ -34,6 +34,7 @@ use iroha_executor_data_model::permission::sorafs::{
     CanIssueSorafsReplicationOrder, CanRegisterSorafsPin, CanRegisterSorafsProviderOwner,
     CanRetireSorafsPin,
 };
+use iroha_primitives::numeric::Numeric;
 use mv::storage::StorageReadOnly;
 use norito::{decode_from_bytes, json, json::Value, to_bytes};
 use sorafs_manifest::{
@@ -457,6 +458,7 @@ fn register_manifest_rejects_unknown_chunker_profile() {
         digest: ManifestDigest::new([0xCC; 32]),
         chunker,
         chunk_digest_sha3_256: [0xEF; 32],
+        content_length: default_content_length(),
         policy: default_policy(),
         submitted_epoch: 5,
         alias: None,
@@ -490,6 +492,7 @@ fn register_manifest_rejects_unknown_successor() {
         digest,
         chunker: default_chunker(),
         chunk_digest_sha3_256: default_chunk_digest(),
+        content_length: default_content_length(),
         policy: default_policy(),
         submitted_epoch: 5,
         alias: None,
@@ -522,6 +525,7 @@ fn register_manifest_rejects_self_successor() {
         digest,
         chunker: default_chunker(),
         chunk_digest_sha3_256: default_chunk_digest(),
+        content_length: default_content_length(),
         policy: default_policy(),
         submitted_epoch: 5,
         alias: None,
@@ -553,6 +557,7 @@ fn register_manifest_accepts_active_successor() {
         digest: parent,
         chunker: default_chunker(),
         chunk_digest_sha3_256: default_chunk_digest(),
+        content_length: default_content_length(),
         policy: default_policy(),
         submitted_epoch: 5,
         alias: None,
@@ -570,6 +575,7 @@ fn register_manifest_accepts_active_successor() {
         digest: ManifestDigest::new([0xE4; 32]),
         chunker: default_chunker(),
         chunk_digest_sha3_256: default_chunk_digest(),
+        content_length: default_content_length(),
         policy: default_policy(),
         submitted_epoch: 6,
         alias: None,
@@ -619,6 +625,7 @@ fn register_manifest_rejects_retired_successor() {
         digest: ManifestDigest::new([0xE6; 32]),
         chunker: default_chunker(),
         chunk_digest_sha3_256: default_chunk_digest(),
+        content_length: default_content_length(),
         policy: default_policy(),
         submitted_epoch: 30,
         alias: None,
@@ -660,6 +667,7 @@ fn register_manifest_with_successor_persists_pointer() {
         digest: child,
         chunker: default_chunker(),
         chunk_digest_sha3_256: default_chunk_digest(),
+        content_length: default_content_length(),
         policy: default_policy(),
         submitted_epoch: 40,
         alias: None,
@@ -804,7 +812,48 @@ fn make_state() -> State {
         [alice_account, bob_account],
         std::iter::empty::<AssetDefinition>(),
     );
-    State::new_for_testing(world, kura, live)
+    let state = State::new_for_testing(world, kura, live);
+    state
+}
+
+fn seed_public_pin_fee_assets(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
+    let fee_asset_id = tx.gov.sorafs_pin_fee_asset_id.clone();
+    if let Some(domain_id) = fee_asset_id.try_domain().cloned()
+        && tx.world().domains().get(&domain_id).is_none()
+    {
+        Register::domain(Domain::new(domain_id))
+            .execute(&alice(), tx)
+            .expect("register SoraFS fee asset domain");
+    }
+    let treasury = tx.gov.sorafs_pin_fee_treasury_account.clone();
+    if tx.world().account(&treasury).is_err() {
+        Register::account(NewAccount::new(treasury))
+            .execute(&alice(), tx)
+            .expect("register SoraFS fee treasury account");
+    }
+    if tx.world().asset_definitions().get(&fee_asset_id).is_none() {
+        let definition = AssetDefinition::numeric(fee_asset_id.clone()).with_name(
+            fee_asset_id
+                .try_name()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "xor".to_owned()),
+        );
+        Register::asset_definition(definition)
+            .execute(&alice(), tx)
+            .expect("register SoraFS fee asset definition");
+    }
+    seed_pin_fee_balance(tx, &alice(), 10_000_000_000_000);
+}
+
+fn seed_pin_fee_balance(
+    tx: &mut iroha_core::state::StateTransaction<'_, '_>,
+    account: &AccountId,
+    amount: u128,
+) {
+    let asset_id = AssetId::new(tx.gov.sorafs_pin_fee_asset_id.clone(), account.clone());
+    Mint::asset_numeric(Numeric::new(amount, 0), asset_id)
+        .execute(&alice(), tx)
+        .expect("mint SoraFS public pin fee balance");
 }
 
 fn default_block_header() -> iroha_data_model::block::BlockHeader {
@@ -822,6 +871,10 @@ fn default_digest() -> ManifestDigest {
 
 fn default_chunk_digest() -> [u8; 32] {
     [0xCD; 32]
+}
+
+fn default_content_length() -> u64 {
+    1_073_741_824
 }
 
 fn default_chunker() -> ChunkerProfileHandle {
@@ -875,6 +928,7 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
             world.add_account_permission(&alice, perm);
         }
     }
+    seed_public_pin_fee_assets(tx);
 
     for provider_id in [
         ProviderId::new([0x51; 32]),
@@ -906,6 +960,7 @@ fn register_and_approve(
         digest,
         chunker: default_chunker(),
         chunk_digest_sha3_256: chunk_digest,
+        content_length: default_content_length(),
         policy: default_policy(),
         submitted_epoch: 5,
         alias: None,

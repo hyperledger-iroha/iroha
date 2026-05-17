@@ -264,7 +264,7 @@ Swift SDK-ებს ახლა შეუძლიათ გამოუშვ�
 - მძიმე ლიმიტები (კონფიგურირებადი ნაგულისხმევი):
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. მტკიცებულებები, რომლებიც აღემატება `verify_timeout_ms`-ს, წყვეტს ინსტრუქციას დეტერმინისტულად (მმართველობის ბიულეტენი გამოსცემს `proof verification exceeded timeout`, `VerifyProof` აბრუნებს შეცდომას).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - დამატებითი კვოტები უზრუნველყოფს სიცოცხლისუნარიანობას: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, და `max_public_inputs` შეკრული ბლოკის შემქმნელები; `reorg_depth_bound` (≥ `max_anchor_age_blocks`) არეგულირებს სასაზღვრო გამშვები პუნქტის შენარჩუნებას.
 - Runtime Execution ახლა უარყოფს ტრანზაქციებს, რომლებიც აღემატება ამ თითო ტრანზაქციის ან ბლოკის ლიმიტებს, გამოყოფს დეტერმინისტულ `InvalidParameter` შეცდომებს და ტოვებს წიგნში არსებულ მდგომარეობას უცვლელად.
 - Mempool წინასწარ ფილტრავს კონფიდენციალურ ტრანზაქციებს `vk_id`-ით, მტკიცებულების სიგრძით და წამყვანის ასაკის მიხედვით, სანამ არ გამოიძახებს ვერიფიკატორს, რათა შეინარჩუნოს რესურსის გამოყენება შეზღუდული.

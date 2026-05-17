@@ -235,7 +235,7 @@ Documente עוקף את locais no runbook de operacoes; politicas de governance 
 - מגבלת duros (ברירת מחדל תצורות):
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. Proofs que excedem `verify_timeout_ms` abortam a instrucao deterministicamente (הקלפיות הממשל emitem `proof verification exceeded timeout`, `VerifyProof` retorna erro).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - מכסות מובטחות לחיות: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, ו-`max_public_inputs` בוני בלוקים מוגבלים; `reorg_depth_bound` (>= `max_anchor_age_blocks`) שולט במחסומי הגבול.
 - A execucao runtime agora rejeita transacoes que excedem esses limites por transacao ou por bloco, emitindo erros `InvalidParameter` deterministas e mantendo o estado do do book inalterado.
 - Mempool prefiltra transacoes confidenciais por `vk_id`, tamanho de proof e idade de anchor antes de invocar o Verifier para manter uso de recursos limitado.
@@ -331,7 +331,7 @@ Documente עוקף את locais no runbook de operacoes; politicas de governance 
    - [x] לחיצת יד P2P anuncia `ConfidentialFeatureDigest` (תקציר אחורי + טביעות אצבעות של הרישום) ו-falha dismatches deterministicamente via `HandshakeConfidentialMismatch`.
    - [x] Remover נכנס לפאניקה בנתיבי הביצוע סודיים ותפקידים נוספים שערים עבור צמתים לא תואמים.
    - [ ] תקציבי זמן קצוב אפליקציוניים עושים אימות ומגבלות של פרופונדידה דה ריורג למחסומי גבול.
-     - [x] Budgets de timeout de verificacao aplicados; הוכחות que excedem `verify_timeout_ms` agora falham deterministicamente.
+     - Verification timeout budgets are telemetry/operator budgets only; proofs fail deterministically on size, gas, public input, policy, or anchor-age bounds.
      - [x] מחסומי גבול agora respeitam `reorg_depth_bound`, מחסומי פונדו mais antigos que a janela configurada e mantendo snapshots deterministas.
    - Introduzir `AssetConfidentialPolicy`, מדיניות FSM ו-gates de enforcement para instrucos mint/transfer/reveal.
    - Commit `conf_features` ללא כותרות de bloco e recusar participacao de validadores quando digests de registry/parametros divergem.

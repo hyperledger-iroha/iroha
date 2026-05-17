@@ -616,15 +616,15 @@ mod tests {
     use crate::{
         domain::DomainId,
         name::Name,
-        proof::{ProofAttachment, ProofBox, VerifyingKeyBox},
+        proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     };
 
     fn proof_attachment() -> ProofAttachment {
         let backend: iroha_schema::Ident = "halo2/ipa/poly-open".into();
-        ProofAttachment::new_inline(
+        ProofAttachment::new_ref(
             backend.clone(),
             ProofBox::new(backend.clone(), vec![1, 2, 3]),
-            VerifyingKeyBox::new(backend, Vec::new()),
+            VerifyingKeyId::new(backend, "escrow_vk"),
         )
     }
 

@@ -21,8 +21,7 @@ use iroha_crypto::sm::OpenSslProvider;
 #[cfg(feature = "sm")]
 use iroha_crypto::sm::{Sm2PublicKey, SmIntrinsicPolicy};
 use iroha_crypto::{
-    Algorithm, Hash, HashOf, MerkleTree as CanonMerkleTree, PublicKey,
-    blake2::{Blake2b512, digest::Digest as _},
+    Algorithm, Hash, HashOf, MerkleTree as CanonMerkleTree, PublicKey, blake2::Blake2b512,
 };
 use iroha_data_model::{
     IntoKeyValue,
@@ -105,11 +104,10 @@ use iroha_data_model::{
         SoraInrouServicePlacementRecordV1, SoraModelArtifactAuditEventV1,
         SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
         SoraModelHostViolationEvidenceRecordV1, SoraModelRegistryV1, SoraModelWeightAuditEventV1,
-        SoraModelWeightVersionRecordV1, SoraPrivateCompileProfileV1,
-        SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionV1, SoraRuntimeReceiptV1,
-        SoraServiceAuditEventV1, SoraServiceDeploymentStateV1, SoraServiceMailboxMessageV1,
-        SoraServiceRuntimeStateV1, SoraServiceStateEntryV1, SoraTrainingJobAuditEventV1,
-        SoraTrainingJobRecordV1, SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
+        SoraModelWeightVersionRecordV1, SoraRuntimeReceiptV1, SoraServiceAuditEventV1,
+        SoraServiceDeploymentStateV1, SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
+        SoraServiceStateEntryV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
+        SoraUploadedModelBundleV1,
     },
     soradns::{
         DirectoryId, DirectoryRotationPolicyV1, PendingDirectoryDraftV1, ResolverDirectoryRecordV1,
@@ -162,6 +160,7 @@ pub use range_bounds::{
     AsAssetIdAccountCompare, AsAssetIdAccountDefinitionCompare, AssetByAccountBounds,
     AssetByAccountDefinitionBounds, RoleIdByAccountBounds,
 };
+use sha2::{Digest as Sha2Digest, Sha256};
 pub use storage_transactions::TransactionsReadOnly;
 use thiserror::Error as ThisError;
 
@@ -476,15 +475,7 @@ macro_rules! build_world_block {
             soracloud_model_artifact_audit_events: $state
                 .soracloud_model_artifact_audit_events
                 .$method(),
-            soracloud_private_compile_profiles: $state.soracloud_private_compile_profiles.$method(),
             soracloud_uploaded_model_bundles: $state.soracloud_uploaded_model_bundles.$method(),
-            soracloud_uploaded_model_chunks: $state.soracloud_uploaded_model_chunks.$method(),
-            soracloud_private_inference_sessions: $state
-                .soracloud_private_inference_sessions
-                .$method(),
-            soracloud_private_inference_checkpoints: $state
-                .soracloud_private_inference_checkpoints
-                .$method(),
             soracloud_model_host_capabilities: $state.soracloud_model_host_capabilities.$method(),
             soracloud_inrou_host_capabilities: $state.soracloud_inrou_host_capabilities.$method(),
             soracloud_hf_sources: $state.soracloud_hf_sources.$method(),
@@ -683,17 +674,7 @@ macro_rules! build_world_transaction {
             soracloud_model_artifact_audit_events: $state
                 .soracloud_model_artifact_audit_events
                 .transaction(),
-            soracloud_private_compile_profiles: $state
-                .soracloud_private_compile_profiles
-                .transaction(),
             soracloud_uploaded_model_bundles: $state.soracloud_uploaded_model_bundles.transaction(),
-            soracloud_uploaded_model_chunks: $state.soracloud_uploaded_model_chunks.transaction(),
-            soracloud_private_inference_sessions: $state
-                .soracloud_private_inference_sessions
-                .transaction(),
-            soracloud_private_inference_checkpoints: $state
-                .soracloud_private_inference_checkpoints
-                .transaction(),
             soracloud_model_host_capabilities: $state
                 .soracloud_model_host_capabilities
                 .transaction(),
@@ -1877,19 +1858,9 @@ pub struct World {
     pub(crate) soracloud_model_artifacts: Storage<(String, String), SoraModelArtifactRecordV1>,
     /// Model-artifact audit events keyed by deterministic sequence.
     pub(crate) soracloud_model_artifact_audit_events: Storage<u64, SoraModelArtifactAuditEventV1>,
-    /// Private compile profiles keyed by compile-profile hash.
-    pub(crate) soracloud_private_compile_profiles: Storage<Hash, SoraPrivateCompileProfileV1>,
     /// Uploaded-model bundle roots keyed by `(service_name, model_id, weight_version)`.
     pub(crate) soracloud_uploaded_model_bundles:
         Storage<(String, String, String), SoraUploadedModelBundleV1>,
-    /// Uploaded-model chunks keyed by canonical `<service>:<model>:<version>:<ordinal>` literal.
-    pub(crate) soracloud_uploaded_model_chunks: Storage<String, SoraUploadedModelChunkV1>,
-    /// Private inference sessions keyed by `(apartment, session_id)`.
-    pub(crate) soracloud_private_inference_sessions:
-        Storage<(String, String), SoraPrivateInferenceSessionV1>,
-    /// Private inference checkpoints keyed by `(session_id, step)`.
-    pub(crate) soracloud_private_inference_checkpoints:
-        Storage<(String, u32), SoraPrivateInferenceCheckpointV1>,
     /// Active validator-host capability adverts keyed by validator account id.
     pub(crate) soracloud_model_host_capabilities:
         Storage<AccountId, SoraModelHostCapabilityRecordV1>,
@@ -2343,21 +2314,9 @@ pub struct WorldBlock<'world> {
     /// Model-artifact audit events keyed by deterministic sequence.
     pub(crate) soracloud_model_artifact_audit_events:
         StorageBlock<'world, u64, SoraModelArtifactAuditEventV1>,
-    /// Private compile profiles keyed by compile-profile hash.
-    pub(crate) soracloud_private_compile_profiles:
-        StorageBlock<'world, Hash, SoraPrivateCompileProfileV1>,
     /// Uploaded-model bundle roots keyed by `(service_name, model_id, weight_version)`.
     pub(crate) soracloud_uploaded_model_bundles:
         StorageBlock<'world, (String, String, String), SoraUploadedModelBundleV1>,
-    /// Uploaded-model chunks keyed by `(service_name, model_id, weight_version, ordinal)`.
-    pub(crate) soracloud_uploaded_model_chunks:
-        StorageBlock<'world, String, SoraUploadedModelChunkV1>,
-    /// Private inference sessions keyed by `(apartment, session_id)`.
-    pub(crate) soracloud_private_inference_sessions:
-        StorageBlock<'world, (String, String), SoraPrivateInferenceSessionV1>,
-    /// Private inference checkpoints keyed by `(session_id, step)`.
-    pub(crate) soracloud_private_inference_checkpoints:
-        StorageBlock<'world, (String, u32), SoraPrivateInferenceCheckpointV1>,
     /// Active validator-host capability adverts keyed by validator account id.
     pub(crate) soracloud_model_host_capabilities:
         StorageBlock<'world, AccountId, SoraModelHostCapabilityRecordV1>,
@@ -2982,21 +2941,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Model-artifact audit events keyed by deterministic sequence.
     pub(crate) soracloud_model_artifact_audit_events:
         StorageTransaction<'block, 'world, u64, SoraModelArtifactAuditEventV1>,
-    /// Private compile profiles keyed by compile-profile hash.
-    pub(crate) soracloud_private_compile_profiles:
-        StorageTransaction<'block, 'world, Hash, SoraPrivateCompileProfileV1>,
     /// Uploaded-model bundle roots keyed by `(service_name, model_id, weight_version)`.
     pub(crate) soracloud_uploaded_model_bundles:
         StorageTransaction<'block, 'world, (String, String, String), SoraUploadedModelBundleV1>,
-    /// Uploaded-model chunks keyed by `(service_name, model_id, weight_version, ordinal)`.
-    pub(crate) soracloud_uploaded_model_chunks:
-        StorageTransaction<'block, 'world, String, SoraUploadedModelChunkV1>,
-    /// Private inference sessions keyed by `(apartment, session_id)`.
-    pub(crate) soracloud_private_inference_sessions:
-        StorageTransaction<'block, 'world, (String, String), SoraPrivateInferenceSessionV1>,
-    /// Private inference checkpoints keyed by `(session_id, step)`.
-    pub(crate) soracloud_private_inference_checkpoints:
-        StorageTransaction<'block, 'world, (String, u32), SoraPrivateInferenceCheckpointV1>,
     /// Active validator-host capability adverts keyed by validator account id.
     pub(crate) soracloud_model_host_capabilities:
         StorageTransaction<'block, 'world, AccountId, SoraModelHostCapabilityRecordV1>,
@@ -4417,21 +4364,9 @@ pub struct WorldView<'world> {
     /// Model-artifact audit events keyed by deterministic sequence.
     pub(crate) soracloud_model_artifact_audit_events:
         StorageView<'world, u64, SoraModelArtifactAuditEventV1>,
-    /// Private compile profiles keyed by compile-profile hash.
-    pub(crate) soracloud_private_compile_profiles:
-        StorageView<'world, Hash, SoraPrivateCompileProfileV1>,
     /// Uploaded-model bundle roots keyed by `(service_name, model_id, weight_version)`.
     pub(crate) soracloud_uploaded_model_bundles:
         StorageView<'world, (String, String, String), SoraUploadedModelBundleV1>,
-    /// Uploaded-model chunks keyed by `(service_name, model_id, weight_version, ordinal)`.
-    pub(crate) soracloud_uploaded_model_chunks:
-        StorageView<'world, String, SoraUploadedModelChunkV1>,
-    /// Private inference sessions keyed by `(apartment, session_id)`.
-    pub(crate) soracloud_private_inference_sessions:
-        StorageView<'world, (String, String), SoraPrivateInferenceSessionV1>,
-    /// Private inference checkpoints keyed by `(session_id, step)`.
-    pub(crate) soracloud_private_inference_checkpoints:
-        StorageView<'world, (String, u32), SoraPrivateInferenceCheckpointV1>,
     /// Active validator-host capability adverts keyed by validator account id.
     pub(crate) soracloud_model_host_capabilities:
         StorageView<'world, AccountId, SoraModelHostCapabilityRecordV1>,
@@ -12331,39 +12266,11 @@ impl World {
         &mut self.soracloud_model_artifact_audit_events
     }
 
-    /// Returns mutable access to private compile profiles for testing.
-    pub fn soracloud_private_compile_profiles_mut_for_testing(
-        &mut self,
-    ) -> &mut Storage<Hash, SoraPrivateCompileProfileV1> {
-        &mut self.soracloud_private_compile_profiles
-    }
-
     /// Returns mutable access to uploaded-model bundles for testing.
     pub fn soracloud_uploaded_model_bundles_mut_for_testing(
         &mut self,
     ) -> &mut Storage<(String, String, String), SoraUploadedModelBundleV1> {
         &mut self.soracloud_uploaded_model_bundles
-    }
-
-    /// Returns mutable access to uploaded-model chunks for testing.
-    pub fn soracloud_uploaded_model_chunks_mut_for_testing(
-        &mut self,
-    ) -> &mut Storage<String, SoraUploadedModelChunkV1> {
-        &mut self.soracloud_uploaded_model_chunks
-    }
-
-    /// Returns mutable access to private inference sessions for testing.
-    pub fn soracloud_private_inference_sessions_mut_for_testing(
-        &mut self,
-    ) -> &mut Storage<(String, String), SoraPrivateInferenceSessionV1> {
-        &mut self.soracloud_private_inference_sessions
-    }
-
-    /// Returns mutable access to private inference checkpoints for testing.
-    pub fn soracloud_private_inference_checkpoints_mut_for_testing(
-        &mut self,
-    ) -> &mut Storage<(String, u32), SoraPrivateInferenceCheckpointV1> {
-        &mut self.soracloud_private_inference_checkpoints
     }
 
     /// Provides mutable access to canonical Hugging Face sources for tests and API scaffolding.
@@ -12406,6 +12313,23 @@ impl World {
         &mut self,
     ) -> &mut Storage<(String, String), SoraInrouServicePlacementRecordV1> {
         &mut self.soracloud_inrou_service_placements
+    }
+
+    /// Provides mutable access to verifying keys for tests and API scaffolding.
+    pub fn verifying_keys_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<
+        iroha_data_model::proof::VerifyingKeyId,
+        iroha_data_model::proof::VerifyingKeyRecord,
+    > {
+        &mut self.verifying_keys
+    }
+
+    /// Provides mutable access to the verifying-key circuit index for tests and API scaffolding.
+    pub fn verifying_keys_by_circuit_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, u32), iroha_data_model::proof::VerifyingKeyId> {
+        &mut self.verifying_keys_by_circuit
     }
 
     /// Provides mutable access to HF shared-lease memberships for tests and API scaffolding.
@@ -13284,13 +13208,7 @@ impl World {
             soracloud_model_artifact_audit_events: self
                 .soracloud_model_artifact_audit_events
                 .view(),
-            soracloud_private_compile_profiles: self.soracloud_private_compile_profiles.view(),
             soracloud_uploaded_model_bundles: self.soracloud_uploaded_model_bundles.view(),
-            soracloud_uploaded_model_chunks: self.soracloud_uploaded_model_chunks.view(),
-            soracloud_private_inference_sessions: self.soracloud_private_inference_sessions.view(),
-            soracloud_private_inference_checkpoints: self
-                .soracloud_private_inference_checkpoints
-                .view(),
             soracloud_model_host_capabilities: self.soracloud_model_host_capabilities.view(),
             soracloud_inrou_host_capabilities: self.soracloud_inrou_host_capabilities.view(),
             soracloud_hf_sources: self.soracloud_hf_sources.view(),
@@ -13850,26 +13768,10 @@ pub trait WorldReadOnly {
     fn soracloud_model_artifact_audit_events(
         &self,
     ) -> &impl StorageReadOnly<u64, SoraModelArtifactAuditEventV1>;
-    /// Private compile profiles keyed by compile-profile hash (read-only).
-    fn soracloud_private_compile_profiles(
-        &self,
-    ) -> &impl StorageReadOnly<Hash, SoraPrivateCompileProfileV1>;
     /// Uploaded-model bundle roots keyed by `(service_name, model_id, weight_version)` (read-only).
     fn soracloud_uploaded_model_bundles(
         &self,
     ) -> &impl StorageReadOnly<(String, String, String), SoraUploadedModelBundleV1>;
-    /// Uploaded-model chunks keyed by canonical `<service>:<model>:<version>:<ordinal>` literal (read-only).
-    fn soracloud_uploaded_model_chunks(
-        &self,
-    ) -> &impl StorageReadOnly<String, SoraUploadedModelChunkV1>;
-    /// Private inference sessions keyed by `(apartment, session_id)` (read-only).
-    fn soracloud_private_inference_sessions(
-        &self,
-    ) -> &impl StorageReadOnly<(String, String), SoraPrivateInferenceSessionV1>;
-    /// Private inference checkpoints keyed by `(session_id, step)` (read-only).
-    fn soracloud_private_inference_checkpoints(
-        &self,
-    ) -> &impl StorageReadOnly<(String, u32), SoraPrivateInferenceCheckpointV1>;
     /// Active validator-host capability adverts keyed by validator account id (read-only).
     fn soracloud_model_host_capabilities(
         &self,
@@ -15214,30 +15116,10 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<u64, SoraModelArtifactAuditEventV1> {
                 &self.soracloud_model_artifact_audit_events
             }
-            fn soracloud_private_compile_profiles(
-                &self,
-            ) -> &impl StorageReadOnly<Hash, SoraPrivateCompileProfileV1> {
-                &self.soracloud_private_compile_profiles
-            }
             fn soracloud_uploaded_model_bundles(
                 &self,
             ) -> &impl StorageReadOnly<(String, String, String), SoraUploadedModelBundleV1> {
                 &self.soracloud_uploaded_model_bundles
-            }
-            fn soracloud_uploaded_model_chunks(
-                &self,
-            ) -> &impl StorageReadOnly<String, SoraUploadedModelChunkV1> {
-                &self.soracloud_uploaded_model_chunks
-            }
-            fn soracloud_private_inference_sessions(
-                &self,
-            ) -> &impl StorageReadOnly<(String, String), SoraPrivateInferenceSessionV1> {
-                &self.soracloud_private_inference_sessions
-            }
-            fn soracloud_private_inference_checkpoints(
-                &self,
-            ) -> &impl StorageReadOnly<(String, u32), SoraPrivateInferenceCheckpointV1> {
-                &self.soracloud_private_inference_checkpoints
             }
             fn soracloud_model_host_capabilities(
                 &self,
@@ -15725,11 +15607,7 @@ impl<'world> WorldBlock<'world> {
             soracloud_model_weight_audit_events,
             soracloud_model_artifacts,
             soracloud_model_artifact_audit_events,
-            soracloud_private_compile_profiles,
             soracloud_uploaded_model_bundles,
-            soracloud_uploaded_model_chunks,
-            soracloud_private_inference_sessions,
-            soracloud_private_inference_checkpoints,
             soracloud_model_host_capabilities,
             soracloud_inrou_host_capabilities,
             soracloud_hf_sources,
@@ -15833,11 +15711,7 @@ impl<'world> WorldBlock<'world> {
         soracloud_model_weight_audit_events.commit();
         soracloud_model_artifacts.commit();
         soracloud_model_artifact_audit_events.commit();
-        soracloud_private_compile_profiles.commit();
         soracloud_uploaded_model_bundles.commit();
-        soracloud_uploaded_model_chunks.commit();
-        soracloud_private_inference_sessions.commit();
-        soracloud_private_inference_checkpoints.commit();
         soracloud_model_host_capabilities.commit();
         soracloud_inrou_host_capabilities.commit();
         soracloud_hf_sources.commit();
@@ -16869,6 +16743,19 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     > {
         &mut self.verifying_keys
     }
+
+    /// Test helper: get mutable access to the verifying-key circuit index for seeding.
+    pub fn verifying_keys_by_circuit_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<
+        'block,
+        'world,
+        (String, u32),
+        iroha_data_model::proof::VerifyingKeyId,
+    > {
+        &mut self.verifying_keys_by_circuit
+    }
+
     /// Apply transaction's changes
     #[allow(clippy::too_many_lines)]
     pub fn apply(self) {
@@ -16980,11 +16867,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             soracloud_model_weight_audit_events,
             soracloud_model_artifacts,
             soracloud_model_artifact_audit_events,
-            soracloud_private_compile_profiles,
             soracloud_uploaded_model_bundles,
-            soracloud_uploaded_model_chunks,
-            soracloud_private_inference_sessions,
-            soracloud_private_inference_checkpoints,
             soracloud_model_host_capabilities,
             soracloud_inrou_host_capabilities,
             soracloud_hf_sources,
@@ -17077,11 +16960,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         soracloud_model_weight_audit_events.apply();
         soracloud_model_artifacts.apply();
         soracloud_model_artifact_audit_events.apply();
-        soracloud_private_compile_profiles.apply();
         soracloud_uploaded_model_bundles.apply();
-        soracloud_uploaded_model_chunks.apply();
-        soracloud_private_inference_sessions.apply();
-        soracloud_private_inference_checkpoints.apply();
         soracloud_model_host_capabilities.apply();
         soracloud_inrou_host_capabilities.apply();
         soracloud_hf_sources.apply();
@@ -19391,8 +19270,14 @@ impl State {
                     ..iroha_config::parameters::actual::Halo2::default()
                 },
                 fastpq: iroha_config::parameters::actual::Fastpq {
-                    execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Auto,
-                    poseidon_mode: iroha_config::parameters::actual::FastpqPoseidonMode::Auto,
+                    execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Cpu,
+                    poseidon_mode: iroha_config::parameters::actual::FastpqPoseidonMode::Cpu,
+                    proof_sidecar_queue_cap:
+                        iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
+                    proof_sidecar_max_bytes:
+                        iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
+                    proof_sidecar_max_retries:
+                        iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
                     device_class: None,
                     chip_family: None,
                     gpu_kind: None,
@@ -19524,6 +19409,16 @@ impl State {
                 citizen_service: iroha_config::parameters::actual::CitizenServiceDiscipline::default(),
                 viral_incentives: iroha_config::parameters::actual::ViralIncentives::default(),
                 sorafs_pin_policy: iroha_config::parameters::actual::SorafsPinPolicyConstraints::default(),
+                sorafs_pin_fee_asset_id:
+                    iroha_config::parameters::defaults::governance::sorafs_pin_fee::asset_id()
+                        .parse()
+                        .expect("default SoraFS pin fee asset id"),
+                sorafs_pin_fee_treasury_account:
+                    iroha_data_model::account::AccountId::parse_encoded(
+                        &iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account(),
+                    )
+                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                    .expect("default SoraFS pin fee treasury account"),
                 sorafs_pricing: PricingScheduleRecord::default(),
                 sorafs_penalty: iroha_config::parameters::actual::SorafsPenaltyPolicy::default(),
                 sorafs_repair_escalation:
@@ -20460,6 +20355,14 @@ impl State {
     pub fn world_view(&self) -> WorldView<'_> {
         let nexus = self.nexus_snapshot();
         self.world_view_with_nexus(&nexus)
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Insert or replace a native VPN lease directly for deterministic test setup.
+    pub fn insert_vpn_lease_for_testing(&self, record: VpnLeaseRecordV1) {
+        let mut world = self.world.block();
+        world.vpn_leases.insert(record.lease_id, record);
+        world.commit();
     }
 
     /// Create a point-in-time world view using an already-snapshotted Nexus configuration.
@@ -24100,6 +24003,284 @@ pub fn compute_vk_set_hash(world: &impl WorldReadOnly) -> Option<[u8; 32]> {
     compute_vk_set_hash_from_statuses(world, &statuses)
 }
 
+fn zk_policy_put_bytes(hasher: &mut Sha256, bytes: &[u8]) {
+    let len = u64::try_from(bytes.len()).expect("ZK policy field length must fit into u64");
+    Sha2Digest::update(hasher, len.to_be_bytes());
+    Sha2Digest::update(hasher, bytes);
+}
+
+fn zk_policy_put_field(hasher: &mut Sha256, name: &str) {
+    zk_policy_put_bytes(hasher, name.as_bytes());
+}
+
+fn zk_policy_put_bool(hasher: &mut Sha256, name: &str, value: bool) {
+    zk_policy_put_field(hasher, name);
+    Sha2Digest::update(hasher, [u8::from(value)]);
+}
+
+fn zk_policy_put_u8(hasher: &mut Sha256, name: &str, value: u8) {
+    zk_policy_put_field(hasher, name);
+    Sha2Digest::update(hasher, [value]);
+}
+
+fn zk_policy_put_u32(hasher: &mut Sha256, name: &str, value: u32) {
+    zk_policy_put_field(hasher, name);
+    Sha2Digest::update(hasher, value.to_be_bytes());
+}
+
+fn zk_policy_put_u64(hasher: &mut Sha256, name: &str, value: u64) {
+    zk_policy_put_field(hasher, name);
+    Sha2Digest::update(hasher, value.to_be_bytes());
+}
+
+fn zk_policy_put_usize(hasher: &mut Sha256, name: &str, value: usize) {
+    let value = u64::try_from(value).expect("ZK policy usize field must fit into u64");
+    zk_policy_put_u64(hasher, name, value);
+}
+
+fn zk_policy_put_str(hasher: &mut Sha256, name: &str, value: &str) {
+    zk_policy_put_field(hasher, name);
+    zk_policy_put_bytes(hasher, value.as_bytes());
+}
+
+fn zk_policy_put_option_u32(hasher: &mut Sha256, name: &str, value: Option<u32>) {
+    zk_policy_put_field(hasher, name);
+    match value {
+        Some(value) => {
+            Sha2Digest::update(hasher, [1]);
+            Sha2Digest::update(hasher, value.to_be_bytes());
+        }
+        None => Sha2Digest::update(hasher, [0]),
+    }
+}
+
+fn zk_policy_put_option_vk_ref(
+    hasher: &mut Sha256,
+    name: &str,
+    value: &Option<iroha_config::parameters::actual::VerifyingKeyRef>,
+) {
+    zk_policy_put_field(hasher, name);
+    match value {
+        Some(value) => {
+            Sha2Digest::update(hasher, [1]);
+            zk_policy_put_bytes(hasher, value.backend.as_bytes());
+            zk_policy_put_bytes(hasher, value.name.as_bytes());
+        }
+        None => Sha2Digest::update(hasher, [0]),
+    }
+}
+
+fn zk_curve_tag(curve: iroha_config::parameters::actual::ZkCurve) -> &'static str {
+    match curve {
+        iroha_config::parameters::actual::ZkCurve::Pallas => "pallas",
+        iroha_config::parameters::actual::ZkCurve::Pasta => "pasta",
+        iroha_config::parameters::actual::ZkCurve::Goldilocks => "goldilocks",
+        iroha_config::parameters::actual::ZkCurve::Bn254 => "bn254",
+    }
+}
+
+fn halo2_backend_tag(backend: iroha_config::parameters::actual::Halo2Backend) -> &'static str {
+    match backend {
+        iroha_config::parameters::actual::Halo2Backend::Ipa => "ipa",
+    }
+}
+
+/// Compute the ZK policy hash committed in confidential feature digests.
+#[must_use]
+pub fn compute_zk_consensus_policy_hash(
+    zk_config: &iroha_config::parameters::actual::Zk,
+) -> [u8; 32] {
+    let mut h = Sha256::new();
+    zk_policy_put_bytes(&mut h, b"iroha:zk:consensus-policy:v1");
+
+    zk_policy_put_bool(
+        &mut h,
+        "compiled.halo2",
+        cfg!(any(feature = "zk-halo2", feature = "zk-halo2-ipa")),
+    );
+    zk_policy_put_bool(&mut h, "compiled.stark", cfg!(feature = "zk-stark"));
+
+    zk_policy_put_bool(&mut h, "halo2.enabled", zk_config.halo2.enabled);
+    zk_policy_put_str(&mut h, "halo2.curve", zk_curve_tag(zk_config.halo2.curve));
+    zk_policy_put_str(
+        &mut h,
+        "halo2.backend",
+        halo2_backend_tag(zk_config.halo2.backend),
+    );
+    zk_policy_put_u32(&mut h, "halo2.max_k", zk_config.halo2.max_k);
+    zk_policy_put_u32(
+        &mut h,
+        "halo2.verifier_max_batch",
+        zk_config.halo2.verifier_max_batch,
+    );
+    zk_policy_put_usize(
+        &mut h,
+        "halo2.max_envelope_bytes",
+        zk_config.halo2.max_envelope_bytes,
+    );
+    zk_policy_put_usize(
+        &mut h,
+        "halo2.max_proof_bytes",
+        zk_config.halo2.max_proof_bytes,
+    );
+    zk_policy_put_usize(
+        &mut h,
+        "halo2.max_transcript_label_len",
+        zk_config.halo2.max_transcript_label_len,
+    );
+    zk_policy_put_bool(
+        &mut h,
+        "halo2.enforce_transcript_label_ascii",
+        zk_config.halo2.enforce_transcript_label_ascii,
+    );
+
+    zk_policy_put_bool(&mut h, "stark.enabled", zk_config.stark.enabled);
+    zk_policy_put_usize(
+        &mut h,
+        "stark.max_envelope_bytes",
+        zk_config.stark.max_envelope_bytes,
+    );
+    zk_policy_put_usize(
+        &mut h,
+        "stark.max_proof_bytes",
+        zk_config.stark.max_proof_bytes,
+    );
+
+    zk_policy_put_usize(&mut h, "root_history_cap", zk_config.root_history_cap);
+    zk_policy_put_usize(&mut h, "ballot_history_cap", zk_config.ballot_history_cap);
+    zk_policy_put_bool(&mut h, "empty_root_on_empty", zk_config.empty_root_on_empty);
+    zk_policy_put_u8(&mut h, "merkle_depth", zk_config.merkle_depth);
+    zk_policy_put_usize(&mut h, "preverify_max_bytes", zk_config.preverify_max_bytes);
+    zk_policy_put_u64(
+        &mut h,
+        "preverify_budget_bytes",
+        zk_config.preverify_budget_bytes,
+    );
+    zk_policy_put_usize(&mut h, "proof_history_cap", zk_config.proof_history_cap);
+    zk_policy_put_u64(
+        &mut h,
+        "proof_retention_grace_blocks",
+        zk_config.proof_retention_grace_blocks,
+    );
+    zk_policy_put_usize(&mut h, "proof_prune_batch", zk_config.proof_prune_batch);
+    zk_policy_put_u64(
+        &mut h,
+        "bridge_proof_max_range_len",
+        zk_config.bridge_proof_max_range_len,
+    );
+    zk_policy_put_u64(
+        &mut h,
+        "bridge_proof_max_past_age_blocks",
+        zk_config.bridge_proof_max_past_age_blocks,
+    );
+    zk_policy_put_u64(
+        &mut h,
+        "bridge_proof_max_future_drift_blocks",
+        zk_config.bridge_proof_max_future_drift_blocks,
+    );
+    zk_policy_put_option_u32(&mut h, "poseidon_params_id", zk_config.poseidon_params_id);
+    zk_policy_put_option_u32(&mut h, "pedersen_params_id", zk_config.pedersen_params_id);
+    zk_policy_put_option_vk_ref(
+        &mut h,
+        "kaigi_roster_join_vk",
+        &zk_config.kaigi_roster_join_vk,
+    );
+    zk_policy_put_option_vk_ref(
+        &mut h,
+        "kaigi_roster_leave_vk",
+        &zk_config.kaigi_roster_leave_vk,
+    );
+    zk_policy_put_option_vk_ref(&mut h, "kaigi_usage_vk", &zk_config.kaigi_usage_vk);
+    zk_policy_put_u32(
+        &mut h,
+        "max_proof_size_bytes",
+        zk_config.max_proof_size_bytes,
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "max_nullifiers_per_tx",
+        zk_config.max_nullifiers_per_tx,
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "max_commitments_per_tx",
+        zk_config.max_commitments_per_tx,
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "max_confidential_ops_per_block",
+        zk_config.max_confidential_ops_per_block,
+    );
+    zk_policy_put_u64(
+        &mut h,
+        "max_anchor_age_blocks",
+        zk_config.max_anchor_age_blocks,
+    );
+    zk_policy_put_u64(
+        &mut h,
+        "max_proof_bytes_block",
+        zk_config.max_proof_bytes_block,
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "max_verify_calls_per_tx",
+        zk_config.max_verify_calls_per_tx,
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "max_verify_calls_per_block",
+        zk_config.max_verify_calls_per_block,
+    );
+    zk_policy_put_u32(&mut h, "max_public_inputs", zk_config.max_public_inputs);
+    zk_policy_put_u64(&mut h, "reorg_depth_bound", zk_config.reorg_depth_bound);
+    zk_policy_put_u64(
+        &mut h,
+        "policy_transition_delay_blocks",
+        zk_config.policy_transition_delay_blocks,
+    );
+    zk_policy_put_u64(
+        &mut h,
+        "policy_transition_window_blocks",
+        zk_config.policy_transition_window_blocks,
+    );
+    zk_policy_put_u64(
+        &mut h,
+        "tree_roots_history_len",
+        zk_config.tree_roots_history_len,
+    );
+    zk_policy_put_u64(
+        &mut h,
+        "tree_frontier_checkpoint_interval",
+        zk_config.tree_frontier_checkpoint_interval,
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "registry_max_vk_entries",
+        zk_config.registry_max_vk_entries,
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "registry_max_params_entries",
+        zk_config.registry_max_params_entries,
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "registry_max_delta_per_block",
+        zk_config.registry_max_delta_per_block,
+    );
+    zk_policy_put_u64(&mut h, "gas.proof_base", zk_config.gas.proof_base);
+    zk_policy_put_u64(
+        &mut h,
+        "gas.per_public_input",
+        zk_config.gas.per_public_input,
+    );
+    zk_policy_put_u64(&mut h, "gas.per_proof_byte", zk_config.gas.per_proof_byte);
+    zk_policy_put_u64(&mut h, "gas.per_nullifier", zk_config.gas.per_nullifier);
+    zk_policy_put_u64(&mut h, "gas.per_commitment", zk_config.gas.per_commitment);
+
+    Sha2Digest::finalize(h).into()
+}
+
 /// Build the confidential feature digest advertised by blocks and handshake metadata for `height`.
 #[must_use]
 pub fn compute_confidential_feature_digest(
@@ -24145,6 +24326,7 @@ pub fn compute_confidential_feature_digest(
         poseidon_params_id,
         pedersen_params_id,
         Some(iroha_config::parameters::defaults::confidential::RULES_VERSION),
+        Some(compute_zk_consensus_policy_hash(zk_config)),
     )
 }
 
@@ -31406,7 +31588,7 @@ impl StateTransaction<'_, '_> {
                 #[cfg(feature = "telemetry")]
                 host.set_telemetry(self.telemetry.clone());
                 host.set_crypto_config(self.crypto());
-                host.set_halo2_config(&self.zk.halo2);
+                host.set_zk_config(&self.zk);
                 host.set_chain_id(self.chain_id());
                 host.set_public_inputs_from_parameters(self.world.parameters.get());
                 host.set_vrf_epoch_seeds_from_world(&self.world);
@@ -31538,7 +31720,7 @@ impl StateTransaction<'_, '_> {
                     #[cfg(feature = "telemetry")]
                     host.set_telemetry(self.telemetry.clone());
                     host.set_crypto_config(self.crypto());
-                    host.set_halo2_config(&self.zk.halo2);
+                    host.set_zk_config(&self.zk);
                     host.set_chain_id(self.chain_id());
                     host.set_public_inputs_from_parameters(self.world.parameters.get());
                     host.set_vrf_epoch_seeds_from_world(&self.world);
@@ -32578,16 +32760,8 @@ pub(crate) mod deserialize {
             take_optional_default(&mut map, "soracloud_model_artifacts")?;
         let soracloud_model_artifact_audit_events =
             take_optional_default(&mut map, "soracloud_model_artifact_audit_events")?;
-        let soracloud_private_compile_profiles =
-            take_optional_default(&mut map, "soracloud_private_compile_profiles")?;
         let soracloud_uploaded_model_bundles =
             take_optional_default(&mut map, "soracloud_uploaded_model_bundles")?;
-        let soracloud_uploaded_model_chunks =
-            take_optional_default(&mut map, "soracloud_uploaded_model_chunks")?;
-        let soracloud_private_inference_sessions =
-            take_optional_default(&mut map, "soracloud_private_inference_sessions")?;
-        let soracloud_private_inference_checkpoints =
-            take_optional_default(&mut map, "soracloud_private_inference_checkpoints")?;
         let soracloud_model_host_capabilities =
             take_optional_default(&mut map, "soracloud_model_host_capabilities")?;
         let soracloud_inrou_host_capabilities =
@@ -32747,11 +32921,7 @@ pub(crate) mod deserialize {
             soracloud_model_weight_audit_events,
             soracloud_model_artifacts,
             soracloud_model_artifact_audit_events,
-            soracloud_private_compile_profiles,
             soracloud_uploaded_model_bundles,
-            soracloud_uploaded_model_chunks,
-            soracloud_private_inference_sessions,
-            soracloud_private_inference_checkpoints,
             soracloud_model_host_capabilities,
             soracloud_inrou_host_capabilities,
             soracloud_hf_sources,
@@ -33147,7 +33317,7 @@ pub(crate) mod deserialize {
         }
     }
 
-    fn default_zk() -> iroha_config::parameters::actual::Zk {
+    pub(super) fn default_zk() -> iroha_config::parameters::actual::Zk {
         iroha_config::parameters::actual::Zk {
             halo2: iroha_config::parameters::actual::Halo2 {
                 enabled: iroha_config::parameters::defaults::zk::halo2::ENABLED,
@@ -33161,8 +33331,14 @@ pub(crate) mod deserialize {
                 ..iroha_config::parameters::actual::Halo2::default()
             },
             fastpq: iroha_config::parameters::actual::Fastpq {
-                execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Auto,
-                poseidon_mode: iroha_config::parameters::actual::FastpqPoseidonMode::Auto,
+                execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Cpu,
+                poseidon_mode: iroha_config::parameters::actual::FastpqPoseidonMode::Cpu,
+                proof_sidecar_queue_cap:
+                    iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
+                proof_sidecar_max_bytes:
+                    iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
+                proof_sidecar_max_retries:
+                    iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
                 device_class: None,
                 chip_family: None,
                 gpu_kind: None,
@@ -33293,6 +33469,15 @@ pub(crate) mod deserialize {
             viral_incentives: iroha_config::parameters::actual::ViralIncentives::default(),
             sorafs_pin_policy:
                 iroha_config::parameters::actual::SorafsPinPolicyConstraints::default(),
+            sorafs_pin_fee_asset_id:
+                iroha_config::parameters::defaults::governance::sorafs_pin_fee::asset_id()
+                    .parse()
+                    .expect("default SoraFS pin fee asset id"),
+            sorafs_pin_fee_treasury_account: iroha_data_model::account::AccountId::parse_encoded(
+                &iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account(),
+            )
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .expect("default SoraFS pin fee treasury account"),
             sorafs_pricing:
                 iroha_data_model::sorafs::pricing::PricingScheduleRecord::launch_default(),
             sorafs_penalty: iroha_config::parameters::actual::SorafsPenaltyPolicy::default(),
@@ -33581,7 +33766,7 @@ mod tests {
     use ivm::{IVM, IVMHost, encoding, pointer_abi::PointerType, syscalls};
     use nonzero_ext::nonzero;
 
-    use super::*;
+    use super::{deserialize::default_zk, *};
     use crate::smartcontracts::ValidQuery;
     #[cfg(feature = "telemetry")]
     use crate::telemetry::StateTelemetry;
@@ -46635,6 +46820,46 @@ mod tests {
             digest.conf_rules_version,
             Some(iroha_config::parameters::defaults::confidential::RULES_VERSION)
         );
+        assert_eq!(
+            digest.zk_policy_hash,
+            Some(compute_zk_consensus_policy_hash(&view.zk))
+        );
+    }
+
+    #[test]
+    fn zk_policy_hash_ignores_operator_only_timing_and_workers() {
+        let base = default_zk();
+        let mut changed = base.clone();
+        changed.verify_timeout = std::time::Duration::from_nanos(1);
+        changed.halo2.verifier_budget_ms = changed.halo2.verifier_budget_ms.saturating_add(1);
+        changed.halo2.verifier_worker_threads =
+            changed.halo2.verifier_worker_threads.saturating_add(1);
+        changed.halo2.verifier_queue_cap = changed.halo2.verifier_queue_cap.saturating_add(1);
+        changed.halo2.verifier_enqueue_wait_ms =
+            changed.halo2.verifier_enqueue_wait_ms.saturating_add(1);
+        changed.halo2.verifier_retry_ring_cap =
+            changed.halo2.verifier_retry_ring_cap.saturating_add(1);
+        changed.halo2.verifier_retry_max_attempts =
+            changed.halo2.verifier_retry_max_attempts.saturating_add(1);
+        changed.halo2.verifier_retry_tick_ms =
+            changed.halo2.verifier_retry_tick_ms.saturating_add(1);
+
+        assert_eq!(
+            compute_zk_consensus_policy_hash(&base),
+            compute_zk_consensus_policy_hash(&changed)
+        );
+    }
+
+    #[test]
+    fn zk_policy_hash_tracks_consensus_limits() {
+        let base = default_zk();
+        let mut changed = base.clone();
+        changed.halo2.max_proof_bytes = changed.halo2.max_proof_bytes.saturating_add(1);
+
+        assert_ne!(
+            compute_zk_consensus_policy_hash(&base),
+            compute_zk_consensus_policy_hash(&changed)
+        );
     }
 
     #[test]
@@ -52083,10 +52308,7 @@ mod tests {
                 provenance_attestation_hash: Hash::new(b"prov"),
                 registered_sequence: 9,
                 consumed_by_version: Some("v2".to_string()),
-                private_bundle_root: None,
-                compile_profile_hash: None,
                 chunk_manifest_root: None,
-                privacy_mode: None,
             },
         );
         world

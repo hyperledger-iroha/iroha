@@ -196,7 +196,7 @@ Grands livres confidentiels et fraîcheur des notes et audits axés sur la gouve
 - Limites strictes (valeurs par défaut configurables) :
 -`max_proof_size_bytes = 262_144`.
 -`max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` سے زیادہ preuves instruction کو déterministe طور پر abort کرتے ہیں (les bulletins de vote de gouvernance `proof verification exceeded timeout` émettent کرتے ہیں، `VerifyProof` retour d'erreur کرتا ہے)۔
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Des quotas supplémentaires garantissent la vivacité des blocs : `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, et `max_public_inputs`, les constructeurs de blocs et les blocs liés. `reorg_depth_bound` (≥ `max_anchor_age_blocks`) la rétention aux points de contrôle frontaliers régit کرتا ہے۔
 - Le temps d'exécution par transaction et les limites par bloc dépassent les transactions et les transactions sont rejetées et les erreurs déterministes `InvalidParameter` émettent un état du grand livre inchangé.
 - Mempool `vk_id`, longueur de preuve et âge d'ancrage pour les transactions confidentielles et préfiltre pour le vérificateur invoquent l'utilisation des ressources limitée par l'utilisation des ressources.- Vérification déterministe et délai d'attente, violation de limite et arrêt. transactions erreurs explicites کے ساتھ échec ہوتی ہیں۔ Backends SIMD facultatifs pour la comptabilité du gaz modifier les détails
@@ -280,7 +280,7 @@ Grands livres confidentiels et fraîcheur des notes et audits axés sur la gouve
    - ✅ Poignée de main P2P `ConfidentialFeatureDigest` (résumé du backend + empreintes digitales du registre) annonce des incompatibilités entre les deux et `HandshakeConfidentialMismatch` en cas d'échec déterministe
    - ✅ Chemins d'exécution confidentiels pour les paniques, supprimer les nœuds non pris en charge et le contrôle de rôle ajouter les nœuds non pris en charge
    - ⚪ Les budgets de délai d'attente du vérificateur et les points de contrôle frontaliers et les limites de profondeur de réorganisation sont appliquées.
-     - ✅ Les budgets de délai d'attente de vérification sont appliqués ہوئے؛ `verify_timeout_ms` سے تجاوز کرنے والی preuves d'échec déterministe ہوتی ہیں۔
+     - Verification timeout budgets are telemetry/operator budgets only; proofs fail deterministically on size, gas, public input, policy, or anchor-age bounds.
      - ✅ Points de contrôle frontaliers `reorg_depth_bound` respecter la fenêtre configurée et les points de contrôle élaguer les instantanés déterministes des points de contrôle
    - `AssetConfidentialPolicy`, politique FSM, et instructions de création/transfert/révélation pour les portes d'application introduisent کریں۔
    - Les en-têtes de bloc `conf_features` commit et les résumés de registre/paramètre divergent et la participation du validateur refuse.

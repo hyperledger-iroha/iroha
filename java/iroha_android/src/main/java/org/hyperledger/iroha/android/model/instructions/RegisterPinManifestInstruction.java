@@ -19,6 +19,7 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
   private final String digestHex;
   private final ChunkerProfile chunkerProfile;
   private final String chunkDigestSha3Hex;
+  private final long contentLength;
   private final PinPolicy pinPolicy;
   private final long submittedEpoch;
   private final String successorOfHex;
@@ -34,6 +35,7 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
     this.digestHex = builder.digestHex;
     this.chunkerProfile = builder.chunkerProfile;
     this.chunkDigestSha3Hex = builder.chunkDigestSha3Hex;
+    this.contentLength = builder.contentLength;
     this.pinPolicy = builder.pinPolicy;
     this.submittedEpoch = builder.submittedEpoch;
     this.successorOfHex = builder.successorOfHex;
@@ -52,6 +54,10 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
 
   public String chunkDigestSha3Hex() {
     return chunkDigestSha3Hex;
+  }
+
+  public long contentLength() {
+    return contentLength;
   }
 
   public PinPolicy pinPolicy() {
@@ -88,6 +94,7 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
     final Builder builder = builder();
     builder.setDigestHex(require(arguments, "digest_hex"));
     builder.setChunkDigestSha3Hex(require(arguments, "chunk_digest_sha3_256_hex"));
+    builder.setContentLength(requireLong(arguments, "content_length"));
     builder.setSubmittedEpoch(requireLong(arguments, "submitted_epoch"));
     if (arguments.containsKey("successor_of_hex")) {
       builder.setSuccessorOfHex(arguments.get("successor_of_hex"));
@@ -130,6 +137,7 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
     return Objects.equals(digestHex, other.digestHex)
         && Objects.equals(chunkerProfile, other.chunkerProfile)
         && Objects.equals(chunkDigestSha3Hex, other.chunkDigestSha3Hex)
+        && contentLength == other.contentLength
         && Objects.equals(pinPolicy, other.pinPolicy)
         && submittedEpoch == other.submittedEpoch
         && Objects.equals(successorOfHex, other.successorOfHex)
@@ -142,6 +150,7 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
         digestHex,
         chunkerProfile,
         chunkDigestSha3Hex,
+        contentLength,
         pinPolicy,
         submittedEpoch,
         successorOfHex,
@@ -152,6 +161,7 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
     private String digestHex;
     private ChunkerProfile chunkerProfile;
     private String chunkDigestSha3Hex;
+    private Long contentLength;
     private PinPolicy pinPolicy;
     private Long submittedEpoch;
     private String successorOfHex;
@@ -171,6 +181,14 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
 
     public Builder setChunkDigestSha3Hex(final String chunkDigestSha3Hex) {
       this.chunkDigestSha3Hex = Objects.requireNonNull(chunkDigestSha3Hex, "chunkDigestSha3Hex");
+      return this;
+    }
+
+    public Builder setContentLength(final long contentLength) {
+      if (contentLength < 0) {
+        throw new IllegalArgumentException("contentLength must be non-negative");
+      }
+      this.contentLength = contentLength;
       return this;
     }
 
@@ -207,6 +225,9 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
       if (chunkDigestSha3Hex == null || chunkDigestSha3Hex.isBlank()) {
         throw new IllegalStateException("chunkDigestSha3Hex must be set");
       }
+      if (contentLength == null) {
+        throw new IllegalStateException("contentLength must be set");
+      }
       if (pinPolicy == null) {
         throw new IllegalStateException("pinPolicy must be set");
       }
@@ -221,6 +242,7 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
       args.put("action", ACTION);
       args.put("digest_hex", digestHex);
       args.put("chunk_digest_sha3_256_hex", chunkDigestSha3Hex);
+      args.put("content_length", Long.toString(contentLength));
       args.put("submitted_epoch", Long.toString(submittedEpoch));
       if (successorOfHex != null && !successorOfHex.isBlank()) {
         args.put("successor_of_hex", successorOfHex);

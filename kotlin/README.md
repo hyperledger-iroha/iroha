@@ -33,17 +33,27 @@ implementation("org.hyperledger.iroha.sdk:offline-wallet-android:0.1-SNAPSHOT")
 ### Offline Note V2 wallet flow
 
 `core-jvm` exposes `OfflineNoteV2Wallet` for the one-call Offline Note V2 app
-actions: load, prepare receive, pay, accept/audit, redeem, and sync. Wallets
-derive note commitments, input nullifiers, and payment token ids locally, then
-delegate Torii issuance, device attestation, proof generation, persistence, and
-direct audit/redeem transaction submission through injectable interfaces. The
-`sync()` call uses an optional transaction-outcome resolver to reconcile
-pending spend, change, and redeem note records once the app's Torii/outcome
-index observes finality.
+actions: load, prepare receive, pay, accept, optional audit publication, redeem,
+and sync. Offline-to-offline `pay` and `accept` are the local-final value
+transfer: the sender marks inputs spent and change spendable immediately, and
+the recipient marks the matched pending output spendable after local token and
+proof verification. No online sync is required for that transfer. Audit
+publication is an explicit optional online step that submits evidence but does
+not affect spendability. Wallets derive note commitments, input nullifiers, and
+payment token ids locally, then delegate Torii issuance, device attestation,
+proof generation/verification, persistence, and direct audit/redeem transaction
+submission through injectable interfaces. The `sync()` call uses an optional
+transaction-outcome resolver to reconcile redeem-pending note records once the
+app's Torii/outcome index observes redeem finality.
 JVM core includes an in-memory store, `IrohaOfflineNoteV2TransactionSubmitter`,
 and `ToriiOfflineNoteV2IssuerClient` for Torii key-refill plus note-issue
 loads. Apps provide canonical auth and a device-binding provider; Android
-secure storage remains in the platform wallet layer.
+secure storage remains in the platform wallet layer. The Android
+`AndroidOfflineNoteV2SecureStore` rotates a non-exportable Android Keystore key
+on every committed wallet-state revision and rejects app-data rollback or
+cloned preference snapshots when the old revision key is no longer present.
+Legacy `SPEND_PENDING` records are migrated to `SPENT`, and legacy
+`CHANGE_PENDING` records are migrated to `SPENDABLE`.
 
 ---
 

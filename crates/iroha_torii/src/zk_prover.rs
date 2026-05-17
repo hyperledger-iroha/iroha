@@ -31,7 +31,7 @@ use iroha_core::{
     zk::{hash_proof, hash_vk, verify_backend, verify_backend_with_timing_checked},
 };
 use iroha_data_model::proof::{
-    ProofAttachment, ProofAttachmentList, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord,
+    ProofAttachment, ProofAttachmentList, VerifyingKeyBox, VerifyingKeyId,
 };
 use mv::storage::StorageReadOnly;
 use norito::json;
@@ -772,19 +772,6 @@ fn load_vk_bytes(keys_dir: &Path, id: &VerifyingKeyId) -> Result<Vec<u8>, String
     })
 }
 
-fn find_vk_record_by_commitment(
-    state: &CoreState,
-    commitment: [u8; 32],
-) -> Option<(VerifyingKeyId, VerifyingKeyRecord)> {
-    let world = state.world_view();
-    for (id, record) in world.verifying_keys().iter() {
-        if record.commitment == commitment {
-            return Some((id.clone(), record.clone()));
-        }
-    }
-    None
-}
-
 fn decode_norito_attachments(body: &[u8]) -> Result<Vec<ProofAttachment>, String> {
     let list_err = match norito::decode_from_bytes::<ProofAttachmentList>(body) {
         Ok(list) => return Ok(list.0),
@@ -885,135 +872,89 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
     }
 
     let mut vk_box: Option<VerifyingKeyBox> = None;
-    let mut resolved_vk_ref = attachment.vk_ref.clone();
+    let resolved_vk_ref = attachment.vk_ref.clone();
     let mut circuit_id: Option<String> = None;
 
-    match (&attachment.vk_ref, &attachment.vk_inline) {
-        (Some(_), Some(_)) => {
-            errors.push("attachment must include exactly one of vk_ref or vk_inline".into());
-        }
-        (None, None) => {
-            errors.push("attachment missing vk_ref/vk_inline".into());
-        }
-        (Some(vk_id), None) => {
-            if vk_id.backend.as_str() != backend_str {
-                errors.push(format!(
-                    "vk_ref backend `{}` does not match proof backend `{backend_str}`",
-                    vk_id.backend
-                ));
-            }
-            let state = match ctx.state.as_ref() {
-                Some(state) => state,
-                None => {
-                    errors.push("verifying key lookup requires core state".into());
-                    return ProofReportEntry {
-                        backend,
-                        ok: false,
-                        error: Some(errors.join("; ")),
-                        proof_hash,
-                        vk_ref: resolved_vk_ref,
-                        circuit_id,
-                    };
-                }
+    let vk_id = &attachment.vk_ref;
+    if vk_id.backend.as_str() != backend_str {
+        errors.push(format!(
+            "vk_ref backend `{}` does not match proof backend `{backend_str}`",
+            vk_id.backend
+        ));
+    }
+    let state = match ctx.state.as_ref() {
+        Some(state) => state,
+        None => {
+            errors.push("verifying key lookup requires core state".into());
+            return ProofReportEntry {
+                backend,
+                ok: false,
+                error: Some(errors.join("; ")),
+                proof_hash,
+                vk_ref: Some(resolved_vk_ref),
+                circuit_id,
             };
-            let world = state.world_view();
-            let record = match world.verifying_keys().get(vk_id) {
-                Some(record) => record.clone(),
-                None => {
-                    errors.push("verifying key not found in registry".into());
-                    return ProofReportEntry {
-                        backend,
-                        ok: false,
-                        error: Some(errors.join("; ")),
-                        proof_hash,
-                        vk_ref: resolved_vk_ref,
-                        circuit_id,
-                    };
-                }
-            };
-            if !record.is_active() {
-                errors.push("verifying key is not active".into());
-            }
-            if record.max_proof_bytes > 0
-                && attachment.proof.bytes.len() > record.max_proof_bytes as usize
-            {
-                errors.push(format!(
-                    "proof exceeds max_proof_bytes {}",
-                    record.max_proof_bytes
-                ));
-            }
-            if let Some(commitment) = attachment.vk_commitment {
-                if commitment != record.commitment {
-                    errors.push("vk_commitment does not match registry commitment".into());
-                }
-            }
-            circuit_id = Some(record.circuit_id.clone());
-            if let Some(key) = record.key.clone() {
-                if key.backend.as_str() != backend_str {
-                    errors.push("verifying key backend does not match proof backend".into());
-                } else {
-                    vk_box = Some(key);
-                }
-            } else {
-                match load_vk_bytes(&ctx.keys_dir, vk_id) {
-                    Ok(bytes) => {
-                        if record.vk_len > 0 && bytes.len() != record.vk_len as usize {
-                            errors.push(format!(
-                                "verifying key length {} does not match registry vk_len {}",
-                                bytes.len(),
-                                record.vk_len
-                            ));
-                        }
-                        vk_box = Some(VerifyingKeyBox::new(backend.clone(), bytes));
-                    }
-                    Err(err) => errors.push(err),
-                }
-            }
-            if let Some(vk_box) = vk_box.as_ref() {
-                if vk_box.bytes.is_empty() {
-                    errors.push("verifying key bytes are empty".into());
-                } else {
-                    let vk_hash = hash_vk(vk_box);
-                    if vk_hash != record.commitment {
-                        errors.push("verifying key bytes do not match registry commitment".into());
-                    }
-                }
-            }
         }
-        (None, Some(vk_inline)) => {
-            if vk_inline.backend.as_str() != backend_str {
-                errors.push("verifying key backend does not match proof backend".into());
-            }
-            let vk_hash = hash_vk(vk_inline);
-            if let Some(commitment) = attachment.vk_commitment {
-                if commitment != vk_hash {
-                    errors.push("vk_commitment does not match inline verifying key".into());
+    };
+    let world = state.world_view();
+    let record = match world.verifying_keys().get(vk_id) {
+        Some(record) => record.clone(),
+        None => {
+            errors.push("verifying key not found in registry".into());
+            return ProofReportEntry {
+                backend,
+                ok: false,
+                error: Some(errors.join("; ")),
+                proof_hash,
+                vk_ref: Some(resolved_vk_ref),
+                circuit_id,
+            };
+        }
+    };
+    if !record.is_active() {
+        errors.push("verifying key is not active".into());
+    }
+    if record.max_proof_bytes > 0 && attachment.proof.bytes.len() > record.max_proof_bytes as usize
+    {
+        errors.push(format!(
+            "proof exceeds max_proof_bytes {}",
+            record.max_proof_bytes
+        ));
+    }
+    if let Some(commitment) = attachment.vk_commitment
+        && commitment != record.commitment
+    {
+        errors.push("vk_commitment does not match registry commitment".into());
+    }
+    circuit_id = Some(record.circuit_id.clone());
+    if let Some(key) = record.key.clone() {
+        if key.backend.as_str() != backend_str {
+            errors.push("verifying key backend does not match proof backend".into());
+        } else {
+            vk_box = Some(key);
+        }
+    } else {
+        match load_vk_bytes(&ctx.keys_dir, vk_id) {
+            Ok(bytes) => {
+                if record.vk_len > 0 && bytes.len() != record.vk_len as usize {
+                    errors.push(format!(
+                        "verifying key length {} does not match registry vk_len {}",
+                        bytes.len(),
+                        record.vk_len
+                    ));
                 }
+                vk_box = Some(VerifyingKeyBox::new(backend.clone(), bytes));
             }
-            vk_box = Some(vk_inline.clone());
-            if let Some(state) = ctx.state.as_ref() {
-                if let Some((vk_id, record)) = find_vk_record_by_commitment(state, vk_hash) {
-                    if !record.is_active() {
-                        errors.push("verifying key is not active".into());
-                    }
-                    if record.max_proof_bytes > 0
-                        && attachment.proof.bytes.len() > record.max_proof_bytes as usize
-                    {
-                        errors.push(format!(
-                            "proof exceeds max_proof_bytes {}",
-                            record.max_proof_bytes
-                        ));
-                    }
-                    if record.vk_len > 0 && vk_inline.bytes.len() != record.vk_len as usize {
-                        errors.push(format!(
-                            "verifying key length {} does not match registry vk_len {}",
-                            vk_inline.bytes.len(),
-                            record.vk_len
-                        ));
-                    }
-                    resolved_vk_ref = Some(vk_id);
-                    circuit_id = Some(record.circuit_id);
-                }
+            Err(err) => errors.push(err),
+        }
+    }
+    if let Some(vk_box) = vk_box.as_ref() {
+        if vk_box.bytes.is_empty() {
+            errors.push("verifying key bytes are empty".into());
+        } else {
+            let vk_hash = hash_vk(vk_box);
+            if vk_hash != record.commitment {
+                errors.push("verifying key bytes do not match registry commitment".into());
             }
         }
     }
@@ -1055,7 +996,7 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
         ok,
         error: if ok { None } else { Some(errors.join("; ")) },
         proof_hash,
-        vk_ref: resolved_vk_ref,
+        vk_ref: Some(resolved_vk_ref),
         circuit_id,
     }
 }
@@ -1700,7 +1641,7 @@ mod tests {
             iroha_config::parameters::defaults::torii::zk_prover_keys_dir(),
             iroha_config::parameters::defaults::torii::zk_prover_allowed_backends(),
             allowed_circuits,
-            None,
+            Some(fixture_state()),
             MaybeTelemetry::disabled(),
         );
         super::TEST_PROCESSING_DELAY_MS.store(0, AtomicOrdering::SeqCst);
@@ -1712,11 +1653,53 @@ mod tests {
     }
 
     fn fixture_attachment_bytes() -> Vec<u8> {
-        let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
+        let seed = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
+        let vk = seed.vk_box("halo2/ipa").expect("fixture vk bytes");
+        let vk_commitment = hash_vk(&vk);
+        let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", vk_commitment);
         let proof = fixture.proof_box("halo2/ipa");
-        let vk = fixture.vk_box("halo2/ipa").expect("fixture vk bytes");
-        let attachment = ProofAttachment::new_inline("halo2/ipa".into(), proof, vk);
+        let vk_id = VerifyingKeyId::new("halo2/ipa", "tiny-add");
+        let mut attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_id);
+        attachment.vk_commitment = Some(vk_commitment);
         norito::to_bytes(&attachment).expect("proof attachment bytes")
+    }
+
+    fn fixture_state() -> Arc<CoreState> {
+        let seed = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
+        let vk = seed.vk_box("halo2/ipa").expect("fixture vk bytes");
+        let vk_id = VerifyingKeyId::new("halo2/ipa", "tiny-add");
+        let vk_commitment = hash_vk(&vk);
+        let mut record = iroha_data_model::proof::VerifyingKeyRecord::new_with_owner(
+            1,
+            "tiny-add",
+            None,
+            "test",
+            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            "pasta",
+            [0; 32],
+            vk_commitment,
+        );
+        record.vk_len = u32::try_from(vk.bytes.len()).expect("fixture vk length fits");
+        record.max_proof_bytes = 1024 * 1024;
+        record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+        record.key = Some(vk);
+
+        let mut world = iroha_core::state::World::new();
+        world
+            .verifying_keys_mut_for_testing()
+            .insert(vk_id.clone(), record);
+        world
+            .verifying_keys_by_circuit_mut_for_testing()
+            .insert(("tiny-add".into(), 1), vk_id);
+        let mut state = iroha_core::state::State::new_for_testing(
+            world,
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
+        let mut zk = state.zk_snapshot();
+        zk.halo2.enabled = true;
+        state.set_zk(zk);
+        Arc::new(state)
     }
 
     fn anon_tenant_key() -> String {

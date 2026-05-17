@@ -355,6 +355,7 @@ impl Execute for OpenVpnLeaseEscrow {
             custody_account_id: custody,
             relay_id: self.relay_id,
             tariff: self.tariff,
+            quote_policy: self.quote_policy,
             open_tx_hash,
             status: VpnLeaseStatusV1::Active,
             opened_at_ms: now_ms,
@@ -365,6 +366,7 @@ impl Execute for OpenVpnLeaseEscrow {
             highest_voucher_sequence: 0,
             client_voucher_hash: None,
             relay_receipt_hash: None,
+            settled_relay_receipt: None,
             earned_fee_nanos: 0,
             refunded_fee_nanos: 0,
         };
@@ -437,6 +439,7 @@ impl Execute for SettleVpnLease {
         record.highest_voucher_sequence = self.client_voucher.body.sequence;
         record.client_voucher_hash = Some(self.client_voucher.hash());
         record.relay_receipt_hash = Some(self.relay_receipt.hash());
+        record.settled_relay_receipt = Some(self.relay_receipt);
         record.earned_fee_nanos = earned_fee_nanos;
         record.refunded_fee_nanos = refund_fee_nanos;
         state_transaction
@@ -548,6 +551,22 @@ mod tests {
             custody_account_id: AccountId::new(KeyPair::random().public_key().clone()),
             relay_id: voucher_body.relay_id,
             tariff,
+            quote_policy: iroha_data_model::soranet::vpn::VpnQuotePolicyV1 {
+                exit_class: iroha_data_model::soranet::vpn::VpnExitClassV1::Standard,
+                relay_endpoint: "/dns/relay.example/udp/9443/quic".to_owned(),
+                lease_secs: 600,
+                meter_family: "soranet.vpn.standard".to_owned(),
+                fee_asset_id: "xor#universal.universal".to_owned(),
+                escrow_account_id: AccountId::new(KeyPair::random().public_key().clone()),
+                route_pushes: vec!["0.0.0.0/0".to_owned()],
+                excluded_routes: Vec::new(),
+                dns_servers: vec!["1.1.1.1".to_owned()],
+                tunnel_addresses: vec!["10.208.0.2/32".to_owned()],
+                mtu_bytes: u64::from(iroha_data_model::soranet::vpn::VPN_DEFAULT_TUNNEL_MTU_BYTES),
+                flow_label_bits: 24,
+                padding_budget_ms: 15,
+                relay_tls_spki_sha256_hex: Some("ab".repeat(32)),
+            },
             open_tx_hash: [0x44; 32],
             status: VpnLeaseStatusV1::Active,
             opened_at_ms: 1_000,
@@ -558,6 +577,7 @@ mod tests {
             highest_voucher_sequence: 0,
             client_voucher_hash: None,
             relay_receipt_hash: None,
+            settled_relay_receipt: None,
             earned_fee_nanos: 0,
             refunded_fee_nanos: 0,
         };

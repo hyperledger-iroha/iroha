@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, OnceLock,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc::{self, RecvTimeoutError},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -22,11 +22,14 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_config::{
     kura::{FsyncMode, InitMode},
     parameters::{
-        actual::{Kura as Config, LaneConfig, LaneConfigEntry},
-        defaults::kura::{
-            BLOCK_SYNC_ROSTER_RETENTION, BLOCKS_IN_MEMORY, EVICTION_REQUIRED_REPLICAS,
-            FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES, MERGE_LEDGER_CACHE_CAPACITY,
-            ROSTER_SIDECAR_RETENTION,
+        actual::{Fastpq as FastpqConfig, Kura as Config, LaneConfig, LaneConfigEntry},
+        defaults::{
+            kura::{
+                BLOCK_SYNC_ROSTER_RETENTION, BLOCKS_IN_MEMORY, EVICTION_REQUIRED_REPLICAS,
+                FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES, MERGE_LEDGER_CACHE_CAPACITY,
+                ROSTER_SIDECAR_RETENTION,
+            },
+            zk::fastpq as FASTPQ_DEFAULTS,
         },
     },
 };
@@ -87,6 +90,20 @@ const EVICTED_BLOCK_START: u64 = u64::MAX;
 /// Upper bound for merge-ledger entry payloads to avoid unbounded allocations on recovery.
 const MERGE_LEDGER_MAX_ENTRY_BYTES: usize = 16 * 1024 * 1024;
 
+fn default_fastpq_proof_sidecar_queue_cap() -> usize {
+    FASTPQ_DEFAULTS::PROOF_SIDECAR_QUEUE_CAP.get()
+}
+
+fn default_fastpq_proof_sidecar_max_bytes() -> usize {
+    usize::try_from(FASTPQ_DEFAULTS::PROOF_SIDECAR_MAX_BYTES.get())
+        .unwrap_or(usize::MAX)
+        .max(1)
+}
+
+fn default_fastpq_proof_sidecar_max_retries() -> usize {
+    FASTPQ_DEFAULTS::PROOF_SIDECAR_MAX_RETRIES.get()
+}
+
 /// The interface of Kura subsystem.
 ///
 /// Merge-ledger persistence requirements are tracked in
@@ -111,6 +128,14 @@ pub struct Kura {
     sidecar_lock: Mutex<()>,
     /// Queue of pipeline sidecar writes flushed by the Kura writer thread.
     pipeline_sidecar_queue: Mutex<VecDeque<PipelineRecoverySidecar>>,
+    /// Queue of FASTPQ proof attachments merged into existing pipeline sidecars.
+    fastpq_proof_queue: Mutex<VecDeque<QueuedFastpqProofSnapshot>>,
+    /// Maximum queued FASTPQ proof sidecar attachments.
+    fastpq_proof_sidecar_queue_cap: AtomicUsize,
+    /// Maximum encoded FASTPQ proof snapshot bytes accepted for persistence.
+    fastpq_proof_sidecar_max_bytes: AtomicUsize,
+    /// Maximum merge attempts for a pending FASTPQ proof sidecar.
+    fastpq_proof_sidecar_max_retries: AtomicUsize,
     /// Root directory where Kura stores lane segments.
     store_root: PathBuf,
     /// Active block directory for the primary lane.
@@ -168,6 +193,64 @@ type TransactionTimestampHeights = BTreeMap<u64, BTreeSet<NonZeroUsize>>;
 type TransactionResultStatusHeights = BTreeMap<bool, BTreeSet<NonZeroUsize>>;
 type BlockReplicaKey = (u64, HashOf<BlockHeader>);
 type BlockReplicaRegistry = BTreeMap<BlockReplicaKey, BTreeMap<PeerId, BlockReplicaAdvert>>;
+
+#[derive(Debug, Clone)]
+struct QueuedFastpqProofSnapshot {
+    snapshot: FastpqProofSnapshot,
+    retries: usize,
+}
+
+/// Result of enqueueing a FASTPQ proof snapshot for sidecar persistence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FastpqProofEnqueueResult {
+    /// The snapshot was accepted.
+    Enqueued {
+        /// Queue depth after the snapshot was accepted.
+        queue_depth: usize,
+    },
+    /// The encoded snapshot exceeded the configured byte limit.
+    RejectedTooLarge {
+        /// Encoded snapshot size in bytes.
+        actual: usize,
+        /// Configured maximum size in bytes.
+        max: usize,
+    },
+    /// The queue is already at the configured capacity.
+    RejectedQueueFull {
+        /// Configured queue capacity.
+        cap: usize,
+    },
+    /// The snapshot could not be encoded for size accounting.
+    RejectedEncode {
+        /// Human-readable encode failure.
+        reason: String,
+    },
+}
+
+#[derive(Clone, Default, Debug)]
+struct FastpqProofSidecarTelemetry;
+
+impl FastpqProofSidecarTelemetry {
+    fn set_queue_depth(&self, depth: usize) {
+        let _ = self;
+        #[cfg(feature = "telemetry")]
+        if let Some(metrics) = iroha_telemetry::metrics::global() {
+            metrics.set_fastpq_proof_sidecar_queue_depth(u64::try_from(depth).unwrap_or(u64::MAX));
+        }
+        #[cfg(not(feature = "telemetry"))]
+        let _ = depth;
+    }
+
+    fn record_event(&self, event: &'static str) {
+        let _ = self;
+        #[cfg(feature = "telemetry")]
+        if let Some(metrics) = iroha_telemetry::metrics::global() {
+            metrics.inc_fastpq_proof_sidecar_event(event);
+        }
+        #[cfg(not(feature = "telemetry"))]
+        let _ = event;
+    }
+}
 
 #[derive(Debug)]
 struct TransactionEntrypointIndex {
@@ -947,6 +1030,16 @@ impl Kura {
             block_plain_text_path: Mutex::new(block_plain_text_path),
             sidecar_lock: Mutex::new(()),
             pipeline_sidecar_queue: Mutex::new(VecDeque::new()),
+            fastpq_proof_queue: Mutex::new(VecDeque::new()),
+            fastpq_proof_sidecar_queue_cap: AtomicUsize::new(
+                default_fastpq_proof_sidecar_queue_cap(),
+            ),
+            fastpq_proof_sidecar_max_bytes: AtomicUsize::new(
+                default_fastpq_proof_sidecar_max_bytes(),
+            ),
+            fastpq_proof_sidecar_max_retries: AtomicUsize::new(
+                default_fastpq_proof_sidecar_max_retries(),
+            ),
             store_root,
             active_blocks_dir: Mutex::new(blocks_root.clone()),
             active_merge_path: Mutex::new(merge_log_path.clone()),
@@ -1030,6 +1123,16 @@ impl Kura {
             block_plain_text_path: Mutex::new(None),
             sidecar_lock: Mutex::new(()),
             pipeline_sidecar_queue: Mutex::new(VecDeque::new()),
+            fastpq_proof_queue: Mutex::new(VecDeque::new()),
+            fastpq_proof_sidecar_queue_cap: AtomicUsize::new(
+                default_fastpq_proof_sidecar_queue_cap(),
+            ),
+            fastpq_proof_sidecar_max_bytes: AtomicUsize::new(
+                default_fastpq_proof_sidecar_max_bytes(),
+            ),
+            fastpq_proof_sidecar_max_retries: AtomicUsize::new(
+                default_fastpq_proof_sidecar_max_retries(),
+            ),
             store_root,
             active_blocks_dir: Mutex::new(blocks_root),
             active_merge_path: Mutex::new(PathBuf::new()),
@@ -1062,6 +1165,49 @@ impl Kura {
     /// Attach a telemetry sink for storage budget reporting.
     pub fn attach_telemetry(&self, telemetry: StateTelemetry) {
         let _ = self.telemetry.set(telemetry);
+    }
+
+    /// Configure FASTPQ proof sidecar persistence limits from runtime configuration.
+    pub fn configure_fastpq_proof_sidecar_limits(&self, config: &FastpqConfig) {
+        let max_bytes = usize::try_from(config.proof_sidecar_max_bytes.get())
+            .unwrap_or(usize::MAX)
+            .max(1);
+        self.set_fastpq_proof_sidecar_limits(
+            config.proof_sidecar_queue_cap.get(),
+            max_bytes,
+            config.proof_sidecar_max_retries.get(),
+        );
+    }
+
+    fn set_fastpq_proof_sidecar_limits(
+        &self,
+        queue_cap: usize,
+        max_bytes: usize,
+        max_retries: usize,
+    ) {
+        self.fastpq_proof_sidecar_queue_cap
+            .store(queue_cap.max(1), Ordering::Relaxed);
+        self.fastpq_proof_sidecar_max_bytes
+            .store(max_bytes.max(1), Ordering::Relaxed);
+        self.fastpq_proof_sidecar_max_retries
+            .store(max_retries.max(1), Ordering::Relaxed);
+    }
+
+    /// Record that a FASTPQ proof could not be persisted because no entry hash was available.
+    pub fn record_fastpq_missing_entry_hash(&self) {
+        let _ = self;
+        let telemetry = FastpqProofSidecarTelemetry;
+        telemetry.record_event("missing_entry_hash");
+    }
+
+    #[cfg(test)]
+    fn set_fastpq_proof_sidecar_limits_for_testing(
+        &self,
+        queue_cap: usize,
+        max_bytes: usize,
+        max_retries: usize,
+    ) {
+        self.set_fastpq_proof_sidecar_limits(queue_cap, max_bytes, max_retries);
     }
 
     /// Root directory used by this Kura instance.
@@ -2152,6 +2298,7 @@ impl Kura {
             }
 
             kura.flush_pipeline_sidecars();
+            kura.flush_fastpq_proof_snapshots();
 
             if should_exit {
                 if let Err(error) = kura.block_store.lock().flush_pending_fsync(true) {
@@ -4037,6 +4184,9 @@ pub struct PipelineRecoverySidecar {
     /// Optional zero-knowledge proof attachments captured for this block.
     #[norito(default)]
     pub proofs: Vec<PipelineProofSnapshot>,
+    /// FASTPQ proof artifacts generated asynchronously for committed execution witnesses.
+    #[norito(default)]
+    pub fastpq_proofs: Vec<FastpqProofSnapshot>,
 }
 
 impl PipelineRecoverySidecar {
@@ -4056,6 +4206,7 @@ impl PipelineRecoverySidecar {
             dag,
             txs,
             proofs: Vec::new(),
+            fastpq_proofs: Vec::new(),
         }
     }
 
@@ -4131,6 +4282,11 @@ impl PipelineRecoverySidecar {
                 norito::json::Value::Object(entry)
             })
             .collect::<Vec<_>>();
+        let fastpq_proofs = self
+            .fastpq_proofs
+            .iter()
+            .map(FastpqProofSnapshot::to_json_value)
+            .collect::<Vec<_>>();
 
         let mut root = norito::json::Map::new();
         root.insert(
@@ -4149,6 +4305,10 @@ impl PipelineRecoverySidecar {
         root.insert("dag".to_string(), dag);
         root.insert("txs".to_string(), norito::json::Value::Array(txs));
         root.insert("proofs".to_string(), norito::json::Value::Array(proofs));
+        root.insert(
+            "fastpq_proofs".to_string(),
+            norito::json::Value::Array(fastpq_proofs),
+        );
         norito::json::Value::Object(root)
     }
 
@@ -4202,6 +4362,118 @@ pub struct PipelineProofSnapshot {
     /// Optional transaction hash associated with the trace.
     #[norito(default)]
     pub tx_hash: Option<[u8; 32]>,
+}
+
+/// FASTPQ proof artifact captured after block commit for local AXT packaging and audits.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct FastpqProofSnapshot {
+    /// Block height the proof belongs to.
+    pub height: u64,
+    /// Block hash the proof belongs to.
+    pub block_hash: HashOf<BlockHeader>,
+    /// Transaction entrypoint or execution-witness entry hash proven by this batch.
+    pub entry_hash: Hash,
+    /// Zero-based batch position in the committed execution witness.
+    pub batch_index: u32,
+    /// FASTPQ parameter set used to produce the proof.
+    pub parameter: String,
+    /// Number of transitions carried by `batch`.
+    pub transition_count: u32,
+    /// Batch trace commitment proven by `proof`.
+    pub trace_commitment: Hash,
+    /// Stable digest of the Norito-encoded FASTPQ proof bytes.
+    pub proof_digest: Hash,
+    /// Canonical transition batch proven by the FASTPQ proof.
+    pub batch: fastpq_prover::TransitionBatch,
+    /// Norito-encoded FASTPQ proof bytes.
+    pub proof: Vec<u8>,
+}
+
+impl FastpqProofSnapshot {
+    /// Return `true` when both snapshots describe the same proof attachment.
+    #[must_use]
+    pub fn same_attachment(&self, other: &Self) -> bool {
+        self.entry_hash == other.entry_hash
+            && self.batch_index == other.batch_index
+            && self.proof_digest == other.proof_digest
+    }
+
+    /// Decode the embedded FASTPQ proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito decode error when the proof bytes are malformed.
+    pub fn decode_proof(&self) -> Result<fastpq_prover::Proof, norito::Error> {
+        norito::decode_from_bytes(&self.proof)
+    }
+
+    /// Convert this FASTPQ proof snapshot to the JSON object used by recovery endpoints.
+    #[must_use]
+    pub fn to_json_value(&self) -> JsonValue {
+        let mut entry = norito::json::Map::new();
+        entry.insert(
+            "entry_hash".to_string(),
+            norito::json::to_value(&self.entry_hash.to_string()).expect("serialize entry hash"),
+        );
+        entry.insert(
+            "batch_index".to_string(),
+            norito::json::to_value(&self.batch_index).expect("serialize batch index"),
+        );
+        entry.insert(
+            "parameter".to_string(),
+            norito::json::to_value(&self.parameter).expect("serialize parameter"),
+        );
+        entry.insert(
+            "transition_count".to_string(),
+            norito::json::to_value(&self.transition_count).expect("serialize transition count"),
+        );
+        entry.insert(
+            "trace_commitment".to_string(),
+            norito::json::to_value(&self.trace_commitment.to_string())
+                .expect("serialize trace commitment"),
+        );
+        entry.insert(
+            "proof_digest".to_string(),
+            norito::json::to_value(&self.proof_digest.to_string()).expect("serialize proof digest"),
+        );
+        entry.insert(
+            "batch".to_string(),
+            norito::json::to_value(
+                &BASE64_STANDARD
+                    .encode(norito::to_bytes(&self.batch).expect("encode FASTPQ batch")),
+            )
+            .expect("serialize FASTPQ batch"),
+        );
+        entry.insert(
+            "proof".to_string(),
+            norito::json::to_value(&BASE64_STANDARD.encode(&self.proof))
+                .expect("serialize FASTPQ proof"),
+        );
+        norito::json::Value::Object(entry)
+    }
+
+    /// Package this snapshot as an AXT proof blob.
+    ///
+    /// # Errors
+    ///
+    /// Returns a FASTPQ prover error when the embedded proof is malformed or
+    /// the batch was not already AXT-bound before proof generation.
+    pub fn to_axt_proof_blob(
+        &self,
+        manifest_root: [u8; 32],
+        da_commitment: Option<[u8; 32]>,
+        expiry_slot: Option<u64>,
+    ) -> fastpq_prover::Result<iroha_data_model::nexus::ProofBlob> {
+        let proof = norito::decode_from_bytes(&self.proof)
+            .map_err(|source| fastpq_prover::Error::AxtProofPayloadDecode { source })?;
+        fastpq_prover::axt_proof_blob_from_bound_batch(
+            &self.batch,
+            proof,
+            manifest_root,
+            da_commitment,
+            expiry_slot,
+        )
+    }
 }
 
 /// Known metadata format variants for roster snapshots persisted alongside blocks.
@@ -4332,6 +4604,13 @@ struct SidecarIndexEntry {
     len: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FastpqProofWriteResult {
+    Written,
+    Retry,
+    Drop,
+}
+
 impl SidecarIndexEntry {
     fn to_bytes(self) -> [u8; PIPELINE_INDEX_ENTRY_SIZE] {
         let mut buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
@@ -4396,6 +4675,119 @@ impl Kura {
             self.write_pipeline_metadata(&sidecar);
         }
         count
+    }
+
+    /// Enqueue a FASTPQ proof attachment for asynchronous persistence in the block sidecar.
+    pub fn enqueue_fastpq_proof_snapshot(
+        &self,
+        snapshot: FastpqProofSnapshot,
+    ) -> FastpqProofEnqueueResult {
+        let telemetry = FastpqProofSidecarTelemetry;
+        let max_bytes = self
+            .fastpq_proof_sidecar_max_bytes
+            .load(Ordering::Relaxed)
+            .max(1);
+        let actual = match norito::to_bytes(&snapshot) {
+            Ok(bytes) => bytes.len(),
+            Err(err) => {
+                telemetry.record_event("rejected_encode");
+                iroha_logger::warn!(
+                    ?err,
+                    "failed to encode FASTPQ proof snapshot before enqueue"
+                );
+                return FastpqProofEnqueueResult::RejectedEncode {
+                    reason: format!("{err:?}"),
+                };
+            }
+        };
+        if actual > max_bytes {
+            telemetry.record_event("rejected_too_large");
+            return FastpqProofEnqueueResult::RejectedTooLarge {
+                actual,
+                max: max_bytes,
+            };
+        }
+
+        let cap = self
+            .fastpq_proof_sidecar_queue_cap
+            .load(Ordering::Relaxed)
+            .max(1);
+        let queue_depth = {
+            let mut queue = self.fastpq_proof_queue.lock();
+            if queue.len() >= cap {
+                telemetry.record_event("rejected_queue_full");
+                telemetry.set_queue_depth(queue.len());
+                return FastpqProofEnqueueResult::RejectedQueueFull { cap };
+            }
+            queue.push_back(QueuedFastpqProofSnapshot {
+                snapshot,
+                retries: 0,
+            });
+            queue.len()
+        };
+        telemetry.record_event("enqueued");
+        telemetry.set_queue_depth(queue_depth);
+        if let Err(err) = self.block_notify_tx.send(BlockNotify::NewBlock) {
+            iroha_logger::warn!(
+                ?err,
+                "failed to notify block writer about FASTPQ proof sidecar"
+            );
+        }
+        FastpqProofEnqueueResult::Enqueued { queue_depth }
+    }
+
+    fn flush_fastpq_proof_snapshots(&self) -> usize {
+        let telemetry = FastpqProofSidecarTelemetry;
+        let snapshots = {
+            let mut queue = self.fastpq_proof_queue.lock();
+            if queue.is_empty() {
+                telemetry.set_queue_depth(0);
+                return 0;
+            }
+            queue.drain(..).collect::<Vec<_>>()
+        };
+        let mut written = 0usize;
+        let mut retry = VecDeque::new();
+        let max_retries = self
+            .fastpq_proof_sidecar_max_retries
+            .load(Ordering::Relaxed)
+            .max(1);
+        for mut queued in snapshots {
+            match self.write_fastpq_proof_snapshot(&queued.snapshot) {
+                FastpqProofWriteResult::Written => {
+                    telemetry.record_event("written");
+                    written = written.saturating_add(1);
+                }
+                FastpqProofWriteResult::Retry => {
+                    let next_retries = queued.retries.saturating_add(1);
+                    if next_retries >= max_retries {
+                        telemetry.record_event("dropped");
+                        iroha_logger::warn!(
+                            height = queued.snapshot.height,
+                            retries = next_retries,
+                            max_retries,
+                            "dropping FASTPQ proof snapshot after retry limit"
+                        );
+                    } else {
+                        telemetry.record_event("retried");
+                        queued.retries = next_retries;
+                        retry.push_back(queued);
+                    }
+                }
+                FastpqProofWriteResult::Drop => {
+                    telemetry.record_event("dropped");
+                }
+            }
+        }
+        let queue_depth = {
+            let mut queue = self.fastpq_proof_queue.lock();
+            if !retry.is_empty() {
+                queue.extend(retry);
+            }
+            queue.len()
+        };
+        telemetry.set_queue_depth(queue_depth);
+        written
     }
 
     /// Write per-block pipeline recovery metadata sidecar under the store dir. Best-effort: errors
@@ -4469,6 +4861,116 @@ impl Kura {
                     ),
                 }
             }
+        }
+    }
+
+    fn write_fastpq_proof_snapshot(
+        &self,
+        snapshot: &FastpqProofSnapshot,
+    ) -> FastpqProofWriteResult {
+        if snapshot.height == 0 {
+            iroha_logger::warn!("refusing to store FASTPQ proof snapshot for zero height");
+            return FastpqProofWriteResult::Drop;
+        }
+        let Some(mut dir) = self.store_dir() else {
+            iroha_logger::warn!("FASTPQ proof snapshot has no Kura store directory");
+            return FastpqProofWriteResult::Drop;
+        };
+        let _guard = self.sidecar_lock.lock();
+        dir.push(PIPELINE_DIR_NAME);
+        if let Err(err) = std::fs::create_dir_all(&dir) {
+            iroha_logger::warn!(?err, ?dir, "failed to create pipeline dir for FASTPQ proof");
+            return FastpqProofWriteResult::Retry;
+        }
+        let data_path = dir.join(PIPELINE_SIDECARS_DATA_FILE);
+        let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
+        let json_sidecar_path = dir.join(format!("block_{}.json", snapshot.height));
+        let Some(mut sidecar) = self.read_indexed_sidecar(
+            snapshot.height,
+            PIPELINE_SIDECARS_DATA_FILE,
+            PIPELINE_SIDECARS_INDEX_FILE,
+            norito::decode_from_bytes::<PipelineRecoverySidecar>,
+            "pipeline sidecar",
+        ) else {
+            iroha_logger::debug!(
+                height = snapshot.height,
+                "pipeline sidecar not ready for FASTPQ proof attachment"
+            );
+            return FastpqProofWriteResult::Retry;
+        };
+        if sidecar.block_hash != snapshot.block_hash {
+            iroha_logger::warn!(
+                height = snapshot.height,
+                expected = %sidecar.block_hash,
+                actual = %snapshot.block_hash,
+                "dropping FASTPQ proof snapshot for mismatched block hash"
+            );
+            return FastpqProofWriteResult::Drop;
+        }
+        if sidecar
+            .fastpq_proofs
+            .iter()
+            .any(|existing| existing.same_attachment(snapshot))
+        {
+            return FastpqProofWriteResult::Written;
+        }
+        sidecar.fastpq_proofs.push(snapshot.clone());
+        let before_bytes =
+            match Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&json_sidecar_path)) {
+                Ok(bytes) => Some(bytes),
+                Err(err) => {
+                    iroha_logger::warn!(
+                        ?err,
+                        ?dir,
+                        "failed to measure pipeline sidecar bytes before FASTPQ proof write"
+                    );
+                    None
+                }
+            };
+        let payload = match sidecar.encode_framed() {
+            Ok(payload) => payload,
+            Err(err) => {
+                iroha_logger::warn!(
+                    ?err,
+                    height = snapshot.height,
+                    "failed to encode FASTPQ proof sidecar update"
+                );
+                return FastpqProofWriteResult::Retry;
+            }
+        };
+        let wrote = Self::append_indexed_sidecar(
+            &data_path,
+            &index_path,
+            snapshot.height,
+            &payload,
+            "pipeline sidecar",
+            self.sidecar_fsync_mode(),
+            None,
+        );
+        if wrote {
+            if json_sidecar_path.exists()
+                && let Err(err) = std::fs::remove_file(&json_sidecar_path)
+            {
+                iroha_logger::debug!(
+                    ?err,
+                    ?json_sidecar_path,
+                    "failed to remove JSON pipeline sidecar after FASTPQ proof update"
+                );
+            }
+            if let Some(before_bytes) = before_bytes {
+                match Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&json_sidecar_path))
+                {
+                    Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
+                    Err(err) => iroha_logger::warn!(
+                        ?err,
+                        ?dir,
+                        "failed to measure pipeline sidecar bytes after FASTPQ proof write"
+                    ),
+                }
+            }
+            FastpqProofWriteResult::Written
+        } else {
+            FastpqProofWriteResult::Retry
         }
     }
 
@@ -4572,6 +5074,14 @@ impl Kura {
                 Some(sidecar)
             }
         })
+    }
+
+    /// Read persisted FASTPQ proof snapshots for a committed block.
+    #[must_use]
+    pub fn fastpq_proofs_for_block(&self, height: u64) -> Vec<FastpqProofSnapshot> {
+        self.read_pipeline_metadata(height)
+            .map(|sidecar| sidecar.fastpq_proofs)
+            .unwrap_or_default()
     }
 
     /// Read roster metadata sidecar for `height` if present. Returns `None` on errors or missing
@@ -11662,6 +12172,46 @@ mod tests {
     }
 
     #[test]
+    fn pipeline_sidecar_decodes_missing_fastpq_proofs_as_empty() {
+        #[derive(Debug, Clone, Encode, Decode)]
+        struct LegacyPipelineRecoverySidecar {
+            format: PipelineRecoveryFormat,
+            height: u64,
+            block_hash: HashOf<BlockHeader>,
+            dag: PipelineDagSnapshot,
+            txs: Vec<PipelineTxSnapshot>,
+            #[norito(default)]
+            proofs: Vec<PipelineProofSnapshot>,
+        }
+
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"legacy-pipeline-sidecar"));
+        let legacy = LegacyPipelineRecoverySidecar {
+            format: PipelineRecoveryFormat::Current,
+            height: 1,
+            block_hash,
+            dag: PipelineDagSnapshot {
+                fingerprint: [0u8; 32],
+                key_count: 0,
+            },
+            txs: Vec::new(),
+            proofs: Vec::new(),
+        };
+        let mut bytes = norito::to_bytes(&legacy).expect("encode legacy sidecar");
+        let schema = <PipelineRecoverySidecar as norito::core::NoritoSerialize>::schema_hash();
+        let schema_start = MAGIC.len() + 2;
+        let schema_end = schema_start + schema.len();
+        assert!(bytes.len() >= Header::SIZE);
+        bytes[schema_start..schema_end].copy_from_slice(&schema);
+        let decoded: PipelineRecoverySidecar =
+            norito::decode_from_bytes(&bytes).expect("decode sidecar with defaulted fastpq proofs");
+        assert_eq!(decoded.height, legacy.height);
+        assert_eq!(decoded.block_hash, legacy.block_hash);
+        assert!(decoded.proofs.is_empty());
+        assert!(decoded.fastpq_proofs.is_empty());
+    }
+
+    #[test]
     fn pipeline_sidecar_enqueue_flushes() {
         use iroha_config::base::WithOrigin;
         let temp_dir = TempDir::new().unwrap();
@@ -11705,6 +12255,153 @@ mod tests {
         let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
         assert_eq!(got.height, 1);
         assert_eq!(got.block_hash, block_hash);
+    }
+
+    fn sample_fastpq_snapshot(
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        proof_len: usize,
+    ) -> FastpqProofSnapshot {
+        let proof = vec![0x7a; proof_len];
+        FastpqProofSnapshot {
+            height,
+            block_hash,
+            entry_hash: Hash::new(format!("fastpq-entry-{height}-{proof_len}").into_bytes()),
+            batch_index: 0,
+            parameter: "fastpq-lane-balanced".to_string(),
+            transition_count: 0,
+            trace_commitment: Hash::new(b"trace-commitment"),
+            proof_digest: Hash::new(&proof),
+            batch: fastpq_prover::TransitionBatch::new(
+                "fastpq-lane-balanced",
+                fastpq_prover::PublicInputs::default(),
+            ),
+            proof,
+        }
+    }
+
+    #[test]
+    fn fastpq_proof_snapshot_merges_into_pipeline_sidecar() {
+        use iroha_config::base::WithOrigin;
+        let temp_dir = TempDir::new().unwrap();
+        let (kura, _count) = Kura::new(
+            &Config {
+                init_mode: InitMode::Strict,
+                store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+                blocks_in_memory: BLOCKS_IN_MEMORY,
+                debug_output_new_blocks: false,
+                merge_ledger_cache_capacity:
+                    iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+                fsync_mode: iroha_config::kura::FsyncMode::Batched,
+                fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+                block_sync_roster_retention:
+                    iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+                roster_sidecar_retention:
+                    iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            },
+            &RuntimeLaneConfig::default(),
+        )
+        .unwrap();
+
+        let block_hash = store_dummy_blocks(&kura, 1)[0];
+        let sidecar = PipelineRecoverySidecar::new(
+            1,
+            block_hash,
+            PipelineDagSnapshot {
+                fingerprint: [0u8; 32],
+                key_count: 0,
+            },
+            Vec::new(),
+        );
+        kura.write_pipeline_metadata(&sidecar);
+
+        let proof = b"fastpq-proof".to_vec();
+        let snapshot = FastpqProofSnapshot {
+            height: 1,
+            block_hash,
+            entry_hash: Hash::prehashed([0x11; 32]),
+            batch_index: 0,
+            parameter: "fastpq-lane-balanced".to_string(),
+            transition_count: 0,
+            trace_commitment: Hash::new(b"trace-commitment"),
+            proof_digest: Hash::new(&proof),
+            batch: fastpq_prover::TransitionBatch::new(
+                "fastpq-lane-balanced",
+                fastpq_prover::PublicInputs::default(),
+            ),
+            proof,
+        };
+
+        assert!(matches!(
+            kura.enqueue_fastpq_proof_snapshot(snapshot.clone()),
+            FastpqProofEnqueueResult::Enqueued { .. }
+        ));
+        assert_eq!(kura.flush_fastpq_proof_snapshots(), 1);
+
+        let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
+        assert_eq!(got.fastpq_proofs, vec![snapshot.clone()]);
+        assert!(got.fastpq_proofs[0].decode_proof().is_err());
+        assert_eq!(kura.fastpq_proofs_for_block(1), vec![snapshot]);
+
+        let duplicate = got.fastpq_proofs[0].clone();
+        assert!(matches!(
+            kura.enqueue_fastpq_proof_snapshot(duplicate),
+            FastpqProofEnqueueResult::Enqueued { .. }
+        ));
+        assert_eq!(kura.flush_fastpq_proof_snapshots(), 1);
+        let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
+        assert_eq!(got.fastpq_proofs.len(), 1);
+    }
+
+    #[test]
+    fn fastpq_proof_snapshot_rejects_queue_overflow() {
+        let kura = Kura::blank_kura_for_testing();
+        kura.set_fastpq_proof_sidecar_limits_for_testing(1, usize::MAX, 2);
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+        assert!(matches!(
+            kura.enqueue_fastpq_proof_snapshot(sample_fastpq_snapshot(1, block_hash, 8)),
+            FastpqProofEnqueueResult::Enqueued { queue_depth: 1 }
+        ));
+        assert_eq!(
+            kura.enqueue_fastpq_proof_snapshot(sample_fastpq_snapshot(1, block_hash, 9)),
+            FastpqProofEnqueueResult::RejectedQueueFull { cap: 1 }
+        );
+        assert_eq!(kura.fastpq_proof_queue.lock().len(), 1);
+    }
+
+    #[test]
+    fn fastpq_proof_snapshot_rejects_oversized_snapshot() {
+        let kura = Kura::blank_kura_for_testing();
+        kura.set_fastpq_proof_sidecar_limits_for_testing(8, 1, 2);
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+        match kura.enqueue_fastpq_proof_snapshot(sample_fastpq_snapshot(1, block_hash, 8)) {
+            FastpqProofEnqueueResult::RejectedTooLarge { actual, max } => {
+                assert!(actual > max);
+                assert_eq!(max, 1);
+            }
+            result => panic!("expected oversized rejection, got {result:?}"),
+        }
+        assert!(kura.fastpq_proof_queue.lock().is_empty());
+    }
+
+    #[test]
+    fn fastpq_proof_snapshot_retries_missing_sidecar_until_limit() {
+        let kura = Kura::blank_kura_for_testing();
+        kura.set_fastpq_proof_sidecar_limits_for_testing(8, usize::MAX, 2);
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+        assert!(matches!(
+            kura.enqueue_fastpq_proof_snapshot(sample_fastpq_snapshot(1, block_hash, 8)),
+            FastpqProofEnqueueResult::Enqueued { .. }
+        ));
+
+        assert_eq!(kura.flush_fastpq_proof_snapshots(), 0);
+        assert_eq!(kura.fastpq_proof_queue.lock().len(), 1);
+        assert_eq!(kura.flush_fastpq_proof_snapshots(), 0);
+        assert!(kura.fastpq_proof_queue.lock().is_empty());
     }
 
     #[test]

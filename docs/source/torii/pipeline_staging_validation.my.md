@@ -75,7 +75,7 @@ The stream must emit `event: pipeline` entries with a JSON body matching `Pipeli
 
 ## 3.4 Norito RPC Parity
 
-Use the NRPC transport (`POST /transaction` with Norito payload wrapped in the RPC envelope) to submit the same transaction and ensure:
+Use the NRPC transport (`POST /v1/pipeline/transactions` with Norito payload wrapped in the RPC envelope) to submit the same transaction and ensure:
 
 - The RPC response matches the HTTP status path (no additional error codes).
 - `/v1/pipeline/transactions/status` reflects both submissions identically.

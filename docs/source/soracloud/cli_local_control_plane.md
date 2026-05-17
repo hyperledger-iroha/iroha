@@ -247,11 +247,8 @@ Torii-backed and require `--torii-url`.
   - when driven by `--container` plus `--service`, attach the same local
     `service_plan` projection that `local-plan` reports
 - `iroha app soracloud model-artifact-*`, `model-weight-*`,
-  `model-upload-encryption-recipient`, `model-upload-init`,
-  `model-upload-chunk`, `model-upload-finalize`, `model-upload-status`,
-  `model-compile`, `model-compile-status`, `model-allow`,
-  `model-run-private`, `model-run-status`, `model-decrypt-output`, and
-  `model-publish-private`
+  `model-upload-encryption-recipient`, `model-upload-register`, and
+  `model-upload-status`
   - accept `--service-name` directly or resolve the owning service from
     `--container` plus `--service` when a service name applies
   - keep model registry and uploaded-model status control aligned with

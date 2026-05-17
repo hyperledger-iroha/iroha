@@ -9,8 +9,8 @@ import org.hyperledger.iroha.sdk.tx.norito.SignedTransactionEncoder
 
 /** Builds Torii HTTP requests for submitting signed transactions. */
 internal object ToriiRequestBuilder {
-    private const val SUBMIT_PATH = "/transaction"
-    private const val SUBMIT_ENTRYPOINT_PATH = "/transaction/entrypoint"
+    private const val SUBMIT_PATH = "/v1/pipeline/transactions"
+    private const val SUBMIT_ENTRYPOINT_PATH = "/v1/pipeline/transaction-entrypoints"
     private const val STATUS_PATH = "/v1/pipeline/transactions/status"
 
     @JvmStatic

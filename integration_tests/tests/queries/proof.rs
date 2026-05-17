@@ -6,7 +6,7 @@ use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::{
     prelude::*,
-    proof::ProofAttachment,
+    proof::{ProofAttachment, VerifyingKeyId},
     query::proof::prelude::{FindProofRecords, FindProofRecordsByStatus},
 };
 use iroha_core::zk::test_utils::halo2_fixture_envelope;
@@ -19,10 +19,11 @@ fn halo2_attachment(circuit_id: &str) -> ProofAttachment {
         .expect("fixture must include a verifying key");
     let fixture = halo2_fixture_envelope(circuit_id, vk_hash);
     let proof_box = fixture.proof_box("halo2/ipa");
-    let vk_box = fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture must include a verifying key");
-    ProofAttachment::new_inline("halo2/ipa".into(), proof_box, vk_box)
+    ProofAttachment::new_ref(
+        "halo2/ipa".into(),
+        proof_box,
+        VerifyingKeyId::new("halo2/ipa", "query_vk"),
+    )
 }
 
 #[test]
@@ -56,10 +57,10 @@ fn proof_query_scenarios() -> Result<()> {
     // find_proof_records_by_backend_filters
     {
         let att1 = halo2_attachment("halo2/ipa:tiny-add-public");
-        let att2 = iroha::data_model::proof::ProofAttachment::new_inline(
+        let att2 = iroha::data_model::proof::ProofAttachment::new_ref(
             "groth16/bn254".into(),
             iroha::data_model::proof::ProofBox::new("groth16/bn254".into(), vec![0x03]),
-            iroha::data_model::proof::VerifyingKeyBox::new("groth16/bn254".into(), vec![0x04]),
+            iroha::data_model::proof::VerifyingKeyId::new("groth16/bn254", "query_groth_vk"),
         );
         client.submit_all_blocking([iroha::data_model::isi::zk::VerifyProof::new(att1)])?;
         client.submit_all_blocking([iroha::data_model::isi::zk::VerifyProof::new(att2)])?;
@@ -85,10 +86,10 @@ fn proof_query_scenarios() -> Result<()> {
     // find_proof_records_by_status_filters
     {
         let att_ok = halo2_attachment("halo2/ipa:tiny-add2inst-public");
-        let att_bad = iroha::data_model::proof::ProofAttachment::new_inline(
+        let att_bad = iroha::data_model::proof::ProofAttachment::new_ref(
             "groth16/bn254".into(),
             iroha::data_model::proof::ProofBox::new("groth16/bn254".into(), vec![0x20]),
-            iroha::data_model::proof::VerifyingKeyBox::new("groth16/bn254".into(), vec![0x21]),
+            iroha::data_model::proof::VerifyingKeyId::new("groth16/bn254", "query_bad_vk"),
         );
         client.submit_all_blocking([iroha::data_model::isi::zk::VerifyProof::new(att_ok)])?;
         client.submit_all_blocking([iroha::data_model::isi::zk::VerifyProof::new(att_bad)])?;

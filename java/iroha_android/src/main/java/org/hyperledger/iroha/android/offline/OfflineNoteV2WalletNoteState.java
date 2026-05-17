@@ -4,8 +4,6 @@ package org.hyperledger.iroha.android.offline;
 public enum OfflineNoteV2WalletNoteState {
   SPENDABLE,
   RECEIVE_PENDING,
-  CHANGE_PENDING,
-  SPEND_PENDING,
   SPENT,
   REDEEM_PENDING,
   REDEEMED,

@@ -146,7 +146,6 @@ fn build_confidential_v2_vk_box<C>(k: u32, circuit: &C) -> Result<VerifyingKeyBo
 where
     C: Circuit<Scalar>,
 {
-    super::ensure_halo2_max_degree(1024);
     let params = super::pasta_params_new(k);
     let vk = keygen_vk(&params, circuit)
         .map_err(|err| format!("failed to generate confidential v2 verifying key: {err}"))?;
@@ -2259,7 +2258,6 @@ pub fn build_confidential_transfer_proof_v2(
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
 ) -> Result<ConfidentialTransferProofV2, String> {
-    super::ensure_halo2_max_degree(1024);
     if inputs.is_empty() || inputs.len() > 2 {
         return Err("confidential transfer v2 supports one or two inputs".to_owned());
     }
@@ -2463,7 +2461,6 @@ pub fn build_confidential_unshield_proof_v2(
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
 ) -> Result<ConfidentialUnshieldProofV2, String> {
-    super::ensure_halo2_max_degree(1024);
     if inputs.is_empty() || inputs.len() > 2 {
         return Err("confidential unshield v2 supports one or two inputs".to_owned());
     }
@@ -2616,7 +2613,6 @@ pub fn build_confidential_unshield_proof_v3(
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
 ) -> Result<ConfidentialUnshieldProofV3, String> {
-    super::ensure_halo2_max_degree(1024);
     if inputs.is_empty() || inputs.len() > 2 {
         return Err("confidential unshield v3 supports one or two inputs".to_owned());
     }

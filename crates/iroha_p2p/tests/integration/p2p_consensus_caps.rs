@@ -2,8 +2,12 @@
 
 use std::num::NonZeroUsize;
 
-use iroha_config::parameters::actual::{
-    Network as Config, SoranetHandshake as ActualSoranetHandshake,
+use iroha_config::parameters::{
+    actual::{
+        LaneProfile, Network as Config, RelayMode, SoranetHandshake as ActualSoranetHandshake,
+        SoranetPrivacy, SoranetVpn,
+    },
+    defaults::network::{PEER_GOSSIP_PERIOD, RELAY_TTL},
 };
 use iroha_config_base::WithOrigin;
 use iroha_crypto::KeyPair;
@@ -11,8 +15,7 @@ use iroha_data_model::prelude::ChainId;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_p2p::{
     ConfidentialFeatureDigest, ConfidentialHandshakeCaps, ConsensusConfigCaps,
-    ConsensusHandshakeCaps,
-    CryptoHandshakeCaps, NetworkHandle, network::message::*,
+    ConsensusHandshakeCaps, CryptoHandshakeCaps, NetworkHandle, network::message::*,
 };
 use iroha_primitives::addr::socket_addr;
 use norito::codec::{Decode, Encode};
@@ -22,6 +25,12 @@ use tokio::time::Duration;
 struct Dummy;
 
 impl iroha_p2p::network::message::ClassifyTopic for Dummy {}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for Dummy {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        norito::core::decode_field_canonical::<Self>(bytes)
+    }
+}
 
 fn sample_consensus_config_caps() -> ConsensusConfigCaps {
     ConsensusConfigCaps {
@@ -44,24 +53,88 @@ fn cfg(addr: iroha_primitives::addr::SocketAddr) -> Config {
     Config {
         address: WithOrigin::inline(addr.clone()),
         public_address: WithOrigin::inline(addr),
+        relay_mode: RelayMode::Disabled,
+        relay_hub_addresses: Vec::new(),
+        relay_ttl: RELAY_TTL,
         soranet_handshake: ActualSoranetHandshake::default(),
+        soranet_privacy: SoranetPrivacy::default(),
+        soranet_vpn: SoranetVpn::default(),
+        lane_profile: LaneProfile::Core,
+        require_sm_handshake_match: true,
+        require_sm_openssl_preview_match: true,
         idle_timeout: Duration::from_millis(1000),
+        connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+        dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+        deferred_send_ttl: Duration::from_millis(
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
+        ),
+        deferred_send_max_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        peer_gossip_period: PEER_GOSSIP_PERIOD,
+        peer_gossip_max_period: PEER_GOSSIP_PERIOD,
+        trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
+        trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
+        trust_penalty_bad_gossip:
+            iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
+        trust_penalty_unknown_peer:
+            iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
+        trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
+        debug_packet_loss_inbound_percent: 0,
+        debug_packet_loss_outbound_percent: 0,
         prefer_ws_fallback: false,
+        p2p_proxy: None,
+        p2p_proxy_required: false,
+        p2p_no_proxy: Vec::new(),
+        p2p_proxy_tls_verify: true,
+        p2p_proxy_tls_pinned_cert_der_base64: None,
         happy_eyeballs_stagger: Duration::from_millis(10),
         addr_ipv6_first: false,
         dns_refresh_interval: None,
         dns_refresh_ttl: None,
         quic_enabled: false,
         quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
-        quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
-        quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
-        quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
+        quic_datagram_max_payload_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+        quic_datagram_receive_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+        quic_datagram_send_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
+        scion: iroha_config::parameters::actual::ScionConfig::default(),
         tls_enabled: false,
+        tls_fallback_to_plain: true,
         tls_listen_address: None,
+        tls_inbound_only: false,
         p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),
         p2p_queue_cap_low: NonZeroUsize::new(128).unwrap(),
         p2p_post_queue_cap: NonZeroUsize::new(64).unwrap(),
-        p2p_subscriber_queue_cap: iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+        p2p_subscriber_queue_cap:
+            iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+        consensus_ingress_rate_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+        consensus_ingress_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+        consensus_ingress_bytes_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+        consensus_ingress_bytes_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+        consensus_ingress_critical_rate_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+        consensus_ingress_critical_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+        consensus_ingress_critical_bytes_per_sec:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+        consensus_ingress_critical_bytes_burst:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
+        consensus_ingress_rbc_session_limit:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+        consensus_ingress_penalty_threshold:
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+        consensus_ingress_penalty_window: Duration::from_millis(
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+        ),
+        consensus_ingress_penalty_cooldown: Duration::from_millis(
+            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+        ),
         max_incoming: None,
         max_total_connections: None,
         accept_rate_per_ip_per_sec: None,
@@ -85,6 +158,15 @@ fn cfg(addr: iroha_primitives::addr::SocketAddr) -> Config {
         max_frame_bytes: 1_048_576,
         tcp_nodelay: true,
         tcp_keepalive: None,
+        max_frame_bytes_consensus: 262_144,
+        max_frame_bytes_control: 262_144,
+        max_frame_bytes_block_sync: 1_048_576,
+        max_frame_bytes_tx_gossip: 262_144,
+        max_frame_bytes_peer_gossip: 131_072,
+        max_frame_bytes_health: 65_536,
+        max_frame_bytes_other: 262_144,
+        tls_only_v1_3: true,
+        quic_max_idle_timeout: None,
     }
 }
 
@@ -104,12 +186,11 @@ async fn consensus_caps_match_connects() {
         config: config_caps.clone(),
     };
 
-    let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
+    let (mut net1, _ch1) = match NetworkHandle::<Dummy>::start(
         kp1.clone(),
         cfg(addr1.clone()),
         Some(chain.clone()),
         Some(caps.clone()),
-        None,
         None,
         ShutdownSignal::new(),
     )
@@ -118,12 +199,11 @@ async fn consensus_caps_match_connects() {
         Ok(ok) => ok,
         Err(_e) => return, // Skip if sockets unavailable
     };
-    let (net2, _ch2) = match NetworkHandle::<Dummy>::start(
+    let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
         kp2.clone(),
         cfg(addr2.clone()),
         Some(chain.clone()),
         Some(caps.clone()),
-        None,
         None,
         ShutdownSignal::new(),
     )
@@ -173,7 +253,6 @@ async fn consensus_caps_mismatch_rejected() {
         Some(chain.clone()),
         Some(caps_ok.clone()),
         None,
-        None,
         ShutdownSignal::new(),
     )
     .await
@@ -181,12 +260,11 @@ async fn consensus_caps_mismatch_rejected() {
         Ok(ok) => ok,
         Err(_e) => return,
     };
-    let (net2, _ch2) = match NetworkHandle::<Dummy>::start(
+    let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
         kp2.clone(),
         cfg(addr2.clone()),
         Some(chain.clone()),
         Some(caps_bad.clone()),
-        None,
         None,
         ShutdownSignal::new(),
     )
@@ -217,7 +295,7 @@ async fn consensus_config_caps_mismatch_rejected() {
     let addr1 = socket_addr!(127.0.0.1:0);
     let addr2 = socket_addr!(127.0.0.1:0);
 
-    let mut config_caps = sample_consensus_config_caps();
+    let config_caps = sample_consensus_config_caps();
     let mut mismatched = config_caps.clone();
     mismatched.collectors_k = 2;
 
@@ -240,7 +318,6 @@ async fn consensus_config_caps_mismatch_rejected() {
         Some(chain.clone()),
         Some(caps_ok.clone()),
         None,
-        None,
         ShutdownSignal::new(),
     )
     .await
@@ -248,12 +325,11 @@ async fn consensus_config_caps_mismatch_rejected() {
         Ok(ok) => ok,
         Err(_e) => return,
     };
-    let (net2, _ch2) = match NetworkHandle::<Dummy>::start(
+    let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
         kp2.clone(),
         cfg(addr2.clone()),
         Some(chain.clone()),
         Some(caps_bad.clone()),
-        None,
         None,
         ShutdownSignal::new(),
     )
@@ -288,6 +364,7 @@ async fn confidential_caps_match_connects() {
         poseidon_params_id: Some(11),
         pedersen_params_id: Some(22),
         conf_rules_version: Some(1),
+        zk_policy_hash: Some([31u8; 32]),
     });
 
     let caps = ConfidentialHandshakeCaps {
@@ -297,14 +374,12 @@ async fn confidential_caps_match_connects() {
         features: features.clone(),
     };
 
-    let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
+    let (mut net1, _ch1) = match NetworkHandle::<Dummy>::start(
         kp1.clone(),
         cfg(addr1.clone()),
         Some(chain.clone()),
         None,
         Some(caps.clone()),
-        None,
-        None,
         ShutdownSignal::new(),
     )
     .await
@@ -312,14 +387,12 @@ async fn confidential_caps_match_connects() {
         Ok(ok) => ok,
         Err(_e) => return,
     };
-    let (net2, _ch2) = match NetworkHandle::<Dummy>::start(
+    let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
         kp2.clone(),
         cfg(addr2.clone()),
         Some(chain.clone()),
         None,
         Some(caps.clone()),
-        None,
-        None,
         ShutdownSignal::new(),
     )
     .await
@@ -352,6 +425,7 @@ async fn confidential_caps_mismatch_rejected() {
         poseidon_params_id: Some(13),
         pedersen_params_id: Some(26),
         conf_rules_version: Some(1),
+        zk_policy_hash: Some([32u8; 32]),
     });
 
     let caps_ok = ConfidentialHandshakeCaps {
@@ -373,8 +447,6 @@ async fn confidential_caps_mismatch_rejected() {
         Some(chain.clone()),
         None,
         Some(caps_ok.clone()),
-        None,
-        None,
         ShutdownSignal::new(),
     )
     .await
@@ -382,14 +454,12 @@ async fn confidential_caps_mismatch_rejected() {
         Ok(ok) => ok,
         Err(_e) => return,
     };
-    let (net2, _ch2) = match NetworkHandle::<Dummy>::start(
+    let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
         kp2.clone(),
         cfg(addr2.clone()),
         Some(chain.clone()),
         None,
         Some(caps_bad.clone()),
-        None,
-        None,
         ShutdownSignal::new(),
     )
     .await
@@ -423,6 +493,7 @@ async fn confidential_caps_backend_mismatch_rejected() {
         poseidon_params_id: Some(5),
         pedersen_params_id: Some(8),
         conf_rules_version: Some(1),
+        zk_policy_hash: Some([33u8; 32]),
     });
 
     let caps_ok = ConfidentialHandshakeCaps {
@@ -444,7 +515,6 @@ async fn confidential_caps_backend_mismatch_rejected() {
         Some(chain.clone()),
         None,
         Some(caps_ok.clone()),
-        None,
         ShutdownSignal::new(),
     )
     .await
@@ -452,13 +522,12 @@ async fn confidential_caps_backend_mismatch_rejected() {
         Ok(ok) => ok,
         Err(_e) => return,
     };
-    let (net2, _ch2) = match NetworkHandle::<Dummy>::start(
+    let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
         kp2.clone(),
         cfg(addr2.clone()),
         Some(chain.clone()),
         None,
         Some(caps_bad.clone()),
-        None,
         ShutdownSignal::new(),
     )
     .await
@@ -492,12 +561,14 @@ async fn confidential_caps_features_mismatch_rejected() {
         poseidon_params_id: Some(42),
         pedersen_params_id: Some(84),
         conf_rules_version: Some(1),
+        zk_policy_hash: Some([34u8; 32]),
     });
     let features_bad = Some(ConfidentialFeatureDigest {
         vk_set_hash: Some([2u8; 32]), // mismatch
         poseidon_params_id: Some(42),
         pedersen_params_id: Some(84),
         conf_rules_version: Some(1),
+        zk_policy_hash: Some([34u8; 32]),
     });
 
     let caps_ok = ConfidentialHandshakeCaps {
@@ -519,7 +590,6 @@ async fn confidential_caps_features_mismatch_rejected() {
         Some(chain.clone()),
         None,
         Some(caps_ok.clone()),
-        None,
         ShutdownSignal::new(),
     )
     .await
@@ -527,13 +597,12 @@ async fn confidential_caps_features_mismatch_rejected() {
         Ok(ok) => ok,
         Err(_e) => return,
     };
-    let (net2, _ch2) = match NetworkHandle::<Dummy>::start(
+    let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
         kp2.clone(),
         cfg(addr2.clone()),
         Some(chain.clone()),
         None,
         Some(caps_bad.clone()),
-        None,
         ShutdownSignal::new(),
     )
     .await
@@ -568,12 +637,14 @@ async fn confidential_caps_stale_digest_recovers_after_alignment() {
         poseidon_params_id: Some(99),
         pedersen_params_id: Some(100),
         conf_rules_version: Some(1),
+        zk_policy_hash: Some([35u8; 32]),
     });
     let features_stale = Some(ConfidentialFeatureDigest {
         vk_set_hash: Some([5u8; 32]), // stale digest
         poseidon_params_id: Some(99),
         pedersen_params_id: Some(100),
         conf_rules_version: Some(1),
+        zk_policy_hash: Some([35u8; 32]),
     });
 
     let shutdown_validator = ShutdownSignal::new();
@@ -714,7 +785,7 @@ async fn crypto_caps_match_connects() {
         require_sm_openssl_preview_match: true,
     };
 
-    let (net1, _ch1) = match NetworkHandle::<Dummy>::start_with_crypto(
+    let (mut net1, _ch1) = match NetworkHandle::<Dummy>::start_with_crypto(
         kp1.clone(),
         cfg(addr1.clone()),
         Some(chain.clone()),
@@ -728,7 +799,7 @@ async fn crypto_caps_match_connects() {
         Ok(ok) => ok,
         Err(_e) => return,
     };
-    let (net2, _ch2) = match NetworkHandle::<Dummy>::start_with_crypto(
+    let (_net2, _ch2) = match NetworkHandle::<Dummy>::start_with_crypto(
         kp2.clone(),
         cfg(addr2.clone()),
         Some(chain.clone()),
@@ -789,7 +860,7 @@ async fn crypto_caps_mismatch_rejected() {
         Ok(ok) => ok,
         Err(_e) => return,
     };
-    let (net2, _ch2) = match NetworkHandle::<Dummy>::start_with_crypto(
+    let (_net2, _ch2) = match NetworkHandle::<Dummy>::start_with_crypto(
         kp2.clone(),
         cfg(addr2.clone()),
         Some(chain.clone()),
@@ -851,7 +922,7 @@ async fn crypto_caps_mismatch_allowed_when_permissive() {
         Ok(ok) => ok,
         Err(_e) => return,
     };
-    let (net2, _ch2) = match NetworkHandle::<Dummy>::start_with_crypto(
+    let (_net2, _ch2) = match NetworkHandle::<Dummy>::start_with_crypto(
         kp2.clone(),
         cfg(addr2.clone()),
         Some(chain.clone()),

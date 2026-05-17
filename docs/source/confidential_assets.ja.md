@@ -86,7 +86,7 @@ translator: manual
 
 ## ゼロ知識証明キャリブレーション
 - 専用ベンチマークは `docs/source/confidential_assets_calibration.md` を参照。
-- 検証時間が `verify_timeout_ms` を超えた場合は `proof verification exceeded timeout` エラーで命令が停止。
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - 定期的にパラメータセットを回転し、`vk_set_hash` と紐付けたレポートを `confidential/calibration` アーティファクトに記録。
 
 ## ガバナンスとレジストリ

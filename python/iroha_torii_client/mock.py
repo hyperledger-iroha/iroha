@@ -151,9 +151,9 @@ class _MockState:
             return self._prover_delete(report_id)
         if method == "DELETE" and path == "/v1/zk/prover/reports":
             return self._prover_delete_filtered(params)
-        if method == "POST" and path in {"/transaction", "/v1/pipeline/transactions", "/v1/transactions"}:
+        if method == "POST" and path == "/v1/pipeline/transactions":
             return self._pipeline_submit(body)
-        if method == "GET" and path in {"/v1/pipeline/transactions/status", "/v1/transactions/status"}:
+        if method == "GET" and path == "/v1/pipeline/transactions/status":
             return self._pipeline_status(params)
         if method == "GET" and path.startswith("/v1/accounts/"):
             account_id = unquote(path.rsplit("/", 1)[-1])

@@ -248,7 +248,7 @@ lockstep.
 - الحدود الصارمة (الافتراضيات القابلة للتكوين):
 -`max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`، `max_commitments_per_tx = 8`، `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`، `max_anchor_age_blocks = 10_000`. تؤدي البراهين التي تتجاوز `verify_timeout_ms` إلى إحباط التعليمات بشكل حتمي (تصدر بطاقات اقتراع الحوكمة `proof verification exceeded timeout`، وترجع `VerifyProof` خطأ).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - تضمن الحصص الإضافية الحيوية: `max_proof_bytes_block`، و`max_verify_calls_per_tx`، و`max_verify_calls_per_block`، و`max_public_inputs` منشئو الكتل المقيدة؛ يحكم `reorg_depth_bound` (≥ `max_anchor_age_blocks`) الاحتفاظ بنقاط التفتيش الحدودية.
 - يرفض تنفيذ وقت التشغيل الآن المعاملات التي تتجاوز حدود كل معاملة أو كل كتلة، مما يؤدي إلى ظهور أخطاء حتمية `InvalidParameter` وترك حالة دفتر الأستاذ دون تغيير.
 - يقوم Mempool بتصفية المعاملات السرية مسبقًا حسب `vk_id` وطول الإثبات وعمر الارتساء قبل استدعاء أداة التحقق للحفاظ على حدود استخدام الموارد.

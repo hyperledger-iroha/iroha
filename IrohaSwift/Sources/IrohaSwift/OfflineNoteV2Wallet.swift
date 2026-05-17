@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 #if canImport(Security)
 import Security
 #endif
@@ -6,8 +7,6 @@ import Security
 public enum OfflineNoteV2WalletNoteState: String, Sendable {
     case spendable
     case receivePending
-    case changePending
-    case spendPending
     case spent
     case redeemPending
     case redeemed
@@ -25,6 +24,8 @@ public enum OfflineNoteV2WalletError: Error, LocalizedError, Equatable {
     case outputMismatch
     case invalidState
     case inputCertificateMismatch
+    case proofVerificationFailed
+    case certificateVerificationFailed
 
     public var errorDescription: String? {
         switch self {
@@ -48,6 +49,10 @@ public enum OfflineNoteV2WalletError: Error, LocalizedError, Equatable {
             return "Offline Note V2 note is not in the required wallet state."
         case .inputCertificateMismatch:
             return "Selected Offline Note V2 input notes must use the same key certificate."
+        case .proofVerificationFailed:
+            return "Offline Note V2 recursive proof verification failed."
+        case .certificateVerificationFailed:
+            return "Offline Note V2 key certificate is not trusted for this wallet operation."
         }
     }
 }
@@ -122,12 +127,27 @@ public struct OfflineNoteV2WalletNote: Equatable, Sendable {
 }
 
 public protocol OfflineNoteV2Store: AnyObject {
+    /// Atomically mutate wallet notes keyed by lower-case note commitment hex.
+    func mutateNotes<T>(_ body: (inout [String: OfflineNoteV2WalletNote]) throws -> T) throws -> T
+}
+
+public extension OfflineNoteV2Store {
     /// List wallet notes; persistent implementations may throw storage or integrity errors.
-    func listNotes() throws -> [OfflineNoteV2WalletNote]
+    func listNotes() throws -> [OfflineNoteV2WalletNote] {
+        try mutateNotes { notes in Array(notes.values) }
+    }
+
     /// Find a wallet note by commitment; persistent implementations may throw storage or integrity errors.
-    func findNote(noteCommitment: Data) throws -> OfflineNoteV2WalletNote?
+    func findNote(noteCommitment: Data) throws -> OfflineNoteV2WalletNote? {
+        try mutateNotes { notes in notes[noteCommitment.hexLowercased()] }
+    }
+
     /// Insert or replace a wallet note; persistent implementations may throw storage or integrity errors.
-    func upsert(_ note: OfflineNoteV2WalletNote) throws
+    func upsert(_ note: OfflineNoteV2WalletNote) throws {
+        try mutateNotes { notes in
+            notes[note.noteCommitmentHex] = note
+        }
+    }
 }
 
 public final class InMemoryOfflineNoteV2Store: OfflineNoteV2Store {
@@ -136,22 +156,10 @@ public final class InMemoryOfflineNoteV2Store: OfflineNoteV2Store {
 
     public init() {}
 
-    public func listNotes() -> [OfflineNoteV2WalletNote] {
+    public func mutateNotes<T>(_ body: (inout [String: OfflineNoteV2WalletNote]) throws -> T) throws -> T {
         lock.lock()
         defer { lock.unlock() }
-        return Array(notes.values)
-    }
-
-    public func findNote(noteCommitment: Data) -> OfflineNoteV2WalletNote? {
-        lock.lock()
-        defer { lock.unlock() }
-        return notes[noteCommitment.hexLowercased()]
-    }
-
-    public func upsert(_ note: OfflineNoteV2WalletNote) {
-        lock.lock()
-        defer { lock.unlock() }
-        notes[note.noteCommitmentHex] = note
+        return try body(&notes)
     }
 }
 
@@ -199,6 +207,64 @@ public struct UuidOfflineNoteV2IdGenerator: OfflineNoteV2IdGenerator {
 public protocol OfflineNoteV2ProofProvider {
     func proveAudit(_ audit: OfflineNoteAuditBundleV2) throws -> OfflineNoteRecursiveProofV2
     func proveRedeem(_ redemption: OfflineNoteRedeemV2) throws -> OfflineNoteRecursiveProofV2
+}
+
+public protocol OfflineNoteV2ProofVerifier {
+    func verifyAudit(_ audit: OfflineNoteAuditBundleV2) throws -> Bool
+    func verifyRedeem(_ redemption: OfflineNoteRedeemV2) throws -> Bool
+}
+
+public struct Halo2OfflineNoteV2ProofVerifier: OfflineNoteV2ProofVerifier {
+    public init() {}
+
+    public func verifyAudit(_ audit: OfflineNoteAuditBundleV2) throws -> Bool {
+        try Halo2OfflineNoteV2Prover.verifyAudit(audit)
+    }
+
+    public func verifyRedeem(_ redemption: OfflineNoteRedeemV2) throws -> Bool {
+        try Halo2OfflineNoteV2Prover.verifyRedeem(redemption)
+    }
+}
+
+public protocol OfflineNoteV2CertificateVerifier {
+    func verifyCertificate(_ certificate: OfflineNoteKeyCertificateV2) throws -> Bool
+}
+
+public struct RejectingOfflineNoteV2CertificateVerifier: OfflineNoteV2CertificateVerifier {
+    public init() {}
+
+    public func verifyCertificate(_ certificate: OfflineNoteKeyCertificateV2) throws -> Bool {
+        false
+    }
+}
+
+public struct Ed25519OfflineNoteV2CertificateVerifier: OfflineNoteV2CertificateVerifier {
+    private let trustedIssuerPublicKeys: [Data]
+
+    public init(trustedIssuerPublicKeys: [Data]) {
+        self.trustedIssuerPublicKeys = trustedIssuerPublicKeys
+    }
+
+    public func verifyCertificate(_ certificate: OfflineNoteKeyCertificateV2) throws -> Bool {
+        guard !trustedIssuerPublicKeys.isEmpty,
+              !certificate.platform.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !certificate.keyId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !certificate.deviceId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !certificate.assertionScheme.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !certificate.assertionKeyAlgorithm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !certificate.assertionPublicKey.isEmpty
+        else {
+            return false
+        }
+        let message = try certificate.signingBytes()
+        for root in trustedIssuerPublicKeys where root.count == 32 {
+            let publicKey = try Curve25519.Signing.PublicKey(rawRepresentation: root)
+            if publicKey.isValidSignature(certificate.issuerSignature, for: message) {
+                return true
+            }
+        }
+        return false
+    }
 }
 
 public struct OfflineNoteV2LoadContext: Sendable {
@@ -315,16 +381,22 @@ public struct OfflineNoteV2ReceiveRequest: Equatable, Sendable {
 }
 
 public struct OfflineNoteV2PaymentToken: Equatable, Sendable {
+    public let chainId: String
     public let paymentRequestId: String
+    public let tokenNonce: Data
     public let tokenId: Data
     public let audit: OfflineNoteAuditBundleV2
     public let createdAtMs: UInt64
 
-    public init(paymentRequestId: String,
+    public init(chainId: String,
+                paymentRequestId: String,
+                tokenNonce: Data,
                 tokenId: Data,
                 audit: OfflineNoteAuditBundleV2,
                 createdAtMs: UInt64) {
+        self.chainId = chainId
         self.paymentRequestId = paymentRequestId
+        self.tokenNonce = tokenNonce
         self.tokenId = tokenId
         self.audit = audit
         self.createdAtMs = createdAtMs
@@ -344,7 +416,7 @@ public enum OfflineNoteV2PaymentTokenCodecError: Error, LocalizedError, Equatabl
     public var errorDescription: String? {
         switch self {
         case .invalidJson:
-            return "Offline Note V2 payment token JSON must be an object."
+            return "Offline Note V2 payment token payload is invalid."
         case let .invalidField(field):
             return "Offline Note V2 payment token field \(field) is invalid."
         case .invalidPrefix:
@@ -359,58 +431,70 @@ public enum OfflineNoteV2PaymentTokenCodec {
     public static let type = "offline_payment_token_v2"
     public static let version: UInt64 = 2
     public static let textPrefix = "wallet-offline-payment-v2:"
+    private static let envelopeTypeName = "iroha_data_model::offline::model::OfflineNotePaymentTokenEnvelopeV2"
 
-    public static func encodeJson(_ token: OfflineNoteV2PaymentToken) throws -> Data {
-        let payload: [String: Any] = [
-            "version": NSNumber(value: version),
-            "type": type,
-            "invoice_id": token.paymentRequestId,
-            "token_id": token.tokenIdHex,
-            "audit_norito_base64": try token.audit.noritoEncoded().base64EncodedString(),
-            "created_at_ms": NSNumber(value: token.createdAtMs)
-        ]
-        return try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+    public static func encodeNorito(_ token: OfflineNoteV2PaymentToken) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(OfflineCompactNorito.encodeUInt64(version))
+        writer.writeField(OfflineCompactNorito.encodeString(token.chainId))
+        writer.writeField(OfflineCompactNorito.encodeString(token.paymentRequestId))
+        writer.writeField(OfflineCompactNorito.encodeUInt64(token.createdAtMs))
+        writer.writeField(OfflineNorito.encodeBytesVec(token.tokenNonce))
+        writer.writeField(try OfflineCompactNorito.encodeHash(token.tokenId))
+        writer.writeField(OfflineNorito.encodeBytesVec(try token.audit.noritoEncoded()))
+        return noritoEncode(typeName: envelopeTypeName, payload: writer.data, flags: NoritoHeader.compactLen)
     }
 
-    public static func decodeJson(_ payload: Data) throws -> OfflineNoteV2PaymentToken {
-        guard let object = try JSONSerialization.jsonObject(with: payload) as? [String: Any] else {
-            throw OfflineNoteV2PaymentTokenCodecError.invalidJson
+    public static func decodeNorito(_ payload: Data) throws -> OfflineNoteV2PaymentToken {
+        guard let frame = noritoDecodeFrame(payload) else {
+            throw OfflineNoteV2PaymentTokenCodecError.invalidField("payload")
         }
-        guard try uint(object["version"], field: "version") == version else {
+        guard frame.header.schema == noritoSchemaHash(forTypeName: envelopeTypeName) else {
+            throw OfflineNoteV2PaymentTokenCodecError.invalidField("schema")
+        }
+        guard frame.header.compression == .none,
+              (frame.header.flags & NoritoHeader.compactLen) != 0
+        else {
+            throw OfflineNoteV2PaymentTokenCodecError.invalidField("layout")
+        }
+        var reader = OfflineNoritoReader(data: frame.payload)
+        let decodedVersion = try field(&reader, "version") { try $0.readUInt64LE() }
+        guard decodedVersion == version else {
             throw OfflineNoteV2PaymentTokenCodecError.invalidField("version")
         }
-        guard try string(object["type"], field: "type") == type else {
-            throw OfflineNoteV2PaymentTokenCodecError.invalidField("type")
-        }
-        let paymentRequestId: String
-        if object.keys.contains("invoice_id") {
-            paymentRequestId = try string(object["invoice_id"], field: "invoice_id")
-        } else {
-            paymentRequestId = try string(object["payment_request_id"], field: "payment_request_id")
-        }
-        guard let tokenId = Data(hexString: try string(object["token_id"], field: "token_id")) else {
-            throw OfflineNoteV2PaymentTokenCodecError.invalidField("token_id")
-        }
-        guard let auditBytes = Data(base64Encoded: try string(
-            object["audit_norito_base64"],
-            field: "audit_norito_base64"
-        )) else {
-            throw OfflineNoteV2PaymentTokenCodecError.invalidField("audit_norito_base64")
+        let chainId = try field(&reader, "chain_id", readString)
+        let paymentRequestId = try field(&reader, "payment_request_id", readString)
+        let createdAtMs = try field(&reader, "created_at_ms") { try $0.readUInt64LE() }
+        let tokenNonce = try field(&reader, "token_nonce", readBytesVec)
+        let tokenId = try field(&reader, "token_id") { try readHash(reader: &$0, field: "token_id") }
+        let auditBytes = try field(&reader, "audit", readBytesVec)
+        guard reader.remaining() == 0 else {
+            throw OfflineNoteV2PaymentTokenCodecError.invalidField("trailing_bytes")
         }
         let audit = try OfflineNoteV2Decoding.decodeAudit(auditBytes)
         guard audit.tokenId == tokenId else {
             throw OfflineNoteV2PaymentTokenCodecError.tokenIdMismatch
         }
         return OfflineNoteV2PaymentToken(
+            chainId: chainId,
             paymentRequestId: paymentRequestId,
+            tokenNonce: tokenNonce,
             tokenId: tokenId,
             audit: audit,
-            createdAtMs: try uint(object["created_at_ms"], field: "created_at_ms")
+            createdAtMs: createdAtMs
         )
     }
 
+    public static func encodeJson(_ token: OfflineNoteV2PaymentToken) throws -> Data {
+        try encodeNorito(token)
+    }
+
+    public static func decodeJson(_ payload: Data) throws -> OfflineNoteV2PaymentToken {
+        try decodeNorito(payload)
+    }
+
     public static func encodeText(_ token: OfflineNoteV2PaymentToken) throws -> String {
-        textPrefix + (try encodeJson(token)).base64EncodedString()
+        textPrefix + base64UrlEncode(try encodeNorito(token))
     }
 
     public static func decodeText(_ text: String) throws -> OfflineNoteV2PaymentToken {
@@ -418,10 +502,10 @@ public enum OfflineNoteV2PaymentTokenCodec {
         guard trimmed.hasPrefix(textPrefix) else {
             throw OfflineNoteV2PaymentTokenCodecError.invalidPrefix
         }
-        guard let payload = Data(base64Encoded: String(trimmed.dropFirst(textPrefix.count))) else {
+        guard let payload = base64UrlDecode(String(trimmed.dropFirst(textPrefix.count))) else {
             throw OfflineNoteV2PaymentTokenCodecError.invalidField("payload")
         }
-        return try decodeJson(payload)
+        return try decodeNorito(payload)
     }
 
     public static func encodeQrFrameBytes(
@@ -429,31 +513,72 @@ public enum OfflineNoteV2PaymentTokenCodec {
         options: OfflineQrStreamOptions = OfflineQrStreamOptions()
     ) throws -> [Data] {
         try OfflineQrStreamEncoder.encodeFrameBytes(
-            payload: encodeJson(token),
+            payload: encodeNorito(token),
             payloadKind: .offlinePaymentTokenV2,
             options: options
         )
     }
 
     public static func decodeQrPayload(_ payload: Data) throws -> OfflineNoteV2PaymentToken {
-        try decodeJson(payload)
+        try decodeNorito(payload)
     }
 
-    private static func string(_ value: Any?, field: String) throws -> String {
-        guard let string = value as? String, !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+    private static func field<T>(
+        _ reader: inout OfflineNoritoReader,
+        _ field: String,
+        _ decode: (inout OfflineNoritoReader) throws -> T
+    ) throws -> T {
+        var child = OfflineNoritoReader(data: try reader.readCompactField())
+        let value = try decode(&child)
+        guard child.remaining() == 0 else {
             throw OfflineNoteV2PaymentTokenCodecError.invalidField(field)
         }
-        return string
+        return value
     }
 
-    private static func uint(_ value: Any?, field: String) throws -> UInt64 {
-        if let number = value as? NSNumber {
-            return number.uint64Value
+    private static func readString(_ reader: inout OfflineNoritoReader) throws -> String {
+        let length = try reader.readVarint()
+        guard length <= UInt64(Int.max) else {
+            throw OfflineNoteV2PaymentTokenCodecError.invalidField("string")
         }
-        if let string = value as? String, let parsed = UInt64(string) {
-            return parsed
+        guard let value = String(data: try reader.readBytes(Int(length)), encoding: .utf8),
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw OfflineNoteV2PaymentTokenCodecError.invalidField("string")
         }
-        throw OfflineNoteV2PaymentTokenCodecError.invalidField(field)
+        return value
+    }
+
+    private static func readBytesVec(_ reader: inout OfflineNoritoReader) throws -> Data {
+        let length = try reader.readUInt64LE()
+        guard length <= UInt64(Int.max) else {
+            throw OfflineNoteV2PaymentTokenCodecError.invalidField("bytes")
+        }
+        return try reader.readBytes(Int(length))
+    }
+
+    private static func readHash(reader: inout OfflineNoritoReader, field: String) throws -> Data {
+        let bytes = try reader.readBytes(32)
+        guard bytes.count == 32 else {
+            throw OfflineNoteV2PaymentTokenCodecError.invalidField(field)
+        }
+        return bytes
+    }
+
+    private static func base64UrlEncode(_ data: Data) -> String {
+        data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "="))
+    }
+
+    private static func base64UrlDecode(_ value: String) -> Data? {
+        var normalized = value
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let padding = (4 - normalized.count % 4) % 4
+        normalized.append(String(repeating: "=", count: padding))
+        return Data(base64Encoded: normalized)
     }
 }
 
@@ -506,10 +631,6 @@ public final class OfflineNoteV2OutcomeIndex: @unchecked Sendable {
         let transactionHashHex: String?
     }
 
-    private var spentInputNullifiers: [String: OutcomeHit] = [:]
-    private var rejectedAuditInputs: [String: OutcomeHit] = [:]
-    private var committedAuditOutputs: [String: OutcomeHit] = [:]
-    private var rejectedAuditOutputs: [String: OutcomeHit] = [:]
     private var committedRedeems: [String: OutcomeHit] = [:]
     private var rejectedRedeems: [String: OutcomeHit] = [:]
 
@@ -518,16 +639,12 @@ public final class OfflineNoteV2OutcomeIndex: @unchecked Sendable {
     @discardableResult
     public func recordCommittedAudit(_ audit: OfflineNoteAuditBundleV2,
                                      transactionHashHex: String? = nil) -> OfflineNoteV2OutcomeIndex {
-        audit.inputNullifiers.forEach { putFirst(&spentInputNullifiers, key: $0, value: transactionHashHex) }
-        audit.outputCommitments.forEach { putFirst(&committedAuditOutputs, key: $0, value: transactionHashHex) }
         return self
     }
 
     @discardableResult
     public func recordRejectedAudit(_ audit: OfflineNoteAuditBundleV2,
                                     transactionHashHex: String? = nil) -> OfflineNoteV2OutcomeIndex {
-        audit.inputClaims.forEach { putFirst(&rejectedAuditInputs, key: $0.noteCommitment, value: transactionHashHex) }
-        audit.outputCommitments.forEach { putFirst(&rejectedAuditOutputs, key: $0, value: transactionHashHex) }
         return self
     }
 
@@ -547,44 +664,11 @@ public final class OfflineNoteV2OutcomeIndex: @unchecked Sendable {
 
     public func resolve(_ note: OfflineNoteV2WalletNote) throws -> OfflineNoteV2SyncResolution? {
         switch note.state {
-        case .spendPending:
-            return try resolveSpendPending(note)
-        case .changePending, .receivePending:
-            return resolveOutputPending(note)
         case .redeemPending:
             return resolveRedeemPending(note)
         default:
             return nil
         }
-    }
-
-    private func resolveSpendPending(_ note: OfflineNoteV2WalletNote) throws -> OfflineNoteV2SyncResolution? {
-        let inputNullifier = try OfflineNoteInputNullifierPreimageV2(
-            chainId: note.chainId,
-            sourceNoteCommitment: note.noteCommitment,
-            ownerKeyCertificatePayloadHash: note.keyCertificate.payloadHash(),
-            noteSecret: note.noteSecret
-        ).deriveInputNullifier()
-        let nullifierKey = inputNullifier.hexLowercased()
-        if let hit = spentInputNullifiers[nullifierKey] {
-            return OfflineNoteV2SyncResolution(state: .spent, transactionHashHex: hit.transactionHashHex)
-        }
-        let commitmentKey = note.noteCommitmentHex
-        if let hit = rejectedAuditInputs[commitmentKey] {
-            return OfflineNoteV2SyncResolution(state: .spendable, transactionHashHex: hit.transactionHashHex)
-        }
-        return nil
-    }
-
-    private func resolveOutputPending(_ note: OfflineNoteV2WalletNote) -> OfflineNoteV2SyncResolution? {
-        let commitmentKey = note.noteCommitmentHex
-        if let hit = committedAuditOutputs[commitmentKey] {
-            return OfflineNoteV2SyncResolution(state: .spendable, transactionHashHex: hit.transactionHashHex)
-        }
-        if let hit = rejectedAuditOutputs[commitmentKey] {
-            return OfflineNoteV2SyncResolution(state: .cancelled, transactionHashHex: hit.transactionHashHex)
-        }
-        return nil
     }
 
     private func resolveRedeemPending(_ note: OfflineNoteV2WalletNote) -> OfflineNoteV2SyncResolution? {
@@ -752,6 +836,8 @@ public final class OfflineNoteV2Wallet {
     private let transactionSubmitter: OfflineNoteV2TransactionSubmitter?
     private let syncResolver: OfflineNoteV2SyncResolver?
     private let proofProvider: OfflineNoteV2ProofProvider
+    private let proofVerifier: OfflineNoteV2ProofVerifier
+    private let certificateVerifier: OfflineNoteV2CertificateVerifier
     private let randomSource: OfflineNoteV2RandomSource
     private let idGenerator: OfflineNoteV2IdGenerator
     private let clock: () -> UInt64
@@ -764,6 +850,8 @@ public final class OfflineNoteV2Wallet {
                 transactionSubmitter: OfflineNoteV2TransactionSubmitter? = nil,
                 syncResolver: OfflineNoteV2SyncResolver? = nil,
                 proofProvider: OfflineNoteV2ProofProvider,
+                proofVerifier: OfflineNoteV2ProofVerifier = Halo2OfflineNoteV2ProofVerifier(),
+                certificateVerifier: OfflineNoteV2CertificateVerifier = RejectingOfflineNoteV2CertificateVerifier(),
                 randomSource: OfflineNoteV2RandomSource = SecureOfflineNoteV2RandomSource(),
                 idGenerator: OfflineNoteV2IdGenerator = UuidOfflineNoteV2IdGenerator(),
                 clock: @escaping () -> UInt64 = { UInt64(Date().timeIntervalSince1970 * 1000) }) {
@@ -775,6 +863,8 @@ public final class OfflineNoteV2Wallet {
         self.transactionSubmitter = transactionSubmitter
         self.syncResolver = syncResolver
         self.proofProvider = proofProvider
+        self.proofVerifier = proofVerifier
+        self.certificateVerifier = certificateVerifier
         self.randomSource = randomSource
         self.idGenerator = idGenerator
         self.clock = clock
@@ -795,6 +885,7 @@ public final class OfflineNoteV2Wallet {
             assetDefinitionId: assetDefinition(from: assetId),
             amount: amount
         )
+        try requireTrustedCertificate(context.keyCertificate, expectedAccountId: accountId)
         let noteSecret = try random32()
         let origin = try OfflineNoteCommitmentOriginV2.issuerLoad(OfflineNoteIssuerLoadOriginV2(
             operationId: context.operationId,
@@ -821,13 +912,15 @@ public final class OfflineNoteV2Wallet {
         guard response.noteCommitment == commitment else {
             throw OfflineNoteV2WalletError.issuerCommitmentMismatch
         }
+        let issuedCertificate = response.keyCertificate ?? context.keyCertificate
+        try requireTrustedCertificate(issuedCertificate, expectedAccountId: accountId)
         let now = clock()
         let note = try OfflineNoteV2WalletNote(
             chainId: chainId,
             accountId: accountId,
             assetId: assetId,
             amount: amount,
-            keyCertificate: response.keyCertificate ?? context.keyCertificate,
+            keyCertificate: issuedCertificate,
             noteCommitment: commitment,
             noteSecret: noteSecret,
             origin: origin,
@@ -842,6 +935,7 @@ public final class OfflineNoteV2Wallet {
     public func prepareReceive(assetDefinitionId: String, amount: String) throws -> OfflineNoteV2ReceiveRequest {
         let paymentRequestId = idGenerator.nextId(prefix: "payment-request")
         let keyCertificate = try attestationProvider.currentKeyCertificate()
+        try requireTrustedCertificate(keyCertificate, expectedAccountId: accountId)
         let assetId = walletAssetId(assetDefinitionId: assetDefinitionId, accountId: accountId)
         let noteSecret = try random32()
         let origin = try OfflineNoteCommitmentOriginV2.p2pOutput(OfflineNoteP2pOutputOriginV2(
@@ -886,6 +980,9 @@ public final class OfflineNoteV2Wallet {
         guard receiveRequest.chainId == chainId else {
             throw OfflineNoteV2WalletError.chainMismatch
         }
+        try requireTrustedCertificate(receiveRequest.keyCertificate, expectedAccountId: receiveRequest.accountId)
+        try rejectReusedReceiveRequest(receiveRequest.paymentRequestId)
+        let createdAtMs = clock()
         let requestedAmount = try OfflineNorito.parseCanonicalNumeric(receiveRequest.amount)
         let selected = try selectSpendableNotes(
             assetDefinitionId: receiveRequest.assetDefinitionId,
@@ -904,8 +1001,10 @@ public final class OfflineNoteV2Wallet {
         }
 
         let senderCertificate = selected[0].keyCertificate
+        try requireTrustedCertificate(senderCertificate, expectedAccountId: accountId)
         let senderCertificateHash = try senderCertificate.payloadHash()
         for note in selected {
+            try requireTrustedCertificate(note.keyCertificate, expectedAccountId: accountId)
             if try note.keyCertificate.payloadHash() != senderCertificateHash {
                 throw OfflineNoteV2WalletError.inputCertificateMismatch
             }
@@ -939,7 +1038,6 @@ public final class OfflineNoteV2Wallet {
                 noteSecret: changeSecret,
                 origin: changeOrigin
             )
-            let now = clock()
             let note = try OfflineNoteV2WalletNote(
                 chainId: chainId,
                 accountId: accountId,
@@ -949,9 +1047,9 @@ public final class OfflineNoteV2Wallet {
                 noteCommitment: changeCommitment,
                 noteSecret: changeSecret,
                 origin: changeOrigin,
-                state: .changePending,
-                createdAtMs: now,
-                updatedAtMs: now
+                state: .spendable,
+                createdAtMs: createdAtMs,
+                updatedAtMs: createdAtMs
             )
             changeNote = note
             outputClaims.append(try OfflineNoteAuditOutputClaimV2(
@@ -964,6 +1062,8 @@ public final class OfflineNoteV2Wallet {
         let outputCommitments = outputClaims.map(\.noteCommitment)
         let tokenId = try OfflineNotePaymentTokenIdPreimageV2(
             chainId: chainId,
+            paymentRequestId: receiveRequest.paymentRequestId,
+            createdAtMs: createdAtMs,
             tokenNonce: tokenNonce,
             senderKeyCertificatePayloadHash: senderCertificateHash,
             inputNullifiers: inputNullifiers,
@@ -980,49 +1080,88 @@ public final class OfflineNoteV2Wallet {
         )
         let audit = try draft.replacingRecursiveProof(proofProvider.proveAudit(draft))
         try audit.validateProofBinding()
-        let now = clock()
-        for note in selected {
-            try store.upsert(try note.withState(.spendPending, updatedAtMs: now))
+        try requireTrustedAuditCertificates(audit)
+        guard try proofVerifier.verifyAudit(audit) else {
+            throw OfflineNoteV2WalletError.proofVerificationFailed
         }
-        if let changeNote {
-            try store.upsert(changeNote)
+        try store.mutateNotes { notes in
+            for note in selected {
+                guard notes[note.noteCommitmentHex]?.state == .spendable else {
+                    throw OfflineNoteV2WalletError.invalidState
+                }
+            }
+            if let changeNote, notes[changeNote.noteCommitmentHex] != nil {
+                throw OfflineNoteV2WalletError.invalidState
+            }
+            for note in selected {
+                notes[note.noteCommitmentHex] = try note.withState(.spent, updatedAtMs: createdAtMs)
+            }
+            if let changeNote {
+                notes[changeNote.noteCommitmentHex] = changeNote
+            }
         }
         return OfflineNoteV2PaymentToken(
+            chainId: chainId,
             paymentRequestId: receiveRequest.paymentRequestId,
+            tokenNonce: tokenNonce,
             tokenId: tokenId,
             audit: audit,
-            createdAtMs: now
+            createdAtMs: createdAtMs
         )
     }
 
-    public func accept(_ paymentToken: OfflineNoteV2PaymentToken) async throws -> OfflineNoteV2WalletNote {
+    private func rejectReusedReceiveRequest(_ paymentRequestId: String) throws {
+        for note in try store.listNotes() {
+            guard note.state != .receivePending else {
+                continue
+            }
+            guard case let .p2pOutput(origin) = note.origin,
+                  origin.paymentRequestId == paymentRequestId else {
+                continue
+            }
+            throw OfflineNoteV2WalletError.invalidState
+        }
+    }
+
+    public func accept(_ paymentToken: OfflineNoteV2PaymentToken) throws -> OfflineNoteV2WalletNote {
+        try validatePaymentToken(paymentToken)
+        guard try proofVerifier.verifyAudit(paymentToken.audit) else {
+            throw OfflineNoteV2WalletError.proofVerificationFailed
+        }
+        let accepted = try store.mutateNotes { notes in
+            for (index, output) in paymentToken.audit.outputClaims.enumerated() {
+                guard let pending = notes[output.noteCommitment.hexLowercased()],
+                      pending.state == .receivePending
+                else {
+                    continue
+                }
+                guard pending.assetId == output.assetId,
+                      pending.amount == output.amount,
+                      try pending.keyCertificate.payloadHash() == output.keyCertificate.payloadHash(),
+                      case let .p2pOutput(origin) = pending.origin,
+                      origin.paymentRequestId == paymentToken.paymentRequestId,
+                      origin.outputIndex == UInt32(index)
+                else {
+                    throw OfflineNoteV2WalletError.outputMismatch
+                }
+                let accepted = try pending.withState(.spendable, updatedAtMs: clock())
+                notes[pending.noteCommitmentHex] = accepted
+                return accepted
+            }
+            throw OfflineNoteV2WalletError.noPendingOutput
+        }
+        return accepted
+    }
+
+    public func publishAudit(_ paymentToken: OfflineNoteV2PaymentToken) async throws {
         guard let transactionSubmitter else {
             throw OfflineNoteV2WalletError.missingTransactionSubmitter
         }
-        try paymentToken.audit.validateProofBinding()
-        var matchingOutput: OfflineNoteAuditOutputClaimV2?
-        for claim in paymentToken.audit.outputClaims {
-            if try store.findNote(noteCommitment: claim.noteCommitment)?.state == .receivePending {
-                matchingOutput = claim
-                break
-            }
-        }
-        guard let output = matchingOutput else {
-            throw OfflineNoteV2WalletError.noPendingOutput
-        }
-        guard let pending = try store.findNote(noteCommitment: output.noteCommitment) else {
-            throw OfflineNoteV2WalletError.noPendingOutput
-        }
-        guard pending.assetId == output.assetId,
-              pending.amount == output.amount,
-              try pending.keyCertificate.payloadHash() == output.keyCertificate.payloadHash()
-        else {
-            throw OfflineNoteV2WalletError.outputMismatch
+        try validatePaymentToken(paymentToken)
+        guard try proofVerifier.verifyAudit(paymentToken.audit) else {
+            throw OfflineNoteV2WalletError.proofVerificationFailed
         }
         try await transactionSubmitter.submitAudit(paymentToken.audit)
-        let accepted = try pending.withState(.spendable, updatedAtMs: clock())
-        try store.upsert(accepted)
-        return accepted
     }
 
     public func redeem(_ note: OfflineNoteV2WalletNote, recipient: String? = nil) async throws -> OfflineNoteV2WalletNote {
@@ -1033,6 +1172,7 @@ public final class OfflineNoteV2Wallet {
         guard current.state == .spendable else {
             throw OfflineNoteV2WalletError.invalidState
         }
+        try requireTrustedCertificate(current.keyCertificate, expectedAccountId: current.accountId)
         let inputNullifier = try deriveInputNullifier(current)
         let draft = try OfflineNoteRedeemV2(
             sourceNoteCommitment: current.noteCommitment,
@@ -1045,8 +1185,18 @@ public final class OfflineNoteV2Wallet {
         )
         let redemption = try draft.replacingRecursiveProof(proofProvider.proveRedeem(draft))
         try redemption.validateProofBinding()
-        let pending = try current.withState(.redeemPending, updatedAtMs: clock())
-        try store.upsert(pending)
+        try requireTrustedCertificate(redemption.senderKeyCertificate, expectedAccountId: current.accountId)
+        guard try proofVerifier.verifyRedeem(redemption) else {
+            throw OfflineNoteV2WalletError.proofVerificationFailed
+        }
+        let pending = try store.mutateNotes { notes in
+            guard (notes[current.noteCommitmentHex] ?? current).state == .spendable else {
+                throw OfflineNoteV2WalletError.invalidState
+            }
+            let pending = try current.withState(.redeemPending, updatedAtMs: clock())
+            notes[current.noteCommitmentHex] = pending
+            return pending
+        }
         try await transactionSubmitter.submitRedeem(redemption)
         return pending
     }
@@ -1119,6 +1269,54 @@ public final class OfflineNoteV2Wallet {
         ).deriveInputNullifier()
     }
 
+    private func validatePaymentToken(_ paymentToken: OfflineNoteV2PaymentToken) throws {
+        guard paymentToken.chainId == chainId else {
+            throw OfflineNoteV2WalletError.chainMismatch
+        }
+        try paymentToken.audit.validateProofBinding()
+        let expectedTokenId = try OfflineNotePaymentTokenIdPreimageV2(
+            chainId: paymentToken.chainId,
+            paymentRequestId: paymentToken.paymentRequestId,
+            createdAtMs: paymentToken.createdAtMs,
+            tokenNonce: paymentToken.tokenNonce,
+            senderKeyCertificatePayloadHash: paymentToken.audit.senderKeyCertificate.payloadHash(),
+            inputNullifiers: paymentToken.audit.inputNullifiers,
+            outputCommitments: paymentToken.audit.outputCommitments
+        ).derivePaymentTokenId()
+        guard paymentToken.audit.tokenId == paymentToken.tokenId,
+              paymentToken.tokenId == expectedTokenId
+        else {
+            throw OfflineNoteV2PaymentTokenCodecError.tokenIdMismatch
+        }
+        try requireTrustedAuditCertificates(paymentToken.audit)
+    }
+
+    private func requireTrustedAuditCertificates(_ audit: OfflineNoteAuditBundleV2) throws {
+        try requireTrustedCertificate(audit.senderKeyCertificate)
+        let senderHash = try audit.senderKeyCertificate.payloadHash()
+        for claim in audit.inputClaims {
+            guard claim.keyCertificatePayloadHash == senderHash else {
+                throw OfflineNoteV2WalletError.certificateVerificationFailed
+            }
+            try requireTrustedCertificate(audit.senderKeyCertificate, expectedAccountId: assetAccount(from: claim.assetId))
+        }
+        for output in audit.outputClaims {
+            try requireTrustedCertificate(output.keyCertificate, expectedAccountId: assetAccount(from: output.assetId))
+        }
+    }
+
+    private func requireTrustedCertificate(
+        _ certificate: OfflineNoteKeyCertificateV2,
+        expectedAccountId: String? = nil
+    ) throws {
+        if let expectedAccountId, certificate.accountId != expectedAccountId {
+            throw OfflineNoteV2WalletError.certificateVerificationFailed
+        }
+        guard try certificateVerifier.verifyCertificate(certificate) else {
+            throw OfflineNoteV2WalletError.certificateVerificationFailed
+        }
+    }
+
     private func random32() throws -> Data {
         let bytes = try randomSource.nextBytes(count: 32)
         guard bytes.count == 32 else {
@@ -1138,9 +1336,9 @@ private func placeholderProof() throws -> OfflineNoteRecursiveProofV2 {
 private extension OfflineNoteV2WalletNoteState {
     var isPending: Bool {
         switch self {
-        case .receivePending, .changePending, .spendPending, .redeemPending:
+        case .redeemPending:
             return true
-        case .spendable, .spent, .redeemed, .cancelled:
+        case .receivePending, .spendable, .spent, .redeemed, .cancelled:
             return false
         }
     }
@@ -1152,4 +1350,12 @@ private func walletAssetId(assetDefinitionId: String, accountId: String) -> Stri
 
 private func assetDefinition(from assetIdOrDefinition: String) -> String {
     assetIdOrDefinition.split(separator: "#", maxSplits: 1).first.map(String.init) ?? assetIdOrDefinition
+}
+
+private func assetAccount(from assetId: String) -> String? {
+    let parts = assetId.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+    guard parts.count == 2 else {
+        return nil
+    }
+    return String(parts[1]).components(separatedBy: "#dataspace:").first
 }

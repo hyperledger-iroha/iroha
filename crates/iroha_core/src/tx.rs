@@ -2400,9 +2400,6 @@ impl<'tx> AcceptedTransaction<'tx> {
         let decompressed_len = tx.attachments().map_or(0usize, |attachments| {
             attachments.0.iter().fold(0usize, |acc, attachment| {
                 let mut subtotal = attachment.proof.bytes.len();
-                if let Some(vk) = &attachment.vk_inline {
-                    subtotal = subtotal.saturating_add(vk.bytes.len());
-                }
                 if attachment.vk_commitment.is_some() {
                     subtotal = subtotal.saturating_add(32);
                 }
@@ -2816,9 +2813,6 @@ impl<'tx> AcceptedTransaction<'tx> {
         let decompressed_len = tx.attachments().map_or(0usize, |attachments| {
             attachments.0.iter().fold(0usize, |acc, attachment| {
                 let mut subtotal = attachment.proof.bytes.len();
-                if let Some(vk) = &attachment.vk_inline {
-                    subtotal = subtotal.saturating_add(vk.bytes.len());
-                }
                 if attachment.vk_commitment.is_some() {
                     subtotal = subtotal.saturating_add(32);
                 }
@@ -5904,7 +5898,7 @@ pub mod tests {
             LaneVisibility, ManifestVersion, ParticipantSelector,
         },
         permission::Permissions,
-        proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
+        proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
         role::{Role, RoleId},
         runtime::RuntimeUpgradeManifest,
         transaction::{
@@ -9450,9 +9444,9 @@ pub mod tests {
         let chain: ChainId = "chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
 
-        let proof = ProofBox::new("halo2/ipa".into(), vec![0u8; 96]);
-        let vk = VerifyingKeyBox::new("halo2/ipa".into(), vec![0u8; 96]);
-        let attachment = ProofAttachment::new_inline("halo2/ipa".into(), proof, vk);
+        let proof = ProofBox::new("halo2/ipa".into(), vec![0u8; 192]);
+        let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_limit");
+        let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_id);
         let attachments = ProofAttachmentList(vec![attachment]);
 
         let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
@@ -10570,16 +10564,16 @@ pub mod tests {
             }),
         };
 
-        let mut attachment1 = ProofAttachment::new_inline(
+        let mut attachment1 = ProofAttachment::new_ref(
             backend.clone(),
             ProofBox::new(backend.clone(), vec![0xAA]),
-            VerifyingKeyBox::new(backend.clone(), vec![0xBB]),
+            VerifyingKeyId::new(backend.clone(), "vk_lane_1"),
         );
         attachment1.lane_privacy = Some(proof1.clone());
-        let mut attachment2 = ProofAttachment::new_inline(
+        let mut attachment2 = ProofAttachment::new_ref(
             backend.clone(),
             ProofBox::new(backend.clone(), vec![0xCC]),
-            VerifyingKeyBox::new(backend, vec![0xDD]),
+            VerifyingKeyId::new(backend, "vk_lane_2"),
         );
         attachment2.lane_privacy = Some(proof2.clone());
 

@@ -75,31 +75,24 @@ final class ProofAttachmentNoritoTests: XCTestCase {
         }
     }
 
-    func testProofAttachmentRejectsInlineVerifyingKeyBytes() {
-        XCTAssertThrowsError(
-            try ProofAttachment(
-                backend: "test",
-                proof: Data([0x01]),
-                verifyingKey: .inline(.init(backend: "halo2/ipa", bytes: Data()))
-            )
-        ) { error in
-            guard case ProofAttachmentError.emptyVerifyingKeyBytes = error else {
-                return XCTFail("expected emptyVerifyingKeyBytes error")
-            }
-        }
+    func testProofAttachmentJsonUsesReferenceOnly() throws {
+        let attachment = try ProofAttachment(
+            backend: "test",
+            proof: Data([0x01]),
+            verifyingKey: .reference(.init(backend: "halo2/ipa", name: "vk"))
+        )
+        let object = try JSONSerialization.jsonObject(with: attachment.encodedJSON()) as? [String: Any]
+        XCTAssertNotNil(object?["vk_ref"])
     }
 
     private func manualProofAttachmentPayload(_ attachment: ProofAttachment) -> Data {
         let proofBox = manualProofBoxPayload(backend: attachment.backend, bytes: attachment.proof)
         let vkRef = manualVerifyingKeyIdPayload(backend: "test", name: "vk")
-        let vkRefOption = manualOptionPayload(vkRef)
-        let vkInlineOption = manualOptionPayload(nil)
 
         var writer = Data()
         writer.append(manualField(encodeString(attachment.backend)))
         writer.append(manualField(proofBox))
-        writer.append(manualField(vkRefOption))
-        writer.append(manualField(vkInlineOption))
+        writer.append(manualField(vkRef))
         return writer
     }
 

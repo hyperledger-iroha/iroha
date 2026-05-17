@@ -483,7 +483,7 @@ async fn configuration_endpoint_accepts_query_when_signature_covers_query() {
     let req = fixtures::operator_signed_request(
         &harness.cfg.common.key_pair,
         Request::builder()
-            .uri("/configuration?view=full")
+            .uri("/v1/configuration?view=full")
             .body(Body::empty())
             .unwrap(),
         &[],
@@ -511,7 +511,7 @@ async fn configuration_endpoint_rejects_signature_bound_to_different_query() {
         &[],
     );
     let mut mismatched = Request::builder()
-        .uri("/configuration?view=full")
+        .uri("/v1/configuration?view=full")
         .body(Body::empty())
         .unwrap();
     *mismatched.headers_mut() = signed.headers().clone();
@@ -561,13 +561,13 @@ async fn configuration_endpoint_rejects_signature_bound_to_different_method() {
 
 #[cfg(feature = "telemetry")]
 #[tokio::test]
-async fn configuration_endpoint_v1_path_is_not_registered() {
+async fn configuration_endpoint_unversioned_path_is_not_registered() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let req = fixtures::operator_signed_request(
         &harness.cfg.common.key_pair,
         Request::builder()
-            .uri("/v1/configuration")
+            .uri("/configuration")
             .body(Body::empty())
             .unwrap(),
         &[],

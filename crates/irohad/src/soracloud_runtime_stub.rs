@@ -6,7 +6,6 @@ use iroha_core::{
         SoracloudApartmentExecutionRequest, SoracloudApartmentExecutionResult,
         SoracloudLocalReadRequest, SoracloudLocalReadResponse,
         SoracloudOrderedMailboxExecutionRequest, SoracloudOrderedMailboxExecutionResult,
-        SoracloudPrivateInferenceExecutionRequest, SoracloudPrivateInferenceExecutionResult,
         SoracloudRuntime, SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind,
         SoracloudRuntimeReadHandle, SoracloudRuntimeSnapshot,
     },
@@ -63,6 +62,7 @@ impl QueuedSoracloudRuntimeMutationSink {
         _state: Arc<State>,
         _authority: AccountId,
         _key_pair: KeyPair,
+        _gas_asset_id: Option<String>,
     ) -> Self {
         Self
     }
@@ -191,14 +191,6 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
         ))
     }
 
-    fn execute_private_inference(
-        &self,
-        _request: SoracloudPrivateInferenceExecutionRequest,
-    ) -> Result<SoracloudPrivateInferenceExecutionResult, SoracloudRuntimeExecutionError> {
-        Err(unavailable(
-            "embedded Soracloud runtime is disabled for this build",
-        ))
-    }
 }
 
 #[cfg(test)]

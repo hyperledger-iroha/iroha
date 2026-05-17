@@ -1029,8 +1029,14 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                 ..iroha_config::parameters::actual::Halo2::default()
             },
             fastpq: iroha_config::parameters::actual::Fastpq {
-                execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Auto,
-                poseidon_mode: iroha_config::parameters::actual::FastpqPoseidonMode::Auto,
+                execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Cpu,
+                poseidon_mode: iroha_config::parameters::actual::FastpqPoseidonMode::Cpu,
+                proof_sidecar_queue_cap:
+                    iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
+                proof_sidecar_max_bytes:
+                    iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
+                proof_sidecar_max_retries:
+                    iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
                 device_class: None,
                 chip_family: None,
                 gpu_kind: None,

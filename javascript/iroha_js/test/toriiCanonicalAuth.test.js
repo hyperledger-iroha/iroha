@@ -11,6 +11,8 @@ import {
 } from "../src/index.js";
 import { AccountAddress } from "../src/address.js";
 
+const SAMPLE_VPN_HELPER_TICKET_HEX = `5356504e48543100${"00".repeat(248)}`;
+
 test("ToriiClient attaches canonical signing headers for app endpoints", async () => {
   const captured = [];
   const fetchImpl = async (url, init) => {
@@ -111,7 +113,7 @@ test("ToriiClient canonical auth uses raw Node transport for UTF-8 account heade
           dns_servers: ["1.1.1.1"],
           tunnel_addresses: ["10.208.0.2/32"],
           mtu_bytes: 1280,
-          helper_ticket_hex: "ab".repeat(32),
+          helper_ticket_hex: SAMPLE_VPN_HELPER_TICKET_HEX,
           bytes_in: 123,
           bytes_out: 456,
           status: "active",

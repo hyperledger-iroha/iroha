@@ -131,12 +131,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<soracloud::PromoteSoracloudModelWeight>,
     InstructionRegistry::register_slice::<soracloud::RollbackSoracloudModelWeight>,
     InstructionRegistry::register_slice::<soracloud::RegisterSoracloudUploadedModelBundle>,
-    InstructionRegistry::register_slice::<soracloud::AppendSoracloudUploadedModelChunk>,
     InstructionRegistry::register_slice::<soracloud::FinalizeSoracloudUploadedModelBundle>,
-    InstructionRegistry::register_slice::<soracloud::AdmitSoracloudPrivateCompileProfile>,
-    InstructionRegistry::register_slice::<soracloud::AllowSoracloudUploadedModel>,
-    InstructionRegistry::register_slice::<soracloud::StartSoracloudPrivateInference>,
-    InstructionRegistry::register_slice::<soracloud::RecordSoracloudPrivateInferenceCheckpoint>,
     InstructionRegistry::register_slice::<soracloud::AdvanceSoracloudRollout>,
     InstructionRegistry::register_slice::<soracloud::SetSoracloudRuntimeState>,
     InstructionRegistry::register_slice::<soracloud::SetSoracloudInrouReplicaRuntimeState>,
@@ -459,25 +454,9 @@ fn with_soracloud_stable_ids(mut registry: InstructionRegistry) -> InstructionRe
     registry = registry.register_with_id_slice::<soracloud::RegisterSoracloudUploadedModelBundle>(
         "soracloud::RegisterSoracloudUploadedModelBundle",
     );
-    registry = registry.register_with_id_slice::<soracloud::AppendSoracloudUploadedModelChunk>(
-        "soracloud::AppendSoracloudUploadedModelChunk",
-    );
     registry = registry.register_with_id_slice::<soracloud::FinalizeSoracloudUploadedModelBundle>(
         "soracloud::FinalizeSoracloudUploadedModelBundle",
     );
-    registry = registry.register_with_id_slice::<soracloud::AdmitSoracloudPrivateCompileProfile>(
-        "soracloud::AdmitSoracloudPrivateCompileProfile",
-    );
-    registry = registry.register_with_id_slice::<soracloud::AllowSoracloudUploadedModel>(
-        "soracloud::AllowSoracloudUploadedModel",
-    );
-    registry = registry.register_with_id_slice::<soracloud::StartSoracloudPrivateInference>(
-        "soracloud::StartSoracloudPrivateInference",
-    );
-    registry = registry
-        .register_with_id_slice::<soracloud::RecordSoracloudPrivateInferenceCheckpoint>(
-            "soracloud::RecordSoracloudPrivateInferenceCheckpoint",
-        );
     registry = registry.register_with_id_slice::<soracloud::AdvanceSoracloudRollout>(
         "soracloud::AdvanceSoracloudRollout",
     );

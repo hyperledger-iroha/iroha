@@ -204,13 +204,13 @@ async fn submit_proof_and_query_record() -> Result<()> {
 
     let backend = "halo2/ipa";
     let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
-    let vk = fixture
-        .vk_box(backend)
-        .expect("fixture must include a verifying key");
     let proof = fixture.proof_box(backend);
     let proof_bytes = proof.bytes.clone();
-    let attachment =
-        iroha_data_model::proof::ProofAttachment::new_inline(backend.into(), proof.clone(), vk);
+    let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
+        backend.into(),
+        proof.clone(),
+        iroha_data_model::proof::VerifyingKeyId::new(backend, "proof_vk"),
+    );
     let isi = iroha_data_model::isi::zk::VerifyProof::new(attachment);
 
     // Submit the transaction to all peers so one healthy peer can accept it

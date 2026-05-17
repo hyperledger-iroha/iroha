@@ -48,9 +48,9 @@ Additional front ends (for example a Tauri shell) can hook into `mochi-core` lat
 
 - **Network Creation Wizard**: choose single or four-peer profile, pick directories, and call `kagami` to generate identities plus genesis.
 - **Lifecycle Controls**: start, stop, restart peers; surface live metrics; expose log tails; toggle runtime configuration endpoints (e.g., log levels).
-- **Block and Event Streams**: subscribe to `/block/stream` and `/events`, storing an in-memory rolling buffer for UI panels.
-- **State Explorer**: run Norito-backed `/query` calls to list domains, accounts, assets, and asset definitions with pagination helpers and metadata summaries.
-- **Transaction Composer**: stage mint/transfer instruction drafts, batch them into signed transactions, preview the Norito payload, submit via `/transaction`, and monitor the resulting events; vault signing hooks remain a future iteration.
+- **Block and Event Streams**: subscribe to `/v1/blocks/stream` and `/v1/events/ws`, storing an in-memory rolling buffer for UI panels.
+- **State Explorer**: run Norito-backed `/v1/query` calls to list domains, accounts, assets, and asset definitions with pagination helpers and metadata summaries.
+- **Transaction Composer**: stage mint/transfer instruction drafts, batch them into signed transactions, preview the Norito payload, submit via `/v1/pipeline/transactions`, and monitor the resulting events; vault signing hooks remain a future iteration.
 - **Snapshots and Re-Genesis**: orchestrate Kura snapshot export/import, wipe stores, and regenerate genesis material for quick resets.
 
 ## UI Layer (`mochi-ui`)

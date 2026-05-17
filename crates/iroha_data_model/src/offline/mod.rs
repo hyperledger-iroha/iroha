@@ -412,6 +412,10 @@ mod model {
         pub domain: String,
         /// Chain id that scopes this payment token.
         pub chain_id: ChainId,
+        /// Wallet-local payment request id that binds this token to one receive request.
+        pub payment_request_id: String,
+        /// Wallet-local token creation time in Unix milliseconds.
+        pub created_at_ms: u64,
         /// Wallet-generated 32-byte payment token nonce.
         pub token_nonce: Vec<u8>,
         /// Hash of the sender key certificate payload.
@@ -922,6 +926,8 @@ mod offline_note_v2_tests {
         let token_preimage = OfflineNotePaymentTokenIdPreimageV2 {
             domain: OFFLINE_NOTE_V2_PAYMENT_TOKEN_ID_DOMAIN.to_owned(),
             chain_id,
+            payment_request_id: "payment-request-fixture".to_owned(),
+            created_at_ms: 1_700_000_001_000,
             token_nonce: vec![0xC6; Hash::LENGTH],
             sender_key_certificate_payload_hash: owner_key_certificate_payload_hash,
             input_nullifiers: vec![nullifier],
@@ -940,6 +946,20 @@ mod offline_note_v2_tests {
             token_id,
             derive_offline_note_v2_payment_token_id(&changed_token_preimage)
                 .expect("changed nonce payment token id")
+        );
+        let mut changed_request_token_preimage = token_preimage.clone();
+        changed_request_token_preimage.payment_request_id = "payment-request-other".to_owned();
+        assert_ne!(
+            token_id,
+            derive_offline_note_v2_payment_token_id(&changed_request_token_preimage)
+                .expect("changed request payment token id")
+        );
+        let mut changed_created_at_token_preimage = token_preimage.clone();
+        changed_created_at_token_preimage.created_at_ms += 1;
+        assert_ne!(
+            token_id,
+            derive_offline_note_v2_payment_token_id(&changed_created_at_token_preimage)
+                .expect("changed created_at payment token id")
         );
     }
 
@@ -996,6 +1016,8 @@ mod offline_note_v2_tests {
         let token_preimage = OfflineNotePaymentTokenIdPreimageV2 {
             domain: OFFLINE_NOTE_V2_PAYMENT_TOKEN_ID_DOMAIN.to_owned(),
             chain_id,
+            payment_request_id: "payment-request-fixture".to_owned(),
+            created_at_ms: 1_700_000_001_000,
             token_nonce: vec![0xC7; Hash::LENGTH - 1],
             sender_key_certificate_payload_hash: owner_key_certificate_payload_hash,
             input_nullifiers: vec![Hash::new(b"nullifier")],

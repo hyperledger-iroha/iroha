@@ -1375,6 +1375,7 @@ fn create_manifest_setup_with_seed(
         digest: manifest_digest,
         chunker: chunker_handle,
         chunk_digest_sha3_256: [seed.wrapping_add(0x33); 32],
+        content_length: manifest.content_length,
         policy: manifest_policy_registry,
         submitted_epoch,
         alias: None,

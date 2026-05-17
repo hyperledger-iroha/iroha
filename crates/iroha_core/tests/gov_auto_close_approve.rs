@@ -10,7 +10,6 @@ use iroha_core::{
 };
 use iroha_data_model::{
     Registrable,
-    domain::DomainId,
     prelude::{Account, Domain},
 };
 use mv::storage::StorageReadOnly;
@@ -48,7 +47,7 @@ fn auto_close_emits_approved() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let domain_id: iroha_data_model::domain::DomainId =
-        DomainId::try_new("wonderland", "universal").expect("domain id");
+        iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let alice_account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let bob_account: Account = Account::new(BOB_ID.clone()).build(&ALICE_ID);

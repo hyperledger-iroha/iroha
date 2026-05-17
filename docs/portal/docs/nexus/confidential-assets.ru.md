@@ -187,7 +187,7 @@ Swift SDKs теперь могут выдавать shield-инструкции 
 - `ConfidentialEncryptedPayload` оборачивает AEAD memo bytes в `{ version, ephemeral_pubkey, nonce, ciphertext }`, по умолчанию `version = CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1` для раскладки XChaCha20-Poly1305.
 - Канонические векторы key-derivation лежат в `docs/source/confidential_key_vectors.json`; и CLI, и Torii endpoint регрессируют по этим фикстурам.
 - `asset::AssetDefinition` получает `confidential_policy: AssetConfidentialPolicy { mode, vk_set_hash, poseidon_params_id, pedersen_params_id, pending_transition }`.
-- `ZkAssetState` сохраняет привязку `(backend, name, commitment)` для transfer/unshield verifiers; исполнение отклоняет proofs, у которых referenced или inline verifying key не совпадает с зарегистрированным commitment.
+- `ZkAssetState` сохраняет привязку `(backend, name, commitment)` для transfer/unshield verifiers; исполнение отклоняет proofs, у которых referenced verifying key не совпадает с зарегистрированным commitment.
 - `CommitmentTree` (по активу с frontier checkpoints), `NullifierSet` с ключом `(chain_id, asset_id, nullifier)`, `ZkVerifierEntry`, `PedersenParams`, `PoseidonParams` хранятся в world state.
 - Mempool поддерживает временные структуры `NullifierIndex` и `AnchorIndex` для раннего обнаружения дубликатов и проверки возраста anchor.
 - Обновления схемы Norito включают канонический порядок public inputs; round-trip tests гарантируют детерминированное кодирование.
@@ -256,7 +256,7 @@ Observer узлы, намеренно пропускающие проверку 
 - Жесткие лимиты (настраиваемые значения по умолчанию):
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. Proofs, превышающие `verify_timeout_ms`, детерминированно прерывают инструкцию (governance-голосования эмитят `proof verification exceeded timeout`, `VerifyProof` возвращает ошибку).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Дополнительные квоты обеспечивают живучесть: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, и `max_public_inputs` ограничивают block builders; `reorg_depth_bound` (≥ `max_anchor_age_blocks`) управляет retention frontier checkpoints.
 - Runtime теперь отклоняет транзакции, превышающие эти per-transaction или per-block лимиты, эмитируя детерминированные ошибки `InvalidParameter` и не изменяя состояние ledger.
 - Mempool предварительно фильтрует конфиденциальные транзакции по `vk_id`, длине proof и возрасту anchor до вызова verifier, чтобы ограничить потребление ресурсов.

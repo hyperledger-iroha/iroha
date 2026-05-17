@@ -15,7 +15,7 @@ use iroha_core::{
 use iroha_data_model::{
     isi::InstructionBox,
     prelude::*,
-    proof::{ProofBox, VerifyingKeyBox},
+    proof::{ProofBox, VerifyingKeyId},
 };
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, IVMHost, PointerType, ProgramMetadata, syscalls as ivm_sys};
@@ -107,10 +107,10 @@ fn halo2_disabled_verify_does_not_set_latch_and_gates_isi() {
         public_amount: 1u128,
         inputs: vec![[0u8; 32]],
         outputs: Vec::new(),
-        proof: iroha_data_model::proof::ProofAttachment::new_inline(
+        proof: iroha_data_model::proof::ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![0xAA, 0xBB]),
-            VerifyingKeyBox::new("halo2/ipa".into(), vec![0x02]),
+            VerifyingKeyId::new("halo2/ipa", "unshield_vk"),
         ),
         root_hint: None,
     };

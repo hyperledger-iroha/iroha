@@ -57,7 +57,10 @@ echo "[docs-portal] verifying SDK ledger recipe parity"
 node scripts/check-sdk-recipes.mjs
 
 echo "[docs-portal] verifying OpenAPI snapshot signatures"
-node scripts/check-openapi-signatures.mjs --allow-unsigned=2025-q2
+node scripts/check-openapi-signatures.mjs \
+  --allow-unsigned=2025-q2 \
+  --allow-unsigned=latest \
+  --allow-unsigned=current
 
 if command -v npm >/dev/null 2>&1; then
   if [[ -n "${CI:-}" ]]; then

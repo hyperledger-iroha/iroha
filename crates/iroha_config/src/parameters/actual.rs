@@ -189,6 +189,8 @@ pub struct SoracloudRuntime {
     pub cache_budgets: SoracloudRuntimeCacheBudgets,
     /// Inrou microVM hosting limits.
     pub inrou: SoracloudRuntimeInrou,
+    /// Runtime-originated transaction submission settings.
+    pub submission: SoracloudRuntimeSubmission,
     /// Outbound egress policy enforced by the embedded runtime manager.
     pub egress: SoracloudRuntimeEgress,
     /// Hugging Face importer and inference bridge settings.
@@ -206,6 +208,7 @@ impl Default for SoracloudRuntime {
             hydration_concurrency: defaults::soracloud_runtime::HYDRATION_CONCURRENCY,
             cache_budgets: SoracloudRuntimeCacheBudgets::default(),
             inrou: SoracloudRuntimeInrou::default(),
+            submission: SoracloudRuntimeSubmission::default(),
             egress: SoracloudRuntimeEgress::default(),
             hf: SoracloudRuntimeHuggingFace::default(),
         }
@@ -223,8 +226,19 @@ impl SoracloudRuntime {
             return;
         }
         assert!(
+            self.inrou.enabled,
+            "soracloud_runtime.production_mode requires soracloud_runtime.inrou.enabled = true"
+        );
+        assert!(
             !self.inrou.proxy_only,
             "soracloud_runtime.production_mode requires soracloud_runtime.inrou.proxy_only = false"
+        );
+        assert!(
+            self.submission
+                .gas_asset_id
+                .as_ref()
+                .is_some_and(|asset_id| !asset_id.trim().is_empty()),
+            "soracloud_runtime.production_mode requires soracloud_runtime.submission.gas_asset_id"
         );
         assert!(
             !self.egress.default_allow,
@@ -280,6 +294,8 @@ impl Default for SoracloudRuntimeCacheBudgets {
 pub struct SoracloudRuntimeInrou {
     /// Maximum number of Inrou VMs hosted concurrently.
     pub max_concurrent_vms: NonZeroUsize,
+    /// Whether this node advertises and materializes local Inrou workloads.
+    pub enabled: bool,
     /// Whether the validator should act as a proxy/control-plane node only.
     pub proxy_only: bool,
     /// Startup grace window before the manager treats the VM as failed.
@@ -292,11 +308,19 @@ impl Default for SoracloudRuntimeInrou {
     fn default() -> Self {
         Self {
             max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
+            enabled: defaults::soracloud_runtime::INROU_ENABLED,
             proxy_only: defaults::soracloud_runtime::INROU_PROXY_ONLY,
             start_grace: Duration::from_millis(defaults::soracloud_runtime::INROU_START_GRACE_MS),
             stop_grace: Duration::from_millis(defaults::soracloud_runtime::INROU_STOP_GRACE_MS),
         }
     }
+}
+
+/// Runtime-originated transaction submission settings.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SoracloudRuntimeSubmission {
+    /// Gas asset definition id used for runtime-originated control-plane submissions.
+    pub gas_asset_id: Option<String>,
 }
 
 /// Outbound egress policy for embedded Soracloud runtimes.
@@ -1923,22 +1947,18 @@ pub struct Acceleration {
 /// Execution mode for the FASTPQ prover backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FastpqExecutionMode {
-    /// Detect available accelerators at runtime and pick the best option.
-    Auto,
     /// Force CPU execution even if accelerators are present.
     Cpu,
-    /// Force GPU execution (falls back to CPU if kernels are unavailable at runtime).
+    /// Force GPU execution; startup fails if kernels or preflight are unavailable.
     Gpu,
 }
 
 /// Poseidon pipeline override for the FASTPQ prover backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FastpqPoseidonMode {
-    /// Follow the global execution mode (default).
-    Auto,
     /// Force CPU hashing even if FFT/LDE use the GPU.
     Cpu,
-    /// Prefer GPU hashing even if the global execution mode falls back to CPU.
+    /// Force GPU hashing; startup fails if kernels or preflight are unavailable.
     Gpu,
 }
 
@@ -1947,8 +1967,14 @@ pub enum FastpqPoseidonMode {
 pub struct Fastpq {
     /// Execution mode used when initialising the prover backend.
     pub execution_mode: FastpqExecutionMode,
-    /// Poseidon pipeline override (defaults to the execution mode when `Auto`).
+    /// Poseidon pipeline override.
     pub poseidon_mode: FastpqPoseidonMode,
+    /// Maximum queued FASTPQ proof sidecar attachments.
+    pub proof_sidecar_queue_cap: NonZeroUsize,
+    /// Maximum encoded FASTPQ proof snapshot accepted for sidecar persistence.
+    pub proof_sidecar_max_bytes: Bytes<u64>,
+    /// Maximum merge attempts for a FASTPQ proof snapshot while the pipeline sidecar is pending.
+    pub proof_sidecar_max_retries: NonZeroUsize,
     /// Optional telemetry label describing the host/device class.
     pub device_class: Option<String>,
     /// Optional chip-family label used for telemetry slicing.
@@ -2198,6 +2224,10 @@ pub struct Governance {
     pub viral_incentives: ViralIncentives,
     /// SoraFS pin policy constraints enforced during manifest admission.
     pub sorafs_pin_policy: SorafsPinPolicyConstraints,
+    /// Asset definition used to collect public SoraFS pin fees.
+    pub sorafs_pin_fee_asset_id: AssetDefinitionId,
+    /// Treasury account that receives public SoraFS pin fees.
+    pub sorafs_pin_fee_treasury_account: AccountId,
     /// SoraFS pricing schedule and credit policy.
     pub sorafs_pricing: PricingScheduleRecord,
     /// SoraFS under-delivery penalty policy applied to provider credits.
@@ -2308,6 +2338,14 @@ impl Default for Governance {
             },
             viral_incentives: ViralIncentives::default(),
             sorafs_pin_policy: SorafsPinPolicyConstraints::default(),
+            sorafs_pin_fee_asset_id: defaults::governance::sorafs_pin_fee::asset_id()
+                .parse()
+                .expect("default SoraFS pin fee asset id"),
+            sorafs_pin_fee_treasury_account: AccountId::parse_encoded(
+                &defaults::governance::sorafs_pin_fee::treasury_account(),
+            )
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .expect("default SoraFS pin fee treasury account"),
             sorafs_pricing: PricingScheduleRecord::launch_default(),
             sorafs_penalty: SorafsPenaltyPolicy::default(),
             sorafs_repair_escalation: RepairEscalationPolicyV1::default(),

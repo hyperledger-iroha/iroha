@@ -1,7 +1,7 @@
 # ZK Audit Matrix
 
 This matrix records the proof-verification ingress points audited in the
-2026-04-02 ZK hardening pass. The goal is to make verifier boundaries explicit:
+2026-04-02 and 2026-05-16 ZK hardening passes. The goal is to make verifier boundaries explicit:
 which surfaces perform real cryptographic verification, what binds the claimed
 statement before verification, and which paths are demo-only or non-ZK.
 
@@ -19,7 +19,7 @@ statement before verification, and which paths are demo-only or non-ZK.
 | Torii `POST /v1/zk/verify` | None (decode-only) | Non-consensus demo surface | Content-type decode only | None | High if misinterpreted as a verifier; docs/comments now explicitly mark it decode-only. |
 | Torii `POST /v1/zk/submit-proof` | None (decode + deterministic id) | Non-consensus demo surface | Content-type decode only, body hash for returned id | None | High if misinterpreted as a verifier; docs/comments now explicitly mark it non-verifying and non-durable. |
 | Torii `POST /v1/zk/verify-batch` | Standalone native IPA poly-open helper | Diagnostic only, not ledger-equivalent | Norito envelope decode plus transcript-bound statement (`transcript_label`, curve/`n`, `z`, `t`, `p_g`, optional metadata), configured batch/envelope/curve-`k`/label caps, and proof-round shape checks | `iroha_zkp_halo2::batch::verify_open_batch_with_limits` | Medium-low for diagnostics. Resource use is now bounded by config and the shared parameter cache is capped, but the endpoint still intentionally lacks VK registry / circuit/schema policy enforcement. |
-| IVM batch syscall (`SYSCALL_ZK_VERIFY_BATCH`) | Registry-backed `halo2/ipa` verifier on `CoreHost`; disabled on `DefaultHost` | Runtime helper with ledger-grade binding on the node host | Outer `OpenVerifyEnvelope` header checks, VK registry lookup, circuit/schema/manifest/curve/`max_k` enforcement, then backend verification with guardrails | `iroha_core::smartcontracts::ivm::host::CoreHost` -> `iroha_core::zk::verify_backend_with_timing_guardrails` | Low on the runtime host. `DefaultHost` intentionally returns `ERR_DISABLED`, so the remaining risk is misuse of a non-runtime host rather than a standalone verifier bypass. |
+| IVM batch syscall (`SYSCALL_ZK_VERIFY_BATCH`) | Registry-backed `halo2/ipa` and `stark/fri-v1/*` verifier on `CoreHost`; disabled on `DefaultHost` | Runtime helper with ledger-grade binding on the node host | Outer `OpenVerifyEnvelope` header checks, VK registry lookup, circuit/schema/manifest/curve/`max_k` or STARK profile enforcement, then backend verification with guardrails | `iroha_core::smartcontracts::ivm::host::CoreHost` -> `iroha_core::zk::verify_backend_with_timing_guardrails` | Low on the runtime host. `DefaultHost` intentionally returns `ERR_DISABLED`, so the remaining risk is misuse of a non-runtime host rather than a standalone verifier bypass. |
 
 ## Notes
 
@@ -35,6 +35,15 @@ statement before verification, and which paths are demo-only or non-ZK.
 - Production ledger verification remains centered on the guarded
   `iroha_core::zk::verify_backend_with_timing_guardrails` path and should stay
   the reference implementation for future proof-bearing features.
+- Block headers and peer handshakes now include a `zk_policy_hash` in the
+  confidential feature digest, so peers commit to the consensus-relevant ZK
+  verifier policy instead of trusting node-local timeout or worker settings.
+- Generic `VerifyProof` is registry-only: it requires `vk_ref`, rejects inline
+  VKs, and enforces active VK record, circuit/version, schema, namespace, gas
+  schedule, and commitment binding before calling the backend verifier.
+- Local verifier elapsed time is reported for telemetry but is no longer a
+  consensus rejection condition. Runtime limits that can change block validity
+  are sourced from the committed ZK policy.
 - The standalone Halo2 helper now keeps a bounded process-local parameter
   registry and derives Fiat-Shamir challenges from a running transcript state.
   That closes the previously noted unbounded-cache and quadratic-history rough

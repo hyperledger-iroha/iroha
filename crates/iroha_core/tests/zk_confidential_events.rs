@@ -157,9 +157,11 @@ fn transfer_emits_confidential_event() {
     let (state, account_id, keypair, asset_def_id) = setup_state();
     let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let proof_box = fixture.proof_box("halo2/ipa");
-    let vk = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
-    let attachment =
-        iroha_data_model::proof::ProofAttachment::new_inline("halo2/ipa".into(), proof_box, vk);
+    let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
+        "halo2/ipa".into(),
+        proof_box,
+        iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "transfer_vk"),
+    );
     let outputs = vec![[9u8; 32], [3u8; 32]];
     let nullifiers = vec![[1u8; 32], [2u8; 32]];
     let instruction = InstructionBox::from(zk::ZkTransfer::new(
@@ -249,9 +251,11 @@ fn unshield_emits_confidential_event() {
     let nullifier = derive_test_nullifier(&nk, &rho, &asset_def_id.to_string(), chain);
     let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let proof_box = fixture.proof_box("halo2/ipa");
-    let vk = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
-    let attachment =
-        iroha_data_model::proof::ProofAttachment::new_inline("halo2/ipa".into(), proof_box, vk);
+    let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
+        "halo2/ipa".into(),
+        proof_box,
+        iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "unshield_vk"),
+    );
     let instruction = InstructionBox::from(zk::Unshield::new(
         asset_def_id.clone(),
         account_id.clone(),

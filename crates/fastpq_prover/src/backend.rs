@@ -211,7 +211,7 @@ fn gpu_available() -> bool {
                 if detected.is_none() {
                     tracing::warn!(
                         target: "fastpq::planner",
-                        "FASTPQ_GPU=gpu requested but no accelerator was detected; falling back to CPU"
+                        "FASTPQ_GPU=gpu requested but no accelerator was detected"
                     );
                 } else {
                     log_detected_backend(detected);
@@ -379,7 +379,7 @@ fn log_detected_backend(backend: Option<GpuBackend>) {
     } else {
         tracing::info!(
             target: "fastpq::planner",
-            "No supported GPU backend detected; using CPU fallback"
+            "No supported GPU backend detected"
         );
     }
 }
@@ -680,10 +680,11 @@ mod detection_tests {
     }
 
     #[test]
-    fn backend_config_defaults_to_auto_execution_mode() {
+    fn backend_config_defaults_to_cpu_execution_mode() {
         let params = CANONICAL_PARAMETER_SETS[0];
         let config = BackendConfig::new(params);
-        assert_eq!(config.execution_mode(), ExecutionMode::Auto);
+        assert_eq!(config.execution_mode(), ExecutionMode::Cpu);
+        assert_eq!(config.poseidon_mode(), PoseidonExecutionMode::Cpu);
     }
 }
 
@@ -913,8 +914,8 @@ impl BackendConfig {
     pub fn new(params: StarkParameterSet) -> Self {
         Self {
             params,
-            execution_mode: ExecutionMode::Auto,
-            poseidon_mode: PoseidonExecutionMode::Auto,
+            execution_mode: ExecutionMode::Cpu,
+            poseidon_mode: PoseidonExecutionMode::Cpu,
         }
     }
 
@@ -2109,11 +2110,9 @@ impl Backend for StarkBackend {
             .map(|column| column.name.clone())
             .collect();
         let planner = Planner::new(&self.config.params);
-        let requested_mode = self.config.execution_mode();
-        let resolved_mode = requested_mode.resolve();
-        let poseidon_policy =
-            PoseidonPipelinePolicy::new(self.config.poseidon_mode(), resolved_mode);
-        let mut polynomial_data = derive_polynomial_data(&trace, &planner, resolved_mode);
+        let canonical_mode = ExecutionMode::Cpu;
+        let poseidon_policy = PoseidonPipelinePolicy::for_mode(canonical_mode);
+        let mut polynomial_data = derive_polynomial_data(&trace, &planner, canonical_mode);
         let transfer_plan = polynomial_data.transfer_plan().clone();
         if transfer_plan.total_deltas() > 0 {
             tracing::debug!(
@@ -2129,24 +2128,24 @@ impl Backend for StarkBackend {
             &trace,
             &polynomial_data.coefficients,
             &planner,
-            resolved_mode,
+            canonical_mode,
             poseidon_policy,
         );
         let trace_root =
             merkle_root_with_first_level(column_digests.leaves(), column_digests.fused_parents());
 
         let lde_columns = polynomial_data.lde_columns();
-        let lde_rows = hash_trace_rows_with_mode(lde_columns, resolved_mode);
-        let lde_values = extend_row_hashes(&planner, resolved_mode, lde_rows, trace.padded_len);
+        let lde_rows = hash_trace_rows_with_mode(lde_columns, canonical_mode);
+        let lde_values = extend_row_hashes(&planner, canonical_mode, lde_rows, trace.padded_len);
         let lde_domain_size =
             u32::try_from(lde_values.len()).map_err(|_| Error::TraceLengthOverflow {
                 rows: lde_values.len(),
             })?;
         let lde_hashes =
-            hash_lde_leaves_with_mode(&lde_values, self.config.params.fri.arity, resolved_mode)?;
-        let lde_root = merkle_root_with_mode(&lde_hashes, resolved_mode);
-        let air_trace_leaves = hash_air_trace_rows_with_mode(lde_columns, resolved_mode)?;
-        let air_trace_root = merkle_root_with_mode(&air_trace_leaves, resolved_mode);
+            hash_lde_leaves_with_mode(&lde_values, self.config.params.fri.arity, canonical_mode)?;
+        let lde_root = merkle_root_with_mode(&lde_hashes, canonical_mode);
+        let air_trace_leaves = hash_air_trace_rows_with_mode(lde_columns, canonical_mode)?;
+        let air_trace_root = merkle_root_with_mode(&air_trace_leaves, canonical_mode);
 
         let mut transcript = Transcript::initialise(
             public_io,
@@ -2179,8 +2178,8 @@ impl Backend for StarkBackend {
         let air_composition_values =
             air_composition_values(&column_names, lde_columns, &alphas, next_step)?;
         let air_composition_leaves =
-            hash_air_composition_leaves_with_mode(&air_composition_values, resolved_mode)?;
-        let air_composition_root = merkle_root_with_mode(&air_composition_leaves, resolved_mode);
+            hash_air_composition_leaves_with_mode(&air_composition_values, canonical_mode)?;
+        let air_composition_root = merkle_root_with_mode(&air_composition_leaves, canonical_mode);
         transcript.append_message(
             TRANSCRIPT_TAG_AIR_ROOTS,
             &[
@@ -2196,7 +2195,7 @@ impl Backend for StarkBackend {
             self.config.params.fri.arity,
             self.config.params.fri.max_reductions,
             &mut transcript,
-            resolved_mode,
+            canonical_mode,
         )?;
         let query_indices = sample_queries(
             lde_values.len(),
@@ -2211,7 +2210,7 @@ impl Backend for StarkBackend {
             &query_indices,
             self.config.params.fri.arity,
             lde_values.len(),
-            resolved_mode,
+            canonical_mode,
         )?;
         let air_openings = open_air_constraint_openings_with_mode(
             lde_columns,
@@ -2220,13 +2219,13 @@ impl Backend for StarkBackend {
             &air_composition_leaves,
             &query_indices,
             next_step,
-            resolved_mode,
+            canonical_mode,
         )?;
         let fri_query_openings = open_fri_query_chains(
             &fri_layer_values,
             &query_indices,
             self.config.params.fri.arity,
-            resolved_mode,
+            canonical_mode,
         )?;
 
         let trace_rows = u32::try_from(trace.rows)

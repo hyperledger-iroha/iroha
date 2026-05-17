@@ -498,6 +498,7 @@ export class ToriiHttpError extends Error {
     errorMessage,
     bodyText,
     bodyJson,
+    details,
   }) {
     const expectedLabel =
       Array.isArray(expected) && expected.length > 0
@@ -528,6 +529,7 @@ export class ToriiHttpError extends Error {
     this.errorMessage = errorMessage ?? null;
     this.bodyText = bodyText ?? null;
     this.bodyJson = bodyJson ?? null;
+    this.details = details ?? null;
   }
 }
 
@@ -565,7 +567,9 @@ export function extractPipelineRejectionReason(payload) {
       ?? payload.rejectionReason
       ?? payload.reason
       ?? payload.reject_code
-      ?? payload.rejectCode,
+      ?? payload.rejectCode
+      ?? payload.details?.reject_code
+      ?? payload.details?.rejectCode,
   );
   if (direct) {
     return direct;
@@ -579,7 +583,9 @@ export function extractPipelineRejectionReason(payload) {
       ?? content.rejectionReason
       ?? content.reason
       ?? content.reject_code
-      ?? content.rejectCode,
+      ?? content.rejectCode
+      ?? content.details?.reject_code
+      ?? content.details?.rejectCode,
   );
   if (nested) {
     return nested;
@@ -593,7 +599,9 @@ export function extractPipelineRejectionReason(payload) {
       ?? status.rejectionReason
       ?? status.reason
       ?? status.reject_code
-      ?? status.rejectCode,
+      ?? status.rejectCode
+      ?? status.details?.reject_code
+      ?? status.details?.rejectCode,
   );
   if (fromStatus) {
     return fromStatus;
@@ -3634,17 +3642,11 @@ export class ToriiClient {
       body: pipelinePayload,
       retryProfile: "pipeline",
     };
-    let response = await this._request(
+    const response = await this._request(
       "POST",
       "/v1/pipeline/transactions",
       requestOptions,
     );
-    if (response.status === 404 || response.status === 405) {
-      response = await this._request("POST", "/transaction", {
-        ...requestOptions,
-        body: pipelinePayload,
-      });
-    }
     await this._expectStatus(response, [200, 201, 202, 204]);
     const route = this._extractSubmissionRoute(response);
     const contentType = this._getHeader(response, "content-type");
@@ -8607,7 +8609,8 @@ export class ToriiClient {
 
   async _buildHttpError(response, expected) {
     const { bodyText, bodyJson } = await this._readErrorBody(response);
-    const rejectCode = this._extractRejectCode(response);
+    const details = this._extractErrorDetails(bodyJson);
+    const rejectCode = this._extractRejectCode(response, bodyJson);
     const code =
       rejectCode ??
       this._extractErrorCode(bodyJson) ??
@@ -8623,6 +8626,7 @@ export class ToriiClient {
       errorMessage,
       bodyText,
       bodyJson,
+      details,
     });
   }
 
@@ -8677,6 +8681,10 @@ export class ToriiClient {
     }
     if (typeof payload.reason === "string" && payload.reason) {
       return payload.reason;
+    }
+    const detailsRejectCode = this._extractRejectCodeFromDetails(payload.details);
+    if (detailsRejectCode) {
+      return detailsRejectCode;
     }
     if (typeof payload.error === "string" && payload.error.startsWith("ERR_")) {
       return payload.error;
@@ -8777,13 +8785,38 @@ export class ToriiClient {
     return null;
   }
 
-  _extractRejectCode(response) {
-    const raw = this._getHeader(response, "x-iroha-reject-code");
-    if (typeof raw !== "string") {
+  _extractErrorDetails(payload) {
+    if (!payload || typeof payload !== "object") {
       return null;
     }
-    const trimmed = raw.trim();
-    return trimmed ? trimmed : null;
+    const details = payload.details;
+    return details && typeof details === "object" ? details : null;
+  }
+
+  _extractRejectCodeFromDetails(details) {
+    if (!details || typeof details !== "object") {
+      return null;
+    }
+    const direct = details.reject_code ?? details.rejectCode;
+    if (typeof direct === "string" && direct.trim()) {
+      return direct.trim();
+    }
+    const axtCode = details.axt?.code;
+    if (typeof axtCode === "string" && axtCode.trim()) {
+      return axtCode.trim();
+    }
+    return null;
+  }
+
+  _extractRejectCode(response, bodyJson = null) {
+    const raw = this._getHeader(response, "x-iroha-reject-code");
+    if (typeof raw === "string") {
+      const trimmed = raw.trim();
+      if (trimmed) {
+        return trimmed;
+      }
+    }
+    return this._extractRejectCodeFromDetails(bodyJson?.details);
   }
 
   static _encodeProverFilters(filters) {
@@ -21306,6 +21339,24 @@ function normalizeSorafsPinRegisterResponse(
       `${context}.submitted_epoch`,
       { allowZero: true },
     ),
+    content_length: ToriiClient._normalizeUnsignedInteger(
+      record.content_length ?? record.contentLength,
+      `${context}.content_length`,
+      { allowZero: true },
+    ),
+    pin_fee_nano: ToriiClient._normalizeUnsignedInteger(
+      record.pin_fee_nano ?? record.pinFeeNano,
+      `${context}.pin_fee_nano`,
+      { allowZero: true },
+    ),
+    pin_fee_asset_id: requireNonEmptyString(
+      record.pin_fee_asset_id ?? record.pinFeeAssetId,
+      `${context}.pin_fee_asset_id`,
+    ),
+    pin_fee_treasury_account_id: requireNonEmptyString(
+      record.pin_fee_treasury_account_id ?? record.pinFeeTreasuryAccountId,
+      `${context}.pin_fee_treasury_account_id`,
+    ),
     alias: aliasValue,
     successor_of_hex:
       successorValue === null
@@ -21572,7 +21623,7 @@ function buildSorafsPinRegisterPayload(record, context) {
   }
   const pinPolicy = normalizeSorafsPinPolicyRequest(pinPolicySource, `${context}.pinPolicy`);
   const manifestDigestHex = normalizeHex32String(
-    record.manifestDigestHex,
+    record.manifestDigestHex ?? record.manifest_digest_hex,
     `${context}.manifestDigestHex`,
   );
   const chunkDigestHex = normalizeHex32String(
@@ -21582,8 +21633,13 @@ function buildSorafsPinRegisterPayload(record, context) {
       record.chunk_digest,
     `${context}.chunkDigestSha3_256Hex`,
   );
+  const contentLength = ToriiClient._normalizeUnsignedInteger(
+    record.contentLength ?? record.content_length,
+    `${context}.contentLength`,
+    { allowZero: true },
+  );
   const submittedEpoch = ToriiClient._normalizeUnsignedInteger(
-    record.submittedEpoch,
+    record.submittedEpoch ?? record.submitted_epoch,
     `${context}.submittedEpoch`,
     { allowZero: true },
   );
@@ -21598,6 +21654,7 @@ function buildSorafsPinRegisterPayload(record, context) {
     pin_policy: pinPolicy,
     manifest_digest_hex: manifestDigestHex,
     chunk_digest_sha3_256_hex: chunkDigestHex,
+    content_length: contentLength,
     submitted_epoch: submittedEpoch,
   };
   const aliasInput =

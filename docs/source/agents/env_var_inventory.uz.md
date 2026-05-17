@@ -667,9 +667,6 @@ Jami havolalar: **505** · Noyob oʻzgaruvchilar: **137**
 - test: sandiqlar/ivm/testlar/i18n.rs:13 - `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 - test: sandiqlar/ivm/tests/i18n.rs:71 - `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 
-## MAX_DEGREE (mahsulot: 1)
-
-- mahsulot: crates/iroha_core/src/zk.rs:106 - `let current = std::env::var("MAX_DEGREE")`
 
 ## MOCHI_CONFIG (mahsulot: 1)
 

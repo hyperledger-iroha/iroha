@@ -667,9 +667,6 @@ _רענון אחרון דרך `python3 scripts/inventory_env_toggles.py --json d
 - בדיקה: crates/ivm/tests/i18n.rs:13 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 - בדיקה: crates/ivm/tests/i18n.rs:71 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 
-## MAX_DEGREE (תפוקה: 1)
-
-- פרוד: crates/iroha_core/src/zk.rs:106 — `let current = std::env::var("MAX_DEGREE")`
 
 ## MOCHI_CONFIG (תפוקה: 1)
 

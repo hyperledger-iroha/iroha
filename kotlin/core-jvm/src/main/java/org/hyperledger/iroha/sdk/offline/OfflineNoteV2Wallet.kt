@@ -11,6 +11,8 @@ import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.function.LongSupplier
+import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
+import org.bouncycastle.crypto.signers.Ed25519Signer
 import org.hyperledger.iroha.sdk.client.ClientObserver
 import org.hyperledger.iroha.sdk.client.ClientResponse
 import org.hyperledger.iroha.sdk.client.HttpErrorMessageExtractor
@@ -25,6 +27,11 @@ import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.crypto.Signer
+import org.hyperledger.iroha.sdk.norito.NoritoCodec
+import org.hyperledger.iroha.sdk.norito.NoritoDecoder
+import org.hyperledger.iroha.sdk.norito.NoritoEncoder
+import org.hyperledger.iroha.sdk.norito.NoritoHeader
+import org.hyperledger.iroha.sdk.norito.TypeAdapter
 import org.hyperledger.iroha.sdk.tx.TransactionBuilder
 import org.hyperledger.iroha.sdk.tx.norito.NoritoCodecAdapter
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
@@ -33,8 +40,6 @@ import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 enum class OfflineNoteV2WalletNoteState {
     SPENDABLE,
     RECEIVE_PENDING,
-    CHANGE_PENDING,
-    SPEND_PENDING,
     SPENT,
     REDEEM_PENDING,
     REDEEMED,
@@ -100,9 +105,16 @@ class OfflineNoteV2WalletNote @JvmOverloads constructor(
 
 /** Minimal structured store API for Offline Note V2 wallet notes. */
 interface OfflineNoteV2Store {
-    fun listNotes(): List<OfflineNoteV2WalletNote>
-    fun findNote(noteCommitment: ByteArray): OfflineNoteV2WalletNote?
-    fun upsert(note: OfflineNoteV2WalletNote)
+    fun <T> mutateNotes(mutator: (MutableMap<String, OfflineNoteV2WalletNote>) -> T): T
+
+    fun listNotes(): List<OfflineNoteV2WalletNote> = mutateNotes { it.values.toList() }
+
+    fun findNote(noteCommitment: ByteArray): OfflineNoteV2WalletNote? =
+        mutateNotes { it[hexLower(noteCommitment)] }
+
+    fun upsert(note: OfflineNoteV2WalletNote) {
+        mutateNotes { it[note.noteCommitmentHex()] = note }
+    }
 }
 
 /** In-memory store for JVM tests and non-persistent tooling. */
@@ -110,16 +122,8 @@ class InMemoryOfflineNoteV2Store : OfflineNoteV2Store {
     private val notes = LinkedHashMap<String, OfflineNoteV2WalletNote>()
 
     @Synchronized
-    override fun listNotes(): List<OfflineNoteV2WalletNote> = notes.values.toList()
-
-    @Synchronized
-    override fun findNote(noteCommitment: ByteArray): OfflineNoteV2WalletNote? =
-        notes[hexLower(noteCommitment)]
-
-    @Synchronized
-    override fun upsert(note: OfflineNoteV2WalletNote) {
-        notes[note.noteCommitmentHex()] = note
-    }
+    override fun <T> mutateNotes(mutator: (MutableMap<String, OfflineNoteV2WalletNote>) -> T): T =
+        mutator(notes)
 }
 
 /** Supplies wallet-bound Offline Note V2 key certificates. */
@@ -158,6 +162,63 @@ class UuidOfflineNoteV2IdGenerator : OfflineNoteV2IdGenerator {
 interface OfflineNoteV2ProofProvider {
     fun proveAudit(audit: OfflineNoteV2.AuditBundleV2): OfflineNoteV2.RecursiveProofV2
     fun proveRedeem(redemption: OfflineNoteV2.RedeemV2): OfflineNoteV2.RecursiveProofV2
+}
+
+/** Verifies recursive proofs before accepting locally-final value. */
+interface OfflineNoteV2ProofVerifier {
+    fun verifyAudit(audit: OfflineNoteV2.AuditBundleV2): Boolean
+    fun verifyRedeem(redemption: OfflineNoteV2.RedeemV2): Boolean
+}
+
+/** Halo2-backed Offline Note V2 proof verifier. */
+class Halo2OfflineNoteV2ProofVerifier : OfflineNoteV2ProofVerifier {
+    override fun verifyAudit(audit: OfflineNoteV2.AuditBundleV2): Boolean =
+        OfflineNoteV2Halo2Prover.verifyAudit(audit)
+
+    override fun verifyRedeem(redemption: OfflineNoteV2.RedeemV2): Boolean =
+        OfflineNoteV2Halo2Prover.verifyRedeem(redemption)
+}
+
+/** Verifies issuer trust and attestation shape for Offline Note V2 key certificates. */
+interface OfflineNoteV2CertificateVerifier {
+    fun verifyCertificate(certificate: OfflineNoteV2.KeyCertificateV2): Boolean
+}
+
+/** Fails closed until a wallet is configured with trusted issuer roots. */
+class RejectingOfflineNoteV2CertificateVerifier : OfflineNoteV2CertificateVerifier {
+    override fun verifyCertificate(certificate: OfflineNoteV2.KeyCertificateV2): Boolean = false
+}
+
+/** Ed25519 verifier for issuer-signed Offline Note V2 key certificates. */
+class Ed25519OfflineNoteV2CertificateVerifier(
+    trustedIssuerPublicKeys: Collection<ByteArray>,
+) : OfflineNoteV2CertificateVerifier {
+    private val trustedIssuerPublicKeys = trustedIssuerPublicKeys.map { it.copyOf() }
+
+    override fun verifyCertificate(certificate: OfflineNoteV2.KeyCertificateV2): Boolean {
+        if (trustedIssuerPublicKeys.isEmpty()) return false
+        if (certificate.platform.trim().isEmpty()) return false
+        if (certificate.keyId.trim().isEmpty()) return false
+        if (certificate.deviceId.trim().isEmpty()) return false
+        if (certificate.assertionScheme.trim().isEmpty()) return false
+        if (certificate.assertionKeyAlgorithm.trim().isEmpty()) return false
+        if (certificate.assertionPublicKey().isEmpty()) return false
+        val message = certificate.signingBytes()
+        val signature = certificate.issuerSignature()
+        return trustedIssuerPublicKeys.any { root ->
+            root.size == 32 && verifyEd25519(root, message, signature)
+        }
+    }
+
+    private fun verifyEd25519(publicKey: ByteArray, message: ByteArray, signature: ByteArray): Boolean =
+        try {
+            val verifier = Ed25519Signer()
+            verifier.init(false, Ed25519PublicKeyParameters(publicKey, 0))
+            verifier.update(message, 0, message.size)
+            verifier.verifySignature(signature)
+        } catch (ex: RuntimeException) {
+            false
+        }
 }
 
 /** JVM Halo2 proof provider backed by the SDK's native Offline Note V2 prover. */
@@ -244,67 +305,52 @@ class OfflineNoteV2ReceiveRequest(
 
 /** Payment token produced by a payer and accepted by the recipient. */
 class OfflineNoteV2PaymentToken(
+    val chainId: String,
     val paymentRequestId: String,
+    tokenNonce: ByteArray,
     tokenId: ByteArray,
     val audit: OfflineNoteV2.AuditBundleV2,
     val createdAtMs: Long,
 ) {
+    private val _tokenNonce = tokenNonce.copyOf()
     private val _tokenId = tokenId.copyOf()
 
+    fun tokenNonce(): ByteArray = _tokenNonce.copyOf()
     fun tokenId(): ByteArray = _tokenId.copyOf()
     fun tokenIdHex(): String = hexLower(_tokenId)
 }
 
-/** QR/JSON handoff codec for Offline Note V2 payment tokens. */
+/** QR/Norito handoff codec for Offline Note V2 payment tokens. */
 object OfflineNoteV2PaymentTokenCodec {
     const val TYPE: String = "offline_payment_token_v2"
     const val VERSION: Long = 2
     const val TEXT_PREFIX: String = "wallet-offline-payment-v2:"
+    private const val TOKEN_ENVELOPE_SCHEMA =
+        "iroha_data_model::offline::model::OfflineNotePaymentTokenEnvelopeV2"
 
     @JvmStatic
-    fun encodeJson(token: OfflineNoteV2PaymentToken): ByteArray {
-        val payload = linkedMapOf<String, Any?>(
-            "version" to VERSION,
-            "type" to TYPE,
-            "invoice_id" to token.paymentRequestId,
-            "token_id" to token.tokenIdHex(),
-            "audit_norito_base64" to Base64.getEncoder().encodeToString(token.audit.noritoEncoded()),
-            "created_at_ms" to token.createdAtMs,
-        )
-        return JsonEncoder.encode(payload).toByteArray(StandardCharsets.UTF_8)
-    }
+    fun encodeNorito(token: OfflineNoteV2PaymentToken): ByteArray =
+        NoritoCodec.encode(token, TOKEN_ENVELOPE_SCHEMA, PaymentTokenAdapter, NoritoHeader.COMPACT_LEN)
 
     @JvmStatic
-    fun decodeJson(payload: ByteArray): OfflineNoteV2PaymentToken {
-        val obj = parseObject(payload)
-        val version = asLong(obj["version"], "version")
-        require(version == VERSION) { "Offline Note V2 payment token JSON version must be $VERSION" }
-        require(asString(obj["type"], "type") == TYPE) { "Offline Note V2 payment token JSON type mismatch" }
-        val paymentRequestId = asOptionalString(obj["invoice_id"])
-            ?: asString(obj["payment_request_id"], "payment_request_id")
-        val tokenId = hexBytes(asString(obj["token_id"], "token_id"), "token_id")
-        val auditBytes = Base64.getDecoder().decode(asString(obj["audit_norito_base64"], "audit_norito_base64"))
-        val audit = OfflineNoteV2.decodeAudit(auditBytes)
-        require(audit.tokenId().contentEquals(tokenId)) {
-            "Offline Note V2 payment token id does not match audit bundle"
-        }
-        return OfflineNoteV2PaymentToken(
-            paymentRequestId = paymentRequestId,
-            tokenId = tokenId,
-            audit = audit,
-            createdAtMs = asLong(obj["created_at_ms"], "created_at_ms"),
-        )
-    }
+    fun decodeNorito(payload: ByteArray): OfflineNoteV2PaymentToken =
+        NoritoCodec.decode(payload, PaymentTokenAdapter, TOKEN_ENVELOPE_SCHEMA)
+
+    @JvmStatic
+    fun encodeJson(token: OfflineNoteV2PaymentToken): ByteArray = encodeNorito(token)
+
+    @JvmStatic
+    fun decodeJson(payload: ByteArray): OfflineNoteV2PaymentToken = decodeNorito(payload)
 
     @JvmStatic
     fun encodeText(token: OfflineNoteV2PaymentToken): String =
-        TEXT_PREFIX + Base64.getEncoder().encodeToString(encodeJson(token))
+        TEXT_PREFIX + Base64.getUrlEncoder().withoutPadding().encodeToString(encodeNorito(token))
 
     @JvmStatic
     fun decodeText(text: String): OfflineNoteV2PaymentToken {
         val trimmed = text.trim()
         require(trimmed.startsWith(TEXT_PREFIX)) { "Offline Note V2 payment token prefix missing" }
-        return decodeJson(Base64.getDecoder().decode(trimmed.substring(TEXT_PREFIX.length)))
+        return decodeNorito(Base64.getUrlDecoder().decode(trimmed.substring(TEXT_PREFIX.length)))
     }
 
     @JvmStatic
@@ -317,49 +363,88 @@ object OfflineNoteV2PaymentTokenCodec {
         options: OfflineQrStream.Options,
     ): List<ByteArray> =
         OfflineQrStream.Encoder.encodeFrameBytes(
-            encodeJson(token),
+            encodeNorito(token),
             OfflineQrStream.PayloadKind.OFFLINE_PAYMENT_TOKEN_V2,
             options,
         )
 
     @JvmStatic
-    fun decodeQrPayload(payload: ByteArray): OfflineNoteV2PaymentToken = decodeJson(payload)
+    fun decodeQrPayload(payload: ByteArray): OfflineNoteV2PaymentToken = decodeNorito(payload)
 
-    @Suppress("UNCHECKED_CAST")
-    private fun parseObject(payload: ByteArray): Map<String, Any?> {
-        val parsed = JsonParser.parse(String(payload, StandardCharsets.UTF_8))
-        require(parsed is Map<*, *>) { "Offline Note V2 payment token JSON root must be an object" }
-        return parsed as Map<String, Any?>
-    }
-
-    private fun asString(value: Any?, field: String): String {
-        require(value is String && value.isNotBlank()) { "$field must be a non-empty string" }
-        return value
-    }
-
-    private fun asOptionalString(value: Any?): String? {
-        if (value == null) return null
-        require(value is String && value.isNotBlank()) { "optional string field must be non-empty when present" }
-        return value
-    }
-
-    private fun asLong(value: Any?, field: String): Long = when (value) {
-        is Number -> value.toLong()
-        is String -> value.toLong()
-        else -> throw IllegalArgumentException("$field must be an integer")
-    }
-
-    private fun hexBytes(value: String, field: String): ByteArray {
-        val normalized = value.lowercase(Locale.ROOT)
-        require(normalized.length % 2 == 0) { "$field must have an even hex length" }
-        val out = ByteArray(normalized.length / 2)
-        for (index in out.indices) {
-            val hi = Character.digit(normalized[index * 2], 16)
-            val lo = Character.digit(normalized[index * 2 + 1], 16)
-            require(hi >= 0 && lo >= 0) { "$field must be hex" }
-            out[index] = ((hi shl 4) or lo).toByte()
+    private object PaymentTokenAdapter : TypeAdapter<OfflineNoteV2PaymentToken> {
+        override fun encode(encoder: NoritoEncoder, value: OfflineNoteV2PaymentToken) {
+            writeField(encoder) { it.writeUInt(VERSION, 64) }
+            writeField(encoder) { writeString(it, value.chainId) }
+            writeField(encoder) { writeString(it, value.paymentRequestId) }
+            writeField(encoder) { it.writeUInt(value.createdAtMs, 64) }
+            writeField(encoder) { writeBytesVec(it, value.tokenNonce()) }
+            writeField(encoder) { it.writeBytes(value.tokenId()) }
+            writeField(encoder) { writeBytesVec(it, value.audit.noritoEncoded()) }
         }
-        return out
+
+        override fun decode(decoder: NoritoDecoder): OfflineNoteV2PaymentToken {
+            val version = readField(decoder) { it.readUInt(64) }
+            require(version == VERSION) { "Offline Note V2 payment token Norito version must be $VERSION" }
+            val chainId = readField(decoder) { readString(it) }
+            val paymentRequestId = readField(decoder) { readString(it) }
+            val createdAtMs = readField(decoder) { it.readUInt(64) }
+            val tokenNonce = readField(decoder) { readBytesVec(it) }
+            val tokenId = readField(decoder) { it.readBytes(32) }
+            val audit = OfflineNoteV2.decodeAudit(readField(decoder) { readBytesVec(it) })
+            require(audit.tokenId().contentEquals(tokenId)) {
+                "Offline Note V2 payment token id does not match audit bundle"
+            }
+            return OfflineNoteV2PaymentToken(
+                chainId = chainId,
+                paymentRequestId = paymentRequestId,
+                tokenNonce = tokenNonce,
+                tokenId = tokenId,
+                audit = audit,
+                createdAtMs = createdAtMs,
+            )
+        }
+    }
+
+    private fun writeField(encoder: NoritoEncoder, write: (NoritoEncoder) -> Unit) {
+        val child = encoder.childEncoder()
+        write(child)
+        val payload = child.toByteArray()
+        encoder.writeLength(payload.size.toLong(), true)
+        encoder.writeBytes(payload)
+    }
+
+    private fun writeString(encoder: NoritoEncoder, value: String) {
+        val bytes = value.toByteArray(StandardCharsets.UTF_8)
+        encoder.writeLength(bytes.size.toLong(), true)
+        encoder.writeBytes(bytes)
+    }
+
+    private fun writeBytesVec(encoder: NoritoEncoder, value: ByteArray) {
+        encoder.writeUInt(value.size.toLong(), 64)
+        encoder.writeBytes(value)
+    }
+
+    private fun <T> readField(decoder: NoritoDecoder, read: (NoritoDecoder) -> T): T {
+        val length = decoder.readLength(true)
+        require(length <= Int.MAX_VALUE) { "Offline Note V2 payment token field length overflow" }
+        val child = NoritoDecoder(decoder.readBytes(length.toInt()), decoder.flags, decoder.flagsHint)
+        val value = read(child)
+        require(child.remaining() == 0) { "Trailing bytes after Offline Note V2 payment token field decode" }
+        return value
+    }
+
+    private fun readString(decoder: NoritoDecoder): String {
+        val length = decoder.readLength(true)
+        require(length <= Int.MAX_VALUE) { "Offline Note V2 payment token string length overflow" }
+        val value = String(decoder.readBytes(length.toInt()), StandardCharsets.UTF_8)
+        require(value.isNotBlank()) { "Offline Note V2 payment token string must not be blank" }
+        return value
+    }
+
+    private fun readBytesVec(decoder: NoritoDecoder): ByteArray {
+        val length = decoder.readUInt(64)
+        require(length <= Int.MAX_VALUE) { "Offline Note V2 payment token bytes length overflow" }
+        return decoder.readBytes(length.toInt())
     }
 }
 
@@ -405,22 +490,14 @@ interface OfflineNoteV2OutcomeProvider {
 
 /** Outcome index that maps committed/rejected Offline Note V2 instructions to note states. */
 class OfflineNoteV2OutcomeIndex {
-    private val spentInputNullifiers = LinkedHashMap<String, String?>()
-    private val rejectedAuditInputs = LinkedHashMap<String, String?>()
-    private val committedAuditOutputs = LinkedHashMap<String, String?>()
-    private val rejectedAuditOutputs = LinkedHashMap<String, String?>()
     private val committedRedeems = LinkedHashMap<String, String?>()
     private val rejectedRedeems = LinkedHashMap<String, String?>()
 
     fun recordCommittedAudit(audit: OfflineNoteV2.AuditBundleV2, transactionHashHex: String?): OfflineNoteV2OutcomeIndex {
-        audit.inputNullifiers().forEach { putFirst(spentInputNullifiers, it, transactionHashHex) }
-        audit.outputCommitments().forEach { putFirst(committedAuditOutputs, it, transactionHashHex) }
         return this
     }
 
     fun recordRejectedAudit(audit: OfflineNoteV2.AuditBundleV2, transactionHashHex: String?): OfflineNoteV2OutcomeIndex {
-        audit.inputClaims.forEach { putFirst(rejectedAuditInputs, it.noteCommitment(), transactionHashHex) }
-        audit.outputCommitments().forEach { putFirst(rejectedAuditOutputs, it, transactionHashHex) }
         return this
     }
 
@@ -436,55 +513,9 @@ class OfflineNoteV2OutcomeIndex {
 
     fun resolve(note: OfflineNoteV2WalletNote): OfflineNoteV2SyncResolution? =
         when (note.state) {
-            OfflineNoteV2WalletNoteState.SPEND_PENDING -> resolveSpendPending(note)
-            OfflineNoteV2WalletNoteState.CHANGE_PENDING,
-            OfflineNoteV2WalletNoteState.RECEIVE_PENDING -> resolveOutputPending(note)
             OfflineNoteV2WalletNoteState.REDEEM_PENDING -> resolveRedeemPending(note)
             else -> null
         }
-
-    private fun resolveSpendPending(note: OfflineNoteV2WalletNote): OfflineNoteV2SyncResolution? {
-        val inputNullifier = OfflineNoteV2.deriveInputNullifier(
-            OfflineNoteV2.InputNullifierPreimageV2(
-                chainId = note.chainId,
-                sourceNoteCommitment = note.noteCommitment(),
-                ownerKeyCertificatePayloadHash = note.keyCertificate.payloadHash(),
-                noteSecret = note.noteSecret(),
-            )
-        )
-        val nullifierKey = hexLower(inputNullifier)
-        if (spentInputNullifiers.containsKey(nullifierKey)) {
-            return OfflineNoteV2SyncResolution(
-                OfflineNoteV2WalletNoteState.SPENT,
-                spentInputNullifiers[nullifierKey],
-            )
-        }
-        val commitmentKey = note.noteCommitmentHex()
-        if (rejectedAuditInputs.containsKey(commitmentKey)) {
-            return OfflineNoteV2SyncResolution(
-                OfflineNoteV2WalletNoteState.SPENDABLE,
-                rejectedAuditInputs[commitmentKey],
-            )
-        }
-        return null
-    }
-
-    private fun resolveOutputPending(note: OfflineNoteV2WalletNote): OfflineNoteV2SyncResolution? {
-        val commitmentKey = note.noteCommitmentHex()
-        if (committedAuditOutputs.containsKey(commitmentKey)) {
-            return OfflineNoteV2SyncResolution(
-                OfflineNoteV2WalletNoteState.SPENDABLE,
-                committedAuditOutputs[commitmentKey],
-            )
-        }
-        if (rejectedAuditOutputs.containsKey(commitmentKey)) {
-            return OfflineNoteV2SyncResolution(
-                OfflineNoteV2WalletNoteState.CANCELLED,
-                rejectedAuditOutputs[commitmentKey],
-            )
-        }
-        return null
-    }
 
     private fun resolveRedeemPending(note: OfflineNoteV2WalletNote): OfflineNoteV2SyncResolution? {
         val commitmentKey = note.noteCommitmentHex()
@@ -601,7 +632,11 @@ class ToriiOfflineNoteV2OutcomeProvider @JvmOverloads constructor(
                 response.body,
                 response.message,
                 null,
-                HttpErrorMessageExtractor.extractRejectCode(response.headers, "x-iroha-reject-code"),
+                HttpErrorMessageExtractor.extractRejectCode(
+                    response.headers,
+                    "x-iroha-reject-code",
+                    response.body,
+                ),
             )
             if (response.statusCode < 200 || response.statusCode >= 300) {
                 val error = OfflineToriiException(
@@ -751,6 +786,8 @@ class OfflineNoteV2Wallet @JvmOverloads constructor(
     private val transactionSubmitter: OfflineNoteV2TransactionSubmitter? = null,
     private val syncResolver: OfflineNoteV2SyncResolver? = null,
     private val proofProvider: OfflineNoteV2ProofProvider = NativeOfflineNoteV2ProofProvider(),
+    private val proofVerifier: OfflineNoteV2ProofVerifier = Halo2OfflineNoteV2ProofVerifier(),
+    private val certificateVerifier: OfflineNoteV2CertificateVerifier = RejectingOfflineNoteV2CertificateVerifier(),
     private val randomSource: OfflineNoteV2RandomSource = SecureOfflineNoteV2RandomSource(),
     private val idGenerator: OfflineNoteV2IdGenerator = UuidOfflineNoteV2IdGenerator(),
     private val clock: LongSupplier = LongSupplier { System.currentTimeMillis() },
@@ -769,6 +806,7 @@ class OfflineNoteV2Wallet @JvmOverloads constructor(
         val assetId = walletAssetId(assetDefinitionId, accountId)
         return issuer.prepareLoad(chainId, accountId, assetDefinition(assetId), amount)
             .thenCompose { context ->
+                requireTrustedCertificate(context.keyCertificate, accountId)
                 val noteSecret = random32()
                 val origin = OfflineNoteV2.CommitmentOriginV2.IssuerLoad(
                     operationId = context.operationId,
@@ -795,12 +833,14 @@ class OfflineNoteV2Wallet @JvmOverloads constructor(
                     require(response.noteCommitment().contentEquals(noteCommitment)) {
                         "issuer returned a different Offline Note V2 commitment"
                     }
+                    val issuedCertificate = response.keyCertificate ?: context.keyCertificate
+                    requireTrustedCertificate(issuedCertificate, accountId)
                     val issued = OfflineNoteV2WalletNote(
                         chainId = chainId,
                         accountId = accountId,
                         assetId = assetId,
                         amount = amount,
-                        keyCertificate = response.keyCertificate ?: context.keyCertificate,
+                        keyCertificate = issuedCertificate,
                         noteCommitment = noteCommitment,
                         noteSecret = noteSecret,
                         origin = origin,
@@ -817,6 +857,7 @@ class OfflineNoteV2Wallet @JvmOverloads constructor(
     fun prepareReceive(assetDefinitionId: String, amount: String): OfflineNoteV2ReceiveRequest {
         val paymentRequestId = idGenerator.nextId("payment-request")
         val keyCertificate = attestationProvider.currentKeyCertificate()
+        requireTrustedCertificate(keyCertificate, accountId)
         val assetId = walletAssetId(assetDefinitionId, accountId)
         val noteSecret = random32()
         val origin = OfflineNoteV2.CommitmentOriginV2.P2pOutput(
@@ -858,6 +899,9 @@ class OfflineNoteV2Wallet @JvmOverloads constructor(
 
     fun pay(receiveRequest: OfflineNoteV2ReceiveRequest): OfflineNoteV2PaymentToken {
         require(receiveRequest.chainId == chainId) { "receive request chainId does not match wallet chainId" }
+        requireTrustedCertificate(receiveRequest.keyCertificate, receiveRequest.accountId)
+        rejectReusedReceiveRequest(receiveRequest.paymentRequestId)
+        val createdAtMs = clock.getAsLong()
         val requestedAmount = decimal(receiveRequest.canonicalAmount)
         val selected = selectSpendableNotes(receiveRequest.assetDefinitionId, requestedAmount)
         val inputAmount = selected.fold(BigDecimal.ZERO) { acc, note -> acc.add(decimal(note.canonicalAmount)) }
@@ -865,9 +909,13 @@ class OfflineNoteV2Wallet @JvmOverloads constructor(
         require(changeAmount.signum() >= 0) { "selected input amount is below requested amount" }
 
         val senderCertificate = selected.first().keyCertificate
+        requireTrustedCertificate(senderCertificate, accountId)
         val senderCertificateHash = senderCertificate.payloadHash()
-        require(selected.all { it.keyCertificate.payloadHash().contentEquals(senderCertificateHash) }) {
-            "selected input notes must use the same key certificate"
+        selected.forEach {
+            requireTrustedCertificate(it.keyCertificate, accountId)
+            require(it.keyCertificate.payloadHash().contentEquals(senderCertificateHash)) {
+                "selected input notes must use the same key certificate"
+            }
         }
         val inputNullifiers = selected.map { note -> deriveInputNullifier(note) }
         val outputClaims = ArrayList<OfflineNoteV2.AuditOutputClaimV2>()
@@ -904,9 +952,9 @@ class OfflineNoteV2Wallet @JvmOverloads constructor(
                 noteCommitment = changeCommitment,
                 noteSecret = changeSecret,
                 origin = changeOrigin,
-                state = OfflineNoteV2WalletNoteState.CHANGE_PENDING,
-                createdAtMs = clock.getAsLong(),
-                updatedAtMs = clock.getAsLong(),
+                state = OfflineNoteV2WalletNoteState.SPENDABLE,
+                createdAtMs = createdAtMs,
+                updatedAtMs = createdAtMs,
             )
             outputClaims.add(
                 OfflineNoteV2.AuditOutputClaimV2(
@@ -921,6 +969,8 @@ class OfflineNoteV2Wallet @JvmOverloads constructor(
         val tokenId = OfflineNoteV2.derivePaymentTokenId(
             OfflineNoteV2.PaymentTokenIdPreimageV2(
                 chainId = chainId,
+                paymentRequestId = receiveRequest.paymentRequestId,
+                createdAtMs = createdAtMs,
                 tokenNonce = tokenNonce,
                 senderKeyCertificatePayloadHash = senderCertificateHash,
                 inputNullifiers = inputNullifiers,
@@ -938,41 +988,88 @@ class OfflineNoteV2Wallet @JvmOverloads constructor(
         )
         val audit = draft.replacingRecursiveProof(proofProvider.proveAudit(draft))
         audit.validateProofBinding()
-        val now = clock.getAsLong()
-        selected.forEach { store.upsert(it.withState(OfflineNoteV2WalletNoteState.SPEND_PENDING, now)) }
-        if (changeNote != null) {
-            store.upsert(changeNote)
+        requireTrustedAuditCertificates(audit)
+        require(proofVerifier.verifyAudit(audit)) { "Offline Note V2 recursive audit proof verification failed" }
+        store.mutateNotes { notes ->
+            selected.forEach {
+                require(notes[it.noteCommitmentHex()]?.state == OfflineNoteV2WalletNoteState.SPENDABLE) {
+                    "selected Offline Note V2 input changed state"
+                }
+            }
+            if (changeNote != null) {
+                require(!notes.containsKey(changeNote.noteCommitmentHex())) {
+                    "Offline Note V2 change note already exists"
+                }
+            }
+            selected.forEach {
+                notes[it.noteCommitmentHex()] = it.withState(OfflineNoteV2WalletNoteState.SPENT, createdAtMs)
+            }
+            if (changeNote != null) {
+                notes[changeNote.noteCommitmentHex()] = changeNote
+            }
         }
         return OfflineNoteV2PaymentToken(
+            chainId = chainId,
             paymentRequestId = receiveRequest.paymentRequestId,
+            tokenNonce = tokenNonce,
             tokenId = tokenId,
             audit = audit,
-            createdAtMs = now,
+            createdAtMs = createdAtMs,
         )
     }
 
-    fun accept(paymentToken: OfflineNoteV2PaymentToken): CompletableFuture<OfflineNoteV2WalletNote> {
-        val submitter = transactionSubmitter ?: return failedFuture(
-            IllegalStateException("Offline Note V2 transaction submitter is required for accept")
-        )
-        paymentToken.audit.validateProofBinding()
-        val output = paymentToken.audit.outputClaims.firstOrNull { claim ->
-            store.findNote(claim.noteCommitment())?.state == OfflineNoteV2WalletNoteState.RECEIVE_PENDING
-        } ?: return failedFuture(IllegalStateException("payment token has no pending output for this wallet"))
-        val pending = store.findNote(output.noteCommitment())
-            ?: return failedFuture(IllegalStateException("pending receive note is missing"))
-        require(pending.assetId == output.assetId) { "payment token output asset does not match receive request" }
-        require(pending.canonicalAmount == output.canonicalAmount) {
-            "payment token output amount does not match receive request"
+    private fun rejectReusedReceiveRequest(paymentRequestId: String) {
+        val reused = store.listNotes().any { note ->
+            note.state != OfflineNoteV2WalletNoteState.RECEIVE_PENDING &&
+                (note.origin as? OfflineNoteV2.CommitmentOriginV2.P2pOutput)?.paymentRequestId == paymentRequestId
         }
-        require(output.keyCertificate.payloadHash().contentEquals(pending.keyCertificate.payloadHash())) {
-            "payment token output key certificate does not match receive request"
+        require(!reused) { "Offline Note V2 receive request has already been used locally" }
+    }
+
+    fun accept(paymentToken: OfflineNoteV2PaymentToken): OfflineNoteV2WalletNote {
+        validatePaymentToken(paymentToken)
+        require(proofVerifier.verifyAudit(paymentToken.audit)) {
+            "Offline Note V2 recursive audit proof verification failed"
+        }
+        return store.mutateNotes { notes ->
+            paymentToken.audit.outputClaims.forEachIndexed { index, output ->
+                val pending = notes[hexLower(output.noteCommitment())]
+                if (pending == null || pending.state != OfflineNoteV2WalletNoteState.RECEIVE_PENDING) {
+                    return@forEachIndexed
+                }
+                require(pending.assetId == output.assetId) {
+                    "payment token output asset does not match receive request"
+                }
+                require(pending.canonicalAmount == output.canonicalAmount) {
+                    "payment token output amount does not match receive request"
+                }
+                require(output.keyCertificate.payloadHash().contentEquals(pending.keyCertificate.payloadHash())) {
+                    "payment token output key certificate does not match receive request"
+                }
+                val origin = pending.origin as? OfflineNoteV2.CommitmentOriginV2.P2pOutput
+                    ?: throw IllegalArgumentException("payment token output origin must be P2P")
+                require(origin.paymentRequestId == paymentToken.paymentRequestId && origin.outputIndex == index) {
+                    "payment token output origin does not match receive request"
+                }
+                val accepted = pending.withState(OfflineNoteV2WalletNoteState.SPENDABLE, clock.getAsLong())
+                notes[pending.noteCommitmentHex()] = accepted
+                return@mutateNotes accepted
+            }
+            throw IllegalStateException("payment token has no pending output for this wallet")
+        }
+    }
+
+    fun publishAudit(paymentToken: OfflineNoteV2PaymentToken): CompletableFuture<ClientResponse> {
+        val submitter = transactionSubmitter ?: return failedFuture(
+            IllegalStateException("Offline Note V2 transaction submitter is required for audit publication")
+        )
+        validatePaymentToken(paymentToken)
+        require(proofVerifier.verifyAudit(paymentToken.audit)) {
+            "Offline Note V2 recursive audit proof verification failed"
         }
         return submitter.submitAudit(paymentToken.audit).thenApply { response ->
             ensureSuccess(response)
-            val accepted = pending.withState(OfflineNoteV2WalletNoteState.SPENDABLE, clock.getAsLong())
-            store.upsert(accepted)
-            accepted
+            response
         }
     }
 
@@ -988,6 +1085,7 @@ class OfflineNoteV2Wallet @JvmOverloads constructor(
         require(current.state == OfflineNoteV2WalletNoteState.SPENDABLE) {
             "only spendable Offline Note V2 notes can be redeemed"
         }
+        requireTrustedCertificate(current.keyCertificate, current.accountId)
         val inputNullifier = deriveInputNullifier(current)
         val draft = OfflineNoteV2.RedeemV2(
             sourceNoteCommitment = current.noteCommitment(),
@@ -1000,8 +1098,19 @@ class OfflineNoteV2Wallet @JvmOverloads constructor(
         )
         val redemption = draft.replacingRecursiveProof(proofProvider.proveRedeem(draft))
         redemption.validateProofBinding()
-        val pending = current.withState(OfflineNoteV2WalletNoteState.REDEEM_PENDING, clock.getAsLong())
-        store.upsert(pending)
+        requireTrustedCertificate(redemption.senderKeyCertificate, current.accountId)
+        require(proofVerifier.verifyRedeem(redemption)) {
+            "Offline Note V2 recursive redeem proof verification failed"
+        }
+        val pending = store.mutateNotes { notes ->
+            val latest = notes[current.noteCommitmentHex()] ?: current
+            require(latest.state == OfflineNoteV2WalletNoteState.SPENDABLE) {
+                "only spendable Offline Note V2 notes can be redeemed"
+            }
+            val updated = latest.withState(OfflineNoteV2WalletNoteState.REDEEM_PENDING, clock.getAsLong())
+            notes[latest.noteCommitmentHex()] = updated
+            updated
+        }
         return submitter.submitRedeem(redemption).thenApply { response ->
             ensureSuccess(response)
             pending
@@ -1077,6 +1186,53 @@ class OfflineNoteV2Wallet @JvmOverloads constructor(
             )
         )
 
+    private fun validatePaymentToken(paymentToken: OfflineNoteV2PaymentToken) {
+        require(paymentToken.chainId == chainId) { "payment token chainId does not match wallet chainId" }
+        paymentToken.audit.validateProofBinding()
+        val expectedTokenId = OfflineNoteV2.derivePaymentTokenId(
+            OfflineNoteV2.PaymentTokenIdPreimageV2(
+                chainId = paymentToken.chainId,
+                paymentRequestId = paymentToken.paymentRequestId,
+                createdAtMs = paymentToken.createdAtMs,
+                tokenNonce = paymentToken.tokenNonce(),
+                senderKeyCertificatePayloadHash = paymentToken.audit.senderKeyCertificate.payloadHash(),
+                inputNullifiers = paymentToken.audit.inputNullifiers(),
+                outputCommitments = paymentToken.audit.outputCommitments(),
+            )
+        )
+        require(paymentToken.audit.tokenId().contentEquals(paymentToken.tokenId()) &&
+            paymentToken.tokenId().contentEquals(expectedTokenId)) {
+            "Offline Note V2 payment token id does not match bound token metadata"
+        }
+        requireTrustedAuditCertificates(paymentToken.audit)
+    }
+
+    private fun requireTrustedAuditCertificates(audit: OfflineNoteV2.AuditBundleV2) {
+        requireTrustedCertificate(audit.senderKeyCertificate, null)
+        val senderHash = audit.senderKeyCertificate.payloadHash()
+        audit.inputClaims.forEach { input ->
+            require(input.keyCertificatePayloadHash().contentEquals(senderHash)) {
+                "Offline Note V2 input claim certificate does not match sender certificate"
+            }
+            requireTrustedCertificate(audit.senderKeyCertificate, assetAccount(input.assetId))
+        }
+        audit.outputClaims.forEach { output ->
+            requireTrustedCertificate(output.keyCertificate, assetAccount(output.assetId))
+        }
+    }
+
+    private fun requireTrustedCertificate(
+        certificate: OfflineNoteV2.KeyCertificateV2,
+        expectedAccountId: String?,
+    ) {
+        require(expectedAccountId == null || certificate.accountId == expectedAccountId) {
+            "Offline Note V2 key certificate account does not match wallet operation"
+        }
+        require(certificateVerifier.verifyCertificate(certificate)) {
+            "Offline Note V2 key certificate is not trusted for this wallet operation"
+        }
+    }
+
     private fun random32(): ByteArray {
         val bytes = randomSource.nextBytes(32)
         require(bytes.size == 32) { "Offline Note V2 random source must return exactly 32 bytes" }
@@ -1097,11 +1253,8 @@ private fun ensureSuccess(response: ClientResponse) {
 }
 
 private fun isPendingState(state: OfflineNoteV2WalletNoteState): Boolean = when (state) {
+    OfflineNoteV2WalletNoteState.REDEEM_PENDING -> true
     OfflineNoteV2WalletNoteState.RECEIVE_PENDING,
-    OfflineNoteV2WalletNoteState.CHANGE_PENDING,
-    OfflineNoteV2WalletNoteState.SPEND_PENDING,
-    OfflineNoteV2WalletNoteState.REDEEM_PENDING,
-    -> true
     OfflineNoteV2WalletNoteState.SPENDABLE,
     OfflineNoteV2WalletNoteState.SPENT,
     OfflineNoteV2WalletNoteState.REDEEMED,
@@ -1116,6 +1269,12 @@ private fun assetDefinition(assetIdOrDefinition: String): String {
     val definition = assetIdOrDefinition.substringBefore('#')
     require(definition.trim().isNotEmpty()) { "asset definition id must not be blank" }
     return definition
+}
+
+private fun assetAccount(assetId: String): String? {
+    val parts = assetId.split("#", limit = 2)
+    if (parts.size != 2) return null
+    return parts[1].substringBefore("#dataspace:")
 }
 
 private fun decimal(value: String): BigDecimal = BigDecimal(value)

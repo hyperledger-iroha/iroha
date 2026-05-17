@@ -86,7 +86,7 @@ public final class HttpClientTransportHarnessTests {
       final var submissions = server.submittedTransactions();
       assert submissions.size() == 1 : "Server must record submissions";
       final var submission = submissions.get(0);
-      assert "/transaction".equals(submission.path())
+      assert "/v1/pipeline/transactions".equals(submission.path())
           : "Submission should target Torii pipeline route";
       assert Arrays.equals(submission.body(), SignedTransactionEncoder.encodeVersioned(transaction))
           : "Serialized payload should match Norito encoding";
@@ -170,10 +170,10 @@ public final class HttpClientTransportHarnessTests {
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(executor, transportConfig);
     final NoritoRpcClient rpcClient = transport.newNoritoRpcClient();
-    rpcClient.call("/transaction", new byte[0]);
+    rpcClient.call("/v1/pipeline/transactions", new byte[0]);
     final TransportRequest recorded =
         Objects.requireNonNull(executor.lastRequest(), "RPC request must be captured");
-    assert "https://rpc.example/transaction"
+    assert "https://rpc.example/v1/pipeline/transactions"
         .equals(recorded.uri().toString()) : "RPC path should use base URI";
     assert recorded.headers().getOrDefault("Authorization", java.util.List.of())
         .contains("Bearer executor") : "Default headers must apply to RPC calls";
@@ -236,7 +236,7 @@ public final class HttpClientTransportHarnessTests {
                   .putDefaultHeader("X-Test", "harness")
                   .build());
       final NoritoRpcClient rpcClient = transport.newNoritoRpcClient();
-      rpcClient.call("/transaction", new byte[0]);
+      rpcClient.call("/v1/pipeline/transactions", new byte[0]);
       assert observer.requestCount.get() == 1 : "RPC client should trigger observer request";
       assert observer.responseCount.get() == 1 : "RPC client should trigger observer response";
       final var submissions = server.submittedTransactions();

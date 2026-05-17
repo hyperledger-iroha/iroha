@@ -4,6 +4,7 @@
 //! of relying on `serde_json`) to keep the toolchain consistent with on-wire
 //! serialization.
 
+use iroha_torii_shared::uri;
 use norito::json::{Map, Value};
 
 pub(crate) const TOOL_EFFECT_EXTENSION: &str = "x-iroha-tool-effect";
@@ -24,11 +25,11 @@ fn info_section(license: Value) -> Value {
     info.insert(
         "description".into(),
         Value::String(
-            "HTTP surface for Torii. App endpoints accept optional canonical signing headers X-Iroha-Account/X-Iroha-Signature/X-Iroha-Timestamp-Ms/X-Iroha-Nonce, except Offline V2 issuer POSTs, which use JSON body auth."
+            "HTTP surface for Torii. Public blockchain reads are available without canonical request signing when they address public state; private dataspace and account-scoped views require canonical signing and permission checks."
                 .to_owned(),
         ),
     );
-    info.insert("version".into(), Value::String("0.0.0-dev".to_owned()));
+    info.insert("version".into(), Value::String("1.0".to_owned()));
     info.insert("license".into(), license);
     Value::Object(info)
 }
@@ -1083,7 +1084,7 @@ fn system_paths() -> Map {
         )),
     );
     paths.insert(
-        "/api_version".to_owned(),
+        uri::API_VERSION.to_owned(),
         Value::Object(text_get_operation(
             "System",
             "Fetch the active API version.",
@@ -1102,7 +1103,7 @@ fn system_paths() -> Map {
         )),
     );
     paths.insert(
-        "/peers".to_owned(),
+        uri::PEERS.to_owned(),
         Value::Object(json_get_operation(
             "System",
             "List online peers.",
@@ -1112,7 +1113,7 @@ fn system_paths() -> Map {
         )),
     );
     paths.insert(
-        "/configuration".to_owned(),
+        uri::CONFIGURATION.to_owned(),
         Value::Object({
             let get_op = json_get_operation(
                 "System",
@@ -1140,7 +1141,7 @@ fn system_paths() -> Map {
         }),
     );
     paths.insert(
-        "/schema".to_owned(),
+        uri::SCHEMA.to_owned(),
         Value::Object(json_get_operation(
             "System",
             "Fetch the data model schema snapshot.",
@@ -1218,6 +1219,20 @@ fn system_paths() -> Map {
         )),
     );
     paths.insert(
+        iroha_torii_shared::uri::PIPELINE_FASTPQ_PROOFS.to_owned(),
+        Value::Object(json_get_operation(
+            "System",
+            "Fetch FASTPQ proof sidecars.",
+            "Return FASTPQ proof attachments from pipeline recovery metadata for the given height.",
+            "#/components/schemas/JsonValue",
+            vec![integer_path_param(
+                "height",
+                "Block height to inspect.",
+                Some("uint64"),
+            )],
+        )),
+    );
+    paths.insert(
         "/v1/debug/axt/cache".to_owned(),
         Value::Object(json_get_operation(
             "System",
@@ -1272,7 +1287,7 @@ fn operator_auth_paths() -> Map {
 fn transaction_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/transaction".to_owned(),
+        uri::TRANSACTION.to_owned(),
         Value::Object(binary_post_operation(
             "Transactions",
             "Submit a versioned signed transaction.",
@@ -1281,11 +1296,20 @@ fn transaction_paths() -> Map {
         )),
     );
     paths.insert(
-        "/transaction/entrypoint".to_owned(),
+        uri::TRANSACTION_ENTRYPOINT.to_owned(),
         Value::Object(binary_post_operation(
             "Transactions",
             "Submit a versioned transaction entrypoint.",
             "Submit a versioned TransactionEntrypoint encoded as Norito bytes. This route accepts sealed commitment/reveal entrypoints and other non-legacy transaction envelopes.",
+            "#/components/schemas/JsonValue",
+        )),
+    );
+    paths.insert(
+        uri::TRANSACTIONS_BATCH.to_owned(),
+        Value::Object(binary_post_operation(
+            "Transactions",
+            "Submit a batch of versioned signed transactions.",
+            "Submit a Norito-encoded batch of SignedTransaction payloads.",
             "#/components/schemas/JsonValue",
         )),
     );
@@ -1454,7 +1478,7 @@ fn transaction_paths() -> Map {
 fn query_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/query".to_owned(),
+        uri::QUERY.to_owned(),
         Value::Object(binary_post_operation(
             "Queries",
             "Submit a signed query.",
@@ -1484,7 +1508,7 @@ fn stream_paths() -> Map {
         )),
     );
     paths.insert(
-        "/events".to_owned(),
+        uri::SUBSCRIPTION.to_owned(),
         Value::Object(text_get_operation(
             "Streams",
             "Connect to the event WebSocket.",
@@ -1493,7 +1517,7 @@ fn stream_paths() -> Map {
         )),
     );
     paths.insert(
-        "/block/stream".to_owned(),
+        uri::BLOCKS_STREAM.to_owned(),
         Value::Object(text_get_operation(
             "Streams",
             "Connect to the block stream WebSocket.",
@@ -4009,6 +4033,17 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/sorafs/pin/register".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Register paid pin manifest.",
+            "Submit a SoraFS manifest registration transaction. The request must include `content_length`; execution collects the public pin fee and records the committed fee receipt on-chain.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/sorafs/pin/{digest_hex}".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
@@ -4076,7 +4111,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Pin storage content.",
-            "Submit a storage pin request.",
+            "Submit a storage pin request. The manifest must already have an approved on-chain paid pin record matching the digest, chunker profile, policy, content length, chunk plan digest, and fee receipt payer.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -6280,7 +6315,7 @@ fn is_operator_operation(method: &str, path: &str) -> bool {
     path.starts_with("/v1/operator/")
         || matches!(
             path,
-            "/configuration"
+            uri::CONFIGURATION
                 | "/v1/internal/torii/proxy"
                 | "/v1/nexus/lane-lifecycle"
                 | "/v1/sumeragi/evidence"
@@ -6296,7 +6331,7 @@ fn is_read_operation(method: &str, path: &str) -> bool {
         || (method == "post"
             && matches!(
                 path,
-                "/query"
+                uri::QUERY
                     | "/v1/accounts/query"
                     | "/v1/aliases/by_account"
                     | "/v1/aliases/resolve"
@@ -6326,7 +6361,7 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/nfts/query"
                     | "/v1/proofs/query"
                     | "/v1/rwas/query"
-                    | "/v1/transactions/status"
+                    | "/v1/pipeline/transactions/status"
                     | "/v1/zk/roots"
                     | "/v1/zk/verify"
                     | "/v1/zk/verify-batch"
@@ -10556,11 +10591,109 @@ fn openapi_schemas() -> Map {
     schemas
 }
 
+fn queue_error_snapshot_schema() -> Value {
+    norito::json!({
+        "type": "object",
+        "required": ["state", "queued", "capacity", "saturated"],
+        "additionalProperties": false,
+        "properties": {
+            "state": {
+                "type": "string",
+                "description": "Queue state label, for example `healthy` or `saturated`."
+            },
+            "queued": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Current queued transaction count."
+            },
+            "capacity": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Configured queue capacity."
+            },
+            "saturated": {
+                "type": "boolean",
+                "description": "Whether the queue was saturated when the error was emitted."
+            }
+        }
+    })
+}
+
+fn axt_error_details_schema() -> Value {
+    norito::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "code": {
+                "type": "string",
+                "description": "Stable AXT rejection code."
+            },
+            "reason": {
+                "type": "string",
+                "description": "Human-readable AXT rejection label."
+            },
+            "snapshot_version": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "AXT policy snapshot version used to reject the request."
+            },
+            "dataspace": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Dataspace id involved in the rejection."
+            },
+            "lane": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Lane id involved in the rejection."
+            },
+            "next_min_handle_era": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Minimum handle era a client should use for retry."
+            },
+            "next_min_sub_nonce": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Minimum sub-nonce a client should use for retry."
+            }
+        }
+    })
+}
+
+fn error_details_schema() -> Value {
+    norito::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "reject_code": {
+                "type": "string",
+                "description": "ISO-20022-style or Torii-local rejection code when available."
+            },
+            "queue": {
+                "$ref": "#/components/schemas/QueueErrorSnapshot"
+            },
+            "retry_after_seconds": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Suggested retry delay in seconds for transient errors."
+            },
+            "endpoint": {
+                "type": "string",
+                "description": "Endpoint associated with throttling or version failures."
+            },
+            "axt": {
+                "$ref": "#/components/schemas/AxtErrorDetails"
+            }
+        }
+    })
+}
+
 fn shared_error_schema() -> Value {
     norito::json!({
         "type": "object",
         "required": ["code", "message"],
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
             "code": {
                 "type": "string",
@@ -10569,6 +10702,13 @@ fn shared_error_schema() -> Value {
             "message": {
                 "type": "string",
                 "description": "Human readable error message."
+            },
+            "details": {
+                "anyOf": [
+                    { "$ref": "#/components/schemas/ErrorDetails" },
+                    { "type": "null" }
+                ],
+                "description": "Optional machine-readable error context such as queue pressure, retry hints, rejection codes, endpoint names, or AXT metadata."
             }
         }
     })
@@ -10577,6 +10717,12 @@ fn shared_error_schema() -> Value {
 fn components_section() -> Value {
     let mut components = Map::new();
     let mut schemas = openapi_schemas();
+    schemas.insert("AxtErrorDetails".to_owned(), axt_error_details_schema());
+    schemas.insert(
+        "QueueErrorSnapshot".to_owned(),
+        queue_error_snapshot_schema(),
+    );
+    schemas.insert("ErrorDetails".to_owned(), error_details_schema());
     schemas.insert("ErrorResponse".to_owned(), shared_error_schema());
     components.insert("schemas".into(), Value::Object(schemas));
     Value::Object(components)
@@ -10682,10 +10828,16 @@ mod tests {
         assert!(paths.contains_key("/v1/nexus/public_lanes/{lane_id}/stake"));
         assert!(paths.contains_key("/v1/repo/agreements"));
         assert!(paths.contains_key("/v1/repo/agreements/query"));
-        assert!(paths.contains_key("/transaction"));
-        assert!(paths.contains_key("/transaction/entrypoint"));
-        assert!(paths.contains_key("/query"));
-        assert!(paths.contains_key("/events"));
+        assert!(paths.contains_key(uri::TRANSACTION));
+        assert!(paths.contains_key(uri::TRANSACTION_ENTRYPOINT));
+        assert!(paths.contains_key(uri::TRANSACTIONS_BATCH));
+        assert!(paths.contains_key(uri::QUERY));
+        assert!(paths.contains_key(uri::SUBSCRIPTION));
+        assert!(!paths.contains_key("/transaction"));
+        assert!(!paths.contains_key("/transaction/entrypoint"));
+        assert!(!paths.contains_key("/transactions/batch"));
+        assert!(!paths.contains_key("/query"));
+        assert!(!paths.contains_key("/events"));
         assert!(paths.contains_key("/v1/da/ingest"));
         assert!(paths.contains_key("/v1/connect/session"));
         assert!(paths.contains_key("/v1/vpn/profile"));
@@ -10824,6 +10976,54 @@ mod tests {
     }
 
     #[test]
+    fn generated_spec_documents_structured_error_details() {
+        let doc = generate_spec();
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("components schemas");
+        let error_response = schemas
+            .get("ErrorResponse")
+            .and_then(Value::as_object)
+            .expect("ErrorResponse schema");
+        assert_eq!(
+            error_response.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+        let details = error_response
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("details"))
+            .and_then(Value::as_object)
+            .expect("ErrorResponse details property");
+        let detail_refs = details
+            .get("anyOf")
+            .and_then(Value::as_array)
+            .expect("details anyOf");
+        assert!(detail_refs.iter().any(|entry| {
+            entry
+                .as_object()
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str)
+                == Some("#/components/schemas/ErrorDetails")
+        }));
+        let error_details = schemas
+            .get("ErrorDetails")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("ErrorDetails properties");
+        assert!(error_details.contains_key("reject_code"));
+        assert!(error_details.contains_key("retry_after_seconds"));
+        assert!(error_details.contains_key("queue"));
+        assert!(error_details.contains_key("axt"));
+        assert!(schemas.contains_key("QueueErrorSnapshot"));
+        assert!(schemas.contains_key("AxtErrorDetails"));
+    }
+
+    #[test]
     fn generated_operations_declare_tool_effects() {
         let doc = generate_spec();
         let paths = doc
@@ -10850,7 +11050,7 @@ mod tests {
         }
 
         let query = paths
-            .get("/query")
+            .get(uri::QUERY)
             .and_then(Value::as_object)
             .and_then(|path| path.get("post"))
             .and_then(Value::as_object)
@@ -11553,17 +11753,17 @@ mod tests {
             PathCase {
                 label: "transactions",
                 builder: transaction_paths,
-                expected: "/transaction",
+                expected: uri::TRANSACTION,
             },
             PathCase {
                 label: "queries",
                 builder: query_paths,
-                expected: "/query",
+                expected: uri::QUERY,
             },
             PathCase {
                 label: "streams",
                 builder: stream_paths,
-                expected: "/events",
+                expected: uri::SUBSCRIPTION,
             },
             PathCase {
                 label: "connect",

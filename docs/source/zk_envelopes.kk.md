@@ -329,7 +329,7 @@ Verifying key registry entries (`VerifyingKeyRecord`) for the tally circuit use:
 | `circuit_id`                | `halo2/pasta/vote-bool-commit-merkle8-v1`                    |
 | `curve`                     | `pallas`                                                     |
 | `public_inputs_schema_hash` | `0xfae4…64d3` (see above)                                    |
-| `commitment`                | `sha256(backend || vk_bytes)`                                |
+| `commitment`                | `zk_hash_vk(backend, vk_bytes)`                                |
 | `vk_len` / `max_proof_bytes`| Derived from the bundled `.zk1` artefacts                    |
 | `key`                       | Inline `VerifyingKeyBox` wrapping the ZK1-encoded verifier   |
 

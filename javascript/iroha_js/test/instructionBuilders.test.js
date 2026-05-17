@@ -1895,7 +1895,7 @@ test("proof attachments support lane privacy merkle witnesses", () => {
     proof: {
       backend: "lane/privacy",
       proof: new Uint8Array([1, 2, 3]),
-      verifyingKeyInline: { backend: "lane/privacy", bytes: new Uint8Array([4, 5]) },
+      verifyingKeyRef: "lane/privacy:vk_lane_privacy",
       lanePrivacy: {
         commitmentId: 9,
         merkle: {

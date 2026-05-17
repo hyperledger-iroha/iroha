@@ -1,29 +1,38 @@
+#![allow(unexpected_cfgs)]
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use std::{
+    collections::HashSet,
     env,
     ffi::OsStr,
     fs, io,
-    net::{IpAddr, SocketAddr},
+    net::IpAddr,
+    path::PathBuf,
     process::{Command as ProcessCommand, ExitCode},
     sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
 };
 #[cfg(target_os = "linux")]
 use std::{ffi::CStr, os::fd::FromRawFd};
 
 use clap::Parser;
-use serde::{Deserialize, Serialize};
+use norito::codec::{Decode, Encode};
 use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, unix::AsyncFd},
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, UnixListener, UnixStream},
     signal::unix::{SignalKind, signal},
 };
 
-const DEFAULT_LISTEN_ADDR: &str = "127.0.0.1:19090";
+const DEFAULT_BACKEND_ENDPOINT: &str = "unix:/tmp/sora-vpn-backend.sock";
 const DEFAULT_INTERFACE_PREFIX: &str = "svpn";
 const DEFAULT_ROUTE_CMD: &str = "ip";
 const PACKET_LEN_PREFIX_BYTES: usize = 2;
 const VPN_BACKEND_BOOTSTRAP_MAGIC: &[u8; 8] = b"SVPNBE1\0";
 const VPN_BACKEND_STATUS_READY: u8 = 1;
+const VPN_BACKEND_BOOTSTRAP_MAX_SKEW_MS: u64 = 60_000;
 #[cfg(target_os = "linux")]
 const LINUX_IFF_TUN: nix::libc::c_short = 0x0001;
 #[cfg(target_os = "linux")]
@@ -34,8 +43,14 @@ const LINUX_TUNSETIFF: nix::libc::c_ulong = 0x4004_54ca;
 #[derive(Debug, Parser)]
 #[command(name = "sora-vpn-backend")]
 struct Cli {
-    #[arg(long, env = "SORANET_VPN_BACKEND_LISTEN_ADDR", default_value = DEFAULT_LISTEN_ADDR)]
-    listen: SocketAddr,
+    #[arg(long, env = "SORANET_VPN_BACKEND_ENDPOINT", default_value = DEFAULT_BACKEND_ENDPOINT)]
+    endpoint: String,
+    #[arg(long, env = "SORANET_VPN_BACKEND_BOOTSTRAP_SECRET_HEX")]
+    bootstrap_secret_hex: Option<String>,
+    #[arg(long, env = "SORANET_VPN_BACKEND_ALLOWED_UID")]
+    allowed_uid: Option<u32>,
+    #[arg(long, env = "SORANET_VPN_BACKEND_ALLOWED_GID")]
+    allowed_gid: Option<u32>,
     #[arg(long = "interface-prefix", env = "SORANET_VPN_BACKEND_INTERFACE", default_value = DEFAULT_INTERFACE_PREFIX)]
     interface_prefix: String,
     #[arg(long, env = "SORANET_VPN_BACKEND_MTU", default_value_t = 1280)]
@@ -62,7 +77,11 @@ struct Cli {
 
 #[derive(Debug, Clone)]
 struct BackendConfig {
-    listen: SocketAddr,
+    endpoint: BackendEndpoint,
+    bootstrap_secret: Option<[u8; 32]>,
+    allowed_uid: Option<u32>,
+    allowed_gid: Option<u32>,
+    seen_bootstrap_nonces: Arc<Mutex<HashSet<[u8; 16]>>>,
     interface_prefix: String,
     default_mtu: u16,
     ipv4_forward: bool,
@@ -73,8 +92,21 @@ struct BackendConfig {
     egress_v6_interface: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BackendEndpoint {
+    Unix(PathBuf),
+    Tcp(String),
+}
+
 impl BackendConfig {
     fn from_cli(cli: Cli) -> Result<Self, BackendError> {
+        let endpoint = parse_backend_endpoint(&cli.endpoint)?;
+        let bootstrap_secret = parse_optional_secret(cli.bootstrap_secret_hex.as_deref())?;
+        if matches!(endpoint, BackendEndpoint::Tcp(_)) && bootstrap_secret.is_none() {
+            return Err(BackendError::InvalidConfig(
+                "bootstrap_secret_hex is required for tcp:// backend endpoints".to_owned(),
+            ));
+        }
         let interface_prefix = trim_to_option(&cli.interface_prefix).ok_or_else(|| {
             BackendError::InvalidConfig("interface_prefix must not be empty".to_owned())
         })?;
@@ -118,7 +150,11 @@ impl BackendConfig {
         };
 
         Ok(Self {
-            listen: cli.listen,
+            endpoint,
+            bootstrap_secret,
+            allowed_uid: cli.allowed_uid.or_else(default_allowed_uid),
+            allowed_gid: cli.allowed_gid.or_else(default_allowed_gid),
+            seen_bootstrap_nonces: Arc::new(Mutex::new(HashSet::new())),
             interface_prefix,
             default_mtu,
             ipv4_forward: cli.ipv4_forward,
@@ -131,12 +167,139 @@ impl BackendConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+impl BackendEndpoint {
+    fn label(&self) -> String {
+        match self {
+            Self::Unix(path) => format!("unix:{}", path.display()),
+            Self::Tcp(addr) => format!("tcp://{addr}"),
+        }
+    }
+}
+
+fn parse_backend_endpoint(endpoint: &str) -> Result<BackendEndpoint, BackendError> {
+    let trimmed = endpoint.trim();
+    if let Some(path) = trimmed.strip_prefix("unix:") {
+        let path = path.trim();
+        if path.is_empty() || !path.starts_with('/') {
+            return Err(BackendError::InvalidConfig(
+                "backend endpoint unix form must be unix:/absolute/path".to_owned(),
+            ));
+        }
+        return Ok(BackendEndpoint::Unix(PathBuf::from(path)));
+    }
+    if let Some(addr) = trimmed.strip_prefix("tcp://") {
+        let addr = addr.trim();
+        let Some((host, port)) = addr.rsplit_once(':') else {
+            return Err(BackendError::InvalidConfig(
+                "backend endpoint tcp form must be tcp://host:port".to_owned(),
+            ));
+        };
+        if host.trim().is_empty() || port.parse::<u16>().is_err() {
+            return Err(BackendError::InvalidConfig(
+                "backend endpoint tcp form must be tcp://host:port".to_owned(),
+            ));
+        }
+        return Ok(BackendEndpoint::Tcp(addr.to_owned()));
+    }
+    Err(BackendError::InvalidConfig(
+        "backend endpoint must start with unix:/path or tcp://host:port".to_owned(),
+    ))
+}
+
+fn parse_optional_secret(secret: Option<&str>) -> Result<Option<[u8; 32]>, BackendError> {
+    let Some(secret) = secret.map(str::trim).filter(|secret| !secret.is_empty()) else {
+        return Ok(None);
+    };
+    let secret = secret.trim_start_matches("0x").trim_start_matches("0X");
+    let decoded = hex::decode(secret).map_err(|error| {
+        BackendError::InvalidConfig(format!("invalid bootstrap secret hex: {error}"))
+    })?;
+    if decoded.len() != 32 {
+        return Err(BackendError::InvalidConfig(
+            "bootstrap secret must decode to 32 bytes".to_owned(),
+        ));
+    }
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&decoded);
+    Ok(Some(bytes))
+}
+
+#[cfg(target_os = "linux")]
+fn default_allowed_uid() -> Option<u32> {
+    // SAFETY: geteuid has no preconditions and does not dereference pointers.
+    Some(unsafe { nix::libc::geteuid() })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn default_allowed_uid() -> Option<u32> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn default_allowed_gid() -> Option<u32> {
+    // SAFETY: getegid has no preconditions and does not dereference pointers.
+    Some(unsafe { nix::libc::getegid() })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn default_allowed_gid() -> Option<u32> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn verify_unix_peer_credentials(
+    stream: &UnixStream,
+    allowed_uid: Option<u32>,
+    allowed_gid: Option<u32>,
+) -> Result<(), BackendError> {
+    let credentials = stream.peer_cred()?;
+    if let Some(allowed_uid) = allowed_uid {
+        if credentials.uid() != allowed_uid {
+            return Err(BackendError::InvalidConfig(format!(
+                "unix backend peer uid {} is not allowed",
+                credentials.uid()
+            )));
+        }
+    }
+    if let Some(allowed_gid) = allowed_gid {
+        if credentials.gid() != allowed_gid {
+            return Err(BackendError::InvalidConfig(format!(
+                "unix backend peer gid {} is not allowed",
+                credentials.gid()
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn verify_unix_peer_credentials(
+    _stream: &UnixStream,
+    allowed_uid: Option<u32>,
+    allowed_gid: Option<u32>,
+) -> Result<(), BackendError> {
+    if allowed_uid.is_some() || allowed_gid.is_some() {
+        return Err(BackendError::InvalidConfig(
+            "unix peer credential checks are not supported on this platform".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 struct VpnBackendBootstrap {
     session_id_hex: String,
     server_tunnel_addresses: Vec<String>,
     session_routes: Vec<String>,
     mtu_bytes: u16,
+}
+
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
+struct VpnBackendBootstrapEnvelope {
+    bootstrap: VpnBackendBootstrap,
+    timestamp_ms: u64,
+    nonce: [u8; 16],
+    mac: [u8; 32],
 }
 
 #[derive(Debug, Clone)]
@@ -301,41 +464,77 @@ async fn main() -> ExitCode {
 
 async fn run(cli: Cli) -> Result<(), BackendError> {
     let config = BackendConfig::from_cli(cli)?;
-    let listener = TcpListener::bind(config.listen).await?;
     let shared_network = Arc::new(Mutex::new(SharedNetworkState::default()));
     eprintln!(
         "sora-vpn-backend listening on {} with interface prefix {}",
-        config.listen, config.interface_prefix
+        config.endpoint.label(),
+        config.interface_prefix
     );
 
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
 
-    loop {
-        tokio::select! {
-            _ = sigterm.recv() => return Ok(()),
-            _ = sigint.recv() => return Ok(()),
-            accept = listener.accept() => {
-                let (stream, remote) = accept?;
-                let session_config = config.clone();
-                let session_shared = Arc::clone(&shared_network);
-                tokio::spawn(async move {
-                    if let Err(error) = serve_connection(stream, remote, &session_config, &session_shared).await {
-                        eprintln!("vpn backend session from {remote} failed: {error}");
+    match &config.endpoint {
+        BackendEndpoint::Tcp(addr) => {
+            let listener = TcpListener::bind(addr.as_str()).await?;
+            loop {
+                tokio::select! {
+                    _ = sigterm.recv() => return Ok(()),
+                    _ = sigint.recv() => return Ok(()),
+                    accept = listener.accept() => {
+                        let (stream, remote) = accept?;
+                        let session_config = config.clone();
+                        let session_shared = Arc::clone(&shared_network);
+                        tokio::spawn(async move {
+                            if let Err(error) = serve_connection(stream, remote.to_string(), true, &session_config, &session_shared).await {
+                                eprintln!("vpn backend session from {remote} failed: {error}");
+                            }
+                        });
                     }
-                });
+                }
+            }
+        }
+        BackendEndpoint::Unix(path) => {
+            if path.exists() {
+                fs::remove_file(path)?;
+            }
+            let listener = UnixListener::bind(path)?;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o660))?;
+            loop {
+                tokio::select! {
+                    _ = sigterm.recv() => return Ok(()),
+                    _ = sigint.recv() => return Ok(()),
+                    accept = listener.accept() => {
+                        let (stream, _addr) = accept?;
+                        if let Err(error) = verify_unix_peer_credentials(&stream, config.allowed_uid, config.allowed_gid) {
+                            eprintln!("vpn backend rejected unix peer: {error}");
+                            continue;
+                        }
+                        let session_config = config.clone();
+                        let session_shared = Arc::clone(&shared_network);
+                        tokio::spawn(async move {
+                            if let Err(error) = serve_connection(stream, "unix-peer".to_owned(), false, &session_config, &session_shared).await {
+                                eprintln!("vpn backend session from unix-peer failed: {error}");
+                            }
+                        });
+                    }
+                }
             }
         }
     }
 }
 
-async fn serve_connection(
-    mut stream: TcpStream,
-    remote: SocketAddr,
+async fn serve_connection<S>(
+    mut stream: S,
+    remote: String,
+    require_bootstrap_mac: bool,
     config: &BackendConfig,
     shared_network: &Arc<Mutex<SharedNetworkState>>,
-) -> Result<(), BackendError> {
-    let bootstrap = read_vpn_backend_bootstrap(&mut stream).await?;
+) -> Result<(), BackendError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let bootstrap = read_vpn_backend_bootstrap(&mut stream, config, require_bootstrap_mac).await?;
     let session_config = match SessionRuntimeConfig::from_bootstrap(config, bootstrap) {
         Ok(session_config) => session_config,
         Err(error) => {
@@ -513,14 +712,17 @@ fn cleanup_network(
     }
 }
 
-async fn backend_packet_loop(
+async fn backend_packet_loop<S>(
     device: Arc<LinuxTunDevice>,
-    stream: TcpStream,
+    stream: S,
     packet_read_mtu: usize,
-) -> Result<(), BackendError> {
+) -> Result<(), BackendError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
-    let (mut reader, mut writer) = stream.into_split();
+    let (mut reader, mut writer) = tokio::io::split(stream);
 
     let upstream = tun_to_socket_loop(Arc::clone(&device), &mut writer, packet_read_mtu);
     let downstream = socket_to_tun_loop(device, &mut reader);
@@ -535,8 +737,32 @@ async fn backend_packet_loop(
     }
 }
 
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after unix epoch")
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
+}
+
+fn vpn_backend_bootstrap_mac(
+    secret: &[u8; 32],
+    bootstrap: &VpnBackendBootstrap,
+    timestamp_ms: u64,
+    nonce: &[u8; 16],
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_keyed(secret);
+    hasher.update(b"soranet-vpn-backend-bootstrap-v1");
+    hasher.update(&bootstrap.encode());
+    hasher.update(&timestamp_ms.to_be_bytes());
+    hasher.update(nonce);
+    *hasher.finalize().as_bytes()
+}
+
 async fn read_vpn_backend_bootstrap<R: AsyncRead + Unpin>(
     reader: &mut R,
+    config: &BackendConfig,
+    require_mac: bool,
 ) -> Result<VpnBackendBootstrap, BackendError> {
     let mut magic = [0u8; 8];
     reader.read_exact(&mut magic).await?;
@@ -550,8 +776,48 @@ async fn read_vpn_backend_bootstrap<R: AsyncRead + Unpin>(
     let len = usize::from(u16::from_be_bytes(len));
     let mut payload = vec![0u8; len];
     reader.read_exact(&mut payload).await?;
-    serde_json::from_slice(&payload)
-        .map_err(|error| BackendError::InvalidConfig(format!("invalid backend bootstrap: {error}")))
+    let mut payload = payload.as_slice();
+    let envelope = VpnBackendBootstrapEnvelope::decode(&mut payload).map_err(|error| {
+        BackendError::InvalidConfig(format!("invalid backend bootstrap: {error}"))
+    })?;
+    if !payload.is_empty() {
+        return Err(BackendError::InvalidConfig(
+            "invalid backend bootstrap: trailing bytes".to_owned(),
+        ));
+    }
+    if require_mac {
+        let secret = config.bootstrap_secret.as_ref().ok_or_else(|| {
+            BackendError::InvalidConfig("tcp backend bootstrap secret is not configured".to_owned())
+        })?;
+        let now_ms = unix_time_ms();
+        let age = now_ms.abs_diff(envelope.timestamp_ms);
+        if age > VPN_BACKEND_BOOTSTRAP_MAX_SKEW_MS {
+            return Err(BackendError::InvalidConfig(
+                "tcp backend bootstrap timestamp is stale".to_owned(),
+            ));
+        }
+        let expected = vpn_backend_bootstrap_mac(
+            secret,
+            &envelope.bootstrap,
+            envelope.timestamp_ms,
+            &envelope.nonce,
+        );
+        if expected != envelope.mac {
+            return Err(BackendError::InvalidConfig(
+                "tcp backend bootstrap MAC is invalid".to_owned(),
+            ));
+        }
+        let mut seen = config
+            .seen_bootstrap_nonces
+            .lock()
+            .map_err(|_| BackendError::State("bootstrap nonce cache poisoned".to_owned()))?;
+        if !seen.insert(envelope.nonce) {
+            return Err(BackendError::InvalidConfig(
+                "tcp backend bootstrap nonce was replayed".to_owned(),
+            ));
+        }
+    }
+    Ok(envelope.bootstrap)
 }
 
 async fn write_vpn_backend_status<W: AsyncWrite + Unpin>(
@@ -1115,15 +1381,37 @@ mod tests {
         assert_ne!(name, "svpn");
     }
 
+    fn test_cli() -> Cli {
+        Cli {
+            endpoint: DEFAULT_BACKEND_ENDPOINT.to_owned(),
+            bootstrap_secret_hex: None,
+            allowed_uid: None,
+            allowed_gid: None,
+            interface_prefix: DEFAULT_INTERFACE_PREFIX.to_owned(),
+            mtu: 1280,
+            egress_interface: Some("eth0".to_owned()),
+            ipv4_forward: true,
+            ipv6_forward: false,
+            enable_ipv4_nat: true,
+            enable_ipv6_nat: false,
+        }
+    }
+
     #[tokio::test]
-    async fn bootstrap_round_trips_from_framed_json() {
+    async fn bootstrap_round_trips_from_framed_norito() {
         let bootstrap = VpnBackendBootstrap {
             session_id_hex: "aabbccdd".to_owned(),
             server_tunnel_addresses: vec!["10.10.0.1/30".to_owned()],
             session_routes: vec!["10.10.0.0/30".to_owned()],
             mtu_bytes: 1280,
         };
-        let payload = serde_json::to_vec(&bootstrap).expect("json");
+        let envelope = VpnBackendBootstrapEnvelope {
+            bootstrap: bootstrap.clone(),
+            timestamp_ms: unix_time_ms(),
+            nonce: [0xA1; 16],
+            mac: [0u8; 32],
+        };
+        let payload = envelope.encode();
         let (mut writer, mut reader) = tokio::io::duplex(4096);
         writer
             .write_all(VPN_BACKEND_BOOTSTRAP_MAGIC)
@@ -1134,11 +1422,105 @@ mod tests {
             .await
             .expect("len");
         writer.write_all(&payload).await.expect("payload");
+        let config = BackendConfig::from_cli(test_cli()).expect("config");
 
-        let decoded = read_vpn_backend_bootstrap(&mut reader)
+        let decoded = read_vpn_backend_bootstrap(&mut reader, &config, false)
             .await
             .expect("decoded");
         assert_eq!(decoded, bootstrap);
+    }
+
+    #[tokio::test]
+    async fn tcp_bootstrap_rejects_bad_mac_and_replay() {
+        let secret = [0xA5; 32];
+        let bootstrap = VpnBackendBootstrap {
+            session_id_hex: "aabbccdd".to_owned(),
+            server_tunnel_addresses: vec!["10.10.0.1/30".to_owned()],
+            session_routes: vec!["10.10.0.0/30".to_owned()],
+            mtu_bytes: 1280,
+        };
+        let timestamp_ms = unix_time_ms();
+        let nonce = [0x55; 16];
+        let mut envelope = VpnBackendBootstrapEnvelope {
+            bootstrap: bootstrap.clone(),
+            timestamp_ms,
+            nonce,
+            mac: [0u8; 32],
+        };
+        envelope.mac = vpn_backend_bootstrap_mac(&secret, &bootstrap, timestamp_ms, &nonce);
+        let config = BackendConfig::from_cli(Cli {
+            endpoint: "tcp://127.0.0.1:19090".to_owned(),
+            bootstrap_secret_hex: Some(hex::encode(secret)),
+            ..test_cli()
+        })
+        .expect("config");
+
+        let mut bad = envelope.clone();
+        bad.mac[0] ^= 0xFF;
+        let (mut writer, mut reader) = tokio::io::duplex(4096);
+        write_bootstrap_test_frame(&mut writer, &bad).await;
+        let error = read_vpn_backend_bootstrap(&mut reader, &config, true)
+            .await
+            .expect_err("bad mac must fail");
+        assert!(error.to_string().contains("MAC"));
+
+        let stale_timestamp = unix_time_ms().saturating_sub(VPN_BACKEND_BOOTSTRAP_MAX_SKEW_MS + 1);
+        let stale_nonce = [0x66; 16];
+        let mut stale = VpnBackendBootstrapEnvelope {
+            bootstrap: bootstrap.clone(),
+            timestamp_ms: stale_timestamp,
+            nonce: stale_nonce,
+            mac: [0u8; 32],
+        };
+        stale.mac = vpn_backend_bootstrap_mac(&secret, &bootstrap, stale_timestamp, &stale_nonce);
+        let (mut writer, mut reader) = tokio::io::duplex(4096);
+        write_bootstrap_test_frame(&mut writer, &stale).await;
+        let stale_error = read_vpn_backend_bootstrap(&mut reader, &config, true)
+            .await
+            .expect_err("stale timestamp must fail");
+        assert!(stale_error.to_string().contains("stale"));
+
+        let (mut writer, mut reader) = tokio::io::duplex(4096);
+        write_bootstrap_test_frame(&mut writer, &envelope).await;
+        let decoded = read_vpn_backend_bootstrap(&mut reader, &config, true)
+            .await
+            .expect("valid bootstrap");
+        assert_eq!(decoded, bootstrap);
+
+        let (mut writer, mut reader) = tokio::io::duplex(4096);
+        write_bootstrap_test_frame(&mut writer, &envelope).await;
+        let replay = read_vpn_backend_bootstrap(&mut reader, &config, true)
+            .await
+            .expect_err("replay must fail");
+        assert!(replay.to_string().contains("replayed"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_peer_credentials_reject_unauthorized_peer() {
+        let (stream, _peer) = UnixStream::pair().expect("unix stream pair");
+        let error = verify_unix_peer_credentials(&stream, Some(u32::MAX), None)
+            .expect_err("unexpected uid must fail");
+        assert!(
+            error.to_string().contains("not allowed")
+                || error.to_string().contains("not supported")
+        );
+    }
+
+    async fn write_bootstrap_test_frame<W: AsyncWrite + Unpin>(
+        writer: &mut W,
+        envelope: &VpnBackendBootstrapEnvelope,
+    ) {
+        let payload = envelope.encode();
+        writer
+            .write_all(VPN_BACKEND_BOOTSTRAP_MAGIC)
+            .await
+            .expect("magic");
+        writer
+            .write_all(&(payload.len() as u16).to_be_bytes())
+            .await
+            .expect("len");
+        writer.write_all(&payload).await.expect("payload");
     }
 
     #[tokio::test]
@@ -1162,14 +1544,8 @@ mod tests {
     #[test]
     fn session_runtime_config_uses_bootstrap_values() {
         let config = BackendConfig::from_cli(Cli {
-            listen: DEFAULT_LISTEN_ADDR.parse().expect("listen addr"),
-            interface_prefix: DEFAULT_INTERFACE_PREFIX.to_owned(),
-            mtu: 1280,
-            egress_interface: Some("eth0".to_owned()),
-            ipv4_forward: true,
-            ipv6_forward: false,
-            enable_ipv4_nat: true,
-            enable_ipv6_nat: false,
+            endpoint: DEFAULT_BACKEND_ENDPOINT.to_owned(),
+            ..test_cli()
         })
         .expect("config");
 

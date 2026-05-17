@@ -225,11 +225,8 @@ Hosted HTTP responses forwarded over the Torii P2P proxy path are capped by
 The same `--container` plus `--service` manifest pair also works for other
 service-bound Soracloud commands such as `hf-deploy`, `hf-status`, `hf-lease-renew`,
 `hf-lease-leave`, `training-job-*`, `model-artifact-*`, `model-weight-*`,
-`model-upload-encryption-recipient`, `model-upload-init`,
-`model-upload-chunk`, `model-upload-finalize`, `model-upload-status`,
-`model-compile`, `model-compile-status`, `model-allow`,
-`model-run-private`, `model-run-status`, `model-decrypt-output`, and
-`model-publish-private`. For `status`, the
+`model-upload-encryption-recipient`, `model-upload-register`, and
+`model-upload-status`. For `status`, the
 manifest-pair form also keeps the same local route and workspace-script
 projection that `local-plan` reports. The direct `deploy` and `upgrade`
 commands now keep that same local projection in their response as well, and

@@ -1700,8 +1700,14 @@ mod tests {
                     ..iroha_config::parameters::actual::Halo2::default()
                 },
                 fastpq: iroha_config::parameters::actual::Fastpq {
-                    execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Auto,
-                    poseidon_mode: iroha_config::parameters::actual::FastpqPoseidonMode::Auto,
+                    execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Cpu,
+                    poseidon_mode: iroha_config::parameters::actual::FastpqPoseidonMode::Cpu,
+                    proof_sidecar_queue_cap:
+                        iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
+                    proof_sidecar_max_bytes:
+                        iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
+                    proof_sidecar_max_retries:
+                        iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
                     device_class: None,
                     chip_family: None,
                     gpu_kind: None,
@@ -1841,6 +1847,16 @@ mod tests {
                 citizen_service: iroha_config::parameters::actual::CitizenServiceDiscipline::default(),
                 viral_incentives: iroha_config::parameters::actual::ViralIncentives::default(),
                 sorafs_pin_policy: iroha_config::parameters::actual::SorafsPinPolicyConstraints::default(),
+                sorafs_pin_fee_asset_id:
+                    iroha_config::parameters::defaults::governance::sorafs_pin_fee::asset_id()
+                        .parse()
+                        .expect("default SoraFS pin fee asset id"),
+                sorafs_pin_fee_treasury_account:
+                    iroha_data_model::account::AccountId::parse_encoded(
+                        &iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account(),
+                    )
+                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                    .expect("default SoraFS pin fee treasury account"),
                 sorafs_pricing: PricingScheduleRecord::launch_default(),
                 alias_teu_minimum: iroha_config::parameters::defaults::governance::alias_teu_minimum(),
                 alias_frontier_telemetry: iroha_config::parameters::defaults::governance::alias_frontier_telemetry(),

@@ -2,7 +2,7 @@
 
 use super::prelude::*;
 use crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with;
-use std::{collections::BTreeSet, time::Duration};
+use std::collections::BTreeSet;
 
 use iroha_crypto::{Algorithm, Hash, PublicKey};
 use iroha_data_model::{
@@ -13,7 +13,7 @@ use iroha_data_model::{
         OfflineNoteAuditRecorded, OfflineNoteEvent, OfflineNoteIssued, OfflineNoteRedeemed,
     },
     isi::{
-        error::{InstructionExecutionError, InvalidParameterError, MathError},
+        error::{InstructionExecutionError, MathError},
         offline::{AuditOfflineNoteV2, IssueOfflineNoteV2, RedeemOfflineNoteV2},
     },
     offline::{
@@ -473,15 +473,6 @@ pub mod isi {
             Some(&vk_box),
             &state_transaction.zk,
         );
-        let timeout_budget = state_transaction.zk.verify_timeout;
-        if timeout_budget > Duration::ZERO && report.elapsed > timeout_budget {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "offline V2 recursive proof verification exceeded timeout".into(),
-                ),
-            )
-            .into());
-        }
         if !report.ok {
             return Err(labeled_invariant(
                 "invalid_proof",

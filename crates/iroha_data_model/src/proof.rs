@@ -247,7 +247,7 @@ pub struct VerifyingKeyRecord {
     /// Stable hash of the public input schema to detect witness layout changes.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub public_inputs_schema_hash: [u8; 32],
-    /// 32-byte commitment of the verifying key bytes (stable hash of `backend || bytes`).
+    /// 32-byte domain-separated commitment of the verifying key bytes and backend.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub commitment: [u8; 32],
     /// Length of the verifying key in bytes (if published off-ledger).
@@ -264,7 +264,7 @@ pub struct VerifyingKeyRecord {
     pub activation_height: Option<u64>,
     /// Block height when the verifier is withdrawn and must not be used.
     pub withdraw_height: Option<u64>,
-    /// Optional inline verifying key bytes. Some deployments may store only commitments.
+    /// Optional stored verifying key bytes. Some deployments may store only commitments.
     pub key: Option<VerifyingKeyBox>,
     /// Status of the verifying key record.
     pub status: ConfidentialStatus,
@@ -336,7 +336,8 @@ impl VerifyingKeyRecord {
 }
 
 /// Attachment of a zero-knowledge proof to a transaction.
-/// Exactly one of `vk_ref` or `vk_inline` must be provided.
+///
+/// Proof attachments carry only a registry reference to the verifying key.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
 #[norito(reuse_archived)]
 #[cfg_attr(
@@ -349,9 +350,7 @@ pub struct ProofAttachment {
     /// Proof payload as produced by the backend.
     pub proof: ProofBox,
     /// Reference to a verifying key stored in WSV.
-    pub vk_ref: Option<VerifyingKeyId>,
-    /// Inline verifying key bytes.
-    pub vk_inline: Option<VerifyingKeyBox>,
+    pub vk_ref: VerifyingKeyId,
     /// Optional verifying key commitment (32-byte hash of VK bytes under backend).
     /// When present, it can be used for stateless deduplication with the proof hash.
     #[cfg_attr(
@@ -381,20 +380,7 @@ impl ProofAttachment {
         Self {
             backend,
             proof,
-            vk_ref: Some(vk_ref),
-            vk_inline: None,
-            vk_commitment: None,
-            envelope_hash: None,
-            lane_privacy: None,
-        }
-    }
-    /// Construct an attachment that inlines a verifying key alongside the proof.
-    pub fn new_inline(backend: Ident, proof: ProofBox, vk: VerifyingKeyBox) -> Self {
-        Self {
-            backend,
-            proof,
-            vk_ref: None,
-            vk_inline: Some(vk),
+            vk_ref,
             vk_commitment: None,
             envelope_hash: None,
             lane_privacy: None,
@@ -418,7 +404,6 @@ impl norito::NoritoSerialize for ProofAttachment {
         write_prefixed(&mut writer, &self.backend)?;
         write_prefixed(&mut writer, &self.proof)?;
         write_prefixed(&mut writer, &self.vk_ref)?;
-        write_prefixed(&mut writer, &self.vk_inline)?;
 
         // Omit trailing default fields to keep payloads compact and deterministic.
         let tail = if self.lane_privacy.is_some() {
@@ -493,18 +478,8 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofAttachment {
 
         let vk_ref_slice = take_len_prefixed_slice(bytes, &mut offset, MAX_REF_FIELD_BYTES)?;
         let (vk_ref, used) =
-            <Option<VerifyingKeyId> as ncore::DecodeFromSlice>::decode_from_slice(vk_ref_slice)?;
+            <VerifyingKeyId as ncore::DecodeFromSlice>::decode_from_slice(vk_ref_slice)?;
         if used != vk_ref_slice.len() {
-            return Err(ncore::Error::LengthMismatch);
-        }
-
-        let vk_inline_slice =
-            take_len_prefixed_slice(bytes, &mut offset, MAX_LEN_PREFIXED_FIELD_BYTES)?;
-        let (vk_inline, used) =
-            <Option<VerifyingKeyBox> as ncore::DecodeFromSlice>::decode_from_slice(
-                vk_inline_slice,
-            )?;
-        if used != vk_inline_slice.len() {
             return Err(ncore::Error::LengthMismatch);
         }
 
@@ -552,7 +527,6 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofAttachment {
                 backend,
                 proof,
                 vk_ref,
-                vk_inline,
                 vk_commitment,
                 envelope_hash,
                 lane_privacy,
@@ -763,7 +737,7 @@ pub struct ProofRecord {
     pub id: ProofId,
     /// Optional reference to a verifying key stored in WSV.
     pub vk_ref: Option<VerifyingKeyId>,
-    /// Optional inline verifying key commitment (32-byte stable hash) used during verification.
+    /// Optional verifying key commitment (32-byte stable hash) used during verification.
     #[cfg_attr(
         feature = "json",
         norito(with = "crate::json_helpers::fixed_bytes::option")
@@ -801,10 +775,10 @@ mod tests {
     use super::*;
     #[test]
     fn proof_attachment_list_roundtrip_bare() {
-        let mut attachment = ProofAttachment::new_inline(
+        let mut attachment = ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![1, 2]),
-            VerifyingKeyBox::new("halo2/ipa".into(), vec![9, 9]),
+            VerifyingKeyId::new("halo2/ipa", "vk_1"),
         );
         attachment.lane_privacy = Some(crate::nexus::LanePrivacyProof {
             commitment_id: LaneCommitmentId::new(5),
@@ -910,14 +884,7 @@ mod tests {
         let arch = norito::from_bytes::<ProofAttachment>(&enc).expect("archived");
         let dec: ProofAttachment = norito::core::NoritoDeserialize::deserialize(arch);
         assert_eq!(dec.backend, "halo2/ipa".to_owned());
-        assert!(dec.vk_ref.is_some());
-
-        let vk = VerifyingKeyBox::new("halo2/ipa".into(), vec![9, 9]);
-        let a2 = ProofAttachment::new_inline("halo2/ipa".into(), p, vk);
-        let enc2 = norito::to_bytes(&a2).expect("encode");
-        let arch2 = norito::from_bytes::<ProofAttachment>(&enc2).expect("archived");
-        let dec2: ProofAttachment = norito::core::NoritoDeserialize::deserialize(arch2);
-        assert!(dec2.vk_inline.is_some());
+        assert_eq!(dec.vk_ref.name.as_str(), "vk_1");
     }
 
     #[test]

@@ -2066,7 +2066,7 @@ pub async fn handle_gov_propose_deploy(
 /// POST /v1/ministry/agenda/proposals/draft — build a detached-signature-ready Ministry submission transaction.
 ///
 /// Returns a duplicate summary with HTTP 409 semantics when the proposal id already exists in committed
-/// state; callers must submit the resulting signed transaction through the normal Torii `/transaction`
+/// state; callers must submit the resulting signed transaction through the normal Torii `/v1/pipeline/transactions`
 /// route.
 pub async fn handle_ministry_agenda_proposal_draft(
     chain_id: Arc<iroha_data_model::ChainId>,

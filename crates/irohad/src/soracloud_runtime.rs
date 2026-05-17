@@ -34,9 +34,8 @@ use iroha_core::soracloud_runtime::{
     SoracloudApartmentExecutionRequest, SoracloudApartmentExecutionResult,
     SoracloudHostedHttpReplicaRuntimeStateV1, SoracloudHostedHttpRuntimeStateV1,
     SoracloudLocalReadRequest, SoracloudLocalReadResponse, SoracloudOrderedMailboxExecutionRequest,
-    SoracloudOrderedMailboxExecutionResult, SoracloudPrivateInferenceExecutionAction,
-    SoracloudPrivateInferenceExecutionRequest, SoracloudPrivateInferenceExecutionResult,
-    SoracloudRuntime, SoracloudRuntimeApartmentPlan, SoracloudRuntimeArtifactPlan,
+    SoracloudOrderedMailboxExecutionResult, SoracloudRuntime, SoracloudRuntimeApartmentPlan,
+    SoracloudRuntimeArtifactPlan,
     SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind,
     SoracloudRuntimeHfSourcePlan, SoracloudRuntimeHfSourceStatus, SoracloudRuntimeInrouPlan,
     SoracloudRuntimeLeaseVolumePlan, SoracloudRuntimeMailboxPlan, SoracloudRuntimeReadHandle,
@@ -44,7 +43,7 @@ use iroha_core::soracloud_runtime::{
     SoracloudRuntimeSnapshot, SoracloudUploadedModelEncryptionRecipient,
     soracloud_hf_generated_bundle_payload_if_applicable, soracloud_hf_generated_source_binding,
 };
-use iroha_core::state::{State, StateReadOnly, StateView, WorldReadOnly};
+use iroha_core::state::{State, StateView, WorldReadOnly};
 use iroha_core::{queue::Queue, tx::AcceptedTransaction};
 use iroha_crypto::{Hash, KeyPair};
 #[cfg(test)]
@@ -56,7 +55,6 @@ use iroha_data_model::{
     isi::{self, InstructionBox},
     metadata::Metadata,
     name::Name,
-    parameter::CustomParameterId,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
         SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1, SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
@@ -69,13 +67,12 @@ use iroha_data_model::{
         SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseStatusV1, SoraHfSourceStatusV1,
         SoraInrouGuestImageV1, SoraInrouGuestIsaV1, SoraInrouHostCapabilityRecordV1,
         SoraInrouReplicaPlacementV1, SoraInrouReplicaRuntimeStateV1, SoraInrouRuntimeBackendV1,
-        SoraLeaseVolumeKindV1, SoraModelHostViolationKindV1, SoraModelPrivacyModeV1,
-        SoraNetworkPolicyV1, SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionStatusV1,
-        SoraPrivateInferenceSessionV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
-        SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
+        SoraLeaseVolumeKindV1, SoraModelHostViolationKindV1, SoraNetworkPolicyV1,
+        SoraRouteVisibilityV1, SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1,
+        SoraServiceHandlerClassV1, SoraServiceHandlerV1,
         SoraServiceHealthStatusV1, SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
         SoraServiceRuntimeStateV1, SoraServiceStateEntryV1, SoraStateBindingV1,
-        SoraStateMutationOperationV1, SoraUploadedModelBindingStatusV1, SoraUploadedModelBundleV1,
+        SoraStateMutationOperationV1,
         SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
         SoracloudAppendJournalResponseV1, SoracloudEgressFetchRequestV1,
         SoracloudEgressFetchResponseV1, SoracloudEmitMailboxMessageRequestV1,
@@ -146,6 +143,8 @@ pub(crate) struct SoracloudRuntimeManagerConfig {
     pub cache_budgets: iroha_config::parameters::actual::SoracloudRuntimeCacheBudgets,
     /// Mutable `Inrou` microVM hosting limits.
     pub inrou: iroha_config::parameters::actual::SoracloudRuntimeInrou,
+    /// Runtime-originated transaction submission settings.
+    pub submission: iroha_config::parameters::actual::SoracloudRuntimeSubmission,
     /// Outbound egress policy for embedded runtimes.
     pub egress: iroha_config::parameters::actual::SoracloudRuntimeEgress,
     /// Hugging Face importer and inference bridge settings.
@@ -195,6 +194,7 @@ pub(crate) struct QueuedSoracloudRuntimeMutationSink {
     state: Arc<State>,
     authority: AccountId,
     key_pair: KeyPair,
+    gas_asset_id: Option<String>,
 }
 
 impl QueuedSoracloudRuntimeMutationSink {
@@ -205,6 +205,7 @@ impl QueuedSoracloudRuntimeMutationSink {
         state: Arc<State>,
         authority: AccountId,
         key_pair: KeyPair,
+        gas_asset_id: Option<String>,
     ) -> Self {
         Self {
             chain_id,
@@ -212,6 +213,7 @@ impl QueuedSoracloudRuntimeMutationSink {
             state,
             authority,
             key_pair,
+            gas_asset_id,
         }
     }
 }
@@ -224,7 +226,10 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
     ) -> eyre::Result<()> {
         let tx = TransactionBuilder::new((*self.chain_id).clone(), self.authority.clone())
             .with_instructions([instruction])
-            .with_metadata(soracloud_runtime_submission_metadata(&self.state))
+            .with_metadata(soracloud_runtime_submission_metadata(
+                &self.state,
+                self.gas_asset_id.as_deref(),
+            ))
             .sign(self.key_pair.private_key());
         let (max_clock_drift, transaction_params, crypto) = {
             let world = self.state.world_view();
@@ -308,11 +313,15 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
     }
 }
 
-fn soracloud_runtime_submission_metadata(state: &State) -> Metadata {
+fn soracloud_runtime_submission_metadata(
+    state: &State,
+    gas_asset_id: Option<&str>,
+) -> Metadata {
     let mut metadata = Metadata::default();
-    if let Some(asset_id) = explicit_soracloud_runtime_gas_asset_id()
-        .map(|asset_id| canonicalize_or_preserve_runtime_gas_asset_id(state, asset_id))
-        .or_else(|| default_soracloud_runtime_gas_asset_id(state))
+    if let Some(asset_id) = gas_asset_id
+        .map(str::trim)
+        .filter(|asset_id| !asset_id.is_empty())
+        .map(|asset_id| canonicalize_or_preserve_runtime_gas_asset_id(state, asset_id.to_owned()))
     {
         let gas_asset_key =
             Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
@@ -320,47 +329,6 @@ fn soracloud_runtime_submission_metadata(state: &State) -> Metadata {
     }
 
     metadata
-}
-
-fn explicit_soracloud_runtime_gas_asset_id() -> Option<String> {
-    [
-        "IROHA_SORACLOUD_GAS_ASSET_ID",
-        "IROHA_SORAFS_GAS_ASSET_ID",
-        "IROHA_GAS_ASSET_ID",
-    ]
-    .into_iter()
-    .find_map(|key| {
-        std::env::var(key)
-            .ok()
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty())
-    })
-}
-
-fn default_soracloud_runtime_gas_asset_id(state: &State) -> Option<String> {
-    let world = state.world_view();
-    let parameter_id = CustomParameterId(
-        Name::from_str("ivm_gas_accepted_assets").expect("static gas-accepted-assets parameter"),
-    );
-    let configured_asset = world
-        .parameters()
-        .custom()
-        .get(&parameter_id)
-        .and_then(|custom| custom.payload().try_into_any_norito::<Vec<String>>().ok())
-        .and_then(first_non_empty_string)
-        .or_else(|| first_non_empty_string(state.pipeline_snapshot().gas.accepted_assets))?;
-
-    Some(canonicalize_or_preserve_runtime_gas_asset_id(
-        state,
-        configured_asset,
-    ))
-}
-
-fn first_non_empty_string(values: Vec<String>) -> Option<String> {
-    values
-        .into_iter()
-        .map(|value| value.trim().to_owned())
-        .find(|value| !value.is_empty())
 }
 
 fn canonicalize_or_preserve_runtime_gas_asset_id(state: &State, asset_id: String) -> String {
@@ -654,6 +622,7 @@ impl SoracloudRuntimeManagerConfig {
             hydration_concurrency: config.hydration_concurrency,
             cache_budgets: config.cache_budgets.clone(),
             inrou: config.inrou,
+            submission: config.submission.clone(),
             egress: config.egress.clone(),
             hf: config.hf.clone(),
             local_validator_account_id: None,
@@ -1369,146 +1338,6 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
         })
     }
 
-    fn execute_private_inference(
-        &self,
-        request: SoracloudPrivateInferenceExecutionRequest,
-    ) -> Result<SoracloudPrivateInferenceExecutionResult, SoracloudRuntimeExecutionError> {
-        let view = self.state.view();
-        let snapshot = self.snapshot();
-        validate_private_inference_snapshot(&view, &snapshot, &request)?;
-        let world = view.world();
-        let Some(record) = world
-            .soracloud_agent_apartments()
-            .get(&request.apartment_name)
-        else {
-            return Err(SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-                format!("unknown Soracloud apartment `{}`", request.apartment_name),
-            ));
-        };
-        if record.process_generation != request.process_generation {
-            return Err(SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                format!(
-                    "apartment `{}` process generation {} does not match committed generation {}",
-                    request.apartment_name, request.process_generation, record.process_generation
-                ),
-            ));
-        }
-
-        let session_key = (request.apartment_name.clone(), request.session_id.clone());
-        let Some(session) = world
-            .soracloud_private_inference_sessions()
-            .get(&session_key)
-            .cloned()
-        else {
-            return Err(SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-                format!(
-                    "private session `{}` is not registered for apartment `{}`",
-                    request.session_id, request.apartment_name
-                ),
-            ));
-        };
-        let Some(binding) = record.uploaded_model_binding.as_ref() else {
-            return Err(SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-                format!(
-                    "apartment `{}` does not have an uploaded model binding",
-                    request.apartment_name
-                ),
-            ));
-        };
-        if binding.status != SoraUploadedModelBindingStatusV1::Active {
-            return Err(SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-                format!(
-                    "uploaded model binding for apartment `{}` is {:?}",
-                    request.apartment_name, binding.status
-                ),
-            ));
-        }
-        if binding.privacy_mode != SoraModelPrivacyModeV1::PrivateExecution {
-            return Err(SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-                format!(
-                    "uploaded model binding for apartment `{}` is not private execution",
-                    request.apartment_name
-                ),
-            ));
-        }
-        if binding.service_name != session.service_name
-            || binding.model_id != session.model_id
-            || binding.weight_version != session.weight_version
-            || binding.bundle_root != session.bundle_root
-        {
-            return Err(SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-                format!(
-                    "private session `{}` does not match apartment `{}` uploaded model binding",
-                    request.session_id, request.apartment_name
-                ),
-            ));
-        }
-
-        let bundle_key = (
-            session.service_name.as_ref().to_owned(),
-            session.model_id.clone(),
-            session.weight_version.clone(),
-        );
-        let Some(bundle) = world
-            .soracloud_uploaded_model_bundles()
-            .get(&bundle_key)
-            .cloned()
-        else {
-            return Err(SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-                format!(
-                    "uploaded model bundle `{}` version `{}` is not registered for service `{}`",
-                    session.model_id, session.weight_version, session.service_name
-                ),
-            ));
-        };
-        if bundle.bundle_root != session.bundle_root
-            || bundle.compile_profile_hash != binding.compile_profile_hash
-        {
-            return Err(SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-                format!(
-                    "private session `{}` no longer matches the admitted bundle manifest",
-                    request.session_id
-                ),
-            ));
-        }
-        if world
-            .soracloud_private_compile_profiles()
-            .get(&bundle.compile_profile_hash)
-            .is_none()
-        {
-            return Err(SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                format!(
-                    "private compile profile `{}` is not materialized for uploaded model `{}`",
-                    bundle.compile_profile_hash, session.model_id
-                ),
-            ));
-        }
-
-        match &request.action {
-            SoracloudPrivateInferenceExecutionAction::Start => {
-                execute_private_inference_start(&view, &bundle, &session, &request)
-            }
-            SoracloudPrivateInferenceExecutionAction::Release { decrypt_request_id } => {
-                execute_private_inference_release(
-                    &view,
-                    &bundle,
-                    &session,
-                    decrypt_request_id,
-                    &request,
-                )
-            }
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -2870,7 +2699,7 @@ impl SoracloudRuntimeManager {
                 self.artifacts_root(),
                 self.config.local_validator_account_id.as_ref(),
                 self.config.local_peer_id.as_deref(),
-                !self.config.inrou.proxy_only,
+                self.config.inrou.enabled && !self.config.inrou.proxy_only,
             )?;
             (
                 bundle_registry,
@@ -2919,7 +2748,7 @@ impl SoracloudRuntimeManager {
                 self.artifacts_root(),
                 self.config.local_validator_account_id.as_ref(),
                 self.config.local_peer_id.as_deref(),
-                !self.config.inrou.proxy_only,
+                self.config.inrou.enabled && !self.config.inrou.proxy_only,
             )?
         };
         self.prune_stale_hf_local_workers(&snapshot);
@@ -3279,6 +3108,9 @@ impl SoracloudRuntimeManager {
         &self,
         now_ms: u64,
     ) -> Option<(SoraInrouHostCapabilityRecordV1, bool)> {
+        if !self.config.inrou.enabled {
+            return None;
+        }
         let validator_account_id = self.config.local_validator_account_id.as_ref()?;
         let peer_id = self.config.local_peer_id.as_deref()?;
         let discovered_backends = supported_inrou_backends_for_host();
@@ -4418,7 +4250,7 @@ impl SoracloudRuntimeManager {
     }
 
     fn hosted_http_concurrency_limit(&self) -> usize {
-        if self.config.inrou.proxy_only {
+        if !self.config.inrou.enabled || self.config.inrou.proxy_only {
             0
         } else {
             self.config.inrou.max_concurrent_vms.get()
@@ -7681,358 +7513,6 @@ fn validate_apartment_snapshot(
         ));
     }
     Ok(())
-}
-
-fn validate_private_inference_snapshot(
-    view: &StateView<'_>,
-    snapshot: &SoracloudRuntimeSnapshot,
-    request: &SoracloudPrivateInferenceExecutionRequest,
-) -> Result<(), SoracloudRuntimeExecutionError> {
-    let committed_height = committed_height(view);
-    let committed_block_hash = committed_block_hash(view);
-    if request.observed_height != committed_height
-        || request.observed_block_hash != committed_block_hash
-    {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!(
-                "private inference snapshot is stale: request observed height/hash {:?}/{:?}, committed {:?}/{:?}",
-                request.observed_height,
-                request.observed_block_hash,
-                committed_height,
-                committed_block_hash
-            ),
-        ));
-    }
-    if snapshot.observed_height != committed_height
-        || parse_snapshot_hash(snapshot.observed_block_hash.as_deref())? != committed_block_hash
-    {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!(
-                "runtime-manager apartment snapshot is behind committed state for `{}`",
-                request.apartment_name
-            ),
-        ));
-    }
-    if !snapshot.apartments.contains_key(&request.apartment_name) {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!(
-                "apartment `{}` is not materialized in the node-local runtime snapshot",
-                request.apartment_name
-            ),
-        ));
-    }
-    Ok(())
-}
-
-const PRIVATE_INFERENCE_MAX_COMPUTE_UNITS_V1: u64 = 16;
-
-fn private_inference_compute_units(session: &SoraPrivateInferenceSessionV1) -> u64 {
-    u64::from(session.token_budget)
-        .max(1)
-        .min(PRIVATE_INFERENCE_MAX_COMPUTE_UNITS_V1)
-}
-
-fn private_inference_updated_at_ms(view: &StateView<'_>) -> u64 {
-    view.latest_block()
-        .map(|block| u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(1)
-        .max(1)
-}
-
-fn private_inference_ciphertext_state_root(
-    session: &SoraPrivateInferenceSessionV1,
-    bundle: &SoraUploadedModelBundleV1,
-    step: u32,
-    request_commitment: Hash,
-) -> Hash {
-    Hash::new(Encode::encode(&(
-        "soracloud.private.ciphertext_state.v1",
-        session.session_id.as_str(),
-        session.apartment.as_ref(),
-        session.service_name.as_ref(),
-        session.model_id.as_str(),
-        session.weight_version.as_str(),
-        bundle.bundle_root,
-        bundle.compile_profile_hash,
-        (
-            session.input_commitments.clone(),
-            session.token_budget,
-            session.image_budget,
-            step,
-            request_commitment,
-        ),
-    )))
-}
-
-fn private_inference_receipt_hash(
-    session_id: &str,
-    step: u32,
-    phase: &str,
-    request_commitment: Hash,
-    ciphertext_state_root: Hash,
-    released_token: Option<&str>,
-) -> Hash {
-    Hash::new(Encode::encode(&(
-        "soracloud.private.receipt.v1",
-        session_id,
-        step,
-        phase,
-        request_commitment,
-        ciphertext_state_root,
-        released_token,
-    )))
-}
-
-fn private_inference_receipt_root(
-    session_id: &str,
-    step: u32,
-    status: SoraPrivateInferenceSessionStatusV1,
-    xor_cost_nanos: u128,
-    receipt_hash: Hash,
-) -> Hash {
-    Hash::new(Encode::encode(&(
-        "soracloud.private.receipt_root.v1",
-        session_id,
-        step,
-        status,
-        xor_cost_nanos,
-        receipt_hash,
-    )))
-}
-
-fn private_inference_result_commitment(
-    session_id: &str,
-    action: &SoracloudPrivateInferenceExecutionAction,
-    status: SoraPrivateInferenceSessionStatusV1,
-    receipt_root: Hash,
-    xor_cost_nanos: u128,
-    checkpoint: &SoraPrivateInferenceCheckpointV1,
-) -> Hash {
-    let (action_label, decrypt_request_id) = match action {
-        SoracloudPrivateInferenceExecutionAction::Start => ("start", None),
-        SoracloudPrivateInferenceExecutionAction::Release { decrypt_request_id } => {
-            ("release", Some(decrypt_request_id.as_str()))
-        }
-    };
-    Hash::new(Encode::encode(&(
-        "soracloud.private.result.v1",
-        session_id,
-        action_label,
-        decrypt_request_id,
-        status,
-        receipt_root,
-        xor_cost_nanos,
-        checkpoint.clone(),
-    )))
-}
-
-fn latest_private_inference_checkpoint(
-    view: &StateView<'_>,
-    session_id: &str,
-) -> Option<SoraPrivateInferenceCheckpointV1> {
-    view.world()
-        .soracloud_private_inference_checkpoints()
-        .iter()
-        .filter_map(|((stored_session_id, _step), checkpoint)| {
-            (stored_session_id == session_id).then(|| checkpoint.clone())
-        })
-        .max_by_key(|checkpoint| checkpoint.step)
-}
-
-fn private_inference_released_token(
-    session: &SoraPrivateInferenceSessionV1,
-    checkpoint: &SoraPrivateInferenceCheckpointV1,
-    request_commitment: Hash,
-) -> String {
-    Hash::new(Encode::encode(&(
-        "soracloud.private.released_token.v1",
-        session.session_id.as_str(),
-        session.model_id.as_str(),
-        session.weight_version.as_str(),
-        checkpoint.step,
-        checkpoint.receipt_hash,
-        request_commitment,
-    )))
-    .to_string()
-    .chars()
-    .take(24)
-    .collect()
-}
-
-fn execute_private_inference_start(
-    view: &StateView<'_>,
-    bundle: &SoraUploadedModelBundleV1,
-    session: &SoraPrivateInferenceSessionV1,
-    request: &SoracloudPrivateInferenceExecutionRequest,
-) -> Result<SoracloudPrivateInferenceExecutionResult, SoracloudRuntimeExecutionError> {
-    if !matches!(
-        session.status,
-        SoraPrivateInferenceSessionStatusV1::Admitted
-            | SoraPrivateInferenceSessionStatusV1::Running
-    ) {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-            format!(
-                "private session `{}` is {:?}, expected Admitted or Running before runtime start",
-                session.session_id, session.status
-            ),
-        ));
-    }
-    if latest_private_inference_checkpoint(view, &session.session_id).is_some() {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-            format!(
-                "private session `{}` already has a recorded checkpoint",
-                session.session_id
-            ),
-        ));
-    }
-
-    let step = 1;
-    let compute_units = private_inference_compute_units(session);
-    let ciphertext_state_root =
-        private_inference_ciphertext_state_root(session, bundle, step, request.request_commitment);
-    let receipt_hash = private_inference_receipt_hash(
-        &session.session_id,
-        step,
-        "start",
-        request.request_commitment,
-        ciphertext_state_root,
-        None,
-    );
-    let xor_cost_nanos = session.xor_cost_nanos.saturating_add(
-        bundle
-            .pricing_policy
-            .runtime_step_xor_nanos
-            .saturating_mul(u128::from(compute_units)),
-    );
-    let receipt_root = private_inference_receipt_root(
-        &session.session_id,
-        step,
-        SoraPrivateInferenceSessionStatusV1::AwaitingDecryption,
-        xor_cost_nanos,
-        receipt_hash,
-    );
-    let checkpoint = SoraPrivateInferenceCheckpointV1 {
-        schema_version: iroha_data_model::soracloud::SORA_PRIVATE_INFERENCE_CHECKPOINT_VERSION_V1,
-        session_id: session.session_id.clone(),
-        step,
-        ciphertext_state_root,
-        receipt_hash,
-        decrypt_request_id: format!("{}:decrypt:{step}", session.session_id),
-        released_token: None,
-        compute_units,
-        updated_at_ms: private_inference_updated_at_ms(view),
-    };
-    Ok(SoracloudPrivateInferenceExecutionResult {
-        status: SoraPrivateInferenceSessionStatusV1::AwaitingDecryption,
-        receipt_root,
-        xor_cost_nanos,
-        result_commitment: private_inference_result_commitment(
-            &session.session_id,
-            &request.action,
-            SoraPrivateInferenceSessionStatusV1::AwaitingDecryption,
-            receipt_root,
-            xor_cost_nanos,
-            &checkpoint,
-        ),
-        checkpoint,
-    })
-}
-
-fn execute_private_inference_release(
-    view: &StateView<'_>,
-    bundle: &SoraUploadedModelBundleV1,
-    session: &SoraPrivateInferenceSessionV1,
-    decrypt_request_id: &str,
-    request: &SoracloudPrivateInferenceExecutionRequest,
-) -> Result<SoracloudPrivateInferenceExecutionResult, SoracloudRuntimeExecutionError> {
-    if session.status != SoraPrivateInferenceSessionStatusV1::AwaitingDecryption {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-            format!(
-                "private session `{}` is {:?}, expected AwaitingDecryption before output release",
-                session.session_id, session.status
-            ),
-        ));
-    }
-    let Some(pending_checkpoint) = latest_private_inference_checkpoint(view, &session.session_id)
-    else {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-            format!(
-                "private session `{}` does not have an awaiting-decryption checkpoint",
-                session.session_id
-            ),
-        ));
-    };
-    if pending_checkpoint.decrypt_request_id != decrypt_request_id {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-            format!(
-                "private session `{}` checkpoint decrypt_request_id `{}` does not match requested `{}`",
-                session.session_id, pending_checkpoint.decrypt_request_id, decrypt_request_id
-            ),
-        ));
-    }
-    if pending_checkpoint.released_token.is_some() {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-            format!(
-                "private session `{}` checkpoint step {} already released output",
-                session.session_id, pending_checkpoint.step
-            ),
-        ));
-    }
-
-    let released_token =
-        private_inference_released_token(session, &pending_checkpoint, request.request_commitment);
-    let receipt_hash = private_inference_receipt_hash(
-        &session.session_id,
-        pending_checkpoint.step,
-        "release",
-        request.request_commitment,
-        pending_checkpoint.ciphertext_state_root,
-        Some(released_token.as_str()),
-    );
-    let xor_cost_nanos = session
-        .xor_cost_nanos
-        .saturating_add(bundle.pricing_policy.decrypt_release_xor_nanos);
-    let receipt_root = private_inference_receipt_root(
-        &session.session_id,
-        pending_checkpoint.step,
-        SoraPrivateInferenceSessionStatusV1::Completed,
-        xor_cost_nanos,
-        receipt_hash,
-    );
-    let checkpoint = SoraPrivateInferenceCheckpointV1 {
-        schema_version: iroha_data_model::soracloud::SORA_PRIVATE_INFERENCE_CHECKPOINT_VERSION_V1,
-        session_id: session.session_id.clone(),
-        step: pending_checkpoint.step,
-        ciphertext_state_root: pending_checkpoint.ciphertext_state_root,
-        receipt_hash,
-        decrypt_request_id: pending_checkpoint.decrypt_request_id,
-        released_token: Some(released_token),
-        compute_units: pending_checkpoint.compute_units,
-        updated_at_ms: private_inference_updated_at_ms(view),
-    };
-    Ok(SoracloudPrivateInferenceExecutionResult {
-        status: SoraPrivateInferenceSessionStatusV1::Completed,
-        receipt_root,
-        xor_cost_nanos,
-        result_commitment: private_inference_result_commitment(
-            &session.session_id,
-            &request.action,
-            SoraPrivateInferenceSessionStatusV1::Completed,
-            receipt_root,
-            xor_cost_nanos,
-            &checkpoint,
-        ),
-        checkpoint,
-    })
 }
 
 fn parse_apartment_autonomy_run_id(operation: &str) -> Option<&str> {
@@ -14391,8 +13871,8 @@ mod tests {
             SoraServiceSecretEntryV1,
         },
         sorafs::pin_registry::{
-            ChunkerProfileHandle, ManifestDigest, PinManifestRecord, PinPolicy, ReplicationOrderId,
-            ReplicationOrderRecord, ReplicationOrderStatus,
+            ChunkerProfileHandle, ManifestDigest, PinFeePayment, PinManifestRecord, PinPolicy,
+            ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus,
         },
     };
     use iroha_primitives::json::Json;
@@ -14484,66 +13964,31 @@ mod tests {
         Ok(Arc::new(State::new_for_testing(World::new(), kura, query)))
     }
 
-    fn set_runtime_gas_pipeline_default(state: &mut Arc<State>, assets: Vec<String>) {
-        let mut pipeline = state.pipeline_snapshot();
-        pipeline.gas.accepted_assets = assets;
-        Arc::get_mut(state)
-            .expect("state should have no other refs")
-            .set_pipeline(pipeline);
-    }
-
-    fn set_gas_accepted_assets_parameter(state: &Arc<State>, payload: Json) {
-        let header = BlockHeader::new(
-            NonZeroU64::new(1).expect("non-zero height"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        let mut block = state.block(header);
-        let custom = iroha_data_model::parameter::CustomParameter::new(
-            iroha_data_model::parameter::CustomParameterId(
-                "ivm_gas_accepted_assets".parse().expect("parameter id"),
-            ),
-            payload,
-        );
-        block
-            .world
-            .parameters
-            .get_mut()
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(custom));
-        block
-            .commit()
-            .expect("commit gas accepted assets parameter");
-    }
-
     #[test]
-    fn default_soracloud_runtime_gas_asset_id_uses_pipeline_default() -> Result<()> {
-        let mut state = test_state()?;
-        set_runtime_gas_pipeline_default(
-            &mut state,
-            vec!["  ".to_owned(), "pipeline-gas".to_owned()],
+    fn soracloud_runtime_submission_metadata_uses_explicit_gas_asset() -> Result<()> {
+        let state = test_state()?;
+
+        let metadata =
+            soracloud_runtime_submission_metadata(state.as_ref(), Some("  configured-gas  "));
+
+        assert_eq!(
+            metadata
+                .get("gas_asset_id")
+                .expect("gas metadata")
+                .as_ref()
+                .to_string(),
+            "configured-gas"
         );
-
-        let gas_asset_id = default_soracloud_runtime_gas_asset_id(state.as_ref());
-
-        assert_eq!(gas_asset_id, Some("pipeline-gas".to_owned()));
         Ok(())
     }
 
     #[test]
-    fn default_soracloud_runtime_gas_asset_id_prefers_custom_parameter() -> Result<()> {
-        let mut state = test_state()?;
-        set_runtime_gas_pipeline_default(&mut state, vec!["pipeline-gas".to_owned()]);
-        set_gas_accepted_assets_parameter(
-            &state,
-            Json::new(vec!["  ".to_owned(), "custom-gas".to_owned()]),
-        );
+    fn soracloud_runtime_submission_metadata_omits_missing_gas_asset() -> Result<()> {
+        let state = test_state()?;
 
-        let gas_asset_id = default_soracloud_runtime_gas_asset_id(state.as_ref());
+        let metadata = soracloud_runtime_submission_metadata(state.as_ref(), None);
 
-        assert_eq!(gas_asset_id, Some("custom-gas".to_owned()));
+        assert!(metadata.get("gas_asset_id").is_none());
         Ok(())
     }
 
@@ -14586,7 +14031,6 @@ mod tests {
             mailbox_queue: Vec::new(),
             autonomy_budget_ceiling_units: 500,
             autonomy_budget_remaining_units: 325,
-            uploaded_model_binding: None,
             artifact_allowlist: BTreeMap::new(),
             autonomy_run_history: Vec::new(),
             manifest,
@@ -15842,6 +15286,7 @@ mod tests {
         fixtures: &[RemoteManifestFixture],
     ) -> Result<()> {
         let view = state.view();
+        let pricing = view.world().sorafs_pricing().clone();
         let next_height = NonZeroU64::new(
             u64::try_from(view.height())
                 .unwrap_or(u64::MAX.saturating_sub(1))
@@ -15855,17 +15300,33 @@ mod tests {
         {
             let mut pin_manifests = block.world.pin_manifests_mut_for_testing().transaction();
             for fixture in fixtures {
+                let policy = PinPolicy::default();
+                let content_length = fixture.payload.len() as u64;
+                let amount_nano = pricing.public_pin_fee_nano(
+                    policy.storage_class,
+                    content_length,
+                    policy.min_replicas,
+                    fixture.issued_epoch,
+                    policy.retention_epoch,
+                );
                 let mut record = PinManifestRecord::new(
                     fixture.manifest_digest,
                     fixed_chunker_handle(),
                     [0; 32],
-                    PinPolicy::default(),
+                    policy,
                     (*ALICE_ID).clone(),
                     fixture.issued_epoch,
                     None,
                     None,
                     Metadata::default(),
-                );
+                )
+                .with_content_length(content_length);
+                record.record_pin_fee_payment(PinFeePayment {
+                    paid_by: (*ALICE_ID).clone(),
+                    fee_asset_id: state.gov.sorafs_pin_fee_asset_id.clone(),
+                    treasury_account_id: state.gov.sorafs_pin_fee_treasury_account.clone(),
+                    amount_nano,
+                });
                 record.approve(fixture.issued_epoch, None);
                 pin_manifests.insert(fixture.manifest_digest, record);
             }
@@ -15897,10 +15358,11 @@ mod tests {
     }
 
     fn test_runtime_manager_config(state_dir: PathBuf) -> SoracloudRuntimeManagerConfig {
-        let runtime = iroha_config::parameters::actual::SoracloudRuntime {
+        let mut runtime = iroha_config::parameters::actual::SoracloudRuntime {
             state_dir,
             ..Default::default()
         };
+        runtime.inrou.enabled = true;
         SoracloudRuntimeManagerConfig::from_runtime_config(&runtime)
     }
 
@@ -16466,6 +15928,7 @@ mod tests {
 
     fn approve_sorafs_manifests(state: &Arc<State>, manifests: &[StoredManifest]) -> Result<()> {
         let view = state.view();
+        let pricing = view.world().sorafs_pricing().clone();
         let next_height = NonZeroU64::new(
             u64::try_from(view.height())
                 .unwrap_or(u64::MAX.saturating_sub(1))
@@ -16479,6 +15942,16 @@ mod tests {
         let mut pin_manifests = block.world.pin_manifests_mut_for_testing().transaction();
         for manifest in manifests {
             let digest = ManifestDigest::new(*manifest.manifest_digest());
+            let policy = PinPolicy::default();
+            let submitted_epoch = 1;
+            let content_length = manifest.content_length();
+            let amount_nano = pricing.public_pin_fee_nano(
+                policy.storage_class,
+                content_length,
+                policy.min_replicas,
+                submitted_epoch,
+                policy.retention_epoch,
+            );
             let mut record = PinManifestRecord::new(
                 ManifestDigest::new(*manifest.manifest_digest()),
                 ChunkerProfileHandle {
@@ -16489,14 +15962,21 @@ mod tests {
                     multihash_code: BLAKE3_256_MULTIHASH_CODE,
                 },
                 [0; 32],
-                PinPolicy::default(),
+                policy,
                 (*ALICE_ID).clone(),
-                1,
+                submitted_epoch,
                 None,
                 None,
                 Metadata::default(),
-            );
-            record.approve(1, None);
+            )
+            .with_content_length(content_length);
+            record.record_pin_fee_payment(PinFeePayment {
+                paid_by: (*ALICE_ID).clone(),
+                fee_asset_id: state.gov.sorafs_pin_fee_asset_id.clone(),
+                treasury_account_id: state.gov.sorafs_pin_fee_treasury_account.clone(),
+                amount_nano,
+            });
+            record.approve(submitted_epoch, None);
             pin_manifests.insert(digest, record);
         }
         pin_manifests.apply();
@@ -16522,9 +16002,13 @@ mod tests {
             },
             inrou: iroha_config::parameters::actual::SoracloudRuntimeInrou {
                 max_concurrent_vms: std::num::NonZeroUsize::new(2).expect("nonzero concurrent vms"),
+                enabled: true,
                 start_grace: Duration::from_secs(11),
                 stop_grace: Duration::from_secs(13),
                 proxy_only: false,
+            },
+            submission: iroha_config::parameters::actual::SoracloudRuntimeSubmission {
+                gas_asset_id: Some("xor#wonderland".to_owned()),
             },
             egress: iroha_config::parameters::actual::SoracloudRuntimeEgress {
                 default_allow: false,
@@ -16557,6 +16041,7 @@ mod tests {
         assert_eq!(manager.hydration_concurrency, runtime.hydration_concurrency);
         assert_eq!(manager.cache_budgets, runtime.cache_budgets);
         assert_eq!(manager.inrou, runtime.inrou);
+        assert_eq!(manager.submission, runtime.submission);
         assert_eq!(manager.egress, runtime.egress);
         assert_eq!(manager.hf, runtime.hf);
     }
@@ -16568,6 +16053,8 @@ mod tests {
             production_mode: true,
             ..Default::default()
         };
+        runtime.inrou.enabled = true;
+        runtime.submission.gas_asset_id = Some("xor#wonderland".to_owned());
         runtime.egress.default_allow = true;
         runtime.egress.rate_per_minute = std::num::NonZeroU32::new(60);
         runtime.egress.max_bytes_per_minute = std::num::NonZeroU64::new(1_048_576);
@@ -16610,6 +16097,30 @@ mod tests {
     }
 
     #[test]
+    fn disabled_inrou_host_does_not_advertise_or_host() {
+        let mut config =
+            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime-disabled"));
+        config.inrou.enabled = false;
+        config =
+            config.with_local_host_identity(ALICE_ID.clone(), "12D3KooWDisabledRuntimeHostAdvert");
+        let state = test_state().expect("test state");
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+
+        assert_eq!(manager.hosted_http_concurrency_limit(), 0);
+        assert!(
+            manager
+                .build_local_inrou_host_capability_record(123)
+                .is_none()
+        );
+        let view = state.view();
+        assert!(
+            manager
+                .local_inrou_host_capability_refresh_candidate(&view)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn inrou_host_heartbeat_ttl_tolerates_public_taira_queue_lag() {
         let config = test_runtime_manager_config(PathBuf::from(
             "/tmp/test-soracloud-runtime-inrou-heartbeat-ttl",
@@ -16628,7 +16139,8 @@ mod tests {
             "/tmp/test-soracloud-runtime-inrou-refresh-margin",
         ))
         .with_local_host_identity(ALICE_ID.clone(), "12D3KooWInrouRefreshMarginHost");
-        let manager = SoracloudRuntimeManager::new(config.clone(), test_state().expect("test state"));
+        let manager =
+            SoracloudRuntimeManager::new(config.clone(), test_state().expect("test state"));
         let now_ms = 1_000_000;
         let (desired, _) = manager
             .build_local_inrou_host_capability_record(now_ms)
@@ -17368,8 +16880,7 @@ mod tests {
                     autonomy_budget_remaining_units: 1_000,
                     artifact_allowlist: BTreeMap::new(),
                     autonomy_run_history: Vec::new(),
-                    uploaded_model_binding: None,
-                },
+                        },
             );
             world.soracloud_hf_sources_mut_for_testing().insert(
                 source_id,
@@ -23749,7 +23260,6 @@ exec python3 /tmp/inrou-shared-volume.py
             mailbox_queue: Vec::new(),
             autonomy_budget_ceiling_units: 1_000,
             autonomy_budget_remaining_units: 925,
-            uploaded_model_binding: None,
             artifact_allowlist: BTreeMap::from([(
                 run.artifact_hash.clone(),
                 SoraAgentArtifactAllowRuleV1 {
@@ -23981,7 +23491,6 @@ exec python3 /tmp/inrou-shared-volume.py
             mailbox_queue: Vec::new(),
             autonomy_budget_ceiling_units: 1_000,
             autonomy_budget_remaining_units: 910,
-            uploaded_model_binding: None,
             artifact_allowlist: BTreeMap::from([(
                 run.artifact_hash.clone(),
                 SoraAgentArtifactAllowRuleV1 {

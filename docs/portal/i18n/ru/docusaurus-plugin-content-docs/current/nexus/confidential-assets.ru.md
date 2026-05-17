@@ -231,7 +231,7 @@ SPDX-License-Identifier: Apache-2.0
 - Жесткие лимиты (настраиваемые значения по умолчанию):
 - `max_proof_size_bytes = 262_144`.
 - И18НИ00000282Х, И18НИ00000283Х, И18НИ00000284Х.
-- И18НИ00000285Х, И18НИ00000286Х. Доказательства, превышающие `verify_timeout_ms`, детерминированно прерывают процедуру (управление-голосования эмитируют `proof verification exceeded timeout`, `VerifyProof` возвращают ошибку).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Дополнительные квоты обеспечивают живучесть: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, и `max_public_inputs` ограничивают построители блоков; `reorg_depth_bound` (≥ `max_anchor_age_blocks`) контрольные точки границы хранения управления.
 - Среда выполнения теперь отклоняет транзакцию, увеличивая лимиты на транзакцию или блок, создавая определенные ошибки `InvalidParameter` и не изменяя реестр состояний.
 - Mempool предварительно фильтрует конфиденциальные транзакции по `vk_id`, полное подтверждение и привязку возраста до вызова верификатора, чтобы проверить потребление ресурсов.

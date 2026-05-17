@@ -24,7 +24,7 @@ class FakeHttpTransportExecutor : HttpTransportExecutor {
         globalResponses.add(response)
     }
 
-    /** Enqueue a response for the given request path (e.g., `/transaction`). */
+    /** Enqueue a response for the given request path (e.g., `/v1/pipeline/transactions`). */
     fun enqueueResponse(path: String, response: TransportResponse) {
         pathResponses
             .computeIfAbsent(path) { ConcurrentLinkedQueue() }

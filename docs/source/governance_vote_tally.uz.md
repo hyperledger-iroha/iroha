@@ -94,7 +94,7 @@ Boshqaruv tekshiruvchini quyidagi hollarda ro'yxatdan o'tkazadi:- `backend = "ha
 - `backend tag = BackendTag::Halo2IpaPasta`
 - `curve = "pallas"`
 - `public_inputs_schema_hash = 0xfae4…64d3`
-- `commitment = sha256(backend || vk_bytes)` (32 baytli dayjest)
+- `commitment = zk_hash_vk(backend, vk_bytes)` (domain-separated length-prefixed SHA-256 digest using domain `iroha:zk:v1:vk`)
 
 Kanonik to'plamga tasdiqlash konverti bilan birga ichki tasdiqlash kaliti (`key = Some(VerifyingKeyBox { … })`) kiradi. `vk_len`, `max_proof_bytes` va ixtiyoriy metama'lumotlar URI'lari yaratilgan artefaktlardan to'ldiriladi.
 

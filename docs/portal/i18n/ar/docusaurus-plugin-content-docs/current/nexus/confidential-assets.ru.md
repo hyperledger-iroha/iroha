@@ -249,7 +249,7 @@ SPDX-License-Identifier: Apache-2.0
 - حدود الاستخدام (زيادة المكافآت):
 -`max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`، `max_commitments_per_tx = 8`، `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`، `max_anchor_age_blocks = 10_000`. البراهين، السابقة `verify_timeout_ms`، تحديد تعليمات التحويل (الحوكمة - الحوكمة، `proof verification exceeded timeout`، `VerifyProof`) возвращает озибку).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - إضافة المزيد من الكلمات إلى الحياة: `max_proof_bytes_block`، `max_verify_calls_per_tx`، `max_verify_calls_per_block`، و`max_public_inputs` منع الكتلة بناة. `reorg_depth_bound` (≥ `max_anchor_age_blocks`) يتحكم في نقاط التفتيش الحدودية للاحتفاظ.
 - يقوم وقت التشغيل بإنهاء المعاملات، أو تقييدها لكل معاملة أو حدود لكل كتلة، وإلغاء تحديد الملحقات `InvalidParameter` وغير ذلك تغيير حالة دفتر الأستاذ.
 - يقوم Mempool بتصفية المعاملات السرية مسبقًا عبر `vk_id` وإثبات الخط ومرساة التحقق من التحقق من أجل التحقق من ذلك الموارد المحتملة.

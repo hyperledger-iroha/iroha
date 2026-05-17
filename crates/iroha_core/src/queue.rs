@@ -5076,7 +5076,7 @@ pub mod tests {
         },
         parameter::TransactionParameters,
         prelude::*,
-        proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
+        proof::{ProofAttachment, ProofAttachmentList, ProofBox},
         runtime::RuntimeUpgradeManifest,
         transaction::signed::{
             SealedTransactionCommitmentPayload, SignedSealedTransactionCommitment,
@@ -5766,11 +5766,7 @@ pub mod tests {
                 backend: Ident::from_str("halo2/ipa").expect("ident"),
                 bytes: vec![0xAA],
             },
-            vk_ref: None,
-            vk_inline: Some(VerifyingKeyBox::new(
-                Ident::from_str("halo2/ipa").expect("ident"),
-                vec![0xBB],
-            )),
+            vk_ref: iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "privacy"),
             vk_commitment: None,
             envelope_hash: None,
             lane_privacy: Some(LanePrivacyProof {

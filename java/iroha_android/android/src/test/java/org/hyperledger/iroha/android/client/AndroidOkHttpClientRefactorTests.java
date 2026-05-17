@@ -131,7 +131,7 @@ public final class AndroidOkHttpClientRefactorTests {
       okTransport.submitTransaction(tx).get(2, TimeUnit.SECONDS);
 
       final TelemetryRecord okRequest = okSink.awaitRequest();
-      assertRequestFields(okRequest, "/transaction", "POST");
+      assertRequestFields(okRequest, "/v1/pipeline/transactions", "POST");
 
       final TelemetryRecord okResponse = okSink.awaitResponse();
       assertEquals(202, okResponse.statusCode().orElseThrow());
@@ -163,7 +163,7 @@ public final class AndroidOkHttpClientRefactorTests {
               .build();
       try (ToriiEventStream stream =
           okClient.openSseStream(
-              "/events",
+              "/v1/events/sse",
               eventOptions,
               new ToriiEventStreamListener() {
                 @Override
@@ -173,7 +173,7 @@ public final class AndroidOkHttpClientRefactorTests {
       }
 
       final TelemetryRecord okRequest = okSink.awaitRequest();
-      assertRequestFields(okRequest, "/events", "GET");
+      assertRequestFields(okRequest, "/v1/events/sse", "GET");
     }
   }
 
