@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
 import org.hyperledger.iroha.android.client.JsonEncoder;
@@ -42,6 +43,16 @@ public final class OfflineNoteV2Test {
     nativeHalo2ProverPerformanceWhenRequested();
     qrFixtureUsesSdkTextPrefix();
     paymentTokenCodecRoundTripsNoritoTextAndQrFrames();
+    qrStreamRejectsAdversarialEnvelopesAndChunkShapes();
+    transferHandoffSupportsQrNfcAndNearbyPayloads();
+    transferHandoffRejectsAdversarialStreamsAndMetadata();
+    nfcApduProtocolSupportsAndroidSafeAndIosFastChunks();
+    transportWireFormatMatchesSharedFixture();
+    nfcApduProtocolRejectsAdversarialPayloadsBeforeCommit();
+    nfcApduProtocolRejectsMalformedCommandsAndBounds();
+    nearbyEnvelopeRoundTripsPairingPaymentAndAck();
+    nearbyEnvelopeRejectsAdversarialMessages();
+    walletAcceptsCanonicalSdkInteropPaymentToken();
     walletNoteJsonCodecRoundTripsFixtureNote();
     walletLoadDerivesCommitmentBeforeIssuerSubmission();
     toriiIssuerClientBodySignsRefillAndIssuesWalletCommitment();
@@ -484,6 +495,7 @@ public final class OfflineNoteV2Test {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> derivation = obj(obj(fixture, "chain_vectors"), "derivation");
     final Map<String, Object> payment = obj(fixture, "payment_token");
+    final Map<String, Object> sdkInterop = obj(fixture, "sdk_interop");
     final OfflineNoteV2PaymentToken token =
         new OfflineNoteV2PaymentToken(
             string(derivation, "chain_id"),
@@ -492,6 +504,10 @@ public final class OfflineNoteV2Test {
             hexBytes(string(payment, "token_id")),
             audit(fixture),
             longValue(payment, "created_at_ms"));
+    final byte[] canonicalPayload = base64Bytes(string(sdkInterop, "payment_token_norito_base64"));
+    assertTrue(
+        Arrays.equals(canonicalPayload, OfflineNoteV2PaymentTokenCodec.encodeNorito(token)),
+        "canonical payment token Norito");
 
     final OfflineNoteV2PaymentToken noritoDecoded =
         OfflineNoteV2PaymentTokenCodec.decodeNorito(OfflineNoteV2PaymentTokenCodec.encodeNorito(token));
@@ -501,8 +517,16 @@ public final class OfflineNoteV2Test {
         base64(token.audit().noritoEncoded()),
         base64(noritoDecoded.audit().noritoEncoded()),
         "norito audit");
+    final OfflineNoteV2PaymentToken canonicalDecoded =
+        OfflineNoteV2PaymentTokenCodec.decodeNorito(canonicalPayload);
+    assertEquals(token.tokenIdHex(), canonicalDecoded.tokenIdHex(), "canonical token id");
+    assertEquals(
+        base64(token.audit().noritoEncoded()),
+        base64(canonicalDecoded.audit().noritoEncoded()),
+        "canonical audit");
 
     final String text = OfflineNoteV2PaymentTokenCodec.encodeText(token);
+    assertEquals(string(sdkInterop, "payment_token_text"), text, "canonical payment token text");
     assertTrue(
         text.startsWith(OfflineNoteV2PaymentTokenCodec.TEXT_PREFIX),
         "payment token text prefix");
@@ -510,10 +534,25 @@ public final class OfflineNoteV2Test {
         token.tokenIdHex(),
         OfflineNoteV2PaymentTokenCodec.decodeText(text).tokenIdHex(),
         "text token id");
+    assertEquals(
+        token.tokenIdHex(),
+        OfflineNoteV2PaymentTokenCodec.decodeText(string(sdkInterop, "payment_token_text"))
+            .tokenIdHex(),
+        "canonical text token id");
 
     final List<byte[]> frames =
         OfflineNoteV2PaymentTokenCodec.encodeQrFrameBytes(
             token, new OfflineQrStream.Options(180, 2));
+    final List<Object> expectedFrameObjects = list(obj(sdkInterop, "payment_token_qr_v1"), "frames");
+    final List<String> expectedFrames = new ArrayList<>();
+    for (final Object frameObject : expectedFrameObjects) {
+      expectedFrames.add(string(asMap(frameObject, "payment_token_qr_v1.frames[]"), "bytes_hex"));
+    }
+    final List<String> actualFrames = new ArrayList<>();
+    for (final byte[] frame : frames) {
+      actualFrames.add(hex(frame));
+    }
+    assertTrue(expectedFrames.equals(actualFrames), "canonical QR frames");
     final OfflineQrStream.Decoder decoder = new OfflineQrStream.Decoder();
     byte[] payload = null;
     for (final byte[] frame : frames) {
@@ -530,6 +569,1158 @@ public final class OfflineNoteV2Test {
         base64(token.audit().noritoEncoded()),
         base64(qrDecoded.audit().noritoEncoded()),
         "qr audit norito");
+
+    final OfflineQrStream.Decoder canonicalDecoder = new OfflineQrStream.Decoder();
+    byte[] canonicalQrPayload = null;
+    for (final String frame : expectedFrames) {
+      final OfflineQrStream.DecodeResult result = canonicalDecoder.ingest(hexBytes(frame));
+      if (result.payload() != null) {
+        canonicalQrPayload = result.payload();
+      }
+    }
+    assertTrue(canonicalQrPayload != null, "canonical QR payload");
+    assertTrue(Arrays.equals(canonicalPayload, canonicalQrPayload), "canonical QR payload bytes");
+    assertEquals(
+        token.tokenIdHex(),
+        OfflineNoteV2PaymentTokenCodec.decodeQrPayload(canonicalQrPayload).tokenIdHex(),
+        "canonical QR token id");
+  }
+
+  private static void qrStreamRejectsAdversarialEnvelopesAndChunkShapes() {
+    final byte[] payload = new byte[300];
+    for (int index = 0; index < payload.length; index++) {
+      payload[index] = (byte) ((index * 31 + 7) & 0xFF);
+    }
+    final List<OfflineQrStream.Frame> frames =
+        OfflineQrStream.Encoder.encodeFrames(
+            payload,
+            OfflineQrStream.PayloadKind.OFFLINE_PAYMENT_TOKEN_V2,
+            new OfflineQrStream.Options(100, 2));
+    OfflineQrStream.Frame header = null;
+    final List<OfflineQrStream.Frame> dataFrames = new ArrayList<>();
+    final List<OfflineQrStream.Frame> parityFrames = new ArrayList<>();
+    for (final OfflineQrStream.Frame frame : frames) {
+      if (frame.kind() == OfflineQrStream.FrameKind.HEADER) {
+        header = frame;
+      } else if (frame.kind() == OfflineQrStream.FrameKind.DATA) {
+        dataFrames.add(frame);
+      } else if (frame.kind() == OfflineQrStream.FrameKind.PARITY) {
+        parityFrames.add(frame);
+      }
+    }
+    assertTrue(header != null, "QR stream header exists");
+    final OfflineQrStream.Frame finalHeader = header;
+    final OfflineQrStream.Frame firstData = dataFrames.get(0);
+    final OfflineQrStream.Frame firstParity = parityFrames.get(0);
+
+    assertThrows(
+        () ->
+            new OfflineQrStream.Frame(
+                OfflineQrStream.FrameKind.DATA, finalHeader.streamId(), 0, 1, new byte[0x1_0000]),
+        "oversized frame payload should fail");
+    assertThrows(
+        () ->
+            new OfflineQrStream.Frame(
+                OfflineQrStream.FrameKind.DATA, finalHeader.streamId(), -1, 1, new byte[0]),
+        "negative frame index should fail");
+    assertThrows(
+        () ->
+            new OfflineQrStream.Frame(
+                OfflineQrStream.FrameKind.DATA, finalHeader.streamId(), 0x1_0000, 1, new byte[0]),
+        "oversized frame index should fail");
+    assertThrows(
+        () ->
+            new OfflineQrStream.Frame(
+                OfflineQrStream.FrameKind.DATA, finalHeader.streamId(), 0, -1, new byte[0]),
+        "negative frame total should fail");
+    assertThrows(
+        () ->
+            new OfflineQrStream.Frame(
+                OfflineQrStream.FrameKind.DATA, finalHeader.streamId(), 0, 0x1_0000, new byte[0]),
+        "oversized frame total should fail");
+    assertThrows(
+        () -> new OfflineQrStream.Envelope(0, 0, 0, 1, 1, 0, -1, 1, new byte[32]),
+        "negative payload kind should fail");
+    assertThrows(
+        () -> new OfflineQrStream.Envelope(0, 0, 0, 1, 1, 0, 0x1_0000, 1, new byte[32]),
+        "oversized payload kind should fail");
+
+    final byte[] encodedHeader = finalHeader.encode();
+    final byte[] trailingFrame = Arrays.copyOf(encodedHeader, encodedHeader.length + 1);
+    assertThrows(
+        () -> OfflineQrStream.Frame.decode(trailingFrame),
+        "trailing frame bytes after CRC should fail");
+
+    final byte[] unsupportedFrameVersion = finalHeader.encode();
+    unsupportedFrameVersion[2] = 0x7F;
+    assertThrows(
+        () -> OfflineQrStream.Frame.decode(unsupportedFrameVersion),
+        "unsupported frame version should fail");
+
+    final byte[] unknownFrameKind = finalHeader.encode();
+    unknownFrameKind[3] = 0x7F;
+    assertThrows(
+        () -> OfflineQrStream.Frame.decode(unknownFrameKind),
+        "unknown frame kind should fail");
+
+    assertThrows(
+        () ->
+            new OfflineQrStream.Decoder()
+                .ingest(
+                    new OfflineQrStream.Frame(
+                            OfflineQrStream.FrameKind.HEADER,
+                            filledBytes(16, (byte) 0xA5),
+                            0,
+                            1,
+                            finalHeader.payload())
+                        .encode()),
+        "header stream id mismatch should fail");
+
+    assertThrows(
+        () ->
+            new OfflineQrStream.Decoder()
+                .ingest(
+                    new OfflineQrStream.Frame(
+                            OfflineQrStream.FrameKind.HEADER,
+                            finalHeader.streamId(),
+                            1,
+                            1,
+                            finalHeader.payload())
+                        .encode()),
+        "noncanonical header counters should fail");
+
+    assertThrows(
+        () ->
+            new OfflineQrStream.Decoder()
+                .ingest(mutatedHeaderFrame(finalHeader, envelope -> Arrays.copyOf(envelope, envelope.length + 1))),
+        "extra envelope bytes should fail");
+    assertThrows(
+        () ->
+            new OfflineQrStream.Decoder()
+                .ingest(
+                    mutatedHeaderFrame(
+                        finalHeader,
+                        envelope -> {
+                          envelope[2] = 0x7F;
+                          return envelope;
+                        })),
+        "unsupported envelope encoding should fail");
+    assertThrows(
+        () ->
+            new OfflineQrStream.Decoder()
+                .ingest(
+                    mutatedHeaderFrame(
+                        finalHeader,
+                        envelope -> {
+                          writeUInt16LE(envelope, 4, 0);
+                          return envelope;
+                        })),
+        "zero envelope chunk size should fail");
+    assertThrows(
+        () ->
+            new OfflineQrStream.Decoder()
+                .ingest(
+                    mutatedHeaderFrame(
+                        finalHeader,
+                        envelope -> {
+                          writeUInt16LE(envelope, 6, 1);
+                          return envelope;
+                        })),
+        "envelope data chunk count mismatch should fail");
+    assertThrows(
+        () ->
+            new OfflineQrStream.Decoder()
+                .ingest(
+                    mutatedHeaderFrame(
+                        finalHeader,
+                        envelope -> {
+                          writeUInt16LE(envelope, 8, 0);
+                          return envelope;
+                        })),
+        "envelope parity chunk count mismatch should fail");
+    assertThrows(
+        () ->
+            new OfflineQrStream.Decoder()
+                .ingest(
+                    mutatedHeaderFrame(
+                        finalHeader,
+                        envelope -> {
+                          envelope[1] = 0x01;
+                          return envelope;
+                        })),
+        "unsupported envelope flags should fail");
+    assertThrows(
+        () ->
+            new OfflineQrStream.Decoder()
+                .ingest(
+                    mutatedHeaderFrame(
+                        finalHeader,
+                        envelope -> {
+                          envelope[0] = 0x7F;
+                          return envelope;
+                        })),
+        "unsupported envelope version should fail");
+
+    final OfflineQrStream.Decoder repeatedHeaderDecoder = new OfflineQrStream.Decoder();
+    repeatedHeaderDecoder.ingest(finalHeader.encode());
+    repeatedHeaderDecoder.ingest(finalHeader.encode());
+    assertThrows(
+        () ->
+            repeatedHeaderDecoder.ingest(
+                mutatedHeaderFrame(
+                    finalHeader,
+                    envelope -> {
+                      writeUInt16LE(
+                          envelope,
+                          10,
+                          OfflineQrStream.PayloadKind.OFFLINE_RECEIVE_CHALLENGE_V2.value());
+                      return envelope;
+                    })),
+        "conflicting repeated header should fail");
+
+    final OfflineQrStream.Decoder shortDataDecoder = new OfflineQrStream.Decoder();
+    shortDataDecoder.ingest(finalHeader.encode());
+    assertThrows(
+        () ->
+            shortDataDecoder.ingest(
+                new OfflineQrStream.Frame(
+                        OfflineQrStream.FrameKind.DATA,
+                        firstData.streamId(),
+                        firstData.index(),
+                        firstData.total(),
+                        Arrays.copyOf(firstData.payload(), firstData.payload().length - 1))
+                    .encode()),
+        "short data chunk should fail");
+
+    final OfflineQrStream.Decoder longDataDecoder = new OfflineQrStream.Decoder();
+    longDataDecoder.ingest(finalHeader.encode());
+    final byte[] longDataPayload = Arrays.copyOf(firstData.payload(), firstData.payload().length + 1);
+    assertThrows(
+        () ->
+            longDataDecoder.ingest(
+                new OfflineQrStream.Frame(
+                        OfflineQrStream.FrameKind.DATA,
+                        firstData.streamId(),
+                        firstData.index(),
+                        firstData.total(),
+                        longDataPayload)
+                    .encode()),
+        "long data chunk should fail");
+
+    final OfflineQrStream.Decoder wrongTotalDecoder = new OfflineQrStream.Decoder();
+    wrongTotalDecoder.ingest(finalHeader.encode());
+    assertThrows(
+        () ->
+            wrongTotalDecoder.ingest(
+                new OfflineQrStream.Frame(
+                        OfflineQrStream.FrameKind.DATA,
+                        firstData.streamId(),
+                        firstData.index(),
+                        firstData.total() + 1,
+                        firstData.payload())
+                    .encode()),
+        "wrong data frame total should fail");
+
+    final OfflineQrStream.Decoder pendingBadDataDecoder = new OfflineQrStream.Decoder();
+    pendingBadDataDecoder.ingest(
+        new OfflineQrStream.Frame(
+                OfflineQrStream.FrameKind.DATA,
+                firstData.streamId(),
+                firstData.index(),
+                firstData.total() + 1,
+                firstData.payload())
+            .encode());
+    assertThrows(
+        () -> pendingBadDataDecoder.ingest(finalHeader.encode()),
+        "pending bad data frame should fail after header");
+
+    final OfflineQrStream.Decoder conflictingDataDecoder = new OfflineQrStream.Decoder();
+    conflictingDataDecoder.ingest(finalHeader.encode());
+    conflictingDataDecoder.ingest(firstData.encode());
+    final byte[] conflictingDataPayload = firstData.payload();
+    conflictingDataPayload[0] ^= (byte) 0xFF;
+    assertThrows(
+        () ->
+            conflictingDataDecoder.ingest(
+                new OfflineQrStream.Frame(
+                        OfflineQrStream.FrameKind.DATA,
+                        firstData.streamId(),
+                        firstData.index(),
+                        firstData.total(),
+                        conflictingDataPayload)
+                    .encode()),
+        "conflicting data chunk should fail");
+
+    final OfflineQrStream.Decoder poisonedParityDecoder = new OfflineQrStream.Decoder();
+    poisonedParityDecoder.ingest(finalHeader.encode());
+    poisonedParityDecoder.ingest(firstData.encode());
+    final byte[] poisonedParityPayload = firstParity.payload();
+    poisonedParityPayload[0] ^= (byte) 0xFF;
+    poisonedParityDecoder.ingest(
+        new OfflineQrStream.Frame(
+                OfflineQrStream.FrameKind.PARITY,
+                firstParity.streamId(),
+                firstParity.index(),
+                firstParity.total(),
+                poisonedParityPayload)
+            .encode());
+    assertThrows(
+        () -> poisonedParityDecoder.ingest(dataFrames.get(1).encode()),
+        "poisoned parity recovery should conflict with later real data");
+
+    final OfflineQrStream.Decoder hashMismatchDecoder = new OfflineQrStream.Decoder();
+    hashMismatchDecoder.ingest(finalHeader.encode());
+    final byte[] mutatedFirstDataPayload = firstData.payload();
+    mutatedFirstDataPayload[0] ^= (byte) 0xFF;
+    hashMismatchDecoder.ingest(
+        new OfflineQrStream.Frame(
+                OfflineQrStream.FrameKind.DATA,
+                firstData.streamId(),
+                firstData.index(),
+                firstData.total(),
+                mutatedFirstDataPayload)
+            .encode());
+    hashMismatchDecoder.ingest(dataFrames.get(1).encode());
+    assertThrows(
+        () -> hashMismatchDecoder.ingest(dataFrames.get(2).encode()),
+        "coherent mutated payload should fail hash validation");
+
+    final OfflineQrStream.Decoder shortParityDecoder = new OfflineQrStream.Decoder();
+    shortParityDecoder.ingest(finalHeader.encode());
+    assertThrows(
+        () ->
+            shortParityDecoder.ingest(
+                new OfflineQrStream.Frame(
+                        OfflineQrStream.FrameKind.PARITY,
+                        firstParity.streamId(),
+                        firstParity.index(),
+                        firstParity.total(),
+                        Arrays.copyOf(firstParity.payload(), firstParity.payload().length - 1))
+                    .encode()),
+        "short parity chunk should fail");
+
+    final OfflineQrStream.Decoder conflictingParityDecoder = new OfflineQrStream.Decoder();
+    conflictingParityDecoder.ingest(finalHeader.encode());
+    conflictingParityDecoder.ingest(firstParity.encode());
+    final byte[] conflictingParityPayload = firstParity.payload();
+    conflictingParityPayload[0] ^= (byte) 0xFF;
+    assertThrows(
+        () ->
+            conflictingParityDecoder.ingest(
+                new OfflineQrStream.Frame(
+                        OfflineQrStream.FrameKind.PARITY,
+                        firstParity.streamId(),
+                        firstParity.index(),
+                        firstParity.total(),
+                        conflictingParityPayload)
+                    .encode()),
+        "conflicting parity chunk should fail");
+  }
+
+  private static void transferHandoffSupportsQrNfcAndNearbyPayloads() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> derivation = obj(obj(fixture, "chain_vectors"), "derivation");
+    final Map<String, Object> payment = obj(fixture, "payment_token");
+    final Map<String, Object> sdkInterop = obj(fixture, "sdk_interop");
+    final OfflineNoteV2PaymentToken token =
+        new OfflineNoteV2PaymentToken(
+            string(derivation, "chain_id"),
+            string(payment, "invoice_id"),
+            hexBytes(string(derivation, "token_nonce_hex")),
+            hexBytes(string(payment, "token_id")),
+            audit(fixture),
+            longValue(payment, "created_at_ms"));
+    final byte[] canonicalPayload = base64Bytes(string(sdkInterop, "payment_token_norito_base64"));
+
+    final OfflineNoteV2TransferHandoff.OfflineNoteV2TransferCapabilities capabilities =
+        OfflineNoteV2TransferHandoff.OfflineNoteV2TransferCapabilities.current(false, true);
+    assertTrue(
+        capabilities
+            .supportedModalities()
+            .contains(OfflineNoteV2TransferHandoff.OfflineNoteV2TransferModality.QR_STREAMING),
+        "QR transfer capability");
+    assertTrue(
+        capabilities
+            .supportedModalities()
+            .contains(OfflineNoteV2TransferHandoff.OfflineNoteV2TransferModality.NEARBY),
+        "nearby transfer capability");
+    assertTrue(
+        !capabilities
+            .supportedModalities()
+            .contains(OfflineNoteV2TransferHandoff.OfflineNoteV2TransferModality.NFC),
+        "NFC should require explicit HCE capability");
+
+    final OfflineNoteV2TransferHandoff.OfflineNoteV2TransferPayload nearby =
+        OfflineNoteV2TransferHandoff.nearbyPayload(token);
+    assertEquals(
+        OfflineNoteV2TransferHandoff.OfflineNoteV2TransferModality.NEARBY.name(),
+        nearby.modality().name(),
+        "nearby modality");
+    assertEquals(
+        OfflineNoteV2TransferHandoff.PAYMENT_TOKEN_CONTENT_TYPE,
+        nearby.contentType(),
+        "nearby content type");
+    assertTrue(Arrays.equals(canonicalPayload, nearby.payload()), "nearby payload");
+    assertEquals(
+        token.tokenIdHex(),
+        OfflineNoteV2TransferHandoff.decodePaymentToken(nearby).tokenIdHex(),
+        "nearby token id");
+
+    final List<Object> expectedFrameObjects = list(obj(sdkInterop, "payment_token_qr_v1"), "frames");
+    final List<String> expectedFrames = new ArrayList<>();
+    for (final Object frameObject : expectedFrameObjects) {
+      expectedFrames.add(string(asMap(frameObject, "payment_token_qr_v1.frames[]"), "bytes_hex"));
+    }
+    final List<byte[]> qrFrames = OfflineNoteV2TransferHandoff.qrStreamingFrameBytes(token);
+    final List<String> actualFrames = new ArrayList<>();
+    for (final byte[] frame : qrFrames) {
+      actualFrames.add(hex(frame));
+    }
+    assertTrue(expectedFrames.equals(actualFrames), "handoff QR frames");
+    final OfflineNoteV2TransferHandoff.OfflineNoteV2TransferStreamReceiver qrReceiver =
+        new OfflineNoteV2TransferHandoff.OfflineNoteV2TransferStreamReceiver();
+    OfflineNoteV2TransferHandoff.OfflineNoteV2TransferStreamResult qrResult = null;
+    for (final byte[] frame : qrFrames) {
+      qrResult = qrReceiver.ingestFrame(frame);
+    }
+    assertTrue(qrResult != null && qrResult.token() != null, "handoff QR token");
+    assertEquals(token.tokenIdHex(), qrResult.token().tokenIdHex(), "handoff QR token id");
+
+    final List<byte[]> nfcFrames = OfflineNoteV2TransferHandoff.nfcFrameBytes(token);
+    for (final byte[] frame : nfcFrames) {
+      assertTrue(frame.length <= 250, "NFC frame fits short APDU payload budget");
+    }
+    final OfflineNoteV2TransferHandoff.OfflineNoteV2TransferStreamReceiver nfcReceiver =
+        new OfflineNoteV2TransferHandoff.OfflineNoteV2TransferStreamReceiver();
+    OfflineNoteV2TransferHandoff.OfflineNoteV2TransferStreamResult nfcResult = null;
+    for (final byte[] frame : nfcFrames) {
+      nfcResult = nfcReceiver.ingestFrame(frame);
+    }
+    assertTrue(nfcResult != null && nfcResult.token() != null, "handoff NFC token");
+    assertEquals(token.tokenIdHex(), nfcResult.token().tokenIdHex(), "handoff NFC token id");
+  }
+
+  private static void transferHandoffRejectsAdversarialStreamsAndMetadata() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNoteV2PaymentToken token =
+        OfflineNoteV2PaymentTokenCodec.decodeNorito(
+            base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64")));
+    final byte[] rawPayload = OfflineNoteV2TransferHandoff.rawPaymentTokenBytes(token);
+    final OfflineNoteV2TransferHandoff.OfflineNoteV2TransferPayload payload =
+        OfflineNoteV2TransferHandoff.paymentTokenPayload(
+            token, OfflineNoteV2TransferHandoff.OfflineNoteV2TransferModality.QR_STREAMING);
+    final OfflineNoteV2TransferHandoff.OfflineNoteV2TransferPayload wrongContentType =
+        new OfflineNoteV2TransferHandoff.OfflineNoteV2TransferPayload(
+            OfflineNoteV2TransferHandoff.OfflineNoteV2TransferModality.NEARBY,
+            OfflineNoteV2TransferHandoff.RECEIPT_ACK_CONTENT_TYPE,
+            payload.payload());
+    assertThrows(
+        () -> OfflineNoteV2TransferHandoff.decodePaymentToken(wrongContentType),
+        "wrong handoff content type should fail");
+
+    final List<byte[]> frames =
+        OfflineNoteV2TransferHandoff.qrStreamingFrameBytes(
+            token, new OfflineQrStream.Options(128, 0));
+    assertTrue(frames.size() > 2, "adversarial stream test needs multiple data frames");
+
+    final byte[] badMagic = Arrays.copyOf(frames.get(0), frames.get(0).length);
+    badMagic[0] = 0x00;
+    assertThrows(
+        () -> new OfflineNoteV2TransferHandoff.OfflineNoteV2TransferStreamReceiver().ingestFrame(badMagic),
+        "bad QR stream magic should fail");
+
+    final byte[] badVersion = Arrays.copyOf(frames.get(0), frames.get(0).length);
+    badVersion[2] = 0x7f;
+    assertThrows(
+        () -> new OfflineNoteV2TransferHandoff.OfflineNoteV2TransferStreamReceiver().ingestFrame(badVersion),
+        "bad QR stream version should fail");
+
+    final byte[] badChecksum = Arrays.copyOf(frames.get(1), frames.get(1).length);
+    badChecksum[badChecksum.length - 1] ^= 0x01;
+    assertThrows(
+        () -> new OfflineNoteV2TransferHandoff.OfflineNoteV2TransferStreamReceiver().ingestFrame(badChecksum),
+        "bad QR stream checksum should fail");
+
+    final byte[] truncated = Arrays.copyOfRange(frames.get(0), 0, 8);
+    assertThrows(
+        () -> new OfflineNoteV2TransferHandoff.OfflineNoteV2TransferStreamReceiver().ingestFrame(truncated),
+        "truncated QR stream frame should fail");
+
+    final OfflineQrStream.Frame header = OfflineQrStream.Frame.decode(frames.get(0));
+    final byte[] mismatchedHeaderStreamId = header.streamId();
+    mismatchedHeaderStreamId[0] ^= 0x01;
+    final byte[] mismatchedHeader =
+        new OfflineQrStream.Frame(
+                OfflineQrStream.FrameKind.HEADER,
+                mismatchedHeaderStreamId,
+                header.index(),
+                header.total(),
+                header.payload())
+            .encode();
+    assertThrows(
+        () -> new OfflineNoteV2TransferHandoff.OfflineNoteV2TransferStreamReceiver().ingestFrame(mismatchedHeader),
+        "header stream id mismatch should fail");
+
+    final OfflineQrStream.Frame firstData = OfflineQrStream.Frame.decode(frames.get(1));
+    final byte[] wrongStreamId = firstData.streamId();
+    wrongStreamId[0] ^= 0x7f;
+    final byte[] wrongStreamFrame =
+        new OfflineQrStream.Frame(
+                OfflineQrStream.FrameKind.DATA,
+                wrongStreamId,
+                firstData.index(),
+                firstData.total(),
+                firstData.payload())
+            .encode();
+    final OfflineNoteV2TransferHandoff.OfflineNoteV2TransferStreamReceiver ignoreWrongStreamReceiver =
+        new OfflineNoteV2TransferHandoff.OfflineNoteV2TransferStreamReceiver();
+    assertTrue(!ignoreWrongStreamReceiver.ingestFrame(frames.get(0)).isComplete(), "header only is incomplete");
+    assertTrue(!ignoreWrongStreamReceiver.ingestFrame(wrongStreamFrame).isComplete(), "wrong stream data is ignored");
+    OfflineNoteV2TransferHandoff.OfflineNoteV2TransferStreamResult completed = null;
+    for (int index = 1; index < frames.size(); index++) {
+      completed = ignoreWrongStreamReceiver.ingestFrame(frames.get(index));
+    }
+    assertTrue(completed != null && completed.token() != null, "valid stream should still complete");
+    assertEquals(token.tokenIdHex(), completed.token().tokenIdHex(), "valid stream token after wrong-stream data");
+
+    final byte[] poisonedPayload = firstData.payload();
+    poisonedPayload[0] ^= 0x01;
+    final byte[] poisonedFrame =
+        new OfflineQrStream.Frame(
+                OfflineQrStream.FrameKind.DATA,
+                firstData.streamId(),
+                firstData.index(),
+                firstData.total(),
+                poisonedPayload)
+            .encode();
+    final OfflineNoteV2TransferHandoff.OfflineNoteV2TransferStreamReceiver poisonedReceiver =
+        new OfflineNoteV2TransferHandoff.OfflineNoteV2TransferStreamReceiver();
+    poisonedReceiver.ingestFrame(frames.get(0));
+    poisonedReceiver.ingestFrame(poisonedFrame);
+    assertThrows(
+        () -> {
+          for (int index = 2; index < frames.size(); index++) {
+            poisonedReceiver.ingestFrame(frames.get(index));
+          }
+        },
+        "valid-CRC poisoned data chunk should fail final payload hash");
+
+    final List<byte[]> wrongKindFrames =
+        OfflineQrStream.Encoder.encodeFrameBytes(
+            rawPayload,
+            OfflineQrStream.PayloadKind.OFFLINE_RECEIPT_ACK_V2,
+            new OfflineQrStream.Options(512, 0));
+    final OfflineNoteV2TransferHandoff.OfflineNoteV2TransferStreamReceiver wrongKindReceiver =
+        new OfflineNoteV2TransferHandoff.OfflineNoteV2TransferStreamReceiver();
+    assertThrows(
+        () -> {
+          for (final byte[] frame : wrongKindFrames) {
+            wrongKindReceiver.ingestFrame(frame);
+          }
+        },
+        "non-payment stream payload kind should fail");
+  }
+
+  private static void nfcApduProtocolSupportsAndroidSafeAndIosFastChunks() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNoteV2PaymentToken token =
+        OfflineNoteV2PaymentTokenCodec.decodeNorito(
+            base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64")));
+    final byte[] payload = OfflineNoteV2TransferHandoff.rawPaymentTokenBytes(token);
+
+    assertEquals(
+        OfflineNoteV2TransferHandoff.DEFAULT_NFC_AID_HEX,
+        OfflineNoteV2NfcApduProtocol.AID_HEX,
+        "NFC AID");
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.select()
+            .equals(OfflineNoteV2NfcApduProtocol.parseCommand(OfflineNoteV2NfcApduProtocol.selectAidApdu())),
+        "select APDU");
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.getInfo()
+            .equals(OfflineNoteV2NfcApduProtocol.parseCommand(OfflineNoteV2NfcApduProtocol.getInfoApdu())),
+        "get-info APDU");
+
+    final byte[] infoBytes =
+        OfflineNoteV2NfcApduProtocol.encodeInfo(
+            OfflineNoteV2NfcApduProtocol.PayloadKind.PAYMENT_TOKEN, payload);
+    final OfflineNoteV2NfcApduProtocol.PayloadInfo info =
+        OfflineNoteV2NfcApduProtocol.decodeInfo(infoBytes);
+    assertTrue(info != null, "NFC info decodes");
+    assertTrue(info.kind() == OfflineNoteV2NfcApduProtocol.PayloadKind.PAYMENT_TOKEN, "info kind");
+    assertEquals(payload.length, info.payloadLength(), "info payload length");
+    assertEquals(
+        OfflineNoteV2NfcApduProtocol.ANDROID_SAFE_CHUNK_BYTES,
+        info.maxChunkLength(),
+        "info max chunk length");
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.payloadDigestMatches(payload, info.sha256()),
+        "info digest");
+
+    final List<byte[]> androidApdus = OfflineNoteV2TransferHandoff.nfcPaymentTokenWriteApdus(token);
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.writeMeta(
+                OfflineNoteV2NfcApduProtocol.PayloadKind.PAYMENT_TOKEN,
+                payload.length,
+                info.sha256())
+            .equals(OfflineNoteV2NfcApduProtocol.parseCommand(androidApdus.get(0))),
+        "payment write meta");
+    for (int index = 1; index < androidApdus.size() - 1; index++) {
+      final OfflineNoteV2NfcApduProtocol.Command command =
+          OfflineNoteV2NfcApduProtocol.parseCommand(androidApdus.get(index));
+      assertTrue(
+          command.type() == OfflineNoteV2NfcApduProtocol.Type.WRITE_CHUNK,
+          "payment write chunk");
+      assertTrue(
+          command.bytes().length <= OfflineNoteV2NfcApduProtocol.ANDROID_SAFE_CHUNK_BYTES,
+          "payment write chunk fits Android APDU budget");
+    }
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.commit()
+            .equals(OfflineNoteV2NfcApduProtocol.parseCommand(androidApdus.get(androidApdus.size() - 1))),
+        "payment commit");
+
+    final byte[] fastPayload = new byte[512];
+    Arrays.fill(fastPayload, (byte) 0x5A);
+    final byte[] fastApdu = OfflineNoteV2NfcApduProtocol.writeChunkApdu(1024, fastPayload);
+    assertTrue(
+        Arrays.equals(
+            new byte[] {(byte) 0x80, 0x21, 0x04, 0x00, 0x00, 0x02, 0x00},
+            Arrays.copyOfRange(fastApdu, 0, 7)),
+        "iOS fast extended write header");
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.writeChunk(1024, fastPayload)
+            .equals(OfflineNoteV2NfcApduProtocol.parseCommand(fastApdu)),
+        "iOS fast extended write parse");
+    final byte[] fastRead =
+        OfflineNoteV2NfcApduProtocol.readChunkApdu(
+            256, OfflineNoteV2NfcApduProtocol.MAX_EXTENDED_READ_CHUNK_BYTES);
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.readChunk(
+                256, OfflineNoteV2NfcApduProtocol.MAX_EXTENDED_READ_CHUNK_BYTES)
+            .equals(OfflineNoteV2NfcApduProtocol.parseCommand(fastRead)),
+        "iOS fast extended read parse");
+  }
+
+  private static void transportWireFormatMatchesSharedFixture() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNoteV2PaymentToken token =
+        OfflineNoteV2PaymentTokenCodec.decodeNorito(
+            base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64")));
+    final byte[] payload = OfflineNoteV2TransferHandoff.rawPaymentTokenBytes(token);
+    final List<byte[]> writeApdus = OfflineNoteV2TransferHandoff.nfcPaymentTokenWriteApdus(token);
+    final List<byte[]> readApdus = OfflineNoteV2NfcApduProtocol.readPayloadApdus(payload.length);
+    final byte[] nearbyBytes = OfflineNoteV2TransferHandoff.nearbyPaymentEnvelopeBytes(token);
+
+    assertEquals(2416, payload.length, "transport fixture payload length");
+    assertEquals(
+        "00a4040007f049524f48413200",
+        hex(OfflineNoteV2NfcApduProtocol.selectAidApdu()),
+        "select APDU fixture");
+    assertEquals(
+        "8010000000", hex(OfflineNoteV2NfcApduProtocol.getInfoApdu()), "get-info APDU fixture");
+    assertEquals(
+        "01020000097000f044c7349a978489568f9e4de6035df214b471571646fb8a6dec4d2c026aca1a5c",
+        hex(
+            OfflineNoteV2NfcApduProtocol.encodeInfo(
+                OfflineNoteV2NfcApduProtocol.PayloadKind.PAYMENT_TOKEN, payload)),
+        "NFC info fixture");
+    assertEquals(
+        "802000002601020000097044c7349a978489568f9e4de6035df214b471571646fb8a6dec4d2c026aca1a5c",
+        hex(
+            OfflineNoteV2NfcApduProtocol.writeMetaApdu(
+                OfflineNoteV2NfcApduProtocol.PayloadKind.PAYMENT_TOKEN, payload)),
+        "NFC write-meta fixture");
+    assertEquals(13, writeApdus.size(), "NFC write APDU count");
+    assertEquals(
+        "802000002601020000097044c7349a978489568f9e4de6035df214b471571646fb8a6dec4d2c026aca1a5c",
+        hex(writeApdus.get(0)),
+        "NFC first write APDU fixture");
+    assertEquals(
+        "4037d861f58cb4820507bd2fe905e395dfc326e93613eb2dd885ba0235cfd053",
+        hex(OfflineNoteV2NfcApduProtocol.sha256(writeApdus.get(1))),
+        "NFC first chunk fixture digest");
+    assertEquals(
+        "802109601063746f722d61756469742d70726f6f66",
+        hex(writeApdus.get(writeApdus.size() - 2)),
+        "NFC final chunk fixture");
+    assertEquals("8022000000", hex(writeApdus.get(writeApdus.size() - 1)), "NFC commit fixture");
+    assertEquals(11, readApdus.size(), "NFC read APDU count");
+    assertEquals("80110000f0", hex(readApdus.get(0)), "NFC first read APDU fixture");
+    assertEquals(3335, nearbyBytes.length, "Nearby payment envelope fixture length");
+    assertEquals(
+        "ce3207d3c55c3d89fc91012bb96546ea7ed71617545bc90b266a3c7bd67aec5c",
+        hex(OfflineNoteV2NfcApduProtocol.sha256(nearbyBytes)),
+        "Nearby payment envelope fixture digest");
+  }
+
+  private static void nfcApduProtocolRejectsAdversarialPayloadsBeforeCommit() {
+    final byte[] payload = "offline-payment".getBytes(StandardCharsets.UTF_8);
+    final OfflineNoteV2NfcApduProtocol.PayloadInfo info =
+        OfflineNoteV2NfcApduProtocol.decodeInfo(
+            OfflineNoteV2NfcApduProtocol.encodeInfo(
+                OfflineNoteV2NfcApduProtocol.PayloadKind.RECEIPT_ACK, payload));
+    assertTrue(info != null, "receipt ACK info decodes");
+    final OfflineNoteV2NfcApduProtocol.PayloadAssembler assembler =
+        new OfflineNoteV2NfcApduProtocol.PayloadAssembler(info);
+
+    assertTrue(
+        !assembler.write(payload.length - 2, new byte[] {1, 1, 1, 1}),
+        "reject chunk past declared length");
+    assertTrue(assembler.write(0, Arrays.copyOfRange(payload, 0, 6)), "accept first chunk");
+    assertTrue(assembler.write(0, Arrays.copyOfRange(payload, 0, 6)), "accept identical duplicate");
+    assertTrue(
+        !assembler.write(0, "OFFLIN".getBytes(StandardCharsets.UTF_8)),
+        "reject conflicting duplicate");
+    assertThrows(assembler::commit, "incomplete payload commit should fail");
+    assertTrue(
+        assembler.write(6, Arrays.copyOfRange(payload, 6, payload.length)),
+        "accept final chunk");
+    assertTrue(Arrays.equals(payload, assembler.commit()), "assembled payload");
+
+    final byte[] oversizedInfo =
+        OfflineNoteV2NfcApduProtocol.encodeInfo(
+            OfflineNoteV2NfcApduProtocol.PayloadKind.PAYMENT_TOKEN, payload);
+    final int oversized = OfflineNoteV2NfcApduProtocol.MAX_INCOMING_PAYLOAD_BYTES + 1;
+    oversizedInfo[2] = (byte) ((oversized >>> 24) & 0xFF);
+    oversizedInfo[3] = (byte) ((oversized >>> 16) & 0xFF);
+    oversizedInfo[4] = (byte) ((oversized >>> 8) & 0xFF);
+    oversizedInfo[5] = (byte) (oversized & 0xFF);
+    assertTrue(OfflineNoteV2NfcApduProtocol.decodeInfo(oversizedInfo) == null, "reject oversized info");
+
+    final OfflineNoteV2NfcApduProtocol.PayloadAssembler badAssembler =
+        new OfflineNoteV2NfcApduProtocol.PayloadAssembler(
+            OfflineNoteV2NfcApduProtocol.PayloadKind.PAYMENT_TOKEN, payload.length, new byte[32]);
+    assertTrue(badAssembler.write(0, payload), "bad checksum payload written");
+    assertThrows(badAssembler::commit, "checksum mismatch commit should fail");
+    assertThrows(
+        () ->
+            new OfflineNoteV2NfcApduProtocol.PayloadAssembler(
+                OfflineNoteV2NfcApduProtocol.PayloadKind.PAYMENT_TOKEN,
+                OfflineNoteV2NfcApduProtocol.MAX_INCOMING_PAYLOAD_BYTES + 1,
+                new byte[32]),
+        "oversized assembler should fail before allocation");
+  }
+
+  private static void nfcApduProtocolRejectsMalformedCommandsAndBounds() {
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.invalid()
+            .equals(OfflineNoteV2NfcApduProtocol.parseCommand(null)),
+        "null APDU should be invalid");
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.invalid()
+            .equals(OfflineNoteV2NfcApduProtocol.parseCommand(new byte[] {0x00})),
+        "short APDU should be invalid");
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.unsupported()
+            .equals(
+                OfflineNoteV2NfcApduProtocol.parseCommand(
+                    new byte[] {0x00, (byte) 0xA4, 0x04, 0x00, 0x01, (byte) 0xFF, 0x00})),
+        "wrong AID should be unsupported");
+    final byte[] selectWithNonZeroLe = OfflineNoteV2NfcApduProtocol.selectAidApdu();
+    selectWithNonZeroLe[selectWithNonZeroLe.length - 1] = 0x01;
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.unsupported()
+            .equals(OfflineNoteV2NfcApduProtocol.parseCommand(selectWithNonZeroLe)),
+        "select AID with nonzero Le should be unsupported");
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.unsupported()
+            .equals(
+                OfflineNoteV2NfcApduProtocol.parseCommand(
+                    new byte[] {(byte) 0x81, 0x10, 0x00, 0x00, 0x00})),
+        "wrong CLA should be unsupported");
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.invalid()
+            .equals(
+                OfflineNoteV2NfcApduProtocol.parseCommand(
+                    new byte[] {(byte) 0x80, 0x10, 0x00, 0x01, 0x00})),
+        "get-info with nonzero P1/P2 should be invalid");
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.invalid()
+            .equals(
+                OfflineNoteV2NfcApduProtocol.parseCommand(
+                    new byte[] {(byte) 0x80, 0x10, 0x00, 0x00, 0x01})),
+        "get-info with nonzero Le should be invalid");
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.invalid()
+            .equals(
+                OfflineNoteV2NfcApduProtocol.parseCommand(
+                    new byte[] {(byte) 0x80, 0x10, 0x00, 0x00, 0x01, 0x00})),
+        "get-info with data should be invalid");
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.invalid()
+            .equals(
+                OfflineNoteV2NfcApduProtocol.parseCommand(
+                    new byte[] {(byte) 0x80, 0x11, 0x00, 0x00, 0x00})),
+        "zero short read length should be invalid");
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.invalid()
+            .equals(
+                OfflineNoteV2NfcApduProtocol.parseCommand(
+                    new byte[] {(byte) 0x80, 0x11, 0x00, 0x00, 0x00, 0x00, 0x00})),
+        "zero-length extended read should be invalid");
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.invalid()
+            .equals(
+                OfflineNoteV2NfcApduProtocol.parseCommand(
+                    new byte[] {(byte) 0x80, 0x20, 0x00, 0x00, 0x01, 0x01})),
+        "short write-meta should be invalid");
+    final byte[] writeMetaWithOffset =
+        OfflineNoteV2NfcApduProtocol.writeMetaApdu(
+            OfflineNoteV2NfcApduProtocol.PayloadKind.RECEIPT_ACK, new byte[] {0x01});
+    writeMetaWithOffset[3] = 0x01;
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.invalid()
+            .equals(OfflineNoteV2NfcApduProtocol.parseCommand(writeMetaWithOffset)),
+        "write-meta with nonzero P1/P2 should be invalid");
+    final byte[] zeroLengthMeta = new byte[38];
+    zeroLengthMeta[0] = 0x01;
+    zeroLengthMeta[1] = (byte) OfflineNoteV2NfcApduProtocol.PayloadKind.PAYMENT_TOKEN.code();
+    final byte[] zeroLengthMetaApdu = new byte[43];
+    zeroLengthMetaApdu[0] = (byte) 0x80;
+    zeroLengthMetaApdu[1] = 0x20;
+    zeroLengthMetaApdu[4] = (byte) zeroLengthMeta.length;
+    System.arraycopy(zeroLengthMeta, 0, zeroLengthMetaApdu, 5, zeroLengthMeta.length);
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.invalid()
+            .equals(OfflineNoteV2NfcApduProtocol.parseCommand(zeroLengthMetaApdu)),
+        "zero-length write-meta should be invalid");
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.invalid()
+            .equals(
+                OfflineNoteV2NfcApduProtocol.parseCommand(
+                    new byte[] {(byte) 0x80, 0x21, 0x00, 0x00, 0x00})),
+        "empty write chunk should be invalid");
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.invalid()
+            .equals(
+                OfflineNoteV2NfcApduProtocol.parseCommand(
+                    new byte[] {(byte) 0x80, 0x21, 0x00, 0x00, 0x02, 0x01})),
+        "truncated write chunk should be invalid");
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.invalid()
+            .equals(
+                OfflineNoteV2NfcApduProtocol.parseCommand(
+                    new byte[] {(byte) 0x80, 0x22, 0x00, 0x00, 0x01, 0x00})),
+        "commit with data should be invalid");
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.invalid()
+            .equals(
+                OfflineNoteV2NfcApduProtocol.parseCommand(
+                    new byte[] {(byte) 0x80, 0x22, 0x01, 0x00, 0x00})),
+        "commit with nonzero P1/P2 should be invalid");
+    assertTrue(
+        OfflineNoteV2NfcApduProtocol.Command.invalid()
+            .equals(
+                OfflineNoteV2NfcApduProtocol.parseCommand(
+                    new byte[] {(byte) 0x80, 0x22, 0x00, 0x00, 0x01})),
+        "commit with nonzero Le should be invalid");
+
+    assertThrows(
+        () -> OfflineNoteV2NfcApduProtocol.writeChunkApdu(0x1_0000, new byte[] {0x01}),
+        "oversized offset should fail");
+    assertThrows(
+        () -> OfflineNoteV2NfcApduProtocol.writeChunkApdu(0, new byte[0]),
+        "empty write chunk should fail");
+    assertThrows(
+        () -> OfflineNoteV2NfcApduProtocol.readChunkApdu(0, 0),
+        "zero read chunk length should fail");
+    assertThrows(
+        () ->
+            OfflineNoteV2NfcApduProtocol.readChunkApdu(
+                0, OfflineNoteV2NfcApduProtocol.MAX_EXTENDED_READ_CHUNK_BYTES + 1),
+        "oversized direct read chunk length should fail");
+    assertThrows(
+        () ->
+            OfflineNoteV2NfcApduProtocol.writePayloadApdus(
+                OfflineNoteV2NfcApduProtocol.PayloadKind.PAYMENT_TOKEN, new byte[] {0x01}, 0),
+        "zero max chunk length should fail");
+    assertThrows(
+        () -> OfflineNoteV2NfcApduProtocol.readPayloadApdus(0),
+        "zero read payload length should fail");
+    assertThrows(
+        () ->
+            OfflineNoteV2NfcApduProtocol.readPayloadApdus(
+                1, OfflineNoteV2NfcApduProtocol.MAX_EXTENDED_READ_CHUNK_BYTES + 1),
+        "oversized read chunk length should fail");
+
+    final byte[] response = OfflineNoteV2NfcApduProtocol.response(new byte[] {(byte) 0xAA, (byte) 0xBB});
+    assertTrue(
+        Arrays.equals(new byte[] {(byte) 0xAA, (byte) 0xBB, (byte) 0x90, 0x00}, response),
+        "response should append success status");
+    assertEquals(0x9000, OfflineNoteV2NfcApduProtocol.responseStatus(response), "response status");
+    assertEquals(
+        -1,
+        OfflineNoteV2NfcApduProtocol.responseStatus(new byte[] {(byte) 0x90}),
+        "short response status");
+    assertTrue(
+        Arrays.equals(
+            new byte[] {(byte) 0xAA, (byte) 0xBB},
+            OfflineNoteV2NfcApduProtocol.responseData(response)),
+        "response data");
+    assertTrue(
+        Arrays.equals(new byte[0], OfflineNoteV2NfcApduProtocol.responseData(new byte[] {(byte) 0x90})),
+        "short response data");
+
+    final OfflineNoteV2NfcApduProtocol.PayloadAssembler assembler =
+        new OfflineNoteV2NfcApduProtocol.PayloadAssembler(
+            OfflineNoteV2NfcApduProtocol.PayloadKind.RECEIPT_ACK,
+            4,
+            OfflineNoteV2NfcApduProtocol.sha256(new byte[] {0x01, 0x02, 0x03, 0x04}));
+    assertTrue(!assembler.write(Integer.MAX_VALUE, new byte[] {0x01}), "huge offset rejected");
+    assertTrue(!assembler.write(4, new byte[] {0x01}), "end offset rejected");
+    assertTrue(!assembler.write(-1, new byte[] {0x01}), "negative offset rejected");
+    assertTrue(!assembler.write(0, new byte[0]), "empty assembler chunk rejected");
+    assertTrue(assembler.write(0, new byte[] {0x01, 0x02}), "first partial overlap chunk");
+    assertTrue(assembler.write(1, new byte[] {0x02, 0x03}), "identical overlap accepted");
+    assertTrue(!assembler.write(1, new byte[] {0x09, 0x09}), "conflicting overlap rejected");
+  }
+
+  private static void nearbyEnvelopeRoundTripsPairingPaymentAndAck() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNoteV2PaymentToken token =
+        OfflineNoteV2PaymentTokenCodec.decodeNorito(
+            base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64")));
+    final OfflineNoteV2NearbyEnvelope.PairingChallenge challenge =
+        new OfflineNoteV2NearbyEnvelope.PairingChallenge(" nearby_pairing_bird ");
+    final OfflineNoteV2NearbyEnvelope challengeEnvelope =
+        new OfflineNoteV2NearbyEnvelope(
+            OfflineNoteV2NearbyEnvelope.Kind.CHALLENGE,
+            "receive-challenge".getBytes(StandardCharsets.UTF_8),
+            OfflineNoteV2TransferHandoff.RECEIVE_CHALLENGE_CONTENT_TYPE,
+            challenge);
+    final byte[] paymentBytes = OfflineNoteV2TransferHandoff.nearbyPaymentEnvelopeBytes(token);
+    final OfflineNoteV2NearbyEnvelope paymentEnvelope =
+        OfflineNoteV2NearbyEnvelope.decode(paymentBytes);
+    final OfflineNoteV2NearbyEnvelope ackEnvelope =
+        new OfflineNoteV2NearbyEnvelope(
+            OfflineNoteV2NearbyEnvelope.Kind.RECEIPT_ACK,
+            "accepted-locally".getBytes(StandardCharsets.UTF_8),
+            OfflineNoteV2TransferHandoff.RECEIPT_ACK_CONTENT_TYPE);
+
+    assertTrue(
+        challenge.equals(
+            OfflineNoteV2NearbyEnvelope.decode(challengeEnvelope.encoded()).pairingChallenge()),
+        "challenge pairing roundtrip");
+    assertTrue(paymentEnvelope.kind() == OfflineNoteV2NearbyEnvelope.Kind.PAYMENT, "payment kind");
+    assertEquals(token.tokenIdHex(), paymentEnvelope.paymentToken().tokenIdHex(), "payment token");
+    assertEquals(
+        token.tokenIdHex(),
+        OfflineNoteV2TransferHandoff.decodeNearbyPaymentToken(paymentBytes).tokenIdHex(),
+        "payment token handoff decode");
+    assertTrue(
+        Arrays.equals(
+            "accepted-locally".getBytes(StandardCharsets.UTF_8),
+            OfflineNoteV2NearbyEnvelope.decode(ackEnvelope.encoded()).payload()),
+        "ACK payload");
+
+    final byte[] legacyPairing =
+        ("{\"version\":1,\"kind\":\"challenge\",\"payload\":\"cmVjZWl2ZS1jaGFsbGVuZ2U\","
+                + "\"contentType\":\"application/vnd.iroha.offline.receive-challenge-v1+octet-stream\","
+                + "\"pairingChallenge\":{\"assetName\":\"nearby_pairing_bird\"}}")
+            .getBytes(StandardCharsets.UTF_8);
+    assertTrue(
+        challenge.equals(OfflineNoteV2NearbyEnvelope.decode(legacyPairing).pairingChallenge()),
+        "legacy object pairing challenge");
+  }
+
+  private static void nearbyEnvelopeRejectsAdversarialMessages() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final byte[] tokenPayload = base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64"));
+    final OfflineNoteV2NearbyEnvelope.PairingChallenge pairing =
+        new OfflineNoteV2NearbyEnvelope.PairingChallenge("nearby_pairing_mask");
+
+    assertThrows(
+        () -> new OfflineNoteV2NearbyEnvelope.PairingChallenge("nearby_pairing_mask<script>"),
+        "invalid pairing asset should fail");
+    assertThrows(
+        () ->
+            new OfflineNoteV2NearbyEnvelope(
+                OfflineNoteV2NearbyEnvelope.Kind.CHALLENGE,
+                "challenge".getBytes(StandardCharsets.UTF_8),
+                OfflineNoteV2TransferHandoff.RECEIVE_CHALLENGE_CONTENT_TYPE),
+        "challenge without pairing should fail");
+    assertThrows(
+        () ->
+            new OfflineNoteV2NearbyEnvelope(
+                OfflineNoteV2NearbyEnvelope.Kind.CHALLENGE,
+                "challenge".getBytes(StandardCharsets.UTF_8),
+                OfflineNoteV2TransferHandoff.RECEIPT_ACK_CONTENT_TYPE,
+                pairing),
+        "challenge content type downgrade should fail");
+    assertThrows(
+        () ->
+            new OfflineNoteV2NearbyEnvelope(
+                OfflineNoteV2NearbyEnvelope.Kind.PAYMENT,
+                tokenPayload,
+                OfflineNoteV2TransferHandoff.PAYMENT_TOKEN_CONTENT_TYPE,
+                pairing),
+        "payment with pairing should fail");
+    assertThrows(
+        () ->
+            new OfflineNoteV2NearbyEnvelope(
+                OfflineNoteV2NearbyEnvelope.Kind.PAYMENT,
+                new byte[OfflineNoteV2NfcApduProtocol.MAX_INCOMING_PAYLOAD_BYTES + 1],
+                OfflineNoteV2TransferHandoff.PAYMENT_TOKEN_CONTENT_TYPE),
+        "oversized nearby payment should fail");
+    assertThrows(
+        () ->
+            new OfflineNoteV2NearbyEnvelope(
+                OfflineNoteV2NearbyEnvelope.Kind.RECEIPT_ACK,
+                "ok".getBytes(StandardCharsets.UTF_8),
+                OfflineNoteV2TransferHandoff.RECEIVE_CHALLENGE_CONTENT_TYPE),
+        "receipt ACK content type downgrade should fail");
+
+    final byte[] unsupportedVersion =
+        ("{\"version\":2,\"kind\":\"payment\",\"payload\":\"AQID\","
+                + "\"contentType\":\"application/vnd.iroha.offline.payment-token-v2+norito\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] fractionalVersion =
+        ("{\"version\":1.5,\"kind\":\"challenge\",\"payload\":\"YQ\","
+                + "\"contentType\":\"application/vnd.iroha.offline.receive-challenge-v1+octet-stream\","
+                + "\"pairingChallenge\":\"nearby_pairing_bird\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] unknownField =
+        ("{\"version\":1,\"kind\":\"payment\",\"payload\":\"AQID\","
+                + "\"contentType\":\"application/vnd.iroha.offline.payment-token-v2+norito\","
+                + "\"extra\":true}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] challengeContentTypeDowngrade =
+        ("{\"version\":1,\"kind\":\"challenge\",\"payload\":\"YQ\","
+                + "\"contentType\":\"application/vnd.iroha.offline.receipt-ack-v1+octet-stream\","
+                + "\"pairingChallenge\":\"nearby_pairing_bird\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] ackContentTypeDowngrade =
+        ("{\"version\":1,\"kind\":\"receipt_ack\",\"payload\":\"b2s\","
+                + "\"contentType\":\"application/vnd.iroha.offline.receive-challenge-v1+octet-stream\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] paddedPayload =
+        ("{\"version\":1,\"kind\":\"challenge\",\"payload\":\"YQ==\","
+                + "\"contentType\":\"application/vnd.iroha.offline.receive-challenge-v1+octet-stream\","
+                + "\"pairingChallenge\":\"nearby_pairing_bird\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    assertThrows(
+        () -> OfflineNoteV2NearbyEnvelope.decode(unsupportedVersion),
+        "unsupported nearby envelope version should fail");
+    assertThrows(
+        () -> OfflineNoteV2NearbyEnvelope.decode(fractionalVersion),
+        "fractional nearby envelope version should fail");
+    assertThrows(
+        () -> OfflineNoteV2NearbyEnvelope.decode(unknownField),
+        "unknown nearby envelope field should fail");
+    assertThrows(
+        () -> OfflineNoteV2NearbyEnvelope.decode(challengeContentTypeDowngrade),
+        "challenge content type downgrade should fail");
+    assertThrows(
+        () -> OfflineNoteV2NearbyEnvelope.decode(ackContentTypeDowngrade),
+        "receipt ACK content type downgrade should fail");
+    assertThrows(
+        () -> OfflineNoteV2NearbyEnvelope.decode(paddedPayload),
+        "padded nearby envelope payload should fail");
+    final byte[] topLevelArray = "[]".getBytes(StandardCharsets.UTF_8);
+    final byte[] invalidBase64Payload =
+        ("{\"version\":1,\"kind\":\"challenge\",\"payload\":\"!!!!\","
+                + "\"contentType\":\"application/vnd.iroha.offline.receive-challenge-v1+octet-stream\","
+                + "\"pairingChallenge\":\"nearby_pairing_bird\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] badPairingObject =
+        ("{\"version\":1,\"kind\":\"challenge\",\"payload\":\"YQ\","
+                + "\"contentType\":\"application/vnd.iroha.offline.receive-challenge-v1+octet-stream\","
+                + "\"pairingChallenge\":{\"assetName\":1}}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] smuggledPairingObject =
+        ("{\"version\":1,\"kind\":\"challenge\",\"payload\":\"YQ\","
+                + "\"contentType\":\"application/vnd.iroha.offline.receive-challenge-v1+octet-stream\","
+                + "\"pairingChallenge\":{\"assetName\":\"nearby_pairing_bird\",\"extra\":true}}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] ackWithPairing =
+        ("{\"version\":1,\"kind\":\"receipt_ack\",\"payload\":\"b2s\","
+                + "\"contentType\":\"application/vnd.iroha.offline.receipt-ack-v1+octet-stream\","
+                + "\"pairingChallenge\":\"nearby_pairing_bird\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    assertThrows(
+        () -> OfflineNoteV2NearbyEnvelope.decode(topLevelArray),
+        "top-level array nearby envelope should fail");
+    assertThrows(
+        () -> OfflineNoteV2NearbyEnvelope.decode(invalidBase64Payload),
+        "invalid nearby envelope base64url should fail");
+    assertThrows(
+        () -> OfflineNoteV2NearbyEnvelope.decode(badPairingObject),
+        "bad nearby pairing object should fail");
+    assertThrows(
+        () -> OfflineNoteV2NearbyEnvelope.decode(smuggledPairingObject),
+        "nearby pairing object with unknown field should fail");
+    assertThrows(
+        () -> OfflineNoteV2NearbyEnvelope.decode(ackWithPairing),
+        "ACK with pairing should fail");
+    assertThrows(
+        () ->
+            new OfflineNoteV2NearbyEnvelope(
+                OfflineNoteV2NearbyEnvelope.Kind.PAYMENT,
+                new byte[] {0x01, 0x02, 0x03},
+                OfflineNoteV2TransferHandoff.PAYMENT_TOKEN_CONTENT_TYPE),
+        "invalid payment token payload should fail");
+    assertThrows(
+        () ->
+            new OfflineNoteV2NearbyEnvelope(
+                OfflineNoteV2NearbyEnvelope.Kind.RECEIPT_ACK,
+                new byte[0],
+                OfflineNoteV2TransferHandoff.RECEIPT_ACK_CONTENT_TYPE),
+        "empty ACK payload should fail");
+  }
+
+  private static void walletAcceptsCanonicalSdkInteropPaymentToken() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final Map<String, Object> derivation = obj(chain, "derivation");
+    final Map<String, Object> payment = obj(fixture, "payment_token");
+    final OfflineNoteV2.KeyCertificateV2 recipientCertificate =
+        certificate(obj(payment, "recipient_key_certificate"));
+    final InMemoryOfflineNoteV2Store recipientStore = new InMemoryOfflineNoteV2Store();
+    final OfflineNoteV2Wallet recipientWallet =
+        new OfflineNoteV2Wallet(
+            string(derivation, "chain_id"),
+            string(payment, "recipient_account_id"),
+            new StaticAttestationProvider(recipientCertificate),
+            recipientStore,
+            null,
+            new RecordingTransactionSubmitter(),
+            BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
+            certificateVerifier(fixture),
+            new QueueRandomSource(
+                Collections.singletonList(hexBytes(string(derivation, "recipient_note_secret_hex")))),
+            new FixedIdGenerator(string(derivation, "payment_request_id")),
+            () -> 1_700_000_001_200L);
+    final OfflineNoteV2ReceiveRequest receiveRequest =
+        recipientWallet.prepareReceive(
+            assetDefinitionFromAssetId(string(obj(chain, "issue"), "asset_id")),
+            string(obj(chain, "redeem"), "amount"));
+    assertEquals(
+        string(derivation, "recipient_output_commitment"),
+        receiveRequest.outputCommitmentHex(),
+        "canonical receive output commitment");
+
+    final OfflineNoteV2PaymentToken token =
+        OfflineNoteV2PaymentTokenCodec.decodeNorito(
+            base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64")));
+    final OfflineNoteV2WalletNote accepted = recipientWallet.accept(token);
+
+    assertEquals(
+        string(derivation, "recipient_output_commitment"),
+        accepted.noteCommitmentHex(),
+        "accepted canonical note commitment");
+    assertEquals(
+        OfflineNoteV2WalletNoteState.SPENDABLE.name(),
+        accepted.state().name(),
+        "accepted canonical note state");
+    assertEquals(
+        OfflineNoteV2WalletNoteState.SPENDABLE.name(),
+        recipientStore
+            .findNote(hexBytes(string(derivation, "recipient_output_commitment")))
+            .state()
+            .name(),
+        "stored canonical note state");
   }
 
   private static void walletNoteJsonCodecRoundTripsFixtureNote() throws Exception {
@@ -2292,6 +3483,24 @@ public final class OfflineNoteV2Test {
       builder.append(String.format("%02x", b & 0xFF));
     }
     return builder.toString();
+  }
+
+  private static byte[] mutatedHeaderFrame(
+      final OfflineQrStream.Frame header, final Function<byte[], byte[]> mutator) {
+    final byte[] envelope = header.payload();
+    final byte[] mutated = mutator.apply(envelope);
+    return new OfflineQrStream.Frame(
+            OfflineQrStream.FrameKind.HEADER,
+            header.streamId(),
+            header.index(),
+            header.total(),
+            mutated)
+        .encode();
+  }
+
+  private static void writeUInt16LE(final byte[] bytes, final int offset, final int value) {
+    bytes[offset] = (byte) (value & 0xFF);
+    bytes[offset + 1] = (byte) ((value >>> 8) & 0xFF);
   }
 
   private static String assetDefinitionFromAssetId(final String assetId) {

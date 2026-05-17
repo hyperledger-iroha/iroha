@@ -28,7 +28,13 @@ object OfflineQrStream {
         UNSPECIFIED(0),
         OFFLINE_RECEIVE_CHALLENGE_V2(1),
         OFFLINE_PAYMENT_TOKEN_V2(2),
-        OFFLINE_RECEIPT_ACK_V2(3),
+        OFFLINE_RECEIPT_ACK_V2(3);
+
+        companion object {
+            @JvmStatic
+            fun fromValue(value: Int): PayloadKind? =
+                entries.firstOrNull { it.value == value }
+        }
     }
 
     object TextCodec {
@@ -78,6 +84,22 @@ object OfflineQrStream {
 
         init {
             require(payloadHash.size == 32) { "payloadHash must be 32 bytes" }
+            require(flags == 0) { "Unsupported envelope flags" }
+            require(encoding == ENCODING_BINARY.toInt()) { "Unsupported envelope encoding" }
+            require(parityGroup in 0..0xFF) { "parityGroup must be between 0 and 255" }
+            require(chunkSize in 1..0xFFFF) { "chunkSize must be between 1 and 65535" }
+            require(dataChunks in 0..0xFFFF) { "dataChunks must be between 0 and 65535" }
+            require(parityChunks in 0..0xFFFF) { "parityChunks must be between 0 and 65535" }
+            require(payloadKind in 0..0xFFFF) { "payloadKind must be between 0 and 65535" }
+            require(payloadLength in 0..0xFFFF_FFFFL) { "payloadLength must fit uint32" }
+            val expectedDataChunks =
+                if (payloadLength == 0L) 0L else (payloadLength + chunkSize - 1L) / chunkSize
+            require(expectedDataChunks <= 0xFFFFL && dataChunks.toLong() == expectedDataChunks) {
+                "dataChunks mismatch"
+            }
+            val expectedParityChunks =
+                if (parityGroup == 0) 0 else (dataChunks + parityGroup - 1) / parityGroup
+            require(parityChunks == expectedParityChunks) { "parityChunks mismatch" }
             _payloadHash = payloadHash.copyOf()
         }
 
@@ -103,7 +125,7 @@ object OfflineQrStream {
         companion object {
             @JvmStatic
             fun decode(bytes: ByteArray): Envelope {
-                require(bytes.size >= ENVELOPE_LENGTH) { "Envelope is too short" }
+                require(bytes.size == ENVELOPE_LENGTH) { "Envelope length mismatch" }
                 var offset = 0
                 val version = bytes[offset++].toInt() and 0xFF
                 require(version == ENVELOPE_VERSION.toInt()) { "Unsupported envelope version: $version" }
@@ -135,14 +157,16 @@ object OfflineQrStream {
         init {
             _streamId = streamId.copyOf()
             require(_streamId.size == 16) { "streamId must be 16 bytes" }
+            require(index in 0..0xFFFF) { "index must be between 0 and 65535" }
+            require(total in 0..0xFFFF) { "total must be between 0 and 65535" }
             _payload = payload?.copyOf() ?: byteArrayOf()
+            require(_payload.size <= 0xFFFF) { "payload length exceeds 65535" }
         }
 
         fun payload(): ByteArray = _payload.copyOf()
         fun streamId(): ByteArray = _streamId.copyOf()
 
         fun encode(): ByteArray {
-            require(_payload.size <= 0xFFFF) { "payload length exceeds 65535" }
             val headerLength = 2 + 1 + 1 + 16 + 2 + 2 + 2
             val out = ByteArray(headerLength + _payload.size + 4)
             var offset = 0
@@ -172,7 +196,7 @@ object OfflineQrStream {
                 val total = readUInt16LE(bytes, 22)
                 val payloadLength = readUInt16LE(bytes, 24)
                 val payloadEnd = 26 + payloadLength
-                require(payloadEnd + 4 <= bytes.size) { "Frame payload length exceeds buffer" }
+                require(payloadEnd + 4 == bytes.size) { "Frame payload length mismatch" }
                 val payload = bytes.copyOfRange(26, payloadEnd)
                 val expected = readUInt32LE(bytes, payloadEnd)
                 val computed = crc32(bytes, 2, payloadEnd - 2)
@@ -184,10 +208,18 @@ object OfflineQrStream {
 
     class DecodeResult(
         val payload: ByteArray?,
+        val payloadKind: PayloadKind?,
         val receivedChunks: Int,
         val totalChunks: Int,
         val recoveredChunks: Int,
     ) {
+        constructor(
+            payload: ByteArray?,
+            receivedChunks: Int,
+            totalChunks: Int,
+            recoveredChunks: Int,
+        ) : this(payload, null, receivedChunks, totalChunks, recoveredChunks)
+
         val isComplete: Boolean get() = payload != null
         fun progress(): Double = if (totalChunks == 0) 0.0 else receivedChunks / totalChunks.toDouble()
     }
@@ -247,16 +279,21 @@ object OfflineQrStream {
             val frame = Frame.decode(frameBytes)
             ingestFrame(frame)
             val payload = finalizeIfComplete()
+            val payloadKind = envelope?.let { PayloadKind.fromValue(it.payloadKind) }
             val received = dataChunks.count { it != null }
-            return DecodeResult(payload, received, dataChunks.size, recovered.size)
+            return DecodeResult(payload, payloadKind, received, dataChunks.size, recovered.size)
         }
 
         private fun ingestFrame(frame: Frame) {
             if (frame.kind == FrameKind.HEADER) {
+                require(frame.index == 0 && frame.total == 1) { "Header frame counters mismatch" }
                 val decoded = Envelope.decode(frame.payload())
                 require(decoded.streamId().contentEquals(frame.streamId())) { "Stream id mismatch" }
                 val env = envelope
-                if (env != null && env.streamId().contentEquals(decoded.streamId())) return
+                if (env != null && env.streamId().contentEquals(decoded.streamId())) {
+                    require(env.encode().contentEquals(decoded.encode())) { "Conflicting repeated header" }
+                    return
+                }
                 envelope = decoded
                 dataChunks = arrayOfNulls(decoded.dataChunks)
                 parityChunks = arrayOfNulls(decoded.parityChunks)
@@ -274,13 +311,27 @@ object OfflineQrStream {
             if (!frame.streamId().contentEquals(env.streamId())) return
             if (frame.kind == FrameKind.DATA) {
                 val index = frame.index
-                if (index < dataChunks.size && dataChunks[index] == null) {
-                    dataChunks[index] = frame.payload()
+                require(frame.total == dataChunks.size) { "Data frame total mismatch" }
+                require(index in dataChunks.indices) { "Data frame index out of bounds" }
+                val payload = frame.payload()
+                require(payload.size == expectedChunkLength(index)) { "Data chunk length mismatch" }
+                val existing = dataChunks[index]
+                if (existing != null) {
+                    require(existing.contentEquals(payload)) { "Conflicting data chunk" }
+                } else {
+                    dataChunks[index] = payload
                 }
             } else if (frame.kind == FrameKind.PARITY) {
                 val index = frame.index
-                if (index < parityChunks.size && parityChunks[index] == null) {
-                    parityChunks[index] = frame.payload()
+                require(frame.total == parityChunks.size) { "Parity frame total mismatch" }
+                require(index in parityChunks.indices) { "Parity frame index out of bounds" }
+                val payload = frame.payload()
+                require(payload.size == env.chunkSize) { "Parity chunk length mismatch" }
+                val existing = parityChunks[index]
+                if (existing != null) {
+                    require(existing.contentEquals(payload)) { "Conflicting parity chunk" }
+                } else {
+                    parityChunks[index] = payload
                 }
             }
             recoverMissing()
@@ -338,6 +389,7 @@ object OfflineQrStream {
             for (i in dataChunks.indices) {
                 val chunk = dataChunks[i]!!
                 val length = expectedChunkLength(i)
+                require(chunk.size == length) { "Data chunk length mismatch" }
                 System.arraycopy(chunk, 0, payload, offset, length)
                 offset += length
             }

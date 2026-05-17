@@ -1302,6 +1302,7 @@ where
         pin_policy: pin_policy_dto,
         manifest_digest_hex: manifest_digest_hex.clone(),
         chunk_digest_sha3_256_hex: hex::encode([0xCD; 32]),
+        content_length: manifest.content_length,
         submitted_epoch,
         gas_asset_id: None,
         alias: None,

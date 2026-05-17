@@ -65,6 +65,15 @@ public final class OfflineQrStream {
     public int value() {
       return value;
     }
+
+    public static PayloadKind fromValue(final int value) {
+      for (PayloadKind kind : values()) {
+        if (kind.value == value) {
+          return kind;
+        }
+      }
+      return null;
+    }
   }
 
   public static final class TextCodec {
@@ -151,6 +160,40 @@ public final class OfflineQrStream {
       if (payloadHash == null || payloadHash.length != 32) {
         throw new IllegalArgumentException("payloadHash must be 32 bytes");
       }
+      if (flags != 0) {
+        throw new IllegalArgumentException("Unsupported envelope flags");
+      }
+      if (encoding != ENCODING_BINARY) {
+        throw new IllegalArgumentException("Unsupported envelope encoding");
+      }
+      if (parityGroup < 0 || parityGroup > 0xFF) {
+        throw new IllegalArgumentException("parityGroup must be between 0 and 255");
+      }
+      if (chunkSize <= 0 || chunkSize > 0xFFFF) {
+        throw new IllegalArgumentException("chunkSize must be between 1 and 65535");
+      }
+      if (dataChunks < 0 || dataChunks > 0xFFFF) {
+        throw new IllegalArgumentException("dataChunks must be between 0 and 65535");
+      }
+      if (parityChunks < 0 || parityChunks > 0xFFFF) {
+        throw new IllegalArgumentException("parityChunks must be between 0 and 65535");
+      }
+      if (payloadKind < 0 || payloadKind > 0xFFFF) {
+        throw new IllegalArgumentException("payloadKind must be between 0 and 65535");
+      }
+      if (payloadLength < 0 || payloadLength > 0xFFFF_FFFFL) {
+        throw new IllegalArgumentException("payloadLength must fit uint32");
+      }
+      final long expectedDataChunks =
+          payloadLength == 0 ? 0 : (payloadLength + chunkSize - 1L) / chunkSize;
+      if (expectedDataChunks > 0xFFFF || dataChunks != (int) expectedDataChunks) {
+        throw new IllegalArgumentException("dataChunks mismatch");
+      }
+      final int expectedParityChunks =
+          parityGroup == 0 ? 0 : (dataChunks + parityGroup - 1) / parityGroup;
+      if (parityChunks != expectedParityChunks) {
+        throw new IllegalArgumentException("parityChunks mismatch");
+      }
       this.flags = flags;
       this.encoding = encoding;
       this.parityGroup = parityGroup;
@@ -186,6 +229,10 @@ public final class OfflineQrStream {
       return payloadLength;
     }
 
+    public int payloadKind() {
+      return payloadKind;
+    }
+
     public byte[] payloadHash() {
       return payloadHash.clone();
     }
@@ -213,8 +260,8 @@ public final class OfflineQrStream {
 
     public static Envelope decode(final byte[] bytes) {
       Objects.requireNonNull(bytes, "bytes");
-      if (bytes.length < ENVELOPE_LENGTH) {
-        throw new IllegalArgumentException("Envelope is too short");
+      if (bytes.length != ENVELOPE_LENGTH) {
+        throw new IllegalArgumentException("Envelope length mismatch");
       }
       int offset = 0;
       final int version = bytes[offset++] & 0xFF;
@@ -266,9 +313,18 @@ public final class OfflineQrStream {
       if (this.streamId.length != 16) {
         throw new IllegalArgumentException("streamId must be 16 bytes");
       }
+      if (index < 0 || index > 0xFFFF) {
+        throw new IllegalArgumentException("index must be between 0 and 65535");
+      }
+      if (total < 0 || total > 0xFFFF) {
+        throw new IllegalArgumentException("total must be between 0 and 65535");
+      }
       this.index = index;
       this.total = total;
       this.payload = payload == null ? new byte[0] : payload.clone();
+      if (this.payload.length > 0xFFFF) {
+        throw new IllegalArgumentException("payload length exceeds 65535");
+      }
     }
 
     public FrameKind kind() {
@@ -283,14 +339,15 @@ public final class OfflineQrStream {
       return index;
     }
 
+    public int total() {
+      return total;
+    }
+
     public byte[] streamId() {
       return streamId.clone();
     }
 
     public byte[] encode() {
-      if (payload.length > 0xFFFF) {
-        throw new IllegalArgumentException("payload length exceeds 65535");
-      }
       final int headerLength = 2 + 1 + 1 + 16 + 2 + 2 + 2;
       final byte[] out = new byte[headerLength + payload.length + 4];
       int offset = 0;
@@ -332,8 +389,8 @@ public final class OfflineQrStream {
       final int total = readUInt16LE(bytes, 22);
       final int payloadLength = readUInt16LE(bytes, 24);
       final int payloadEnd = 26 + payloadLength;
-      if (payloadEnd + 4 > bytes.length) {
-        throw new IllegalArgumentException("Frame payload length exceeds buffer");
+      if (payloadEnd + 4 != bytes.length) {
+        throw new IllegalArgumentException("Frame payload length mismatch");
       }
       final byte[] payload = Arrays.copyOfRange(bytes, 26, payloadEnd);
       final long expected = readUInt32LE(bytes, payloadEnd);
@@ -347,19 +404,30 @@ public final class OfflineQrStream {
 
   public static final class DecodeResult {
     private final byte[] payload;
+    private final PayloadKind payloadKind;
     private final int receivedChunks;
     private final int totalChunks;
     private final int recoveredChunks;
 
     public DecodeResult(
         final byte[] payload,
+        final PayloadKind payloadKind,
         final int receivedChunks,
         final int totalChunks,
         final int recoveredChunks) {
       this.payload = payload;
+      this.payloadKind = payloadKind;
       this.receivedChunks = receivedChunks;
       this.totalChunks = totalChunks;
       this.recoveredChunks = recoveredChunks;
+    }
+
+    public DecodeResult(
+        final byte[] payload,
+        final int receivedChunks,
+        final int totalChunks,
+        final int recoveredChunks) {
+      this(payload, null, receivedChunks, totalChunks, recoveredChunks);
     }
 
     public byte[] payload() {
@@ -368,6 +436,10 @@ public final class OfflineQrStream {
 
     public boolean isComplete() {
       return payload != null;
+    }
+
+    public PayloadKind payloadKind() {
+      return payloadKind;
     }
 
     public int receivedChunks() {
@@ -464,17 +536,25 @@ public final class OfflineQrStream {
       final Frame frame = Frame.decode(frameBytes);
       ingest(frame);
       final byte[] payload = finalizeIfComplete();
+      final PayloadKind payloadKind =
+          envelope == null ? null : PayloadKind.fromValue(envelope.payloadKind());
       final int received = countNonNull(dataChunks);
-      return new DecodeResult(payload, received, dataChunks.length, recovered.size());
+      return new DecodeResult(payload, payloadKind, received, dataChunks.length, recovered.size());
     }
 
     private void ingest(final Frame frame) {
       if (frame.kind() == FrameKind.HEADER) {
+        if (frame.index() != 0 || frame.total() != 1) {
+          throw new IllegalArgumentException("Header frame counters mismatch");
+        }
         final Envelope decoded = Envelope.decode(frame.payload());
         if (!Arrays.equals(decoded.streamId(), frame.streamId())) {
           throw new IllegalArgumentException("Stream id mismatch");
         }
         if (envelope != null && Arrays.equals(envelope.streamId(), decoded.streamId())) {
+          if (!Arrays.equals(envelope.encode(), decoded.encode())) {
+            throw new IllegalArgumentException("Conflicting repeated header");
+          }
           return;
         }
         envelope = decoded;
@@ -500,13 +580,41 @@ public final class OfflineQrStream {
       }
       if (frame.kind() == FrameKind.DATA) {
         final int index = frame.index();
-        if (index < dataChunks.length && dataChunks[index] == null) {
-          dataChunks[index] = frame.payload();
+        if (frame.total() != dataChunks.length) {
+          throw new IllegalArgumentException("Data frame total mismatch");
+        }
+        if (index < 0 || index >= dataChunks.length) {
+          throw new IllegalArgumentException("Data frame index out of bounds");
+        }
+        final byte[] payload = frame.payload();
+        if (payload.length != expectedChunkLength(index)) {
+          throw new IllegalArgumentException("Data chunk length mismatch");
+        }
+        if (dataChunks[index] != null) {
+          if (!Arrays.equals(dataChunks[index], payload)) {
+            throw new IllegalArgumentException("Conflicting data chunk");
+          }
+        } else {
+          dataChunks[index] = payload;
         }
       } else if (frame.kind() == FrameKind.PARITY) {
         final int index = frame.index();
-        if (index < parityChunks.length && parityChunks[index] == null) {
-          parityChunks[index] = frame.payload();
+        if (frame.total() != parityChunks.length) {
+          throw new IllegalArgumentException("Parity frame total mismatch");
+        }
+        if (index < 0 || index >= parityChunks.length) {
+          throw new IllegalArgumentException("Parity frame index out of bounds");
+        }
+        final byte[] payload = frame.payload();
+        if (payload.length != envelope.chunkSize()) {
+          throw new IllegalArgumentException("Parity chunk length mismatch");
+        }
+        if (parityChunks[index] != null) {
+          if (!Arrays.equals(parityChunks[index], payload)) {
+            throw new IllegalArgumentException("Conflicting parity chunk");
+          }
+        } else {
+          parityChunks[index] = payload;
         }
       }
       recoverMissing();
@@ -587,6 +695,9 @@ public final class OfflineQrStream {
       for (int i = 0; i < dataChunks.length; i++) {
         final byte[] chunk = dataChunks[i];
         final int length = expectedChunkLength(i);
+        if (chunk.length != length) {
+          throw new IllegalArgumentException("Data chunk length mismatch");
+        }
         System.arraycopy(chunk, 0, payload, offset, length);
         offset += length;
       }

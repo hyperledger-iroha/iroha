@@ -25,7 +25,7 @@ enum AssetDefinitionAddress {
         }
         var body = Data([version])
         body.append(uuidBytes)
-        guard let digest = NoritoNativeBridge.shared.blake3Hash(data: body),
+        guard let digest = blake3Hash(data: body),
               digest.count >= 4 else {
             return nil
         }
@@ -44,10 +44,9 @@ enum AssetDefinitionAddress {
         }
         let body = payload.prefix(17)
         let checksum = payload.suffix(4)
-        if let digest = NoritoNativeBridge.shared.blake3Hash(data: Data(body)) {
-            guard digest.prefix(4) == checksum else {
-                return nil
-            }
+        guard let digest = blake3Hash(data: Data(body)),
+              digest.prefix(4) == checksum else {
+            return nil
         }
         let uuidBytes = Data(payload[1..<17])
         guard uuidBytes.count == 16 else {
@@ -58,6 +57,10 @@ enum AssetDefinitionAddress {
             return nil
         }
         return uuidBytes
+    }
+
+    private static func blake3Hash(data: Data) -> Data? {
+        NoritoNativeBridge.shared.blake3Hash(data: data) ?? AssetDefinitionAddressBlake3.hashSmallInput(data)
     }
 
     private static func encodeBase58(_ data: Data) -> String {
@@ -108,5 +111,91 @@ enum AssetDefinitionAddress {
         var decoded = Data(repeating: 0, count: zeroCount)
         decoded.append(contentsOf: bytes.reversed())
         return decoded
+    }
+}
+
+private enum AssetDefinitionAddressBlake3 {
+    private static let iv: [UInt32] = [
+        0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
+        0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19,
+    ]
+    private static let permutation = [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8]
+    private static let chunkStart: UInt32 = 1
+    private static let chunkEnd: UInt32 = 2
+    private static let root: UInt32 = 8
+
+    static func hashSmallInput(_ data: Data) -> Data? {
+        guard data.count <= 64 else {
+            return nil
+        }
+        var block = [UInt8](repeating: 0, count: 64)
+        block.replaceSubrange(0..<data.count, with: data)
+        var words = [UInt32](repeating: 0, count: 16)
+        for index in 0..<16 {
+            let start = index * 4
+            words[index] = UInt32(block[start])
+                | (UInt32(block[start + 1]) << 8)
+                | (UInt32(block[start + 2]) << 16)
+                | (UInt32(block[start + 3]) << 24)
+        }
+
+        var state = [UInt32](repeating: 0, count: 16)
+        for index in 0..<8 {
+            state[index] = iv[index]
+        }
+        for index in 0..<4 {
+            state[index + 8] = iv[index]
+        }
+        state[12] = 0
+        state[13] = 0
+        state[14] = UInt32(data.count)
+        state[15] = chunkStart | chunkEnd | root
+
+        var message = words
+        for _ in 0..<7 {
+            round(&state, message)
+            message = permutation.map { message[$0] }
+        }
+
+        var output = Data(capacity: 32)
+        for index in 0..<8 {
+            var word = (state[index] ^ state[index + 8]).littleEndian
+            withUnsafeBytes(of: &word) { output.append(contentsOf: $0) }
+        }
+        return output
+    }
+
+    private static func round(_ state: inout [UInt32], _ message: [UInt32]) {
+        mix(&state, 0, 4, 8, 12, message[0], message[1])
+        mix(&state, 1, 5, 9, 13, message[2], message[3])
+        mix(&state, 2, 6, 10, 14, message[4], message[5])
+        mix(&state, 3, 7, 11, 15, message[6], message[7])
+        mix(&state, 0, 5, 10, 15, message[8], message[9])
+        mix(&state, 1, 6, 11, 12, message[10], message[11])
+        mix(&state, 2, 7, 8, 13, message[12], message[13])
+        mix(&state, 3, 4, 9, 14, message[14], message[15])
+    }
+
+    private static func mix(
+        _ state: inout [UInt32],
+        _ a: Int,
+        _ b: Int,
+        _ c: Int,
+        _ d: Int,
+        _ x: UInt32,
+        _ y: UInt32
+    ) {
+        state[a] = state[a] &+ state[b] &+ x
+        state[d] = rotateRight(state[d] ^ state[a], by: 16)
+        state[c] = state[c] &+ state[d]
+        state[b] = rotateRight(state[b] ^ state[c], by: 12)
+        state[a] = state[a] &+ state[b] &+ y
+        state[d] = rotateRight(state[d] ^ state[a], by: 8)
+        state[c] = state[c] &+ state[d]
+        state[b] = rotateRight(state[b] ^ state[c], by: 7)
+    }
+
+    private static func rotateRight(_ value: UInt32, by amount: UInt32) -> UInt32 {
+        (value >> amount) | (value << (32 - amount))
     }
 }

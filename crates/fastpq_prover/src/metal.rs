@@ -1,4 +1,39 @@
 #![cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+#![allow(
+    dead_code,
+    clippy::cast_possible_truncation,
+    clippy::cast_lossless,
+    clippy::clone_on_copy,
+    clippy::collapsible_if,
+    clippy::derivable_impls,
+    clippy::elidable_lifetime_names,
+    clippy::float_cmp,
+    clippy::items_after_statements,
+    clippy::manual_div_ceil,
+    clippy::manual_inspect,
+    clippy::manual_is_multiple_of,
+    clippy::manual_range_contains,
+    clippy::manual_slice_size_calculation,
+    clippy::map_unwrap_or,
+    clippy::missing_errors_doc,
+    clippy::needless_collect,
+    clippy::needless_pass_by_value,
+    clippy::needless_return,
+    clippy::option_if_let_else,
+    clippy::or_fun_call,
+    clippy::redundant_closure,
+    clippy::redundant_closure_for_method_calls,
+    clippy::redundant_pub_crate,
+    clippy::return_self_not_must_use,
+    clippy::single_match_else,
+    clippy::suboptimal_flops,
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::trivially_copy_pass_by_ref,
+    clippy::uninlined_format_args,
+    clippy::unnecessary_lazy_evaluations,
+    clippy::useless_conversion
+)]
 
 //! Metal GPU bindings for FASTPQ.
 
@@ -95,7 +130,9 @@ const COLUMN_STAGING_PIPE_DEPTH: usize = 2;
 const ADAPTIVE_TARGET_MS: f64 = 2.0;
 const ADAPTIVE_BACKOFF_RATIO: f64 = 1.3;
 const METAL_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
-const METAL_COMMAND_PERMIT_TIMEOUT: Duration = Duration::from_secs(10);
+// Permit acquisition is host-side backpressure, so it must not fail before a
+// submitted command is considered hung.
+const METAL_COMMAND_PERMIT_TIMEOUT: Duration = METAL_COMMAND_TIMEOUT;
 
 fn debug_env_var(name: &str) -> Option<String> {
     overrides::guard_env_override(|| overrides::debug_env_string(name))
@@ -611,6 +648,7 @@ mod bn254_parity {
     #[test]
     fn fft_matches_cpu_reference() {
         ensure_multi_queue_env();
+        let _gpu_lane = crate::backend::acquire_gpu_lane();
         let log_size = 4;
         let column_count = 2;
         let mut gpu_columns = sample_columns(log_size, column_count);
@@ -635,6 +673,7 @@ mod bn254_parity {
     #[test]
     fn lde_matches_cpu_reference() {
         ensure_multi_queue_env();
+        let _gpu_lane = crate::backend::acquire_gpu_lane();
         let trace_log = 3;
         let blowup_log = 2;
         let coset = Bn254Scalar::from(5u64);
@@ -3642,7 +3681,12 @@ pub fn poseidon_hash_rows(columns: &[Vec<u64>]) -> MetalResult<Vec<u64>> {
     let mut result = PooledBuffer::zeroed(row_len);
     let result_buffer = shared_buffer(&context.device, result.as_mut_slice());
     let limits = pipeline_limits(&context.poseidon_hash_rows);
-    let tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
+    let mut tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
+    // Row hashing absorbs values one at a time with sponge padding. Keep each
+    // row on its own lane; multi-row lane packing has separate vector state and
+    // row-index bookkeeping, and parity is more important than the small packing
+    // win for v1 proof commitments.
+    tuning.states_per_lane = 1;
     let selection = select_poseidon_batch(row_count, tuning);
     let batch_size = selection.columns();
     let total_batches =
@@ -5336,6 +5380,7 @@ mod helper_tests {
 
     #[test]
     fn lde_tile_stage_limit_scales_with_log_size() {
+        let _hint_guard = metal_config::device_hints_test_guard();
         assert_eq!(lde_tile_stage_limit(5), 5);
         assert_eq!(lde_tile_stage_limit(18), 12);
         assert_eq!(lde_tile_stage_limit(64), 8);
@@ -5343,6 +5388,7 @@ mod helper_tests {
 
     #[test]
     fn lde_tile_stage_limit_respects_device_hints() {
+        let _hint_guard = metal_config::device_hints_test_guard();
         metal_config::set_device_hints_for_tests(Some(DeviceHints::new(
             false,
             true,
@@ -5350,7 +5396,6 @@ mod helper_tests {
             24 * 1024 * 1024 * 1024,
         )));
         assert_eq!(lde_tile_stage_limit(18), 14);
-        metal_config::set_device_hints_for_tests(None);
     }
 
     #[test]
@@ -5526,6 +5571,7 @@ mod bn254_helper_tests {
         if Device::system_default().is_none() {
             return;
         }
+        let _gpu_lane = crate::backend::acquire_gpu_lane();
         match super::bn254_status() {
             Ok(()) => {}
             Err(GpuError::Unsupported(_)) => return,
@@ -5570,6 +5616,7 @@ mod tests {
     #[test]
     fn fft_and_ifft_match_cpu_reference() {
         ensure_multi_queue_env();
+        let _gpu_lane = crate::backend::acquire_gpu_lane();
         let params = CANONICAL_PARAMETER_SETS[0];
         let planner = Planner::new(&params);
         let scenarios = [(3, 2), (10, 2), (14, 1)];
@@ -5606,6 +5653,7 @@ mod tests {
     #[test]
     fn lde_matches_cpu_reference() {
         ensure_multi_queue_env();
+        let _gpu_lane = crate::backend::acquire_gpu_lane();
         let params = CANONICAL_PARAMETER_SETS[0];
         let planner = Planner::new(&params);
         let trace_log = 3;
@@ -5646,6 +5694,7 @@ mod tests {
     #[test]
     fn poseidon_matches_cpu_permutation() {
         ensure_multi_queue_env();
+        let _gpu_lane = crate::backend::acquire_gpu_lane();
         let mut cpu_states = Vec::new();
         for idx in 0u64..4 {
             cpu_states.push(idx * 11);
@@ -5665,6 +5714,39 @@ mod tests {
             return;
         }
         assert_eq!(cpu_states, metal_states);
+    }
+
+    #[test]
+    fn poseidon_hash_rows_matches_cpu_reference() {
+        ensure_multi_queue_env();
+        let _gpu_lane = crate::backend::acquire_gpu_lane();
+        let row_count = 64usize;
+        let columns = (0..5usize)
+            .map(|column| {
+                (0..row_count)
+                    .map(|row| {
+                        ((column as u64 + 3) * 97 + (row as u64 * 13)) % cpu_poseidon::FIELD_MODULUS
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let expected = (0..row_count)
+            .map(|row| {
+                let mut limbs = Vec::with_capacity(columns.len() + 2);
+                limbs.push(row as u64);
+                limbs.push(columns.len() as u64);
+                for column in &columns {
+                    limbs.push(column[row]);
+                }
+                cpu_poseidon::hash_field_elements(&limbs)
+            })
+            .collect::<Vec<_>>();
+        let Some(actual) =
+            unwrap_or_skip(super::poseidon_hash_rows(&columns), "poseidon_hash_rows")
+        else {
+            return;
+        };
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -5796,14 +5878,12 @@ mod tests {
     fn queue_stats_capture_overlap() {
         super::enable_queue_depth_stats(true);
         {
-            let mut first = super::CommandPermit::try_new(0).expect("first command permit");
-            first.mark_launched();
+            super::record_queue_launch(0);
             thread::sleep(Duration::from_millis(1));
-            let mut second = super::CommandPermit::try_new(0).expect("second command permit");
-            second.mark_launched();
+            super::record_queue_launch(0);
             thread::sleep(Duration::from_millis(1));
-            second.complete();
-            first.complete();
+            super::record_queue_completion(0);
+            super::record_queue_completion(0);
         }
         let stats = super::take_queue_depth_stats().expect("stats captured");
         super::enable_queue_depth_stats(false);

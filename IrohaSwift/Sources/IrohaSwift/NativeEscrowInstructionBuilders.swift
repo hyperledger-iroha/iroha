@@ -64,8 +64,41 @@ private enum NativeEscrowInstructionPayloadBuilder {
         guard !proof.isEmpty else {
             throw NativeEscrowInstructionBuilderError.invalidValue(field: "proof")
         }
+        for field in [
+            "vk_inline",
+            "vkInline",
+            "verifyingKeyInline",
+            "verifying_key_inline",
+            "vk_reference",
+        ] {
+            if proof[field] != nil {
+                throw NativeEscrowInstructionBuilderError.invalidValue(field: "proof.\(field)")
+            }
+        }
         guard proof["vk_ref"] != nil else {
             throw NativeEscrowInstructionBuilderError.invalidValue(field: "proof.vk_ref")
+        }
+        guard let vkRef = proof["vk_ref"] as? [String: Any] else {
+            throw NativeEscrowInstructionBuilderError.invalidValue(field: "proof.vk_ref")
+        }
+        for field in vkRef.keys where field != "backend" && field != "name" {
+            throw NativeEscrowInstructionBuilderError.invalidValue(field: "proof.vk_ref.\(field)")
+        }
+        guard let vkBackend = vkRef["backend"] as? String else {
+            throw NativeEscrowInstructionBuilderError.invalidValue(field: "proof.vk_ref.backend")
+        }
+        let normalizedVkBackend = vkBackend.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedVkBackend.isEmpty else {
+            throw NativeEscrowInstructionBuilderError.invalidValue(field: "proof.vk_ref.backend")
+        }
+        guard let vkName = vkRef["name"] as? String,
+              !vkName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw NativeEscrowInstructionBuilderError.invalidValue(field: "proof.vk_ref.name")
+        }
+        if let backend = proof["backend"] as? String,
+           backend.trimmingCharacters(in: .whitespacesAndNewlines)
+             != normalizedVkBackend {
+            throw NativeEscrowInstructionBuilderError.invalidValue(field: "proof.vk_ref.backend")
         }
         payload["proof"] = proof
     }

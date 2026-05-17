@@ -1,5 +1,11 @@
 //! Handshake caps (consensus) tests: accept match, reject mismatch.
 
+#![allow(
+    clippy::clone_on_copy,
+    clippy::redundant_closure_for_method_calls,
+    clippy::too_many_lines
+)]
+
 use std::num::NonZeroUsize;
 
 use iroha_config::parameters::{

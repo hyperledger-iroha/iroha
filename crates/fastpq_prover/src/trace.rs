@@ -326,6 +326,11 @@ pub fn take_poseidon_pipeline_stats() -> Option<PoseidonPipelineStats> {
 }
 
 #[cfg(feature = "fastpq-gpu")]
+fn saturating_u32(value: usize) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}
+
+#[cfg(feature = "fastpq-gpu")]
 fn record_poseidon_pipeline_start(chunk_columns: usize, depth: usize) {
     if !POSEIDON_PIPELINE_STATS_ENABLED.load(Ordering::Relaxed) {
         return;
@@ -334,8 +339,8 @@ fn record_poseidon_pipeline_start(chunk_columns: usize, depth: usize) {
         POSEIDON_PIPELINE_STATS.get_or_init(|| Mutex::new(PoseidonPipelineStats::default()));
     if let Ok(mut guard) = store.lock() {
         guard.enabled = true;
-        guard.chunk_columns = chunk_columns.min(u32::MAX as usize) as u32;
-        guard.pipe_depth = depth.min(u32::MAX as usize) as u32;
+        guard.chunk_columns = saturating_u32(chunk_columns);
+        guard.pipe_depth = saturating_u32(depth);
         guard.batches = 0;
         guard.fallbacks = 0;
     }
@@ -374,9 +379,7 @@ fn record_poseidon_merkle_pair_gpu_batch(pair_count: usize) {
         POSEIDON_PIPELINE_STATS.get_or_init(|| Mutex::new(PoseidonPipelineStats::default()));
     if let Ok(mut guard) = store.lock() {
         guard.merkle_pair_gpu_batches = guard.merkle_pair_gpu_batches.saturating_add(1);
-        guard.merkle_pair_max_pairs = guard
-            .merkle_pair_max_pairs
-            .max(pair_count.min(u32::MAX as usize) as u32);
+        guard.merkle_pair_max_pairs = guard.merkle_pair_max_pairs.max(saturating_u32(pair_count));
     }
 }
 
@@ -389,9 +392,7 @@ fn record_poseidon_merkle_pair_cpu_batch(pair_count: usize) {
         POSEIDON_PIPELINE_STATS.get_or_init(|| Mutex::new(PoseidonPipelineStats::default()));
     if let Ok(mut guard) = store.lock() {
         guard.merkle_pair_cpu_batches = guard.merkle_pair_cpu_batches.saturating_add(1);
-        guard.merkle_pair_max_pairs = guard
-            .merkle_pair_max_pairs
-            .max(pair_count.min(u32::MAX as usize) as u32);
+        guard.merkle_pair_max_pairs = guard.merkle_pair_max_pairs.max(saturating_u32(pair_count));
     }
 }
 
@@ -687,22 +688,22 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         .iter()
         .map(|row| row.key_limbs.len())
         .max()
-        .unwrap_or(0);
+        .unwrap_or_default();
     let max_value_old = rows
         .iter()
         .map(|row| row.value_old_limbs.len())
         .max()
-        .unwrap_or(0);
+        .unwrap_or_default();
     let max_value_new = rows
         .iter()
         .map(|row| row.value_new_limbs.len())
         .max()
-        .unwrap_or(0);
+        .unwrap_or_default();
     let max_asset_limbs = rows
         .iter()
         .map(|row| row.asset_limbs.len())
         .max()
-        .unwrap_or(0);
+        .unwrap_or_default();
 
     let mut columns = vec![
         TraceColumn::new("s_active", rows.iter().map(|row| row.selectors.active)),
@@ -997,16 +998,21 @@ impl PoseidonColumnSlice {
     }
 
     /// Return the starting index of this column within the flattened payload slice.
-    pub fn offset(&self) -> usize {
+    pub fn offset(self) -> usize {
         self.offset as usize
     }
 
     /// Return the number of limbs reserved for this column payload (including padding).
-    pub fn len(&self) -> usize {
+    pub fn len(self) -> usize {
         self.len as usize
     }
 
-    fn rebased(&self, base: usize) -> Option<Self> {
+    /// Return true when this descriptor does not cover any payload limbs.
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    fn rebased(self, base: usize) -> Option<Self> {
         let offset = self.offset().checked_sub(base)?;
         Self::new(offset, self.len())
     }
@@ -1081,7 +1087,7 @@ impl PoseidonColumnBatch {
             let remainder = column_total % RATE;
             if remainder != 0 {
                 let padding = RATE - remainder;
-                payloads.extend(std::iter::repeat(0).take(padding));
+                payloads.extend(std::iter::repeat_n(0, padding));
                 column_total += padding;
             }
             let blocks = column_total / RATE;
@@ -1093,17 +1099,16 @@ impl PoseidonColumnBatch {
             } else {
                 block_count = Some(blocks);
             }
-            match PoseidonColumnSlice::new(start, column_total) {
-                Some(slice) => offsets.push(slice),
-                None => {
-                    tracing::warn!(
-                        target: "fastpq::poseidon",
-                        offset = start,
-                        len = column_total,
-                        "poseidon column descriptor exceeded GPU bounds"
-                    );
-                    return None;
-                }
+            if let Some(slice) = PoseidonColumnSlice::new(start, column_total) {
+                offsets.push(slice);
+            } else {
+                tracing::warn!(
+                    target: "fastpq::poseidon",
+                    offset = start,
+                    len = column_total,
+                    "poseidon column descriptor exceeded GPU bounds"
+                );
+                return None;
             }
         }
 
@@ -1112,8 +1117,7 @@ impl PoseidonColumnBatch {
             payload_start: 0,
             payload_len: offsets
                 .last()
-                .map(|slice| slice.offset() + slice.len())
-                .unwrap_or(0),
+                .map_or(0, |slice| slice.offset() + slice.len()),
             offsets,
             block_count: block_count.unwrap_or(0),
             padded_len,
@@ -1150,7 +1154,7 @@ impl PoseidonColumnBatch {
             let remainder = column_total % RATE;
             if remainder != 0 {
                 let padding = RATE - remainder;
-                payloads.extend(std::iter::repeat(0).take(padding));
+                payloads.extend(std::iter::repeat_n(0, padding));
                 column_total += padding;
             }
             let blocks = column_total / RATE;
@@ -1162,17 +1166,16 @@ impl PoseidonColumnBatch {
             } else {
                 block_count = Some(blocks);
             }
-            match PoseidonColumnSlice::new(start, column_total) {
-                Some(slice) => offsets.push(slice),
-                None => {
-                    tracing::warn!(
-                        target: "fastpq::poseidon",
-                        offset = start,
-                        len = column_total,
-                        "poseidon pair descriptor exceeded GPU bounds"
-                    );
-                    return None;
-                }
+            if let Some(slice) = PoseidonColumnSlice::new(start, column_total) {
+                offsets.push(slice);
+            } else {
+                tracing::warn!(
+                    target: "fastpq::poseidon",
+                    offset = start,
+                    len = column_total,
+                    "poseidon pair descriptor exceeded GPU bounds"
+                );
+                return None;
             }
         }
 
@@ -1181,8 +1184,7 @@ impl PoseidonColumnBatch {
             payload_start: 0,
             payload_len: offsets
                 .last()
-                .map(|slice| slice.offset() + slice.len())
-                .unwrap_or(0),
+                .map_or(0, |slice| slice.offset() + slice.len()),
             offsets,
             block_count: block_count.unwrap_or(0),
             padded_len,
@@ -1225,17 +1227,16 @@ impl PoseidonColumnBatch {
             payloads.push(1);
             let padding = padded_len.saturating_sub(values.len() + 1);
             payloads.extend(std::iter::repeat_n(0, padding));
-            match PoseidonColumnSlice::new(start, padded_len) {
-                Some(slice) => offsets.push(slice),
-                None => {
-                    tracing::warn!(
-                        target: "fastpq::poseidon",
-                        offset = start,
-                        len = padded_len,
-                        "poseidon limb batch descriptor exceeded GPU bounds"
-                    );
-                    return None;
-                }
+            if let Some(slice) = PoseidonColumnSlice::new(start, padded_len) {
+                offsets.push(slice);
+            } else {
+                tracing::warn!(
+                    target: "fastpq::poseidon",
+                    offset = start,
+                    len = padded_len,
+                    "poseidon limb batch descriptor exceeded GPU bounds"
+                );
+                return None;
             }
         }
 
@@ -1244,8 +1245,7 @@ impl PoseidonColumnBatch {
             payload_start: 0,
             payload_len: offsets
                 .last()
-                .map(|slice| slice.offset() + slice.len())
-                .unwrap_or(0),
+                .map_or(0, |slice| slice.offset() + slice.len()),
             offsets,
             block_count,
             padded_len,
@@ -1454,7 +1454,7 @@ pub fn hash_columns_gpu_fused(
     }
     if batch.block_count() == 0 || batch.padded_len() == 0 {
         let leaves = vec![0u64; batch.columns()];
-        let parents = vec![0u64; (batch.columns() + 1) / 2];
+        let parents = vec![0u64; batch.columns().div_ceil(2)];
         return Some(ColumnDigests::new(leaves, Some(parents)));
     }
 
@@ -1608,15 +1608,15 @@ pub(crate) fn hash_columns_from_coefficients(
                     );
                     return fused;
                 }
-                if poseidon_backend.is_some() {
-                    if let Some(result) = hash_columns_gpu_batch(&batch) {
-                        notify_poseidon_pipeline_observer(
-                            poseidon_policy,
-                            "gpu_batch",
-                            poseidon_backend,
-                        );
-                        return ColumnDigests::new(result, None);
-                    }
+                if poseidon_backend.is_some()
+                    && let Some(result) = hash_columns_gpu_batch(&batch)
+                {
+                    notify_poseidon_pipeline_observer(
+                        poseidon_policy,
+                        "gpu_batch",
+                        poseidon_backend,
+                    );
+                    return ColumnDigests::new(result, None);
                 }
                 notify_poseidon_pipeline_observer(
                     poseidon_policy,
@@ -1779,10 +1779,10 @@ pub(crate) fn hash_trace_merkle_pairs_with_mode(
     #[cfg(not(feature = "fastpq-gpu"))]
     let _ = mode;
     #[cfg(feature = "fastpq-gpu")]
-    if mode == backend::ExecutionMode::Gpu {
-        if let Some(hashes) = hash_trace_merkle_pairs_gpu(pairs) {
-            return hashes;
-        }
+    if mode == backend::ExecutionMode::Gpu
+        && let Some(hashes) = hash_trace_merkle_pairs_gpu(pairs)
+    {
+        return hashes;
     }
     #[cfg(feature = "fastpq-gpu")]
     record_poseidon_merkle_pair_cpu_batch(pairs.len());
@@ -2169,9 +2169,9 @@ mod tests {
         assert_eq!(batch.columns(), domains.len());
         let offsets = batch.offsets();
         assert_eq!(offsets.len(), domains.len());
-        assert!(offsets.iter().all(|slice| slice.len() % RATE == 0));
+        assert!(offsets.iter().all(|slice| slice.len().is_multiple_of(RATE)));
         let payload_len = columns[0].len() + 2;
-        let padded_len = if payload_len % RATE == 0 {
+        let padded_len = if payload_len.is_multiple_of(RATE) {
             payload_len
         } else {
             payload_len + (RATE - (payload_len % RATE))
@@ -2184,10 +2184,7 @@ mod tests {
             let end = slice.offset() + slice.len();
             let region = &payloads[start..end];
             assert_eq!(region[0], domain_seed(domains[index].as_bytes()));
-            assert_eq!(
-                &region[1..1 + columns[index].len()],
-                columns[index].as_slice()
-            );
+            assert_eq!(&region[1..=columns[index].len()], columns[index].as_slice());
             assert_eq!(region[1 + columns[index].len()], 1);
             assert!(
                 region[columns[index].len() + 2..]
@@ -2206,7 +2203,7 @@ mod tests {
         assert_eq!(batch.columns(), pairs.len());
         let offsets = batch.offsets();
         assert_eq!(offsets.len(), pairs.len());
-        assert!(offsets.iter().all(|slice| slice.len() % RATE == 0));
+        assert!(offsets.iter().all(|slice| slice.len().is_multiple_of(RATE)));
         assert_eq!(batch.block_count(), offsets[0].len() / RATE);
         let payloads = batch.payloads();
         for (index, slice) in offsets.iter().enumerate() {
@@ -2226,7 +2223,7 @@ mod tests {
         let messages = vec![Vec::<u64>::new(), vec![1u64]];
         let batch = PoseidonColumnBatch::from_limb_slices(&messages).expect("batch");
         assert_eq!(batch.columns(), messages.len());
-        assert!(batch.padded_len() % RATE == 0);
+        assert!(batch.padded_len().is_multiple_of(RATE));
         assert_eq!(batch.block_count(), batch.padded_len() / RATE);
         for (index, slice) in batch.offsets().iter().enumerate() {
             assert_eq!(slice.len(), batch.padded_len());
@@ -2305,7 +2302,7 @@ mod tests {
             let domain = domains[index + 1].as_bytes();
             assert_eq!(region[0], domain_seed(domain));
             assert_eq!(
-                &region[1..1 + columns[index + 1].len()],
+                &region[1..=columns[index + 1].len()],
                 columns[index + 1].as_slice()
             );
         }
@@ -2337,12 +2334,9 @@ mod tests {
         let domains: Vec<&str> = domain_names.iter().map(String::as_str).collect();
         let batch = PoseidonColumnBatch::from_domains_and_columns(&domains, &data.coefficients)
             .expect("gpu batch");
-        let gpu_hashes = match hash_columns_gpu_batch(&batch) {
-            Some(values) => values,
-            None => {
-                eprintln!("skipping poseidon gpu parity test; dispatch declined");
-                return;
-            }
+        let Some(gpu_hashes) = hash_columns_gpu_batch(&batch) else {
+            eprintln!("skipping poseidon gpu parity test; dispatch declined");
+            return;
         };
         assert_eq!(
             cpu_hashes.leaves(),
@@ -2392,12 +2386,9 @@ mod tests {
         let domains: Vec<&str> = domain_names.iter().map(String::as_str).collect();
         let batch = PoseidonColumnBatch::from_domains_and_columns(&domains, &data.coefficients)
             .expect("gpu batch");
-        let first = match hash_columns_gpu_batch(&batch) {
-            Some(values) => values,
-            None => {
-                eprintln!("skipping repeated poseidon gpu parity test; dispatch declined");
-                return;
-            }
+        let Some(first) = hash_columns_gpu_batch(&batch) else {
+            eprintln!("skipping repeated poseidon gpu parity test; dispatch declined");
+            return;
         };
         let second = hash_columns_gpu_batch(&batch).expect("second gpu hash dispatch");
         assert_eq!(
@@ -2465,7 +2456,10 @@ mod tests {
             "threshold Merkle level should be accounted for by pair-batch telemetry: {stats:?}"
         );
         assert_eq!(stats.merkle_pair_gpu_batches, 0);
-        assert_eq!(stats.merkle_pair_max_pairs, pair_count as u32);
+        assert_eq!(
+            stats.merkle_pair_max_pairs,
+            u32::try_from(pair_count).expect("test pair count fits u32")
+        );
     }
 
     #[cfg(feature = "fastpq-gpu")]
@@ -2494,12 +2488,9 @@ mod tests {
         let domains: Vec<&str> = domain_names.iter().map(String::as_str).collect();
         let batch =
             PoseidonColumnBatch::from_domains_and_columns(&domains, &coefficients).expect("batch");
-        let fused = match hash_columns_gpu_fused(&batch, ExecutionMode::Gpu) {
-            Some(values) => values,
-            None => {
-                eprintln!("skipping poseidon fused parity test; fused dispatch declined");
-                return;
-            }
+        let Some(fused) = hash_columns_gpu_fused(&batch, ExecutionMode::Gpu) else {
+            eprintln!("skipping poseidon fused parity test; fused dispatch declined");
+            return;
         };
         assert_eq!(
             fused.leaves(),

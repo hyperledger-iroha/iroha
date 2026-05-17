@@ -8,6 +8,19 @@ import {
 
 const CANONICAL_XOR_ASSET_DEFINITION_ID = "61CtjvNd9T3THAR65GsMVHr82Bjc";
 
+function validHfDeployInput(overrides = {}) {
+  return {
+    repoId: "sentence-transformers/all-MiniLM-L6-v2",
+    modelName: "all-MiniLM-L6-v2",
+    serviceName: "all_minilm_l6_v2",
+    storageClass: "warm",
+    leaseTermMs: "3600000",
+    leaseAssetDefinitionId: CANONICAL_XOR_ASSET_DEFINITION_ID,
+    baseFeeNanos: "1",
+    ...overrides,
+  };
+}
+
 test("buildSoracloudHfDeployDraft returns unsigned payloads", () => {
   const draft = buildSoracloudHfDeployDraft({
     repoId: "sentence-transformers/all-MiniLM-L6-v2",
@@ -61,19 +74,345 @@ test("assembleSoracloudHfDeployRequest uses external provenances", () => {
 });
 
 test("buildSoracloudHfDeployDraft rejects raw private keys", () => {
+  for (const field of ["privateKeyHex", "privateKey", "private_key", "private_key_hex"]) {
+    assert.throws(
+      () => buildSoracloudHfDeployDraft(validHfDeployInput({ [field]: "00" })),
+      new RegExp(`${field} is not accepted`),
+    );
+  }
+});
+
+test("buildSoracloudHfDeployDraft rejects inherited signing secrets", () => {
+  const input = Object.create({ privateKeyHex: "00" });
+  Object.assign(input, validHfDeployInput());
+
+  assert.throws(
+    () => buildSoracloudHfDeployDraft(input),
+    /privateKeyHex is not accepted/,
+  );
+});
+
+test("assembleSoracloudHfDeployRequest requires apartment provenance for apartment drafts", () => {
+  const draft = buildSoracloudHfDeployDraft(
+    validHfDeployInput({ apartmentName: "all_minilm_agent" }),
+  );
+
   assert.throws(
     () =>
-      buildSoracloudHfDeployDraft({
-        repoId: "sentence-transformers/all-MiniLM-L6-v2",
-        modelName: "all-MiniLM-L6-v2",
-        serviceName: "all_minilm_l6_v2",
-        storageClass: "warm",
-        leaseTermMs: "3600000",
-        leaseAssetDefinitionId: CANONICAL_XOR_ASSET_DEFINITION_ID,
-        baseFeeNanos: "1",
-        privateKeyHex: "00",
+      assembleSoracloudHfDeployRequest(draft, {
+        deploy: { signer: "signer", signature: "ABCD" },
+        generatedService: { signer: "signer", signature: "CDEF" },
       }),
-    /privateKeyHex is not accepted/,
+    /generatedApartment provenance must include signer and signature/,
+  );
+});
+
+test("assembleSoracloudHfDeployRequest rejects hand-built drafts without signing payloads", () => {
+  const draft = buildSoracloudHfDeployDraft(validHfDeployInput());
+
+  assert.throws(
+    () =>
+      assembleSoracloudHfDeployRequest(
+        { payload: draft.payload },
+        {
+          deploy: { signer: "signer", signature: "ABCD" },
+          generatedService: { signer: "signer", signature: "CDEF" },
+        },
+      ),
+    /draft provenancePayloads\.deploy is required/,
+  );
+});
+
+test("assembleSoracloudHfDeployRequest rejects inherited signing payload fields", () => {
+  const draft = buildSoracloudHfDeployDraft(validHfDeployInput());
+  const provenancePayloads = Object.create({
+    deploy: draft.provenancePayloads.deploy,
+  });
+  provenancePayloads.generatedService = draft.provenancePayloads.generatedService;
+
+  assert.throws(
+    () =>
+      assembleSoracloudHfDeployRequest(
+        { payload: draft.payload, provenancePayloads },
+        {
+          deploy: { signer: "signer", signature: "ABCD" },
+          generatedService: { signer: "signer", signature: "CDEF" },
+        },
+      ),
+    /draft provenancePayloads\.deploy is required/,
+  );
+});
+
+test("assembleSoracloudHfDeployRequest rejects incomplete hand-built drafts with signing payloads", () => {
+  const payload = { repo_id: "repo", service_name: "service" };
+  const draft = {
+    payload,
+    provenancePayloads: {
+      deploy: {
+        schema: "soracloud.hf.deploy.provenance.v1",
+        label: "hf_deploy",
+        payload,
+      },
+      generatedService: {
+        schema: "soracloud.hf.deploy.provenance.v1",
+        label: "generated_service",
+        payload: {
+          service_name: "service",
+          repo_id: "repo",
+          revision: null,
+        },
+      },
+    },
+  };
+
+  assert.throws(
+    () =>
+      assembleSoracloudHfDeployRequest(draft, {
+        deploy: { signer: "signer", signature: "ABCD" },
+        generatedService: { signer: "signer", signature: "CDEF" },
+      }),
+    /draft payload\.model_name must be a non-empty string/,
+  );
+});
+
+test("assembleSoracloudHfDeployRequest rejects malformed draft payloads", () => {
+  const draft = buildSoracloudHfDeployDraft(validHfDeployInput());
+
+  assert.throws(
+    () =>
+      assembleSoracloudHfDeployRequest(
+        { ...draft, payload: [] },
+        {
+          deploy: { signer: "signer", signature: "ABCD" },
+          generatedService: { signer: "signer", signature: "CDEF" },
+        },
+      ),
+    /draft payload is required/,
+  );
+});
+
+test("assembleSoracloudHfDeployRequest rejects malformed canonical draft fields", () => {
+  const malformed = [
+    {
+      payload: { storage_class: "archive" },
+      message: /draft payload\.storage_class must be hot, warm, or cold/,
+    },
+    {
+      payload: { lease_term_ms: "3600000" },
+      message: /draft payload\.lease_term_ms must be a safe non-negative integer/,
+    },
+    {
+      payload: { base_fee_nanos: "0001" },
+      message: /draft payload\.base_fee_nanos must be a canonical non-negative integer string/,
+    },
+    {
+      payload: { lease_asset_definition_id: "xor#universal" },
+      message: /draft payload\.lease_asset_definition_id must be valid Base58/,
+    },
+  ];
+
+  for (const { payload: overrides, message } of malformed) {
+    const draft = buildSoracloudHfDeployDraft(validHfDeployInput());
+    const payload = { ...draft.payload, ...overrides };
+    assert.throws(
+      () =>
+        assembleSoracloudHfDeployRequest(
+          { ...draft, payload },
+          {
+            deploy: { signer: "signer", signature: "ABCD" },
+            generatedService: { signer: "signer", signature: "CDEF" },
+          },
+        ),
+      message,
+    );
+  }
+});
+
+test("assembleSoracloudHfDeployRequest rejects draft payload mutation after signing", () => {
+  const draft = buildSoracloudHfDeployDraft(validHfDeployInput());
+  const tamperedDraft = {
+    ...draft,
+    payload: { ...draft.payload, service_name: "replayed_service" },
+  };
+
+  assert.throws(
+    () =>
+      assembleSoracloudHfDeployRequest(tamperedDraft, {
+        deploy: { signer: "signer", signature: "ABCD" },
+        generatedService: { signer: "signer", signature: "CDEF" },
+      }),
+    /draft provenancePayloads\.deploy payload must match draft payload/,
+  );
+
+  const inPlaceDraft = buildSoracloudHfDeployDraft(validHfDeployInput());
+  inPlaceDraft.payload.service_name = "replayed_service";
+  assert.throws(
+    () =>
+      assembleSoracloudHfDeployRequest(inPlaceDraft, {
+        deploy: { signer: "signer", signature: "ABCD" },
+        generatedService: { signer: "signer", signature: "CDEF" },
+      }),
+    /draft provenancePayloads\.deploy payload must match draft payload/,
+  );
+});
+
+test("assembleSoracloudHfDeployRequest rejects tampered generated service signing payloads", () => {
+  const draft = buildSoracloudHfDeployDraft(validHfDeployInput());
+  const tamperedDraft = {
+    ...draft,
+    provenancePayloads: {
+      ...draft.provenancePayloads,
+      generatedService: {
+        ...draft.provenancePayloads.generatedService,
+        payload: {
+          ...draft.provenancePayloads.generatedService.payload,
+          service_name: "replayed_service",
+        },
+      },
+    },
+  };
+
+  assert.throws(
+    () =>
+      assembleSoracloudHfDeployRequest(tamperedDraft, {
+        deploy: { signer: "signer", signature: "ABCD" },
+        generatedService: { signer: "signer", signature: "CDEF" },
+      }),
+    /draft provenancePayloads\.generatedService payload must match draft payload/,
+  );
+});
+
+test("assembleSoracloudHfDeployRequest rejects unknown draft payload fields", () => {
+  const draft = buildSoracloudHfDeployDraft(validHfDeployInput());
+
+  assert.throws(
+    () =>
+      assembleSoracloudHfDeployRequest(
+        { ...draft, payload: { ...draft.payload, private_key: "00" } },
+        {
+          deploy: { signer: "signer", signature: "ABCD" },
+          generatedService: { signer: "signer", signature: "CDEF" },
+        },
+      ),
+    /draft payload\.private_key is not accepted/,
+  );
+
+  const inheritedPayload = Object.create({ private_key: "00" });
+  Object.assign(inheritedPayload, draft.payload);
+  assert.throws(
+    () =>
+      assembleSoracloudHfDeployRequest(
+        { ...draft, payload: inheritedPayload },
+        {
+          deploy: { signer: "signer", signature: "ABCD" },
+          generatedService: { signer: "signer", signature: "CDEF" },
+        },
+      ),
+    /draft payload\.private_key is not accepted/,
+  );
+});
+
+test("assembleSoracloudHfDeployRequest rejects inherited required draft fields", () => {
+  const draft = buildSoracloudHfDeployDraft(validHfDeployInput());
+  const inheritedPayload = Object.create({
+    model_name: draft.payload.model_name,
+  });
+  for (const [field, value] of Object.entries(draft.payload)) {
+    if (field !== "model_name") {
+      inheritedPayload[field] = value;
+    }
+  }
+
+  assert.throws(
+    () =>
+      assembleSoracloudHfDeployRequest(
+        { ...draft, payload: inheritedPayload },
+        {
+          deploy: { signer: "signer", signature: "ABCD" },
+          generatedService: { signer: "signer", signature: "CDEF" },
+        },
+      ),
+    /draft payload\.model_name must be a non-empty string/,
+  );
+});
+
+test("assembleSoracloudHfDeployRequest rejects inherited provenance fields", () => {
+  const draft = buildSoracloudHfDeployDraft(validHfDeployInput());
+  const inheritedProvenance = Object.create({
+    signer: "signer",
+    signature: "ABCD",
+  });
+
+  assert.throws(
+    () =>
+      assembleSoracloudHfDeployRequest(draft, {
+        deploy: inheritedProvenance,
+        generatedService: { signer: "signer", signature: "CDEF" },
+      }),
+    /deploy provenance must include signer and signature/,
+  );
+});
+
+test("assembleSoracloudHfDeployRequest rejects inherited provenance entries", () => {
+  const draft = buildSoracloudHfDeployDraft(validHfDeployInput());
+  const provenances = Object.create({
+    deploy: { signer: "signer", signature: "ABCD" },
+  });
+  provenances.generatedService = { signer: "signer", signature: "CDEF" };
+
+  assert.throws(
+    () => assembleSoracloudHfDeployRequest(draft, provenances),
+    /deploy provenance must include signer and signature/,
+  );
+});
+
+test("assembleSoracloudHfDeployRequest rejects tampered apartment signing payloads", () => {
+  const draft = buildSoracloudHfDeployDraft(
+    validHfDeployInput({ apartmentName: "all_minilm_agent" }),
+  );
+  const tamperedDraft = {
+    ...draft,
+    provenancePayloads: {
+      ...draft.provenancePayloads,
+      generatedApartment: {
+        ...draft.provenancePayloads.generatedApartment,
+        label: "generated_service",
+      },
+    },
+  };
+
+  assert.throws(
+    () =>
+      assembleSoracloudHfDeployRequest(tamperedDraft, {
+        deploy: { signer: "signer", signature: "ABCD" },
+        generatedService: { signer: "signer", signature: "CDEF" },
+        generatedApartment: { signer: "signer", signature: "DEFA" },
+      }),
+    /draft provenancePayloads\.generatedApartment is required/,
+  );
+});
+
+test("buildSoracloudHfDeployDraft rejects adversarial numeric fields", () => {
+  for (const overrides of [
+    { leaseTermMs: "-1" },
+    { leaseTermMs: "1.5" },
+    { baseFeeNanos: "-1" },
+    { baseFeeNanos: "1.5" },
+  ]) {
+    assert.throws(
+      () => buildSoracloudHfDeployDraft(validHfDeployInput(overrides)),
+      /must be a non-negative integer/,
+    );
+  }
+});
+
+test("buildSoracloudHfDeployDraft rejects unsafe lease integers", () => {
+  assert.throws(
+    () =>
+      buildSoracloudHfDeployDraft(
+        validHfDeployInput({ leaseTermMs: "9007199254740993" }),
+      ),
+    /leaseTermMs must fit in a safe JavaScript integer/,
   );
 });
 

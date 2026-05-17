@@ -1469,6 +1469,27 @@ mod tests {
         }
     }
 
+    fn sample_usage_voucher() -> (KeyPair, VpnUsageVoucherV1) {
+        let key_pair = KeyPair::random();
+        let body = VpnUsageVoucherBodyV1 {
+            session_id: [0x11; 16],
+            quote_id: [0x22; 32],
+            relay_id: [0x33; 32],
+            sequence: 7,
+            ingress_bytes: 128,
+            egress_bytes: 256,
+            active_ms: 1_500,
+            issued_at_ms: 1_700_000_000_000,
+        };
+        let signature = Signature::new(key_pair.private_key(), &body.encode());
+        let voucher = VpnUsageVoucherV1 {
+            body,
+            client_public_key: key_pair.public_key().clone(),
+            signature,
+        };
+        (key_pair, voucher)
+    }
+
     #[test]
     fn flow_label_roundtrip_respects_bounds() {
         let label = VpnFlowLabelV1::from_u32(0xABCDE).expect("flow label within bounds");
@@ -1564,6 +1585,108 @@ mod tests {
     }
 
     #[test]
+    fn helper_ticket_rejects_wrong_secret() {
+        let secret = [0x24; 32];
+        let wrong_secret = [0x25; 32];
+        let ticket = sample_helper_ticket(55_000);
+        let bytes = ticket.to_bytes(&secret);
+
+        let err =
+            VpnHelperTicketV1::parse(&bytes, &wrong_secret, 1).expect_err("wrong secret must fail");
+
+        assert_eq!(VpnHelperTicketError::InvalidMac, err);
+    }
+
+    #[test]
+    fn helper_ticket_rejects_bad_magic_at_valid_length() {
+        let secret = [0x24; 32];
+        let ticket = sample_helper_ticket(55_000);
+        let mut bytes = ticket.to_bytes(&secret);
+        bytes[0] ^= 0xFF;
+
+        assert!(!VpnHelperTicketV1::looks_like(&bytes));
+        let err = VpnHelperTicketV1::parse(&bytes, &secret, 1).expect_err("bad magic must fail");
+
+        assert_eq!(VpnHelperTicketError::InvalidMagic, err);
+    }
+
+    #[test]
+    fn helper_ticket_parse_hex_rejects_non_hex() {
+        let secret = [0x24; 32];
+
+        let err = VpnHelperTicketV1::parse_hex("not-hex", &secret, 1)
+            .expect_err("non-hex ticket must fail");
+
+        assert!(matches!(err, VpnHelperTicketError::Hex(_)));
+    }
+
+    #[test]
+    fn helper_ticket_parse_hex_rejects_valid_hex_wrong_length() {
+        let secret = [0x24; 32];
+        let short_ticket = hex::encode(vec![0u8; VPN_HELPER_TICKET_LEN - 1]);
+
+        let err = VpnHelperTicketV1::parse_hex(&short_ticket, &secret, 1)
+            .expect_err("wrong-length hex ticket must fail");
+
+        assert_eq!(
+            VpnHelperTicketError::InvalidLength {
+                expected: VPN_HELPER_TICKET_LEN,
+                actual: VPN_HELPER_TICKET_LEN - 1,
+            },
+            err
+        );
+    }
+
+    #[test]
+    fn helper_ticket_mac_covers_metering_public_key() {
+        let secret = [0x24; 32];
+        let ticket = sample_helper_ticket(55_000);
+        let mut bytes = ticket.to_bytes(&secret);
+        let metering_offset = VPN_HELPER_TICKET_MAGIC.len() + 16 + 32 + 32 + 32 + 32;
+        bytes[metering_offset] ^= 0x01;
+
+        let err = VpnHelperTicketV1::parse(&bytes, &secret, 1)
+            .expect_err("metering key tamper must fail");
+
+        assert_eq!(VpnHelperTicketError::InvalidMac, err);
+    }
+
+    #[test]
+    fn helper_ticket_mac_covers_tariff_fields() {
+        let secret = [0x24; 32];
+        let ticket = sample_helper_ticket(55_000);
+        let mut bytes = ticket.to_bytes(&secret);
+        let tariff_offset = VPN_HELPER_TICKET_MAGIC.len() + 16 + 32 + 32 + 32 + 32 + 32;
+        bytes[tariff_offset + 7] ^= 0x01;
+
+        let err =
+            VpnHelperTicketV1::parse(&bytes, &secret, 1).expect_err("tariff tamper must fail");
+
+        assert_eq!(VpnHelperTicketError::InvalidMac, err);
+    }
+
+    #[test]
+    fn helper_ticket_mac_covers_expiry() {
+        let secret = [0x24; 32];
+        let ticket = sample_helper_ticket(55_000);
+        let mut bytes = ticket.to_bytes(&secret);
+        let expiry_offset = VPN_HELPER_TICKET_MAGIC.len()
+            + 16
+            + 32
+            + 32
+            + 32
+            + 32
+            + 32
+            + (4 * std::mem::size_of::<u64>());
+        bytes[expiry_offset + 7] ^= 0x01;
+
+        let err =
+            VpnHelperTicketV1::parse(&bytes, &secret, 1).expect_err("expiry tamper must fail");
+
+        assert_eq!(VpnHelperTicketError::InvalidMac, err);
+    }
+
+    #[test]
     fn helper_ticket_rejects_expired_ticket() {
         let secret = [0x99; 32];
         let ticket = sample_helper_ticket(999);
@@ -1580,26 +1703,58 @@ mod tests {
 
     #[test]
     fn usage_voucher_verifies_signature_and_hashes() {
-        let key_pair = KeyPair::random();
-        let body = VpnUsageVoucherBodyV1 {
-            session_id: [0x11; 16],
-            quote_id: [0x22; 32],
-            relay_id: [0x33; 32],
-            sequence: 7,
-            ingress_bytes: 128,
-            egress_bytes: 256,
-            active_ms: 1_500,
-            issued_at_ms: 1_700_000_000_000,
-        };
-        let signature = Signature::new(key_pair.private_key(), &body.encode());
-        let voucher = VpnUsageVoucherV1 {
-            body,
-            client_public_key: key_pair.public_key().clone(),
-            signature,
-        };
+        let (_key_pair, voucher) = sample_usage_voucher();
 
         voucher.verify().expect("voucher signature must verify");
         assert_ne!([0u8; 32], voucher.hash());
+    }
+
+    #[test]
+    fn usage_voucher_rejects_body_tampering() {
+        let (_key_pair, mut voucher) = sample_usage_voucher();
+        voucher.body.egress_bytes = voucher.body.egress_bytes.saturating_add(1);
+
+        assert!(voucher.verify().is_err());
+    }
+
+    #[test]
+    fn usage_voucher_rejects_public_key_substitution() {
+        let (_key_pair, mut voucher) = sample_usage_voucher();
+        let other_key_pair = KeyPair::random();
+        voucher.client_public_key = other_key_pair.public_key().clone();
+
+        assert!(voucher.verify().is_err());
+    }
+
+    #[test]
+    fn usage_voucher_rejects_signature_substitution() {
+        let (_key_pair, mut voucher) = sample_usage_voucher();
+        let other_key_pair = KeyPair::random();
+        voucher.signature = Signature::new(other_key_pair.private_key(), &voucher.body.encode());
+
+        assert!(voucher.verify().is_err());
+    }
+
+    #[test]
+    fn usage_voucher_hash_commits_body_public_key_and_signature() {
+        let (key_pair, voucher) = sample_usage_voucher();
+        let base_hash = voucher.hash();
+
+        let mut body_changed = voucher.clone();
+        body_changed.body.sequence = body_changed.body.sequence.saturating_add(1);
+        body_changed.signature =
+            Signature::new(key_pair.private_key(), &body_changed.body.encode());
+        assert_ne!(base_hash, body_changed.hash());
+
+        let mut public_key_changed = voucher.clone();
+        public_key_changed.client_public_key = KeyPair::random().public_key().clone();
+        assert_ne!(base_hash, public_key_changed.hash());
+
+        let signature_changed = VpnUsageVoucherV1 {
+            signature: Signature::new(KeyPair::random().private_key(), &voucher.body.encode()),
+            ..voucher
+        };
+        assert_ne!(base_hash, signature_changed.hash());
     }
 
     #[test]

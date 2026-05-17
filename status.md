@@ -7,32 +7,58 @@ Last updated: 2026-05-17
 - Added SoraFS paid-pin negative coverage for unfunded and underfunded public
   registration, pre-fee validation failures that must not debit the submitter,
   successor-chain rejection paths that must leave fee balances unchanged,
-  alias proof tampering that must not write a manifest or move fees,
+  malformed alias proof bytes, stale alias records, and other alias proof
+  tampering that must not write a manifest or move fees,
   duplicate digest/alias replay without a second fee charge, and storage ingest
   with pending/retired records, missing fee metadata, forged fee payer,
-  embedded record digest mismatch, chunker profile mismatch, policy mismatches
-  across replicas/storage class/retention epoch, and tampered paid-record
-  content length.
+  submitter mismatch, embedded record digest mismatch, chunker profile and
+  multihash mismatches, policy mismatches across replicas/storage
+  class/retention epoch, and tampered paid-record content length. Approval
+  rejection coverage now also checks invalid council signatures and alias
+  collisions leave pending manifests pending, do not stamp envelope digests,
+  and do not create or overwrite alias bindings. The latest approval pass also
+  rejects a valid pending approval envelope paired with a forged supplied
+  digest while leaving the pending record and alias table unchanged. Alias
+  lifecycle coverage now rejects expiry-before-bound, pending-manifest binds,
+  duplicate binds, bound-before-approval binds, unknown-manifest binds, and
+  expiry-past-retention without attaching aliases or replacing existing alias
+  records; conflicting repeat retirement leaves the original retired epoch,
+  reason, and dropped alias state intact.
 - Added SDK-side validation coverage so JavaScript, Kotlin/JVM, and Java
   Android builders reject missing or negative SoraFS pin-register
   `content_length` instead of emitting malformed register payloads, and reject
-  nonnumeric `content_length` during argument decoding. JavaScript request
-  validation also rejects alias bindings without proofs and malformed successor
-  digests before fetch; typed response normalization rejects negative pin-fee
-  receipt values.
+  nonnumeric `content_length` during argument decoding. Kotlin and Java
+  argument decoding now also reject negative `submitted_epoch`. JavaScript
+  request validation rejects zero replicas, negative retention epochs, alias
+  bindings without proofs, malformed alias proofs, and malformed successor
+  digests before fetch; it now also rejects negative submitted epochs and
+  malformed manifest digests before fetch. Kotlin/JVM and Java Android policy
+  builders and argument decoders now reject zero, negative, and nonnumeric
+  replica counts as well as partial alias argument sets. Typed response
+  normalization rejects negative pin-fee receipt values, negative response
+  content lengths, negative response submitted epochs, malformed successor
+  digests, and aliases missing proofs.
 - Validation: `cargo fmt --all`, `git diff --check`,
   `cargo test -p iroha_core --lib register_pin_manifest_rejects_unfunded_public_submission_without_side_effects -- --nocapture`,
   `cargo test -p iroha_core --lib register_pin_manifest_rejects_insufficient_public_fee_without_side_effects -- --nocapture`,
   `cargo test -p iroha_core --lib register_manifest_rejects -- --nocapture`,
   `cargo test -p iroha_core --lib register_manifest_rejects_alias -- --nocapture`,
   `cargo test -p iroha_core --lib register_manifest_rejects_empty_alias_proof_without_side_effects -- --nocapture`,
+  `cargo test -p iroha_core --lib register_manifest_rejects_malformed_alias_proof_without_side_effects -- --nocapture`,
+  `cargo test -p iroha_core --lib register_manifest_rejects_stale_alias_record_without_side_effects -- --nocapture`,
+  `cargo test -p iroha_core --lib approve_pending_manifest_rejects -- --nocapture`,
+  `cargo test -p iroha_core --lib bind_manifest_alias_rejects -- --nocapture`,
+  `cargo test -p iroha_core --lib retire_manifest_rejects_conflicting_repeat_without_side_effects -- --nocapture`,
   `cargo test -p iroha_torii --lib --features app_api storage_pin_rejects_paid_record -- --nocapture`,
   and
   `cargo test -p iroha_torii --lib --features app_api paid_record_even -- --nocapture`
-  are green. The focused JavaScript register-pin filter,
-  `node --test --test-name-pattern "registerSorafsPinManifest" javascript/iroha_js/test/toriiClient.test.js`,
-  is also green. Kotlin/Java Gradle validation is blocked because this host has
-  no Java runtime available.
+  are green. The focused JavaScript register-pin filter is also green when run
+  with a temporary `IROHA_JS_NATIVE_DIR` whose checksum manifest matches the
+  local native binding:
+  `node --test --test-name-pattern "registerSorafsPinManifest" javascript/iroha_js/test/toriiClient.test.js`.
+  A direct run is currently blocked by a dirty-worktree native checksum
+  mismatch. Kotlin/Java Gradle validation is blocked because this host has no
+  Java runtime available.
 
 ## 2026-05-16 SoraFS paid pin registry enforcement
 
@@ -104,24 +130,79 @@ Last updated: 2026-05-17
   token-id substitution, and stale recursive-proof public-input bindings.
   Receive-request tampering coverage now includes asset-owner substitution and
   amount substitution before the payer creates an otherwise coherent token.
+  The shared Offline V2 fixture now also carries a canonical SDK interop payment
+  token handoff, and Swift, Kotlin/JVM, and Java Android assert identical Norito
+  bytes, text payloads, QR frames, and local recipient acceptance from that
+  artifact. Swift asset-definition address decoding now has a bridge-free
+  BLAKE3 checksum fallback and rejects bad checksums, matching Android/Kotlin
+  address semantics when the native bridge is unavailable on SwiftPM or iOS
+  simulator test hosts.
+- Swift, Kotlin/JVM, and Java Android now expose an app-facing
+  `OfflineNoteV2TransferHandoff` layer for QR streaming, NFC, and nearby
+  payment-token transfer modalities. QR uses the canonical `iroha:qr1:`
+  streaming frames, NFC includes a png2-style APDU datastream
+  (`select`/`get_info`/`read_chunk`/`write_meta`/`write_chunk`/`commit`) with a
+  64 KiB advertised-payload cap, SHA-256 metadata, Android-safe 240-byte default
+  chunks, local receipt ACK reads, and explicit iOS fast-chunk opt-in. Nearby now
+  has a sorted-key shared JSON envelope with unpadded base64url payloads, a
+  pairing-image challenge, payment payload, receipt ACK, and rejection message.
+  Swift/Kotlin/Java tests pin the same NFC APDU and Nearby envelope wire
+  fixture, including rejection of padded Nearby payloads, malformed APDUs,
+  nonzero Le bytes on no-data commands, non-canonical zero-length reads,
+  invalid direct read lengths, nonzero P1/P2 smuggling on no-offset APDUs,
+  invalid response/bounds handling, huge and negative assembler offsets,
+  conflicting partial-overlap chunks, malformed or smuggled pairing objects,
+  fractional Nearby versions, challenge/receipt ACK content-type downgrades,
+  top-level non-object envelopes, ACK-with-pairing payloads, and invalid
+  payment-token payloads. The app-facing handoff decoders now also reject
+  content-type downgrades, corrupted QR stream frames, header stream-id
+  mismatches, wrong-stream data injection, valid-CRC poisoned chunks,
+  non-canonical QR frame/envelope lengths, header counter drift, data/parity
+  count and chunk-length mismatches, out-of-range Java/Kotlin 16-bit field
+  values that previously could wrap on encode, poisoned parity recovery,
+  coherent-but-mutated payload hash mismatches, conflicting repeated headers or
+  chunks, and non-payment stream payload kinds before returning a token.
+  Android platform modules include capability helpers that enable NFC only when
+  the device advertises HCE support; Swift keeps NFC disabled unless the app
+  opts in after confirming an allowed iOS HCE/CardSession use case and
+  entitlement.
 - The previously blocking `qr_stream_fixtures` bin now uses the exported
   `norito::json!` macro form that compiles under the current Norito JSON
   module layout, and the shared QR fixtures were regenerated.
 - Validation:
-  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift`
-  - `xcodebuild test -scheme IrohaSwift -destination 'id=7A8B8CC0-617D-49EA-BA33-3976C3E15517' -only-testing:IrohaSwiftTests/OfflineNoteV2Tests` from `IrohaSwift` on the iPhone 17 iOS 26.4.1 simulator
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain` from `kotlin`
+  - `cargo fmt --all`
+  - `swift test --filter OfflineQrStreamTests` from `IrohaSwift` (`8` tests)
+  - `swift test --filter OfflineQrStreamTests/testQrStreamRejectsAdversarialEnvelopeAndChunkShapes` from `IrohaSwift`
+  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift` (`53` tests)
+  - `swift test --filter OfflineNoteV2Tests/testOfflineNoteV2TransferHandoffRejectsAdversarialStreamsAndMetadata` from `IrohaSwift`
+  - `swift test --filter OfflineNoteV2Tests/testOfflineNoteV2NfcApduProtocolSupportsAndroidSafeAndIOSFastChunks --filter OfflineNoteV2Tests/testOfflineNoteV2NearbyEnvelopeRoundTripsPairingPaymentAndAck` from `IrohaSwift`
+  - `swift test --filter OfflineNoteV2Tests/testOfflineNoteV2TransportWireFormatMatchesSharedFixture --filter OfflineNoteV2Tests/testOfflineNoteV2NearbyEnvelopeRejectsAdversarialMessages` from `IrohaSwift`
+  - `swift test --filter OfflineNoteV2Tests/testOfflineNoteV2NfcApduProtocolRejectsMalformedCommandsAndBounds --filter OfflineNoteV2Tests/testOfflineNoteV2NearbyEnvelopeRejectsAdversarialMessages` from `IrohaSwift`
+  - `swift test --filter OfflineNoteV2Tests/testOfflineNoteV2TransferHandoffSupportsQrNfcAndNearbyPayloads` from `IrohaSwift`
+  - `swift test --filter ToriiClientTests/testCanonical` from `IrohaSwift`
+  - `xcodebuild test -scheme IrohaSwift -destination 'id=7A8B8CC0-617D-49EA-BA33-3976C3E15517' -only-testing:IrohaSwiftTests/OfflineQrStreamTests -only-testing:IrohaSwiftTests/OfflineNoteV2Tests` from `IrohaSwift` on the iPhone 17 iOS 26.4 simulator (`61` tests)
+  - `xcodebuild test -scheme IrohaSwift -destination 'id=7A8B8CC0-617D-49EA-BA33-3976C3E15517' -only-testing:IrohaSwiftTests/OfflineNoteV2Tests` from `IrohaSwift` on the booted iPhone 17 iOS 26.5 simulator (`53` tests)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test.qrStreamRejectsAdversarialEnvelopesAndChunkShapes --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test.transferHandoffRejectsAdversarialStreamsAndMetadata --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test.nfcApduProtocolRejectsMalformedCommandsAndBounds --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test.nearbyEnvelopeRejectsAdversarialMessages --console=plain --rerun-tasks` from `kotlin`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :offline-wallet-android:compileDebugAndroidTestJavaWithJavac :offline-wallet-android:compileReleaseKotlin --console=plain` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :client-android:assembleRelease :offline-wallet-android:assembleRelease --quiet` from `kotlin`
   - Installed Android emulator tooling and an API 35 Google APIs ARM64 system
     image with `sdkmanager`, created the `iroha_offline_api35` AVD, and booted
     it headless for connected tests.
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_SERIAL=emulator-5554 ANDROID_HOME=/opt/homebrew/share/android-commandlinetools ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools PATH=/opt/homebrew/opt/openjdk@21/bin:/opt/homebrew/share/android-commandlinetools/platform-tools:/opt/homebrew/share/android-commandlinetools/emulator:$PATH ./gradlew :offline-wallet-android:connectedDebugAndroidTest --console=plain` from `kotlin`
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :android:compileDebugAndroidTestJavaWithJavac :android:compileDebugJavaWithJavac --console=plain` from `java/iroha_android`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :android:compileDebugJavaWithJavac --console=plain --rerun-tasks` from `java/iroha_android`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :android:assembleDebug --console=plain --quiet` from `java/iroha_android`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_SERIAL=emulator-5554 ANDROID_HOME=/opt/homebrew/share/android-commandlinetools ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools PATH=/opt/homebrew/opt/openjdk@21/bin:/opt/homebrew/share/android-commandlinetools/platform-tools:/opt/homebrew/share/android-commandlinetools/emulator:$PATH ./gradlew :android:connectedDebugAndroidTest --console=plain` from `java/iroha_android`
+  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --nocapture`
+  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --check`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-v2-fixtures cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --check`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-v2-fixtures cargo run -p iroha_data_model --features test-fixtures --bin qr_stream_fixtures -- --check`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-v2-fixtures cargo test -p iroha_data_model --features test-fixtures,transparent_api offline_note_v2_wallet_derivations -- --nocapture`
+  - `git diff --check`
   - `git diff --check`
 - Device validation now includes Swift Offline Note V2 tests on an iOS
   simulator plus Kotlin and Java Android Keystore rollback drills on a real
@@ -151,15 +232,36 @@ Last updated: 2026-05-17
 - Torii adversarial coverage now exercises WSV-backed session lookup after
   cache loss for expired leases, non-active leases, and cross-account access,
   plus WSV-backed receipt settlement rejection for wrong metering keys,
-  relay-side earned-fee inflation, and voucher substitution.
-- Focused validation passed for data-model helper-ticket tests, the full
-  `sora-vpn-backend` unit suite, the full `sora-vpn-controller` helper binary
-  suite, relay VPN voucher debt/earned-fee tests, Torii WSV-backed active
-  session and receipt-settlement tests, the Swift/Kotlin/JVM/Java Android,
-  Python, and JavaScript client Torii files, `git diff --check` on the
-  task-scoped files, and rustfmt on the touched Rust files. Full
-  `cargo fmt --all --check` is currently blocked by unrelated dirty-tree
-  formatting diffs in `crates/iroha_core/src/smartcontracts/isi/soracloud.rs`.
+  relay-side earned-fee inflation, voucher substitution, non-operator
+  signatures, exact signed-request replay, and explicit `lease_id_hex`
+  confusion between two active leases. Additional receipt verifier coverage
+  rejects payment-hash, account-hash, relay-id, byte-counter, uptime,
+  timestamp-order, voucher-signature, and voucher-sequence tampering after
+  WSV/cache-loss reconstruction. The latest negative pass also rejects
+  receipt-side and voucher-side session/quote mismatches, voucher-side relay-id
+  mismatch, malformed receipt/voucher hex, and extra malformed Norito bytes
+  before settlement. Additional boundary tests now reject malformed JSON
+  receipt bodies before auth, explicit `lease_id_hex` values that are non-hex
+  or the wrong length, receipt-derived unknown lease IDs, and replayed
+  settlement attempts against already settled or refunded WSV leases. The
+  quote/session creation boundary now rejects malformed JSON before auth,
+  non-hex metering keys, cross-account quote consumption, exit-class mismatch,
+  metering-key mismatch, and empty payment hashes.
+- Helper-ticket parser coverage now rejects wrong MAC secrets and verifies that
+  the MAC covers both the authorized Ed25519 metering public key and every
+  deterministic tariff field. Additional fixed-frame parser coverage rejects
+  valid-length bad magic, non-hex transport input, valid-hex wrong-length
+  input, and expiry-field tampering under the MAC. Usage-voucher data-model
+  tests now reject signed-body tampering, public-key substitution, and
+  signature substitution, and verify that voucher hashes commit to the body,
+  public key, and signature.
+- Focused validation passed for data-model SoraNet VPN/helper-ticket tests,
+  the full `sora-vpn-backend` unit suite, the full `sora-vpn-controller`
+  helper binary suite, relay VPN voucher debt/earned-fee tests, Torii
+  WSV-backed active session and receipt-settlement tests, the
+  Swift/Kotlin/JVM/Java Android, Python, and JavaScript client Torii files,
+  `git diff --check` on the task-scoped files, rustfmt on the touched files,
+  and `cargo fmt --all --check`.
 
 ## 2026-05-17 ZK audit hardening
 
@@ -213,6 +315,91 @@ Last updated: 2026-05-17
   is currently blocked by unrelated Torii test compile issues in
   `sorafs_discovery`, `connect_gating`, `gov_mode_mismatch_and_autoclose`, and
   `zk_vote_tally_handler`.
+- Additional negative/adversarial coverage now rejects legacy inline verifying
+  key fields in CLI, Connect Norito bridge, JavaScript, and Swift proof
+  builders even when `vk_ref` is present, including every legacy field alias
+  used by old clients. Connect bridge coverage now also rejects legacy inline
+  VK fields through the exported C encoder, leaving output pointers and hashes
+  untouched on failure. Data-model unit coverage rejects missing `vk_ref` and
+  the old optional `vk_ref`/inline-key Norito slot shape, while core ZK
+  coverage rejects proof/backend mismatches, commitment-only registry bypass
+  attempts, inactive registered VKs in preverify, inactive VKs in
+  `VerifyProof`, tampered OpenVerifyEnvelope VK hashes, and malformed supported
+  Halo2 proof envelopes that should be recorded as rejected.
+- A second adversarial pass makes `ProofAttachment` direct JSON decoding fail
+  closed on unknown fields and legacy inline VK aliases, rejects malformed
+  `vk_commitment`/`envelope_hash` arrays before model construction, rejects
+  malformed CLI commitment hex and non-object `vk_ref`, rejects Connect bridge
+  proof/backend splits at both parser and C encoder boundaries, rejects
+  JavaScript structured proof backend mismatches, covers Swift missing-`vk_ref`
+  proof payloads, and adds a direct `VerifyProof` duplicate-record replay test.
+- A third adversarial pass enforces attachment/proof/VK-reference backend
+  consistency at the data-model JSON boundary, CLI proof JSON builder, Connect
+  bridge parser and C encoder, JavaScript builder, Swift proof attachment, and
+  core preverify/direct `VerifyProof` paths. The JavaScript builder no longer
+  accepts the stale `vk_reference` alias, and fixed-byte JSON tests now cover
+  out-of-range byte values in addition to wrong lengths.
+- A fourth adversarial pass makes `ProofAttachment` Norito wire decode fail
+  closed on proof/backend and VK-reference/backend mismatches, including
+  base64-encoded `ProofAttachmentList` JSON payloads. CLI, Connect bridge,
+  JavaScript, and Swift native escrow builders now also reject a stale
+  `vk_reference` shadow field even when a valid `vk_ref` is present.
+- A fifth adversarial pass rejects nested shadow fields inside proof attachment
+  `proof` and `vk_ref` objects instead of silently ignoring them. The
+  data-model JSON decoder now fails closed on nested shadow keys, CLI/Connect
+  bridge/JavaScript/Swift native escrow builders reject nested `vk_ref`
+  smuggling, JavaScript rejects structured proof shadow fields, and Norito wire
+  tests cover legacy `Some(vk_ref)/Some(vk_inline)` slots plus inline-VK tails
+  after a valid registry reference.
+- A sixth adversarial pass rejects surplus Norito tail fields after the allowed
+  `vk_commitment`/`envelope_hash`/`lane_privacy` attachment tail, preventing
+  future or legacy fields from being silently ignored by direct slice decode.
+  JavaScript proof builders now reject conflicting aliases for proof bytes,
+  verifying-key references, and verifying-key commitments instead of letting
+  precedence rules hide a shadow value. Swift native escrow tests also cover
+  incomplete `vk_ref` dictionaries.
+- A seventh adversarial pass adds list/DTO boundary checks: base64
+  `ProofAttachmentList` JSON rejects a single-attachment wire payload, the CLI
+  rejects bridge-only `proof_backend` shadowing, the Connect C encoder rejects
+  nested `vk_ref` shadow fields, and JavaScript rejects envelope-hash alias
+  collisions.
+- Focused validation for the adversarial follow-up:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-dm cargo test -p iroha_data_model proof_attachment_list_json_rejects_single_attachment_wire_payload --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-dm cargo test -p iroha_data_model proof_attachment_decode_rejects --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-dm cargo test -p iroha_data_model proof_attachment_json_rejects_nested_shadow_fields --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-dm cargo test -p iroha_data_model proof_attachment_json --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-dm cargo test -p iroha_data_model proof_attachment_decode --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-dm cargo test -p iroha_data_model proof_attachment_roundtrip --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-dm cargo test -p iroha_data_model proof_attachment_list_roundtrip_bare --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-dm-json cargo test -p iroha_data_model proof_attachment_list_json_rejects_backend_mismatch_inside_wire_payload --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-dm-tests cargo test -p iroha_data_model proof_attachment_decode --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-dm-tests cargo test -p iroha_data_model proof_attachment_json --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-cli cargo test -p iroha_cli build_proof_attachment_from_json --bins -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-cli cargo test -p iroha_cli build_proof_attachment_from_json_rejects_bridge_only_proof_backend_shadow --bins -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-cli cargo test -p iroha_cli build_proof_attachment_from_json_rejects_nested_vk_ref_shadow_field --bins -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-cli cargo test -p iroha_cli build_proof_attachment_from_json_rejects_vk_reference_shadow_field --bins -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-cli-tests cargo test -p iroha_cli build_proof_attachment_from_json --bins -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-cli-tests cargo test -p iroha_cli build_proof_attachment_from_json_rejects_legacy_inline_vk_field --bins -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-cli-tests cargo test -p iroha_cli build_proof_attachment_from_json_rejects --bins -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-bridge cargo test -p connect_norito_bridge vk_reference_shadow_field -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-bridge cargo test -p connect_norito_bridge proof_attachment_json_rejects_nested_vk_ref_shadow_field -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-bridge cargo test -p connect_norito_bridge zk_transfer_encoder_rejects_nested_vk_ref_shadow_field -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-bridge cargo test -p connect_norito_bridge proof_attachment_json -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-bridge-tests cargo test -p connect_norito_bridge legacy_inline_vk_field -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-bridge-tests cargo test -p connect_norito_bridge proof_attachment_json -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-bridge-tests cargo test -p connect_norito_bridge zk_transfer_encoder_rejects -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-core-zk-tests cargo test -p iroha_core --test zk_verify --features zk-tests,zk-preverify,halo2-dev-tests preverify_rejects -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-core-zk-tests cargo test -p iroha_core --test zk_verify --features zk-tests,zk-preverify,halo2-dev-tests verifyproof_rejects_inactive_registered_verifying_key -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-core-zk-tests cargo test -p iroha_core --test zk_verify --features zk-tests,zk-preverify,halo2-dev-tests verifyproof -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-js-native npm run build:native` from `javascript/iroha_js`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-js-native npm run build:native` from `javascript/iroha_js`
+  - `swift test --filter NativeEscrowInstructionBuildersTests` from `IrohaSwift`
+  - `swift test --filter NativeEscrowInstructionBuildersTests/testAnonymousEscrowRejectsVerifyingKeyReferenceShadowField` from `IrohaSwift`
+  - `swift test --filter 'ProofAttachmentNoritoTests|NativeEscrowInstructionBuildersTests'` from `IrohaSwift`
+  - `node --test test/instructionBuilders.test.js` from `javascript/iroha_js`
+  - `git diff --check`
+  - `rg -n "new_inline|ProofAttachment::new_inline" crates javascript IrohaSwift python docs roadmap.md`
   - Static stale-pattern scan for the removed env override, old VK hash formula,
     timeout-as-rejection wording, and old SDK messages
   - `git diff --check` on the ZK cleanup touch set
@@ -305,17 +492,38 @@ Last updated: 2026-05-17
   applies consistently to those routes.
 - Validation: `cargo fmt --all`, `git diff --check`,
   `cargo test -p iroha_torii_shared`,
-  `cargo test -p iroha response_report::with_msg_decodes_shared_error_envelope_queue_details`,
+  `cargo test -p iroha response_report -- --nocapture`,
   and
   `CARGO_TARGET_DIR=target/codex-openapi cargo test -p iroha_core pipeline_sidecar_decodes_missing_fastpq_proofs_as_empty -- --nocapture`
   are green. Focused Swift, Python, Kotlin/JVM, Java Android, and JavaScript
   client regressions for structured `ErrorEnvelope.details` reject codes are
   also green after rebuilding the JS native binding and package `dist`.
-- Static Torii OpenAPI JSON snapshots were refreshed in unsigned mode. The
-  OpenAPI check now reaches manifest verification and fails only because the
-  signed manifest hash still points at the previous snapshot; an operator must
-  regenerate the manifest with the OpenAPI signing key or detached signature
-  envelope.
+  Additional Rust/Python adversarial client coverage now checks AXT details
+  without `reject_code`, ignores non-string reject-code smuggling attempts, and
+  refuses to decode binary Norito envelopes under a non-Norito content type.
+- Static Torii OpenAPI JSON snapshots and latest/current manifests were
+  refreshed in explicit unsigned first-release mode. `ci/check_openapi_spec.sh`
+  now verifies latest and current artifact path, size, SHA-256, and BLAKE3
+  metadata with `--allow-unsigned`, while the signed manifest path remains
+  available for operator release signing. Focused xtask OpenAPI tests now also
+  reject stale unsigned payload digests, mismatched detached signatures, invalid
+  signatures even under `--allow-unsigned`, unsupported signature algorithms,
+  malformed signature hex/public-key hex, unsafe manifest artifact paths,
+  platform-specific artifact paths, artifact filename mismatches, and all
+  unsigned/signed flag combinations; portal OpenAPI tests reject signed entries
+  hidden behind unsigned allowlists, signature metadata smuggled into unsigned
+  version entries, signed manifests smuggled behind unsigned labels, and
+  relative, absolute, Windows-drive, drive-relative, or backslash-traversal
+  spec/manifest paths that escape the static OpenAPI directory. The portal
+  checker also now rejects malformed allowed-signer keys/algorithms, malformed
+  allowed-signer versions, duplicate allowed signers, malformed/missing and
+  duplicate/whitespace versions lists, non-object version entries, missing or
+  whitespace version-entry labels, non-boolean `signed` flags, invalid version
+  byte counts, malformed BLAKE3 metadata, malformed signed version-entry
+  metadata, malformed/non-object manifest-side signature metadata, incomplete
+  manifest generator metadata, invalid manifest artifact byte counts, malformed
+  signature hex before verification, and unsafe manifest `artifact.path`
+  metadata rather than normalizing it into a valid-looking path.
 
 ## 2026-05-16 Parallel apply event fixture refresh
 

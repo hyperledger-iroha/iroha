@@ -1513,10 +1513,25 @@ fn parse_proof_attachment_from_json_bytes(
 }
 
 fn parse_proof_attachment_value(value: &JsonValue) -> BridgeResult<ProofAttachment> {
+    let object = value.as_object().ok_or(BridgeError::ProofAttachment)?;
+    for field in object.keys() {
+        match field.as_str() {
+            "backend" | "proof_backend" | "proof_b64" | "vk_ref" | "vk_commitment_hex"
+            | "envelope_hash_hex" => {}
+            "vk_inline" | "vkInline" | "verifyingKeyInline" | "verifying_key_inline" => {
+                return Err(BridgeError::ProofAttachment);
+            }
+            _ => return Err(BridgeError::ProofAttachment),
+        }
+    }
     let backend_str = value
         .get("backend")
         .and_then(JsonValue::as_str)
         .ok_or(BridgeError::ProofAttachment)?;
+    let backend_str = backend_str.trim();
+    if backend_str.is_empty() {
+        return Err(BridgeError::ProofAttachment);
+    }
     let backend = backend_str
         .parse::<String>()
         .map_err(|_| BridgeError::ProofAttachment)?;
@@ -1532,19 +1547,39 @@ fn parse_proof_attachment_value(value: &JsonValue) -> BridgeResult<ProofAttachme
         .unwrap_or(backend_str)
         .parse::<String>()
         .map_err(|_| BridgeError::ProofAttachment)?;
+    if proof_backend != backend {
+        return Err(BridgeError::ProofAttachment);
+    }
     let proof = ProofBox::new(proof_backend, proof_bytes);
 
     let attachment = if let Some(vk_ref) = value.get("vk_ref").and_then(JsonValue::as_object) {
+        for field in vk_ref.keys() {
+            match field.as_str() {
+                "backend" | "name" => {}
+                _ => return Err(BridgeError::ProofAttachment),
+            }
+        }
         let vk_backend = vk_ref
             .get("backend")
             .and_then(JsonValue::as_str)
             .ok_or(BridgeError::ProofAttachment)?
+            .trim()
             .parse::<String>()
             .map_err(|_| BridgeError::ProofAttachment)?;
+        if vk_backend.is_empty() {
+            return Err(BridgeError::ProofAttachment);
+        }
+        if vk_backend != backend {
+            return Err(BridgeError::ProofAttachment);
+        }
         let name = vk_ref
             .get("name")
             .and_then(JsonValue::as_str)
             .ok_or(BridgeError::ProofAttachment)?;
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(BridgeError::ProofAttachment);
+        }
         let id = VerifyingKeyId::new(vk_backend, name);
         ProofAttachment::new_ref(backend.clone(), proof.clone(), id)
     } else {
@@ -8032,6 +8067,325 @@ mod accel_tests {
         unsafe {
             free(out_signed_ptr as *mut _);
         }
+    }
+
+    #[test]
+    fn zk_transfer_encoder_rejects_legacy_inline_vk_field() {
+        let _guard = chain_guard();
+        let chain = cstring("test-chain");
+        let (authority, private) = sample_account("bank", 0);
+        let asset_definition = asset_definition_cstring("bank", "usd");
+        let inputs = [0x11_u8; 32];
+        let outputs = [0x22_u8; 32];
+        let proof = cstring(
+            r#"{"backend":"groth16","proof_b64":"AA==","vk_ref":{"backend":"groth16","name":"vk1"},"verifyingKeyInline":{"backend":"groth16","bytes_b64":"AQID"}}"#,
+        );
+        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
+        let mut out_signed_len: c_ulong = 0;
+        let mut out_hash = [0u8; 32];
+        let result = unsafe {
+            connect_norito_encode_zk_transfer_signed_transaction(
+                chain.as_ptr(),
+                chain.as_bytes().len() as c_ulong,
+                authority.as_ptr(),
+                authority.as_bytes().len() as c_ulong,
+                1,
+                0,
+                0,
+                asset_definition.as_ptr(),
+                asset_definition.as_bytes().len() as c_ulong,
+                inputs.as_ptr(),
+                inputs.len() as c_ulong,
+                outputs.as_ptr(),
+                outputs.len() as c_ulong,
+                proof.as_ptr(),
+                proof.as_bytes().len() as c_ulong,
+                ptr::null(),
+                0,
+                private.as_ptr(),
+                private.len() as c_ulong,
+                &mut out_signed_ptr,
+                &mut out_signed_len,
+                out_hash.as_mut_ptr(),
+                out_hash.len() as c_ulong,
+            )
+        };
+        assert_eq!(result, ERR_PROOF_ATTACHMENT);
+        assert!(out_signed_ptr.is_null());
+        assert_eq!(out_signed_len, 0);
+        assert_eq!(out_hash, [0u8; 32]);
+    }
+
+    #[test]
+    fn zk_transfer_encoder_rejects_proof_backend_mismatch() {
+        let _guard = chain_guard();
+        let chain = cstring("test-chain");
+        let (authority, private) = sample_account("bank", 0);
+        let asset_definition = asset_definition_cstring("bank", "usd");
+        let inputs = [0x11_u8; 32];
+        let outputs = [0x22_u8; 32];
+        let proof = cstring(
+            r#"{"backend":"halo2/ipa","proof_backend":"stark/fri-v1","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
+        );
+        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
+        let mut out_signed_len: c_ulong = 0;
+        let mut out_hash = [0u8; 32];
+        let result = unsafe {
+            connect_norito_encode_zk_transfer_signed_transaction(
+                chain.as_ptr(),
+                chain.as_bytes().len() as c_ulong,
+                authority.as_ptr(),
+                authority.as_bytes().len() as c_ulong,
+                1,
+                0,
+                0,
+                asset_definition.as_ptr(),
+                asset_definition.as_bytes().len() as c_ulong,
+                inputs.as_ptr(),
+                inputs.len() as c_ulong,
+                outputs.as_ptr(),
+                outputs.len() as c_ulong,
+                proof.as_ptr(),
+                proof.as_bytes().len() as c_ulong,
+                ptr::null(),
+                0,
+                private.as_ptr(),
+                private.len() as c_ulong,
+                &mut out_signed_ptr,
+                &mut out_signed_len,
+                out_hash.as_mut_ptr(),
+                out_hash.len() as c_ulong,
+            )
+        };
+        assert_eq!(result, ERR_PROOF_ATTACHMENT);
+        assert!(out_signed_ptr.is_null());
+        assert_eq!(out_signed_len, 0);
+        assert_eq!(out_hash, [0u8; 32]);
+    }
+
+    #[test]
+    fn zk_transfer_encoder_rejects_vk_ref_backend_mismatch() {
+        let _guard = chain_guard();
+        let chain = cstring("test-chain");
+        let (authority, private) = sample_account("bank", 0);
+        let asset_definition = asset_definition_cstring("bank", "usd");
+        let inputs = [0x11_u8; 32];
+        let outputs = [0x22_u8; 32];
+        let proof = cstring(
+            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"stark/fri-v1","name":"vk1"}}"#,
+        );
+        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
+        let mut out_signed_len: c_ulong = 0;
+        let mut out_hash = [0u8; 32];
+        let result = unsafe {
+            connect_norito_encode_zk_transfer_signed_transaction(
+                chain.as_ptr(),
+                chain.as_bytes().len() as c_ulong,
+                authority.as_ptr(),
+                authority.as_bytes().len() as c_ulong,
+                1,
+                0,
+                0,
+                asset_definition.as_ptr(),
+                asset_definition.as_bytes().len() as c_ulong,
+                inputs.as_ptr(),
+                inputs.len() as c_ulong,
+                outputs.as_ptr(),
+                outputs.len() as c_ulong,
+                proof.as_ptr(),
+                proof.as_bytes().len() as c_ulong,
+                ptr::null(),
+                0,
+                private.as_ptr(),
+                private.len() as c_ulong,
+                &mut out_signed_ptr,
+                &mut out_signed_len,
+                out_hash.as_mut_ptr(),
+                out_hash.len() as c_ulong,
+            )
+        };
+        assert_eq!(result, ERR_PROOF_ATTACHMENT);
+        assert!(out_signed_ptr.is_null());
+        assert_eq!(out_signed_len, 0);
+        assert_eq!(out_hash, [0u8; 32]);
+    }
+
+    #[test]
+    fn zk_transfer_encoder_rejects_vk_reference_shadow_field() {
+        let _guard = chain_guard();
+        let chain = cstring("test-chain");
+        let (authority, private) = sample_account("bank", 0);
+        let asset_definition = asset_definition_cstring("bank", "usd");
+        let inputs = [0x11_u8; 32];
+        let outputs = [0x22_u8; 32];
+        let proof = cstring(
+            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"},"vk_reference":{"backend":"halo2/ipa","name":"shadow"}}"#,
+        );
+        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
+        let mut out_signed_len: c_ulong = 0;
+        let mut out_hash = [0u8; 32];
+        let result = unsafe {
+            connect_norito_encode_zk_transfer_signed_transaction(
+                chain.as_ptr(),
+                chain.as_bytes().len() as c_ulong,
+                authority.as_ptr(),
+                authority.as_bytes().len() as c_ulong,
+                1,
+                0,
+                0,
+                asset_definition.as_ptr(),
+                asset_definition.as_bytes().len() as c_ulong,
+                inputs.as_ptr(),
+                inputs.len() as c_ulong,
+                outputs.as_ptr(),
+                outputs.len() as c_ulong,
+                proof.as_ptr(),
+                proof.as_bytes().len() as c_ulong,
+                ptr::null(),
+                0,
+                private.as_ptr(),
+                private.len() as c_ulong,
+                &mut out_signed_ptr,
+                &mut out_signed_len,
+                out_hash.as_mut_ptr(),
+                out_hash.len() as c_ulong,
+            )
+        };
+        assert_eq!(result, ERR_PROOF_ATTACHMENT);
+        assert!(out_signed_ptr.is_null());
+        assert_eq!(out_signed_len, 0);
+        assert_eq!(out_hash, [0u8; 32]);
+    }
+
+    #[test]
+    fn zk_transfer_encoder_rejects_nested_vk_ref_shadow_field() {
+        let _guard = chain_guard();
+        let chain = cstring("test-chain");
+        let (authority, private) = sample_account("bank", 0);
+        let asset_definition = asset_definition_cstring("bank", "usd");
+        let inputs = [0x11_u8; 32];
+        let outputs = [0x22_u8; 32];
+        let proof = cstring(
+            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1","vk_reference":"shadow"}}"#,
+        );
+        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
+        let mut out_signed_len: c_ulong = 0;
+        let mut out_hash = [0u8; 32];
+        let result = unsafe {
+            connect_norito_encode_zk_transfer_signed_transaction(
+                chain.as_ptr(),
+                chain.as_bytes().len() as c_ulong,
+                authority.as_ptr(),
+                authority.as_bytes().len() as c_ulong,
+                1,
+                0,
+                0,
+                asset_definition.as_ptr(),
+                asset_definition.as_bytes().len() as c_ulong,
+                inputs.as_ptr(),
+                inputs.len() as c_ulong,
+                outputs.as_ptr(),
+                outputs.len() as c_ulong,
+                proof.as_ptr(),
+                proof.as_bytes().len() as c_ulong,
+                ptr::null(),
+                0,
+                private.as_ptr(),
+                private.len() as c_ulong,
+                &mut out_signed_ptr,
+                &mut out_signed_len,
+                out_hash.as_mut_ptr(),
+                out_hash.len() as c_ulong,
+            )
+        };
+        assert_eq!(result, ERR_PROOF_ATTACHMENT);
+        assert!(out_signed_ptr.is_null());
+        assert_eq!(out_signed_len, 0);
+        assert_eq!(out_hash, [0u8; 32]);
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_legacy_inline_vk_field() {
+        for field in [
+            "vk_inline",
+            "vkInline",
+            "verifyingKeyInline",
+            "verifying_key_inline",
+        ] {
+            let json = format!(
+                r#"{{"backend":"groth16","proof_b64":"AA==","vk_ref":{{"backend":"groth16","name":"vk1"}},"{field}":{{"backend":"groth16","bytes_b64":"AQID"}}}}"#
+            );
+            let value: JsonValue = norito::json::from_str(&json).expect("json");
+            let err = parse_proof_attachment_value(&value)
+                .expect_err("legacy inline verifying-key field rejected");
+            assert!(matches!(err, BridgeError::ProofAttachment));
+        }
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_proof_backend_mismatch() {
+        let value: JsonValue = norito::json::from_str(
+            r#"{"backend":"halo2/ipa","proof_backend":"stark/fri-v1","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
+        )
+        .expect("json");
+        let err = parse_proof_attachment_value(&value)
+            .expect_err("proof backend mismatch should be rejected by bridge parser");
+        assert!(matches!(err, BridgeError::ProofAttachment));
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_bad_fixed_hash_lengths() {
+        let value: JsonValue = norito::json::from_str(
+            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"},"vk_commitment_hex":"abcd"}"#,
+        )
+        .expect("json");
+        let err = parse_proof_attachment_value(&value)
+            .expect_err("short vk_commitment_hex should be rejected");
+        assert!(matches!(err, BridgeError::ProofAttachment));
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_vk_ref_backend_mismatch() {
+        let value: JsonValue = norito::json::from_str(
+            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"stark/fri-v1","name":"vk1"}}"#,
+        )
+        .expect("json");
+        let err = parse_proof_attachment_value(&value)
+            .expect_err("vk_ref backend mismatch should be rejected");
+        assert!(matches!(err, BridgeError::ProofAttachment));
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_vk_reference_shadow_field() {
+        let value: JsonValue = norito::json::from_str(
+            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"},"vk_reference":{"backend":"halo2/ipa","name":"shadow"}}"#,
+        )
+        .expect("json");
+        let err = parse_proof_attachment_value(&value)
+            .expect_err("vk_reference shadow field should be rejected");
+        assert!(matches!(err, BridgeError::ProofAttachment));
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_nested_vk_ref_shadow_field() {
+        let value: JsonValue = norito::json::from_str(
+            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1","vk_reference":"shadow"}}"#,
+        )
+        .expect("json");
+        let err = parse_proof_attachment_value(&value)
+            .expect_err("nested vk_ref shadow field should be rejected");
+        assert!(matches!(err, BridgeError::ProofAttachment));
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_blank_vk_ref_name() {
+        let value: JsonValue = norito::json::from_str(
+            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"   "}}"#,
+        )
+        .expect("json");
+        let err =
+            parse_proof_attachment_value(&value).expect_err("blank vk_ref name should be rejected");
+        assert!(matches!(err, BridgeError::ProofAttachment));
     }
 
     #[test]

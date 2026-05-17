@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#![allow(clippy::redundant_pub_crate)]
+
 //! CUDA bindings for the FASTPQ preview backend.
 //!
 //! The GPU backend is optional – enable the `fastpq-gpu` feature and provide a CUDA toolchain
@@ -883,8 +885,7 @@ pub fn fastpq_poseidon_hash_columns(
     }
     let expected_payload = slices
         .last()
-        .map(|slice| slice.offset().saturating_add(slice.len()))
-        .unwrap_or(0);
+        .map_or(0, |slice| slice.offset().saturating_add(slice.len()));
     if payloads.len() != expected_payload {
         return Err(CudaBackendError::ShapeMismatch {
             expected: usize_to_u32(expected_payload),
@@ -937,8 +938,7 @@ pub fn fastpq_poseidon_hash_columns_fused(
     }
     let expected_payload = slices
         .last()
-        .map(|slice| slice.offset().saturating_add(slice.len()))
-        .unwrap_or(0);
+        .map_or(0, |slice| slice.offset().saturating_add(slice.len()));
     if payloads.len() != expected_payload {
         return Err(CudaBackendError::ShapeMismatch {
             expected: usize_to_u32(expected_payload),

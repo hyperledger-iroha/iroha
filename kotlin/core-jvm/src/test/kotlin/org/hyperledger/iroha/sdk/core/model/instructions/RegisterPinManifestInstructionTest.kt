@@ -21,6 +21,20 @@ class RegisterPinManifestInstructionTest {
     }
 
     @Test
+    fun `pin policy rejects zero replicas`() {
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.PinPolicy.builder().setMinReplicas(0)
+        }
+    }
+
+    @Test
+    fun `pin policy rejects negative replicas`() {
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.PinPolicy.builder().setMinReplicas(-1)
+        }
+    }
+
+    @Test
     fun `arguments include content length and roundtrip`() {
         val instruction = baseBuilder()
             .setContentLength(4096)
@@ -69,6 +83,62 @@ class RegisterPinManifestInstructionTest {
             .arguments
             .toMutableMap()
         arguments["submitted_epoch"] = "-1"
+
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.fromArguments(arguments)
+        }
+    }
+
+    @Test
+    fun `from arguments rejects zero replicas`() {
+        val arguments = baseBuilder()
+            .setContentLength(4096)
+            .build()
+            .arguments
+            .toMutableMap()
+        arguments["policy.min_replicas"] = "0"
+
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.fromArguments(arguments)
+        }
+    }
+
+    @Test
+    fun `from arguments rejects negative replicas`() {
+        val arguments = baseBuilder()
+            .setContentLength(4096)
+            .build()
+            .arguments
+            .toMutableMap()
+        arguments["policy.min_replicas"] = "-1"
+
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.fromArguments(arguments)
+        }
+    }
+
+    @Test
+    fun `from arguments rejects nonnumeric replicas`() {
+        val arguments = baseBuilder()
+            .setContentLength(4096)
+            .build()
+            .arguments
+            .toMutableMap()
+        arguments["policy.min_replicas"] = "many"
+
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.fromArguments(arguments)
+        }
+    }
+
+    @Test
+    fun `from arguments rejects partial alias binding`() {
+        val arguments = baseBuilder()
+            .setContentLength(4096)
+            .build()
+            .arguments
+            .toMutableMap()
+        arguments["alias.name"] = "docs"
 
         assertFailsWith<IllegalArgumentException> {
             RegisterPinManifestInstruction.fromArguments(arguments)

@@ -112,9 +112,14 @@ public final class AndroidOfflineNoteV2SecureStore implements OfflineNoteV2Store
     final Map<String, OfflineNoteV2WalletNote> notes = new LinkedHashMap<>();
     for (final String commitmentHex : indexSnapshot()) {
       final String encrypted = preferences.getString(noteKey(commitmentHex), null);
-      if (encrypted != null) {
-        notes.put(commitmentHex, OfflineNoteV2WalletNoteJsonCodec.decode(decrypt(encrypted)));
+      if (encrypted == null) {
+        throw new IllegalStateException("missing Offline Note V2 wallet note ciphertext");
       }
+      final OfflineNoteV2WalletNote note = OfflineNoteV2WalletNoteJsonCodec.decode(decrypt(encrypted));
+      if (!note.noteCommitmentHex().equals(commitmentHex)) {
+        throw new IllegalStateException("Offline Note V2 wallet note commitment mismatch");
+      }
+      notes.put(commitmentHex, note);
     }
     return notes;
   }
@@ -137,13 +142,13 @@ public final class AndroidOfflineNoteV2SecureStore implements OfflineNoteV2Store
     }
     editor.putStringSet(INDEX_KEY, newIndex);
     editor.putLong(STORE_REVISION_KEY, revision);
+    if (!editor.commit()) {
+      throw new IllegalStateException("failed to persist Offline Note V2 wallet notes");
+    }
     if (oldRevision == 0L) {
       deleteKeyAlias(keyAlias);
     } else {
       deleteKeyAlias(storeKeyAlias(oldRevision));
-    }
-    if (!editor.commit()) {
-      throw new IllegalStateException("failed to persist Offline Note V2 wallet notes");
     }
   }
 
@@ -190,7 +195,12 @@ public final class AndroidOfflineNoteV2SecureStore implements OfflineNoteV2Store
     if (parts.length != 3) {
       throw new IllegalStateException("invalid Offline Note V2 wallet note envelope");
     }
-    final long revision = Long.parseLong(parts[0]);
+    final long revision;
+    try {
+      revision = Long.parseLong(parts[0]);
+    } catch (final NumberFormatException e) {
+      throw new IllegalStateException("invalid Offline Note V2 wallet note revision", e);
+    }
     try {
       final Cipher cipher = Cipher.getInstance(AES_GCM);
       cipher.init(

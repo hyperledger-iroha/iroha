@@ -190,7 +190,10 @@ class RegisterPinManifestInstruction private constructor(
             private var storageClass: String? = null
             private var retentionEpoch: Long? = null
 
-            fun setMinReplicas(minReplicas: Int) = apply { this.minReplicas = minReplicas }
+            fun setMinReplicas(minReplicas: Int) = apply {
+                require(minReplicas > 0) { "minReplicas must be positive" }
+                this.minReplicas = minReplicas
+            }
             fun setStorageClass(storageClass: String) = apply {
                 this.storageClass = requireNotNull(storageClass) { "storageClass" }
             }

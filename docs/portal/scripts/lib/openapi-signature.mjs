@@ -28,6 +28,9 @@ function decodeHex(hexString, label) {
   if (normalized.length % 2 !== 0) {
     throw new Error(`${label} must have an even number of characters`);
   }
+  if (!/^[0-9a-f]*$/.test(normalized)) {
+    throw new Error(`${label} is not valid hex`);
+  }
   let decoded;
   try {
     decoded = Buffer.from(normalized, 'hex');

@@ -3025,6 +3025,28 @@ mod sorafs_tests {
         insert_manifest_with_status(stx, digest, chunk_digest, None, PinStatus::Pending);
     }
 
+    fn insert_pending_manifest_with_alias(
+        stx: &mut crate::state::StateTransaction<'_, '_>,
+        digest: ManifestDigest,
+        chunk_digest: [u8; 32],
+        alias: ManifestAliasBinding,
+    ) -> PinManifestRecord {
+        let record = PinManifestRecord::new(
+            digest,
+            default_chunker(),
+            chunk_digest,
+            default_policy(),
+            alice(),
+            5,
+            Some(alias),
+            None,
+            Metadata::default(),
+        )
+        .with_content_length(default_content_length());
+        stx.world.pin_manifests.insert(digest, record.clone());
+        record
+    }
+
     fn default_alias_binding() -> ManifestAliasBinding {
         alias_binding_for(default_digest(), "sora", "docs", 0, 0)
     }
@@ -5135,6 +5157,176 @@ mod sorafs_tests {
     }
 
     #[test]
+    fn approve_pending_manifest_rejects_invalid_signature_without_side_effects() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let alias = default_alias_binding();
+        let record = insert_pending_manifest_with_alias(
+            &mut stx,
+            default_digest(),
+            default_chunk_digest(),
+            alias.clone(),
+        );
+        let council_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let (envelope, signature_hex) = build_envelope(&record, &council_key);
+
+        let mut modified_signature =
+            hex::decode(&signature_hex).expect("signature hex decodes cleanly");
+        modified_signature[0] ^= 0xAA;
+        let bad_signature_hex = hex::encode(modified_signature);
+        let mut invalid_json =
+            String::from_utf8(envelope.clone()).expect("envelope is valid UTF-8 JSON");
+        invalid_json = invalid_json.replacen(&signature_hex, &bad_signature_hex, 1);
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 9,
+            council_envelope: Some(invalid_json.into_bytes()),
+            council_envelope_digest: None,
+        };
+        let err = approve
+            .execute(&alice(), &mut stx)
+            .expect_err("pending approval must reject invalid signature");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("failed to verify council signature"),
+            "unexpected error message: {message}"
+        );
+
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("pending manifest remains stored");
+        assert!(matches!(stored.status, PinStatus::Pending));
+        assert!(stored.council_envelope_digest.is_none());
+        assert!(
+            stx.world
+                .manifest_aliases
+                .get(&ManifestAliasId::from(&alias))
+                .is_none(),
+            "failed approval must not bind the pending alias"
+        );
+    }
+
+    #[test]
+    fn approve_pending_manifest_rejects_alias_collision_without_side_effects() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let alias = default_alias_binding();
+        let record = insert_pending_manifest_with_alias(
+            &mut stx,
+            default_digest(),
+            default_chunk_digest(),
+            alias.clone(),
+        );
+        let stale_alias = alias_binding_for(second_digest(), "sora", "docs", 0, 0);
+        let stale_record =
+            ManifestAliasRecord::new(stale_alias.clone(), second_digest(), bob(), 1, 10);
+        let alias_id = ManifestAliasId::from(&stale_alias);
+        stx.world
+            .manifest_aliases
+            .insert(alias_id.clone(), stale_record);
+
+        let council_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let (envelope, _) = build_envelope(&record, &council_key);
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 9,
+            council_envelope: Some(envelope),
+            council_envelope_digest: None,
+        };
+        let err = approve
+            .execute(&alice(), &mut stx)
+            .expect_err("pending approval must reject alias collision");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("alias `sora/docs` is already associated"),
+            "unexpected error message: {message}"
+        );
+
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("pending manifest remains stored");
+        assert!(matches!(stored.status, PinStatus::Pending));
+        assert!(stored.council_envelope_digest.is_none());
+        let stale = stx
+            .world
+            .manifest_aliases
+            .get(&alias_id)
+            .expect("stale alias record remains");
+        assert!(stale.targets_manifest(&second_digest()));
+    }
+
+    #[test]
+    fn approve_pending_manifest_rejects_digest_mismatch_with_envelope_without_side_effects() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let alias = default_alias_binding();
+        let record = insert_pending_manifest_with_alias(
+            &mut stx,
+            default_digest(),
+            default_chunk_digest(),
+            alias.clone(),
+        );
+        let council_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let (envelope, _) = build_envelope(&record, &council_key);
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 9,
+            council_envelope: Some(envelope),
+            council_envelope_digest: Some([0x99; 32]),
+        };
+        let err = approve
+            .execute(&alice(), &mut stx)
+            .expect_err("pending approval must reject mismatched supplied digest");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("approval digest mismatch with provided envelope"),
+            "unexpected error message: {message}"
+        );
+
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("pending manifest remains stored");
+        assert!(matches!(stored.status, PinStatus::Pending));
+        assert!(stored.council_envelope_digest.is_none());
+        assert!(
+            stx.world
+                .manifest_aliases
+                .get(&ManifestAliasId::from(&alias))
+                .is_none(),
+            "failed digest-mismatch approval must not bind the pending alias"
+        );
+    }
+
+    #[test]
     fn approve_manifest_reapproval_rejects_digest_without_stored_digest() {
         let state = make_state();
         let mut block = state.block(block_header());
@@ -5258,6 +5450,65 @@ mod sorafs_tests {
     }
 
     #[test]
+    fn retire_manifest_rejects_conflicting_repeat_without_side_effects() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+
+        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let binding = sample_alias_binding();
+        BindManifestAlias {
+            digest: default_digest(),
+            binding: binding.clone(),
+            bound_epoch: 8,
+            expiry_epoch: 16,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("bind alias before retirement");
+
+        RetirePinManifest {
+            digest: default_digest(),
+            retired_epoch: 10,
+            reason: Some("superseded".into()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect("first retire succeeds");
+
+        let err = RetirePinManifest {
+            digest: default_digest(),
+            retired_epoch: 11,
+            reason: Some("different".into()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("conflicting second retirement must fail");
+        let message = match err {
+            InstructionExecutionError::InvariantViolation(message) => message.to_string(),
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("already retired at epoch 10"),
+            "unexpected error message: {message}"
+        );
+
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest remains stored");
+        assert!(matches!(stored.status, PinStatus::Retired(10)));
+        assert_eq!(stored.retirement_reason.as_deref(), Some("superseded"));
+        assert!(
+            stx.world
+                .manifest_aliases
+                .get(&ManifestAliasId::from(&binding))
+                .is_none(),
+            "retirement must keep the old alias record removed"
+        );
+    }
+
+    #[test]
     fn bind_manifest_alias_registers_record() {
         let state = make_state();
         let mut block = state.block(block_header());
@@ -5328,6 +5579,240 @@ mod sorafs_tests {
             other => panic!("unexpected error: {other:?}"),
         };
         assert!(message.contains("alias"), "unexpected message: {message}");
+
+        let first_record = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("first manifest remains stored");
+        assert_eq!(first_record.alias.as_ref(), Some(&binding));
+        let second_record = stx
+            .world
+            .pin_manifests
+            .get(&second_digest())
+            .expect("second manifest remains stored");
+        assert!(
+            second_record.alias.is_none(),
+            "failed duplicate bind must not attach the contested alias to the second manifest"
+        );
+        let alias_record = stx
+            .world
+            .manifest_aliases
+            .get(&ManifestAliasId::from(&binding))
+            .expect("first alias record remains");
+        assert!(alias_record.targets_manifest(&default_digest()));
+    }
+
+    #[test]
+    fn bind_manifest_alias_rejects_expiry_before_bound_without_side_effects() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+
+        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let binding = alias_binding_for(default_digest(), "sora", "docs", 8, 7);
+        let err = BindManifestAlias {
+            digest: default_digest(),
+            binding: binding.clone(),
+            bound_epoch: 8,
+            expiry_epoch: 7,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("expiry before bound must fail");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("expiry epoch"),
+            "unexpected error message: {message}"
+        );
+
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest remains stored");
+        assert!(stored.alias.is_none());
+        assert!(
+            stx.world
+                .manifest_aliases
+                .get(&ManifestAliasId::from(&binding))
+                .is_none(),
+            "failed bind must not create an alias record"
+        );
+    }
+
+    #[test]
+    fn bind_manifest_alias_rejects_pending_manifest_without_side_effects() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let binding = sample_alias_binding();
+        let err = BindManifestAlias {
+            digest: default_digest(),
+            binding: binding.clone(),
+            bound_epoch: 8,
+            expiry_epoch: 16,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("pending manifest must not accept alias binding");
+        let message = match err {
+            InstructionExecutionError::InvariantViolation(message) => message.to_string(),
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("must be approved before binding an alias"),
+            "unexpected error message: {message}"
+        );
+
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest remains stored");
+        assert!(matches!(stored.status, PinStatus::Pending));
+        assert!(stored.alias.is_none());
+        assert!(
+            stx.world
+                .manifest_aliases
+                .get(&ManifestAliasId::from(&binding))
+                .is_none(),
+            "failed pending bind must not create an alias record"
+        );
+    }
+
+    #[test]
+    fn bind_manifest_alias_rejects_expiry_past_retention_without_side_effects() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+
+        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let binding = alias_binding_for(default_digest(), "sora", "docs", 8, 43);
+        let err = BindManifestAlias {
+            digest: default_digest(),
+            binding: binding.clone(),
+            bound_epoch: 8,
+            expiry_epoch: 43,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("alias expiry beyond retention must fail");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("exceeds manifest retention epoch"),
+            "unexpected error message: {message}"
+        );
+
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest remains stored");
+        assert!(stored.alias.is_none());
+        assert!(
+            stx.world
+                .manifest_aliases
+                .get(&ManifestAliasId::from(&binding))
+                .is_none(),
+            "failed retention bind must not create an alias record"
+        );
+    }
+
+    #[test]
+    fn bind_manifest_alias_rejects_bound_before_approval_without_side_effects() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+
+        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let binding = alias_binding_for(default_digest(), "sora", "docs", 4, 16);
+        let err = BindManifestAlias {
+            digest: default_digest(),
+            binding: binding.clone(),
+            bound_epoch: 4,
+            expiry_epoch: 16,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("alias bound before approval must fail");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("precedes manifest approval epoch"),
+            "unexpected error message: {message}"
+        );
+
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest remains stored");
+        assert!(matches!(stored.status, PinStatus::Approved(5)));
+        assert!(stored.alias.is_none());
+        assert!(
+            stx.world
+                .manifest_aliases
+                .get(&ManifestAliasId::from(&binding))
+                .is_none(),
+            "failed early-bound bind must not create an alias record"
+        );
+    }
+
+    #[test]
+    fn bind_manifest_alias_rejects_unknown_manifest_without_side_effects() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+
+        let binding = sample_alias_binding();
+        let err = BindManifestAlias {
+            digest: default_digest(),
+            binding: binding.clone(),
+            bound_epoch: 8,
+            expiry_epoch: 16,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("unknown manifest must not accept alias binding");
+        let message = match err {
+            InstructionExecutionError::InvariantViolation(message) => message.to_string(),
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("not registered"),
+            "unexpected error message: {message}"
+        );
+        assert!(
+            stx.world.pin_manifests.get(&default_digest()).is_none(),
+            "failed unknown-manifest bind must not create a manifest"
+        );
+        assert!(
+            stx.world
+                .manifest_aliases
+                .get(&ManifestAliasId::from(&binding))
+                .is_none(),
+            "failed unknown-manifest bind must not create an alias record"
+        );
     }
 
     #[test]

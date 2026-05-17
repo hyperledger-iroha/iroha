@@ -24,7 +24,6 @@ use norito::core::to_bytes;
 #[cfg(feature = "fastpq-gpu")]
 use norito::to_bytes as norito_bytes;
 #[cfg(feature = "fastpq-gpu")]
-#[cfg(feature = "fastpq-gpu")]
 const FIXTURE_NAME: &str = "stage4_balanced_preview.bin";
 
 #[cfg(feature = "fastpq-gpu")]

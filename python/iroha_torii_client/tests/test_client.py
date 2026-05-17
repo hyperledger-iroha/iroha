@@ -135,6 +135,29 @@ def test_expect_status_surfaces_error_envelope_details() -> None:
     assert "reject_code=TX_QUEUE_FULL" in message
 
 
+def test_expect_status_ignores_adversarial_non_string_reject_code() -> None:
+    response = StubResponse(
+        400,
+        {
+            "code": "bad_request",
+            "message": "bad request",
+            "details": {
+                "reject_code": {"unexpected": "object"},
+                "axt": {"code": ["array"]},
+            },
+        },
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        ToriiClient._expect_status(response, (200,))
+
+    message = str(exc.value)
+    assert "bad request" in message
+    assert "reject_code=" not in message
+    assert "object" not in message
+    assert "array" not in message
+
+
 VPN_ACCOUNT = "vpn-user@paynet"
 VPN_OPERATOR = "vpn-operator@paynet"
 VPN_ESCROW = "vpn-escrow@paynet"

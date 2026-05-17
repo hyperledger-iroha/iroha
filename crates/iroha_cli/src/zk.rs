@@ -1648,10 +1648,28 @@ fn build_proof_attachment_from_json(
     v: &norito::json::Value,
 ) -> eyre::Result<iroha::data_model::proof::ProofAttachment> {
     use iroha::data_model::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
+    let object = v
+        .as_object()
+        .ok_or_else(|| eyre::eyre!("proof attachment JSON must be an object"))?;
+    for field in object.keys() {
+        match field.as_str() {
+            "backend" | "proof_b64" | "vk_ref" | "vk_commitment_hex" => {}
+            "vk_inline" | "vkInline" | "verifyingKeyInline" | "verifying_key_inline" => {
+                return Err(eyre::eyre!(
+                    "legacy inline verifying-key field `{field}` is not supported; use vk_ref"
+                ));
+            }
+            other => return Err(eyre::eyre!("unknown proof attachment field `{other}`")),
+        }
+    }
     let backend = v
         .get("backend")
         .and_then(|x| x.as_str())
         .ok_or_else(|| eyre::eyre!("missing backend"))?;
+    let backend = backend.trim();
+    if backend.is_empty() {
+        return Err(eyre::eyre!("backend must be non-empty"));
+    }
     let proof_b64 = v
         .get("proof_b64")
         .and_then(|x| x.as_str())
@@ -1662,14 +1680,27 @@ fn build_proof_attachment_from_json(
     let proof = ProofBox::new(backend.into(), proof_bytes);
     let vk_ref = v.get("vk_ref").and_then(|x| x.as_object());
     let mut att = if let Some(obj) = vk_ref {
+        for field in obj.keys() {
+            match field.as_str() {
+                "backend" | "name" => {}
+                other => return Err(eyre::eyre!("unknown vk_ref field `{other}`")),
+            }
+        }
         let b = obj
             .get("backend")
             .and_then(|x| x.as_str())
             .ok_or_else(|| eyre::eyre!("vk_ref.backend missing"))?;
+        if b != backend {
+            return Err(eyre::eyre!("vk_ref.backend must match backend"));
+        }
         let name = obj
             .get("name")
             .and_then(|x| x.as_str())
             .ok_or_else(|| eyre::eyre!("vk_ref.name missing"))?;
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(eyre::eyre!("vk_ref.name must be non-empty"));
+        }
         let id = VerifyingKeyId::new(b, name);
         ProofAttachment::new_ref(backend.into(), proof, id)
     } else {
@@ -1677,11 +1708,15 @@ fn build_proof_attachment_from_json(
     };
     if let Some(hex) = v.get("vk_commitment_hex").and_then(|x| x.as_str()) {
         let bytes = hex::decode(hex).map_err(|e| eyre::eyre!("invalid vk_commitment_hex: {e}"))?;
-        if bytes.len() == 32 {
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&bytes);
-            att.vk_commitment = Some(arr);
+        if bytes.len() != 32 {
+            return Err(eyre::eyre!(
+                "vk_commitment_hex must decode to 32 bytes, got {}",
+                bytes.len()
+            ));
         }
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&bytes);
+        att.vk_commitment = Some(arr);
     }
     Ok(att)
 }
@@ -1709,6 +1744,119 @@ mod tests {
         assert_eq!(att.proof.bytes, b"Hello");
         assert_eq!(att.vk_ref.name.as_str(), "vk_transfer");
         assert_eq!(att.vk_commitment.unwrap(), [0u8; 32]);
+    }
+
+    #[test]
+    fn build_proof_attachment_from_json_rejects_legacy_inline_vk_field() {
+        for field in [
+            "vk_inline",
+            "vkInline",
+            "verifyingKeyInline",
+            "verifying_key_inline",
+        ] {
+            let json = format!(
+                r#"{{
+                    "backend": "halo2/ipa",
+                    "proof_b64": "AA==",
+                    "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_transfer" }},
+                    "{field}": {{ "backend": "halo2/ipa", "bytes_b64": "AQID" }}
+                }}"#
+            );
+            let v = norito::json::from_str(&json).expect("legacy inline json");
+            let err = build_proof_attachment_from_json(&v).expect_err("legacy inline vk rejected");
+            assert!(format!("{err}").contains("legacy inline verifying-key field"));
+        }
+    }
+
+    #[test]
+    fn build_proof_attachment_from_json_rejects_short_vk_commitment() {
+        let json = r#"{
+            "backend": "halo2/ipa",
+            "proof_b64": "AA==",
+            "vk_ref": { "backend": "halo2/ipa", "name": "vk_transfer" },
+            "vk_commitment_hex": "abcd"
+        }"#;
+        let v = norito::json::from_str(json).expect("short commitment json");
+        let err = build_proof_attachment_from_json(&v).expect_err("short commitment rejected");
+        assert!(format!("{err}").contains("32 bytes"));
+    }
+
+    #[test]
+    fn build_proof_attachment_from_json_rejects_non_object_vk_ref() {
+        let json = r#"{
+            "backend": "halo2/ipa",
+            "proof_b64": "AA==",
+            "vk_ref": "halo2/ipa:vk_transfer"
+        }"#;
+        let v = norito::json::from_str(json).expect("string vk_ref json");
+        let err = build_proof_attachment_from_json(&v).expect_err("string vk_ref rejected");
+        assert!(format!("{err}").contains("vk_ref must be provided"));
+    }
+
+    #[test]
+    fn build_proof_attachment_from_json_rejects_vk_ref_backend_mismatch() {
+        let json = r#"{
+            "backend": "halo2/ipa",
+            "proof_b64": "AA==",
+            "vk_ref": { "backend": "stark/fri-v1", "name": "vk_transfer" }
+        }"#;
+        let v = norito::json::from_str(json).expect("vk backend mismatch json");
+        let err = build_proof_attachment_from_json(&v).expect_err("vk backend mismatch rejected");
+        assert!(format!("{err}").contains("vk_ref.backend must match backend"));
+    }
+
+    #[test]
+    fn build_proof_attachment_from_json_rejects_vk_reference_shadow_field() {
+        let json = r#"{
+            "backend": "halo2/ipa",
+            "proof_b64": "AA==",
+            "vk_ref": { "backend": "halo2/ipa", "name": "vk_transfer" },
+            "vk_reference": { "backend": "halo2/ipa", "name": "vk_shadow" }
+        }"#;
+        let v = norito::json::from_str(json).expect("vk_reference shadow json");
+        let err = build_proof_attachment_from_json(&v).expect_err("shadow alias rejected");
+        assert!(format!("{err}").contains("unknown proof attachment field `vk_reference`"));
+    }
+
+    #[test]
+    fn build_proof_attachment_from_json_rejects_bridge_only_proof_backend_shadow() {
+        let json = r#"{
+            "backend": "halo2/ipa",
+            "proof_backend": "stark/fri-v1",
+            "proof_b64": "AA==",
+            "vk_ref": { "backend": "halo2/ipa", "name": "vk_transfer" }
+        }"#;
+        let v = norito::json::from_str(json).expect("proof_backend shadow json");
+        let err = build_proof_attachment_from_json(&v).expect_err("proof_backend shadow rejected");
+        assert!(format!("{err}").contains("unknown proof attachment field `proof_backend`"));
+    }
+
+    #[test]
+    fn build_proof_attachment_from_json_rejects_nested_vk_ref_shadow_field() {
+        let json = r#"{
+            "backend": "halo2/ipa",
+            "proof_b64": "AA==",
+            "vk_ref": {
+                "backend": "halo2/ipa",
+                "name": "vk_transfer",
+                "vk_reference": "shadow"
+            }
+        }"#;
+        let v = norito::json::from_str(json).expect("nested vk_ref shadow json");
+        let err = build_proof_attachment_from_json(&v).expect_err("nested shadow rejected");
+        assert!(format!("{err}").contains("unknown vk_ref field `vk_reference`"));
+    }
+
+    #[test]
+    fn build_proof_attachment_from_json_rejects_blank_vk_ref_name() {
+        let json = r#"{
+            "backend": "halo2/ipa",
+            "proof_b64": "AA==",
+            "vk_ref": { "backend": "halo2/ipa", "name": "   " }
+        }"#;
+        let v = norito::json::from_str(json).expect("blank vk_ref name json");
+        let err = build_proof_attachment_from_json(&v).expect_err("blank vk_ref name rejected");
+        assert!(format!("{err}").contains("vk_ref.name must be non-empty"));
     }
 
     #[test]

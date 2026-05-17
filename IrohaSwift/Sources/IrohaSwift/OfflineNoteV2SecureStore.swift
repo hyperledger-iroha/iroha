@@ -216,12 +216,17 @@ public final class OfflineNoteV2KeychainStore: OfflineNoteV2Store {
     }
 
     private let label: String
-    private let backing: OfflineNoteV2KeychainBacking
+    private let backing: any OfflineNoteV2KeychainBackingStore
     private let lock = NSLock()
 
     public init(label rawLabel: String = "default", configuration: Configuration = .default) throws {
         label = try Self.sanitize(label: rawLabel)
         backing = OfflineNoteV2KeychainBacking(configuration: configuration)
+    }
+
+    init(label rawLabel: String, backing: any OfflineNoteV2KeychainBackingStore) throws {
+        label = try Self.sanitize(label: rawLabel)
+        self.backing = backing
     }
 
     public func mutateNotes<T>(_ body: (inout [String: OfflineNoteV2WalletNote]) throws -> T) throws -> T {
@@ -266,11 +271,12 @@ public final class OfflineNoteV2KeychainStore: OfflineNoteV2Store {
 
     public func clear() throws {
         try lock.withLock {
-            if let metadata = try loadMetadata() {
-                try backing.delete(label: collectionLabel(revision: metadata.revision))
-            }
+            let metadata = try loadMetadata()
             try backing.delete(label: metadataLabel)
             try backing.delete(label: label)
+            if let metadata {
+                try backing.delete(label: collectionLabel(revision: metadata.revision))
+            }
         }
     }
 
@@ -302,6 +308,9 @@ public final class OfflineNoteV2KeychainStore: OfflineNoteV2Store {
                 guard note.noteCommitmentHex == stored.commitmentHex else {
                     throw OfflineNoteV2KeychainStoreError.corrupt("note commitment index mismatch")
                 }
+                guard notes[stored.commitmentHex] == nil else {
+                    throw OfflineNoteV2KeychainStoreError.corrupt("duplicate note commitment")
+                }
                 notes[stored.commitmentHex] = note
             }
             return notes
@@ -332,13 +341,13 @@ public final class OfflineNoteV2KeychainStore: OfflineNoteV2Store {
             label: collectionLabel(revision: revision),
             data: encoder.encode(StoredCollection(version: 1, notes: stored))
         )
-        if let previousRevision {
-            try backing.delete(label: collectionLabel(revision: previousRevision))
-        }
         try backing.save(
             label: metadataLabel,
             data: encoder.encode(StoredMetadata(version: 1, revision: revision))
         )
+        if let previousRevision {
+            try backing.delete(label: collectionLabel(revision: previousRevision))
+        }
         try backing.delete(label: label)
     }
 
@@ -382,7 +391,13 @@ public final class OfflineNoteV2KeychainStore: OfflineNoteV2Store {
     }
 }
 
-private struct OfflineNoteV2KeychainBacking {
+protocol OfflineNoteV2KeychainBackingStore {
+    func load(label: String) throws -> Data?
+    func save(label: String, data: Data) throws
+    func delete(label: String) throws
+}
+
+private struct OfflineNoteV2KeychainBacking: OfflineNoteV2KeychainBackingStore {
     private let service = "org.hyperledger.iroha.offline-note-v2-store"
     private let accessGroup: String?
     private let accessControl: SecAccessControl?

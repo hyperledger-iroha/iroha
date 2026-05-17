@@ -1169,6 +1169,16 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             viral_incentives: iroha_config::parameters::actual::ViralIncentives::default(),
             sorafs_pin_policy:
                 iroha_config::parameters::actual::SorafsPinPolicyConstraints::default(),
+            sorafs_pin_fee_asset_id:
+                iroha_config::parameters::defaults::governance::sorafs_pin_fee::asset_id()
+                    .parse()
+                    .expect("default SoraFS pin fee asset id"),
+            sorafs_pin_fee_treasury_account: iroha_data_model::account::AccountId::parse_encoded(
+                &iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account(
+                ),
+            )
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .expect("default SoraFS pin fee treasury account"),
             sorafs_pricing:
                 iroha_data_model::sorafs::pricing::PricingScheduleRecord::launch_default(),
             alias_teu_minimum:

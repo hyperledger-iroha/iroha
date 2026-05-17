@@ -1740,6 +1740,315 @@ test("buildZkTransferInstruction normalizes proof attachments", () => {
   assert.equal(payload.inputs.length, 1);
 });
 
+test("buildZkTransferInstruction rejects legacy inline verifying key fields", () => {
+  for (const field of [
+    "vk_inline",
+    "vkInline",
+    "verifyingKeyInline",
+    "verifying_key_inline",
+  ]) {
+    assert.throws(
+      () =>
+        buildZkTransferInstruction({
+          assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+          inputs: [Buffer.alloc(32, 0x11)],
+          outputs: [Buffer.alloc(32, 0x22)],
+          proof: {
+            backend: "halo2/ipa",
+            proof: Buffer.from("proof"),
+            verifyingKeyRef: "halo2/ipa:vk_transfer",
+            [field]: { backend: "halo2/ipa", bytes: Buffer.from("legacy-vk") },
+          },
+        }),
+      (error) => {
+        assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
+        assert.match(String(error?.message), /not supported; use verifyingKeyRef/i);
+        return true;
+      },
+    );
+  }
+});
+
+test("buildZkTransferInstruction rejects proof backend mismatch", () => {
+  assert.throws(
+    () =>
+      buildZkTransferInstruction({
+        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+        inputs: [Buffer.alloc(32, 0x11)],
+        outputs: [Buffer.alloc(32, 0x22)],
+        proof: {
+          backend: "halo2/ipa",
+          proofBytes: {
+            backend: "stark/fri-v1",
+            bytes: Buffer.from("proof"),
+          },
+          verifyingKeyRef: "halo2/ipa:vk_transfer",
+        },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
+      assert.match(String(error?.message), /proof\.backend must match/i);
+      return true;
+    },
+  );
+});
+
+test("buildZkTransferInstruction rejects verifying key backend mismatch", () => {
+  assert.throws(
+    () =>
+      buildZkTransferInstruction({
+        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+        inputs: [Buffer.alloc(32, 0x11)],
+        outputs: [Buffer.alloc(32, 0x22)],
+        proof: {
+          backend: "halo2/ipa",
+          proof: Buffer.from("proof"),
+          verifyingKeyRef: "stark/fri-v1:vk_transfer",
+        },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
+      assert.match(String(error?.message), /verifyingKeyRef\.backend must match/i);
+      return true;
+    },
+  );
+});
+
+test("buildZkTransferInstruction rejects legacy vk_reference alias", () => {
+  assert.throws(
+    () =>
+      buildZkTransferInstruction({
+        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+        inputs: [Buffer.alloc(32, 0x11)],
+        outputs: [Buffer.alloc(32, 0x22)],
+        proof: {
+          backend: "halo2/ipa",
+          proof: Buffer.from("proof"),
+          vk_reference: "halo2/ipa:vk_transfer",
+        },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
+      assert.match(String(error?.message), /vk_reference is not supported/i);
+      return true;
+    },
+  );
+});
+
+test("buildZkTransferInstruction rejects vk_reference shadow field", () => {
+  assert.throws(
+    () =>
+      buildZkTransferInstruction({
+        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+        inputs: [Buffer.alloc(32, 0x11)],
+        outputs: [Buffer.alloc(32, 0x22)],
+        proof: {
+          backend: "halo2/ipa",
+          proof: Buffer.from("proof"),
+          verifyingKeyRef: "halo2/ipa:vk_transfer",
+          vk_reference: "halo2/ipa:shadow",
+        },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
+      assert.match(String(error?.message), /vk_reference is not supported/i);
+      return true;
+    },
+  );
+});
+
+test("buildZkTransferInstruction rejects nested verifyingKeyRef shadow fields", () => {
+  assert.throws(
+    () =>
+      buildZkTransferInstruction({
+        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+        inputs: [Buffer.alloc(32, 0x11)],
+        outputs: [Buffer.alloc(32, 0x22)],
+        proof: {
+          backend: "halo2/ipa",
+          proof: Buffer.from("proof"),
+          verifyingKeyRef: {
+            backend: "halo2/ipa",
+            name: "vk_transfer",
+            vk_reference: "shadow",
+          },
+        },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
+      assert.match(String(error?.message), /verifyingKeyRef\.vk_reference is not supported/i);
+      return true;
+    },
+  );
+});
+
+test("buildZkTransferInstruction rejects structured proof shadow fields", () => {
+  assert.throws(
+    () =>
+      buildZkTransferInstruction({
+        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+        inputs: [Buffer.alloc(32, 0x11)],
+        outputs: [Buffer.alloc(32, 0x22)],
+        proof: {
+          backend: "halo2/ipa",
+          proofBytes: {
+            backend: "halo2/ipa",
+            bytes: Buffer.from("proof"),
+            vk_inline: { backend: "halo2/ipa", bytes: Buffer.from("legacy") },
+          },
+          verifyingKeyRef: "halo2/ipa:vk_transfer",
+        },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
+      assert.match(String(error?.message), /proof\.vk_inline is not supported/i);
+      return true;
+    },
+  );
+});
+
+test("buildZkTransferInstruction rejects verifying key reference alias collisions", () => {
+  assert.throws(
+    () =>
+      buildZkTransferInstruction({
+        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+        inputs: [Buffer.alloc(32, 0x11)],
+        outputs: [Buffer.alloc(32, 0x22)],
+        proof: {
+          backend: "halo2/ipa",
+          proof: Buffer.from("proof"),
+          verifyingKeyRef: "halo2/ipa:vk_transfer",
+          vk_ref: { backend: "halo2/ipa", name: "shadow" },
+        },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
+      assert.match(String(error?.message), /multiple verifying key reference aliases/i);
+      return true;
+    },
+  );
+});
+
+test("buildZkTransferInstruction rejects nested verifying key id alias collisions", () => {
+  assert.throws(
+    () =>
+      buildZkTransferInstruction({
+        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+        inputs: [Buffer.alloc(32, 0x11)],
+        outputs: [Buffer.alloc(32, 0x22)],
+        proof: {
+          backend: "halo2/ipa",
+          proof: Buffer.from("proof"),
+          verifyingKeyRef: {
+            backend: "halo2/ipa",
+            backendId: "stark/fri-v1",
+            name: "vk_transfer",
+          },
+        },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
+      assert.match(String(error?.message), /multiple backend aliases/i);
+      return true;
+    },
+  );
+});
+
+test("buildZkTransferInstruction rejects blank verifying key id fields", () => {
+  for (const verifyingKeyRef of [
+    "halo2/ipa:   ",
+    { backend: "halo2/ipa", name: "   " },
+    { backend: "   ", name: "vk_transfer" },
+  ]) {
+    assert.throws(
+      () =>
+        buildZkTransferInstruction({
+          assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+          inputs: [Buffer.alloc(32, 0x11)],
+          outputs: [Buffer.alloc(32, 0x22)],
+          proof: {
+            backend: "halo2/ipa",
+            proof: Buffer.from("proof"),
+            verifyingKeyRef,
+          },
+        }),
+      (error) => {
+        assert.equal(error?.code, ValidationErrorCode.INVALID_STRING);
+        assert.match(String(error?.message), /non-empty|backend:name/i);
+        return true;
+      },
+    );
+  }
+});
+
+test("buildZkTransferInstruction rejects proof byte alias collisions", () => {
+  assert.throws(
+    () =>
+      buildZkTransferInstruction({
+        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+        inputs: [Buffer.alloc(32, 0x11)],
+        outputs: [Buffer.alloc(32, 0x22)],
+        proof: {
+          backend: "halo2/ipa",
+          proof: Buffer.from("proof"),
+          proof_b64: Buffer.from("shadow").toString("base64"),
+          verifyingKeyRef: "halo2/ipa:vk_transfer",
+        },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
+      assert.match(String(error?.message), /multiple proof byte aliases/i);
+      return true;
+    },
+  );
+});
+
+test("buildZkTransferInstruction rejects commitment alias collisions", () => {
+  assert.throws(
+    () =>
+      buildZkTransferInstruction({
+        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+        inputs: [Buffer.alloc(32, 0x11)],
+        outputs: [Buffer.alloc(32, 0x22)],
+        proof: {
+          backend: "halo2/ipa",
+          proof: Buffer.from("proof"),
+          verifyingKeyRef: "halo2/ipa:vk_transfer",
+          verifyingKeyCommitment: Buffer.alloc(32, 0xaa),
+          vk_commitment: Buffer.alloc(32, 0xbb),
+        },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
+      assert.match(String(error?.message), /multiple verifying key commitment aliases/i);
+      return true;
+    },
+  );
+});
+
+test("buildZkTransferInstruction rejects envelope hash alias collisions", () => {
+  assert.throws(
+    () =>
+      buildZkTransferInstruction({
+        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+        inputs: [Buffer.alloc(32, 0x11)],
+        outputs: [Buffer.alloc(32, 0x22)],
+        proof: {
+          backend: "halo2/ipa",
+          proof: Buffer.from("proof"),
+          verifyingKeyRef: "halo2/ipa:vk_transfer",
+          envelopeHash: Buffer.alloc(32, 0xaa),
+          proofEnvelopeHash: Buffer.alloc(32, 0xbb),
+        },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
+      assert.match(String(error?.message), /multiple envelope hash aliases/i);
+      return true;
+    },
+  );
+});
+
 test("buildUnshieldInstruction honours optional root hints", () => {
   const instruction = buildUnshieldInstruction({
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",

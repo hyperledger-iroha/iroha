@@ -2369,10 +2369,10 @@ fn hash_poseidon_limb_batches(messages: &[Vec<u64>], mode: ExecutionMode) -> Vec
     #[cfg(not(feature = "fastpq-gpu"))]
     let _ = mode;
     #[cfg(feature = "fastpq-gpu")]
-    if mode == ExecutionMode::Gpu {
-        if let Some(hashes) = hash_poseidon_limb_batches_gpu(messages) {
-            return hashes;
-        }
+    if mode == ExecutionMode::Gpu
+        && let Some(hashes) = hash_poseidon_limb_batches_gpu(messages)
+    {
+        return hashes;
     }
     messages
         .par_iter()
@@ -2659,7 +2659,7 @@ mod tests {
 
     #[test]
     fn domain_hash_batches_match_scalar_reference() {
-        let messages = vec![
+        let messages = [
             Vec::<u64>::new(),
             vec![1u64],
             vec![2u64, 3, u64::MAX],
@@ -2681,7 +2681,7 @@ mod tests {
     #[cfg(feature = "fastpq-gpu")]
     #[test]
     fn domain_hash_gpu_batches_group_mixed_limb_lengths() {
-        let messages = vec![
+        let messages = [
             Vec::<u64>::new(),
             vec![1u64],
             vec![2u64, 3, u64::MAX],
@@ -2703,7 +2703,7 @@ mod tests {
     #[cfg(feature = "fastpq-gpu")]
     #[test]
     fn domain_hash_gpu_batches_match_scalar_for_pair_of_len17_limb_messages() {
-        let messages = vec![
+        let messages = [
             (0u64..10).collect::<Vec<_>>(),
             (10u64..20).collect::<Vec<_>>(),
         ];

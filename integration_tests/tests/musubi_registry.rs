@@ -263,6 +263,7 @@ fn register_manifest_instruction(release: &MusubiRelease) -> Result<RegisterPinM
         release.archive.sorafs_manifest,
         default_chunker_handle(),
         chunk_plan_digest(source_plan),
+        source_plan.content_length,
         PinPolicy::default(),
         0,
         None,

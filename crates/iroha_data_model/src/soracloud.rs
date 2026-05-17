@@ -6500,13 +6500,13 @@ pub struct SoraUploadedModelBundleV1 {
     pub runtime_format: SoraUploadedModelRuntimeFormatV1,
     /// Canonical bundle root.
     pub bundle_root: Hash,
-    /// Approved active SoraFS manifest digest containing the encrypted model bundle.
+    /// Approved active `SoraFS` manifest digest containing the encrypted model bundle.
     pub sorafs_manifest_digest: ManifestDigest,
     /// Total chunk count in deterministic ordinal order.
     pub chunk_count: u32,
     /// Total plaintext bytes before encryption.
     pub plaintext_bytes: u64,
-    /// Total ciphertext bytes stored in the referenced SoraFS bundle.
+    /// Total ciphertext bytes stored in the referenced `SoraFS` bundle.
     pub ciphertext_bytes: u64,
     /// Merkle root over the chunk manifest.
     pub chunk_manifest_root: Hash,

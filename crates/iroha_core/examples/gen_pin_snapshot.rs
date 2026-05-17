@@ -368,49 +368,39 @@ fn order_snapshot(order: &ReplicationOrderRecord) -> json::Map {
 fn make_state() -> State {
     let kura = Kura::blank_kura_for_testing();
     let live = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::new(), kura, live);
-    seed_public_pin_fee_assets(&mut state);
-    state
+    State::new_for_testing(public_pin_fee_world(), kura, live)
 }
 
-fn seed_public_pin_fee_assets(state: &mut State) {
-    let fee_asset_id = state.gov.sorafs_pin_fee_asset_id.clone();
-    if let Some(domain_id) = fee_asset_id.try_domain().cloned()
-        && state.world.domains.get(&domain_id).is_none()
-    {
-        state
-            .world
-            .domains
-            .insert(domain_id.clone(), Domain::new(domain_id).build(&alice()));
+fn public_pin_fee_world() -> World {
+    let gov = iroha_config::parameters::actual::Governance::default();
+    let fee_asset_id = gov.sorafs_pin_fee_asset_id.clone();
+    let authority = alice();
+    let domains = fee_asset_id
+        .try_domain()
+        .cloned()
+        .map(|domain_id| Domain::new(domain_id).build(&authority))
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    let treasury = gov.sorafs_pin_fee_treasury_account;
+    let mut accounts = vec![Account::new(authority.clone()).build(&authority)];
+    if treasury != authority {
+        accounts.push(Account::new(treasury).build(&authority));
     }
-    if state.world.accounts.get(&alice()).is_none() {
-        let (account_id, account_value) = Account::new(alice()).into_key_value();
-        state.world.accounts.insert(account_id, account_value);
-    }
-    let treasury = state.gov.sorafs_pin_fee_treasury_account.clone();
-    if state.world.accounts.get(&treasury).is_none() {
-        let (account_id, account_value) = Account::new(treasury).into_key_value();
-        state.world.accounts.insert(account_id, account_value);
-    }
-    if state.world.asset_definitions.get(&fee_asset_id).is_none() {
-        let definition = AssetDefinition::numeric(fee_asset_id.clone())
-            .with_name(
-                fee_asset_id
-                    .try_name()
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|| "xor".to_owned()),
-            )
-            .build(&alice());
-        state
-            .world
-            .insert_asset_definition_entry(fee_asset_id.clone(), definition);
-    }
-    let asset_id = AssetId::new(fee_asset_id, alice());
-    let (asset_id, asset_value) =
-        Asset::new(asset_id, Numeric::new(10_000_000_000_000, 0)).into_key_value();
-    state.world.assets.insert(asset_id.clone(), asset_value);
-    state.world.track_asset_holder(&asset_id);
-    state.world.track_nonzero_asset_holder(&asset_id);
+
+    let definition = AssetDefinition::numeric(fee_asset_id.clone())
+        .with_name(
+            fee_asset_id
+                .try_name()
+                .map_or_else(|| "xor".to_owned(), ToString::to_string),
+        )
+        .build(&authority);
+    let asset = Asset::new(
+        AssetId::new(fee_asset_id, authority),
+        Numeric::new(10_000_000_000_000_i128, 0),
+    );
+
+    World::with_assets(domains, accounts, [definition], [asset], [])
 }
 
 fn default_chunker() -> ChunkerProfileHandle {

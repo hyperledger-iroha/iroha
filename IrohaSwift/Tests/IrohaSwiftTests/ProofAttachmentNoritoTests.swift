@@ -79,10 +79,26 @@ final class ProofAttachmentNoritoTests: XCTestCase {
         let attachment = try ProofAttachment(
             backend: "test",
             proof: Data([0x01]),
-            verifyingKey: .reference(.init(backend: "halo2/ipa", name: "vk"))
+            verifyingKey: .reference(.init(backend: "test", name: "vk"))
         )
         let object = try JSONSerialization.jsonObject(with: attachment.encodedJSON()) as? [String: Any]
         XCTAssertNotNil(object?["vk_ref"])
+    }
+
+    func testProofAttachmentRejectsVerifyingKeyBackendMismatch() {
+        XCTAssertThrowsError(
+            try ProofAttachment(
+                backend: "halo2/ipa",
+                proof: Data([0x01]),
+                verifyingKey: .reference(.init(backend: "stark/fri-v1", name: "vk"))
+            )
+        ) { error in
+            guard case let ProofAttachmentError.verifyingKeyBackendMismatch(expected, actual) = error else {
+                return XCTFail("expected verifyingKeyBackendMismatch error")
+            }
+            XCTAssertEqual(expected, "halo2/ipa")
+            XCTAssertEqual(actual, "stark/fri-v1")
+        }
     }
 
     private func manualProofAttachmentPayload(_ attachment: ProofAttachment) -> Data {

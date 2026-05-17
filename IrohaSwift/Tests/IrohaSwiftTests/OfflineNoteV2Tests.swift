@@ -212,6 +212,8 @@ final class OfflineNoteV2Tests: XCTestCase {
             audit: try Self.audit(fixture),
             createdAtMs: fixture.paymentToken.createdAtMs
         )
+        let canonicalPayload = try Self.base64(fixture.sdkInterop.paymentTokenNoritoBase64)
+        XCTAssertEqual(try OfflineNoteV2PaymentTokenCodec.encodeNorito(token), canonicalPayload)
 
         let noritoDecoded = try OfflineNoteV2PaymentTokenCodec.decodeNorito(
             OfflineNoteV2PaymentTokenCodec.encodeNorito(token)
@@ -219,14 +221,26 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertEqual(noritoDecoded.tokenIdHex, token.tokenIdHex)
         XCTAssertEqual(noritoDecoded.paymentRequestId, token.paymentRequestId)
         XCTAssertEqual(try noritoDecoded.audit.noritoEncoded(), try token.audit.noritoEncoded())
+        let canonicalDecoded = try OfflineNoteV2PaymentTokenCodec.decodeNorito(canonicalPayload)
+        XCTAssertEqual(canonicalDecoded.tokenIdHex, token.tokenIdHex)
+        XCTAssertEqual(try canonicalDecoded.audit.noritoEncoded(), try token.audit.noritoEncoded())
 
         let text = try OfflineNoteV2PaymentTokenCodec.encodeText(token)
+        XCTAssertEqual(text, fixture.sdkInterop.paymentTokenText)
         XCTAssertTrue(text.hasPrefix(OfflineNoteV2PaymentTokenCodec.textPrefix))
         XCTAssertEqual(try OfflineNoteV2PaymentTokenCodec.decodeText(text).tokenIdHex, token.tokenIdHex)
+        XCTAssertEqual(
+            try OfflineNoteV2PaymentTokenCodec.decodeText(fixture.sdkInterop.paymentTokenText).tokenIdHex,
+            token.tokenIdHex
+        )
 
         let frames = try OfflineNoteV2PaymentTokenCodec.encodeQrFrameBytes(
             token,
             options: OfflineQrStreamOptions(chunkSize: 180, parityGroup: 2)
+        )
+        XCTAssertEqual(
+            frames.map { $0.hexLowercased() },
+            fixture.sdkInterop.paymentTokenQrV1.frames.map(\.bytesHex)
         )
         let decoder = OfflineQrStreamDecoder()
         var payload: Data?
@@ -237,6 +251,590 @@ final class OfflineNoteV2Tests: XCTestCase {
         let qrDecoded = try OfflineNoteV2PaymentTokenCodec.decodeQrPayload(XCTUnwrap(payload))
         XCTAssertEqual(qrDecoded.tokenIdHex, token.tokenIdHex)
         XCTAssertEqual(try qrDecoded.audit.noritoEncoded(), try token.audit.noritoEncoded())
+
+        let canonicalDecoder = OfflineQrStreamDecoder()
+        var canonicalQrPayload: Data?
+        for frame in fixture.sdkInterop.paymentTokenQrV1.frames {
+            let result = try canonicalDecoder.ingest(frameBytes: Self.hex(frame.bytesHex))
+            canonicalQrPayload = result.payload ?? canonicalQrPayload
+        }
+        XCTAssertEqual(try XCTUnwrap(canonicalQrPayload), canonicalPayload)
+        XCTAssertEqual(
+            try OfflineNoteV2PaymentTokenCodec.decodeQrPayload(try XCTUnwrap(canonicalQrPayload)).tokenIdHex,
+            token.tokenIdHex
+        )
+    }
+
+    func testAssetDefinitionAddressRoundTripsFixtureAndRejectsBadChecksum() throws {
+        let fixture = try Self.loadFixture()
+        let definition = Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId)
+        let uuidBytes = try XCTUnwrap(AssetDefinitionAddress.decode(definition))
+
+        XCTAssertEqual(AssetDefinitionAddress.encode(uuidBytes: uuidBytes), definition)
+
+        var tampered = definition
+        let replacement: Character = tampered.last == "1" ? "2" : "1"
+        tampered.removeLast()
+        tampered.append(replacement)
+        XCTAssertNil(AssetDefinitionAddress.decode(tampered))
+    }
+
+    func testOfflineNoteV2TransferHandoffSupportsQrNfcAndNearbyPayloads() throws {
+        let fixture = try Self.loadFixture()
+        let token = OfflineNoteV2PaymentToken(
+            chainId: fixture.chainVectors.derivation.chainId,
+            paymentRequestId: fixture.paymentToken.invoiceId,
+            tokenNonce: try Self.hex(fixture.chainVectors.derivation.tokenNonceHex),
+            tokenId: try Self.hex(fixture.paymentToken.tokenId),
+            audit: try Self.audit(fixture),
+            createdAtMs: fixture.paymentToken.createdAtMs
+        )
+        let canonicalPayload = try Self.base64(fixture.sdkInterop.paymentTokenNoritoBase64)
+
+        let capabilities = OfflineNoteV2TransferCapabilities.current()
+        XCTAssertTrue(capabilities.supportedModalities.contains(.qrStreaming))
+        XCTAssertTrue(capabilities.supportedModalities.contains(.nearby))
+        XCTAssertFalse(capabilities.supportedModalities.contains(.nfc))
+
+        let nearby = try OfflineNoteV2TransferHandoff.nearbyPayload(for: token)
+        XCTAssertEqual(nearby.modality, .nearby)
+        XCTAssertEqual(nearby.contentType, OfflineNoteV2TransferHandoff.paymentTokenContentType)
+        XCTAssertEqual(nearby.payload, canonicalPayload)
+        XCTAssertEqual(
+            try OfflineNoteV2TransferHandoff.decodePaymentToken(from: nearby).tokenIdHex,
+            token.tokenIdHex
+        )
+
+        let qrFrames = try OfflineNoteV2TransferHandoff.qrStreamingFrameBytes(for: token)
+        XCTAssertEqual(
+            qrFrames.map { $0.hexLowercased() },
+            fixture.sdkInterop.paymentTokenQrV1.frames.map(\.bytesHex)
+        )
+        let qrReceiver = OfflineNoteV2TransferStreamReceiver()
+        var qrResult: OfflineNoteV2TransferStreamResult?
+        for frame in qrFrames {
+            qrResult = try qrReceiver.ingestFrame(frame)
+        }
+        XCTAssertEqual(try XCTUnwrap(qrResult?.token).tokenIdHex, token.tokenIdHex)
+
+        let nfcFrames = try OfflineNoteV2TransferHandoff.nfcFrameBytes(for: token)
+        XCTAssertTrue(nfcFrames.allSatisfy { $0.count <= 250 })
+        let nfcReceiver = OfflineNoteV2TransferStreamReceiver()
+        var nfcResult: OfflineNoteV2TransferStreamResult?
+        for frame in nfcFrames {
+            nfcResult = try nfcReceiver.ingestFrame(frame)
+        }
+        XCTAssertEqual(try XCTUnwrap(nfcResult?.token).tokenIdHex, token.tokenIdHex)
+    }
+
+    func testOfflineNoteV2TransferHandoffRejectsAdversarialStreamsAndMetadata() throws {
+        let fixture = try Self.loadFixture()
+        let token = try OfflineNoteV2PaymentTokenCodec.decodeNorito(
+            Self.base64(fixture.sdkInterop.paymentTokenNoritoBase64)
+        )
+        let rawPayload = try OfflineNoteV2TransferHandoff.rawPaymentTokenBytes(for: token)
+        let payload = try OfflineNoteV2TransferHandoff.paymentTokenPayload(for: token, modality: .qrStreaming)
+        let wrongContentType = OfflineNoteV2TransferPayload(
+            modality: .nearby,
+            contentType: OfflineNoteV2TransferHandoff.receiptAckContentType,
+            payload: payload.payload
+        )
+        XCTAssertThrowsError(try OfflineNoteV2TransferHandoff.decodePaymentToken(from: wrongContentType))
+
+        let frames = try OfflineNoteV2TransferHandoff.qrStreamingFrameBytes(
+            for: token,
+            options: OfflineQrStreamOptions(chunkSize: 128, parityGroup: 0)
+        )
+        XCTAssertGreaterThan(frames.count, 2)
+
+        var badMagic = frames[0]
+        badMagic[badMagic.startIndex] = 0x00
+        XCTAssertThrowsError(try OfflineNoteV2TransferStreamReceiver().ingestFrame(badMagic))
+
+        var badVersion = frames[0]
+        badVersion[badVersion.startIndex + 2] = 0x7f
+        XCTAssertThrowsError(try OfflineNoteV2TransferStreamReceiver().ingestFrame(badVersion))
+
+        var badChecksum = frames[1]
+        badChecksum[badChecksum.index(before: badChecksum.endIndex)] ^= 0x01
+        XCTAssertThrowsError(try OfflineNoteV2TransferStreamReceiver().ingestFrame(badChecksum))
+
+        XCTAssertThrowsError(try OfflineNoteV2TransferStreamReceiver().ingestFrame(Data(frames[0].prefix(8))))
+
+        let header = try OfflineQrStreamFrame.decode(frames[0])
+        var mismatchedHeaderStreamId = header.streamId
+        mismatchedHeaderStreamId[mismatchedHeaderStreamId.startIndex] ^= 0x01
+        let mismatchedHeader = try OfflineQrStreamFrame(
+            kind: .header,
+            streamId: mismatchedHeaderStreamId,
+            index: header.index,
+            total: header.total,
+            payload: header.payload
+        ).encode()
+        XCTAssertThrowsError(try OfflineNoteV2TransferStreamReceiver().ingestFrame(mismatchedHeader))
+
+        let firstData = try OfflineQrStreamFrame.decode(frames[1])
+        var wrongStreamId = firstData.streamId
+        wrongStreamId[wrongStreamId.startIndex] ^= 0x7f
+        let wrongStreamFrame = try OfflineQrStreamFrame(
+            kind: .data,
+            streamId: wrongStreamId,
+            index: firstData.index,
+            total: firstData.total,
+            payload: firstData.payload
+        ).encode()
+        let ignoreWrongStreamReceiver = OfflineNoteV2TransferStreamReceiver()
+        XCTAssertNil(try ignoreWrongStreamReceiver.ingestFrame(frames[0]).token)
+        XCTAssertNil(try ignoreWrongStreamReceiver.ingestFrame(wrongStreamFrame).token)
+        var completed: OfflineNoteV2TransferStreamResult?
+        for frame in frames.dropFirst() {
+            completed = try ignoreWrongStreamReceiver.ingestFrame(frame)
+        }
+        XCTAssertEqual(try XCTUnwrap(completed?.token).tokenIdHex, token.tokenIdHex)
+
+        var poisonedPayload = firstData.payload
+        poisonedPayload[poisonedPayload.startIndex] ^= 0x01
+        let poisonedFrame = try OfflineQrStreamFrame(
+            kind: .data,
+            streamId: firstData.streamId,
+            index: firstData.index,
+            total: firstData.total,
+            payload: poisonedPayload
+        ).encode()
+        let poisonedReceiver = OfflineNoteV2TransferStreamReceiver()
+        _ = try poisonedReceiver.ingestFrame(frames[0])
+        _ = try poisonedReceiver.ingestFrame(poisonedFrame)
+        XCTAssertThrowsError(try frames.dropFirst(2).forEach { _ = try poisonedReceiver.ingestFrame($0) })
+
+        let wrongKindFrames = try OfflineQrStreamEncoder.encodeFrameBytes(
+            payload: rawPayload,
+            payloadKind: .offlineReceiptAckV2,
+            options: OfflineQrStreamOptions(chunkSize: 512, parityGroup: 0)
+        )
+        let wrongKindReceiver = OfflineNoteV2TransferStreamReceiver()
+        XCTAssertThrowsError(try wrongKindFrames.forEach { _ = try wrongKindReceiver.ingestFrame($0) })
+    }
+
+    func testOfflineNoteV2NfcApduProtocolSupportsAndroidSafeAndIOSFastChunks() throws {
+        let fixture = try Self.loadFixture()
+        let token = try OfflineNoteV2PaymentTokenCodec.decodeNorito(Self.base64(fixture.sdkInterop.paymentTokenNoritoBase64))
+        let payload = try OfflineNoteV2TransferHandoff.rawPaymentTokenBytes(for: token)
+
+        XCTAssertEqual(OfflineNoteV2TransferHandoff.defaultNfcAidHex, OfflineNoteV2NfcApduProtocol.aidHex)
+        XCTAssertEqual(OfflineNoteV2NfcApduProtocol.parseCommand(OfflineNoteV2NfcApduProtocol.selectAidAPDUData()), .select)
+        XCTAssertEqual(OfflineNoteV2NfcApduProtocol.parseCommand(OfflineNoteV2NfcApduProtocol.getInfoAPDUData()), .getInfo)
+
+        let infoBytes = try OfflineNoteV2NfcApduProtocol.encodeInfo(kind: .paymentToken, payloadBytes: payload)
+        let info = try XCTUnwrap(OfflineNoteV2NfcApduProtocol.decodeInfo(infoBytes))
+        XCTAssertEqual(info.kind, .paymentToken)
+        XCTAssertEqual(info.payloadLength, payload.count)
+        XCTAssertEqual(info.maxChunkLength, OfflineNoteV2NfcApduProtocol.androidSafeChunkBytes)
+        XCTAssertTrue(OfflineNoteV2NfcApduProtocol.payloadDigestMatches(payload, expectedSha256: info.sha256))
+
+        let androidApdus = try OfflineNoteV2TransferHandoff.nfcPaymentTokenWriteAPDUs(for: token)
+        XCTAssertEqual(OfflineNoteV2NfcApduProtocol.parseCommand(androidApdus.first), .writeMeta(kind: .paymentToken, payloadLength: payload.count, sha256: info.sha256))
+        for apdu in androidApdus.dropFirst().dropLast() {
+            guard case let .writeChunk(_, bytes) = OfflineNoteV2NfcApduProtocol.parseCommand(apdu) else {
+                return XCTFail("Expected write chunk APDU")
+            }
+            XCTAssertLessThanOrEqual(bytes.count, OfflineNoteV2NfcApduProtocol.androidSafeChunkBytes)
+        }
+        XCTAssertEqual(OfflineNoteV2NfcApduProtocol.parseCommand(androidApdus.last), .commit)
+
+        let fastPayload = Data(repeating: 0x5A, count: 512)
+        let fastApdu = try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(offset: 1_024, bytes: fastPayload)
+        XCTAssertEqual(
+            Data(fastApdu.prefix(7)),
+            Data([0x80, 0x21, 0x04, 0x00, 0x00, 0x02, 0x00])
+        )
+        XCTAssertEqual(
+            OfflineNoteV2NfcApduProtocol.parseCommand(fastApdu),
+            .writeChunk(offset: 1_024, bytes: fastPayload)
+        )
+        let fastRead = try OfflineNoteV2NfcApduProtocol.readChunkAPDUData(
+            offset: 256,
+            length: OfflineNoteV2NfcApduProtocol.maxExtendedReadChunkBytes
+        )
+        XCTAssertEqual(
+            OfflineNoteV2NfcApduProtocol.parseCommand(fastRead),
+            .readChunk(offset: 256, requestedLength: OfflineNoteV2NfcApduProtocol.maxExtendedReadChunkBytes)
+        )
+    }
+
+    func testOfflineNoteV2TransportWireFormatMatchesSharedFixture() throws {
+        let fixture = try Self.loadFixture()
+        let token = try OfflineNoteV2PaymentTokenCodec.decodeNorito(Self.base64(fixture.sdkInterop.paymentTokenNoritoBase64))
+        let payload = try OfflineNoteV2TransferHandoff.rawPaymentTokenBytes(for: token)
+        let writeApdus = try OfflineNoteV2TransferHandoff.nfcPaymentTokenWriteAPDUs(for: token)
+        let readApdus = try OfflineNoteV2NfcApduProtocol.readPayloadAPDUs(payloadLength: payload.count)
+        let nearbyBytes = try OfflineNoteV2TransferHandoff.nearbyPaymentEnvelopeBytes(for: token)
+
+        XCTAssertEqual(payload.count, 2_416)
+        XCTAssertEqual(OfflineNoteV2NfcApduProtocol.selectAidAPDUData().hexLowercased(), "00a4040007f049524f48413200")
+        XCTAssertEqual(OfflineNoteV2NfcApduProtocol.getInfoAPDUData().hexLowercased(), "8010000000")
+        XCTAssertEqual(
+            try OfflineNoteV2NfcApduProtocol.encodeInfo(kind: .paymentToken, payloadBytes: payload).hexLowercased(),
+            "01020000097000f044c7349a978489568f9e4de6035df214b471571646fb8a6dec4d2c026aca1a5c"
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2NfcApduProtocol.writeMetaAPDUData(kind: .paymentToken, payloadBytes: payload).hexLowercased(),
+            "802000002601020000097044c7349a978489568f9e4de6035df214b471571646fb8a6dec4d2c026aca1a5c"
+        )
+        XCTAssertEqual(writeApdus.count, 13)
+        XCTAssertEqual(writeApdus[0].hexLowercased(), "802000002601020000097044c7349a978489568f9e4de6035df214b471571646fb8a6dec4d2c026aca1a5c")
+        XCTAssertEqual(OfflineNoteV2NfcApduProtocol.sha256(writeApdus[1]).hexLowercased(), "4037d861f58cb4820507bd2fe905e395dfc326e93613eb2dd885ba0235cfd053")
+        XCTAssertEqual(writeApdus[writeApdus.count - 2].hexLowercased(), "802109601063746f722d61756469742d70726f6f66")
+        XCTAssertEqual(writeApdus.last?.hexLowercased(), "8022000000")
+        XCTAssertEqual(readApdus.count, 11)
+        XCTAssertEqual(readApdus.first?.hexLowercased(), "80110000f0")
+        XCTAssertEqual(nearbyBytes.count, 3_335)
+        XCTAssertEqual(OfflineNoteV2NfcApduProtocol.sha256(nearbyBytes).hexLowercased(), "ce3207d3c55c3d89fc91012bb96546ea7ed71617545bc90b266a3c7bd67aec5c")
+    }
+
+    func testOfflineNoteV2NfcApduProtocolRejectsAdversarialPayloadsBeforeCommit() throws {
+        let payload = Data("offline-payment".utf8)
+        let info = try XCTUnwrap(
+            OfflineNoteV2NfcApduProtocol.decodeInfo(
+                try OfflineNoteV2NfcApduProtocol.encodeInfo(kind: .receiptAck, payloadBytes: payload)
+            )
+        )
+        let assembler = try OfflineNoteV2NfcPayloadAssembler(info: info)
+
+        XCTAssertFalse(assembler.write(offset: payload.count - 2, chunk: Data(repeating: 0x01, count: 4)))
+        XCTAssertTrue(assembler.write(offset: 0, chunk: Data(payload.prefix(6))))
+        XCTAssertTrue(assembler.write(offset: 0, chunk: Data(payload.prefix(6))))
+        XCTAssertFalse(assembler.write(offset: 0, chunk: Data("OFFLIN".utf8)))
+        XCTAssertThrowsError(try assembler.commit()) { error in
+            XCTAssertEqual(error as? OfflineNoteV2NfcApduError, .incompletePayload)
+        }
+        XCTAssertTrue(assembler.write(offset: 6, chunk: Data(payload.dropFirst(6))))
+        XCTAssertEqual(try assembler.commit(), payload)
+
+        var oversizedInfo = try OfflineNoteV2NfcApduProtocol.encodeInfo(kind: .paymentToken, payloadBytes: payload)
+        let oversized = OfflineNoteV2NfcApduProtocol.maxIncomingPayloadBytes + 1
+        oversizedInfo[oversizedInfo.startIndex + 2] = UInt8((oversized >> 24) & 0xff)
+        oversizedInfo[oversizedInfo.startIndex + 3] = UInt8((oversized >> 16) & 0xff)
+        oversizedInfo[oversizedInfo.startIndex + 4] = UInt8((oversized >> 8) & 0xff)
+        oversizedInfo[oversizedInfo.startIndex + 5] = UInt8(oversized & 0xff)
+        XCTAssertNil(OfflineNoteV2NfcApduProtocol.decodeInfo(oversizedInfo))
+
+        let badAssembler = try OfflineNoteV2NfcPayloadAssembler(
+            kind: .paymentToken,
+            expectedLength: payload.count,
+            expectedSha256: Data(repeating: 0x00, count: 32)
+        )
+        XCTAssertTrue(badAssembler.write(offset: 0, chunk: payload))
+        XCTAssertThrowsError(try badAssembler.commit()) { error in
+            XCTAssertEqual(error as? OfflineNoteV2NfcApduError, .checksumMismatch)
+        }
+        XCTAssertThrowsError(
+            try OfflineNoteV2NfcPayloadAssembler(
+                kind: .paymentToken,
+                expectedLength: OfflineNoteV2NfcApduProtocol.maxIncomingPayloadBytes + 1,
+                expectedSha256: Data(repeating: 0x00, count: 32)
+            )
+        )
+    }
+
+    func testOfflineNoteV2NfcApduProtocolRejectsMalformedCommandsAndBounds() throws {
+        XCTAssertEqual(OfflineNoteV2NfcApduProtocol.parseCommand(nil), .invalid)
+        XCTAssertEqual(OfflineNoteV2NfcApduProtocol.parseCommand(Data([0x00])), .invalid)
+        XCTAssertEqual(
+            OfflineNoteV2NfcApduProtocol.parseCommand(Data([0x00, 0xA4, 0x04, 0x00, 0x01, 0xFF, 0x00])),
+            .unsupported
+        )
+        var selectWithNonZeroLe = OfflineNoteV2NfcApduProtocol.selectAidAPDUData()
+        selectWithNonZeroLe[selectWithNonZeroLe.index(before: selectWithNonZeroLe.endIndex)] = 0x01
+        XCTAssertEqual(OfflineNoteV2NfcApduProtocol.parseCommand(selectWithNonZeroLe), .unsupported)
+        XCTAssertEqual(
+            OfflineNoteV2NfcApduProtocol.parseCommand(Data([0x81, 0x10, 0x00, 0x00, 0x00])),
+            .unsupported
+        )
+        XCTAssertEqual(
+            OfflineNoteV2NfcApduProtocol.parseCommand(Data([0x80, 0x10, 0x00, 0x01, 0x00])),
+            .invalid
+        )
+        XCTAssertEqual(
+            OfflineNoteV2NfcApduProtocol.parseCommand(Data([0x80, 0x10, 0x00, 0x00, 0x01])),
+            .invalid
+        )
+        XCTAssertEqual(
+            OfflineNoteV2NfcApduProtocol.parseCommand(Data([0x80, 0x10, 0x00, 0x00, 0x01, 0x00])),
+            .invalid
+        )
+        XCTAssertEqual(
+            OfflineNoteV2NfcApduProtocol.parseCommand(Data([0x80, 0x11, 0x00, 0x00, 0x00])),
+            .invalid
+        )
+        XCTAssertEqual(
+            OfflineNoteV2NfcApduProtocol.parseCommand(Data([0x80, 0x11, 0x00, 0x00, 0x00, 0x00, 0x00])),
+            .invalid
+        )
+        XCTAssertEqual(
+            OfflineNoteV2NfcApduProtocol.parseCommand(Data([0x80, 0x20, 0x00, 0x00, 0x01, 0x01])),
+            .invalid
+        )
+        var writeMetaWithOffset = try OfflineNoteV2NfcApduProtocol.writeMetaAPDUData(
+            kind: .receiptAck,
+            payloadBytes: Data([0x01])
+        )
+        writeMetaWithOffset[writeMetaWithOffset.startIndex + 3] = 0x01
+        XCTAssertEqual(OfflineNoteV2NfcApduProtocol.parseCommand(writeMetaWithOffset), .invalid)
+        let zeroLengthMeta = Data([0x01, OfflineNoteV2NfcPayloadKind.paymentToken.rawValue, 0x00, 0x00, 0x00, 0x00])
+            + Data(repeating: 0x00, count: 32)
+        XCTAssertEqual(
+            OfflineNoteV2NfcApduProtocol.parseCommand(Data([0x80, 0x20, 0x00, 0x00, UInt8(zeroLengthMeta.count)]) + zeroLengthMeta),
+            .invalid
+        )
+        XCTAssertEqual(
+            OfflineNoteV2NfcApduProtocol.parseCommand(Data([0x80, 0x21, 0x00, 0x00, 0x00])),
+            .invalid
+        )
+        XCTAssertEqual(
+            OfflineNoteV2NfcApduProtocol.parseCommand(Data([0x80, 0x21, 0x00, 0x00, 0x02, 0x01])),
+            .invalid
+        )
+        XCTAssertEqual(
+            OfflineNoteV2NfcApduProtocol.parseCommand(Data([0x80, 0x22, 0x00, 0x00, 0x01, 0x00])),
+            .invalid
+        )
+        XCTAssertEqual(
+            OfflineNoteV2NfcApduProtocol.parseCommand(Data([0x80, 0x22, 0x01, 0x00, 0x00])),
+            .invalid
+        )
+        XCTAssertEqual(
+            OfflineNoteV2NfcApduProtocol.parseCommand(Data([0x80, 0x22, 0x00, 0x00, 0x01])),
+            .invalid
+        )
+
+        XCTAssertThrowsError(try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(offset: 0x1_0000, bytes: Data([0x01])))
+        XCTAssertThrowsError(try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(offset: 0, bytes: Data()))
+        XCTAssertThrowsError(try OfflineNoteV2NfcApduProtocol.readChunkAPDUData(offset: 0, length: 0))
+        XCTAssertThrowsError(
+            try OfflineNoteV2NfcApduProtocol.readChunkAPDUData(
+                offset: 0,
+                length: OfflineNoteV2NfcApduProtocol.maxExtendedReadChunkBytes + 1
+            )
+        )
+        XCTAssertThrowsError(
+            try OfflineNoteV2NfcApduProtocol.writePayloadAPDUs(
+                kind: .paymentToken,
+                payloadBytes: Data([0x01]),
+                maxChunkLength: 0
+            )
+        )
+        XCTAssertThrowsError(try OfflineNoteV2NfcApduProtocol.readPayloadAPDUs(payloadLength: 0))
+        XCTAssertThrowsError(
+            try OfflineNoteV2NfcApduProtocol.readPayloadAPDUs(
+                payloadLength: 1,
+                maxChunkLength: OfflineNoteV2NfcApduProtocol.maxExtendedReadChunkBytes + 1
+            )
+        )
+
+        let response = OfflineNoteV2NfcApduProtocol.response(Data([0xAA, 0xBB]))
+        XCTAssertEqual(response, Data([0xAA, 0xBB, 0x90, 0x00]))
+        XCTAssertEqual(OfflineNoteV2NfcApduProtocol.responseStatus(response), 0x9000)
+        XCTAssertEqual(OfflineNoteV2NfcApduProtocol.responseStatus(Data([0x90])), nil)
+        XCTAssertEqual(OfflineNoteV2NfcApduProtocol.responseData(response), Data([0xAA, 0xBB]))
+        XCTAssertEqual(OfflineNoteV2NfcApduProtocol.responseData(Data([0x90])), Data())
+
+        let assembler = try OfflineNoteV2NfcPayloadAssembler(
+            kind: .receiptAck,
+            expectedLength: 4,
+            expectedSha256: OfflineNoteV2NfcApduProtocol.sha256(Data([0x01, 0x02, 0x03, 0x04]))
+        )
+        XCTAssertFalse(assembler.write(offset: Int.max, chunk: Data([0x01])))
+        XCTAssertFalse(assembler.write(offset: 4, chunk: Data([0x01])))
+        XCTAssertFalse(assembler.write(offset: -1, chunk: Data([0x01])))
+        XCTAssertFalse(assembler.write(offset: 0, chunk: Data()))
+        XCTAssertTrue(assembler.write(offset: 0, chunk: Data([0x01, 0x02])))
+        XCTAssertTrue(assembler.write(offset: 1, chunk: Data([0x02, 0x03])))
+        XCTAssertFalse(assembler.write(offset: 1, chunk: Data([0x09, 0x09])))
+    }
+
+    func testOfflineNoteV2NearbyEnvelopeRoundTripsPairingPaymentAndAck() throws {
+        let fixture = try Self.loadFixture()
+        let token = try OfflineNoteV2PaymentTokenCodec.decodeNorito(Self.base64(fixture.sdkInterop.paymentTokenNoritoBase64))
+        let challenge = try OfflineNoteV2NearbyPairingChallenge(assetName: " nearby_pairing_bird ")
+        let challengeEnvelope = try OfflineNoteV2NearbyEnvelope(
+            kind: .challenge,
+            payload: Data("receive-challenge".utf8),
+            contentType: OfflineNoteV2TransferHandoff.receiveChallengeContentType,
+            pairingChallenge: challenge
+        )
+        let paymentBytes = try OfflineNoteV2TransferHandoff.nearbyPaymentEnvelopeBytes(for: token)
+        let paymentEnvelope = try OfflineNoteV2NearbyEnvelope.decode(paymentBytes)
+        let ackEnvelope = try OfflineNoteV2NearbyEnvelope(
+            kind: .receiptAck,
+            payload: Data("accepted-locally".utf8),
+            contentType: OfflineNoteV2TransferHandoff.receiptAckContentType
+        )
+
+        XCTAssertEqual(try OfflineNoteV2NearbyEnvelope.decode(challengeEnvelope.encoded()).pairingChallenge, challenge)
+        XCTAssertEqual(paymentEnvelope.kind, .payment)
+        XCTAssertEqual(try paymentEnvelope.paymentToken().tokenIdHex, token.tokenIdHex)
+        XCTAssertEqual(try OfflineNoteV2TransferHandoff.decodeNearbyPaymentToken(from: paymentBytes).tokenIdHex, token.tokenIdHex)
+        XCTAssertEqual(try OfflineNoteV2NearbyEnvelope.decode(ackEnvelope.encoded()).payload, Data("accepted-locally".utf8))
+
+        let legacyPairing = Data(
+            #"{"version":1,"kind":"challenge","payload":"cmVjZWl2ZS1jaGFsbGVuZ2U","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":{"assetName":"nearby_pairing_bird"}}"#.utf8
+        )
+        XCTAssertEqual(try OfflineNoteV2NearbyEnvelope.decode(legacyPairing).pairingChallenge, challenge)
+    }
+
+    func testOfflineNoteV2NearbyEnvelopeRejectsAdversarialMessages() throws {
+        let fixture = try Self.loadFixture()
+        let tokenPayload = try Self.base64(fixture.sdkInterop.paymentTokenNoritoBase64)
+        let pairing = try OfflineNoteV2NearbyPairingChallenge(assetName: "nearby_pairing_mask")
+
+        XCTAssertThrowsError(try OfflineNoteV2NearbyPairingChallenge(assetName: "nearby_pairing_mask<script>"))
+        XCTAssertThrowsError(
+            try OfflineNoteV2NearbyEnvelope(
+                kind: .challenge,
+                payload: Data("challenge".utf8),
+                contentType: OfflineNoteV2TransferHandoff.receiveChallengeContentType
+            )
+        )
+        XCTAssertThrowsError(
+            try OfflineNoteV2NearbyEnvelope(
+                kind: .challenge,
+                payload: Data("challenge".utf8),
+                contentType: OfflineNoteV2TransferHandoff.receiptAckContentType,
+                pairingChallenge: pairing
+            )
+        )
+        XCTAssertThrowsError(
+            try OfflineNoteV2NearbyEnvelope(
+                kind: .payment,
+                payload: tokenPayload,
+                contentType: OfflineNoteV2TransferHandoff.paymentTokenContentType,
+                pairingChallenge: pairing
+            )
+        )
+        XCTAssertThrowsError(
+            try OfflineNoteV2NearbyEnvelope(
+                kind: .payment,
+                payload: Data(repeating: 0x01, count: OfflineNoteV2NfcApduProtocol.maxIncomingPayloadBytes + 1),
+                contentType: OfflineNoteV2TransferHandoff.paymentTokenContentType
+            )
+        )
+        XCTAssertThrowsError(
+            try OfflineNoteV2NearbyEnvelope(
+                kind: .receiptAck,
+                payload: Data("ok".utf8),
+                contentType: OfflineNoteV2TransferHandoff.receiveChallengeContentType
+            )
+        )
+
+        let unsupportedVersion = Data(
+            #"{"version":2,"kind":"payment","payload":"AQID","contentType":"application/vnd.iroha.offline.payment-token-v2+norito"}"#.utf8
+        )
+        let fractionalVersion = Data(
+            #"{"version":1.5,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":"nearby_pairing_bird"}"#.utf8
+        )
+        let unknownField = Data(
+            #"{"version":1,"kind":"payment","payload":"AQID","contentType":"application/vnd.iroha.offline.payment-token-v2+norito","extra":true}"#.utf8
+        )
+        let challengeContentTypeDowngrade = Data(
+            #"{"version":1,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receipt-ack-v1+octet-stream","pairingChallenge":"nearby_pairing_bird"}"#.utf8
+        )
+        let ackContentTypeDowngrade = Data(
+            #"{"version":1,"kind":"receipt_ack","payload":"b2s","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream"}"#.utf8
+        )
+        let paddedPayload = Data(
+            #"{"version":1,"kind":"challenge","payload":"YQ==","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":"nearby_pairing_bird"}"#.utf8
+        )
+        XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(unsupportedVersion))
+        XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(fractionalVersion))
+        XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(unknownField))
+        XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(challengeContentTypeDowngrade))
+        XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(ackContentTypeDowngrade))
+        XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(paddedPayload))
+
+        let topLevelArray = Data(#"[]"#.utf8)
+        let invalidBase64Payload = Data(
+            #"{"version":1,"kind":"challenge","payload":"!!!!","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":"nearby_pairing_bird"}"#.utf8
+        )
+        let badPairingObject = Data(
+            #"{"version":1,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":{"assetName":1}}"#.utf8
+        )
+        let smuggledPairingObject = Data(
+            #"{"version":1,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":{"assetName":"nearby_pairing_bird","extra":true}}"#.utf8
+        )
+        let ackWithPairing = Data(
+            #"{"version":1,"kind":"receipt_ack","payload":"b2s","contentType":"application/vnd.iroha.offline.receipt-ack-v1+octet-stream","pairingChallenge":"nearby_pairing_bird"}"#.utf8
+        )
+        XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(topLevelArray))
+        XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(invalidBase64Payload))
+        XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(badPairingObject))
+        XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(smuggledPairingObject))
+        XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(ackWithPairing))
+        XCTAssertThrowsError(
+            try OfflineNoteV2NearbyEnvelope(
+                kind: .payment,
+                payload: Data([0x01, 0x02, 0x03]),
+                contentType: OfflineNoteV2TransferHandoff.paymentTokenContentType
+            )
+        )
+        XCTAssertThrowsError(
+            try OfflineNoteV2NearbyEnvelope(
+                kind: .receiptAck,
+                payload: Data(),
+                contentType: OfflineNoteV2TransferHandoff.receiptAckContentType
+            )
+        )
+    }
+
+    func testOfflineNoteV2WalletAcceptsCanonicalSdkInteropPaymentToken() throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let recipientCertificate = try Self.certificate(fixture.paymentToken.recipientKeyCertificate)
+        let recipientStore = InMemoryOfflineNoteV2Store()
+        let recipientWallet = OfflineNoteV2Wallet(
+            chainId: derivation.chainId,
+            accountId: fixture.paymentToken.recipientAccountId,
+            attestationProvider: StaticAttestationProvider(certificate: recipientCertificate),
+            store: recipientStore,
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
+            certificateVerifier: try Self.certificateVerifier(fixture),
+            randomSource: QueueRandomSource(values: [
+                try Self.hex(derivation.recipientNoteSecretHex)
+            ]),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { 1_700_000_001_200 }
+        )
+        let receiveRequest = try recipientWallet.prepareReceive(
+            assetDefinitionId: Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId),
+            amount: fixture.chainVectors.redeem.amount
+        )
+        XCTAssertEqual(receiveRequest.outputCommitmentHex, derivation.recipientOutputCommitment)
+
+        let token = try OfflineNoteV2PaymentTokenCodec.decodeNorito(
+            Self.base64(fixture.sdkInterop.paymentTokenNoritoBase64)
+        )
+        let pending = try XCTUnwrap(
+            recipientStore.findNote(noteCommitment: Self.hex(derivation.recipientOutputCommitment))
+        )
+        let output = token.audit.outputClaims[0]
+        XCTAssertEqual(pending.assetId, output.assetId)
+        XCTAssertEqual(pending.amount, output.amount)
+        XCTAssertEqual(try pending.keyCertificate.payloadHash(), try output.keyCertificate.payloadHash())
+        if case let .p2pOutput(origin) = pending.origin {
+            XCTAssertEqual(origin.paymentRequestId, token.paymentRequestId)
+            XCTAssertEqual(origin.outputIndex, 0)
+        } else {
+            XCTFail("expected P2P pending output origin")
+        }
+        let accepted = try recipientWallet.accept(token)
+
+        XCTAssertEqual(accepted.noteCommitmentHex, derivation.recipientOutputCommitment)
+        XCTAssertEqual(accepted.state, .spendable)
+        XCTAssertEqual(
+            try recipientStore.findNote(noteCommitment: Self.hex(derivation.recipientOutputCommitment))?.state,
+            .spendable
+        )
     }
 
     func testOfflineNoteV2WalletNoteJsonCodecRoundTripsFixtureNote() throws {
@@ -272,6 +870,321 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertThrowsError(try OfflineNoteV2KeychainStore(label: "bad/label")) { error in
             XCTAssertEqual(error as? OfflineNoteV2KeychainStoreError, .invalidLabel("bad/label"))
         }
+    }
+
+    func testOfflineNoteV2KeychainStoreMovesMetadataBeforeDeletingOldCollection() throws {
+        let label = "atomic-order-test"
+        let fixture = try Self.loadFixture()
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let note = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
+        let backing = RecordingOfflineNoteV2KeychainBacking()
+        let store = try OfflineNoteV2KeychainStore(label: label, backing: backing)
+
+        try store.upsert(note)
+        backing.operations.removeAll()
+        try store.upsert(note)
+
+        let metadataSave = try XCTUnwrap(backing.operations.firstIndex(of: "save:\(label).meta"))
+        let oldCollectionDelete = try XCTUnwrap(backing.operations.firstIndex(of: "delete:\(label).rev.1"))
+        XCTAssertLessThan(metadataSave, oldCollectionDelete)
+
+        backing.operations.removeAll()
+        try store.clear()
+
+        let metadataDelete = try XCTUnwrap(backing.operations.firstIndex(of: "delete:\(label).meta"))
+        let currentCollectionDelete = try XCTUnwrap(backing.operations.firstIndex(of: "delete:\(label).rev.2"))
+        XCTAssertLessThan(metadataDelete, currentCollectionDelete)
+    }
+
+    func testOfflineNoteV2KeychainStoreKeepsOldRevisionWhenMetadataSaveFails() throws {
+        let label = "metadata-failure-test"
+        let fixture = try Self.loadFixture()
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let note = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
+        let backing = RecordingOfflineNoteV2KeychainBacking()
+        let store = try OfflineNoteV2KeychainStore(label: label, backing: backing)
+
+        try store.upsert(note)
+        backing.operations.removeAll()
+        backing.saveFailures.insert("\(label).meta")
+
+        let updated = try note.withState(.spent, updatedAtMs: note.updatedAtMs + 1)
+        XCTAssertThrowsError(try store.upsert(updated)) { error in
+            XCTAssertEqual(error as? OfflineNoteV2KeychainStoreError, .keychainFailure(-1))
+        }
+        XCTAssertFalse(backing.operations.contains("delete:\(label).rev.1"))
+        XCTAssertNotNil(backing.values["\(label).rev.2"])
+
+        backing.saveFailures.removeAll()
+        let loaded = try XCTUnwrap(try store.findNote(noteCommitment: note.noteCommitment))
+        XCTAssertEqual(loaded.state, .spendable)
+        XCTAssertEqual(loaded.updatedAtMs, note.updatedAtMs)
+    }
+
+    func testOfflineNoteV2KeychainStoreKeepsOldRevisionWhenCollectionSaveFails() throws {
+        let label = "collection-failure-test"
+        let fixture = try Self.loadFixture()
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let note = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
+        let backing = RecordingOfflineNoteV2KeychainBacking()
+        let store = try OfflineNoteV2KeychainStore(label: label, backing: backing)
+
+        try store.upsert(note)
+        backing.operations.removeAll()
+        backing.saveFailures.insert("\(label).rev.2")
+
+        let updated = try note.withState(.spent, updatedAtMs: note.updatedAtMs + 1)
+        XCTAssertThrowsError(try store.upsert(updated)) { error in
+            XCTAssertEqual(error as? OfflineNoteV2KeychainStoreError, .keychainFailure(-1))
+        }
+        XCTAssertNil(backing.values["\(label).rev.2"])
+        XCTAssertFalse(backing.operations.contains("save:\(label).meta"))
+
+        backing.saveFailures.removeAll()
+        let loaded = try XCTUnwrap(try store.findNote(noteCommitment: note.noteCommitment))
+        XCTAssertEqual(loaded.state, .spendable)
+    }
+
+    func testOfflineNoteV2KeychainStoreKeepsLegacyCollectionWhenMetadataSaveFails() throws {
+        let label = "legacy-metadata-failure-test"
+        let fixture = try Self.loadFixture()
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let note = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
+        let backing = RecordingOfflineNoteV2KeychainBacking()
+        backing.values[label] = try Self.storedCollectionData(notes: [note])
+        let store = try OfflineNoteV2KeychainStore(label: label, backing: backing)
+        backing.saveFailures.insert("\(label).meta")
+
+        let updated = try note.withState(.spent, updatedAtMs: note.updatedAtMs + 1)
+        XCTAssertThrowsError(try store.upsert(updated)) { error in
+            XCTAssertEqual(error as? OfflineNoteV2KeychainStoreError, .keychainFailure(-1))
+        }
+        XCTAssertFalse(backing.operations.contains("delete:\(label)"))
+
+        backing.saveFailures.removeAll()
+        let loaded = try XCTUnwrap(try store.findNote(noteCommitment: note.noteCommitment))
+        XCTAssertEqual(loaded.state, .spendable)
+    }
+
+    func testOfflineNoteV2KeychainStoreUsesNewRevisionWhenOldCollectionDeleteFails() throws {
+        let label = "delete-old-failure-test"
+        let fixture = try Self.loadFixture()
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let note = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
+        let backing = RecordingOfflineNoteV2KeychainBacking()
+        let store = try OfflineNoteV2KeychainStore(label: label, backing: backing)
+
+        try store.upsert(note)
+        backing.operations.removeAll()
+        backing.deleteFailures.insert("\(label).rev.1")
+
+        let updated = try note.withState(.spent, updatedAtMs: note.updatedAtMs + 1)
+        XCTAssertThrowsError(try store.upsert(updated)) { error in
+            XCTAssertEqual(error as? OfflineNoteV2KeychainStoreError, .keychainFailure(-1))
+        }
+        XCTAssertNotNil(backing.values["\(label).rev.1"])
+
+        backing.deleteFailures.removeAll()
+        let loaded = try XCTUnwrap(try store.findNote(noteCommitment: note.noteCommitment))
+        XCTAssertEqual(loaded.state, .spent)
+    }
+
+    func testOfflineNoteV2KeychainStoreRejectsMetadataPointerToMissingCollection() throws {
+        let label = "missing-collection-test"
+        let backing = RecordingOfflineNoteV2KeychainBacking()
+        backing.values["\(label).meta"] = try Self.storedMetadataData(revision: 99)
+        let store = try OfflineNoteV2KeychainStore(label: label, backing: backing)
+
+        XCTAssertThrowsError(try store.listNotes()) { error in
+            XCTAssertEqual(
+                error as? OfflineNoteV2KeychainStoreError,
+                .corrupt("collection revision is missing")
+            )
+        }
+    }
+
+    func testOfflineNoteV2KeychainStoreDoesNotFallBackToLegacyCollectionWhenMetadataExists() throws {
+        let label = "metadata-blocks-legacy-fallback-test"
+        let fixture = try Self.loadFixture()
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let note = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
+        let backing = RecordingOfflineNoteV2KeychainBacking()
+        backing.values[label] = try Self.storedCollectionData(notes: [note])
+        backing.values["\(label).meta"] = try Self.storedMetadataData(revision: 2)
+        let store = try OfflineNoteV2KeychainStore(label: label, backing: backing)
+
+        XCTAssertThrowsError(try store.listNotes()) { error in
+            XCTAssertEqual(
+                error as? OfflineNoteV2KeychainStoreError,
+                .corrupt("collection revision is missing")
+            )
+        }
+    }
+
+    func testOfflineNoteV2KeychainStoreRejectsInvalidMetadataShapes() throws {
+        for (label, metadata, expected) in [
+            (
+                "metadata-version-test",
+                try Self.storedMetadataData(version: 2, revision: 1),
+                OfflineNoteV2KeychainStoreError.corrupt("unsupported metadata")
+            ),
+            (
+                "metadata-zero-revision-test",
+                try Self.storedMetadataData(version: 1, revision: 0),
+                OfflineNoteV2KeychainStoreError.corrupt("unsupported metadata")
+            )
+        ] {
+            let backing = RecordingOfflineNoteV2KeychainBacking()
+            backing.values["\(label).meta"] = metadata
+            let store = try OfflineNoteV2KeychainStore(label: label, backing: backing)
+
+            XCTAssertThrowsError(try store.listNotes()) { error in
+                XCTAssertEqual(error as? OfflineNoteV2KeychainStoreError, expected)
+            }
+        }
+    }
+
+    func testOfflineNoteV2KeychainStoreRejectsInvalidMetadataJson() throws {
+        let label = "metadata-json-test"
+        let backing = RecordingOfflineNoteV2KeychainBacking()
+        backing.values["\(label).meta"] = Data("{".utf8)
+        let store = try OfflineNoteV2KeychainStore(label: label, backing: backing)
+
+        XCTAssertThrowsError(try store.listNotes()) { error in
+            guard case let OfflineNoteV2KeychainStoreError.corrupt(reason) = error else {
+                return XCTFail("expected corrupt metadata, got \(error)")
+            }
+            XCTAssertTrue(reason.contains("failed to decode metadata"))
+        }
+    }
+
+    func testOfflineNoteV2KeychainStoreRejectsCorruptCollections() throws {
+        let fixture = try Self.loadFixture()
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let note = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
+        let validPayload = try OfflineNoteV2WalletNoteJsonCodec.encode(note).base64EncodedString()
+        let cases: [(String, [String: Any], String)] = [
+            (
+                "collection-version-test",
+                ["version": 2, "notes": []],
+                "unsupported collection version"
+            ),
+            (
+                "collection-base64-test",
+                ["version": 1, "notes": [["commitmentHex": note.noteCommitmentHex, "payloadBase64": "%%%"]]],
+                "note payload is not base64"
+            ),
+            (
+                "collection-index-test",
+                ["version": 1, "notes": [["commitmentHex": String(repeating: "0", count: 64), "payloadBase64": validPayload]]],
+                "note commitment index mismatch"
+            ),
+            (
+                "collection-duplicate-test",
+                [
+                    "version": 1,
+                    "notes": [
+                        ["commitmentHex": note.noteCommitmentHex, "payloadBase64": validPayload],
+                        ["commitmentHex": note.noteCommitmentHex, "payloadBase64": validPayload]
+                    ]
+                ],
+                "duplicate note commitment"
+            )
+        ]
+
+        for (label, collection, reason) in cases {
+            let backing = RecordingOfflineNoteV2KeychainBacking()
+            backing.values[label] = try JSONSerialization.data(
+                withJSONObject: collection,
+                options: [.sortedKeys]
+            )
+            let store = try OfflineNoteV2KeychainStore(label: label, backing: backing)
+
+            XCTAssertThrowsError(try store.listNotes()) { error in
+                XCTAssertEqual(error as? OfflineNoteV2KeychainStoreError, .corrupt(reason))
+            }
+        }
+    }
+
+    func testOfflineNoteV2KeychainStoreRejectsInvalidCollectionJson() throws {
+        let label = "collection-json-test"
+        let backing = RecordingOfflineNoteV2KeychainBacking()
+        backing.values[label] = Data("{".utf8)
+        let store = try OfflineNoteV2KeychainStore(label: label, backing: backing)
+
+        XCTAssertThrowsError(try store.listNotes()) { error in
+            guard case let OfflineNoteV2KeychainStoreError.corrupt(reason) = error else {
+                return XCTFail("expected corrupt collection, got \(error)")
+            }
+            XCTAssertTrue(reason.contains("failed to decode collection"))
+        }
+    }
+
+    func testOfflineNoteV2KeychainStoreDoesNotDeleteCollectionWhenMetadataClearFails() throws {
+        let label = "clear-failure-test"
+        let fixture = try Self.loadFixture()
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let note = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
+        let backing = RecordingOfflineNoteV2KeychainBacking()
+        let store = try OfflineNoteV2KeychainStore(label: label, backing: backing)
+
+        try store.upsert(note)
+        backing.operations.removeAll()
+        backing.deleteFailures.insert("\(label).meta")
+
+        XCTAssertThrowsError(try store.clear()) { error in
+            XCTAssertEqual(error as? OfflineNoteV2KeychainStoreError, .keychainFailure(-1))
+        }
+        XCTAssertFalse(backing.operations.contains("delete:\(label).rev.1"))
+
+        backing.deleteFailures.removeAll()
+        let loaded = try XCTUnwrap(try store.findNote(noteCommitment: note.noteCommitment))
+        XCTAssertEqual(loaded.state, .spendable)
+    }
+
+    func testOfflineNoteV2KeychainStoreDoesNotResurrectRevisionWhenClearCollectionDeleteFails() throws {
+        let label = "clear-collection-failure-test"
+        let fixture = try Self.loadFixture()
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let note = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
+        let backing = RecordingOfflineNoteV2KeychainBacking()
+        let store = try OfflineNoteV2KeychainStore(label: label, backing: backing)
+
+        try store.upsert(note)
+        backing.operations.removeAll()
+        backing.deleteFailures.insert("\(label).rev.1")
+
+        XCTAssertThrowsError(try store.clear()) { error in
+            XCTAssertEqual(error as? OfflineNoteV2KeychainStoreError, .keychainFailure(-1))
+        }
+        XCTAssertNil(backing.values["\(label).meta"])
+        XCTAssertNotNil(backing.values["\(label).rev.1"])
+
+        backing.deleteFailures.removeAll()
+        XCTAssertTrue(try store.listNotes().isEmpty)
+    }
+
+    func testOfflineNoteV2KeychainStoreUsesMetadataWhenLegacyDeleteFails() throws {
+        let label = "legacy-delete-failure-test"
+        let fixture = try Self.loadFixture()
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let note = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
+        let backing = RecordingOfflineNoteV2KeychainBacking()
+        backing.values[label] = try Self.storedCollectionData(notes: [note])
+        let store = try OfflineNoteV2KeychainStore(label: label, backing: backing)
+        backing.deleteFailures.insert(label)
+
+        let updated = try note.withState(.spent, updatedAtMs: note.updatedAtMs + 1)
+        XCTAssertThrowsError(try store.upsert(updated)) { error in
+            XCTAssertEqual(error as? OfflineNoteV2KeychainStoreError, .keychainFailure(-1))
+        }
+        XCTAssertNotNil(backing.values[label])
+        XCTAssertNotNil(backing.values["\(label).meta"])
+
+        backing.deleteFailures.removeAll()
+        let loaded = try XCTUnwrap(try store.findNote(noteCommitment: note.noteCommitment))
+        XCTAssertEqual(loaded.state, .spent)
+        XCTAssertEqual(loaded.updatedAtMs, updated.updatedAtMs)
     }
 
     func testOfflineNoteV2WalletDerivationsMatchRustVectors() throws {
@@ -2264,6 +3177,53 @@ final class OfflineNoteV2Tests: XCTestCase {
         )
     }
 
+    private static func storedCollectionData(notes: [OfflineNoteV2WalletNote]) throws -> Data {
+        let stored = try notes.map { note in
+            [
+                "commitmentHex": note.noteCommitmentHex,
+                "payloadBase64": try OfflineNoteV2WalletNoteJsonCodec.encode(note).base64EncodedString()
+            ]
+        }
+        return try JSONSerialization.data(
+            withJSONObject: ["version": 1, "notes": stored],
+            options: [.sortedKeys]
+        )
+    }
+
+    private static func storedMetadataData(version: Int = 1, revision: Int) throws -> Data {
+        try JSONSerialization.data(
+            withJSONObject: ["version": version, "revision": revision],
+            options: [.sortedKeys]
+        )
+    }
+
+    private final class RecordingOfflineNoteV2KeychainBacking: OfflineNoteV2KeychainBackingStore {
+        var values: [String: Data] = [:]
+        var operations: [String] = []
+        var saveFailures: Set<String> = []
+        var deleteFailures: Set<String> = []
+
+        func load(label: String) throws -> Data? {
+            values[label]
+        }
+
+        func save(label: String, data: Data) throws {
+            operations.append("save:\(label)")
+            if saveFailures.contains(label) {
+                throw OfflineNoteV2KeychainStoreError.keychainFailure(-1)
+            }
+            values[label] = data
+        }
+
+        func delete(label: String) throws {
+            operations.append("delete:\(label)")
+            if deleteFailures.contains(label) {
+                throw OfflineNoteV2KeychainStoreError.keychainFailure(-1)
+            }
+            values.removeValue(forKey: label)
+        }
+    }
+
     private struct StaticAttestationProvider: OfflineNoteV2AttestationProvider {
         let certificate: OfflineNoteKeyCertificateV2
 
@@ -2676,11 +3636,37 @@ private struct OfflineInteropFixture: Decodable {
     let offlineFiPublicKeyBase64: String
     let chainVectors: OfflineChainVectors
     let paymentToken: OfflinePaymentTokenJSON
+    let sdkInterop: OfflineSdkInterop
 
     private enum CodingKeys: String, CodingKey {
         case offlineFiPublicKeyBase64 = "offline_fi_public_key_base64"
         case chainVectors = "chain_vectors"
         case paymentToken = "payment_token"
+        case sdkInterop = "sdk_interop"
+    }
+}
+
+private struct OfflineSdkInterop: Decodable {
+    let paymentTokenNoritoBase64: String
+    let paymentTokenText: String
+    let paymentTokenQrV1: OfflineQrFixture
+
+    private enum CodingKeys: String, CodingKey {
+        case paymentTokenNoritoBase64 = "payment_token_norito_base64"
+        case paymentTokenText = "payment_token_text"
+        case paymentTokenQrV1 = "payment_token_qr_v1"
+    }
+}
+
+private struct OfflineQrFixture: Decodable {
+    let frames: [OfflineQrFrameFixture]
+}
+
+private struct OfflineQrFrameFixture: Decodable {
+    let bytesHex: String
+
+    private enum CodingKeys: String, CodingKey {
+        case bytesHex = "bytes_hex"
     }
 }
 

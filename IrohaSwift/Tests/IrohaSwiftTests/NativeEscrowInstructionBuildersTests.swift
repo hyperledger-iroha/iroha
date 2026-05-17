@@ -132,4 +132,145 @@ final class NativeEscrowInstructionBuildersTests: XCTestCase {
                            .invalidEvidenceHash(index: 1))
         }
     }
+
+    func testAnonymousEscrowRejectsLegacyInlineVerifyingKeyField() {
+        for field in ["vk_inline", "vkInline", "verifyingKeyInline", "verifying_key_inline"] {
+            let proof: [String: Any] = [
+                "backend": "halo2/ipa",
+                "proof": "proof-bytes",
+                "vk_ref": ["backend": "halo2/ipa", "name": "vk_escrow"],
+                field: ["backend": "halo2/ipa", "bytes_b64": "AQID"],
+            ]
+            XCTAssertThrowsError(try NativeEscrowInstructionBuilders.openAnonymousAssetEscrow(
+                escrowId: "anonymous-escrow",
+                assetDefinition: "xor#wonderland",
+                fundingNullifiers: ["n1"],
+                escrowCommitment: "escrow-note",
+                proof: proof
+            )) { error in
+                XCTAssertEqual(error as? NativeEscrowInstructionBuilderError,
+                               .invalidValue(field: "proof.\(field)"))
+            }
+        }
+    }
+
+    func testAnonymousEscrowRejectsMissingVerifyingKeyReference() {
+        let proof: [String: Any] = [
+            "backend": "halo2/ipa",
+            "proof": "proof-bytes",
+            "vk_commitment": Array(repeating: 0, count: 32),
+        ]
+        XCTAssertThrowsError(try NativeEscrowInstructionBuilders.openAnonymousAssetEscrow(
+            escrowId: "anonymous-escrow",
+            assetDefinition: "xor#wonderland",
+            fundingNullifiers: ["n1"],
+            escrowCommitment: "escrow-note",
+            proof: proof
+        )) { error in
+            XCTAssertEqual(error as? NativeEscrowInstructionBuilderError,
+                           .invalidValue(field: "proof.vk_ref"))
+        }
+    }
+
+    func testAnonymousEscrowRejectsNonObjectVerifyingKeyReference() {
+        let proof: [String: Any] = [
+            "backend": "halo2/ipa",
+            "proof": "proof-bytes",
+            "vk_ref": "halo2/ipa:vk_escrow",
+        ]
+        XCTAssertThrowsError(try NativeEscrowInstructionBuilders.openAnonymousAssetEscrow(
+            escrowId: "anonymous-escrow",
+            assetDefinition: "xor#wonderland",
+            fundingNullifiers: ["n1"],
+            escrowCommitment: "escrow-note",
+            proof: proof
+        )) { error in
+            XCTAssertEqual(error as? NativeEscrowInstructionBuilderError,
+                           .invalidValue(field: "proof.vk_ref"))
+        }
+    }
+
+    func testAnonymousEscrowRejectsIncompleteVerifyingKeyReference() {
+        for (vkRef, field) in [
+            (["name": "vk_escrow"], "proof.vk_ref.backend"),
+            (["backend": "halo2/ipa"], "proof.vk_ref.name"),
+            (["backend": "   ", "name": "vk_escrow"], "proof.vk_ref.backend"),
+            (["backend": "halo2/ipa", "name": "   "], "proof.vk_ref.name"),
+        ] {
+            let proof: [String: Any] = [
+                "backend": "halo2/ipa",
+                "proof": "proof-bytes",
+                "vk_ref": vkRef,
+            ]
+            XCTAssertThrowsError(try NativeEscrowInstructionBuilders.openAnonymousAssetEscrow(
+                escrowId: "anonymous-escrow",
+                assetDefinition: "xor#wonderland",
+                fundingNullifiers: ["n1"],
+                escrowCommitment: "escrow-note",
+                proof: proof
+            )) { error in
+                XCTAssertEqual(error as? NativeEscrowInstructionBuilderError,
+                               .invalidValue(field: field))
+            }
+        }
+    }
+
+    func testAnonymousEscrowRejectsVerifyingKeyBackendMismatch() {
+        let proof: [String: Any] = [
+            "backend": "halo2/ipa",
+            "proof": "proof-bytes",
+            "vk_ref": ["backend": "stark/fri-v1", "name": "vk_escrow"],
+        ]
+        XCTAssertThrowsError(try NativeEscrowInstructionBuilders.openAnonymousAssetEscrow(
+            escrowId: "anonymous-escrow",
+            assetDefinition: "xor#wonderland",
+            fundingNullifiers: ["n1"],
+            escrowCommitment: "escrow-note",
+            proof: proof
+        )) { error in
+            XCTAssertEqual(error as? NativeEscrowInstructionBuilderError,
+                           .invalidValue(field: "proof.vk_ref.backend"))
+        }
+    }
+
+    func testAnonymousEscrowRejectsVerifyingKeyReferenceShadowField() {
+        let proof: [String: Any] = [
+            "backend": "halo2/ipa",
+            "proof": "proof-bytes",
+            "vk_ref": ["backend": "halo2/ipa", "name": "vk_escrow"],
+            "vk_reference": ["backend": "halo2/ipa", "name": "shadow"],
+        ]
+        XCTAssertThrowsError(try NativeEscrowInstructionBuilders.openAnonymousAssetEscrow(
+            escrowId: "anonymous-escrow",
+            assetDefinition: "xor#wonderland",
+            fundingNullifiers: ["n1"],
+            escrowCommitment: "escrow-note",
+            proof: proof
+        )) { error in
+            XCTAssertEqual(error as? NativeEscrowInstructionBuilderError,
+                           .invalidValue(field: "proof.vk_reference"))
+        }
+    }
+
+    func testAnonymousEscrowRejectsNestedVerifyingKeyReferenceShadowField() {
+        let proof: [String: Any] = [
+            "backend": "halo2/ipa",
+            "proof": "proof-bytes",
+            "vk_ref": [
+                "backend": "halo2/ipa",
+                "name": "vk_escrow",
+                "vk_reference": "shadow",
+            ],
+        ]
+        XCTAssertThrowsError(try NativeEscrowInstructionBuilders.openAnonymousAssetEscrow(
+            escrowId: "anonymous-escrow",
+            assetDefinition: "xor#wonderland",
+            fundingNullifiers: ["n1"],
+            escrowCommitment: "escrow-note",
+            proof: proof
+        )) { error in
+            XCTAssertEqual(error as? NativeEscrowInstructionBuilderError,
+                           .invalidValue(field: "proof.vk_ref.vk_reference"))
+        }
+    }
 }

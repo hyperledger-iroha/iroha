@@ -2372,6 +2372,11 @@ impl Executor {
                             "proof backend mismatch".to_owned(),
                         ));
                     }
+                    if vk_ref.backend != backend {
+                        return Err(ValidationFail::NotPermitted(
+                            "verifying key backend mismatch".to_owned(),
+                        ));
+                    }
 
                     // If a VK reference is provided without a commitment, check existence in
                     // WSV. If a commitment is provided, skip the lookup to keep pre-verify

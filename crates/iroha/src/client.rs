@@ -3,7 +3,7 @@
 
 use std::{
     collections::HashMap,
-    fmt,
+    fmt::{self, Write as _},
     future::Future,
     num::{NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
@@ -6061,24 +6061,25 @@ fn format_error_envelope(envelope: &ErrorEnvelope) -> String {
         return message;
     };
     if let Some(reject_code) = details.reject_code.as_deref() {
-        message.push_str(&format!("; reject_code={reject_code}"));
+        let _ = write!(message, "; reject_code={reject_code}");
     }
     if let Some(queue) = details.queue.as_ref() {
-        message.push_str(&format!(
+        let _ = write!(
+            message,
             "; queue={} queued={}/{} saturated={}",
             queue.state, queue.queued, queue.capacity, queue.saturated
-        ));
+        );
     }
     if let Some(retry_after_seconds) = details.retry_after_seconds {
-        message.push_str(&format!("; retry_after_seconds={retry_after_seconds}"));
+        let _ = write!(message, "; retry_after_seconds={retry_after_seconds}");
     }
     if let Some(endpoint) = details.endpoint.as_deref() {
-        message.push_str(&format!("; endpoint={endpoint}"));
+        let _ = write!(message, "; endpoint={endpoint}");
     }
-    if let Some(axt) = details.axt.as_ref() {
-        if let Some(code) = axt.code.as_deref() {
-            message.push_str(&format!("; axt_code={code}"));
-        }
+    if let Some(axt) = details.axt.as_ref()
+        && let Some(code) = axt.code.as_deref()
+    {
+        let _ = write!(message, "; axt_code={code}");
     }
     message
 }
@@ -20156,6 +20157,22 @@ mod response_report {
     }
 
     #[test]
+    fn with_msg_does_not_decode_norito_envelope_with_json_content_type() {
+        let envelope = ErrorEnvelope::new("queue_error", "transaction already committed");
+        let body = to_bytes(&envelope).expect("encode error envelope");
+        let response = Response::builder()
+            .status(StatusCode::CONFLICT)
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(body)
+            .unwrap();
+
+        assert!(
+            ResponseReport::with_msg("Unexpected transaction response", &response).is_err(),
+            "binary Norito error envelopes must only be decoded for Norito content types"
+        );
+    }
+
+    #[test]
     fn with_msg_decodes_shared_error_envelope_queue_details() {
         let envelope = ErrorEnvelope::new("queue_full", "transaction queue is at capacity")
             .with_details(iroha_torii_shared::ErrorDetails {
@@ -20186,6 +20203,38 @@ mod response_report {
         assert!(text.contains("queued=24/24"));
         assert!(text.contains("retry_after_seconds=1"));
         assert!(text.contains("transaction queue is at capacity"));
+    }
+
+    #[test]
+    fn with_msg_decodes_shared_error_envelope_axt_details_without_reject_code() {
+        let envelope = ErrorEnvelope::new("axt_rejected", "AXT policy rejected the transaction")
+            .with_details(iroha_torii_shared::ErrorDetails {
+                reject_code: None,
+                queue: None,
+                retry_after_seconds: None,
+                endpoint: Some("/v1/pipeline/transactions".to_owned()),
+                axt: Some(iroha_torii_shared::AxtErrorDetails {
+                    code: Some("AXT_RULE_DENIED".to_owned()),
+                    reason: Some("rule denied".to_owned()),
+                    ..Default::default()
+                }),
+            });
+        let body = to_bytes(&envelope).expect("encode axt error envelope");
+        let response = Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(http::header::CONTENT_TYPE, APPLICATION_NORITO)
+            .body(body)
+            .unwrap();
+        let report = match ResponseReport::with_msg("Unexpected transaction response", &response) {
+            Ok(report) => report,
+            Err(err) => panic!("expected axt envelope decode, got error: {}", err.0),
+        };
+        let text = report.0.to_string();
+        assert!(text.contains("axt_rejected"));
+        assert!(text.contains("AXT policy rejected the transaction"));
+        assert!(text.contains("endpoint=/v1/pipeline/transactions"));
+        assert!(text.contains("axt_code=AXT_RULE_DENIED"));
+        assert!(!text.contains("reject_code="));
     }
 
     #[test]

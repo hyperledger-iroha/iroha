@@ -54,6 +54,36 @@ on every committed wallet-state revision and rejects app-data rollback or
 cloned preference snapshots when the old revision key is no longer present.
 Legacy `SPEND_PENDING` records are migrated to `SPENT`, and legacy
 `CHANGE_PENDING` records are migrated to `SPENDABLE`.
+`OfflineNoteV2TransferHandoff` exposes one integration surface for local token
+handoff modalities: `qrStreamingFrameBytes(token)` for animated/binary QR,
+`nfcFrameBytes(token)` for APDU-sized NFC frame exchange, and
+`nearbyPayload(token)` / `nearbyFrameBytes(token)` for Nearby Connections,
+Bluetooth, Wi-Fi Direct, or any app-owned byte channel. The receiver
+`OfflineNoteV2TransferStreamReceiver` accepts those stream frames and returns a
+decoded payment token when complete. Android apps can call
+`AndroidOfflineNoteV2TransferCapabilities.current(context)` from
+`offline-wallet-android` to include NFC only on devices that advertise HCE.
+For png2-style NFC, bind `OfflineNoteV2NfcApduProtocol` to an Android
+`HostApduService`/`IsoDep` reader: select the Iroha AID, exchange metadata,
+transfer bounded chunks, commit, then poll/read a local `RECEIPT_ACK`. The
+default `nfcPaymentTokenWriteApdus(token)` uses 240-byte chunks because Android
+NFC APDU limits vary by device; extended iOS-to-iOS chunks are exposed only as
+an explicit opt-in. `OfflineNoteV2NearbyEnvelope` provides the sorted-key
+Nearby JSON envelope with unpadded base64url payloads and a human-verifiable
+pairing challenge for Google Nearby Connections, Bluetooth, Wi-Fi Direct, or
+another reliable byte channel.
+The app-facing receiver rejects completed streams whose QR envelope kind is not
+a payment token, and direct payload decoding enforces the payment-token content
+type before Norito decode. The QR stream decoder also rejects non-canonical
+frame/envelope lengths, header counter drift, data/parity count or chunk-length
+mismatches, out-of-range wire fields, poisoned parity recovery, payload-hash
+mismatches, and conflicting repeated headers or chunks.
+The NFC APDU parser fails closed on nonzero Le bytes for no-data commands,
+non-canonical zero-length reads, and direct read helpers with invalid requested
+lengths; no-offset APDUs also reject smuggled nonzero P1/P2 bytes. Nearby
+decoding rejects fractional versions, unknown fields inside legacy
+pairing-challenge objects, and challenge/receipt ACK content-type downgrades
+instead of ignoring smuggled JSON.
 
 ---
 

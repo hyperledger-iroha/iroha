@@ -4435,7 +4435,7 @@ mod tests {
             .as_any()
             .downcast_ref::<transparent::InvalidInstruction>()
             .expect("unknown instruction becomes invalid placeholder");
-        let expected_hash: [u8; 32] = iroha_crypto::Hash::new(&[]).into();
+        let expected_hash: [u8; 32] = iroha_crypto::Hash::new([]).into();
 
         assert_eq!(invalid.wire_id, hostile_name);
         assert_eq!(invalid.payload_hash, expected_hash);

@@ -315,40 +315,30 @@ pub mod wire {
         pub Option<[u8; 32]>,
     );
 
+    type ConfidentialFeatureDigestTuple = (
+        Option<[u8; 32]>,
+        Option<u32>,
+        Option<u32>,
+        Option<u32>,
+        Option<[u8; 32]>,
+    );
+
     impl ncore::NoritoSerialize for ConfidentialFeatureDigestWire {
         fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
-            <(
-                Option<[u8; 32]>,
-                Option<u32>,
-                Option<u32>,
-                Option<u32>,
-                Option<[u8; 32]>,
-            ) as ncore::NoritoSerialize>::serialize(
+            <ConfidentialFeatureDigestTuple as ncore::NoritoSerialize>::serialize(
                 &(self.0, self.1, self.2, self.3, self.4),
                 writer,
             )
         }
 
         fn encoded_len_hint(&self) -> Option<usize> {
-            <(
-                Option<[u8; 32]>,
-                Option<u32>,
-                Option<u32>,
-                Option<u32>,
-                Option<[u8; 32]>,
-            ) as ncore::NoritoSerialize>::encoded_len_hint(&(
+            <ConfidentialFeatureDigestTuple as ncore::NoritoSerialize>::encoded_len_hint(&(
                 self.0, self.1, self.2, self.3, self.4,
             ))
         }
 
         fn encoded_len_exact(&self) -> Option<usize> {
-            <(
-                Option<[u8; 32]>,
-                Option<u32>,
-                Option<u32>,
-                Option<u32>,
-                Option<[u8; 32]>,
-            ) as ncore::NoritoSerialize>::encoded_len_exact(&(
+            <ConfidentialFeatureDigestTuple as ncore::NoritoSerialize>::encoded_len_exact(&(
                 self.0, self.1, self.2, self.3, self.4,
             ))
         }
@@ -356,31 +346,18 @@ pub mod wire {
 
     impl<'de> ncore::NoritoDeserialize<'de> for ConfidentialFeatureDigestWire {
         fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
-            let (vk, poseidon, pedersen, rules, policy): (
-                Option<[u8; 32]>,
-                Option<u32>,
-                Option<u32>,
-                Option<u32>,
-                Option<[u8; 32]>,
-            ) = <(
-                Option<[u8; 32]>,
-                Option<u32>,
-                Option<u32>,
-                Option<u32>,
-                Option<[u8; 32]>,
-            ) as ncore::NoritoDeserialize>::deserialize(archived.cast());
+            let (vk, poseidon, pedersen, rules, policy): ConfidentialFeatureDigestTuple =
+                <ConfidentialFeatureDigestTuple as ncore::NoritoDeserialize>::deserialize(
+                    archived.cast(),
+                );
             Self(vk, poseidon, pedersen, rules, policy)
         }
 
         fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
             let (vk, poseidon, pedersen, rules, policy) =
-                <(
-                    Option<[u8; 32]>,
-                    Option<u32>,
-                    Option<u32>,
-                    Option<u32>,
-                    Option<[u8; 32]>,
-                ) as ncore::NoritoDeserialize>::try_deserialize(archived.cast())?;
+                <ConfidentialFeatureDigestTuple as ncore::NoritoDeserialize>::try_deserialize(
+                    archived.cast(),
+                )?;
             Ok(Self(vk, poseidon, pedersen, rules, policy))
         }
     }

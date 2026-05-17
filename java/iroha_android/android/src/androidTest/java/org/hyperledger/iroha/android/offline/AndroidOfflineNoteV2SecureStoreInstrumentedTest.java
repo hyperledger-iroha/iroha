@@ -7,6 +7,7 @@ import androidx.test.platform.app.InstrumentationRegistry;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -40,6 +41,7 @@ public final class AndroidOfflineNoteV2SecureStoreInstrumentedTest {
 
     store.upsert(note.withState(OfflineNoteV2WalletNoteState.SPENT, note.updatedAtMs() + 1L));
     assertEquals(OfflineNoteV2WalletNoteState.SPENT, store.listNotes().get(0).state());
+    final Map<String, ?> revisionTwoSnapshot = snapshot(preferences);
 
     restore(preferences, revisionOneSnapshot);
     final AndroidOfflineNoteV2SecureStore reloaded =
@@ -50,8 +52,206 @@ public final class AndroidOfflineNoteV2SecureStoreInstrumentedTest {
     } catch (final IllegalStateException expected) {
       assertTrue(expected.getMessage().contains("failed to decrypt Offline Note V2 wallet note"));
       assertTrue(expected.getCause().getMessage().contains("missing Offline Note V2 store key"));
+    }
+    restore(preferences, revisionTwoSnapshot);
+    final AndroidOfflineNoteV2SecureStore restoredLatest =
+        new AndroidOfflineNoteV2SecureStore(context, PREFS, KEY_ALIAS);
+    try {
+      assertEquals(OfflineNoteV2WalletNoteState.SPENT, restoredLatest.listNotes().get(0).state());
     } finally {
-      reloaded.clear();
+      restoredLatest.clear();
+    }
+  }
+
+  @Test
+  public void tamperedCiphertextRevisionCannotDecrypt() throws Exception {
+    final Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+    final AndroidOfflineNoteV2SecureStore store =
+        new AndroidOfflineNoteV2SecureStore(context, PREFS, KEY_ALIAS);
+    store.clear();
+
+    final OfflineNoteV2WalletNote note = sourceWalletNote(loadFixture());
+    store.upsert(note);
+    final SharedPreferences preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    final String noteKey = "note." + note.noteCommitmentHex();
+    final String encrypted = preferences.getString(noteKey, null);
+    assertTrue(encrypted != null && encrypted.startsWith("v2:1:"));
+    if (!preferences.edit().putString(noteKey, encrypted.replaceFirst("v2:1:", "v2:999:")).commit()) {
+      throw new IllegalStateException("failed to tamper ciphertext revision");
+    }
+
+    try {
+      store.listNotes();
+      fail("tampered Offline Note V2 ciphertext revision should not decrypt");
+    } catch (final IllegalStateException expected) {
+      assertTrue(expected.getMessage().contains("failed to decrypt Offline Note V2 wallet note"));
+      assertTrue(expected.getCause().getMessage().contains("missing Offline Note V2 store key"));
+    } finally {
+      store.clear();
+    }
+  }
+
+  @Test
+  public void unknownCiphertextEnvelopeCannotDecrypt() throws Exception {
+    final Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+    final AndroidOfflineNoteV2SecureStore store =
+        new AndroidOfflineNoteV2SecureStore(context, PREFS, KEY_ALIAS);
+    store.clear();
+
+    final OfflineNoteV2WalletNote note = sourceWalletNote(loadFixture());
+    store.upsert(note);
+    final SharedPreferences preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    final String noteKey = "note." + note.noteCommitmentHex();
+    if (!preferences.edit().putString(noteKey, "v9:not-a-valid-envelope").commit()) {
+      throw new IllegalStateException("failed to tamper ciphertext envelope");
+    }
+
+    try {
+      store.listNotes();
+      fail("unknown Offline Note V2 ciphertext envelope should not decrypt");
+    } catch (final IllegalStateException expected) {
+      assertTrue(expected.getMessage().contains("unknown Offline Note V2 wallet note envelope"));
+    } finally {
+      store.clear();
+    }
+  }
+
+  @Test
+  public void malformedV2CiphertextEnvelopeCannotDecrypt() throws Exception {
+    final Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+    final AndroidOfflineNoteV2SecureStore store =
+        new AndroidOfflineNoteV2SecureStore(context, PREFS, KEY_ALIAS);
+    store.clear();
+
+    final OfflineNoteV2WalletNote note = sourceWalletNote(loadFixture());
+    store.upsert(note);
+    final SharedPreferences preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    final String noteKey = "note." + note.noteCommitmentHex();
+    if (!preferences.edit().putString(noteKey, "v2:1:missing-ciphertext").commit()) {
+      throw new IllegalStateException("failed to tamper ciphertext envelope");
+    }
+
+    try {
+      store.listNotes();
+      fail("malformed Offline Note V2 ciphertext envelope should not decrypt");
+    } catch (final IllegalStateException expected) {
+      assertTrue(expected.getMessage().contains("invalid Offline Note V2 wallet note envelope"));
+    } finally {
+      store.clear();
+    }
+  }
+
+  @Test
+  public void nonNumericCiphertextRevisionCannotDecrypt() throws Exception {
+    final Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+    final AndroidOfflineNoteV2SecureStore store =
+        new AndroidOfflineNoteV2SecureStore(context, PREFS, KEY_ALIAS);
+    store.clear();
+
+    final OfflineNoteV2WalletNote note = sourceWalletNote(loadFixture());
+    store.upsert(note);
+    final SharedPreferences preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    final String noteKey = "note." + note.noteCommitmentHex();
+    final String encrypted = preferences.getString(noteKey, null);
+    assertTrue(encrypted != null && encrypted.startsWith("v2:1:"));
+    if (!preferences.edit().putString(noteKey, encrypted.replaceFirst("v2:1:", "v2:not-a-number:")).commit()) {
+      throw new IllegalStateException("failed to tamper ciphertext revision");
+    }
+
+    try {
+      store.listNotes();
+      fail("non-numeric Offline Note V2 ciphertext revision should not decrypt");
+    } catch (final IllegalStateException expected) {
+      assertTrue(expected.getMessage().contains("invalid Offline Note V2 wallet note revision"));
+    } finally {
+      store.clear();
+    }
+  }
+
+  @Test
+  public void tamperedCiphertextPayloadCannotDecrypt() throws Exception {
+    final Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+    final AndroidOfflineNoteV2SecureStore store =
+        new AndroidOfflineNoteV2SecureStore(context, PREFS, KEY_ALIAS);
+    store.clear();
+
+    final OfflineNoteV2WalletNote note = sourceWalletNote(loadFixture());
+    store.upsert(note);
+    final SharedPreferences preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    final String noteKey = "note." + note.noteCommitmentHex();
+    final String encrypted = preferences.getString(noteKey, null);
+    assertTrue(encrypted != null && encrypted.startsWith("v2:1:"));
+    if (!preferences.edit().putString(noteKey, tamperCiphertextPayload(encrypted)).commit()) {
+      throw new IllegalStateException("failed to tamper ciphertext payload");
+    }
+
+    try {
+      store.listNotes();
+      fail("tampered Offline Note V2 ciphertext payload should not decrypt");
+    } catch (final IllegalStateException expected) {
+      assertTrue(expected.getMessage().contains("failed to decrypt Offline Note V2 wallet note"));
+    } finally {
+      store.clear();
+    }
+  }
+
+  @Test
+  public void indexedCiphertextReplayUnderDifferentCommitmentCannotLoad() throws Exception {
+    final Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+    final AndroidOfflineNoteV2SecureStore store =
+        new AndroidOfflineNoteV2SecureStore(context, PREFS, KEY_ALIAS);
+    store.clear();
+
+    final OfflineNoteV2WalletNote note = sourceWalletNote(loadFixture());
+    store.upsert(note);
+    final SharedPreferences preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    final String noteKey = "note." + note.noteCommitmentHex();
+    final String encrypted = preferences.getString(noteKey, null);
+    assertTrue(encrypted != null);
+    final String replayedCommitment =
+        "0000000000000000000000000000000000000000000000000000000000000000";
+    assertTrue(!replayedCommitment.equals(note.noteCommitmentHex()));
+    final Set<String> tamperedIndex = new HashSet<>();
+    tamperedIndex.add(replayedCommitment);
+    if (!preferences
+        .edit()
+        .putString("note." + replayedCommitment, encrypted)
+        .putStringSet("note_index", tamperedIndex)
+        .commit()) {
+      throw new IllegalStateException("failed to replay ciphertext under a different commitment");
+    }
+
+    try {
+      store.listNotes();
+      fail("replayed Offline Note V2 ciphertext should not load under another commitment");
+    } catch (final IllegalStateException expected) {
+      assertTrue(expected.getMessage().contains("commitment mismatch"));
+    } finally {
+      store.clear();
+    }
+  }
+
+  @Test
+  public void missingIndexedCiphertextCannotLoad() throws Exception {
+    final Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+    final AndroidOfflineNoteV2SecureStore store =
+        new AndroidOfflineNoteV2SecureStore(context, PREFS, KEY_ALIAS);
+    store.clear();
+
+    final OfflineNoteV2WalletNote note = sourceWalletNote(loadFixture());
+    store.upsert(note);
+    final SharedPreferences preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    if (!preferences.edit().remove("note." + note.noteCommitmentHex()).commit()) {
+      throw new IllegalStateException("failed to remove indexed ciphertext");
+    }
+
+    try {
+      store.listNotes();
+      fail("missing indexed Offline Note V2 ciphertext should not be ignored");
+    } catch (final IllegalStateException expected) {
+      assertTrue(expected.getMessage().contains("missing Offline Note V2 wallet note ciphertext"));
+    } finally {
+      store.clear();
     }
   }
 
@@ -78,6 +278,22 @@ public final class AndroidOfflineNoteV2SecureStoreInstrumentedTest {
     if (!editor.commit()) {
       throw new IllegalStateException("failed to restore rolled-back preferences");
     }
+  }
+
+  private static String tamperCiphertextPayload(final String encrypted) {
+    final String[] parts = encrypted.split(":", -1);
+    if (parts.length != 4) {
+      throw new IllegalArgumentException("expected v2 envelope");
+    }
+    final byte[] ciphertext = Base64.getDecoder().decode(parts[3]);
+    ciphertext[ciphertext.length - 1] ^= 0x01;
+    return parts[0]
+        + ":"
+        + parts[1]
+        + ":"
+        + parts[2]
+        + ":"
+        + Base64.getEncoder().encodeToString(ciphertext);
   }
 
   private Map<String, Object> loadFixture() throws Exception {

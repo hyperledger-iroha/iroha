@@ -73,7 +73,7 @@ pub struct PendingBn254PoseidonWordBatch {
 enum PendingBn254PoseidonWordBatchInner {
     Ready(Vec<[u8; 32]>),
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
-    Metal(crate::metal::PendingBn254PoseidonWords),
+    Metal(Box<crate::metal::PendingBn254PoseidonWords>),
     Chunked(Vec<PendingBn254PoseidonWordBatch>),
 }
 
@@ -223,7 +223,7 @@ fn try_submit_bn254_poseidon_word_batches_impl(
         Some(GpuBackend::Metal) => {
             match crate::metal::bn254_poseidon_hash_words_async(words, slices) {
                 Ok(pending) => Some(PendingBn254PoseidonWordBatch {
-                    inner: PendingBn254PoseidonWordBatchInner::Metal(pending),
+                    inner: PendingBn254PoseidonWordBatchInner::Metal(Box::new(pending)),
                 }),
                 Err(error) => {
                     warn!(
@@ -506,10 +506,12 @@ mod tests {
 
     #[test]
     fn direct_gpu_batch_limit_covers_izanami_block_shape() {
-        assert!(
-            BN254_POSEIDON_MAX_GPU_BATCH_SLICES >= 4_096,
-            "4096-transfer blocks should submit as one GPU batch"
-        );
+        const {
+            assert!(
+                BN254_POSEIDON_MAX_GPU_BATCH_SLICES >= 4_096,
+                "4096-transfer blocks should submit as one GPU batch"
+            );
+        };
     }
 
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
@@ -518,6 +520,7 @@ mod tests {
         if !metal_backend_selected() {
             return;
         }
+        let _gpu_lane = crate::backend::acquire_gpu_lane();
         let (words, slices) = bn254_poseidon_self_test_batch();
         let actual = crate::metal::bn254_poseidon_hash_words(&words, &slices)
             .expect("Metal BN254 Poseidon word batch should run");
@@ -531,6 +534,7 @@ mod tests {
         if !metal_backend_selected() {
             return;
         }
+        let _gpu_lane = crate::backend::acquire_gpu_lane();
         for batch_count in [64, 128, 512, 1_024] {
             let (words, slices) = generated_word_batch(batch_count);
             let actual = crate::metal::bn254_poseidon_hash_words(&words, &slices)
@@ -549,6 +553,7 @@ mod tests {
         if !metal_backend_selected() {
             return;
         }
+        let _gpu_lane = crate::backend::acquire_gpu_lane();
         let (words, slices) = generated_word_batch(512);
         let expected = expected_bn254_poseidon_word_hashes(&words, &slices);
         for iteration in 0..8 {

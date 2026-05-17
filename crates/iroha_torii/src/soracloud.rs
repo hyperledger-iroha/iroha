@@ -88,7 +88,7 @@ use iroha_data_model::{
         encode_uploaded_model_bundle_register_provenance_payload,
         encode_uploaded_model_finalize_provenance_payload,
     },
-    sorafs::pin_registry::{PinStatus, StorageClass},
+    sorafs::pin_registry::{PinManifestRecord, PinStatus, StorageClass},
 };
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
@@ -6043,6 +6043,13 @@ fn require_active_sorafs_uploaded_model_pin(
             bundle.sorafs_manifest_digest, bundle.model_id, bundle.weight_version
         )));
     };
+    require_active_sorafs_uploaded_model_pin_record(pin, bundle)
+}
+
+fn require_active_sorafs_uploaded_model_pin_record(
+    pin: &PinManifestRecord,
+    bundle: &SoraUploadedModelBundleV1,
+) -> Result<(), SoracloudError> {
     match pin.status {
         PinStatus::Approved(_) => Ok(()),
         PinStatus::Pending => Err(SoracloudError::conflict(format!(
@@ -6053,7 +6060,20 @@ fn require_active_sorafs_uploaded_model_pin(
             "SoraFS manifest {:?} for uploaded model `{}` version `{}` retired at epoch {epoch}",
             bundle.sorafs_manifest_digest, bundle.model_id, bundle.weight_version
         ))),
+    }?;
+    if pin.digest != bundle.sorafs_manifest_digest {
+        return Err(SoracloudError::conflict(format!(
+            "SoraFS manifest record digest {:?} does not match uploaded model digest {:?}",
+            pin.digest, bundle.sorafs_manifest_digest
+        )));
     }
+    if pin.content_length != bundle.ciphertext_bytes {
+        return Err(SoracloudError::conflict(format!(
+            "SoraFS manifest {:?} content_length {} does not match uploaded model ciphertext_bytes {}",
+            bundle.sorafs_manifest_digest, pin.content_length, bundle.ciphertext_bytes
+        )));
+    }
+    Ok(())
 }
 
 fn authoritative_uploaded_model_status_from_query(
@@ -12680,7 +12700,9 @@ mod tests {
             SoraStateEncryptionV1, SoraTlsModeV1, SoraUploadedModelBundleV1,
             SoraUploadedModelPricingPolicyV1, SoraUploadedModelRuntimeFormatV1,
         },
-        sorafs::pin_registry::StorageClass,
+        sorafs::pin_registry::{
+            ChunkerProfileHandle, ManifestDigest, PinManifestRecord, PinPolicy, StorageClass,
+        },
     };
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_ID};
@@ -14797,8 +14819,136 @@ mod tests {
                     .map(|artifact| artifact.artifact_id.as_str()),
                 Some("artifact-1")
             );
+            let err = authoritative_uploaded_model_status_from_query(
+                &app,
+                &UploadedModelStatusQuery {
+                    service_name: "web_portal".to_string(),
+                    weight_version: "v1".to_string(),
+                    model_id: Some("upload-1".to_string()),
+                    model_name: None,
+                    bundle_root: Some(Hash::new(b"wrong-bundle-root")),
+                },
+            )
+            .expect_err("bundle_root mismatch must be rejected");
+            assert_eq!(err.status(), StatusCode::CONFLICT);
+            assert!(err.message.contains("bundle_root does not match"));
             Ok(())
         })
+    }
+
+    #[test]
+    fn authoritative_uploaded_model_status_rejects_orphan_user_upload_artifact() {
+        use iroha_core::state::World;
+
+        let mut world = World::default();
+        let service_name: Name = "web_portal".parse().expect("service name");
+        world.soracloud_model_artifacts_mut_for_testing().insert(
+            (service_name.as_ref().to_owned(), "artifact-1".to_string()),
+            iroha_data_model::soracloud::SoraModelArtifactRecordV1 {
+                schema_version: iroha_data_model::soracloud::SORA_MODEL_ARTIFACT_RECORD_VERSION_V1,
+                service_name,
+                service_version: "1.0.0".to_string(),
+                model_name: "vision_model".to_string(),
+                artifact_id: "artifact-1".to_string(),
+                training_job_id: "artifact-1".to_string(),
+                weight_version: Some("v1".to_string()),
+                source_provenance: Some(SoraModelProvenanceRefV1 {
+                    kind: SoraModelProvenanceKindV1::UserUpload,
+                    id: "orphan-upload".to_string(),
+                }),
+                weight_artifact_hash: Hash::new(b"weights"),
+                dataset_ref: "hf://repo".to_string(),
+                training_config_hash: Hash::new(b"cfg"),
+                reproducibility_hash: Hash::new(b"repro"),
+                provenance_attestation_hash: Hash::new(b"prov"),
+                registered_sequence: 11,
+                consumed_by_version: Some("v1".to_string()),
+                chunk_manifest_root: Some(Hash::new(b"chunk-manifest-root")),
+            },
+        );
+
+        let app = mk_app_state_for_tests_with_world(world);
+        let err = authoritative_uploaded_model_status_from_query(
+            &app,
+            &UploadedModelStatusQuery {
+                service_name: "web_portal".to_string(),
+                weight_version: "v1".to_string(),
+                model_id: None,
+                model_name: Some("vision_model".to_string()),
+                bundle_root: None,
+            },
+        )
+        .expect_err("artifact-only user upload status must not be authoritative");
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+        assert!(err.message.contains("orphan-upload"));
+    }
+
+    #[test]
+    fn authoritative_uploaded_model_status_rejects_malformed_queries() {
+        use iroha_core::state::World;
+
+        let app = mk_app_state_for_tests_with_world(World::default());
+        let assert_bad_request = |query: UploadedModelStatusQuery, expected: &str| {
+            let err = authoritative_uploaded_model_status_from_query(&app, &query)
+                .expect_err("malformed uploaded-model status query must fail");
+            assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}` in `{}`",
+                err.message
+            );
+        };
+
+        assert_bad_request(
+            UploadedModelStatusQuery {
+                service_name: "web portal".to_string(),
+                weight_version: "v1".to_string(),
+                model_id: Some("upload-1".to_string()),
+                model_name: None,
+                bundle_root: None,
+            },
+            "invalid service_name",
+        );
+        assert_bad_request(
+            UploadedModelStatusQuery {
+                service_name: "web_portal".to_string(),
+                weight_version: "v1 shadow".to_string(),
+                model_id: Some("upload-1".to_string()),
+                model_name: None,
+                bundle_root: None,
+            },
+            "weight_version must not contain whitespace",
+        );
+        assert_bad_request(
+            UploadedModelStatusQuery {
+                service_name: "web_portal".to_string(),
+                weight_version: "v1".to_string(),
+                model_id: Some("upload 1".to_string()),
+                model_name: None,
+                bundle_root: None,
+            },
+            "job_id must not contain whitespace",
+        );
+        assert_bad_request(
+            UploadedModelStatusQuery {
+                service_name: "web_portal".to_string(),
+                weight_version: "v1".to_string(),
+                model_id: None,
+                model_name: Some("vision model".to_string()),
+                bundle_root: None,
+            },
+            "invalid model_name",
+        );
+        assert_bad_request(
+            UploadedModelStatusQuery {
+                service_name: "web_portal".to_string(),
+                weight_version: "v1".to_string(),
+                model_id: None,
+                model_name: None,
+                bundle_root: None,
+            },
+            "model_id or model_name must be provided",
+        );
     }
 
     fn signed_state_mutation_request(
@@ -14961,6 +15111,254 @@ mod tests {
             authority: None,
             private_key: None,
         }
+    }
+
+    fn sample_uploaded_model_register_payload() -> UploadedModelRegisterPayload {
+        let public_key_bytes = vec![7u8; 32];
+        let wrapped_key_ciphertext = vec![10u8; 48];
+        UploadedModelRegisterPayload {
+            bundle: SoraUploadedModelBundleV1 {
+                schema_version: iroha_data_model::soracloud::SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
+                service_name: "web_portal".parse().expect("service name"),
+                model_id: "upload-1".to_string(),
+                weight_version: "v1".to_string(),
+                family: "decoder-only".to_string(),
+                modalities: vec!["text".to_string()],
+                plaintext_root: Hash::new(b"plaintext-root"),
+                runtime_format: SoraUploadedModelRuntimeFormatV1::HuggingFaceSafetensors,
+                bundle_root: Hash::new(b"bundle-root"),
+                sorafs_manifest_digest:
+                    iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xA5; 32]),
+                chunk_count: 1,
+                plaintext_bytes: 16,
+                ciphertext_bytes: 24,
+                chunk_manifest_root: Hash::new(b"chunk-manifest-root"),
+                upload_recipient: iroha_data_model::soracloud::SoraUploadedModelEncryptionRecipientV1 {
+                    schema_version: iroha_data_model::soracloud::SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
+                    key_id: "soracloud-upload".to_string(),
+                    key_version: NonZeroU32::new(1).expect("non-zero key version"),
+                    kem: iroha_data_model::soracloud::SoraUploadedModelKeyEncapsulationV1::X25519HkdfSha256,
+                    aead: iroha_data_model::soracloud::SoraUploadedModelKeyWrapAeadV1::Aes256Gcm,
+                    public_key_bytes: public_key_bytes.clone(),
+                    public_key_fingerprint: Hash::new(public_key_bytes),
+                },
+                wrapped_bundle_key: iroha_data_model::soracloud::SoraUploadedModelWrappedKeyV1 {
+                    schema_version: iroha_data_model::soracloud::SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1,
+                    recipient_key_id: "soracloud-upload".to_string(),
+                    recipient_key_version: NonZeroU32::new(1).expect("non-zero key version"),
+                    kem: iroha_data_model::soracloud::SoraUploadedModelKeyEncapsulationV1::X25519HkdfSha256,
+                    aead: iroha_data_model::soracloud::SoraUploadedModelKeyWrapAeadV1::Aes256Gcm,
+                    ephemeral_public_key: vec![8u8; 32],
+                    nonce: vec![9u8; 12],
+                    wrapped_key_ciphertext: wrapped_key_ciphertext.clone(),
+                    ciphertext_hash: Hash::new(wrapped_key_ciphertext),
+                    aad_digest: Hash::new(b"wrapped-aad"),
+                },
+                pricing_policy: SoraUploadedModelPricingPolicyV1 {
+                    storage_xor_nanos: 1,
+                },
+                decryption_policy_ref: "policy-1".to_string(),
+            },
+            model_name: "vision_model".to_string(),
+            artifact_id: "artifact-1".to_string(),
+            weight_artifact_hash: Hash::new(b"weights"),
+            dataset_ref: "dataset://upload".to_string(),
+            training_config_hash: Hash::new(b"cfg"),
+            reproducibility_hash: Hash::new(b"repro"),
+            provenance_attestation_hash: Hash::new(b"prov"),
+        }
+    }
+
+    fn sample_uploaded_model_pin_record(
+        digest: ManifestDigest,
+        content_length: u64,
+        status: PinStatus,
+    ) -> PinManifestRecord {
+        let policy = PinPolicy {
+            min_replicas: 1,
+            storage_class: StorageClass::Warm,
+            retention_epoch: u64::MAX,
+        };
+        let mut record = PinManifestRecord::new(
+            digest,
+            ChunkerProfileHandle {
+                profile_id: 1,
+                namespace: "sorafs".to_string(),
+                name: "sf1".to_string(),
+                semver: "1.0.0".to_string(),
+                multihash_code: 0x1e,
+            },
+            [0xA7; 32],
+            policy,
+            ALICE_ID.clone(),
+            1,
+            None,
+            None,
+            Metadata::default(),
+        )
+        .with_content_length(content_length);
+        match status {
+            PinStatus::Pending => {}
+            PinStatus::Approved(epoch) => record.approve(epoch, None),
+            PinStatus::Retired(epoch) => record.retire(epoch, None),
+        }
+        record
+    }
+
+    fn signed_uploaded_model_register_request(
+        payload: UploadedModelRegisterPayload,
+        key_pair: &KeyPair,
+    ) -> SignedUploadedModelRegisterRequest {
+        let bundle_encoded = encode_uploaded_model_register_bundle_signature_payload(&payload)
+            .expect("encode uploaded model bundle payload");
+        let finalize_encoded = encode_uploaded_model_register_finalize_signature_payload(&payload)
+            .expect("encode uploaded model finalize payload");
+        SignedUploadedModelRegisterRequest {
+            payload,
+            bundle_provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature: Signature::new(key_pair.private_key(), &bundle_encoded),
+            },
+            finalize_provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature: Signature::new(key_pair.private_key(), &finalize_encoded),
+            },
+            authority: None,
+            private_key: None,
+        }
+    }
+
+    #[test]
+    fn uploaded_model_register_pin_gate_rejects_missing_inactive_or_mismatched_pin() {
+        use iroha_core::state::World;
+
+        let payload = sample_uploaded_model_register_payload();
+        let digest = payload.bundle.sorafs_manifest_digest;
+        let missing_app = mk_app_state_for_tests_with_world(World::default());
+        let missing_err = require_active_sorafs_uploaded_model_pin(&missing_app, &payload.bundle)
+            .expect_err("missing pin must fail before upload registration");
+        assert_eq!(missing_err.status(), StatusCode::CONFLICT);
+        assert!(missing_err.message.contains("is not registered"));
+
+        for (status, expected_message) in [
+            (PinStatus::Pending, "is not approved"),
+            (PinStatus::Retired(3), "retired at epoch"),
+        ] {
+            let record =
+                sample_uploaded_model_pin_record(digest, payload.bundle.ciphertext_bytes, status);
+            let err = require_active_sorafs_uploaded_model_pin_record(&record, &payload.bundle)
+                .expect_err("inactive pin must fail before upload registration");
+            assert_eq!(err.status(), StatusCode::CONFLICT);
+            assert!(err.message.contains(expected_message));
+        }
+
+        let digest_mismatch_record = sample_uploaded_model_pin_record(
+            ManifestDigest::new([0xB6; 32]),
+            payload.bundle.ciphertext_bytes,
+            PinStatus::Approved(1),
+        );
+        let digest_mismatch_err = require_active_sorafs_uploaded_model_pin_record(
+            &digest_mismatch_record,
+            &payload.bundle,
+        )
+        .expect_err("pin digest mismatch must fail before upload registration");
+        assert_eq!(digest_mismatch_err.status(), StatusCode::CONFLICT);
+        assert!(digest_mismatch_err.message.contains("record digest"));
+
+        let length_mismatch_record = sample_uploaded_model_pin_record(
+            digest,
+            payload.bundle.ciphertext_bytes + 1,
+            PinStatus::Approved(1),
+        );
+        let length_mismatch_err = require_active_sorafs_uploaded_model_pin_record(
+            &length_mismatch_record,
+            &payload.bundle,
+        )
+        .expect_err("pin length mismatch must fail before upload registration");
+        assert_eq!(length_mismatch_err.status(), StatusCode::CONFLICT);
+        assert!(length_mismatch_err.message.contains("content_length"));
+    }
+
+    #[test]
+    fn uploaded_model_register_signature_rejects_signer_mismatch() {
+        let key_pair = KeyPair::random();
+        let other_key_pair = KeyPair::random();
+        let payload = sample_uploaded_model_register_payload();
+        let finalize_encoded = encode_uploaded_model_register_finalize_signature_payload(&payload)
+            .expect("encode uploaded model finalize payload");
+        let mut request = signed_uploaded_model_register_request(payload, &key_pair);
+        request.finalize_provenance = ManifestProvenance {
+            signer: other_key_pair.public_key().clone(),
+            signature: Signature::new(other_key_pair.private_key(), &finalize_encoded),
+        };
+
+        let err = verify_uploaded_model_register_signature(&request)
+            .expect_err("mismatched upload register signers must fail");
+        assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
+        assert!(err.message.contains("signers must match"));
+    }
+
+    #[test]
+    fn uploaded_model_register_signature_rejects_swapped_same_signer_provenances() {
+        let key_pair = KeyPair::random();
+        let payload = sample_uploaded_model_register_payload();
+        let bundle_encoded = encode_uploaded_model_register_bundle_signature_payload(&payload)
+            .expect("encode uploaded model bundle payload");
+        let finalize_encoded = encode_uploaded_model_register_finalize_signature_payload(&payload)
+            .expect("encode uploaded model finalize payload");
+        let request = SignedUploadedModelRegisterRequest {
+            payload,
+            bundle_provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature: Signature::new(key_pair.private_key(), &finalize_encoded),
+            },
+            finalize_provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature: Signature::new(key_pair.private_key(), &bundle_encoded),
+            },
+            authority: None,
+            private_key: None,
+        };
+
+        let err = verify_uploaded_model_register_signature(&request)
+            .expect_err("swapped upload register provenances must fail");
+        assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
+        assert!(
+            err.message
+                .contains("bundle provenance signature verification failed")
+        );
+    }
+
+    #[test]
+    fn uploaded_model_register_signature_rejects_tampered_bundle_payload() {
+        let key_pair = KeyPair::random();
+        let payload = sample_uploaded_model_register_payload();
+        let mut request = signed_uploaded_model_register_request(payload, &key_pair);
+        request.payload.bundle.model_id = "upload-replayed".to_string();
+
+        let err = verify_uploaded_model_register_signature(&request)
+            .expect_err("tampered upload bundle payload must fail");
+        assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
+        assert!(
+            err.message
+                .contains("bundle provenance signature verification failed")
+        );
+    }
+
+    #[test]
+    fn uploaded_model_register_signature_rejects_tampered_finalize_payload() {
+        let key_pair = KeyPair::random();
+        let payload = sample_uploaded_model_register_payload();
+        let mut request = signed_uploaded_model_register_request(payload, &key_pair);
+        request.payload.dataset_ref = "dataset://replayed".to_string();
+
+        let err = verify_uploaded_model_register_signature(&request)
+            .expect_err("tampered upload finalize payload must fail");
+        assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
+        assert!(
+            err.message
+                .contains("finalize provenance signature verification failed")
+        );
     }
 
     fn signed_decryption_request(

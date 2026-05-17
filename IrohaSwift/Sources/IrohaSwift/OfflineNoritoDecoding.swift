@@ -680,47 +680,13 @@ public enum OfflineNoteV2Decoding {
     private static func readAssetId(_ reader: inout OfflineNoritoReader) throws -> String {
         let accountId = try readField(&reader, readAccountId)
         let definitionBytes = try readField(&reader, readAssetDefinitionAddress)
-        guard let definitionId = AssetDefinitionAddress.encode(uuidBytes: definitionBytes)
-            ?? uncheckedAssetDefinitionAddress(uuidBytes: definitionBytes) else {
+        guard let definitionId = AssetDefinitionAddress.encode(uuidBytes: definitionBytes) else {
             throw OfflineNoritoDecodingError.invalidField("invalid asset definition bytes")
         }
         let dataspaceId = try readField(&reader, readAssetBalanceScope)
         let base = "\(definitionId)#\(accountId)"
         guard let dataspaceId else { return base }
         return "\(base)#dataspace:\(dataspaceId)"
-    }
-
-    private static func uncheckedAssetDefinitionAddress(uuidBytes: Data) -> String? {
-        guard uuidBytes.count == 16 else { return nil }
-        // TODO: Replace this bridge-free fallback with a pure Swift BLAKE3 checksum.
-        var payload = Data([1])
-        payload.append(uuidBytes)
-        payload.append(Data(repeating: 0, count: 4))
-        return base58Encode(payload)
-    }
-
-    private static func base58Encode(_ data: Data) -> String {
-        let alphabet = Array("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
-        let input = [UInt8](data)
-        let zeroCount = input.prefix(while: { $0 == 0 }).count
-        var digits = [Int](repeating: 0, count: 1)
-        for byte in input {
-            var carry = Int(byte)
-            for index in 0..<digits.count {
-                carry += digits[index] << 8
-                digits[index] = carry % 58
-                carry /= 58
-            }
-            while carry > 0 {
-                digits.append(carry % 58)
-                carry /= 58
-            }
-        }
-        var encoded = String(repeating: "1", count: zeroCount)
-        for digit in digits.reversed() {
-            encoded.append(alphabet[digit])
-        }
-        return encoded
     }
 
     private static func readAssetDefinitionAddress(_ reader: inout OfflineNoritoReader) throws -> Data {

@@ -1904,10 +1904,18 @@ mod tests {
         relay_receipt: &VpnSessionReceiptV1,
         voucher: &VpnUsageVoucherV1,
     ) -> Vec<u8> {
+        receipt_submit_body_with_lease_id(relay_receipt, voucher, String::new())
+    }
+
+    fn receipt_submit_body_with_lease_id(
+        relay_receipt: &VpnSessionReceiptV1,
+        voucher: &VpnUsageVoucherV1,
+        lease_id_hex: String,
+    ) -> Vec<u8> {
         norito::json::to_vec(&VpnReceiptSubmitRequestDto {
             relay_receipt_hex: hex::encode(relay_receipt.encode()),
             client_voucher_hex: hex::encode(voucher.encode()),
-            lease_id_hex: String::new(),
+            lease_id_hex,
         })
         .expect("receipt request")
     }
@@ -2009,6 +2017,39 @@ mod tests {
             metering_keys,
             fixture,
         )
+    }
+
+    async fn submit_receipt_expect_error(
+        app: SharedAppState,
+        operator: &AccountId,
+        operator_keys: &KeyPair,
+        relay_receipt: &VpnSessionReceiptV1,
+        voucher: &VpnUsageVoucherV1,
+        expected: &str,
+    ) {
+        let body = receipt_submit_body(relay_receipt, voucher);
+        submit_receipt_body_expect_error(app, operator, operator_keys, body, expected).await;
+    }
+
+    async fn submit_receipt_body_expect_error(
+        app: SharedAppState,
+        operator: &AccountId,
+        operator_keys: &KeyPair,
+        body: Vec<u8>,
+        expected: &str,
+    ) {
+        let method = Method::POST;
+        let uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
+        let headers = signed_app_headers(operator, operator_keys, &method, &uri, body.as_ref());
+
+        let error = handle_submit_vpn_receipt(app, &method, &uri, &headers, body.as_ref())
+            .await
+            .expect_err("adversarial receipt must fail");
+
+        assert!(
+            format!("{error:?}").contains(expected),
+            "expected `{expected}` in {error:?}"
+        );
     }
 
     async fn read_json<T>(response: axum::response::Response) -> T
@@ -2175,6 +2216,170 @@ mod tests {
             };
 
         assert!(format!("{error:?}").contains("signed account headers are required"));
+    }
+
+    #[tokio::test]
+    async fn create_vpn_quote_rejects_malformed_json_payload_before_auth() {
+        let account = account_id_for(&KeyPair::random());
+        let app = mk_app_state_for_tests_with_world(world_with_account(&account));
+        let method = Method::POST;
+        let uri: Uri = "/v1/vpn/quotes".parse().expect("quote uri");
+        let headers = HeaderMap::new();
+        let body = b"{not valid json";
+
+        let error = handle_create_vpn_quote(app, &method, &uri, &headers, body)
+            .await
+            .expect_err("malformed quote json must fail before auth");
+
+        assert!(format!("{error:?}").contains("invalid vpn quote create payload"));
+    }
+
+    #[tokio::test]
+    async fn create_vpn_quote_rejects_non_hex_metering_key() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let key_pair = KeyPair::random();
+        let account = account_id_for(&key_pair);
+        let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
+        let method = Method::POST;
+        let uri: Uri = "/v1/vpn/quotes".parse().expect("quote uri");
+        let body = norito::json::to_vec(&VpnQuoteCreateRequestDto {
+            exit_class: "standard".to_owned(),
+            metering_public_key_hex: "not-hex".to_owned(),
+        })
+        .expect("quote body");
+        let headers = signed_app_headers(&account, &key_pair, &method, &uri, body.as_ref());
+
+        let error = handle_create_vpn_quote(app, &method, &uri, &headers, body.as_ref())
+            .await
+            .expect_err("bad metering key must fail");
+
+        assert!(format!("{error:?}").contains("metering_public_key_hex"));
+    }
+
+    #[tokio::test]
+    async fn create_vpn_session_rejects_malformed_json_payload_before_auth() {
+        let account = account_id_for(&KeyPair::random());
+        let app = mk_app_state_for_tests_with_world(world_with_account(&account));
+        let method = Method::POST;
+        let uri: Uri = "/v1/vpn/sessions".parse().expect("session uri");
+        let headers = HeaderMap::new();
+        let body = b"{not valid json";
+
+        let error = handle_create_vpn_session(app, &method, &uri, &headers, body)
+            .await
+            .expect_err("malformed session json must fail before auth");
+
+        assert!(format!("{error:?}").contains("invalid vpn session create payload"));
+    }
+
+    #[tokio::test]
+    async fn create_vpn_session_rejects_quote_owned_by_different_account() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let user_keys = KeyPair::random();
+        let other_keys = KeyPair::random();
+        let user = account_id_for(&user_keys);
+        let other = account_id_for(&other_keys);
+        let app = vpn_enabled_app_with_operator(
+            world_with_accounts(&[user.clone(), other.clone()]),
+            &user,
+        );
+        let (quote, metering_keys) =
+            create_quote_for_account(app.clone(), &user, &user_keys, "standard").await;
+        let method = Method::POST;
+        let uri: Uri = "/v1/vpn/sessions".parse().expect("session uri");
+        let body = norito::json::to_vec(&VpnSessionCreateRequestDto {
+            exit_class: quote.exit_class.clone(),
+            quote_id: quote.quote_id.clone(),
+            payment_tx_hash: quote.quote_id.clone(),
+            metering_public_key_hex: metering_public_key_hex(&metering_keys),
+        })
+        .expect("session body");
+        let headers = signed_app_headers(&other, &other_keys, &method, &uri, body.as_ref());
+
+        let error = handle_create_vpn_session(app, &method, &uri, &headers, body.as_ref())
+            .await
+            .expect_err("wrong account must not consume quote");
+
+        assert!(format!("{error:?}").contains("different account"));
+    }
+
+    #[tokio::test]
+    async fn create_vpn_session_rejects_exit_class_mismatch() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let key_pair = KeyPair::random();
+        let account = account_id_for(&key_pair);
+        let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
+        let (quote, metering_keys) =
+            create_quote_for_account(app.clone(), &account, &key_pair, "low-latency").await;
+        let method = Method::POST;
+        let uri: Uri = "/v1/vpn/sessions".parse().expect("session uri");
+        let body = norito::json::to_vec(&VpnSessionCreateRequestDto {
+            exit_class: "standard".to_owned(),
+            quote_id: quote.quote_id.clone(),
+            payment_tx_hash: quote.quote_id.clone(),
+            metering_public_key_hex: metering_public_key_hex(&metering_keys),
+        })
+        .expect("session body");
+        let headers = signed_app_headers(&account, &key_pair, &method, &uri, body.as_ref());
+
+        let error = handle_create_vpn_session(app, &method, &uri, &headers, body.as_ref())
+            .await
+            .expect_err("exit class mismatch must fail");
+
+        assert!(format!("{error:?}").contains("exit class does not match"));
+    }
+
+    #[tokio::test]
+    async fn create_vpn_session_rejects_metering_key_mismatch() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let key_pair = KeyPair::random();
+        let account = account_id_for(&key_pair);
+        let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
+        let (quote, _metering_keys) =
+            create_quote_for_account(app.clone(), &account, &key_pair, "standard").await;
+        let wrong_metering_keys = KeyPair::random();
+        let method = Method::POST;
+        let uri: Uri = "/v1/vpn/sessions".parse().expect("session uri");
+        let body = norito::json::to_vec(&VpnSessionCreateRequestDto {
+            exit_class: quote.exit_class.clone(),
+            quote_id: quote.quote_id.clone(),
+            payment_tx_hash: quote.quote_id.clone(),
+            metering_public_key_hex: metering_public_key_hex(&wrong_metering_keys),
+        })
+        .expect("session body");
+        let headers = signed_app_headers(&account, &key_pair, &method, &uri, body.as_ref());
+
+        let error = handle_create_vpn_session(app, &method, &uri, &headers, body.as_ref())
+            .await
+            .expect_err("metering key mismatch must fail");
+
+        assert!(format!("{error:?}").contains("metering key does not match"));
+    }
+
+    #[tokio::test]
+    async fn create_vpn_session_rejects_empty_payment_hash() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let key_pair = KeyPair::random();
+        let account = account_id_for(&key_pair);
+        let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
+        let (quote, metering_keys) =
+            create_quote_for_account(app.clone(), &account, &key_pair, "standard").await;
+        let method = Method::POST;
+        let uri: Uri = "/v1/vpn/sessions".parse().expect("session uri");
+        let body = norito::json::to_vec(&VpnSessionCreateRequestDto {
+            exit_class: quote.exit_class.clone(),
+            quote_id: quote.quote_id.clone(),
+            payment_tx_hash: String::new(),
+            metering_public_key_hex: metering_public_key_hex(&metering_keys),
+        })
+        .expect("session body");
+        let headers = signed_app_headers(&account, &key_pair, &method, &uri, body.as_ref());
+
+        let error = handle_create_vpn_session(app, &method, &uri, &headers, body.as_ref())
+            .await
+            .expect_err("empty payment hash must fail");
+
+        assert!(format!("{error:?}").contains("payment_tx_hash must not be empty"));
     }
 
     #[tokio::test]
@@ -2773,6 +2978,122 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn submit_vpn_receipt_rejects_non_operator_signature_after_cache_loss() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, user, user_keys, _operator, _operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let method = Method::POST;
+        let uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
+        let headers = signed_app_headers(&user, &user_keys, &method, &uri, fixture.body.as_ref());
+
+        let error = handle_submit_vpn_receipt(app, &method, &uri, &headers, fixture.body.as_ref())
+            .await
+            .expect_err("non-operator receipt signer must fail");
+
+        assert!(format!("{error:?}").contains("configured operator account"));
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_exact_signed_request_replay() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let method = Method::POST;
+        let uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
+        let headers = signed_app_headers(
+            &operator,
+            &operator_keys,
+            &method,
+            &uri,
+            fixture.body.as_ref(),
+        );
+
+        let first =
+            handle_submit_vpn_receipt(app.clone(), &method, &uri, &headers, fixture.body.as_ref())
+                .await
+                .expect("first settlement")
+                .into_response();
+        assert_eq!(first.status(), StatusCode::CREATED);
+
+        let replay = handle_submit_vpn_receipt(app, &method, &uri, &headers, fixture.body.as_ref())
+            .await
+            .expect_err("exact request replay must fail");
+
+        assert!(format!("{replay:?}").contains("nonce already used"));
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_explicit_lease_id_for_different_active_lease() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let user_keys = KeyPair::random();
+        let other_user_keys = KeyPair::random();
+        let operator_keys = KeyPair::random();
+        let user = account_id_for(&user_keys);
+        let other_user = account_id_for(&other_user_keys);
+        let operator = account_id_for(&operator_keys);
+        let app = vpn_enabled_app_with_operator(
+            world_with_accounts(&[user.clone(), other_user.clone(), operator.clone()]),
+            &operator,
+        );
+
+        let (quote, metering_keys) =
+            create_quote_for_account(app.clone(), &user, &user_keys, "standard").await;
+        let session =
+            create_session_for_quote(app.clone(), &user, &user_keys, &quote, &metering_keys).await;
+        let active_record = app
+            .vpn_sessions
+            .get(&session.session_id)
+            .expect("active session")
+            .clone();
+        let fixture = receipt_fixture_for_session(&session, &active_record, &user, &metering_keys);
+        app.state
+            .insert_vpn_lease_for_testing(lease_record_from_session_record(
+                &active_record,
+                VpnLeaseStatusV1::Active,
+                None,
+            ));
+
+        let (other_quote, other_metering_keys) =
+            create_quote_for_account(app.clone(), &other_user, &other_user_keys, "standard").await;
+        let other_session = create_session_for_quote(
+            app.clone(),
+            &other_user,
+            &other_user_keys,
+            &other_quote,
+            &other_metering_keys,
+        )
+        .await;
+        let other_record = app
+            .vpn_sessions
+            .get(&other_session.session_id)
+            .expect("other active session")
+            .clone();
+        app.state
+            .insert_vpn_lease_for_testing(lease_record_from_session_record(
+                &other_record,
+                VpnLeaseStatusV1::Active,
+                None,
+            ));
+        app.vpn_sessions.clear();
+
+        let body = receipt_submit_body_with_lease_id(
+            &fixture.relay_receipt,
+            &fixture.voucher,
+            other_session.quote_id.clone(),
+        );
+        let method = Method::POST;
+        let uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
+        let headers = signed_app_headers(&operator, &operator_keys, &method, &uri, body.as_ref());
+
+        let error = handle_submit_vpn_receipt(app.clone(), &method, &uri, &headers, body.as_ref())
+            .await
+            .expect_err("explicit mismatched lease id must fail");
+
+        assert!(format!("{error:?}").contains("vpn receipt"));
+        assert!(app.vpn_receipts.is_empty());
+    }
+
+    #[tokio::test]
     async fn submit_vpn_receipt_rejects_wrong_metering_key_after_cache_loss() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
         let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
@@ -2837,6 +3158,445 @@ mod tests {
             .expect_err("voucher substitution must fail");
 
         assert!(format!("{error:?}").contains("does not commit"));
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_payment_hash_substitution_after_cache_loss() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let mut relay_receipt = fixture.relay_receipt;
+        relay_receipt.payment_tx_hash[0] ^= 0x01;
+
+        submit_receipt_expect_error(
+            app,
+            &operator,
+            &operator_keys,
+            &relay_receipt,
+            &fixture.voucher,
+            "payment hash does not match",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_account_hash_substitution_after_cache_loss() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let mut relay_receipt = fixture.relay_receipt;
+        relay_receipt.account_hash[0] ^= 0x01;
+
+        submit_receipt_expect_error(
+            app,
+            &operator,
+            &operator_keys,
+            &relay_receipt,
+            &fixture.voucher,
+            "account hash does not match",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_relay_id_substitution_after_cache_loss() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let mut relay_receipt = fixture.relay_receipt;
+        relay_receipt.relay_id[0] ^= 0x01;
+
+        submit_receipt_expect_error(
+            app,
+            &operator,
+            &operator_keys,
+            &relay_receipt,
+            &fixture.voucher,
+            "relay id does not match",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_byte_counter_mismatch_after_cache_loss() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let mut relay_receipt = fixture.relay_receipt;
+        relay_receipt.ingress_bytes = relay_receipt.ingress_bytes.saturating_add(1);
+
+        submit_receipt_expect_error(
+            app,
+            &operator,
+            &operator_keys,
+            &relay_receipt,
+            &fixture.voucher,
+            "byte counters do not match",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_uptime_below_voucher_active_time_after_cache_loss() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let mut relay_receipt = fixture.relay_receipt;
+        relay_receipt.uptime_secs = 0;
+
+        submit_receipt_expect_error(
+            app,
+            &operator,
+            &operator_keys,
+            &relay_receipt,
+            &fixture.voucher,
+            "uptime is below",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_end_before_start_after_cache_loss() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let mut relay_receipt = fixture.relay_receipt;
+        relay_receipt.started_at_ms = 10_000;
+        relay_receipt.ended_at_ms = 9_999;
+
+        submit_receipt_expect_error(
+            app,
+            &operator,
+            &operator_keys,
+            &relay_receipt,
+            &fixture.voucher,
+            "end timestamp precedes",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_voucher_signature_tamper_after_cache_loss() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let mut voucher = fixture.voucher.clone();
+        voucher.body.issued_at_ms = voucher.body.issued_at_ms.saturating_add(1);
+        let mut relay_receipt = fixture.relay_receipt;
+        relay_receipt.client_voucher_hash = voucher.hash();
+
+        submit_receipt_expect_error(
+            app,
+            &operator,
+            &operator_keys,
+            &relay_receipt,
+            &voucher,
+            "signature failed",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_voucher_sequence_mismatch_after_cache_loss() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let mut relay_receipt = fixture.relay_receipt;
+        relay_receipt.highest_voucher_sequence =
+            relay_receipt.highest_voucher_sequence.saturating_add(1);
+
+        submit_receipt_expect_error(
+            app,
+            &operator,
+            &operator_keys,
+            &relay_receipt,
+            &fixture.voucher,
+            "voucher sequence does not match",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_receipt_session_id_mismatch_after_cache_loss() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let mut relay_receipt = fixture.relay_receipt;
+        relay_receipt.session_id[0] ^= 0x01;
+
+        submit_receipt_expect_error(
+            app,
+            &operator,
+            &operator_keys,
+            &relay_receipt,
+            &fixture.voucher,
+            "session id does not match",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_voucher_session_id_mismatch_after_cache_loss() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let mut voucher = fixture.voucher.clone();
+        voucher.body.session_id[0] ^= 0x01;
+
+        submit_receipt_expect_error(
+            app,
+            &operator,
+            &operator_keys,
+            &fixture.relay_receipt,
+            &voucher,
+            "session id does not match",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_receipt_quote_id_mismatch_after_cache_loss() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let mut relay_receipt = fixture.relay_receipt;
+        relay_receipt.quote_id[0] ^= 0x01;
+        let body = receipt_submit_body_with_lease_id(
+            &relay_receipt,
+            &fixture.voucher,
+            hex::encode(fixture.quote_id),
+        );
+
+        submit_receipt_body_expect_error(
+            app,
+            &operator,
+            &operator_keys,
+            body,
+            "quote id does not match",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_voucher_quote_id_mismatch_after_cache_loss() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let mut voucher = fixture.voucher.clone();
+        voucher.body.quote_id[0] ^= 0x01;
+
+        submit_receipt_expect_error(
+            app,
+            &operator,
+            &operator_keys,
+            &fixture.relay_receipt,
+            &voucher,
+            "quote id does not match",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_voucher_relay_id_mismatch_after_cache_loss() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let mut voucher = fixture.voucher.clone();
+        voucher.body.relay_id[0] ^= 0x01;
+
+        submit_receipt_expect_error(
+            app,
+            &operator,
+            &operator_keys,
+            &fixture.relay_receipt,
+            &voucher,
+            "relay id does not match",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_malformed_relay_receipt_hex() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let body = norito::json::to_vec(&VpnReceiptSubmitRequestDto {
+            relay_receipt_hex: "not-hex".to_owned(),
+            client_voucher_hex: hex::encode(fixture.voucher.encode()),
+            lease_id_hex: String::new(),
+        })
+        .expect("receipt request");
+
+        submit_receipt_body_expect_error(app, &operator, &operator_keys, body, "relay_receipt_hex")
+            .await;
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_malformed_client_voucher_hex() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let body = norito::json::to_vec(&VpnReceiptSubmitRequestDto {
+            relay_receipt_hex: hex::encode(fixture.relay_receipt.encode()),
+            client_voucher_hex: "not-hex".to_owned(),
+            lease_id_hex: String::new(),
+        })
+        .expect("receipt request");
+
+        submit_receipt_body_expect_error(
+            app,
+            &operator,
+            &operator_keys,
+            body,
+            "client_voucher_hex",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_client_voucher_trailing_norito_bytes() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let mut encoded_voucher = fixture.voucher.encode();
+        encoded_voucher.push(0);
+        let body = norito::json::to_vec(&VpnReceiptSubmitRequestDto {
+            relay_receipt_hex: hex::encode(fixture.relay_receipt.encode()),
+            client_voucher_hex: hex::encode(encoded_voucher),
+            lease_id_hex: String::new(),
+        })
+        .expect("receipt request");
+
+        submit_receipt_body_expect_error(
+            app,
+            &operator,
+            &operator_keys,
+            body,
+            "client_voucher_hex is not valid Norito",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_malformed_json_payload_before_auth() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let account = account_id_for(&KeyPair::random());
+        let app = mk_app_state_for_tests_with_world(world_with_account(&account));
+        let method = Method::POST;
+        let uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
+        let headers = HeaderMap::new();
+        let body = b"{not valid json";
+
+        let error = handle_submit_vpn_receipt(app, &method, &uri, &headers, body)
+            .await
+            .expect_err("malformed json must fail before receipt decoding");
+
+        assert!(format!("{error:?}").contains("invalid vpn receipt payload"));
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_explicit_lease_id_wrong_length() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let body = receipt_submit_body_with_lease_id(
+            &fixture.relay_receipt,
+            &fixture.voucher,
+            "aa".to_owned(),
+        );
+
+        submit_receipt_body_expect_error(
+            app,
+            &operator,
+            &operator_keys,
+            body,
+            "lease_id_hex must decode to 32 bytes",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_explicit_lease_id_non_hex() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let body = receipt_submit_body_with_lease_id(
+            &fixture.relay_receipt,
+            &fixture.voucher,
+            "not-hex".to_owned(),
+        );
+
+        submit_receipt_body_expect_error(app, &operator, &operator_keys, body, "lease_id_hex")
+            .await;
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_unknown_receipt_lease_id_after_cache_loss() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let mut relay_receipt = fixture.relay_receipt;
+        relay_receipt.quote_id[0] ^= 0x01;
+
+        submit_receipt_expect_error(
+            app,
+            &operator,
+            &operator_keys,
+            &relay_receipt,
+            &fixture.voucher,
+            "does not match an on-chain native VPN lease",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_settled_lease_after_cache_loss() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let mut lease = lease_record_by_id(&app, &fixture.quote_id).expect("active lease");
+        lease.status = VpnLeaseStatusV1::Settled;
+        lease.settled_at_ms = Some(fixture.relay_receipt.ended_at_ms);
+        lease.highest_voucher_sequence = fixture.relay_receipt.highest_voucher_sequence;
+        lease.client_voucher_hash = Some(fixture.voucher.hash());
+        lease.relay_receipt_hash = Some(fixture.relay_receipt.hash());
+        lease.settled_relay_receipt = Some(fixture.relay_receipt);
+        lease.earned_fee_nanos = fixture.earned_fee_nanos;
+        lease.refunded_fee_nanos = lease
+            .lease_fee_nanos
+            .saturating_sub(fixture.earned_fee_nanos);
+        app.state.insert_vpn_lease_for_testing(lease);
+
+        submit_receipt_expect_error(
+            app,
+            &operator,
+            &operator_keys,
+            &fixture.relay_receipt,
+            &fixture.voucher,
+            "vpn lease is not active",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_rejects_refunded_lease_after_cache_loss() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let mut lease = lease_record_by_id(&app, &fixture.quote_id).expect("active lease");
+        lease.status = VpnLeaseStatusV1::Refunded;
+        lease.refunded_at_ms = Some(now_ms());
+        app.state.insert_vpn_lease_for_testing(lease);
+
+        submit_receipt_expect_error(
+            app,
+            &operator,
+            &operator_keys,
+            &fixture.relay_receipt,
+            &fixture.voucher,
+            "vpn lease is not active",
+        )
+        .await;
     }
 
     #[tokio::test]

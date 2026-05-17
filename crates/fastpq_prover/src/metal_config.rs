@@ -4,6 +4,8 @@
     allow(dead_code)
 )]
 
+#[cfg(test)]
+use std::sync::{Mutex, MutexGuard};
 use std::{env, sync::OnceLock};
 
 use tracing::{debug, warn};
@@ -39,7 +41,9 @@ static POSEIDON_LANE_OVERRIDE: OnceLock<Option<u32>> = OnceLock::new();
 static POSEIDON_BATCH_OVERRIDE: OnceLock<Option<u32>> = OnceLock::new();
 static DEVICE_HINTS: OnceLock<DeviceHints> = OnceLock::new();
 #[cfg(test)]
-static TEST_DEVICE_HINTS: OnceLock<std::sync::Mutex<TestDeviceHints>> = OnceLock::new();
+static TEST_DEVICE_HINTS: OnceLock<Mutex<TestDeviceHints>> = OnceLock::new();
+#[cfg(test)]
+static TEST_DEVICE_HINTS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
@@ -426,9 +430,31 @@ fn working_set_gib(hints: DeviceHints) -> f64 {
 
 #[cfg(test)]
 pub fn set_device_hints_for_tests(hints: Option<DeviceHints>) {
-    let store = TEST_DEVICE_HINTS.get_or_init(|| std::sync::Mutex::new(TestDeviceHints::Inherit));
+    let store = TEST_DEVICE_HINTS.get_or_init(|| Mutex::new(TestDeviceHints::Inherit));
     if let Ok(mut guard) = store.lock() {
         *guard = hints.map_or(TestDeviceHints::Default, TestDeviceHints::Override);
+    }
+}
+
+#[cfg(test)]
+pub struct DeviceHintsTestGuard {
+    _guard: MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+pub fn device_hints_test_guard() -> DeviceHintsTestGuard {
+    let guard = TEST_DEVICE_HINTS_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    set_device_hints_for_tests(None);
+    DeviceHintsTestGuard { _guard: guard }
+}
+
+#[cfg(test)]
+impl Drop for DeviceHintsTestGuard {
+    fn drop(&mut self) {
+        set_device_hints_for_tests(None);
     }
 }
 
@@ -536,11 +562,11 @@ mod tests {
 
     #[test]
     fn poseidon_tuning_scales_with_device_hints() {
+        let _hint_guard = device_hints_test_guard();
         set_device_hints_for_tests(Some(DeviceHints::new(false, true, true, 0)));
         let tuning = poseidon_tuning(64, 512);
         assert_eq!(tuning.threadgroup_lanes, 256);
         assert_eq!(tuning.states_per_lane, 2);
-        set_device_hints_for_tests(None);
     }
 
     #[test]
@@ -561,6 +587,7 @@ mod tests {
 
     #[test]
     fn poseidon_multiplier_scales_with_hardware() {
+        let _hint_guard = device_hints_test_guard();
         set_device_hints_for_tests(Some(DeviceHints::new(false, true, true, 48 * GIB_BYTES)));
         assert_eq!(poseidon_batch_multiplier(), 4);
         set_device_hints_for_tests(Some(DeviceHints::new(false, true, true, 32 * GIB_BYTES)));
@@ -581,14 +608,12 @@ mod tests {
 
     #[test]
     fn lde_tile_stage_target_tracks_memory_tier() {
-        set_device_hints_for_tests(None);
+        let _hint_guard = device_hints_test_guard();
         let default_target = lde_tile_stage_target(18, device_hint_snapshot());
         assert_eq!(default_target, 12);
 
         set_device_hints_for_tests(Some(DeviceHints::new(false, true, true, 24 * GIB_BYTES)));
         let boosted = lde_tile_stage_target(18, device_hint_snapshot());
         assert_eq!(boosted, 14);
-
-        set_device_hints_for_tests(None);
     }
 }

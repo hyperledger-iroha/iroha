@@ -10,7 +10,9 @@ import java.util.Base64
 import java.util.Locale
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
+import java.util.function.LongSupplier
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
@@ -418,6 +420,7 @@ class OfflineNoteV2Test {
         val fixture = loadFixture()
         val derivation = obj(obj(fixture, "chain_vectors"), "derivation")
         val payment = obj(fixture, "payment_token")
+        val sdkInterop = obj(fixture, "sdk_interop")
         val token = OfflineNoteV2PaymentToken(
             chainId = string(derivation, "chain_id"),
             paymentRequestId = string(payment, "invoice_id"),
@@ -426,6 +429,8 @@ class OfflineNoteV2Test {
             audit = audit(fixture),
             createdAtMs = long(payment, "created_at_ms"),
         )
+        val canonicalPayload = base64Bytes(string(sdkInterop, "payment_token_norito_base64"))
+        assertContentEquals(canonicalPayload, OfflineNoteV2PaymentTokenCodec.encodeNorito(token))
 
         val noritoDecoded = OfflineNoteV2PaymentTokenCodec.decodeNorito(
             OfflineNoteV2PaymentTokenCodec.encodeNorito(token)
@@ -433,15 +438,27 @@ class OfflineNoteV2Test {
         assertEquals(token.tokenIdHex(), noritoDecoded.tokenIdHex())
         assertEquals(token.paymentRequestId, noritoDecoded.paymentRequestId)
         assertEquals(base64(token.audit.noritoEncoded()), base64(noritoDecoded.audit.noritoEncoded()))
+        val canonicalDecoded = OfflineNoteV2PaymentTokenCodec.decodeNorito(canonicalPayload)
+        assertEquals(token.tokenIdHex(), canonicalDecoded.tokenIdHex())
+        assertEquals(base64(token.audit.noritoEncoded()), base64(canonicalDecoded.audit.noritoEncoded()))
 
         val text = OfflineNoteV2PaymentTokenCodec.encodeText(token)
+        assertEquals(string(sdkInterop, "payment_token_text"), text)
         assertTrue(text.startsWith(OfflineNoteV2PaymentTokenCodec.TEXT_PREFIX))
         assertEquals(token.tokenIdHex(), OfflineNoteV2PaymentTokenCodec.decodeText(text).tokenIdHex())
+        assertEquals(
+            token.tokenIdHex(),
+            OfflineNoteV2PaymentTokenCodec.decodeText(string(sdkInterop, "payment_token_text")).tokenIdHex(),
+        )
 
         val frames = OfflineNoteV2PaymentTokenCodec.encodeQrFrameBytes(
             token,
             OfflineQrStream.Options(chunkSize = 180, parityGroup = 2),
         )
+        @Suppress("UNCHECKED_CAST")
+        val expectedFrames = list(obj(sdkInterop, "payment_token_qr_v1"), "frames")
+            .map { string(it as Map<String, Any?>, "bytes_hex") }
+        assertEquals(expectedFrames, frames.map(::hex))
         val decoder = OfflineQrStream.Decoder()
         var payload: ByteArray? = null
         for (frame in frames) {
@@ -450,6 +467,879 @@ class OfflineNoteV2Test {
         val qrDecoded = OfflineNoteV2PaymentTokenCodec.decodeQrPayload(assertNotNull(payload))
         assertEquals(token.tokenIdHex(), qrDecoded.tokenIdHex())
         assertEquals(base64(token.audit.noritoEncoded()), base64(qrDecoded.audit.noritoEncoded()))
+
+        val canonicalDecoder = OfflineQrStream.Decoder()
+        var canonicalQrPayload: ByteArray? = null
+        for (frame in expectedFrames) {
+            canonicalQrPayload = canonicalDecoder.ingest(hexBytes(frame)).payload ?: canonicalQrPayload
+        }
+        assertContentEquals(canonicalPayload, assertNotNull(canonicalQrPayload))
+        assertEquals(
+            token.tokenIdHex(),
+            OfflineNoteV2PaymentTokenCodec.decodeQrPayload(assertNotNull(canonicalQrPayload)).tokenIdHex(),
+        )
+    }
+
+    @Test
+    fun qrStreamRejectsAdversarialEnvelopesAndChunkShapes() {
+        val payload = ByteArray(300) { ((it * 31 + 7) and 0xff).toByte() }
+        val frames = OfflineQrStream.Encoder.encodeFrames(
+            payload,
+            OfflineQrStream.PayloadKind.OFFLINE_PAYMENT_TOKEN_V2,
+            OfflineQrStream.Options(chunkSize = 100, parityGroup = 2),
+        )
+        val header = frames.first { it.kind == OfflineQrStream.FrameKind.HEADER }
+        val dataFrames = frames.filter { it.kind == OfflineQrStream.FrameKind.DATA }
+        val parityFrames = frames.filter { it.kind == OfflineQrStream.FrameKind.PARITY }
+        val firstData = dataFrames.first()
+        val firstParity = parityFrames.first()
+
+        assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.Frame(
+                OfflineQrStream.FrameKind.DATA,
+                header.streamId(),
+                0,
+                1,
+                ByteArray(0x1_0000),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.Frame(OfflineQrStream.FrameKind.DATA, header.streamId(), -1, 1, ByteArray(0))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.Frame(OfflineQrStream.FrameKind.DATA, header.streamId(), 0x1_0000, 1, ByteArray(0))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.Frame(OfflineQrStream.FrameKind.DATA, header.streamId(), 0, -1, ByteArray(0))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.Frame(OfflineQrStream.FrameKind.DATA, header.streamId(), 0, 0x1_0000, ByteArray(0))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.Envelope(0, 0, 0, 1, 1, 0, -1, 1, ByteArray(32))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.Envelope(0, 0, 0, 1, 1, 0, 0x1_0000, 1, ByteArray(32))
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.Frame.decode(header.encode() + byteArrayOf(0x00))
+        }
+
+        val unsupportedFrameVersion = header.encode()
+        unsupportedFrameVersion[2] = 0x7f
+        assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.Frame.decode(unsupportedFrameVersion)
+        }
+
+        val unknownFrameKind = header.encode()
+        unknownFrameKind[3] = 0x7f
+        assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.Frame.decode(unknownFrameKind)
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.Decoder().ingest(
+                OfflineQrStream.Frame(
+                    OfflineQrStream.FrameKind.HEADER,
+                    ByteArray(16) { 0xa5.toByte() },
+                    0,
+                    1,
+                    header.payload(),
+                ).encode(),
+            )
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.Decoder().ingest(
+                OfflineQrStream.Frame(
+                    OfflineQrStream.FrameKind.HEADER,
+                    header.streamId(),
+                    1,
+                    1,
+                    header.payload(),
+                ).encode(),
+            )
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.Decoder().ingest(mutatedHeaderFrame(header) { it + byteArrayOf(0x00) })
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.Decoder().ingest(mutatedHeaderFrame(header) { envelope ->
+                envelope.apply { this[2] = 0x7f }
+            })
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.Decoder().ingest(mutatedHeaderFrame(header) { envelope ->
+                envelope.apply { writeUInt16LE(this, 4, 0) }
+            })
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.Decoder().ingest(mutatedHeaderFrame(header) { envelope ->
+                envelope.apply { writeUInt16LE(this, 6, 1) }
+            })
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.Decoder().ingest(mutatedHeaderFrame(header) { envelope ->
+                envelope.apply { writeUInt16LE(this, 8, 0) }
+            })
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.Decoder().ingest(mutatedHeaderFrame(header) { envelope ->
+                envelope.apply { this[1] = 0x01 }
+            })
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.Decoder().ingest(mutatedHeaderFrame(header) { envelope ->
+                envelope.apply { this[0] = 0x7f }
+            })
+        }
+
+        val repeatedHeaderDecoder = OfflineQrStream.Decoder()
+        repeatedHeaderDecoder.ingest(header.encode())
+        repeatedHeaderDecoder.ingest(header.encode())
+        assertFailsWith<IllegalArgumentException> {
+            repeatedHeaderDecoder.ingest(mutatedHeaderFrame(header) { envelope ->
+                envelope.apply {
+                    writeUInt16LE(this, 10, OfflineQrStream.PayloadKind.OFFLINE_RECEIVE_CHALLENGE_V2.value)
+                }
+            })
+        }
+
+        val shortDataDecoder = OfflineQrStream.Decoder()
+        shortDataDecoder.ingest(header.encode())
+        val shortDataPayload = firstData.payload().copyOf(firstData.payload().size - 1)
+        assertFailsWith<IllegalArgumentException> {
+            shortDataDecoder.ingest(
+                OfflineQrStream.Frame(
+                    OfflineQrStream.FrameKind.DATA,
+                    firstData.streamId(),
+                    firstData.index,
+                    firstData.total,
+                    shortDataPayload,
+                ).encode(),
+            )
+        }
+
+        val longDataDecoder = OfflineQrStream.Decoder()
+        longDataDecoder.ingest(header.encode())
+        assertFailsWith<IllegalArgumentException> {
+            longDataDecoder.ingest(
+                OfflineQrStream.Frame(
+                    OfflineQrStream.FrameKind.DATA,
+                    firstData.streamId(),
+                    firstData.index,
+                    firstData.total,
+                    firstData.payload() + byteArrayOf(0x00),
+                ).encode(),
+            )
+        }
+
+        val wrongTotalDecoder = OfflineQrStream.Decoder()
+        wrongTotalDecoder.ingest(header.encode())
+        assertFailsWith<IllegalArgumentException> {
+            wrongTotalDecoder.ingest(
+                OfflineQrStream.Frame(
+                    OfflineQrStream.FrameKind.DATA,
+                    firstData.streamId(),
+                    firstData.index,
+                    firstData.total + 1,
+                    firstData.payload(),
+                ).encode(),
+            )
+        }
+
+        val pendingBadDataDecoder = OfflineQrStream.Decoder()
+        pendingBadDataDecoder.ingest(
+            OfflineQrStream.Frame(
+                OfflineQrStream.FrameKind.DATA,
+                firstData.streamId(),
+                firstData.index,
+                firstData.total + 1,
+                firstData.payload(),
+            ).encode(),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            pendingBadDataDecoder.ingest(header.encode())
+        }
+
+        val conflictingDataDecoder = OfflineQrStream.Decoder()
+        conflictingDataDecoder.ingest(header.encode())
+        conflictingDataDecoder.ingest(firstData.encode())
+        val conflictingDataPayload = firstData.payload()
+        conflictingDataPayload[0] = (conflictingDataPayload[0].toInt() xor 0xff).toByte()
+        assertFailsWith<IllegalArgumentException> {
+            conflictingDataDecoder.ingest(
+                OfflineQrStream.Frame(
+                    OfflineQrStream.FrameKind.DATA,
+                    firstData.streamId(),
+                    firstData.index,
+                    firstData.total,
+                    conflictingDataPayload,
+                ).encode(),
+            )
+        }
+
+        val poisonedParityDecoder = OfflineQrStream.Decoder()
+        poisonedParityDecoder.ingest(header.encode())
+        poisonedParityDecoder.ingest(firstData.encode())
+        val poisonedParityPayload = firstParity.payload()
+        poisonedParityPayload[0] = (poisonedParityPayload[0].toInt() xor 0xff).toByte()
+        poisonedParityDecoder.ingest(
+            OfflineQrStream.Frame(
+                OfflineQrStream.FrameKind.PARITY,
+                firstParity.streamId(),
+                firstParity.index,
+                firstParity.total,
+                poisonedParityPayload,
+            ).encode(),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            poisonedParityDecoder.ingest(dataFrames[1].encode())
+        }
+
+        val hashMismatchDecoder = OfflineQrStream.Decoder()
+        hashMismatchDecoder.ingest(header.encode())
+        val mutatedFirstDataPayload = firstData.payload()
+        mutatedFirstDataPayload[0] = (mutatedFirstDataPayload[0].toInt() xor 0xff).toByte()
+        hashMismatchDecoder.ingest(
+            OfflineQrStream.Frame(
+                OfflineQrStream.FrameKind.DATA,
+                firstData.streamId(),
+                firstData.index,
+                firstData.total,
+                mutatedFirstDataPayload,
+            ).encode(),
+        )
+        hashMismatchDecoder.ingest(dataFrames[1].encode())
+        assertFailsWith<IllegalArgumentException> {
+            hashMismatchDecoder.ingest(dataFrames[2].encode())
+        }
+
+        val shortParityDecoder = OfflineQrStream.Decoder()
+        shortParityDecoder.ingest(header.encode())
+        assertFailsWith<IllegalArgumentException> {
+            shortParityDecoder.ingest(
+                OfflineQrStream.Frame(
+                    OfflineQrStream.FrameKind.PARITY,
+                    firstParity.streamId(),
+                    firstParity.index,
+                    firstParity.total,
+                    firstParity.payload().copyOf(firstParity.payload().size - 1),
+                ).encode(),
+            )
+        }
+
+        val conflictingParityDecoder = OfflineQrStream.Decoder()
+        conflictingParityDecoder.ingest(header.encode())
+        conflictingParityDecoder.ingest(firstParity.encode())
+        val conflictingParityPayload = firstParity.payload()
+        conflictingParityPayload[0] = (conflictingParityPayload[0].toInt() xor 0xff).toByte()
+        assertFailsWith<IllegalArgumentException> {
+            conflictingParityDecoder.ingest(
+                OfflineQrStream.Frame(
+                    OfflineQrStream.FrameKind.PARITY,
+                    firstParity.streamId(),
+                    firstParity.index,
+                    firstParity.total,
+                    conflictingParityPayload,
+                ).encode(),
+            )
+        }
+    }
+
+    @Test
+    fun transferHandoffSupportsQrNfcAndNearbyPayloads() {
+        val fixture = loadFixture()
+        val derivation = obj(obj(fixture, "chain_vectors"), "derivation")
+        val payment = obj(fixture, "payment_token")
+        val sdkInterop = obj(fixture, "sdk_interop")
+        val token = OfflineNoteV2PaymentToken(
+            chainId = string(derivation, "chain_id"),
+            paymentRequestId = string(payment, "invoice_id"),
+            tokenNonce = hexBytes(string(derivation, "token_nonce_hex")),
+            tokenId = hexBytes(string(payment, "token_id")),
+            audit = audit(fixture),
+            createdAtMs = long(payment, "created_at_ms"),
+        )
+        val canonicalPayload = base64Bytes(string(sdkInterop, "payment_token_norito_base64"))
+
+        val capabilities = OfflineNoteV2TransferCapabilities.current()
+        assertTrue(capabilities.supportedModalities().contains(OfflineNoteV2TransferModality.QR_STREAMING))
+        assertTrue(capabilities.supportedModalities().contains(OfflineNoteV2TransferModality.NEARBY))
+        assertFalse(capabilities.supportedModalities().contains(OfflineNoteV2TransferModality.NFC))
+
+        val nearby = OfflineNoteV2TransferHandoff.nearbyPayload(token)
+        assertEquals(OfflineNoteV2TransferModality.NEARBY, nearby.modality)
+        assertEquals(OfflineNoteV2TransferHandoff.PAYMENT_TOKEN_CONTENT_TYPE, nearby.contentType)
+        assertContentEquals(canonicalPayload, nearby.payload())
+        assertEquals(token.tokenIdHex(), OfflineNoteV2TransferHandoff.decodePaymentToken(nearby).tokenIdHex())
+
+        @Suppress("UNCHECKED_CAST")
+        val expectedFrames = list(obj(sdkInterop, "payment_token_qr_v1"), "frames")
+            .map { string(it as Map<String, Any?>, "bytes_hex") }
+        val qrFrames = OfflineNoteV2TransferHandoff.qrStreamingFrameBytes(token)
+        assertEquals(expectedFrames, qrFrames.map(::hex))
+        val qrReceiver = OfflineNoteV2TransferStreamReceiver()
+        var qrResult: OfflineNoteV2TransferStreamResult? = null
+        for (frame in qrFrames) {
+            qrResult = qrReceiver.ingestFrame(frame)
+        }
+        assertEquals(token.tokenIdHex(), assertNotNull(qrResult?.token).tokenIdHex())
+
+        val nfcFrames = OfflineNoteV2TransferHandoff.nfcFrameBytes(token)
+        assertTrue(nfcFrames.all { it.size <= 250 })
+        val nfcReceiver = OfflineNoteV2TransferStreamReceiver()
+        var nfcResult: OfflineNoteV2TransferStreamResult? = null
+        for (frame in nfcFrames) {
+            nfcResult = nfcReceiver.ingestFrame(frame)
+        }
+        assertEquals(token.tokenIdHex(), assertNotNull(nfcResult?.token).tokenIdHex())
+    }
+
+    @Test
+    fun transferHandoffRejectsAdversarialStreamsAndMetadata() {
+        val fixture = loadFixture()
+        val token = OfflineNoteV2PaymentTokenCodec.decodeNorito(
+            base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64")),
+        )
+        val rawPayload = OfflineNoteV2TransferHandoff.rawPaymentTokenBytes(token)
+        val payload = OfflineNoteV2TransferHandoff.paymentTokenPayload(
+            token,
+            OfflineNoteV2TransferModality.QR_STREAMING,
+        )
+        val wrongContentType = OfflineNoteV2TransferPayload(
+            OfflineNoteV2TransferModality.NEARBY,
+            OfflineNoteV2TransferHandoff.RECEIPT_ACK_CONTENT_TYPE,
+            payload.payload(),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2TransferHandoff.decodePaymentToken(wrongContentType)
+        }
+
+        val frames = OfflineNoteV2TransferHandoff.qrStreamingFrameBytes(
+            token,
+            OfflineQrStream.Options(chunkSize = 128, parityGroup = 0),
+        )
+        assertTrue(frames.size > 2)
+
+        fun assertRejectedFrame(frame: ByteArray) {
+            assertFailsWith<IllegalArgumentException> {
+                OfflineNoteV2TransferStreamReceiver().ingestFrame(frame)
+            }
+        }
+
+        val badMagic = frames[0].copyOf()
+        badMagic[0] = 0x00
+        assertRejectedFrame(badMagic)
+
+        val badVersion = frames[0].copyOf()
+        badVersion[2] = 0x7f
+        assertRejectedFrame(badVersion)
+
+        val badChecksum = frames[1].copyOf()
+        badChecksum[badChecksum.lastIndex] = (badChecksum[badChecksum.lastIndex].toInt() xor 0x01).toByte()
+        assertRejectedFrame(badChecksum)
+
+        assertRejectedFrame(frames[0].copyOfRange(0, 8))
+
+        val header = OfflineQrStream.Frame.decode(frames[0])
+        val mismatchedHeaderStreamId = header.streamId()
+        mismatchedHeaderStreamId[0] = (mismatchedHeaderStreamId[0].toInt() xor 0x01).toByte()
+        val mismatchedHeader = OfflineQrStream.Frame(
+            OfflineQrStream.FrameKind.HEADER,
+            mismatchedHeaderStreamId,
+            header.index,
+            header.total,
+            header.payload(),
+        ).encode()
+        assertRejectedFrame(mismatchedHeader)
+
+        val firstData = OfflineQrStream.Frame.decode(frames[1])
+        val wrongStreamId = firstData.streamId()
+        wrongStreamId[0] = (wrongStreamId[0].toInt() xor 0x7f).toByte()
+        val wrongStreamFrame = OfflineQrStream.Frame(
+            OfflineQrStream.FrameKind.DATA,
+            wrongStreamId,
+            firstData.index,
+            firstData.total,
+            firstData.payload(),
+        ).encode()
+        val ignoreWrongStreamReceiver = OfflineNoteV2TransferStreamReceiver()
+        assertFalse(ignoreWrongStreamReceiver.ingestFrame(frames[0]).isComplete)
+        assertFalse(ignoreWrongStreamReceiver.ingestFrame(wrongStreamFrame).isComplete)
+        var completed: OfflineNoteV2TransferStreamResult? = null
+        frames.drop(1).forEach { completed = ignoreWrongStreamReceiver.ingestFrame(it) }
+        assertEquals(token.tokenIdHex(), assertNotNull(completed?.token).tokenIdHex())
+
+        val poisonedPayload = firstData.payload()
+        poisonedPayload[0] = (poisonedPayload[0].toInt() xor 0x01).toByte()
+        val poisonedFrame = OfflineQrStream.Frame(
+            OfflineQrStream.FrameKind.DATA,
+            firstData.streamId(),
+            firstData.index,
+            firstData.total,
+            poisonedPayload,
+        ).encode()
+        val poisonedReceiver = OfflineNoteV2TransferStreamReceiver()
+        poisonedReceiver.ingestFrame(frames[0])
+        poisonedReceiver.ingestFrame(poisonedFrame)
+        assertFailsWith<IllegalArgumentException> {
+            frames.drop(2).forEach { poisonedReceiver.ingestFrame(it) }
+        }
+
+        val wrongKindFrames = OfflineQrStream.Encoder.encodeFrameBytes(
+            rawPayload,
+            OfflineQrStream.PayloadKind.OFFLINE_RECEIPT_ACK_V2,
+            OfflineQrStream.Options(chunkSize = 512, parityGroup = 0),
+        )
+        val wrongKindReceiver = OfflineNoteV2TransferStreamReceiver()
+        assertFailsWith<IllegalArgumentException> {
+            wrongKindFrames.forEach { wrongKindReceiver.ingestFrame(it) }
+        }
+    }
+
+    @Test
+    fun nfcApduProtocolSupportsAndroidSafeAndIosFastChunks() {
+        val fixture = loadFixture()
+        val token = OfflineNoteV2PaymentTokenCodec.decodeNorito(
+            base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64")),
+        )
+        val payload = OfflineNoteV2TransferHandoff.rawPaymentTokenBytes(token)
+
+        assertEquals(OfflineNoteV2TransferHandoff.DEFAULT_NFC_AID_HEX, OfflineNoteV2NfcApduProtocol.AID_HEX)
+        assertEquals(OfflineNoteV2NfcCommand.Select, OfflineNoteV2NfcApduProtocol.parseCommand(OfflineNoteV2NfcApduProtocol.selectAidApdu()))
+        assertEquals(OfflineNoteV2NfcCommand.GetInfo, OfflineNoteV2NfcApduProtocol.parseCommand(OfflineNoteV2NfcApduProtocol.getInfoApdu()))
+
+        val infoBytes = OfflineNoteV2NfcApduProtocol.encodeInfo(OfflineNoteV2NfcPayloadKind.PAYMENT_TOKEN, payload)
+        val info = assertNotNull(OfflineNoteV2NfcApduProtocol.decodeInfo(infoBytes))
+        assertEquals(OfflineNoteV2NfcPayloadKind.PAYMENT_TOKEN, info.kind)
+        assertEquals(payload.size, info.payloadLength)
+        assertEquals(OfflineNoteV2NfcApduProtocol.ANDROID_SAFE_CHUNK_BYTES, info.maxChunkLength)
+        assertTrue(OfflineNoteV2NfcApduProtocol.payloadDigestMatches(payload, info.sha256()))
+
+        val androidApdus = OfflineNoteV2TransferHandoff.nfcPaymentTokenWriteApdus(token)
+        assertEquals(
+            OfflineNoteV2NfcCommand.WriteMeta(OfflineNoteV2NfcPayloadKind.PAYMENT_TOKEN, payload.size, info.sha256()),
+            OfflineNoteV2NfcApduProtocol.parseCommand(androidApdus.first()),
+        )
+        androidApdus.drop(1).dropLast(1).forEach { apdu ->
+            val command = OfflineNoteV2NfcApduProtocol.parseCommand(apdu)
+            assertTrue(command is OfflineNoteV2NfcCommand.WriteChunk)
+            assertTrue(command.bytes.size <= OfflineNoteV2NfcApduProtocol.ANDROID_SAFE_CHUNK_BYTES)
+        }
+        assertEquals(OfflineNoteV2NfcCommand.Commit, OfflineNoteV2NfcApduProtocol.parseCommand(androidApdus.last()))
+
+        val fastPayload = ByteArray(512) { 0x5a.toByte() }
+        val fastApdu = OfflineNoteV2NfcApduProtocol.writeChunkApdu(1024, fastPayload)
+        assertContentEquals(
+            byteArrayOf(0x80.toByte(), 0x21, 0x04, 0x00, 0x00, 0x02, 0x00),
+            fastApdu.copyOfRange(0, 7),
+        )
+        assertEquals(
+            OfflineNoteV2NfcCommand.WriteChunk(1024, fastPayload),
+            OfflineNoteV2NfcApduProtocol.parseCommand(fastApdu),
+        )
+        val fastRead = OfflineNoteV2NfcApduProtocol.readChunkApdu(
+            256,
+            OfflineNoteV2NfcApduProtocol.MAX_EXTENDED_READ_CHUNK_BYTES,
+        )
+        assertEquals(
+            OfflineNoteV2NfcCommand.ReadChunk(
+                256,
+                OfflineNoteV2NfcApduProtocol.MAX_EXTENDED_READ_CHUNK_BYTES,
+            ),
+            OfflineNoteV2NfcApduProtocol.parseCommand(fastRead),
+        )
+    }
+
+    @Test
+    fun transportWireFormatMatchesSharedFixture() {
+        val fixture = loadFixture()
+        val token = OfflineNoteV2PaymentTokenCodec.decodeNorito(
+            base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64")),
+        )
+        val payload = OfflineNoteV2TransferHandoff.rawPaymentTokenBytes(token)
+        val writeApdus = OfflineNoteV2TransferHandoff.nfcPaymentTokenWriteApdus(token)
+        val readApdus = OfflineNoteV2NfcApduProtocol.readPayloadApdus(payload.size)
+        val nearbyBytes = OfflineNoteV2TransferHandoff.nearbyPaymentEnvelopeBytes(token)
+
+        assertEquals(2_416, payload.size)
+        assertEquals("00a4040007f049524f48413200", hex(OfflineNoteV2NfcApduProtocol.selectAidApdu()))
+        assertEquals("8010000000", hex(OfflineNoteV2NfcApduProtocol.getInfoApdu()))
+        assertEquals(
+            "01020000097000f044c7349a978489568f9e4de6035df214b471571646fb8a6dec4d2c026aca1a5c",
+            hex(OfflineNoteV2NfcApduProtocol.encodeInfo(OfflineNoteV2NfcPayloadKind.PAYMENT_TOKEN, payload)),
+        )
+        assertEquals(
+            "802000002601020000097044c7349a978489568f9e4de6035df214b471571646fb8a6dec4d2c026aca1a5c",
+            hex(OfflineNoteV2NfcApduProtocol.writeMetaApdu(OfflineNoteV2NfcPayloadKind.PAYMENT_TOKEN, payload)),
+        )
+        assertEquals(13, writeApdus.size)
+        assertEquals(
+            "802000002601020000097044c7349a978489568f9e4de6035df214b471571646fb8a6dec4d2c026aca1a5c",
+            hex(writeApdus[0]),
+        )
+        assertEquals(
+            "4037d861f58cb4820507bd2fe905e395dfc326e93613eb2dd885ba0235cfd053",
+            hex(OfflineNoteV2NfcApduProtocol.sha256(writeApdus[1])),
+        )
+        assertEquals(
+            "802109601063746f722d61756469742d70726f6f66",
+            hex(writeApdus[writeApdus.size - 2]),
+        )
+        assertEquals("8022000000", hex(writeApdus.last()))
+        assertEquals(11, readApdus.size)
+        assertEquals("80110000f0", hex(readApdus.first()))
+        assertEquals(3_335, nearbyBytes.size)
+        assertEquals(
+            "ce3207d3c55c3d89fc91012bb96546ea7ed71617545bc90b266a3c7bd67aec5c",
+            hex(OfflineNoteV2NfcApduProtocol.sha256(nearbyBytes)),
+        )
+    }
+
+    @Test
+    fun nfcApduProtocolRejectsAdversarialPayloadsBeforeCommit() {
+        val payload = "offline-payment".toByteArray()
+        val info = assertNotNull(
+            OfflineNoteV2NfcApduProtocol.decodeInfo(
+                OfflineNoteV2NfcApduProtocol.encodeInfo(OfflineNoteV2NfcPayloadKind.RECEIPT_ACK, payload),
+            ),
+        )
+        val assembler = OfflineNoteV2NfcPayloadAssembler(info)
+
+        assertFalse(assembler.write(payload.size - 2, ByteArray(4) { 1 }))
+        assertTrue(assembler.write(0, payload.copyOfRange(0, 6)))
+        assertTrue(assembler.write(0, payload.copyOfRange(0, 6)))
+        assertFalse(assembler.write(0, "OFFLIN".toByteArray()))
+        assertFailsWith<IllegalArgumentException> { assembler.commit() }
+        assertTrue(assembler.write(6, payload.copyOfRange(6, payload.size)))
+        assertContentEquals(payload, assembler.commit())
+
+        val oversizedInfo = OfflineNoteV2NfcApduProtocol.encodeInfo(OfflineNoteV2NfcPayloadKind.PAYMENT_TOKEN, payload)
+        val oversized = OfflineNoteV2NfcApduProtocol.MAX_INCOMING_PAYLOAD_BYTES + 1
+        oversizedInfo[2] = ((oversized ushr 24) and 0xff).toByte()
+        oversizedInfo[3] = ((oversized ushr 16) and 0xff).toByte()
+        oversizedInfo[4] = ((oversized ushr 8) and 0xff).toByte()
+        oversizedInfo[5] = (oversized and 0xff).toByte()
+        assertEquals(null, OfflineNoteV2NfcApduProtocol.decodeInfo(oversizedInfo))
+
+        val badAssembler = OfflineNoteV2NfcPayloadAssembler(
+            OfflineNoteV2NfcPayloadKind.PAYMENT_TOKEN,
+            payload.size,
+            ByteArray(32),
+        )
+        assertTrue(badAssembler.write(0, payload))
+        assertFailsWith<IllegalArgumentException> { badAssembler.commit() }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2NfcPayloadAssembler(
+                OfflineNoteV2NfcPayloadKind.PAYMENT_TOKEN,
+                OfflineNoteV2NfcApduProtocol.MAX_INCOMING_PAYLOAD_BYTES + 1,
+                ByteArray(32),
+            )
+        }
+    }
+
+    @Test
+    fun nfcApduProtocolRejectsMalformedCommandsAndBounds() {
+        assertEquals(OfflineNoteV2NfcCommand.Invalid, OfflineNoteV2NfcApduProtocol.parseCommand(null))
+        assertEquals(OfflineNoteV2NfcCommand.Invalid, OfflineNoteV2NfcApduProtocol.parseCommand(byteArrayOf(0x00)))
+        assertEquals(
+            OfflineNoteV2NfcCommand.Unsupported,
+            OfflineNoteV2NfcApduProtocol.parseCommand(
+                byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x00, 0x01, 0xFF.toByte(), 0x00),
+            ),
+        )
+        val selectWithNonZeroLe = OfflineNoteV2NfcApduProtocol.selectAidApdu()
+        selectWithNonZeroLe[selectWithNonZeroLe.lastIndex] = 0x01
+        assertEquals(OfflineNoteV2NfcCommand.Unsupported, OfflineNoteV2NfcApduProtocol.parseCommand(selectWithNonZeroLe))
+        assertEquals(
+            OfflineNoteV2NfcCommand.Unsupported,
+            OfflineNoteV2NfcApduProtocol.parseCommand(byteArrayOf(0x81.toByte(), 0x10, 0x00, 0x00, 0x00)),
+        )
+        assertEquals(
+            OfflineNoteV2NfcCommand.Invalid,
+            OfflineNoteV2NfcApduProtocol.parseCommand(byteArrayOf(0x80.toByte(), 0x10, 0x00, 0x01, 0x00)),
+        )
+        assertEquals(
+            OfflineNoteV2NfcCommand.Invalid,
+            OfflineNoteV2NfcApduProtocol.parseCommand(byteArrayOf(0x80.toByte(), 0x10, 0x00, 0x00, 0x01)),
+        )
+        assertEquals(
+            OfflineNoteV2NfcCommand.Invalid,
+            OfflineNoteV2NfcApduProtocol.parseCommand(byteArrayOf(0x80.toByte(), 0x10, 0x00, 0x00, 0x01, 0x00)),
+        )
+        assertEquals(
+            OfflineNoteV2NfcCommand.Invalid,
+            OfflineNoteV2NfcApduProtocol.parseCommand(byteArrayOf(0x80.toByte(), 0x11, 0x00, 0x00, 0x00)),
+        )
+        assertEquals(
+            OfflineNoteV2NfcCommand.Invalid,
+            OfflineNoteV2NfcApduProtocol.parseCommand(
+                byteArrayOf(0x80.toByte(), 0x11, 0x00, 0x00, 0x00, 0x00, 0x00),
+            ),
+        )
+        assertEquals(
+            OfflineNoteV2NfcCommand.Invalid,
+            OfflineNoteV2NfcApduProtocol.parseCommand(byteArrayOf(0x80.toByte(), 0x20, 0x00, 0x00, 0x01, 0x01)),
+        )
+        val writeMetaWithOffset = OfflineNoteV2NfcApduProtocol.writeMetaApdu(
+            OfflineNoteV2NfcPayloadKind.RECEIPT_ACK,
+            byteArrayOf(0x01),
+        )
+        writeMetaWithOffset[3] = 0x01
+        assertEquals(OfflineNoteV2NfcCommand.Invalid, OfflineNoteV2NfcApduProtocol.parseCommand(writeMetaWithOffset))
+        val zeroLengthMeta = byteArrayOf(0x01, OfflineNoteV2NfcPayloadKind.PAYMENT_TOKEN.code.toByte(), 0x00, 0x00, 0x00, 0x00) +
+            ByteArray(32)
+        assertEquals(
+            OfflineNoteV2NfcCommand.Invalid,
+            OfflineNoteV2NfcApduProtocol.parseCommand(
+                byteArrayOf(0x80.toByte(), 0x20, 0x00, 0x00, zeroLengthMeta.size.toByte()) + zeroLengthMeta,
+            ),
+        )
+        assertEquals(
+            OfflineNoteV2NfcCommand.Invalid,
+            OfflineNoteV2NfcApduProtocol.parseCommand(byteArrayOf(0x80.toByte(), 0x21, 0x00, 0x00, 0x00)),
+        )
+        assertEquals(
+            OfflineNoteV2NfcCommand.Invalid,
+            OfflineNoteV2NfcApduProtocol.parseCommand(byteArrayOf(0x80.toByte(), 0x21, 0x00, 0x00, 0x02, 0x01)),
+        )
+        assertEquals(
+            OfflineNoteV2NfcCommand.Invalid,
+            OfflineNoteV2NfcApduProtocol.parseCommand(byteArrayOf(0x80.toByte(), 0x22, 0x00, 0x00, 0x01, 0x00)),
+        )
+        assertEquals(
+            OfflineNoteV2NfcCommand.Invalid,
+            OfflineNoteV2NfcApduProtocol.parseCommand(byteArrayOf(0x80.toByte(), 0x22, 0x01, 0x00, 0x00)),
+        )
+        assertEquals(
+            OfflineNoteV2NfcCommand.Invalid,
+            OfflineNoteV2NfcApduProtocol.parseCommand(byteArrayOf(0x80.toByte(), 0x22, 0x00, 0x00, 0x01)),
+        )
+
+        assertFailsWith<IllegalArgumentException> { OfflineNoteV2NfcApduProtocol.writeChunkApdu(0x1_0000, byteArrayOf(0x01)) }
+        assertFailsWith<IllegalArgumentException> { OfflineNoteV2NfcApduProtocol.writeChunkApdu(0, ByteArray(0)) }
+        assertFailsWith<IllegalArgumentException> { OfflineNoteV2NfcApduProtocol.readChunkApdu(0, 0) }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2NfcApduProtocol.readChunkApdu(
+                0,
+                OfflineNoteV2NfcApduProtocol.MAX_EXTENDED_READ_CHUNK_BYTES + 1,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2NfcApduProtocol.writePayloadApdus(
+                OfflineNoteV2NfcPayloadKind.PAYMENT_TOKEN,
+                byteArrayOf(0x01),
+                0,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> { OfflineNoteV2NfcApduProtocol.readPayloadApdus(0) }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2NfcApduProtocol.readPayloadApdus(
+                1,
+                OfflineNoteV2NfcApduProtocol.MAX_EXTENDED_READ_CHUNK_BYTES + 1,
+            )
+        }
+
+        val response = OfflineNoteV2NfcApduProtocol.response(byteArrayOf(0xAA.toByte(), 0xBB.toByte()))
+        assertContentEquals(byteArrayOf(0xAA.toByte(), 0xBB.toByte(), 0x90.toByte(), 0x00), response)
+        assertEquals(0x9000, OfflineNoteV2NfcApduProtocol.responseStatus(response))
+        assertEquals(-1, OfflineNoteV2NfcApduProtocol.responseStatus(byteArrayOf(0x90.toByte())))
+        assertContentEquals(byteArrayOf(0xAA.toByte(), 0xBB.toByte()), OfflineNoteV2NfcApduProtocol.responseData(response))
+        assertContentEquals(ByteArray(0), OfflineNoteV2NfcApduProtocol.responseData(byteArrayOf(0x90.toByte())))
+
+        val assembler = OfflineNoteV2NfcPayloadAssembler(
+            OfflineNoteV2NfcPayloadKind.RECEIPT_ACK,
+            4,
+            OfflineNoteV2NfcApduProtocol.sha256(byteArrayOf(0x01, 0x02, 0x03, 0x04)),
+        )
+        assertFalse(assembler.write(Int.MAX_VALUE, byteArrayOf(0x01)))
+        assertFalse(assembler.write(4, byteArrayOf(0x01)))
+        assertFalse(assembler.write(-1, byteArrayOf(0x01)))
+        assertFalse(assembler.write(0, ByteArray(0)))
+        assertTrue(assembler.write(0, byteArrayOf(0x01, 0x02)))
+        assertTrue(assembler.write(1, byteArrayOf(0x02, 0x03)))
+        assertFalse(assembler.write(1, byteArrayOf(0x09, 0x09)))
+    }
+
+    @Test
+    fun nearbyEnvelopeRoundTripsPairingPaymentAndAck() {
+        val fixture = loadFixture()
+        val token = OfflineNoteV2PaymentTokenCodec.decodeNorito(
+            base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64")),
+        )
+        val challenge = OfflineNoteV2NearbyPairingChallenge(" nearby_pairing_bird ")
+        val challengeEnvelope = OfflineNoteV2NearbyEnvelope(
+            kind = OfflineNoteV2NearbyMessageKind.CHALLENGE,
+            payload = "receive-challenge".toByteArray(),
+            contentType = OfflineNoteV2TransferHandoff.RECEIVE_CHALLENGE_CONTENT_TYPE,
+            pairingChallenge = challenge,
+        )
+        val paymentBytes = OfflineNoteV2TransferHandoff.nearbyPaymentEnvelopeBytes(token)
+        val paymentEnvelope = OfflineNoteV2NearbyEnvelope.decode(paymentBytes)
+        val ackEnvelope = OfflineNoteV2NearbyEnvelope(
+            kind = OfflineNoteV2NearbyMessageKind.RECEIPT_ACK,
+            payload = "accepted-locally".toByteArray(),
+            contentType = OfflineNoteV2TransferHandoff.RECEIPT_ACK_CONTENT_TYPE,
+        )
+
+        assertEquals(challenge, OfflineNoteV2NearbyEnvelope.decode(challengeEnvelope.encoded()).pairingChallenge)
+        assertEquals(OfflineNoteV2NearbyMessageKind.PAYMENT, paymentEnvelope.kind)
+        assertEquals(token.tokenIdHex(), paymentEnvelope.paymentToken().tokenIdHex())
+        assertEquals(token.tokenIdHex(), OfflineNoteV2TransferHandoff.decodeNearbyPaymentToken(paymentBytes).tokenIdHex())
+        assertContentEquals(
+            "accepted-locally".toByteArray(),
+            OfflineNoteV2NearbyEnvelope.decode(ackEnvelope.encoded()).payload(),
+        )
+
+        val legacyPairing = """
+            {"version":1,"kind":"challenge","payload":"cmVjZWl2ZS1jaGFsbGVuZ2U","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":{"assetName":"nearby_pairing_bird"}}
+        """.trimIndent().toByteArray()
+        assertEquals(challenge, OfflineNoteV2NearbyEnvelope.decode(legacyPairing).pairingChallenge)
+    }
+
+    @Test
+    fun nearbyEnvelopeRejectsAdversarialMessages() {
+        val fixture = loadFixture()
+        val tokenPayload = base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64"))
+        val pairing = OfflineNoteV2NearbyPairingChallenge("nearby_pairing_mask")
+
+        assertFailsWith<IllegalArgumentException> { OfflineNoteV2NearbyPairingChallenge("nearby_pairing_mask<script>") }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2NearbyEnvelope(
+                kind = OfflineNoteV2NearbyMessageKind.CHALLENGE,
+                payload = "challenge".toByteArray(),
+                contentType = OfflineNoteV2TransferHandoff.RECEIVE_CHALLENGE_CONTENT_TYPE,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2NearbyEnvelope(
+                kind = OfflineNoteV2NearbyMessageKind.CHALLENGE,
+                payload = "challenge".toByteArray(),
+                contentType = OfflineNoteV2TransferHandoff.RECEIPT_ACK_CONTENT_TYPE,
+                pairingChallenge = pairing,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2NearbyEnvelope(
+                kind = OfflineNoteV2NearbyMessageKind.PAYMENT,
+                payload = tokenPayload,
+                contentType = OfflineNoteV2TransferHandoff.PAYMENT_TOKEN_CONTENT_TYPE,
+                pairingChallenge = pairing,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2NearbyEnvelope(
+                kind = OfflineNoteV2NearbyMessageKind.PAYMENT,
+                payload = ByteArray(OfflineNoteV2NfcApduProtocol.MAX_INCOMING_PAYLOAD_BYTES + 1) { 1 },
+                contentType = OfflineNoteV2TransferHandoff.PAYMENT_TOKEN_CONTENT_TYPE,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2NearbyEnvelope(
+                kind = OfflineNoteV2NearbyMessageKind.RECEIPT_ACK,
+                payload = "ok".toByteArray(),
+                contentType = OfflineNoteV2TransferHandoff.RECEIVE_CHALLENGE_CONTENT_TYPE,
+            )
+        }
+
+        val unsupportedVersion = """
+            {"version":2,"kind":"payment","payload":"AQID","contentType":"application/vnd.iroha.offline.payment-token-v2+norito"}
+        """.trimIndent().toByteArray()
+        val fractionalVersion = """
+            {"version":1.5,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":"nearby_pairing_bird"}
+        """.trimIndent().toByteArray()
+        val unknownField = """
+            {"version":1,"kind":"payment","payload":"AQID","contentType":"application/vnd.iroha.offline.payment-token-v2+norito","extra":true}
+        """.trimIndent().toByteArray()
+        val challengeContentTypeDowngrade = """
+            {"version":1,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receipt-ack-v1+octet-stream","pairingChallenge":"nearby_pairing_bird"}
+        """.trimIndent().toByteArray()
+        val ackContentTypeDowngrade = """
+            {"version":1,"kind":"receipt_ack","payload":"b2s","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream"}
+        """.trimIndent().toByteArray()
+        val paddedPayload = """
+            {"version":1,"kind":"challenge","payload":"YQ==","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":"nearby_pairing_bird"}
+        """.trimIndent().toByteArray()
+        assertFailsWith<IllegalArgumentException> { OfflineNoteV2NearbyEnvelope.decode(unsupportedVersion) }
+        assertFailsWith<IllegalArgumentException> { OfflineNoteV2NearbyEnvelope.decode(fractionalVersion) }
+        assertFailsWith<IllegalArgumentException> { OfflineNoteV2NearbyEnvelope.decode(unknownField) }
+        assertFailsWith<IllegalArgumentException> { OfflineNoteV2NearbyEnvelope.decode(challengeContentTypeDowngrade) }
+        assertFailsWith<IllegalArgumentException> { OfflineNoteV2NearbyEnvelope.decode(ackContentTypeDowngrade) }
+        assertFailsWith<IllegalArgumentException> { OfflineNoteV2NearbyEnvelope.decode(paddedPayload) }
+
+        val topLevelArray = "[]".toByteArray()
+        val invalidBase64Payload = """
+            {"version":1,"kind":"challenge","payload":"!!!!","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":"nearby_pairing_bird"}
+        """.trimIndent().toByteArray()
+        val badPairingObject = """
+            {"version":1,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":{"assetName":1}}
+        """.trimIndent().toByteArray()
+        val smuggledPairingObject = """
+            {"version":1,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":{"assetName":"nearby_pairing_bird","extra":true}}
+        """.trimIndent().toByteArray()
+        val ackWithPairing = """
+            {"version":1,"kind":"receipt_ack","payload":"b2s","contentType":"application/vnd.iroha.offline.receipt-ack-v1+octet-stream","pairingChallenge":"nearby_pairing_bird"}
+        """.trimIndent().toByteArray()
+        assertFailsWith<IllegalArgumentException> { OfflineNoteV2NearbyEnvelope.decode(topLevelArray) }
+        assertFailsWith<IllegalArgumentException> { OfflineNoteV2NearbyEnvelope.decode(invalidBase64Payload) }
+        assertFailsWith<IllegalArgumentException> { OfflineNoteV2NearbyEnvelope.decode(badPairingObject) }
+        assertFailsWith<IllegalArgumentException> { OfflineNoteV2NearbyEnvelope.decode(smuggledPairingObject) }
+        assertFailsWith<IllegalArgumentException> { OfflineNoteV2NearbyEnvelope.decode(ackWithPairing) }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2NearbyEnvelope(
+                kind = OfflineNoteV2NearbyMessageKind.PAYMENT,
+                payload = byteArrayOf(0x01, 0x02, 0x03),
+                contentType = OfflineNoteV2TransferHandoff.PAYMENT_TOKEN_CONTENT_TYPE,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2NearbyEnvelope(
+                kind = OfflineNoteV2NearbyMessageKind.RECEIPT_ACK,
+                payload = ByteArray(0),
+                contentType = OfflineNoteV2TransferHandoff.RECEIPT_ACK_CONTENT_TYPE,
+            )
+        }
+    }
+
+    @Test
+    fun walletAcceptsCanonicalSdkInteropPaymentToken() {
+        val fixture = loadFixture()
+        val derivation = obj(obj(fixture, "chain_vectors"), "derivation")
+        val recipientCertificate = certificate(obj(obj(fixture, "payment_token"), "recipient_key_certificate"))
+        val recipientStore = InMemoryOfflineNoteV2Store()
+        val recipientWallet = OfflineNoteV2Wallet(
+            chainId = string(derivation, "chain_id"),
+            accountId = string(obj(fixture, "payment_token"), "recipient_account_id"),
+            attestationProvider = StaticAttestationProvider(recipientCertificate),
+            store = recipientStore,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
+            certificateVerifier = certificateVerifier(fixture),
+            randomSource = QueueRandomSource(listOf(hexBytes(string(derivation, "recipient_note_secret_hex")))),
+            idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
+            clock = LongSupplier { 1_700_000_001_200L },
+        )
+        val receiveRequest = recipientWallet.prepareReceive(
+            assetDefinitionId = assetDefinitionFromAssetId(string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id")),
+            amount = string(obj(obj(fixture, "chain_vectors"), "redeem"), "amount"),
+        )
+        assertEquals(string(derivation, "recipient_output_commitment"), receiveRequest.outputCommitmentHex())
+
+        val token = OfflineNoteV2PaymentTokenCodec.decodeNorito(
+            base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64"))
+        )
+        val accepted = recipientWallet.accept(token)
+
+        assertEquals(string(derivation, "recipient_output_commitment"), accepted.noteCommitmentHex())
+        assertEquals(OfflineNoteV2WalletNoteState.SPENDABLE, accepted.state)
+        assertEquals(
+            OfflineNoteV2WalletNoteState.SPENDABLE,
+            recipientStore.findNote(hexBytes(string(derivation, "recipient_output_commitment")))?.state,
+        )
     }
 
     @Test
@@ -2007,6 +2897,23 @@ class OfflineNoteV2Test {
 
     private fun hex(bytes: ByteArray): String =
         bytes.joinToString(separator = "") { "%02x".format(it.toInt() and 0xFF) }
+
+    private fun mutatedHeaderFrame(
+        header: OfflineQrStream.Frame,
+        mutate: (ByteArray) -> ByteArray,
+    ): ByteArray =
+        OfflineQrStream.Frame(
+            OfflineQrStream.FrameKind.HEADER,
+            header.streamId(),
+            header.index,
+            header.total,
+            mutate(header.payload()),
+        ).encode()
+
+    private fun writeUInt16LE(bytes: ByteArray, offset: Int, value: Int) {
+        bytes[offset] = (value and 0xff).toByte()
+        bytes[offset + 1] = ((value ushr 8) and 0xff).toByte()
+    }
 
     private fun assetDefinitionFromAssetId(assetId: String): String = assetId.substringBefore('#')
 

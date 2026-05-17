@@ -1,3 +1,5 @@
+#![allow(clippy::redundant_pub_crate)]
+
 //! Shared BN254 Poseidon width-3 parameter staging for GPU hosts.
 
 use std::sync::OnceLock;

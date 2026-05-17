@@ -136,11 +136,21 @@ export async function checkOpenApiSignatures(options = {}) {
       });
       continue;
     }
-    const requiresSignature = Boolean(entry.signed) || !unsignedAllowed;
-    if (!entry.signed && requiresSignature) {
+    if (!isNonEmptyString(label)) {
+      entryIssues.push('versions entry missing label');
+    } else if (label.trim() !== label) {
+      entryIssues.push('versions entry label must not have surrounding whitespace');
+    }
+    if (typeof entry.signed !== 'boolean') {
+      entryIssues.push('versions entry signed must be boolean');
+    }
+    const entrySigned = entry.signed === true;
+    const requiresSignature = entrySigned || !unsignedAllowed;
+    if (!entrySigned && requiresSignature) {
       entryIssues.push('entry is not flagged as signed');
     }
-    const entryBytes = typeof entry.bytes === 'number' ? entry.bytes : null;
+    const entryBytes =
+      Number.isSafeInteger(entry.bytes) && entry.bytes >= 0 ? entry.bytes : null;
     if (entryBytes === null) {
       entryIssues.push('versions entry missing bytes');
     }
@@ -149,6 +159,22 @@ export async function checkOpenApiSignatures(options = {}) {
       publicKey: normalizeHex(entry.signaturePublicKeyHex),
       signature: normalizeHex(entry.signatureHex),
     };
+    if (entrySignature.algorithm && entrySignature.algorithm !== 'ed25519') {
+      entryIssues.push(`versions entry unsupported signatureAlgorithm ${entrySignature.algorithm}`);
+    }
+    if (entrySignature.publicKey && !isEd25519PublicKeyHex(entrySignature.publicKey)) {
+      entryIssues.push('versions entry invalid signaturePublicKeyHex');
+    }
+    if (entrySignature.signature && !isEd25519SignatureHex(entrySignature.signature)) {
+      entryIssues.push('versions entry invalid signatureHex');
+    }
+    if (
+      unsignedAllowed &&
+      !entrySigned &&
+      (entrySignature.algorithm || entrySignature.publicKey || entrySignature.signature)
+    ) {
+      entryIssues.push('unsigned versions entry must not include signature metadata');
+    }
     if (requiresSignature && !entrySignature.algorithm) {
       entryIssues.push('versions entry missing signatureAlgorithm');
     }
@@ -215,12 +241,24 @@ export async function checkOpenApiSignatures(options = {}) {
     }
 
     if (manifestJson) {
+      if (manifestJson.version !== 1) {
+        entryIssues.push('manifest unsupported version');
+      }
+      if (
+        !Number.isSafeInteger(manifestJson.generated_unix_ms) ||
+        manifestJson.generated_unix_ms < 0
+      ) {
+        entryIssues.push('manifest missing generated_unix_ms');
+      }
+      if (!isNonEmptyString(manifestJson.generator_commit)) {
+        entryIssues.push('manifest missing generator_commit');
+      }
       const artifact = manifestJson.artifact;
-      if (!artifact) {
+      if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
         entryIssues.push('manifest missing artifact metadata');
       } else {
         const manifestBytes =
-          typeof artifact.bytes === 'number' ? artifact.bytes : null;
+          Number.isSafeInteger(artifact.bytes) && artifact.bytes >= 0 ? artifact.bytes : null;
         if (manifestBytes === null) {
           entryIssues.push('manifest missing artifact.bytes');
         } else {
@@ -235,7 +273,10 @@ export async function checkOpenApiSignatures(options = {}) {
             );
           }
         }
-        if (specPath && normalizePath(artifact.path) !== normalizePath(specPath)) {
+        const artifactPath = normalizeArtifactPath(artifact.path);
+        if (!artifactPath) {
+          entryIssues.push('manifest missing or invalid artifact.path');
+        } else if (specPath && artifactPath !== specPath) {
           entryIssues.push(
             `manifest references ${artifact.path ?? '(missing)'}, expected ${specPath}`,
           );
@@ -248,12 +289,15 @@ export async function checkOpenApiSignatures(options = {}) {
             `manifest sha256 mismatch (manifest: ${manifestSha}, computed: ${computedSha256})`,
           );
         }
-        if (entry.blake3) {
+        if (entry.blake3 !== undefined && entry.blake3 !== null) {
           const recorded = normalizeHex(entry.blake3);
+          if (!isBlake3Hex(recorded)) {
+            entryIssues.push('versions entry invalid blake3');
+          }
           const manifestBlake3 = normalizeHex(artifact.blake3_hex);
           if (!manifestBlake3) {
             entryIssues.push('manifest missing artifact.blake3_hex');
-          } else if (recorded && manifestBlake3 !== recorded) {
+          } else if (recorded && isBlake3Hex(recorded) && manifestBlake3 !== recorded) {
             entryIssues.push('manifest blake3 mismatch');
           }
         }
@@ -262,7 +306,12 @@ export async function checkOpenApiSignatures(options = {}) {
           if (requiresSignature) {
             entryIssues.push('manifest missing artifact.signature');
           }
+        } else if (typeof signature !== 'object' || Array.isArray(signature)) {
+          entryIssues.push('manifest signature must be an object');
         } else {
+          if (!requiresSignature) {
+            entryIssues.push('unsigned manifest must not include artifact.signature');
+          }
           const manifestSignatureAlgorithm = normalizeAlgorithm(signature.algorithm);
           if (!manifestSignatureAlgorithm) {
             entryIssues.push('signature missing algorithm');
@@ -270,10 +319,14 @@ export async function checkOpenApiSignatures(options = {}) {
           const manifestSignaturePublicKey = normalizeHex(signature.public_key_hex);
           if (!manifestSignaturePublicKey) {
             entryIssues.push('signature missing public key');
+          } else if (!isEd25519PublicKeyHex(manifestSignaturePublicKey)) {
+            entryIssues.push('signature invalid public key');
           }
           const manifestSignatureValue = normalizeHex(signature.signature_hex);
           if (!manifestSignatureValue) {
             entryIssues.push('signature missing value');
+          } else if (!isEd25519SignatureHex(manifestSignatureValue)) {
+            entryIssues.push('signature invalid value');
           }
           if (
             manifestSignatureAlgorithm &&
@@ -394,11 +447,21 @@ function normalizeVersions(manifest, versionsFile) {
   }
   const issues = [];
   const labels = [];
+  const seen = new Set();
   manifest.versions.forEach((value, index) => {
     if (typeof value !== 'string' || value.trim() === '') {
       issues.push(`versions[${index}] must be a non-empty string`);
       return;
     }
+    if (value.trim() !== value) {
+      issues.push(`versions[${index}] must not have surrounding whitespace`);
+      return;
+    }
+    if (seen.has(value)) {
+      issues.push(`versions[${index}] duplicates ${value}`);
+      return;
+    }
+    seen.add(value);
     labels.push(value);
   });
   if (issues.length > 0) {
@@ -429,19 +492,33 @@ async function loadAllowedSigners(allowedSignersFile) {
   if (!parsed || !Array.isArray(parsed.allow)) {
     throw new Error(`${allowedSignersFile} must contain an allow array`);
   }
+  if (parsed.version !== 1) {
+    throw new Error(`${allowedSignersFile} unsupported version ${parsed.version ?? '(missing)'}`);
+  }
   const entries = [];
   const issues = [];
+  const seenSigners = new Set();
   for (const [index, entry] of parsed.allow.entries()) {
     const algorithm = normalizeAlgorithm(entry?.algorithm);
     const publicKey = normalizeHex(entry?.public_key_hex ?? entry?.publicKeyHex);
     if (!algorithm) {
       issues.push(`entry ${index} missing algorithm`);
+    } else if (algorithm !== 'ed25519') {
+      issues.push(`entry ${index} unsupported algorithm ${algorithm}`);
     }
     if (!publicKey) {
       issues.push(`entry ${index} missing public_key_hex`);
+    } else if (!isEd25519PublicKeyHex(publicKey)) {
+      issues.push(`entry ${index} invalid public_key_hex`);
     }
-    if (algorithm && publicKey) {
-      entries.push(formatSignerKey(algorithm, publicKey));
+    if (algorithm && publicKey && algorithm === 'ed25519' && isEd25519PublicKeyHex(publicKey)) {
+      const signerKey = formatSignerKey(algorithm, publicKey);
+      if (seenSigners.has(signerKey)) {
+        issues.push(`entry ${index} duplicates allowed signer`);
+      } else {
+        seenSigners.add(signerKey);
+        entries.push(signerKey);
+      }
     }
   }
   if (entries.length === 0) {
@@ -472,11 +549,38 @@ function normalizeRelative(value) {
   if (typeof value !== 'string' || value.trim() === '') {
     return null;
   }
-  return value.replace(/^[/\\]+/, '').trim();
+  const normalized = value.trim().replace(/\\/g, '/');
+  if (
+    path.isAbsolute(normalized) ||
+    /^[A-Za-z]:/.test(normalized) ||
+    normalized.split('/').some((segment) => segment === '..')
+  ) {
+    return null;
+  }
+  return normalized.replace(/^\/+/, '');
 }
 
-function normalizePath(value) {
-  return typeof value === 'string' ? value.replace(/\\/g, '/') : value;
+function normalizeArtifactPath(value) {
+  if (typeof value !== 'string' || value.includes('\\')) {
+    return null;
+  }
+  return normalizeRelative(value);
+}
+
+function isEd25519PublicKeyHex(value) {
+  return /^[0-9a-f]{64}$/.test(value);
+}
+
+function isEd25519SignatureHex(value) {
+  return /^[0-9a-f]{128}$/.test(value);
+}
+
+function isBlake3Hex(value) {
+  return /^[0-9a-f]{64}$/.test(value ?? '');
+}
+
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.trim() !== '';
 }
 
 async function runCli() {

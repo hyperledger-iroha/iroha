@@ -3,17 +3,17 @@
     "2025-q2",
     "current"
   ],
-  "generatedAt": "2026-05-17T06:22:05.084Z",
+  "generatedAt": "2026-05-17T08:16:05.504Z",
   "entries": [
     {
       "label": "latest",
       "path": "torii.json",
       "bytes": 461474,
       "sha256": "e4dd02d6eed564cc52259325607326b538c64d17b0c4d3b64318f97ae318f978",
-      "blake3": null,
-      "updatedAt": "2026-05-17T06:22:05.070Z",
+      "blake3": "ec0ba2659706e495cbec14a6cf4a81e53ea5db20464677e7336f5f07b61be4e5",
+      "updatedAt": "2026-05-17T08:16:05.491Z",
       "signed": false,
-      "manifestPath": null,
+      "manifestPath": "manifest.json",
       "signatureAlgorithm": null,
       "signaturePublicKeyHex": null,
       "signatureHex": null
@@ -36,10 +36,10 @@
       "path": "versions/current/torii.json",
       "bytes": 461474,
       "sha256": "e4dd02d6eed564cc52259325607326b538c64d17b0c4d3b64318f97ae318f978",
-      "blake3": null,
-      "updatedAt": "2026-05-17T06:22:05.059Z",
+      "blake3": "ec0ba2659706e495cbec14a6cf4a81e53ea5db20464677e7336f5f07b61be4e5",
+      "updatedAt": "2026-05-17T08:16:05.481Z",
       "signed": false,
-      "manifestPath": null,
+      "manifestPath": "versions/current/manifest.json",
       "signatureAlgorithm": null,
       "signaturePublicKeyHex": null,
       "signatureHex": null

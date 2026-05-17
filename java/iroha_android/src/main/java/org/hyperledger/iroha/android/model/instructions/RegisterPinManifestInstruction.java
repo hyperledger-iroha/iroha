@@ -474,6 +474,9 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
       private Builder() {}
 
       public Builder setMinReplicas(final int minReplicas) {
+        if (minReplicas <= 0) {
+          throw new IllegalArgumentException("minReplicas must be positive");
+        }
         this.minReplicas = minReplicas;
         return this;
       }

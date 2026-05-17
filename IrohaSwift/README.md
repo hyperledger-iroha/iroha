@@ -610,6 +610,37 @@ generation/verification, transaction submission, and persistent storage.
 redeem-pending note records after redeem finality. The SDK includes an in-memory store, a
 `ToriiOfflineNoteV2IssuerClient` for body-signed key-refill plus note-issue
 loads, and a direct `IrohaSDK` audit/redeem submitter.
+`OfflineNoteV2TransferHandoff` wraps the canonical payment token into app-facing
+transfer modalities. Use `qrStreamingFrameBytes(for:)` for animated/binary QR
+flows, `nfcFrameBytes(for:)` for APDU-sized NFC frame exchange, and
+`nearbyPayload(for:)` or `nearbyFrameBytes(for:)` for MultipeerConnectivity or
+other nearby byte channels. `OfflineNoteV2TransferStreamReceiver` reconstructs
+stream frames back into a payment token, and `OfflineNoteV2TransferCapabilities`
+keeps NFC disabled on iOS unless the app explicitly opts in after confirming an
+allowed Core NFC HCE/CardSession use case and entitlement. Apps that want the
+png2-style NFC handoff can use `OfflineNoteV2NfcApduProtocol` directly: select
+the Iroha AID, read/write the 40-byte metadata header, transfer chunks, then
+commit and poll/read a local `receiptAck` payload. The default write helper
+`nfcPaymentTokenWriteAPDUs(for:)` uses Android-safe 240-byte chunks because many
+Android NFC stacks cannot reliably carry larger APDUs; iOS-to-iOS integrations
+can opt into the extended helpers only after both peers advertise support.
+The app-facing receiver rejects completed streams whose QR envelope kind is not
+a payment token, and direct payload decoding enforces the payment-token content
+type before Norito decode. The QR stream decoder also rejects non-canonical
+frame/envelope lengths, header counter drift, data/parity count or chunk-length
+mismatches, out-of-range wire fields, poisoned parity recovery, payload-hash
+mismatches, and conflicting repeated headers or chunks.
+The NFC APDU parser fails closed on nonzero Le bytes for no-data commands,
+non-canonical zero-length reads, and direct read helpers with invalid requested
+lengths; no-offset APDUs also reject smuggled nonzero P1/P2 bytes. Nearby
+decoding rejects fractional versions, unknown fields inside legacy
+pairing-challenge objects, and challenge/receipt ACK content-type downgrades
+instead of ignoring smuggled JSON.
+`OfflineNoteV2NearbyEnvelope` provides the matching sorted-key JSON envelope
+with unpadded base64url payloads, the pairing-image challenge used before
+sending a payment token, and the local receipt ACK returned by the receiver.
+None of these local transports require online sync for offline-to-offline value
+transfer.
 `OfflineNoteV2KeychainStore` writes wallet state through revisioned
 ThisDeviceOnly Keychain records and deletes the previous revision after each
 commit, so app-container rollback cannot revive an earlier note set without the

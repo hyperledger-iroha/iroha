@@ -1263,7 +1263,26 @@ fn require_active_sorafs_uploaded_model_pin(
             )
             .into(),
         )),
+    }?;
+    if pin.digest != bundle.sorafs_manifest_digest {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "SoraFS manifest record digest {:?} does not match uploaded model digest {:?}",
+                pin.digest, bundle.sorafs_manifest_digest
+            )
+            .into(),
+        ));
     }
+    if pin.content_length != bundle.ciphertext_bytes {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "SoraFS manifest {:?} content_length {} does not match uploaded model ciphertext_bytes {}",
+                bundle.sorafs_manifest_digest, pin.content_length, bundle.ciphertext_bytes
+            )
+            .into(),
+        ));
+    }
+    Ok(())
 }
 
 fn normalize_training_reason(reason: &str) -> Result<String, InstructionExecutionError> {
@@ -10762,11 +10781,18 @@ mod tests {
     }
 
     fn uploaded_model_bundle_provenance(bundle: &SoraUploadedModelBundleV1) -> ManifestProvenance {
+        uploaded_model_bundle_provenance_for(bundle, &ALICE_KEYPAIR)
+    }
+
+    fn uploaded_model_bundle_provenance_for(
+        bundle: &SoraUploadedModelBundleV1,
+        key_pair: &KeyPair,
+    ) -> ManifestProvenance {
         let payload = encode_uploaded_model_bundle_register_provenance_payload(bundle.clone())
             .expect("uploaded model bundle payload");
         ManifestProvenance {
-            signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signer: key_pair.public_key().clone(),
+            signature: iroha_crypto::Signature::new(key_pair.private_key(), &payload),
         }
     }
 
@@ -10783,6 +10809,37 @@ mod tests {
         reproducibility_hash: Hash,
         provenance_attestation_hash: Hash,
     ) -> ManifestProvenance {
+        uploaded_model_finalize_provenance_for(
+            service_name,
+            model_name,
+            model_id,
+            artifact_id,
+            weight_version,
+            bundle_root,
+            weight_artifact_hash,
+            dataset_ref,
+            training_config_hash,
+            reproducibility_hash,
+            provenance_attestation_hash,
+            &ALICE_KEYPAIR,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn uploaded_model_finalize_provenance_for(
+        service_name: &iroha_data_model::name::Name,
+        model_name: &str,
+        model_id: &str,
+        artifact_id: &str,
+        weight_version: &str,
+        bundle_root: Hash,
+        weight_artifact_hash: Hash,
+        dataset_ref: &str,
+        training_config_hash: Hash,
+        reproducibility_hash: Hash,
+        provenance_attestation_hash: Hash,
+        key_pair: &KeyPair,
+    ) -> ManifestProvenance {
         let payload = encode_uploaded_model_finalize_provenance_payload(
             service_name.as_ref(),
             model_name,
@@ -10798,14 +10855,33 @@ mod tests {
         )
         .expect("uploaded model finalize payload");
         ManifestProvenance {
-            signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signer: key_pair.public_key().clone(),
+            signature: iroha_crypto::Signature::new(key_pair.private_key(), &payload),
         }
     }
 
     fn insert_uploaded_model_pin(
         state_transaction: &mut StateTransaction<'_, '_>,
         digest: ManifestDigest,
+        status: PinStatus,
+    ) {
+        insert_uploaded_model_pin_record(state_transaction, digest, digest, 4_352, status);
+    }
+
+    fn insert_uploaded_model_pin_with_content_length(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        digest: ManifestDigest,
+        content_length: u64,
+        status: PinStatus,
+    ) {
+        insert_uploaded_model_pin_record(state_transaction, digest, digest, content_length, status);
+    }
+
+    fn insert_uploaded_model_pin_record(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        storage_key_digest: ManifestDigest,
+        record_digest: ManifestDigest,
+        content_length: u64,
         status: PinStatus,
     ) {
         let chunker = iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
@@ -10820,9 +10896,8 @@ mod tests {
             storage_class: StorageClass::Warm,
             retention_epoch: u64::MAX,
         };
-        let content_length = 4_352;
         let mut record = iroha_data_model::sorafs::pin_registry::PinManifestRecord::new(
-            digest,
+            record_digest,
             chunker,
             [0xA7; 32],
             policy,
@@ -10862,7 +10937,10 @@ mod tests {
             }
             PinStatus::Retired(epoch) => record.retire(epoch, None),
         }
-        state_transaction.world.pin_manifests.insert(digest, record);
+        state_transaction
+            .world
+            .pin_manifests
+            .insert(storage_key_digest, record);
     }
 
     fn deploy_uploaded_model_service(
@@ -14929,6 +15007,204 @@ mod tests {
     }
 
     #[test]
+    fn soracloud_uploaded_model_register_rejects_adversarial_sorafs_pin_metadata()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        deploy_uploaded_model_service(&mut stx)?;
+
+        let digest_mismatch = ManifestDigest::new([0xCA; 32]);
+        let digest_mismatch_bundle = sample_uploaded_model_bundle("portal", digest_mismatch);
+        insert_uploaded_model_pin_record(
+            &mut stx,
+            digest_mismatch,
+            ManifestDigest::new([0xCB; 32]),
+            digest_mismatch_bundle.ciphertext_bytes,
+            PinStatus::Approved(1),
+        );
+        let digest_mismatch_result = isi::RegisterSoracloudUploadedModelBundle {
+            bundle: digest_mismatch_bundle.clone(),
+            provenance: uploaded_model_bundle_provenance(&digest_mismatch_bundle),
+        }
+        .execute(&ALICE_ID, &mut stx);
+        assert!(digest_mismatch_result.is_err());
+
+        let length_mismatch = ManifestDigest::new([0xCC; 32]);
+        let length_mismatch_bundle = sample_uploaded_model_bundle("portal", length_mismatch);
+        insert_uploaded_model_pin_with_content_length(
+            &mut stx,
+            length_mismatch,
+            length_mismatch_bundle.ciphertext_bytes.saturating_sub(1),
+            PinStatus::Approved(1),
+        );
+        let length_mismatch_result = isi::RegisterSoracloudUploadedModelBundle {
+            bundle: length_mismatch_bundle.clone(),
+            provenance: uploaded_model_bundle_provenance(&length_mismatch_bundle),
+        }
+        .execute(&ALICE_ID, &mut stx);
+        assert!(length_mismatch_result.is_err());
+
+        assert!(
+            stx.world
+                .soracloud_uploaded_model_bundles
+                .get(&(
+                    "portal".to_string(),
+                    "vision_model".to_string(),
+                    "v1".to_string(),
+                ))
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_uploaded_model_register_rejects_malformed_identifiers() -> Result<(), eyre::Report>
+    {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        deploy_uploaded_model_service(&mut stx)?;
+
+        let invalid_model_digest = ManifestDigest::new([0xE0; 32]);
+        insert_uploaded_model_pin(&mut stx, invalid_model_digest, PinStatus::Approved(1));
+        let mut invalid_model_bundle = sample_uploaded_model_bundle("portal", invalid_model_digest);
+        invalid_model_bundle.model_id = "vision model".to_string();
+        let invalid_model_result = isi::RegisterSoracloudUploadedModelBundle {
+            bundle: invalid_model_bundle.clone(),
+            provenance: uploaded_model_bundle_provenance(&invalid_model_bundle),
+        }
+        .execute(&ALICE_ID, &mut stx);
+        assert!(invalid_model_result.is_err());
+
+        let invalid_version_digest = ManifestDigest::new([0xE1; 32]);
+        insert_uploaded_model_pin(&mut stx, invalid_version_digest, PinStatus::Approved(1));
+        let mut invalid_version_bundle =
+            sample_uploaded_model_bundle("portal", invalid_version_digest);
+        invalid_version_bundle.weight_version = "v1\nreplay".to_string();
+        let invalid_version_result = isi::RegisterSoracloudUploadedModelBundle {
+            bundle: invalid_version_bundle.clone(),
+            provenance: uploaded_model_bundle_provenance(&invalid_version_bundle),
+        }
+        .execute(&ALICE_ID, &mut stx);
+        assert!(invalid_version_result.is_err());
+
+        assert_eq!(
+            stx.world
+                .soracloud_uploaded_model_bundles
+                .iter()
+                .filter(|((service, _model, _version), _)| service == "portal")
+                .count(),
+            0
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_uploaded_model_register_rejects_disallowed_service_plane()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        let mut service_bundle = sample_bundle("portal", "1.0.0", 0);
+        service_bundle.container.capabilities.allow_model_training = false;
+        service_bundle.container.capabilities.allow_model_inference = false;
+        service_bundle.service.container.manifest_hash = service_bundle.container_manifest_hash();
+        isi::DeploySoracloudService {
+            bundle: service_bundle.clone(),
+            initial_service_configs: BTreeMap::new(),
+            initial_service_secrets: BTreeMap::new(),
+            provenance: bundle_provenance(&service_bundle),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+
+        let digest = ManifestDigest::new([0xCD; 32]);
+        insert_uploaded_model_pin(&mut stx, digest, PinStatus::Approved(1));
+        let bundle = sample_uploaded_model_bundle("portal", digest);
+        let result = isi::RegisterSoracloudUploadedModelBundle {
+            bundle: bundle.clone(),
+            provenance: uploaded_model_bundle_provenance(&bundle),
+        }
+        .execute(&ALICE_ID, &mut stx);
+        assert!(result.is_err());
+        assert!(
+            stx.world
+                .soracloud_uploaded_model_bundles
+                .get(&(
+                    "portal".to_string(),
+                    "vision_model".to_string(),
+                    "v1".to_string(),
+                ))
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_uploaded_model_register_rejects_nexus_limit_overrides() -> Result<(), eyre::Report>
+    {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        deploy_uploaded_model_service(&mut stx)?;
+
+        let plaintext_digest = ManifestDigest::new([0xCE; 32]);
+        insert_uploaded_model_pin(&mut stx, plaintext_digest, PinStatus::Approved(1));
+        stx.nexus.uploaded_models.max_plaintext_bytes_per_model = 1;
+        let plaintext_bundle = sample_uploaded_model_bundle("portal", plaintext_digest);
+        let plaintext_result = isi::RegisterSoracloudUploadedModelBundle {
+            bundle: plaintext_bundle.clone(),
+            provenance: uploaded_model_bundle_provenance(&plaintext_bundle),
+        }
+        .execute(&ALICE_ID, &mut stx);
+        assert!(plaintext_result.is_err());
+
+        let chunk_digest = ManifestDigest::new([0xCF; 32]);
+        insert_uploaded_model_pin(&mut stx, chunk_digest, PinStatus::Approved(1));
+        stx.nexus.uploaded_models.max_plaintext_bytes_per_model = u64::MAX;
+        stx.nexus.uploaded_models.max_chunk_count_per_model = 0;
+        let chunk_bundle = sample_uploaded_model_bundle("portal", chunk_digest);
+        let chunk_result = isi::RegisterSoracloudUploadedModelBundle {
+            bundle: chunk_bundle.clone(),
+            provenance: uploaded_model_bundle_provenance(&chunk_bundle),
+        }
+        .execute(&ALICE_ID, &mut stx);
+        assert!(chunk_result.is_err());
+
+        assert!(
+            stx.world
+                .soracloud_uploaded_model_bundles
+                .get(&(
+                    "portal".to_string(),
+                    "vision_model".to_string(),
+                    "v1".to_string(),
+                ))
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn soracloud_uploaded_model_register_rejects_tampered_signed_bundle() -> Result<(), eyre::Report>
     {
         let kura = Kura::blank_kura_for_testing();
@@ -14958,6 +15234,80 @@ mod tests {
                     "v1".to_string(),
                 ))
                 .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_uploaded_model_register_rejects_provenance_signer_mismatch()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        deploy_uploaded_model_service(&mut stx)?;
+        let digest = ManifestDigest::new([0xD0; 32]);
+        insert_uploaded_model_pin(&mut stx, digest, PinStatus::Approved(1));
+        let bundle = sample_uploaded_model_bundle("portal", digest);
+        let result = isi::RegisterSoracloudUploadedModelBundle {
+            bundle: bundle.clone(),
+            provenance: uploaded_model_bundle_provenance_for(&bundle, &BOB_KEYPAIR),
+        }
+        .execute(&ALICE_ID, &mut stx);
+        assert!(result.is_err());
+        assert!(
+            stx.world
+                .soracloud_uploaded_model_bundles
+                .get(&(
+                    "portal".to_string(),
+                    "vision_model".to_string(),
+                    "v1".to_string(),
+                ))
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_uploaded_model_register_rejects_duplicate_model_version()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        deploy_uploaded_model_service(&mut stx)?;
+        let digest = ManifestDigest::new([0xC7; 32]);
+        insert_uploaded_model_pin(&mut stx, digest, PinStatus::Approved(1));
+        let bundle = sample_uploaded_model_bundle("portal", digest);
+        isi::RegisterSoracloudUploadedModelBundle {
+            bundle: bundle.clone(),
+            provenance: uploaded_model_bundle_provenance(&bundle),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+
+        let result = isi::RegisterSoracloudUploadedModelBundle {
+            bundle: bundle.clone(),
+            provenance: uploaded_model_bundle_provenance(&bundle),
+        }
+        .execute(&ALICE_ID, &mut stx);
+        assert!(result.is_err());
+        assert_eq!(
+            stx.world
+                .soracloud_uploaded_model_bundles
+                .iter()
+                .filter(|((service, model, version), _)| {
+                    service == "portal" && model == "vision_model" && version == "v1"
+                })
+                .count(),
+            1
         );
         Ok(())
     }
@@ -15085,6 +15435,259 @@ mod tests {
                 .get(&(
                     "portal".to_string(),
                     "uploaded-artifact-tampered".to_string(),
+                ))
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_uploaded_model_finalize_rejects_tampered_signed_payload()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        deploy_uploaded_model_service(&mut stx)?;
+        let digest = ManifestDigest::new([0xD8; 32]);
+        insert_uploaded_model_pin(&mut stx, digest, PinStatus::Approved(1));
+        let bundle = sample_uploaded_model_bundle("portal", digest);
+        isi::RegisterSoracloudUploadedModelBundle {
+            bundle: bundle.clone(),
+            provenance: uploaded_model_bundle_provenance(&bundle),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+
+        let mut instruction = sample_uploaded_model_finalize_instruction(
+            &bundle,
+            "uploaded-artifact-replayed",
+            bundle.bundle_root,
+        );
+        instruction.model_id = "vision_model_replayed".to_string();
+        let result = instruction.execute(&ALICE_ID, &mut stx);
+        assert!(result.is_err());
+        assert!(
+            stx.world
+                .soracloud_model_artifacts
+                .get(&(
+                    "portal".to_string(),
+                    "uploaded-artifact-replayed".to_string(),
+                ))
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_uploaded_model_finalize_rejects_malformed_identifiers() -> Result<(), eyre::Report>
+    {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        deploy_uploaded_model_service(&mut stx)?;
+        let digest = ManifestDigest::new([0xE2; 32]);
+        insert_uploaded_model_pin(&mut stx, digest, PinStatus::Approved(1));
+        let bundle = sample_uploaded_model_bundle("portal", digest);
+        isi::RegisterSoracloudUploadedModelBundle {
+            bundle: bundle.clone(),
+            provenance: uploaded_model_bundle_provenance(&bundle),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+
+        let invalid_artifact_result = sample_uploaded_model_finalize_instruction(
+            &bundle,
+            "uploaded artifact",
+            bundle.bundle_root,
+        )
+        .execute(&ALICE_ID, &mut stx);
+        assert!(invalid_artifact_result.is_err());
+
+        let mut invalid_model_instruction = sample_uploaded_model_finalize_instruction(
+            &bundle,
+            "uploaded-artifact-invalid-model",
+            bundle.bundle_root,
+        );
+        invalid_model_instruction.model_id = "vision model".to_string();
+        let invalid_model_result = invalid_model_instruction.execute(&ALICE_ID, &mut stx);
+        assert!(invalid_model_result.is_err());
+
+        let mut invalid_version_instruction = sample_uploaded_model_finalize_instruction(
+            &bundle,
+            "uploaded-artifact-invalid-version",
+            bundle.bundle_root,
+        );
+        invalid_version_instruction.weight_version = "v1\tshadow".to_string();
+        let invalid_version_result = invalid_version_instruction.execute(&ALICE_ID, &mut stx);
+        assert!(invalid_version_result.is_err());
+
+        assert_eq!(
+            stx.world
+                .soracloud_model_artifacts
+                .iter()
+                .filter(|((service, artifact), _)| {
+                    service == "portal" && artifact.starts_with("uploaded-artifact-invalid")
+                })
+                .count(),
+            0
+        );
+        assert!(
+            stx.world
+                .soracloud_model_artifacts
+                .get(&("portal".to_string(), "uploaded artifact".to_string()))
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_uploaded_model_finalize_rejects_duplicate_weight_version()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        deploy_uploaded_model_service(&mut stx)?;
+        let digest = ManifestDigest::new([0xD9; 32]);
+        insert_uploaded_model_pin(&mut stx, digest, PinStatus::Approved(1));
+        let bundle = sample_uploaded_model_bundle("portal", digest);
+        isi::RegisterSoracloudUploadedModelBundle {
+            bundle: bundle.clone(),
+            provenance: uploaded_model_bundle_provenance(&bundle),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+        sample_uploaded_model_finalize_instruction(
+            &bundle,
+            "uploaded-artifact-original",
+            bundle.bundle_root,
+        )
+        .execute(&ALICE_ID, &mut stx)?;
+
+        let result = sample_uploaded_model_finalize_instruction(
+            &bundle,
+            "uploaded-artifact-replayed-version",
+            bundle.bundle_root,
+        )
+        .execute(&ALICE_ID, &mut stx);
+        assert!(result.is_err());
+        assert!(
+            stx.world
+                .soracloud_model_artifacts
+                .get(&(
+                    "portal".to_string(),
+                    "uploaded-artifact-replayed-version".to_string(),
+                ))
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_uploaded_model_finalize_rejects_pin_metadata_changed_after_register()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        deploy_uploaded_model_service(&mut stx)?;
+        let digest = ManifestDigest::new([0xDA; 32]);
+        insert_uploaded_model_pin(&mut stx, digest, PinStatus::Approved(1));
+        let bundle = sample_uploaded_model_bundle("portal", digest);
+        isi::RegisterSoracloudUploadedModelBundle {
+            bundle: bundle.clone(),
+            provenance: uploaded_model_bundle_provenance(&bundle),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+        insert_uploaded_model_pin_with_content_length(
+            &mut stx,
+            digest,
+            bundle.ciphertext_bytes + 1,
+            PinStatus::Approved(2),
+        );
+
+        let result = sample_uploaded_model_finalize_instruction(
+            &bundle,
+            "uploaded-artifact-mutated-pin",
+            bundle.bundle_root,
+        )
+        .execute(&ALICE_ID, &mut stx);
+        assert!(result.is_err());
+        assert!(
+            stx.world
+                .soracloud_model_artifacts
+                .get(&(
+                    "portal".to_string(),
+                    "uploaded-artifact-mutated-pin".to_string(),
+                ))
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_uploaded_model_finalize_rejects_provenance_signer_mismatch()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        deploy_uploaded_model_service(&mut stx)?;
+        let digest = ManifestDigest::new([0xDB; 32]);
+        insert_uploaded_model_pin(&mut stx, digest, PinStatus::Approved(1));
+        let bundle = sample_uploaded_model_bundle("portal", digest);
+        isi::RegisterSoracloudUploadedModelBundle {
+            bundle: bundle.clone(),
+            provenance: uploaded_model_bundle_provenance(&bundle),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+
+        let mut instruction = sample_uploaded_model_finalize_instruction(
+            &bundle,
+            "uploaded-artifact-signer-mismatch",
+            bundle.bundle_root,
+        );
+        instruction.provenance = uploaded_model_finalize_provenance_for(
+            &bundle.service_name,
+            "vision_model",
+            &bundle.model_id,
+            "uploaded-artifact-signer-mismatch",
+            &bundle.weight_version,
+            bundle.bundle_root,
+            instruction.weight_artifact_hash,
+            &instruction.dataset_ref,
+            instruction.training_config_hash,
+            instruction.reproducibility_hash,
+            instruction.provenance_attestation_hash,
+            &BOB_KEYPAIR,
+        );
+        let result = instruction.execute(&ALICE_ID, &mut stx);
+        assert!(result.is_err());
+        assert!(
+            stx.world
+                .soracloud_model_artifacts
+                .get(&(
+                    "portal".to_string(),
+                    "uploaded-artifact-signer-mismatch".to_string(),
                 ))
                 .is_none()
         );

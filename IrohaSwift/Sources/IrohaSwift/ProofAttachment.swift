@@ -7,6 +7,7 @@ public enum ProofAttachmentError: Error, LocalizedError, Sendable {
     case emptyVerifyingKeyBackend
     case emptyVerifyingKeyName
     case invalidVerifyingKeySeparator
+    case verifyingKeyBackendMismatch(expected: String, actual: String)
     case invalidVerifyingKeyCommitmentLength(expected: Int, actual: Int)
     case invalidEnvelopeHashLength(expected: Int, actual: Int)
 
@@ -24,6 +25,8 @@ public enum ProofAttachmentError: Error, LocalizedError, Sendable {
             return "Verifying key name must not be empty."
         case .invalidVerifyingKeySeparator:
             return "Verifying key backend and name must not contain ':' characters."
+        case let .verifyingKeyBackendMismatch(expected, actual):
+            return "Verifying key backend must match proof backend \(expected) (found \(actual))."
         case let .invalidVerifyingKeyCommitmentLength(expected, actual):
             return "Verifying key commitment must be \(expected) bytes (found \(actual))."
         case let .invalidEnvelopeHashLength(expected, actual):
@@ -69,6 +72,12 @@ public struct ProofAttachment: Sendable, Equatable {
             let normalizedName = try Self.normalizeNonEmpty(ref.name, error: .emptyVerifyingKeyName)
             try Self.ensureNoSeparator(normalizedRefBackend)
             try Self.ensureNoSeparator(normalizedName)
+            guard normalizedRefBackend == normalizedBackend else {
+                throw ProofAttachmentError.verifyingKeyBackendMismatch(
+                    expected: normalizedBackend,
+                    actual: normalizedRefBackend
+                )
+            }
             normalizedKey = .reference(.init(backend: normalizedRefBackend, name: normalizedName))
         }
         if let commitment = verifyingKeyCommitment {

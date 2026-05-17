@@ -352,6 +352,7 @@ mod tests {
     #[cfg(all(test, feature = "fastpq-gpu"))]
     fn run_gpu_poseidon_permute(states: &mut [u64]) -> Result<(), String> {
         use crate::backend;
+        let _lane = backend::acquire_gpu_lane();
         match backend::current_gpu_backend() {
             Some(backend::GpuBackend::Cuda) => {
                 fastpq_cuda::fastpq_poseidon_permute(states).map_err(|err| err.to_string())

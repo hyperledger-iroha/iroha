@@ -1827,6 +1827,60 @@ test("registerSorafsPinManifest rejects negative retention epoch before fetch", 
   );
 });
 
+test("registerSorafsPinManifest rejects negative submitted epoch before fetch", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: () => {
+      throw new Error("fetch should not be called");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.registerSorafsPinManifest({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        chunker: {
+          profileId: 1,
+          namespace: "sorafs",
+          name: "sf1",
+          semver: "1.0.0",
+        },
+        pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
+        manifestDigestHex: "a".repeat(64),
+        chunkDigestSha3_256Hex: "b".repeat(64),
+        contentLength: 4096,
+        submittedEpoch: -1,
+      }),
+    /submittedEpoch.*non-negative/i,
+  );
+});
+
+test("registerSorafsPinManifest rejects malformed manifest digest before fetch", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: () => {
+      throw new Error("fetch should not be called");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.registerSorafsPinManifest({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        chunker: {
+          profileId: 1,
+          namespace: "sorafs",
+          name: "sf1",
+          semver: "1.0.0",
+        },
+        pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
+        manifestDigestHex: "abc123",
+        chunkDigestSha3_256Hex: "b".repeat(64),
+        contentLength: 4096,
+        submittedEpoch: 1,
+      }),
+    /manifestDigestHex.*32-byte hex/i,
+  );
+});
+
 test("registerSorafsPinManifest rejects alias without proof before fetch", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: () => {
@@ -2042,6 +2096,164 @@ test("registerSorafsPinManifestTyped rejects negative fee receipt", async () => 
         submittedEpoch: 42,
       }),
     /pin_fee_nano.*non-negative/i,
+  );
+});
+
+test("registerSorafsPinManifestTyped rejects negative response content length", async () => {
+  const manifestHex = "a".repeat(64);
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        manifestDigestHex: manifestHex,
+        chunkerHandle: "sorafs.sf1@1.0.0",
+        submittedEpoch: 42,
+        contentLength: "-1",
+        pinFeeNano: "500000000",
+        pinFeeAssetId: "xor#universal",
+        pinFeeTreasuryAccountId: FIXTURE_ALICE_ID,
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () =>
+      client.registerSorafsPinManifestTyped({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        chunker: {
+          profileId: 1,
+          namespace: "sorafs",
+          name: "sf1",
+          semver: "1.0.0",
+          multihashCode: 0,
+        },
+        pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
+        manifestDigestHex: manifestHex,
+        chunkDigestSha3_256Hex: "c".repeat(64),
+        contentLength: 4096,
+        submittedEpoch: 42,
+      }),
+    /content_length.*non-negative/i,
+  );
+});
+
+test("registerSorafsPinManifestTyped rejects negative response submitted epoch", async () => {
+  const manifestHex = "a".repeat(64);
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        manifestDigestHex: manifestHex,
+        chunkerHandle: "sorafs.sf1@1.0.0",
+        submittedEpoch: "-1",
+        contentLength: 4096,
+        pinFeeNano: "500000000",
+        pinFeeAssetId: "xor#universal",
+        pinFeeTreasuryAccountId: FIXTURE_ALICE_ID,
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () =>
+      client.registerSorafsPinManifestTyped({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        chunker: {
+          profileId: 1,
+          namespace: "sorafs",
+          name: "sf1",
+          semver: "1.0.0",
+          multihashCode: 0,
+        },
+        pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
+        manifestDigestHex: manifestHex,
+        chunkDigestSha3_256Hex: "c".repeat(64),
+        contentLength: 4096,
+        submittedEpoch: 42,
+      }),
+    /submitted_epoch.*non-negative/i,
+  );
+});
+
+test("registerSorafsPinManifestTyped rejects malformed response successor digest", async () => {
+  const manifestHex = "a".repeat(64);
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        manifestDigestHex: manifestHex,
+        chunkerHandle: "sorafs.sf1@1.0.0",
+        submittedEpoch: "42",
+        contentLength: 4096,
+        pinFeeNano: "500000000",
+        pinFeeAssetId: "xor#universal",
+        pinFeeTreasuryAccountId: FIXTURE_ALICE_ID,
+        successorOfHex: "zz",
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () =>
+      client.registerSorafsPinManifestTyped({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        chunker: {
+          profileId: 1,
+          namespace: "sorafs",
+          name: "sf1",
+          semver: "1.0.0",
+          multihashCode: 0,
+        },
+        pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
+        manifestDigestHex: manifestHex,
+        chunkDigestSha3_256Hex: "c".repeat(64),
+        contentLength: 4096,
+        submittedEpoch: 42,
+      }),
+    /successor_of_hex.*32-byte hex/i,
+  );
+});
+
+test("registerSorafsPinManifestTyped rejects response alias without proof", async () => {
+  const manifestHex = "a".repeat(64);
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        manifestDigestHex: manifestHex,
+        chunkerHandle: "sorafs.sf1@1.0.0",
+        submittedEpoch: "42",
+        contentLength: 4096,
+        pinFeeNano: "500000000",
+        pinFeeAssetId: "xor#universal",
+        pinFeeTreasuryAccountId: FIXTURE_ALICE_ID,
+        alias: { namespace: "docs", name: "main" },
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () =>
+      client.registerSorafsPinManifestTyped({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        chunker: {
+          profileId: 1,
+          namespace: "sorafs",
+          name: "sf1",
+          semver: "1.0.0",
+          multihashCode: 0,
+        },
+        pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
+        manifestDigestHex: manifestHex,
+        chunkDigestSha3_256Hex: "c".repeat(64),
+        contentLength: 4096,
+        submittedEpoch: 42,
+      }),
+    /alias\.proof/i,
   );
 });
 

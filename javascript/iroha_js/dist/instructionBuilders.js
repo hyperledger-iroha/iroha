@@ -92,6 +92,30 @@ function assertString(value, name) {
   return value;
 }
 
+function assertNonBlankString(value, name) {
+  const raw = assertString(value, name);
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
+  }
+  return trimmed;
+}
+
+function readSingleAlias(source, aliases, name, description) {
+  const present = aliases.filter((key) => Object.prototype.hasOwnProperty.call(source, key));
+  if (present.length > 1) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must not include multiple ${description} aliases: ${present.join(", ")}`,
+      name,
+    );
+  }
+  if (present.length === 0) {
+    return { key: null, value: undefined };
+  }
+  return { key: present[0], value: source[present[0]] };
+}
+
 function normalizeNumericLiteral(value, name, { allowNegative = false } = {}) {
   let raw;
   if (typeof value === "string") {
@@ -1017,14 +1041,45 @@ function normalizeVerifyingKeyId(value, name) {
         name,
       );
     }
+    const backend = parts[0].trim();
+    const keyName = parts[1].trim();
+    if (backend.length === 0 || keyName.length === 0) {
+      fail(
+        ValidationErrorCode.INVALID_STRING,
+        `${name} must be in 'backend:name' format`,
+        name,
+      );
+    }
     return {
-      backend: parts[0],
-      name: parts[1],
+      backend,
+      name: keyName,
     };
   }
   const object = assertPlainObject(value, name);
-  const backend = assertString(object.backend ?? object.backendId, `${name}.backend`);
-  const keyName = assertString(object.name ?? object.id ?? object.key, `${name}.name`);
+  const allowedFields = new Set(["backend", "backendId", "name", "id", "key"]);
+  for (const field of Object.keys(object)) {
+    if (!allowedFields.has(field)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.${field} is not supported`,
+        `${name}.${field}`,
+      );
+    }
+  }
+  const backendAlias = readSingleAlias(
+    object,
+    ["backend", "backendId"],
+    `${name}.backend`,
+    "backend",
+  );
+  const nameAlias = readSingleAlias(
+    object,
+    ["name", "id", "key"],
+    `${name}.name`,
+    "name",
+  );
+  const backend = assertNonBlankString(backendAlias.value, `${name}.backend`);
+  const keyName = assertNonBlankString(nameAlias.value, `${name}.name`);
   return { backend, name: keyName };
 }
 
@@ -1087,26 +1142,57 @@ function normalizeConfidentialEncryptedPayload(value, name) {
 
 function normalizeProofAttachment(value, name) {
   const source = assertPlainObject(value, name);
+  for (const field of [
+    "vk_inline",
+    "vkInline",
+    "verifyingKeyInline",
+    "verifying_key_inline",
+    "vk_reference",
+  ]) {
+    if (Object.prototype.hasOwnProperty.call(source, field)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.${field} is not supported; use verifyingKeyRef`,
+        `${name}.${field}`,
+      );
+    }
+  }
   const backend = assertString(source.backend, `${name}.backend`);
-  let rawProof =
-    source.proofBytes ??
-    source.proof_bytes ??
-    source.proof ??
-    source.proof_b64 ??
-    source.proofBase64;
+  const proofAlias = readSingleAlias(
+    source,
+    ["proofBytes", "proof_bytes", "proof", "proof_b64", "proofBase64", "proofB64"],
+    `${name}.proof`,
+    "proof byte",
+  );
+  const rawProof = proofAlias.value;
   const attachmentHasProofBytes =
-    "proof" in source || "proof_b64" in source || "proofB64" in source;
+    proofAlias.key === "proof" ||
+    proofAlias.key === "proof_b64" ||
+    proofAlias.key === "proofB64";
   const structuredProofBox =
     !attachmentHasProofBytes &&
     rawProof &&
     typeof rawProof === "object" &&
     !Array.isArray(rawProof);
 
-  let verifyRef = source.verifyingKeyRef ?? source.vkRef ?? source.vk_ref;
-  let commitmentInput =
-    source.verifyingKeyCommitment ?? source.vkCommitment ?? source.vk_commitment;
-  let envelopeInput =
-    source.envelopeHash ?? source.envelope_hash ?? source.proofEnvelopeHash;
+  const verifyRef = readSingleAlias(
+    source,
+    ["verifyingKeyRef", "vkRef", "vk_ref"],
+    `${name}.verifyingKeyRef`,
+    "verifying key reference",
+  ).value;
+  const commitmentInput = readSingleAlias(
+    source,
+    ["verifyingKeyCommitment", "vkCommitment", "vk_commitment"],
+    `${name}.verifyingKeyCommitment`,
+    "verifying key commitment",
+  ).value;
+  const envelopeInput = readSingleAlias(
+    source,
+    ["envelopeHash", "envelope_hash", "proofEnvelopeHash"],
+    `${name}.envelopeHash`,
+    "envelope hash",
+  ).value;
 
   let proofBox;
   if (attachmentHasProofBytes) {
@@ -1114,22 +1200,28 @@ function normalizeProofAttachment(value, name) {
       source.backend ?? backend,
       `${name}.proof.backend`,
     );
-    const proofValue = source.proof ?? source.proof_b64 ?? source.proofB64;
     proofBox = {
       backend: proofBackend,
-      bytes: normalizeByteArray(proofValue, `${name}.proof`),
+      bytes: normalizeByteArray(rawProof, `${name}.proof`),
     };
-    verifyRef ??=
-      source.verifyingKeyRef ??
-      source.vkRef ??
-      source.vk_ref ??
-      source.vk_reference;
-    commitmentInput ??=
-      source.verifyingKeyCommitment ??
-      source.vkCommitment ??
-      source.vk_commitment;
-    envelopeInput ??= source.envelopeHash ?? source.envelope_hash;
   } else if (structuredProofBox) {
+    const allowedProofFields = new Set([
+      "backend",
+      "bytes",
+      "bytes_b64",
+      "bytesBase64",
+      "data",
+      "payload",
+    ]);
+    for (const field of Object.keys(rawProof)) {
+      if (!allowedProofFields.has(field)) {
+        fail(
+          ValidationErrorCode.INVALID_OBJECT,
+          `${name}.proof.${field} is not supported`,
+          `${name}.proof.${field}`,
+        );
+      }
+    }
     const proofBackend = assertString(
       rawProof.backend ?? backend,
       `${name}.proof.backend`,
@@ -1151,6 +1243,13 @@ function normalizeProofAttachment(value, name) {
       bytes: proofBytes,
     };
   }
+  if (proofBox.backend !== backend) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name}.proof.backend must match ${name}.backend`,
+      `${name}.proof.backend`,
+    );
+  }
 
   if (!verifyRef) {
     fail(
@@ -1162,6 +1261,13 @@ function normalizeProofAttachment(value, name) {
 
   const payload = { backend, proof: proofBox };
   payload.vk_ref = normalizeVerifyingKeyId(verifyRef, `${name}.verifyingKeyRef`);
+  if (payload.vk_ref.backend !== backend) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name}.verifyingKeyRef.backend must match ${name}.backend`,
+      `${name}.verifyingKeyRef.backend`,
+    );
+  }
 
   const commitment = normalizeOptionalFixedBytes(
     commitmentInput,

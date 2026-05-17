@@ -4,6 +4,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import java.security.GeneralSecurityException
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -68,8 +69,13 @@ class AndroidOfflineNoteV2SecureStore @JvmOverloads constructor(
     private fun loadNotes(): MutableMap<String, OfflineNoteV2WalletNote> {
         val notes = LinkedHashMap<String, OfflineNoteV2WalletNote>()
         for (commitmentHex in indexSnapshot()) {
-            val encrypted = preferences.getString(noteKey(commitmentHex), null) ?: continue
-            notes[commitmentHex] = WalletNoteJsonCodec.decode(decrypt(encrypted))
+            val encrypted = preferences.getString(noteKey(commitmentHex), null)
+                ?: error("missing Offline Note V2 wallet note ciphertext")
+            val note = WalletNoteJsonCodec.decode(decrypt(encrypted))
+            require(note.noteCommitmentHex() == commitmentHex) {
+                "Offline Note V2 wallet note commitment mismatch"
+            }
+            notes[commitmentHex] = note
         }
         return notes
     }
@@ -90,12 +96,12 @@ class AndroidOfflineNoteV2SecureStore @JvmOverloads constructor(
         }
         editor.putStringSet(INDEX_KEY, newIndex)
         editor.putLong(STORE_REVISION_KEY, revision)
+        check(editor.commit()) { "failed to persist Offline Note V2 wallet notes" }
         if (oldRevision == 0L) {
             deleteKeyAlias(keyAlias)
         } else {
             deleteKeyAlias(storeKeyAlias(oldRevision))
         }
-        check(editor.commit()) { "failed to persist Offline Note V2 wallet notes" }
     }
 
     private fun indexSnapshot(): Set<String> =
@@ -118,25 +124,28 @@ class AndroidOfflineNoteV2SecureStore @JvmOverloads constructor(
         if (envelope.startsWith(VALUE_PREFIX)) {
             val parts = envelope.removePrefix(VALUE_PREFIX).split(':')
             require(parts.size == 2) { "invalid Offline Note V2 wallet note envelope" }
-            val cipher = Cipher.getInstance(AES_GCM)
-            cipher.init(
-                Cipher.DECRYPT_MODE,
-                secretKey(keyAlias, createIfMissing = false),
-                GCMParameterSpec(GCM_TAG_BITS, b64decode(parts[0])),
-            )
-            return cipher.doFinal(b64decode(parts[1]))
+            return decryptWithKeyAlias(keyAlias, parts[0], parts[1])
         }
         require(envelope.startsWith(VALUE_PREFIX_V2)) { "unknown Offline Note V2 wallet note envelope" }
         val parts = envelope.removePrefix(VALUE_PREFIX_V2).split(':')
         require(parts.size == 3) { "invalid Offline Note V2 wallet note envelope" }
-        val revision = parts[0].toLong()
-        val cipher = Cipher.getInstance(AES_GCM)
-        cipher.init(
-            Cipher.DECRYPT_MODE,
-            secretKey(storeKeyAlias(revision), createIfMissing = false),
-            GCMParameterSpec(GCM_TAG_BITS, b64decode(parts[1])),
-        )
-        return cipher.doFinal(b64decode(parts[2]))
+        val revision = parts[0].toLongOrNull()
+            ?: throw IllegalArgumentException("invalid Offline Note V2 wallet note revision")
+        return decryptWithKeyAlias(storeKeyAlias(revision), parts[1], parts[2])
+    }
+
+    private fun decryptWithKeyAlias(alias: String, ivBase64: String, ciphertextBase64: String): ByteArray {
+        try {
+            val cipher = Cipher.getInstance(AES_GCM)
+            cipher.init(
+                Cipher.DECRYPT_MODE,
+                secretKey(alias, createIfMissing = false),
+                GCMParameterSpec(GCM_TAG_BITS, b64decode(ivBase64)),
+            )
+            return cipher.doFinal(b64decode(ciphertextBase64))
+        } catch (e: GeneralSecurityException) {
+            throw IllegalStateException("failed to decrypt Offline Note V2 wallet note", e)
+        }
     }
 
     private fun secretKey(alias: String, createIfMissing: Boolean): SecretKey {

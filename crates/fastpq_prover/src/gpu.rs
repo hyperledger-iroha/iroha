@@ -1,3 +1,5 @@
+#![allow(clippy::elidable_lifetime_names, clippy::redundant_pub_crate)]
+
 use std::fmt;
 
 use fastpq_isi::poseidon::STATE_WIDTH;
@@ -410,7 +412,10 @@ pub fn poseidon_hash_columns(
     match backend {
         GpuBackend::Cuda => poseidon_hash_columns_cuda(batch),
         #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
-        GpuBackend::Metal => metal::poseidon_hash_columns(batch),
+        GpuBackend::Metal => {
+            let _lane = crate::backend::acquire_gpu_lane();
+            metal::poseidon_hash_columns(batch)
+        }
         other => Err(GpuError::Unsupported(other)),
     }
 }
@@ -428,7 +433,10 @@ pub fn poseidon_hash_rows(columns: &[Vec<u64>], backend: GpuBackend) -> Result<V
     }
     match backend {
         #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
-        GpuBackend::Metal => metal::poseidon_hash_rows(columns),
+        GpuBackend::Metal => {
+            let _lane = crate::backend::acquire_gpu_lane();
+            metal::poseidon_hash_rows(columns)
+        }
         other => Err(GpuError::Unsupported(other)),
     }
 }
@@ -472,7 +480,10 @@ pub fn poseidon_hash_columns_fused(
     match backend {
         GpuBackend::Cuda => poseidon_hash_columns_fused_cuda(batch),
         #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
-        GpuBackend::Metal => metal::poseidon_hash_columns_fused(batch),
+        GpuBackend::Metal => {
+            let _lane = crate::backend::acquire_gpu_lane();
+            metal::poseidon_hash_columns_fused(batch)
+        }
         other => Err(GpuError::Unsupported(other)),
     }
 }
@@ -490,7 +501,7 @@ fn poseidon_hash_columns_fused_cuda(batch: &PoseidonColumnBatch) -> Result<Vec<u
     if batch.padded_len() == 0 {
         return Ok(vec![0; batch.columns()]);
     }
-    let parent_count = (batch.columns() + 1) / 2;
+    let parent_count = batch.columns().div_ceil(2);
     let total = batch.columns() + parent_count;
     let _lane = crate::backend::acquire_gpu_lane();
     let mut hashes = vec![0u64; total];

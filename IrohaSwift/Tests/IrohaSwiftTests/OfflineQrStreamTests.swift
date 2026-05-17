@@ -67,6 +67,247 @@ final class OfflineQrStreamTests: XCTestCase {
         }
     }
 
+    func testQrStreamRejectsAdversarialEnvelopeAndChunkShapes() throws {
+        let payload = makePayload(length: 300)
+        let frames = try OfflineQrStreamEncoder.encodeFrames(
+            payload: payload,
+            payloadKind: .offlinePaymentTokenV2,
+            options: OfflineQrStreamOptions(chunkSize: 100, parityGroup: 2)
+        )
+        let header = try XCTUnwrap(frames.first(where: { $0.kind == .header }))
+        let dataFrames = frames.filter { $0.kind == .data }
+        let parityFrames = frames.filter { $0.kind == .parity }
+        let firstData = try XCTUnwrap(dataFrames.first)
+        let firstParity = try XCTUnwrap(parityFrames.first)
+
+        XCTAssertThrowsError(
+            try OfflineQrStreamFrame(
+                kind: .data,
+                streamId: header.streamId,
+                index: 0,
+                total: 1,
+                payload: Data(repeating: 0, count: Int(UInt16.max) + 1)
+            )
+        )
+
+        var trailingFrame = header.encode()
+        trailingFrame.append(0x00)
+        XCTAssertThrowsError(try OfflineQrStreamFrame.decode(trailingFrame))
+
+        var unsupportedFrameVersion = header.encode()
+        unsupportedFrameVersion[unsupportedFrameVersion.startIndex + 2] = 0x7f
+        XCTAssertThrowsError(try OfflineQrStreamFrame.decode(unsupportedFrameVersion))
+
+        var unknownFrameKind = header.encode()
+        unknownFrameKind[unknownFrameKind.startIndex + 3] = 0x7f
+        XCTAssertThrowsError(try OfflineQrStreamFrame.decode(unknownFrameKind))
+
+        XCTAssertThrowsError(
+            try OfflineQrStreamDecoder().ingest(
+                frameBytes: OfflineQrStreamFrame(
+                    kind: .header,
+                    streamId: Data(repeating: 0xa5, count: 16),
+                    index: 0,
+                    total: 1,
+                    payload: header.payload
+                ).encode()
+            )
+        )
+
+        XCTAssertThrowsError(
+            try OfflineQrStreamDecoder().ingest(
+                frameBytes: OfflineQrStreamFrame(
+                    kind: .header,
+                    streamId: header.streamId,
+                    index: 1,
+                    total: 1,
+                    payload: header.payload
+                ).encode()
+            )
+        )
+
+        XCTAssertThrowsError(
+            try OfflineQrStreamDecoder().ingest(frameBytes: mutatedHeaderFrame(header) { envelope in
+                envelope.append(0x00)
+            })
+        )
+        XCTAssertThrowsError(
+            try OfflineQrStreamDecoder().ingest(frameBytes: mutatedHeaderFrame(header) { envelope in
+                envelope[envelope.startIndex + 2] = 0x7f
+            })
+        )
+        XCTAssertThrowsError(
+            try OfflineQrStreamDecoder().ingest(frameBytes: mutatedHeaderFrame(header) { envelope in
+                setUInt16LE(&envelope, offset: 4, value: 0)
+            })
+        )
+        XCTAssertThrowsError(
+            try OfflineQrStreamDecoder().ingest(frameBytes: mutatedHeaderFrame(header) { envelope in
+                setUInt16LE(&envelope, offset: 6, value: 1)
+            })
+        )
+        XCTAssertThrowsError(
+            try OfflineQrStreamDecoder().ingest(frameBytes: mutatedHeaderFrame(header) { envelope in
+                setUInt16LE(&envelope, offset: 8, value: 0)
+            })
+        )
+        XCTAssertThrowsError(
+            try OfflineQrStreamDecoder().ingest(frameBytes: mutatedHeaderFrame(header) { envelope in
+                envelope[envelope.startIndex + 1] = 0x01
+            })
+        )
+        XCTAssertThrowsError(
+            try OfflineQrStreamDecoder().ingest(frameBytes: mutatedHeaderFrame(header) { envelope in
+                envelope[envelope.startIndex] = 0x7f
+            })
+        )
+
+        let repeatedHeaderDecoder = OfflineQrStreamDecoder()
+        _ = try repeatedHeaderDecoder.ingest(frameBytes: header.encode())
+        XCTAssertNoThrow(try repeatedHeaderDecoder.ingest(frameBytes: header.encode()))
+        XCTAssertThrowsError(
+            try repeatedHeaderDecoder.ingest(frameBytes: mutatedHeaderFrame(header) { envelope in
+                setUInt16LE(&envelope, offset: 10, value: OfflineQrPayloadKind.offlineReceiveChallengeV2.rawValue)
+            })
+        )
+
+        let decoder = OfflineQrStreamDecoder()
+        _ = try decoder.ingest(frameBytes: header.encode())
+        XCTAssertThrowsError(
+            try decoder.ingest(
+                frameBytes: OfflineQrStreamFrame(
+                    kind: .data,
+                    streamId: firstData.streamId,
+                    index: firstData.index,
+                    total: firstData.total,
+                    payload: Data(firstData.payload.dropLast())
+                ).encode()
+            )
+        )
+
+        let longDataDecoder = OfflineQrStreamDecoder()
+        _ = try longDataDecoder.ingest(frameBytes: header.encode())
+        XCTAssertThrowsError(
+            try longDataDecoder.ingest(
+                frameBytes: OfflineQrStreamFrame(
+                    kind: .data,
+                    streamId: firstData.streamId,
+                    index: firstData.index,
+                    total: firstData.total,
+                    payload: firstData.payload + Data([0x00])
+                ).encode()
+            )
+        )
+
+        let wrongTotalDecoder = OfflineQrStreamDecoder()
+        _ = try wrongTotalDecoder.ingest(frameBytes: header.encode())
+        XCTAssertThrowsError(
+            try wrongTotalDecoder.ingest(
+                frameBytes: OfflineQrStreamFrame(
+                    kind: .data,
+                    streamId: firstData.streamId,
+                    index: firstData.index,
+                    total: firstData.total + 1,
+                    payload: firstData.payload
+                ).encode()
+            )
+        )
+
+        let pendingBadDataDecoder = OfflineQrStreamDecoder()
+        _ = try pendingBadDataDecoder.ingest(
+            frameBytes: OfflineQrStreamFrame(
+                kind: .data,
+                streamId: firstData.streamId,
+                index: firstData.index,
+                total: firstData.total + 1,
+                payload: firstData.payload
+            ).encode()
+        )
+        XCTAssertThrowsError(try pendingBadDataDecoder.ingest(frameBytes: header.encode()))
+
+        let conflictingDataDecoder = OfflineQrStreamDecoder()
+        _ = try conflictingDataDecoder.ingest(frameBytes: header.encode())
+        _ = try conflictingDataDecoder.ingest(frameBytes: firstData.encode())
+        var conflictingDataPayload = firstData.payload
+        conflictingDataPayload[conflictingDataPayload.startIndex] ^= 0xff
+        XCTAssertThrowsError(
+            try conflictingDataDecoder.ingest(
+                frameBytes: OfflineQrStreamFrame(
+                    kind: .data,
+                    streamId: firstData.streamId,
+                    index: firstData.index,
+                    total: firstData.total,
+                    payload: conflictingDataPayload
+                ).encode()
+            )
+        )
+
+        let poisonedParityDecoder = OfflineQrStreamDecoder()
+        _ = try poisonedParityDecoder.ingest(frameBytes: header.encode())
+        _ = try poisonedParityDecoder.ingest(frameBytes: firstData.encode())
+        var poisonedParityPayload = firstParity.payload
+        poisonedParityPayload[poisonedParityPayload.startIndex] ^= 0xff
+        _ = try poisonedParityDecoder.ingest(
+            frameBytes: OfflineQrStreamFrame(
+                kind: .parity,
+                streamId: firstParity.streamId,
+                index: firstParity.index,
+                total: firstParity.total,
+                payload: poisonedParityPayload
+            ).encode()
+        )
+        XCTAssertThrowsError(
+            try poisonedParityDecoder.ingest(frameBytes: dataFrames[1].encode())
+        )
+
+        let hashMismatchDecoder = OfflineQrStreamDecoder()
+        _ = try hashMismatchDecoder.ingest(frameBytes: header.encode())
+        var mutatedFirstDataPayload = firstData.payload
+        mutatedFirstDataPayload[mutatedFirstDataPayload.startIndex] ^= 0xff
+        _ = try hashMismatchDecoder.ingest(
+            frameBytes: OfflineQrStreamFrame(
+                kind: .data,
+                streamId: firstData.streamId,
+                index: firstData.index,
+                total: firstData.total,
+                payload: mutatedFirstDataPayload
+            ).encode()
+        )
+        _ = try hashMismatchDecoder.ingest(frameBytes: dataFrames[1].encode())
+        XCTAssertThrowsError(try hashMismatchDecoder.ingest(frameBytes: dataFrames[2].encode()))
+
+        let shortParityDecoder = OfflineQrStreamDecoder()
+        _ = try shortParityDecoder.ingest(frameBytes: header.encode())
+        XCTAssertThrowsError(
+            try shortParityDecoder.ingest(
+                frameBytes: OfflineQrStreamFrame(
+                    kind: .parity,
+                    streamId: firstParity.streamId,
+                    index: firstParity.index,
+                    total: firstParity.total,
+                    payload: Data(firstParity.payload.dropLast())
+                ).encode()
+            )
+        )
+
+        let conflictingParityDecoder = OfflineQrStreamDecoder()
+        _ = try conflictingParityDecoder.ingest(frameBytes: header.encode())
+        _ = try conflictingParityDecoder.ingest(frameBytes: firstParity.encode())
+        var conflictingParityPayload = firstParity.payload
+        conflictingParityPayload[conflictingParityPayload.startIndex] ^= 0xff
+        XCTAssertThrowsError(
+            try conflictingParityDecoder.ingest(
+                frameBytes: OfflineQrStreamFrame(
+                    kind: .parity,
+                    streamId: firstParity.streamId,
+                    index: firstParity.index,
+                    total: firstParity.total,
+                    payload: conflictingParityPayload
+                ).encode()
+            )
+        )
+    }
+
     func testQrStreamTextCodecRoundTrip() throws {
         let payload = makePayload(length: 128)
         let encoded = OfflineQrStreamTextCodec.encode(payload, encoding: .base64)
@@ -121,7 +362,7 @@ final class OfflineQrStreamTests: XCTestCase {
         XCTAssertEqual(final.payload, payload)
         XCTAssertEqual(final.recoveredChunks, 1)
     }
-    /// Full chain: encode → TextCodec → CIFilter QR → Vision detect → TextCodec decode → ingest
+    /// Full chain: encode → TextCodec → CIFilter QR → platform QR detect → TextCodec decode → ingest
     func testQrStreamFullChainViaQRImage() throws {
         #if canImport(CoreImage) && canImport(Vision)
         let payload = makePayload(length: 256)
@@ -169,19 +410,10 @@ final class OfflineQrStreamTests: XCTestCase {
                 continue
             }
 
-            // Step 2: Detect with Vision
-            let request = VNDetectBarcodesRequest()
-            request.symbologies = [.qr]
-            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-            try handler.perform([request])
-            guard let results = request.results, !results.isEmpty else {
-                XCTFail("Frame \(index): Vision detected 0 barcodes")
-                continue
-            }
-
-            // Step 3: Read payloadStringValue
-            guard let detected = results.first?.payloadStringValue else {
-                XCTFail("Frame \(index): no payloadStringValue")
+            // Step 2: Detect with Vision, falling back to CoreImage on simulator runtimes
+            // where Vision barcode inference resources are not installed.
+            guard let detected = try detectQrString(cgImage: cgImage, ciImage: scaledImage, context: context) else {
+                XCTFail("Frame \(index): QR detector found no payload")
                 continue
             }
             print("[Test] Frame[\(index)] detected string prefix: \(String(detected.prefix(50)))")
@@ -211,11 +443,56 @@ final class OfflineQrStreamTests: XCTestCase {
         #endif
     }
 
+    private func detectQrString(cgImage: CGImage, ciImage: CIImage, context: CIContext) throws -> String? {
+        #if canImport(Vision)
+        let request = VNDetectBarcodesRequest()
+        request.symbologies = [.qr]
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        do {
+            try handler.perform([request])
+            if let detected = request.results?.compactMap(\.payloadStringValue).first {
+                return detected
+            }
+        } catch {
+            print("[Test] Vision QR detection unavailable, falling back to CoreImage: \(error)")
+        }
+        #endif
+        let detector = CIDetector(
+            ofType: CIDetectorTypeQRCode,
+            context: context,
+            options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]
+        )
+        return detector?
+            .features(in: ciImage)
+            .compactMap { ($0 as? CIQRCodeFeature)?.messageString }
+            .first
+    }
+
     private func makePayload(length: Int) -> Data {
         var bytes = [UInt8](repeating: 0, count: length)
         for index in bytes.indices {
             bytes[index] = UInt8((index * 31 + 7) % 256)
         }
         return Data(bytes)
+    }
+
+    private func mutatedHeaderFrame(
+        _ header: OfflineQrStreamFrame,
+        mutate: (inout Data) -> Void
+    ) throws -> Data {
+        var envelope = header.payload
+        mutate(&envelope)
+        return try OfflineQrStreamFrame(
+            kind: .header,
+            streamId: header.streamId,
+            index: header.index,
+            total: header.total,
+            payload: envelope
+        ).encode()
+    }
+
+    private func setUInt16LE(_ data: inout Data, offset: Int, value: UInt16) {
+        data[data.startIndex + offset] = UInt8(value & 0xff)
+        data[data.startIndex + offset + 1] = UInt8((value >> 8) & 0xff)
     }
 }

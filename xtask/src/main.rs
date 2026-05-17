@@ -9936,7 +9936,7 @@ fn write_openapi_manifest_from_bytes(
             bytes: size_bytes,
             sha256_hex,
             blake3_hex,
-            signature: Some(signature),
+            signature,
         },
     };
 
@@ -9981,6 +9981,8 @@ fn verify_openapi_manifest(
         )
         .into());
     }
+
+    verify_openapi_artifact_path(spec_path, &manifest.artifact.path)?;
 
     let expected_sha256 = hex::encode(Sha256::digest(&spec_bytes));
     if !manifest
@@ -10051,6 +10053,56 @@ fn verify_openapi_manifest(
         manifest_path.display(),
         spec_path.display()
     );
+    Ok(())
+}
+
+fn verify_openapi_artifact_path(
+    spec_path: &Path,
+    artifact_path: &str,
+) -> Result<(), Box<dyn Error>> {
+    if artifact_path.trim().is_empty() {
+        return Err("manifest artifact.path is empty".into());
+    }
+    if artifact_path.contains('\\') {
+        return Err(
+            format!("manifest artifact.path `{artifact_path}` must use forward slashes").into(),
+        );
+    }
+    if artifact_path
+        .split('/')
+        .next()
+        .is_some_and(|segment| segment.ends_with(':'))
+    {
+        return Err(format!(
+            "manifest artifact.path `{artifact_path}` must not use drive prefixes"
+        )
+        .into());
+    }
+    let recorded_path = Path::new(artifact_path);
+    if recorded_path.is_absolute()
+        || recorded_path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(format!(
+            "manifest artifact.path `{artifact_path}` must be relative and stay under the OpenAPI directory"
+        )
+        .into());
+    }
+    let recorded_file_name = recorded_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| format!("manifest artifact.path `{artifact_path}` has no file name"))?;
+    let expected_file_name = spec_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| format!("spec path `{}` has no file name", spec_path.display()))?;
+    if recorded_file_name != expected_file_name {
+        return Err(format!(
+            "manifest artifact.path `{artifact_path}` does not match spec file `{expected_file_name}`"
+        )
+        .into());
+    }
     Ok(())
 }
 
@@ -10436,23 +10488,33 @@ mod openapi_tests {
 
     #[test]
     fn openapi_unsigned_manifest_mode_conflicts_with_signing() {
-        let args = [
-            "xtask",
-            "openapi",
-            "--unsigned-manifest",
-            "--signature-envelope",
-            "signature.json",
-        ];
-        let iter = args.into_iter().map(String::from);
-        let err = match parse_command(iter) {
-            Ok(_) => panic!("unsigned manifest and signed modes must fail"),
-            Err(err) => err,
-        };
-        let message = err.to_string();
-        assert!(
-            message.contains("cannot be combined"),
-            "expected cannot be combined message, got {message}"
-        );
+        for args in [
+            vec![
+                "xtask",
+                "openapi",
+                "--unsigned-manifest",
+                "--sign",
+                "signing.key",
+            ],
+            vec![
+                "xtask",
+                "openapi",
+                "--unsigned-manifest",
+                "--signature-envelope",
+                "signature.json",
+            ],
+        ] {
+            let iter = args.into_iter().map(String::from);
+            let err = match parse_command(iter) {
+                Ok(_) => panic!("unsigned manifest and signed modes must fail"),
+                Err(err) => err,
+            };
+            let message = err.to_string();
+            assert!(
+                message.contains("cannot be combined"),
+                "expected cannot be combined message, got {message}"
+            );
+        }
     }
 
     #[test]
@@ -10473,6 +10535,224 @@ mod openapi_tests {
         assert!(
             message.contains("missing signature"),
             "expected missing signature message, got {message}"
+        );
+    }
+
+    #[test]
+    fn unsigned_openapi_manifest_still_checks_payload_integrity() {
+        let tmp = tempdir().expect("tempdir");
+        let spec_path = tmp.path().join("spec.json");
+        fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
+        let manifest_path = tmp.path().join("manifest.json");
+
+        write_openapi_manifest_unsigned(&spec_path, &manifest_path)
+            .expect("write unsigned manifest");
+        fs::write(&spec_path, b"{\"ok\":false}").expect("tamper spec");
+
+        let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
+            .expect_err("allowing unsigned manifests must not allow stale digests");
+        let message = err.to_string();
+        assert!(
+            message.contains("sha256_hex mismatch"),
+            "expected digest mismatch message, got {message}"
+        );
+    }
+
+    #[test]
+    fn detached_signature_envelope_must_match_spec_bytes() {
+        let tmp = tempdir().expect("tempdir");
+        let spec_path = tmp.path().join("spec.json");
+        fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
+
+        let key_path = tmp.path().join("key.hex");
+        let key_hex = hex::encode([0x55u8; 32]);
+        fs::write(&key_path, key_hex).expect("write key");
+
+        let other_payload = b"{\"ok\":false}";
+        let signature = sign_manifest_payload(other_payload, &key_path).expect("sign payload");
+        let manifest_path = tmp.path().join("manifest.json");
+
+        let err = write_openapi_manifest_with_signature(&spec_path, &manifest_path, signature)
+            .expect_err("detached signature for another payload must be rejected");
+        let message = err.to_string();
+        assert!(
+            message.contains("manifest signature verification failed"),
+            "expected signature verification failure, got {message}"
+        );
+        assert!(
+            !manifest_path.exists(),
+            "manifest must not be written after signature verification fails"
+        );
+    }
+
+    #[test]
+    fn openapi_allow_unsigned_still_rejects_invalid_signature() {
+        let tmp = tempdir().expect("tempdir");
+        let spec_path = tmp.path().join("spec.json");
+        fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
+
+        let key_path = tmp.path().join("key.hex");
+        let key_hex = hex::encode([0x66u8; 32]);
+        fs::write(&key_path, key_hex).expect("write key");
+
+        let manifest_path = tmp.path().join("manifest.json");
+        write_openapi_manifest(&spec_path, &manifest_path, &key_path).expect("sign manifest");
+
+        let manifest_json = fs::read_to_string(&manifest_path).expect("manifest json");
+        let mut manifest: OpenApiManifest =
+            serde_json::from_str(&manifest_json).expect("parse manifest json");
+        let signature = manifest
+            .artifact
+            .signature
+            .as_mut()
+            .expect("signed manifest should include signature");
+        signature.signature_hex = "00".repeat(signature.signature_hex.len() / 2);
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).expect("serialize manifest"),
+        )
+        .expect("rewrite manifest");
+
+        let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
+            .expect_err("allow-unsigned must not bypass invalid signatures");
+        let message = err.to_string();
+        assert!(
+            message.contains("manifest signature verification failed"),
+            "expected signature verification failure, got {message}"
+        );
+    }
+
+    #[test]
+    fn openapi_signature_envelope_rejects_unsupported_algorithm() {
+        let payload = b"{\"ok\":true}";
+        let signature = SignatureEnvelope {
+            algorithm: "ed448".to_owned(),
+            public_key_hex: hex::encode([0x77u8; 32]),
+            signature_hex: hex::encode([0x88u8; 64]),
+        };
+
+        let err = verify_manifest_signature(&signature, payload)
+            .expect_err("unsupported signature algorithms must be rejected");
+        let message = err.to_string();
+        assert!(
+            message.contains("unsupported manifest signature algorithm"),
+            "expected unsupported algorithm message, got {message}"
+        );
+    }
+
+    #[test]
+    fn openapi_signature_envelope_rejects_invalid_hex_fields() {
+        let payload = b"{\"ok\":true}";
+        let invalid_public_key = SignatureEnvelope {
+            algorithm: "ed25519".to_owned(),
+            public_key_hex: "not-hex".to_owned(),
+            signature_hex: hex::encode([0x88u8; 64]),
+        };
+        let err = verify_manifest_signature(&invalid_public_key, payload)
+            .expect_err("invalid public key hex must fail verification");
+        let message = err.to_string();
+        assert!(
+            message.contains("invalid manifest public key hex"),
+            "expected invalid public key message, got {message}"
+        );
+
+        let invalid_signature = SignatureEnvelope {
+            algorithm: "ed25519".to_owned(),
+            public_key_hex: hex::encode([0x77u8; 32]),
+            signature_hex: "not-hex".to_owned(),
+        };
+        let err = verify_manifest_signature(&invalid_signature, payload)
+            .expect_err("invalid signature hex must fail verification");
+        let message = err.to_string();
+        assert!(
+            message.contains("invalid manifest signature hex"),
+            "expected invalid signature hex message, got {message}"
+        );
+    }
+
+    #[test]
+    fn openapi_manifest_rejects_unsafe_artifact_path() {
+        let tmp = tempdir().expect("tempdir");
+        let spec_path = tmp.path().join("torii.json");
+        fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
+        let manifest_path = tmp.path().join("manifest.json");
+        write_openapi_manifest_unsigned(&spec_path, &manifest_path)
+            .expect("write unsigned manifest");
+
+        let manifest_json = fs::read_to_string(&manifest_path).expect("manifest json");
+        let mut manifest: OpenApiManifest =
+            serde_json::from_str(&manifest_json).expect("parse manifest json");
+        manifest.artifact.path = "../torii.json".to_owned();
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).expect("serialize manifest"),
+        )
+        .expect("rewrite manifest");
+
+        let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
+            .expect_err("unsafe artifact path must fail verification");
+        let message = err.to_string();
+        assert!(
+            message.contains("must be relative"),
+            "expected unsafe path message, got {message}"
+        );
+    }
+
+    #[test]
+    fn openapi_manifest_rejects_platform_specific_artifact_paths() {
+        for artifact_path in ["versions\\current\\torii.json", "C:/outside/torii.json", ""] {
+            let tmp = tempdir().expect("tempdir");
+            let spec_path = tmp.path().join("torii.json");
+            fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
+            let manifest_path = tmp.path().join("manifest.json");
+            write_openapi_manifest_unsigned(&spec_path, &manifest_path)
+                .expect("write unsigned manifest");
+
+            let manifest_json = fs::read_to_string(&manifest_path).expect("manifest json");
+            let mut manifest: OpenApiManifest =
+                serde_json::from_str(&manifest_json).expect("parse manifest json");
+            manifest.artifact.path = artifact_path.to_owned();
+            fs::write(
+                &manifest_path,
+                serde_json::to_string_pretty(&manifest).expect("serialize manifest"),
+            )
+            .expect("rewrite manifest");
+
+            let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
+                .expect_err("platform-specific artifact paths must fail verification");
+            let message = err.to_string();
+            assert!(
+                message.contains("artifact.path"),
+                "expected artifact path rejection for `{artifact_path}`, got {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn openapi_manifest_rejects_artifact_file_name_mismatch() {
+        let tmp = tempdir().expect("tempdir");
+        let spec_path = tmp.path().join("torii.json");
+        fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
+        let manifest_path = tmp.path().join("manifest.json");
+        write_openapi_manifest_unsigned(&spec_path, &manifest_path)
+            .expect("write unsigned manifest");
+
+        let manifest_json = fs::read_to_string(&manifest_path).expect("manifest json");
+        let mut manifest: OpenApiManifest =
+            serde_json::from_str(&manifest_json).expect("parse manifest json");
+        manifest.artifact.path = "other.json".to_owned();
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).expect("serialize manifest"),
+        )
+        .expect("rewrite manifest");
+
+        let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
+            .expect_err("artifact filename mismatch must fail verification");
+        let message = err.to_string();
+        assert!(
+            message.contains("does not match spec file"),
+            "expected artifact path mismatch message, got {message}"
         );
     }
 

@@ -1030,8 +1030,8 @@ fn fountain_qr_fixture(payload: &[u8]) -> Result<Value, Box<dyn Error>> {
 
 fn fountain_qr_fixture_with_options(
     payload: &[u8],
-    chunk_size: usize,
-    parity_group: usize,
+    chunk_size: u16,
+    parity_group: u8,
 ) -> Result<Value, Box<dyn Error>> {
     let options = QrStreamOptions {
         chunk_size,
@@ -1229,6 +1229,20 @@ mod tests {
             string(field(assertion, "challenge_hash_hex")),
             string(field(proof, "public_inputs_hash_hex"))
         );
+
+        let sdk_interop = field(&fixture, "sdk_interop");
+        assert_eq!(
+            string(field(sdk_interop, "payment_token_envelope_schema")),
+            PAYMENT_TOKEN_ENVELOPE_SCHEMA
+        );
+        assert!(
+            string(field(sdk_interop, "payment_token_text"))
+                .starts_with("wallet-offline-payment-v2:")
+        );
+        assert!(!string(field(sdk_interop, "payment_token_norito_base64")).is_empty());
+        let sdk_qr = field(sdk_interop, "payment_token_qr_v1");
+        assert_eq!(number(field(sdk_qr, "frame_size_bytes")), 180);
+        assert_eq!(string(field(sdk_qr, "frame_prefix")), "iroha:qr1:");
 
         let fountain = field(&fixture, "fountain_qr_v1");
         assert_eq!(string(field(fountain, "frame_prefix")), "iroha:qr1:");

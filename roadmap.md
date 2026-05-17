@@ -250,9 +250,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - Focused Kotlin/JVM and Java Android RAM-LFE parser/transport tests are
     green as of 2026-05-02 with Homebrew OpenJDK 21 pinned via `JAVA_HOME`; the
     same harnesses also cover the canonical BFV identifier schema-hash vector.
-  - An operator still needs to provide either the OpenAPI signing key or a
-    detached Ed25519 signature envelope for the exact canonical `torii.json`
-    bytes so the static OpenAPI manifest can be regenerated and verified.
+  - The current static OpenAPI manifest now verifies in explicit unsigned
+    first-release mode; before publishing a signed OpenAPI release, rerun the
+    same manifest flow with the operator signing key or detached Ed25519
+    signature envelope.
 - Carry the FastPQ V1 release hardening through the remaining broad validation
   corridor.
   - The 2026-05-17 implementation removes prover-scale CPU replay from
@@ -488,10 +489,9 @@ Completed history lives in `status.md`. This file should only track unfinished w
     2026-05-04. The Sora governance runtime-upgrade path now hashes prepared
     transaction entrypoints from the actual canonical signed payload bytes and
     confirms Torii status with explicit auto scope, but the full workspace
-    command still needs an uncontended end-to-end pass. The static OpenAPI JSON
-    and version index are refreshed in explicit unsigned mode; an operator
-    still needs to regenerate the manifest with the OpenAPI signing key or
-    detached signature envelope.
+    command still needs an uncontended end-to-end pass. The static OpenAPI JSON,
+    version index, and unsigned latest/current manifests are refreshed and
+    verify under the explicit first-release unsigned corridor.
 - Carry the Torii exposure-hardening slice through the next clean Cargo
   validation corridor.
   - `cargo fmt --all` and `cargo check -p iroha_config -p iroha_torii` are
@@ -511,10 +511,9 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - The route/API/error-envelope implementation, focused Rust sidecar/client
     tests, Swift/Python/Kotlin/JVM/Java Android/JavaScript client regressions,
     JS native/dist rebuild, formatting, and whitespace checks are green as of
-    2026-05-17. Static OpenAPI JSON snapshots are refreshed in unsigned mode;
-    the remaining blocker is operator regeneration of the signed OpenAPI
-    manifest with the signing key or detached signature envelope, then the next
-    full workspace test/clippy corridor.
+    2026-05-17. Static OpenAPI JSON snapshots and latest/current unsigned
+    manifests are refreshed and verified; the remaining broad release work is
+    the next full workspace test/clippy corridor.
 - Carry the Iroha Connect hardening through the remaining SDK and workspace
   validation corridor.
   - P2P session claims, hashed token storage, focused Rust checks, JavaScript

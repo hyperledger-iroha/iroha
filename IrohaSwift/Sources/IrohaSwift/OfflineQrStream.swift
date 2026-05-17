@@ -86,6 +86,36 @@ public struct OfflineQrStreamEnvelope: Sendable, Equatable {
         guard payloadHash.count == 32 else {
             throw OfflineQrStreamError.invalidEnvelope("payload_hash must be 32 bytes")
         }
+        guard flags == 0 else {
+            throw OfflineQrStreamError.invalidEnvelope("unsupported flags")
+        }
+        guard encoding == Self.encodingBinary else {
+            throw OfflineQrStreamError.invalidEnvelope("unsupported encoding")
+        }
+        guard chunkSize > 0 else {
+            throw OfflineQrStreamError.invalidLength("chunk_size")
+        }
+        let chunkSizeInt = Int(chunkSize)
+        let payloadLengthInt = Int(payloadLength)
+        let expectedDataChunks: Int
+        if payloadLengthInt == 0 {
+            expectedDataChunks = 0
+        } else {
+            expectedDataChunks = (payloadLengthInt + chunkSizeInt - 1) / chunkSizeInt
+        }
+        guard expectedDataChunks <= Int(UInt16.max),
+              Int(dataChunks) == expectedDataChunks else {
+            throw OfflineQrStreamError.invalidEnvelope("data_chunks mismatch")
+        }
+        let expectedParityChunks: Int
+        if parityGroup == 0 {
+            expectedParityChunks = 0
+        } else {
+            expectedParityChunks = (Int(dataChunks) + Int(parityGroup) - 1) / Int(parityGroup)
+        }
+        guard Int(parityChunks) == expectedParityChunks else {
+            throw OfflineQrStreamError.invalidEnvelope("parity_chunks mismatch")
+        }
         self.flags = flags
         self.encoding = encoding
         self.parityGroup = parityGroup
@@ -115,7 +145,7 @@ public struct OfflineQrStreamEnvelope: Sendable, Equatable {
     public static func decode(_ data: Data) throws -> OfflineQrStreamEnvelope {
         let bytes = [UInt8](data)
         let minLength = 1 + 1 + 1 + 1 + 2 + 2 + 2 + 2 + 4 + 32
-        guard bytes.count >= minLength else {
+        guard bytes.count == minLength else {
             throw OfflineQrStreamError.invalidLength("envelope")
         }
         let version = bytes[0]
@@ -172,6 +202,9 @@ public struct OfflineQrStreamFrame: Sendable, Equatable {
         guard streamId.count == 16 else {
             throw OfflineQrStreamError.invalidLength("stream_id")
         }
+        guard payload.count <= Int(UInt16.max) else {
+            throw OfflineQrStreamError.invalidLength("payload")
+        }
         self.kind = kind
         self.streamId = streamId
         self.index = index
@@ -225,7 +258,7 @@ public struct OfflineQrStreamFrame: Sendable, Equatable {
         let payloadLength = Int(readUInt16LE(bytes, offset))
         offset += 2
         let payloadEnd = offset + payloadLength
-        guard payloadEnd + 4 <= bytes.count else {
+        guard payloadEnd + 4 == bytes.count else {
             throw OfflineQrStreamError.invalidLength("payload")
         }
         let payload = Data(bytes[offset..<payloadEnd])
@@ -254,6 +287,7 @@ public struct OfflineQrStreamFrame: Sendable, Equatable {
 
 public struct OfflineQrStreamDecodeResult: Sendable, Equatable {
     public let payload: Data?
+    public let payloadKind: OfflineQrPayloadKind?
     public let receivedChunks: Int
     public let totalChunks: Int
     public let recoveredChunks: Int
@@ -392,9 +426,11 @@ public final class OfflineQrStreamDecoder {
     public func ingest(frameBytes: Data) throws -> OfflineQrStreamDecodeResult {
         let frame = try OfflineQrStreamFrame.decode(frameBytes)
         try ingest(frame: frame)
+        let payloadKind = envelope.flatMap { OfflineQrPayloadKind(rawValue: $0.payloadKind) }
         if let payload = try finalizeIfComplete() {
             return OfflineQrStreamDecodeResult(
                 payload: payload,
+                payloadKind: payloadKind,
                 receivedChunks: dataChunks.compactMap { $0 }.count,
                 totalChunks: dataChunks.count,
                 recoveredChunks: recovered.count
@@ -402,6 +438,7 @@ public final class OfflineQrStreamDecoder {
         }
         return OfflineQrStreamDecodeResult(
             payload: nil,
+            payloadKind: payloadKind,
             receivedChunks: dataChunks.compactMap { $0 }.count,
             totalChunks: dataChunks.count,
             recoveredChunks: recovered.count
@@ -411,6 +448,9 @@ public final class OfflineQrStreamDecoder {
     private func ingest(frame: OfflineQrStreamFrame) throws {
         switch frame.kind {
         case .header:
+            guard frame.index == 0, frame.total == 1 else {
+                throw OfflineQrStreamError.invalidEnvelope("header frame counters")
+            }
             let envelope = try OfflineQrStreamEnvelope.decode(frame.payload)
             let streamId = envelope.streamId
             guard streamId == frame.streamId else {
@@ -418,6 +458,9 @@ public final class OfflineQrStreamDecoder {
             }
             // Skip reset if we already have this stream's envelope (repeated header in looping animation)
             if let existing = self.envelope, existing.streamId == streamId {
+                guard existing == envelope else {
+                    throw OfflineQrStreamError.invalidEnvelope("conflicting repeated header")
+                }
                 return
             }
             self.envelope = envelope
@@ -440,9 +483,9 @@ public final class OfflineQrStreamDecoder {
             }
             switch frame.kind {
             case .data:
-                storeData(frame: frame, envelope: envelope)
+                try storeData(frame: frame, envelope: envelope)
             case .parity:
-                storeParity(frame: frame, envelope: envelope)
+                try storeParity(frame: frame, envelope: envelope)
             case .header:
                 break
             }
@@ -450,18 +493,43 @@ public final class OfflineQrStreamDecoder {
         }
     }
 
-    private func storeData(frame: OfflineQrStreamFrame, envelope: OfflineQrStreamEnvelope) {
+    private func storeData(frame: OfflineQrStreamFrame, envelope: OfflineQrStreamEnvelope) throws {
         let index = Int(frame.index)
-        guard index < dataChunks.count else { return }
-        if dataChunks[index] == nil {
+        guard Int(frame.total) == dataChunks.count else {
+            throw OfflineQrStreamError.invalidEnvelope("data frame total mismatch")
+        }
+        guard index < dataChunks.count else {
+            throw OfflineQrStreamError.invalidEnvelope("data frame index out of bounds")
+        }
+        let expectedLength = expectedChunkLength(envelope: envelope, index: index)
+        guard frame.payload.count == expectedLength else {
+            throw OfflineQrStreamError.invalidLength("data chunk")
+        }
+        if let existing = dataChunks[index] {
+            guard existing == frame.payload else {
+                throw OfflineQrStreamError.invalidEnvelope("conflicting data chunk")
+            }
+        } else {
             dataChunks[index] = frame.payload
         }
     }
 
-    private func storeParity(frame: OfflineQrStreamFrame, envelope: OfflineQrStreamEnvelope) {
+    private func storeParity(frame: OfflineQrStreamFrame, envelope: OfflineQrStreamEnvelope) throws {
         let index = Int(frame.index)
-        guard index < parityChunks.count else { return }
-        if parityChunks[index] == nil {
+        guard Int(frame.total) == parityChunks.count else {
+            throw OfflineQrStreamError.invalidEnvelope("parity frame total mismatch")
+        }
+        guard index < parityChunks.count else {
+            throw OfflineQrStreamError.invalidEnvelope("parity frame index out of bounds")
+        }
+        guard frame.payload.count == Int(envelope.chunkSize) else {
+            throw OfflineQrStreamError.invalidLength("parity chunk")
+        }
+        if let existing = parityChunks[index] {
+            guard existing == frame.payload else {
+                throw OfflineQrStreamError.invalidEnvelope("conflicting parity chunk")
+            }
+        } else {
             parityChunks[index] = frame.payload
         }
     }

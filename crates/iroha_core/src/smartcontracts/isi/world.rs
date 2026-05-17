@@ -6497,6 +6497,11 @@ pub mod isi {
                 "proof backend mismatch".into(),
             ));
         }
+        if attachment.vk_ref.backend != attachment.backend {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "verifying key backend mismatch".into(),
+            ));
+        }
         if expects_envelope && envelope_meta.is_none() {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(

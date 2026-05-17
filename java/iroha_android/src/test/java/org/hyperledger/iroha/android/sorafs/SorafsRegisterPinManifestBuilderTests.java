@@ -20,12 +20,18 @@ public final class SorafsRegisterPinManifestBuilderTests {
 
   public static void main(final String[] args) throws Exception {
     rejectsNegativeSubmittedEpoch();
+    rejectsZeroMinReplicas();
+    rejectsNegativeMinReplicas();
     rejectsNegativeContentLength();
     rejectsMissingContentLength();
     rejectsFromArgumentsMissingContentLength();
     rejectsFromArgumentsNegativeContentLength();
     rejectsFromArgumentsNonnumericContentLength();
     rejectsFromArgumentsNegativeSubmittedEpoch();
+    rejectsFromArgumentsZeroMinReplicas();
+    rejectsFromArgumentsNegativeMinReplicas();
+    rejectsFromArgumentsNonnumericMinReplicas();
+    rejectsFromArgumentsPartialAliasBinding();
     rejectsNegativeRetentionEpoch();
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> instruction = asMap(fixture.get("instruction"), "instruction");
@@ -74,6 +80,26 @@ public final class SorafsRegisterPinManifestBuilderTests {
       threw = true;
     }
     assert threw : "Expected negative retention epoch to throw";
+  }
+
+  private static void rejectsZeroMinReplicas() {
+    boolean threw = false;
+    try {
+      RegisterPinManifestInstruction.PinPolicy.builder().setMinReplicas(0);
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected zero min replicas to throw";
+  }
+
+  private static void rejectsNegativeMinReplicas() {
+    boolean threw = false;
+    try {
+      RegisterPinManifestInstruction.PinPolicy.builder().setMinReplicas(-1);
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected negative min replicas to throw";
   }
 
   private static void rejectsNegativeContentLength() {
@@ -206,6 +232,99 @@ public final class SorafsRegisterPinManifestBuilderTests {
       threw = true;
     }
     assert threw : "Expected negative fromArguments submitted_epoch to throw";
+  }
+
+  private static void rejectsFromArgumentsZeroMinReplicas() {
+    final Map<String, String> arguments = new LinkedHashMap<>();
+    arguments.put("digest_hex", "a0".repeat(32));
+    arguments.put("chunk_digest_sha3_256_hex", "b0".repeat(32));
+    arguments.put("content_length", "4096");
+    arguments.put("submitted_epoch", "1");
+    arguments.put("chunker.profile_id", "1");
+    arguments.put("chunker.namespace", "sorafs");
+    arguments.put("chunker.name", "sf1");
+    arguments.put("chunker.semver", "1.0.0");
+    arguments.put("chunker.multihash_code", "0");
+    arguments.put("policy.min_replicas", "0");
+    arguments.put("policy.storage_class", "hot");
+    arguments.put("policy.retention_epoch", "10");
+    boolean threw = false;
+    try {
+      RegisterPinManifestInstruction.fromArguments(arguments);
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected zero fromArguments policy.min_replicas to throw";
+  }
+
+  private static void rejectsFromArgumentsNegativeMinReplicas() {
+    final Map<String, String> arguments = new LinkedHashMap<>();
+    arguments.put("digest_hex", "a0".repeat(32));
+    arguments.put("chunk_digest_sha3_256_hex", "b0".repeat(32));
+    arguments.put("content_length", "4096");
+    arguments.put("submitted_epoch", "1");
+    arguments.put("chunker.profile_id", "1");
+    arguments.put("chunker.namespace", "sorafs");
+    arguments.put("chunker.name", "sf1");
+    arguments.put("chunker.semver", "1.0.0");
+    arguments.put("chunker.multihash_code", "0");
+    arguments.put("policy.min_replicas", "-1");
+    arguments.put("policy.storage_class", "hot");
+    arguments.put("policy.retention_epoch", "10");
+    boolean threw = false;
+    try {
+      RegisterPinManifestInstruction.fromArguments(arguments);
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected negative fromArguments policy.min_replicas to throw";
+  }
+
+  private static void rejectsFromArgumentsNonnumericMinReplicas() {
+    final Map<String, String> arguments = new LinkedHashMap<>();
+    arguments.put("digest_hex", "a0".repeat(32));
+    arguments.put("chunk_digest_sha3_256_hex", "b0".repeat(32));
+    arguments.put("content_length", "4096");
+    arguments.put("submitted_epoch", "1");
+    arguments.put("chunker.profile_id", "1");
+    arguments.put("chunker.namespace", "sorafs");
+    arguments.put("chunker.name", "sf1");
+    arguments.put("chunker.semver", "1.0.0");
+    arguments.put("chunker.multihash_code", "0");
+    arguments.put("policy.min_replicas", "many");
+    arguments.put("policy.storage_class", "hot");
+    arguments.put("policy.retention_epoch", "10");
+    boolean threw = false;
+    try {
+      RegisterPinManifestInstruction.fromArguments(arguments);
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected nonnumeric fromArguments policy.min_replicas to throw";
+  }
+
+  private static void rejectsFromArgumentsPartialAliasBinding() {
+    final Map<String, String> arguments = new LinkedHashMap<>();
+    arguments.put("digest_hex", "a0".repeat(32));
+    arguments.put("chunk_digest_sha3_256_hex", "b0".repeat(32));
+    arguments.put("content_length", "4096");
+    arguments.put("submitted_epoch", "1");
+    arguments.put("chunker.profile_id", "1");
+    arguments.put("chunker.namespace", "sorafs");
+    arguments.put("chunker.name", "sf1");
+    arguments.put("chunker.semver", "1.0.0");
+    arguments.put("chunker.multihash_code", "0");
+    arguments.put("policy.min_replicas", "1");
+    arguments.put("policy.storage_class", "hot");
+    arguments.put("policy.retention_epoch", "10");
+    arguments.put("alias.name", "docs");
+    boolean threw = false;
+    try {
+      RegisterPinManifestInstruction.fromArguments(arguments);
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected partial fromArguments alias binding to throw";
   }
 
   private static RegisterPinManifestInstruction buildInstruction(
