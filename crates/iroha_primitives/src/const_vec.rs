@@ -456,6 +456,11 @@ where
     T: norito::core::DecodeFromSlice<'a>,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        if core::any::type_name::<T>() == "u8" {
+            let flags = norito::core::effective_decode_flags()
+                .unwrap_or_else(norito::core::default_encode_flags);
+            return decode_const_vec_prefix_from_plan::<T>(bytes, flags);
+        }
         if core::any::type_name::<T>() != "u8"
             && let Ok((vec, used)) = norito::core::decode_vec_from_slice_serial::<T>(bytes)
         {
@@ -464,6 +469,35 @@ where
         let (vec, used) = norito::core::decode_field_canonical::<Vec<T>>(bytes)?;
         Ok((Self::from(vec), used))
     }
+}
+
+fn decode_const_vec_prefix_from_plan<T>(
+    bytes: &[u8],
+    flags: u8,
+) -> Result<(ConstVec<T>, usize), ncore::Error>
+where
+    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+{
+    let layout = if ncore::packed_seq_enabled_for_flags(flags) {
+        ncore::BinarySequenceLayout::FixedOffsets
+    } else {
+        ncore::BinarySequenceLayout::LengthPrefixed
+    };
+    let plan = ncore::plan_binary_sequence(bytes, flags, layout)?;
+    let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+    let mut items = Vec::new();
+    items
+        .try_reserve(plan.spans.len())
+        .map_err(|_| ncore::Error::LengthMismatch)?;
+    for span in &plan.spans {
+        let elem_bytes = span.get(bytes)?;
+        let (item, used) = ncore::decode_field_canonical::<T>(elem_bytes)?;
+        if used != elem_bytes.len() {
+            return Err(ncore::Error::LengthMismatch);
+        }
+        items.push(item);
+    }
+    Ok((ConstVec::from(items), plan.used))
 }
 
 impl<'a, T> NoritoDeserialize<'a> for ConstVec<T>
@@ -590,12 +624,12 @@ where
 {
     match err {
         ncore::Error::Misaligned { .. } | ncore::Error::LengthMismatch => {
+            if let Ok(manual) = decode_const_vec_manual_unpacked(bytes) {
+                return Ok(manual);
+            }
             match decode_const_vec_via_codec(bytes) {
                 Ok(vec) => Ok(vec),
                 Err(fallback) => {
-                    if let Ok(manual) = decode_const_vec_manual_unpacked(bytes) {
-                        return Ok(manual);
-                    }
                     if let Some(instr_vec) = decode_instruction_vec_ignore_lengths::<T>(bytes) {
                         return Ok(instr_vec);
                     }
@@ -1430,6 +1464,21 @@ mod tests {
     }
 
     #[test]
+    fn byte_decode_from_slice_reports_prefix_used_bytes() {
+        let items = vec![1_u8, 2, 3, 4, 5];
+        let bytes = ConstVec::from(items.clone()).encode();
+        let mut with_tail = bytes.clone();
+        with_tail.extend_from_slice(&[0xAA, 0xBB]);
+
+        let (decoded, used) =
+            <ConstVec<u8> as ncore::DecodeFromSlice>::decode_from_slice(&with_tail)
+                .expect("decode byte const vec prefix from slice");
+
+        assert_eq!(decoded.into_vec(), items);
+        assert_eq!(used, bytes.len());
+    }
+
+    #[test]
     fn decode_from_slice_reports_prefix_used_for_non_byte_items() {
         let items = vec![3_u16, 5, 8, 13];
         let bytes = ConstVec::from(items.clone()).encode();
@@ -1824,6 +1873,7 @@ mod tests {
     #[test]
     fn manual_unpacked_decodes_length_prefixed_elements() {
         let bytes = manual_unpacked_payload(&[&[1], &[2], &[3]]);
+        let _guard = ncore::DecodeFlagsGuard::enter(0);
 
         let decoded = decode_const_vec_manual_unpacked::<u8>(&bytes)
             .expect("manual unpacked payload should decode");
@@ -1834,6 +1884,7 @@ mod tests {
     #[test]
     fn manual_unpacked_with_recovery_decodes_length_prefixed_payload() {
         let bytes = manual_unpacked_payload(&[&[4], &[5]]);
+        let _guard = ncore::DecodeFlagsGuard::enter(0);
 
         let decoded = super::decode_const_vec_with_recovery::<u8>(&bytes)
             .expect("recovery path should decode manual unpacked payload");
@@ -1844,6 +1895,7 @@ mod tests {
     #[test]
     fn realigned_decode_decodes_manual_unpacked_payload() {
         let bytes = manual_unpacked_payload(&[&[11], &[12]]);
+        let _guard = ncore::DecodeFlagsGuard::enter(0);
 
         let decoded = super::decode_const_vec_realigned::<u8>(&bytes, 16)
             .expect("realigned decode should recover manual unpacked payload");
@@ -1865,6 +1917,7 @@ mod tests {
     fn manual_unpacked_decodes_non_byte_scalars() {
         let expected = vec![0x1234_u16, 0xABCD_u16];
         let bytes = manual_unpacked_payload_from_values(&expected);
+        let _guard = ncore::DecodeFlagsGuard::enter(0);
 
         let decoded = decode_const_vec_manual_unpacked::<u16>(&bytes)
             .expect("manual unpacked scalar payload should decode");
@@ -1876,6 +1929,7 @@ mod tests {
     fn manual_unpacked_decodes_nested_byte_vectors() {
         let expected = vec![vec![1_u8, 2, 3], vec![4_u8, 5]];
         let bytes = manual_unpacked_payload_from_values(&expected);
+        let _guard = ncore::DecodeFlagsGuard::enter(0);
 
         let decoded = decode_const_vec_manual_unpacked::<Vec<u8>>(&bytes)
             .expect("manual unpacked nested byte vectors should decode");
@@ -1886,6 +1940,7 @@ mod tests {
     #[test]
     fn recover_uses_manual_unpacked_after_length_mismatch() {
         let bytes = manual_unpacked_payload(&[&[7], &[8]]);
+        let _guard = ncore::DecodeFlagsGuard::enter(0);
 
         let decoded = decode_const_vec_recover::<u8>(ncore::Error::LengthMismatch, &bytes, false)
             .expect("manual unpacked fallback should recover from length mismatch");
@@ -1896,6 +1951,7 @@ mod tests {
     #[test]
     fn manual_unpacked_recover_handles_misaligned_error() {
         let bytes = manual_unpacked_payload(&[&[9], &[10]]);
+        let _guard = ncore::DecodeFlagsGuard::enter(0);
 
         let decoded = decode_const_vec_recover::<u8>(
             ncore::Error::Misaligned { align: 8, addr: 1 },
