@@ -2783,7 +2783,10 @@ pub(crate) fn metal_sha256_leaves(blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> 
     })
 }
 
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
+#[cfg(all(
+    not(all(target_os = "macos", feature = "metal")),
+    any(target_os = "macos", test)
+))]
 pub(crate) fn metal_sha256_leaves(_blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> {
     None
 }
@@ -2876,7 +2879,10 @@ pub(crate) fn metal_sha256_pairs_reduce(digests: &[[u8; 32]]) -> Option<[u8; 32]
     })
 }
 
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
+#[cfg(all(
+    not(all(target_os = "macos", feature = "metal")),
+    any(target_os = "macos", test)
+))]
 pub(crate) fn metal_sha256_pairs_reduce(_digests: &[[u8; 32]]) -> Option<[u8; 32]> {
     None
 }
