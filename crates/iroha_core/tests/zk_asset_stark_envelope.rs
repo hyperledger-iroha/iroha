@@ -262,8 +262,11 @@ fn zk_transfer_rejects_raw_stark_envelope() {
 
     // Proof bytes are a (Norito-encoded) raw STARK envelope, not an OpenVerifyEnvelope wrapper.
     let proof = ProofBox::new(BACKEND.into(), raw_stark_envelope_bytes());
-    let vk_inline = VerifyingKeyBox::new(BACKEND.into(), vec![1, 2, 3, 4]);
-    let attachment = ProofAttachment::new_inline(BACKEND.into(), proof, vk_inline);
+    let attachment = ProofAttachment::new_ref(
+        BACKEND.into(),
+        proof,
+        VerifyingKeyId::new(BACKEND, "raw_stark_vk"),
+    );
 
     let transfer = ZkTransfer::new(asset_def_id, Vec::new(), vec![[1u8; 32]], attachment, None);
 
@@ -364,8 +367,11 @@ fn unshield_rejects_raw_stark_envelope() {
     let executor = stx.world.executor().clone();
 
     let proof = ProofBox::new(BACKEND.into(), raw_stark_envelope_bytes());
-    let vk_inline = VerifyingKeyBox::new(BACKEND.into(), vec![1, 2, 3, 4]);
-    let attachment = ProofAttachment::new_inline(BACKEND.into(), proof, vk_inline);
+    let attachment = ProofAttachment::new_ref(
+        BACKEND.into(),
+        proof,
+        VerifyingKeyId::new(BACKEND, "raw_stark_vk"),
+    );
 
     let unshield = Unshield::new(
         asset_def_id,

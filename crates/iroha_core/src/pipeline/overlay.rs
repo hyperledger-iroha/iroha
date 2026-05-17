@@ -5162,16 +5162,7 @@ where
     }
 
     // Require VK references for governance-controlled circuit selection.
-    let vk_id: &VerifyingKeyId = attachment.vk_ref.as_ref().ok_or_else(|| {
-        OverlayBuildError::ZkProof(
-            "Executable::IvmProved requires a verifying key reference (vk_ref)".to_owned(),
-        )
-    })?;
-    if attachment.vk_inline.is_some() {
-        return Err(OverlayBuildError::ZkProof(
-            "Executable::IvmProved does not accept inline verifying keys".to_owned(),
-        ));
-    }
+    let vk_id: &VerifyingKeyId = &attachment.vk_ref;
 
     let vk_record = state_ro
         .world()

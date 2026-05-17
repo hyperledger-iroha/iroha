@@ -170,11 +170,14 @@ def _normalize_lane_privacy_attachment(entry: Mapping[str, Any]) -> Dict[str, An
         leaf_index = int(entry.get("leaf_index", 0))
         proof_backend = str(entry.get("proof_backend", "halo2/ipa"))
         proof_bytes = _normalize_bytes(entry["proof_bytes"], "proof_bytes")
-        verifying_key_bytes = _normalize_bytes(entry["verifying_key_bytes"], "verifying_key_bytes")
+        verifying_key_name = str(entry["verifying_key_name"]).strip()
         leaf = _normalize_bytes(entry["leaf"], "leaf", expected_len=32)
         raw_audit = entry.get("audit_path", [])
     except KeyError as exc:  # pragma: no cover - defensive path
         raise KeyError(f"lane privacy attachment missing required key: {exc}") from exc
+
+    if not verifying_key_name:
+        raise ValueError("verifying_key_name must not be empty")
 
     if not isinstance(raw_audit, Iterable):
         raise TypeError("audit_path must be an iterable of optional bytes")
@@ -192,7 +195,7 @@ def _normalize_lane_privacy_attachment(entry: Mapping[str, Any]) -> Dict[str, An
         "audit_path": audit_path,
         "proof_backend": proof_backend,
         "proof_bytes": proof_bytes,
-        "verifying_key_bytes": verifying_key_bytes,
+        "verifying_key_name": verifying_key_name,
     }
 
 
@@ -750,7 +753,7 @@ def build_signed_transaction(
         Optional iterable of mappings describing Merkle lane privacy proofs. Each mapping
         must include ``commitment_id``, ``leaf`` (32-byte hash), ``leaf_index``,
         ``audit_path`` (iterable of optional 32-byte hashes), ``proof_backend``,
-        ``proof_bytes``, and ``verifying_key_bytes``.
+        ``proof_bytes``, and ``verifying_key_name``.
     """
 
     builder = TransactionBuilder(chain_id, authority)
@@ -774,7 +777,7 @@ def build_signed_transaction(
                 normalized["audit_path"],
                 normalized["proof_backend"],
                 normalized["proof_bytes"],
-                normalized["verifying_key_bytes"],
+                normalized["verifying_key_name"],
             )
     return builder.sign(private_key)
 

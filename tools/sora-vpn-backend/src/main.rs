@@ -1464,6 +1464,22 @@ mod tests {
             .expect_err("bad mac must fail");
         assert!(error.to_string().contains("MAC"));
 
+        let stale_timestamp = unix_time_ms().saturating_sub(VPN_BACKEND_BOOTSTRAP_MAX_SKEW_MS + 1);
+        let stale_nonce = [0x66; 16];
+        let mut stale = VpnBackendBootstrapEnvelope {
+            bootstrap: bootstrap.clone(),
+            timestamp_ms: stale_timestamp,
+            nonce: stale_nonce,
+            mac: [0u8; 32],
+        };
+        stale.mac = vpn_backend_bootstrap_mac(&secret, &bootstrap, stale_timestamp, &stale_nonce);
+        let (mut writer, mut reader) = tokio::io::duplex(4096);
+        write_bootstrap_test_frame(&mut writer, &stale).await;
+        let stale_error = read_vpn_backend_bootstrap(&mut reader, &config, true)
+            .await
+            .expect_err("stale timestamp must fail");
+        assert!(stale_error.to_string().contains("stale"));
+
         let (mut writer, mut reader) = tokio::io::duplex(4096);
         write_bootstrap_test_frame(&mut writer, &envelope).await;
         let decoded = read_vpn_backend_bootstrap(&mut reader, &config, true)
@@ -1477,6 +1493,18 @@ mod tests {
             .await
             .expect_err("replay must fail");
         assert!(replay.to_string().contains("replayed"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_peer_credentials_reject_unauthorized_peer() {
+        let (stream, _peer) = UnixStream::pair().expect("unix stream pair");
+        let error = verify_unix_peer_credentials(&stream, Some(u32::MAX), None)
+            .expect_err("unexpected uid must fail");
+        assert!(
+            error.to_string().contains("not allowed")
+                || error.to_string().contains("not supported")
+        );
     }
 
     async fn write_bootstrap_test_frame<W: AsyncWrite + Unpin>(

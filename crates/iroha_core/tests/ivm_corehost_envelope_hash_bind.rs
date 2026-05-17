@@ -8,7 +8,7 @@ use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_data_model::{
     isi::InstructionBox,
     prelude::*,
-    proof::{ProofBox, VerifyingKeyBox},
+    proof::{ProofBox, VerifyingKeyId},
 };
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, IVMHost, PointerType, ProgramMetadata, syscalls as ivm_sys};
@@ -59,10 +59,10 @@ fn envelope_hash_is_injected_into_enqueued_unshield() {
         public_amount: 5u128,
         inputs: vec![[0u8; 32]],
         outputs: Vec::new(),
-        proof: iroha_data_model::proof::ProofAttachment::new_inline(
+        proof: iroha_data_model::proof::ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![0x01, 0x02, 0x03]),
-            VerifyingKeyBox::new("halo2/ipa".into(), vec![0x02]),
+            VerifyingKeyId::new("halo2/ipa", "unshield_vk"),
         ),
         root_hint: None,
     };

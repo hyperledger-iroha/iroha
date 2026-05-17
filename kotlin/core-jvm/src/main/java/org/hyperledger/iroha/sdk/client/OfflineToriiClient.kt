@@ -83,7 +83,7 @@ class OfflineToriiClient private constructor(builder: Builder) {
                 future.completeExceptionally(error)
                 return@whenComplete
             }
-            val rejectCode = extractRejectCode(response.headers)
+            val rejectCode = extractRejectCode(response.headers, response.body)
             val bodyPreview = decodeBodyPreview(response.body)
             val clientResponse = ClientResponse(response.statusCode, response.body, response.message, null, rejectCode)
             if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -125,7 +125,8 @@ class OfflineToriiClient private constructor(builder: Builder) {
         private const val OFFLINE_V2_READINESS_PATH = "/v1/offline/v2/readiness"
 
         @JvmStatic fun builder(): Builder = Builder()
-        private fun extractRejectCode(headers: Map<String, List<String>>): String? = HttpErrorMessageExtractor.extractRejectCode(headers, "x-iroha-reject-code")
+        private fun extractRejectCode(headers: Map<String, List<String>>, body: ByteArray?): String? =
+            HttpErrorMessageExtractor.extractRejectCode(headers, "x-iroha-reject-code", body)
         private fun decodeBodyPreview(payload: ByteArray): String? = HttpErrorMessageExtractor.extractMessage(payload)
         private fun summarizeCauseMessage(cause: Throwable?): String = cause?.message?.takeIf { it.isNotBlank() } ?: cause?.javaClass?.simpleName ?: "unknown transport error"
         private fun buildHttpFailureMessage(request: TransportRequest?, statusCode: Int, statusMessage: String?, rejectCode: String?, bodyPreview: String?): String {

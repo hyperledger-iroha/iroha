@@ -5089,9 +5089,9 @@ pub fn preverify_with_budget(
             return PreverifyResult::PreverifyBudgetExceeded;
         }
     }
-    // If we have both inline VK and expected commitment, enforce match early.
-    if let (Some(expected), Some(inline_vk)) = (expected_vk_commitment, vk) {
-        let actual = crate::zk::hash_vk(inline_vk);
+    // If we have both VK bytes and expected commitment, enforce the match early.
+    if let (Some(expected), Some(vk_box)) = (expected_vk_commitment, vk) {
+        let actual = crate::zk::hash_vk(vk_box);
         if actual != expected {
             return PreverifyResult::VerifyingKeyMismatch;
         }

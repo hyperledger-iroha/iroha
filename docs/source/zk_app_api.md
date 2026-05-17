@@ -98,7 +98,7 @@ Cancellation:
 
 Key resolution:
 - `vk_ref` is resolved via the WSV verifying-key registry and must be `Active`.
-- If the registry entry omits inline VK bytes, Torii loads them from `torii.zk_prover_keys_dir`
+- If the registry entry omits embedded VK bytes, Torii loads them from `torii.zk_prover_keys_dir`
   using `<backend>__<name>.vk` naming (sanitized components).
 - For `halo2/ipa`, the proving key is loaded from the same directory using `<backend>__<name>.pk`
   naming. The `.pk` file must contain the Halo2 `ProvingKey` serialization in

@@ -183,7 +183,7 @@ Confidentialityを有効にして開始する新規ネットワークは、希�
 - `ConfidentialEncryptedPayload` はAEAD memo bytesを `{ version, ephemeral_pubkey, nonce, ciphertext }` でラップし、XChaCha20-Poly1305レイアウトの `CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1` をデフォルトにする。
 - Canonical key-derivationベクトルは `docs/source/confidential_key_vectors.json` にあり、CLIとTorii endpointの回帰テストで使用する。
 - `asset::AssetDefinition` に `confidential_policy: AssetConfidentialPolicy { mode, vk_set_hash, poseidon_params_id, pedersen_params_id, pending_transition }` を追加。
-- `ZkAssetState` はtransfer/unshield verifiersの `(backend, name, commitment)` を保持し、参照/inline verifying keyが一致しないproofを拒否する。
+- `ZkAssetState` はtransfer/unshield verifiersの `(backend, name, commitment)` を保持し、参照 verifying keyが一致しないproofを拒否する。
 - `CommitmentTree`（資産ごとのfrontier checkpoints付き）、`NullifierSet`（キー `(chain_id, asset_id, nullifier)`）、`ZkVerifierEntry`、`PedersenParams`、`PoseidonParams` をworld stateに保存。
 - Mempoolは重複検出とanchor ageチェックのために一時 `NullifierIndex` と `AnchorIndex` を保持する。
 - Noritoスキーマ更新にはpublic inputsのcanonical orderingを含め、round-trip testsでエンコードの決定性を保証する。
@@ -241,7 +241,7 @@ Confidential ledgerはnoteのfreshness証明とgovernance監査の再現に十�
 - ハード制限（設定可能なデフォルト）:
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`。`verify_timeout_ms` を超えるproofは命令を確定的に中断する（governance投票は `proof verification exceeded timeout` を出力し、`VerifyProof` はエラーを返す）。
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - 追加クォータはlivenessを確保する: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, `max_public_inputs` がblock buildersを制限し、`reorg_depth_bound`（≥ `max_anchor_age_blocks`）がfrontier checkpoint retentionを制御する。
 - Runtimeはこれらのper-transaction/per-block制限を超えるトランザクションを拒否し、決定論的な `InvalidParameter` エラーを出力してledger状態を変更しない。
 - Mempoolは `vk_id`、proof長、anchor ageでconfidentialトランザクションを事前フィルタし、verifier実行前にリソース使用を抑制する。

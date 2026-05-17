@@ -456,7 +456,8 @@ and telemetry stay in sync.【crates/iroha_torii/tests/sorafs_discovery.rs:989-1
 1. Register the manifest on-chain with `RegisterPinManifest`; the submitter pays
    the configured SoraFS public pin fee and the approved registry record stores
    the manifest digest, chunk digest, content length, policy, fee asset, treasury,
-   and fee amount.
+   and fee amount. That fee metadata is a committed receipt; storage ingest does
+   not reprice the record against later governance schedule or treasury changes.
 2. `POST /v1/sorafs/storage/pin` with a base64-encoded manifest (`manifest_b64`)
    and payload (`payload_b64`). Torii recomputes the chunk plan and admits the
    ingest only when it matches the approved paid registry record. A successful

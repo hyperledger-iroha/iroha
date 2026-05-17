@@ -667,9 +667,6 @@ _`python3 scripts/inventory_env_toggles.py --json docs/source/agents/env_var_inv
 - စမ်းသပ်မှု- သေတ္တာ/ivm/tests/i18n.rs:13 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 - စမ်းသပ်မှု- သေတ္တာ/ivm/tests/i18n.rs:71 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 
-## MAX_DEGREE (ထုတ်ကုန်- ၁)
-
-- ကုန်ပစ္စည်း- သေတ္တာ/iroha_core/src/zk.rs:106 — `let current = std::env::var("MAX_DEGREE")`
 
 ## MOCHI_CONFIG (ထုတ်ကုန်- ၁)
 

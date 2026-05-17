@@ -3706,8 +3706,7 @@ function encodeProofAttachmentValue(value, context) {
   const parts = [
     encodeNoritoField(encodeNoritoStringValue(assertNonEmptyString(value.backend, `${context}.backend`))),
     encodeNoritoField(encodeProofBoxValue(value.proof, `${context}.proof`)),
-    encodeNoritoField(encodeOptionValue(value.vk_ref, encodeVerifyingKeyIdValue, `${context}.vk_ref`)),
-    encodeNoritoField(encodeOptionValue(value.vk_inline, encodeVerifyingKeyBoxValue, `${context}.vk_inline`)),
+    encodeNoritoField(encodeVerifyingKeyIdValue(value.vk_ref, `${context}.vk_ref`)),
   ];
   const hasLanePrivacy = value.lane_privacy !== undefined && value.lane_privacy !== null;
   const hasEnvelopeHash = hasLanePrivacy || (value.envelope_hash !== undefined && value.envelope_hash !== null);
@@ -3750,16 +3749,7 @@ function decodeProofAttachmentValue(payload, context) {
   const reader = new BufferReader(payload, context);
   const backend = decodeStringValue(readNoritoField(reader, "backend"), `${context}.backend`);
   const proof = decodeProofBoxValue(readNoritoField(reader, "proof"), `${context}.proof`);
-  const vk_ref = decodeOptionValue(
-    readNoritoField(reader, "vk_ref"),
-    decodeVerifyingKeyIdValue,
-    `${context}.vk_ref`,
-  );
-  const vk_inline = decodeOptionValue(
-    readNoritoField(reader, "vk_inline"),
-    decodeVerifyingKeyBoxValue,
-    `${context}.vk_inline`,
-  );
+  const vk_ref = decodeVerifyingKeyIdValue(readNoritoField(reader, "vk_ref"), `${context}.vk_ref`);
   const vk_commitment =
     reader.offset < reader.buffer.length
       ? decodeOptionValue(
@@ -3791,7 +3781,6 @@ function decodeProofAttachmentValue(payload, context) {
     backend,
     proof,
     vk_ref,
-    vk_inline,
     vk_commitment,
     envelope_hash,
     lane_privacy,

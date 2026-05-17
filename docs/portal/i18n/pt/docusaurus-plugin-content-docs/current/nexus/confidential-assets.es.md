@@ -247,7 +247,7 @@ A Documenta substitui localidades no runbook de operações; As políticas de go
 - Limites duros (padrões configuráveis):
 -`max_proof_size_bytes = 262_144`.
 -`max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
--`verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. Provas que excedem `verify_timeout_ms` abortam a instrução de forma determinista (cédulas de governança emitem `proof verification exceeded timeout`, `VerifyProof` retorna erro).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Cuotas adicionais para garantir a vivacidade: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, e `max_public_inputs` acotan block builders; `reorg_depth_bound` (>= `max_anchor_age_blocks`) governa a retenção de pontos de controle de fronteira.
 - O tempo de execução de execução agora rechaza transações que excedem esses limites por transação ou por bloco, emitindo erros `InvalidParameter` deterministas e deixando o estado do razão sem mudanças.
 - Mempool pré-filtre transações confidenciais por `vk_id`, comprimento de prova e idade de âncora antes de invocar o verificador para manter atualizado o uso de recursos.

@@ -98,7 +98,7 @@ public_inputs_schema_hash = 0xfae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be960
 - `backend tag = BackendTag::Halo2IpaPasta` X.
 - `curve = "pallas"`
 - `public_inputs_schema_hash = 0xfae4…64d3`
-- `commitment = sha256(backend || vk_bytes)` (32 байлыҡлы диге)
+- `commitment = zk_hash_vk(backend, vk_bytes)` (domain-separated length-prefixed SHA-256 digest using domain `iroha:zk:v1:vk`)
 
 Канон өйөмөнә рәтте раҫлау асҡысы (`key = Some(VerifyingKeyBox { … })`) иҫбатлау конверты менән бергә инә. `vk_len`, `max_proof_bytes`, ә опциональ метамағлүмәт URI-лар генерацияланған артефакттарҙан халыҡ йәшәй.
 

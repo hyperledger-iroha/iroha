@@ -87,6 +87,7 @@ function sampleAccountForms() {
 
 const SAMPLE_ACCOUNT_FORMS = sampleAccountForms();
 const SAMPLE_ACCOUNT_ID = SAMPLE_ACCOUNT_FORMS.canonical;
+const SAMPLE_VPN_HELPER_TICKET_HEX = `5356504e48543100${"00".repeat(248)}`;
 const SAMPLE_RWA_ID =
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities";
 const SAMPLE_RWA_ID_UPPER =
@@ -1672,6 +1673,7 @@ test("registerSorafsPinManifest posts payload and returns JSON", async () => {
     pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
     manifestDigestHex: manifestHex,
     chunkDigestSha3_256Hex: chunkHex,
+    contentLength: 4096,
     submittedEpoch: 42,
     alias: { namespace: "docs", name: "main", proof: Buffer.from("alias-proof") },
     successorOfHex: successorHex,
@@ -1683,6 +1685,7 @@ test("registerSorafsPinManifest posts payload and returns JSON", async () => {
   assert.equal(body.chunker_profile_id, 1);
   assert.equal(body.pin_policy?.storage_class?.type, "Hot");
   assert.equal(body.chunk_digest_sha3_256_hex, chunkHex);
+  assert.equal(body.content_length, 4096);
   assert.equal(
     body.alias?.proof_base64,
     Buffer.from("alias-proof").toString("base64"),
@@ -1717,6 +1720,197 @@ test("registerSorafsPinManifest validates storage class input", async () => {
   );
 });
 
+test("registerSorafsPinManifest requires content length before fetch", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: () => {
+      throw new Error("fetch should not be called");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.registerSorafsPinManifest({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        chunker: {
+          profileId: 1,
+          namespace: "sorafs",
+          name: "sf1",
+          semver: "1.0.0",
+        },
+        pinPolicy: { minReplicas: 3, storageClass: "hot" },
+        manifestDigestHex: "a".repeat(64),
+        chunkDigestSha3_256Hex: "b".repeat(64),
+        submittedEpoch: 1,
+      }),
+    /contentLength/i,
+  );
+});
+
+test("registerSorafsPinManifest rejects negative content length before fetch", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: () => {
+      throw new Error("fetch should not be called");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.registerSorafsPinManifest({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        chunker: {
+          profileId: 1,
+          namespace: "sorafs",
+          name: "sf1",
+          semver: "1.0.0",
+        },
+        pinPolicy: { minReplicas: 3, storageClass: "hot" },
+        manifestDigestHex: "a".repeat(64),
+        chunkDigestSha3_256Hex: "b".repeat(64),
+        contentLength: -1,
+        submittedEpoch: 1,
+      }),
+    /contentLength.*non-negative/i,
+  );
+});
+
+test("registerSorafsPinManifest rejects zero replicas before fetch", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: () => {
+      throw new Error("fetch should not be called");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.registerSorafsPinManifest({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        chunker: {
+          profileId: 1,
+          namespace: "sorafs",
+          name: "sf1",
+          semver: "1.0.0",
+        },
+        pinPolicy: { minReplicas: 0, storageClass: "hot" },
+        manifestDigestHex: "a".repeat(64),
+        chunkDigestSha3_256Hex: "b".repeat(64),
+        contentLength: 4096,
+        submittedEpoch: 1,
+      }),
+    /minReplicas.*positive/i,
+  );
+});
+
+test("registerSorafsPinManifest rejects negative retention epoch before fetch", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: () => {
+      throw new Error("fetch should not be called");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.registerSorafsPinManifest({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        chunker: {
+          profileId: 1,
+          namespace: "sorafs",
+          name: "sf1",
+          semver: "1.0.0",
+        },
+        pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: -1 },
+        manifestDigestHex: "a".repeat(64),
+        chunkDigestSha3_256Hex: "b".repeat(64),
+        contentLength: 4096,
+        submittedEpoch: 1,
+      }),
+    /retentionEpoch.*non-negative/i,
+  );
+});
+
+test("registerSorafsPinManifest rejects alias without proof before fetch", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: () => {
+      throw new Error("fetch should not be called");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.registerSorafsPinManifest({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        chunker: {
+          profileId: 1,
+          namespace: "sorafs",
+          name: "sf1",
+          semver: "1.0.0",
+        },
+        pinPolicy: { minReplicas: 3, storageClass: "hot" },
+        manifestDigestHex: "a".repeat(64),
+        chunkDigestSha3_256Hex: "b".repeat(64),
+        contentLength: 4096,
+        submittedEpoch: 1,
+        alias: { namespace: "docs", name: "main" },
+      }),
+    /alias\.proof/i,
+  );
+});
+
+test("registerSorafsPinManifest rejects malformed alias proof before fetch", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: () => {
+      throw new Error("fetch should not be called");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.registerSorafsPinManifest({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        chunker: {
+          profileId: 1,
+          namespace: "sorafs",
+          name: "sf1",
+          semver: "1.0.0",
+        },
+        pinPolicy: { minReplicas: 3, storageClass: "hot" },
+        manifestDigestHex: "a".repeat(64),
+        chunkDigestSha3_256Hex: "b".repeat(64),
+        contentLength: 4096,
+        submittedEpoch: 1,
+        alias: { namespace: "docs", name: "main", proof: "not base64!" },
+      }),
+    /alias\.proof.*base64/i,
+  );
+});
+
+test("registerSorafsPinManifest rejects malformed successor digest before fetch", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: () => {
+      throw new Error("fetch should not be called");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.registerSorafsPinManifest({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        chunker: {
+          profileId: 1,
+          namespace: "sorafs",
+          name: "sf1",
+          semver: "1.0.0",
+        },
+        pinPolicy: { minReplicas: 3, storageClass: "hot" },
+        manifestDigestHex: "a".repeat(64),
+        chunkDigestSha3_256Hex: "b".repeat(64),
+        contentLength: 4096,
+        submittedEpoch: 1,
+        successorOfHex: "zz",
+      }),
+    /successorOfHex/i,
+  );
+});
+
 test("registerSorafsPinManifestTyped normalizes response payloads", async () => {
   const manifestHex = "a".repeat(64);
   const successorHex = "b".repeat(64);
@@ -1728,6 +1922,10 @@ test("registerSorafsPinManifestTyped normalizes response payloads", async () => 
         manifestDigestHex: manifestHex.toUpperCase(),
         chunkerHandle: "sorafs.sf1@1.0.0",
         submittedEpoch: "42",
+        contentLength: 4096,
+        pinFeeNano: "500000000",
+        pinFeeAssetId: "xor#universal",
+        pinFeeTreasuryAccountId: FIXTURE_ALICE_ID,
         alias: {
           namespace: "docs",
           name: "main",
@@ -1751,12 +1949,17 @@ test("registerSorafsPinManifestTyped normalizes response payloads", async () => 
     pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
     manifestDigestHex: manifestHex,
     chunkDigestSha3_256Hex: "c".repeat(64),
+    contentLength: 4096,
     submittedEpoch: 42,
   });
   assert.deepEqual(result, {
     manifest_digest_hex: manifestHex,
     chunker_handle: "sorafs.sf1@1.0.0",
     submitted_epoch: 42,
+    content_length: 4096,
+    pin_fee_nano: 500000000,
+    pin_fee_asset_id: "xor#universal",
+    pin_fee_treasury_account_id: FIXTURE_ALICE_ID,
     alias: {
       namespace: "docs",
       name: "main",
@@ -1764,6 +1967,82 @@ test("registerSorafsPinManifestTyped normalizes response payloads", async () => 
     },
     successor_of_hex: successorHex,
   });
+});
+
+test("registerSorafsPinManifestTyped rejects response without fee receipt", async () => {
+  const manifestHex = "a".repeat(64);
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        manifestDigestHex: manifestHex,
+        chunkerHandle: "sorafs.sf1@1.0.0",
+        submittedEpoch: 42,
+        contentLength: 4096,
+        pinFeeNano: 500000000,
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () =>
+      client.registerSorafsPinManifestTyped({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        chunker: {
+          profileId: 1,
+          namespace: "sorafs",
+          name: "sf1",
+          semver: "1.0.0",
+          multihashCode: 0,
+        },
+        pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
+        manifestDigestHex: manifestHex,
+        chunkDigestSha3_256Hex: "c".repeat(64),
+        contentLength: 4096,
+        submittedEpoch: 42,
+      }),
+    /pin_fee_asset_id/,
+  );
+});
+
+test("registerSorafsPinManifestTyped rejects negative fee receipt", async () => {
+  const manifestHex = "a".repeat(64);
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        manifestDigestHex: manifestHex,
+        chunkerHandle: "sorafs.sf1@1.0.0",
+        submittedEpoch: 42,
+        contentLength: 4096,
+        pinFeeNano: "-1",
+        pinFeeAssetId: "xor#universal",
+        pinFeeTreasuryAccountId: FIXTURE_ALICE_ID,
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () =>
+      client.registerSorafsPinManifestTyped({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        chunker: {
+          profileId: 1,
+          namespace: "sorafs",
+          name: "sf1",
+          semver: "1.0.0",
+          multihashCode: 0,
+        },
+        pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
+        manifestDigestHex: manifestHex,
+        chunkDigestSha3_256Hex: "c".repeat(64),
+        contentLength: 4096,
+        submittedEpoch: 42,
+      }),
+    /pin_fee_nano.*non-negative/i,
+  );
 });
 
 test("getSorafsPinManifestTyped normalizes manifest, aliases, and orders", async (t) => {
@@ -6331,6 +6610,43 @@ test("getTransactionStatus surfaces nested JSON error message and reject code", 
       assert.equal(error.rejectCode, "build_claim_missing");
       assert.equal(error.code, "build_claim_missing");
       assert.equal(error.errorMessage, "missing build claim for transaction status");
+      return true;
+    },
+  );
+});
+
+test("getTransactionStatus surfaces ErrorEnvelope details reject code", async () => {
+  const hashHex = "ac".repeat(32);
+  const details = {
+    reject_code: "TX_QUEUE_FULL",
+    retry_after_seconds: 1,
+    queue: {
+      state: "saturated",
+      queued: 128,
+      capacity: 128,
+      saturated: true,
+    },
+  };
+  const fetchImpl = async () =>
+    createResponse({
+      status: 429,
+      jsonData: {
+        code: "queue_full",
+        message: "transaction queue is at capacity",
+        details,
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl, maxRetries: 0 });
+  await assert.rejects(
+    () => client.getTransactionStatus(hashHex),
+    (error) => {
+      assert(error instanceof ToriiHttpError);
+      assert.equal(error.status, 429);
+      assert.equal(error.rejectCode, "TX_QUEUE_FULL");
+      assert.equal(error.code, "TX_QUEUE_FULL");
+      assert.equal(error.errorMessage, "transaction queue is at capacity");
+      assert.deepEqual(error.details, details);
       return true;
     },
   );
@@ -18043,7 +18359,7 @@ test("createVpnSession signs the request and normalizes the response", async () 
         dns_servers: ["1.1.1.1"],
         tunnel_addresses: ["10.208.0.2/32"],
         mtu_bytes: 1280,
-        helper_ticket_hex: "ab".repeat(32),
+        helper_ticket_hex: SAMPLE_VPN_HELPER_TICKET_HEX,
         bytes_in: 123,
         bytes_out: 456,
         status: "active",
@@ -18083,7 +18399,7 @@ test("createVpnSession signs the request and normalizes the response", async () 
     dnsServers: ["1.1.1.1"],
     tunnelAddresses: ["10.208.0.2/32"],
     mtuBytes: 1280,
-    helperTicketHex: "ab".repeat(32),
+    helperTicketHex: SAMPLE_VPN_HELPER_TICKET_HEX,
     bytesIn: 123,
     bytesOut: 456,
     status: "active",
@@ -18169,7 +18485,7 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
           dns_servers: ["1.1.1.1"],
           tunnel_addresses: ["10.208.0.2/32"],
           mtu_bytes: 1280,
-          helper_ticket_hex: "ab".repeat(32),
+          helper_ticket_hex: SAMPLE_VPN_HELPER_TICKET_HEX,
           bytes_in: 11,
           bytes_out: 22,
           status: "active",
@@ -18242,7 +18558,7 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
     dnsServers: ["1.1.1.1"],
     tunnelAddresses: ["10.208.0.2/32"],
     mtuBytes: 1280,
-    helperTicketHex: "ab".repeat(32),
+    helperTicketHex: SAMPLE_VPN_HELPER_TICKET_HEX,
     bytesIn: 11,
     bytesOut: 22,
     status: "active",

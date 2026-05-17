@@ -3,7 +3,7 @@
 //! Run with `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors`
 //! to refresh `fixtures/offline/interop_contract_v2.json`. Use `--check` to verify it is up to date.
 
-use std::{env, error::Error, fs, path::Path};
+use std::{env, error::Error, fs, io::Write, path::Path};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use hex::encode;
@@ -28,6 +28,8 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Numeric;
 use norito::{
+    NoritoSerialize,
+    core::{header_flags, schema_hash_for_name, write_len_with_flags},
     json::{self, Value},
     to_bytes,
 };
@@ -55,6 +57,8 @@ const ISSUE_AMOUNT: &str = "52";
 const GENERATED_AT_MS: u64 = 1_706_000_000_000;
 const CREATED_AT_MS: u64 = 1_706_000_000_123;
 const ACCEPTED_AT_MS: u64 = 1_706_000_000_333;
+const PAYMENT_TOKEN_ENVELOPE_SCHEMA: &str =
+    "iroha_data_model::offline::model::OfflineNotePaymentTokenEnvelopeV2";
 
 fn main() -> Result<(), Box<dyn Error>> {
     let check_only = env::args().any(|arg| arg == "--check");
@@ -360,6 +364,16 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         ("accepted_at_ms", Value::from(ACCEPTED_AT_MS)),
     ]);
 
+    let payment_token_wire = mobile_payment_token_wire(MobilePaymentTokenWireFields {
+        chain_id: CHAIN_ID,
+        payment_request_id: INVOICE_ID,
+        created_at_ms: CREATED_AT_MS,
+        token_nonce: &token_nonce,
+        token_id,
+        audit: &audit,
+    })?;
+    let sdk_interop = sdk_interop_json(&payment_token_wire)?;
+
     let payment_token_payload = json::to_string(&payment_token)?;
     let fountain = fountain_qr_fixture(payment_token_payload.as_bytes())?;
     let audit_output_claim_hashes = audit_output_claims
@@ -405,6 +419,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         ),
         ("receive_challenge", receive_challenge),
         ("payment_token", payment_token),
+        ("sdk_interop", sdk_interop),
         ("receipt_ack", receipt_ack),
         ("fountain_qr_v1", fountain),
         (
@@ -922,10 +937,105 @@ fn payment_token_json(fields: PaymentTokenJsonFields<'_>) -> Result<Value, Box<d
     ]))
 }
 
+struct MobilePaymentTokenWireFields<'a> {
+    chain_id: &'a str,
+    payment_request_id: &'a str,
+    created_at_ms: u64,
+    token_nonce: &'a [u8],
+    token_id: Hash,
+    audit: &'a OfflineNoteAuditBundleV2,
+}
+
+struct MobilePaymentTokenWire<'a> {
+    fields: MobilePaymentTokenWireFields<'a>,
+    audit_norito: Vec<u8>,
+}
+
+impl NoritoSerialize for MobilePaymentTokenWire<'_> {
+    fn schema_hash() -> [u8; 16] {
+        schema_hash_for_name(PAYMENT_TOKEN_ENVELOPE_SCHEMA)
+    }
+
+    fn serialize<W: Write>(&self, mut writer: W) -> Result<(), norito::Error> {
+        write_field(&mut writer, &2_u64.to_le_bytes())?;
+        write_string_field(&mut writer, self.fields.chain_id)?;
+        write_string_field(&mut writer, self.fields.payment_request_id)?;
+        write_field(&mut writer, &self.fields.created_at_ms.to_le_bytes())?;
+        write_bytes_vec_field(&mut writer, self.fields.token_nonce)?;
+        write_field(&mut writer, self.fields.token_id.as_ref())?;
+        write_bytes_vec_field(&mut writer, &self.audit_norito)?;
+        Ok(())
+    }
+}
+
+fn mobile_payment_token_wire(
+    fields: MobilePaymentTokenWireFields<'_>,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    Ok(to_bytes(&MobilePaymentTokenWire {
+        audit_norito: to_bytes(fields.audit)?,
+        fields,
+    })?)
+}
+
+fn sdk_interop_json(payment_token_wire: &[u8]) -> Result<Value, Box<dyn Error>> {
+    let text_payload = format!(
+        "wallet-offline-payment-v2:{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payment_token_wire)
+    );
+    Ok(object(vec![
+        (
+            "payment_token_envelope_schema",
+            Value::from(PAYMENT_TOKEN_ENVELOPE_SCHEMA),
+        ),
+        (
+            "payment_token_norito_base64",
+            Value::from(BASE64_STANDARD.encode(payment_token_wire)),
+        ),
+        (
+            "payment_token_sha256_hex",
+            Value::from(encode(Sha256::digest(payment_token_wire))),
+        ),
+        ("payment_token_text", Value::from(text_payload)),
+        (
+            "payment_token_qr_v1",
+            fountain_qr_fixture_with_options(payment_token_wire, 180, 2)?,
+        ),
+    ]))
+}
+
+fn write_field<W: Write>(writer: &mut W, payload: &[u8]) -> Result<(), norito::Error> {
+    write_len_with_flags(writer, payload.len() as u64, header_flags::COMPACT_LEN)?;
+    writer.write_all(payload)?;
+    Ok(())
+}
+
+fn write_string_field<W: Write>(writer: &mut W, value: &str) -> Result<(), norito::Error> {
+    let bytes = value.as_bytes();
+    let mut payload = Vec::new();
+    write_len_with_flags(&mut payload, bytes.len() as u64, header_flags::COMPACT_LEN)?;
+    payload.write_all(bytes)?;
+    write_field(writer, &payload)
+}
+
+fn write_bytes_vec_field<W: Write>(writer: &mut W, value: &[u8]) -> Result<(), norito::Error> {
+    let mut payload = Vec::with_capacity(8 + value.len());
+    payload.write_all(&(value.len() as u64).to_le_bytes())?;
+    payload.write_all(value)?;
+    write_field(writer, &payload)
+}
+
 fn fountain_qr_fixture(payload: &[u8]) -> Result<Value, Box<dyn Error>> {
+    fountain_qr_fixture_with_options(payload, 360, 3)
+}
+
+fn fountain_qr_fixture_with_options(
+    payload: &[u8],
+    chunk_size: usize,
+    parity_group: usize,
+) -> Result<Value, Box<dyn Error>> {
     let options = QrStreamOptions {
-        chunk_size: 360,
-        parity_group: 3,
+        chunk_size,
+        parity_group,
         payload_kind: QrPayloadKind::OfflinePaymentTokenV2,
         ..QrStreamOptions::default()
     };

@@ -196,7 +196,7 @@ Libros de contabilidad confidenciales کو nota frescura ثابت کرنے او�
 - Límites estrictos (valores predeterminados configurables):
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` سے زیادہ instrucciones de prueba کو determinista طور پر abort کرتے ہیں (las boletas de gobernanza `proof verification exceeded timeout` emiten کرتے ہیں، `VerifyProof` retorno de error کرتا ہے)۔
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Cuotas adicionales de vida aseguran کرتے ہیں: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, اور `max_public_inputs` constructores de bloques کو enlazados کرتے ہیں؛ `reorg_depth_bound` (≥ `max_anchor_age_blocks`) la retención del punto de control fronterizo rige کرتا ہے۔
 - Los límites de tiempo de ejecución por transacción y por bloque superan las transacciones y rechazan las transacciones deterministas `InvalidParameter` emiten errores en el estado del libro mayor sin cambios
 - Mempool `vk_id`, longitud de la prueba, edad del anclaje, transacciones confidenciales, prefiltro, invocación del verificador, uso de recursos limitado.- Verificación determinista طور پر tiempo de espera یا violación limitada پر detener ہوتی ہے؛ errores explícitos de transacciones کے ساتھ fallan ہوتی ہیں۔ Backends SIMD opcionales ہیں مگر contabilidad de gas alterar نہیں کرتے۔
@@ -280,7 +280,7 @@ Libros de contabilidad confidenciales کو nota frescura ثابت کرنے او�
    - ✅ El protocolo de enlace P2P `ConfidentialFeatureDigest` (resumen de backend + huellas digitales de registro) anuncia errores de coincidencia y `HandshakeConfidentialMismatch` un error determinista.
    - ✅ Rutas de ejecución confidenciales میں pánicos eliminar کئے گئے اور nodos no compatibles کیلئے activación de roles agregar کیا گیا۔
    - ⚪ Presupuestos de tiempo de espera del verificador اور puntos de control fronterizos کیلئے reorganizar los límites de profundidad hacer cumplir کرنا۔
-     - ✅ Se aplican presupuestos de tiempo de espera de verificación ہوئے؛ `verify_timeout_ms` سے تجاوز کرنے والی pruebas اب fallo determinista ہوتی ہیں۔
+     - Verification timeout budgets are telemetry/operator budgets only; proofs fail deterministically on size, gas, public input, policy, or anchor-age bounds.
      - ✅ Puntos de control fronterizos اب `reorg_depth_bound` respeto کرتے ہیں، ventana configurada سے پرانے puntos de control podar کرتے ہوئے instantáneas deterministas برقرار رکھتے ہیں۔
    - `AssetConfidentialPolicy`, política FSM, اور mint/transfer/revelar instrucciones کیلئے puertas de cumplimiento introducen کریں۔
    - Encabezados de bloque میں `conf_features` commit کریں اور registro/resúmenes de parámetros divergen ہونے پر participación del validador rechazar کریں۔

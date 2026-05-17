@@ -247,7 +247,7 @@ Documente as substituições locais nas operações do runbook; As políticas de
 - Limites de duração (padrões configuráveis):
 -`max_proof_size_bytes = 262_144`.
 -`max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
--`verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. As provas despassantes `verify_timeout_ms` abortaram a instrução de determinística (governança de cédulas emettent `proof verification exceeded timeout`, `VerifyProof` retornou um erro).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Cotas adicionais garantidas à vida: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block` e `max_public_inputs` nascem dos construtores de blocos; `reorg_depth_bound` (>= `max_anchor_age_blocks`) controla a retenção dos pontos de verificação de fronteira.
 - O tempo de execução de execução é rejeitado, mantendo as transações fora dos limites por transação ou por bloco, emite erros `InvalidParameter` determinados e mantém o estado do livro-razão intacto.
 - Mempool pré-filtra as transações confidenciais por `vk_id`, prolonga a prova e a idade da âncora antes de solicitar o verificador para suportar o uso dos recursos.

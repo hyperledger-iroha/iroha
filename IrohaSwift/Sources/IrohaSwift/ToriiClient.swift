@@ -7247,7 +7247,7 @@ public struct ToriiVerifyingKeyRecord: Decodable, Sendable {
                 throw DecodingError.dataCorrupted(
                     DecodingError.Context(
                         codingPath: container.codingPath + [CodingKeys.inlineKey],
-                        debugDescription: "inline key backend must match record backend"
+                        debugDescription: "stored key backend must match record backend"
                     )
                 )
             }
@@ -7255,7 +7255,7 @@ public struct ToriiVerifyingKeyRecord: Decodable, Sendable {
                 throw DecodingError.dataCorrupted(
                     DecodingError.Context(
                         codingPath: container.codingPath + [CodingKeys.verifyingKeyLength],
-                        debugDescription: "vk_len must match inline key byte length"
+                        debugDescription: "vk_len must match stored key byte length"
                     )
                 )
             }
@@ -15173,13 +15173,68 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         }
     }
 
-    private func rejectCode(from response: HTTPURLResponse) -> String? {
-        guard let raw = response.value(forHTTPHeaderField: "x-iroha-reject-code")?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !raw.isEmpty
-        else {
+    private func rejectCode(from response: HTTPURLResponse, responseBody: Data? = nil) -> String? {
+        if let raw = response.value(forHTTPHeaderField: "x-iroha-reject-code")?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty {
+            return raw
+        }
+        guard let responseBody,
+              !responseBody.isEmpty,
+              let jsonObject = try? JSONSerialization.jsonObject(with: responseBody, options: [])
+        else { return nil }
+        return Self.extractRejectCode(from: jsonObject)
+    }
+
+    private static func extractRejectCode(from jsonObject: Any) -> String? {
+        if let list = jsonObject as? [Any] {
+            for value in list {
+                if let nested = extractRejectCode(from: value) {
+                    return nested
+                }
+            }
             return nil
         }
-        return raw
+        guard let object = jsonObject as? [String: Any] else { return nil }
+        var caseInsensitiveValues: [String: Any] = [:]
+        for (key, value) in object {
+            let normalized = key.lowercased()
+            if caseInsensitiveValues[normalized] == nil {
+                caseInsensitiveValues[normalized] = value
+            }
+        }
+        for key in ["reject_code", "rejectcode"] {
+            if let text = caseInsensitiveValues[key] as? String {
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    return trimmed
+                }
+            }
+        }
+        if let details = caseInsensitiveValues["details"] as? [String: Any] {
+            var detailValues: [String: Any] = [:]
+            for (key, value) in details {
+                let normalized = key.lowercased()
+                if detailValues[normalized] == nil {
+                    detailValues[normalized] = value
+                }
+            }
+            for key in ["reject_code", "rejectcode"] {
+                if let text = detailValues[key] as? String {
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        return trimmed
+                    }
+                }
+            }
+            if let axt = detailValues["axt"] as? [String: Any],
+               let text = axt["code"] as? String {
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    return trimmed
+                }
+            }
+        }
+        return nil
     }
 
     private static func trimErrorBodyText(_ text: String, maxLength: Int = 512) -> String {
@@ -15265,7 +15320,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         guard range.contains(response.statusCode) else {
             throw ToriiClientError.httpStatus(code: response.statusCode,
                                               message: Self.httpStatusMessage(response: response, responseBody: responseBody),
-                                              rejectCode: rejectCode(from: response))
+                                              rejectCode: rejectCode(from: response, responseBody: responseBody))
         }
     }
 
@@ -15275,7 +15330,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         guard response.statusCode == code else {
             throw ToriiClientError.httpStatus(code: response.statusCode,
                                               message: Self.httpStatusMessage(response: response, responseBody: responseBody),
-                                              rejectCode: rejectCode(from: response))
+                                              rejectCode: rejectCode(from: response, responseBody: responseBody))
         }
     }
 

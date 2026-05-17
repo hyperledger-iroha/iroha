@@ -667,9 +667,6 @@ translator: machine-google-reviewed
 - ٹیسٹ: کریٹس/IVM/ٹیسٹ/i18n.rs: 13 - `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 - ٹیسٹ: کریٹس/IVM/ٹیسٹ/i18n.rs: 71 - `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 
-## میکس_ ڈگری (پروڈ: 1)
-
-- پروڈ: کریٹس/آئروہ_کور/ایس آر سی/زیڈ کے آر ایس: 106 - `let current = std::env::var("MAX_DEGREE")`
 
 ## موچی_کونفگ (پروڈ: 1)
 

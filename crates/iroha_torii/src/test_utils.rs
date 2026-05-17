@@ -1242,13 +1242,16 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 ..A::Halo2::default()
             },
             fastpq: A::Fastpq {
-                execution_mode: A::FastpqExecutionMode::Auto,
+                execution_mode: A::FastpqExecutionMode::Cpu,
+                poseidon_mode: A::FastpqPoseidonMode::Cpu,
+                proof_sidecar_queue_cap: fastpq::PROOF_SIDECAR_QUEUE_CAP,
+                proof_sidecar_max_bytes: fastpq::PROOF_SIDECAR_MAX_BYTES,
+                proof_sidecar_max_retries: fastpq::PROOF_SIDECAR_MAX_RETRIES,
                 device_class: None,
                 chip_family: None,
                 gpu_kind: None,
                 metal_queue_fanout: None,
                 metal_queue_column_threshold: None,
-                poseidon_mode: A::FastpqPoseidonMode::Auto,
                 metal_max_in_flight: fastpq::METAL_MAX_IN_FLIGHT,
                 metal_threadgroup_width: fastpq::METAL_THREADGROUP_WIDTH,
                 metal_trace: fastpq::METAL_TRACE,

@@ -255,7 +255,7 @@ enhebra `ConfidentialEncryptedPayload` وجهاز التشفير Norito، ويع
 - حدود التحمل (التكوينات الافتراضية):
 -`max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`، `max_commitments_per_tx = 8`، `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`، `max_anchor_age_blocks = 10_000`. تؤدي الأدلة التي تتجاوز `verify_timeout_ms` إلى إلغاء تعليمات شكل التحديد (تصدر بطاقات الاقتراع `proof verification exceeded timeout`، و`VerifyProof` خطأ مكرر).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - العناصر الإضافية لضمان الحياة: `max_proof_bytes_block`، `max_verify_calls_per_tx`، `max_verify_calls_per_block`، و`max_public_inputs` منشئو كتل الأكوتان؛ `reorg_depth_bound` (>= `max_anchor_age_blocks`) يدير نقاط التفتيش الحدودية.
 - يتم تنفيذ وقت التشغيل بعد إعادة المعاملات التي تتجاوز هذه الحدود للمعاملة أو للكتلة، مما يؤدي إلى إزالة الأخطاء `InvalidParameter` في تحديد وإلغاء حالة دفتر الأستاذ دون تغيير.
 - تقوم الذاكرة بتصفية المعاملات السرية مسبقًا لـ `vk_id`، ومدة الإثبات، ومدة التثبيت قبل استدعاء المدقق للحفاظ على استخدام الموارد.

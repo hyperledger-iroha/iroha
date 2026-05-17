@@ -1003,7 +1003,7 @@ public final class HttpClientTransport implements IrohaClient {
       return null;
     }
     return HttpErrorMessageExtractor.extractRejectCode(
-        response.headers(), "x-iroha-reject-code");
+        response.headers(), "x-iroha-reject-code", response.body());
   }
 
   private static Optional<String> extractTransactionHash(final TransportResponse response) {

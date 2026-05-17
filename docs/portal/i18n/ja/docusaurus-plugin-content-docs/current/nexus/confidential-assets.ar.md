@@ -243,7 +243,7 @@ Swift SDK のセキュリティ シールド グルー JSON のセキュリテ�
 - حدود صارمة (افتراضات قابلة للضبط):
 - `max_proof_size_bytes = 262_144`。
 - `max_nullifiers_per_tx = 8`、`max_commitments_per_tx = 8`、`max_confidential_ops_per_block = 256`。
-- `verify_timeout_ms = 750`、`max_anchor_age_blocks = 10_000`。証明 التي تتجاوز `verify_timeout_ms` تقطع التعليمة حتميا (تصويتات الحوكمة تصدر `proof verification exceeded timeout` و`VerifyProof` يعيد) )。
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - ビルダーのバージョン: `max_proof_bytes_block`、`max_verify_calls_per_tx`、`max_verify_calls_per_block`、`max_public_inputs` のビルダー`reorg_depth_bound` (≥ `max_anchor_age_blocks`) 国境の検問所。
 - ランタイム プログラム `InvalidParameter`台帳の管理。
 - メンプール セキュリティ `vk_id` 証明アンカー 検証者検証すごい。

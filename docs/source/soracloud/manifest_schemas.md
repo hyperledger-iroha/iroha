@@ -21,10 +21,9 @@ deployment on Iroha 3:
 
 The Rust definitions live in `crates/iroha_data_model/src/soracloud.rs`.
 
-Uploaded-model private-runtime records are intentionally a separate layer from
-these SCR deployment manifests. They should extend the Soracloud model plane
-and reuse `SecretEnvelopeV1` / `CiphertextStateRecordV1` for encrypted bytes
-and ciphertext-native state, rather than being encoded as new service/container
+Uploaded-model storage references are intentionally separate from these SCR
+deployment manifests. They extend the Soracloud model plane and point at
+approved SoraFS manifests rather than being encoded as new service/container
 manifests. See `uploaded_private_models.md`.
 
 ## Scope

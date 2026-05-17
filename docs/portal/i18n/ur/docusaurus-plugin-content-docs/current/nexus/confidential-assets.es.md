@@ -235,7 +235,7 @@ SPDX-License-Identifier: Apache-2.0
 - سخت حدود (ترتیب دینے والے پہلے سے طے شدہ):
 - `max_proof_size_bytes = 262_144`۔
 - `max_nullifiers_per_tx = 8` ، `max_commitments_per_tx = 8` ، `max_confidential_ops_per_block = 256`۔
-- `verify_timeout_ms = 750` ، `max_anchor_age_blocks = 10_000`۔ `verify_timeout_ms` سے زیادہ ثبوت ہدایت کو طے شدہ طور پر اسقاط حمل کرتے ہیں (گورننس بالز جاری کریں `proof verification exceeded timeout` ، `VerifyProof` غلطی کی واپسی)۔
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - اضافی کوٹے کو یقینی بنانا یقینی ہے: `max_proof_bytes_block` ، `max_verify_calls_per_tx` ، `max_verify_calls_per_block` ، اور `max_public_inputs` ڈیمیٹ بلاک بلڈرز ؛ `reorg_depth_bound` (> = `max_anchor_age_blocks`) فرنٹیئر چوکیوں کو برقرار رکھنے پر حکومت کرتا ہے۔
 - رن ٹائم پھانسی اب ان لین دین کو مسترد کرتی ہے جو ان حدود کو فی ٹرانزیکشن یا فی بلاک سے تجاوز کرتی ہے ، جس سے ڈٹرمینسٹک `InvalidParameter` غلطیاں جاری ہوتی ہیں اور لیجر اسٹیٹ کو کوئی تبدیلی نہیں ہوتی ہیں۔
 - میمپول سے پہلے سے فلٹرڈ حساس لین دین `vk_id` کے ذریعہ ، پروف کی لمبائی اور اینکر ایج کے ذریعہ وسائل کے استعمال کو محدود رکھنے کے لئے تصدیق کنندہ کی درخواست کرنے سے پہلے۔
@@ -331,7 +331,7 @@ SPDX-License-Identifier: Apache-2.0
    ۔
    - [x] خفیہ عملدرآمد کے راستوں میں گھبراہٹ کو ہٹا دیں اور غیر تعاون یافتہ نوڈس کے لئے رول گیٹنگ شامل کریں۔
    - [] فرنٹیئر چوکیوں کے لئے چیکر ٹائم آؤٹ بجٹ اور ریورج گہرائی کی حدوں کا اطلاق کریں۔
-     - [x] توثیق کے ٹائم آؤٹ بجٹ کا اطلاق ؛ `verify_timeout_ms` سے زیادہ ثبوت اب عزم کے مطابق ناکام ہوجاتے ہیں۔
+     - Verification timeout budgets are telemetry/operator budgets only; proofs fail deterministically on size, gas, public input, policy, or anchor-age bounds.
      ۔
    - `AssetConfidentialPolicy` ، FSM پالیسی اور ٹکسال/منتقلی/انکشاف ہدایات کے لئے نفاذ کے دروازے متعارف کروائیں۔
    - بلاک ہیڈرز میں `conf_features` کا ارتکاب کریں اور جب رجسٹری ڈائجسٹ/پیرامیٹرز ڈائیورج ہو تو توثیق کرنے والے کی شرکت کو مسترد کریں۔

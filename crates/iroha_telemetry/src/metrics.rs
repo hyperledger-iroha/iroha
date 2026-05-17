@@ -2657,6 +2657,21 @@ mod tests {
     }
 
     #[test]
+    fn records_fastpq_proof_sidecar_metrics() {
+        let metrics = Metrics::default();
+        metrics.set_fastpq_proof_sidecar_queue_depth(7);
+        metrics.inc_fastpq_proof_sidecar_event("enqueued");
+        assert_eq!(metrics.fastpq_proof_sidecar_queue_depth.get(), 7);
+        assert_eq!(
+            metrics
+                .fastpq_proof_sidecar_events_total
+                .with_label_values(&["enqueued"])
+                .get(),
+            1
+        );
+    }
+
+    #[test]
     fn records_offline_note_rejections() {
         let metrics = Metrics::default();
         metrics.record_offline_note_rejection("ios-appattest", "proof_invalid");
@@ -6236,6 +6251,10 @@ pub struct Metrics {
     pub fastpq_execution_mode_total: IntCounterVec,
     /// FASTPQ Poseidon pipeline resolutions grouped by requested/resolved/path/device labels.
     pub fastpq_poseidon_pipeline_total: IntCounterVec,
+    /// FASTPQ proof sidecar queue depth.
+    pub fastpq_proof_sidecar_queue_depth: GenericGauge<AtomicU64>,
+    /// FASTPQ proof sidecar persistence events grouped by event.
+    pub fastpq_proof_sidecar_events_total: IntCounterVec,
     /// FASTPQ Metal queue duty-cycle ratios grouped by device/queue/metric.
     pub fastpq_metal_queue_ratio: GaugeVec,
     /// FASTPQ Metal queue depth snapshots grouped by device/metric.
@@ -8114,6 +8133,19 @@ impl Default for Metrics {
                 "chip_family",
                 "gpu_kind",
             ],
+        )
+        .expect("Infallible");
+        let fastpq_proof_sidecar_queue_depth = GenericGauge::new(
+            "fastpq_proof_sidecar_queue_depth",
+            "FASTPQ proof sidecar queue depth.",
+        )
+        .expect("Infallible");
+        let fastpq_proof_sidecar_events_total = IntCounterVec::new(
+            Opts::new(
+                "fastpq_proof_sidecar_events_total",
+                "FASTPQ proof sidecar persistence events grouped by event.",
+            ),
+            &["event"],
         )
         .expect("Infallible");
         let fastpq_metal_queue_ratio = GaugeVec::new(
@@ -13689,6 +13721,8 @@ impl Default for Metrics {
             oracle_evidence_hashes_total,
             fastpq_execution_mode_total,
             fastpq_poseidon_pipeline_total,
+            fastpq_proof_sidecar_queue_depth,
+            fastpq_proof_sidecar_events_total,
             fastpq_metal_queue_ratio,
             fastpq_metal_queue_depth,
             fastpq_zero_fill_duration_ms,
@@ -14238,6 +14272,8 @@ impl Default for Metrics {
             oracle_evidence_hashes_total,
             fastpq_execution_mode_total,
             fastpq_poseidon_pipeline_total,
+            fastpq_proof_sidecar_queue_depth,
+            fastpq_proof_sidecar_events_total,
             fastpq_metal_queue_ratio,
             fastpq_metal_queue_depth,
             fastpq_zero_fill_duration_ms,
@@ -15634,6 +15670,18 @@ impl Metrics {
                 gpu_kind,
             );
         }
+    }
+
+    /// Set FASTPQ proof sidecar queue depth.
+    pub fn set_fastpq_proof_sidecar_queue_depth(&self, depth: u64) {
+        self.fastpq_proof_sidecar_queue_depth.set(depth);
+    }
+
+    /// Increment a FASTPQ proof sidecar persistence event counter.
+    pub fn inc_fastpq_proof_sidecar_event(&self, event: &str) {
+        self.fastpq_proof_sidecar_events_total
+            .with_label_values(&[event])
+            .inc();
     }
 
     /// Record aggregated Metal queue statistics for FASTPQ.

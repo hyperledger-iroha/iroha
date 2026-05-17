@@ -667,9 +667,6 @@ _ ბოლოს განახლდა `python3 scripts/inventory_env_toggle
 - ტესტი: crates/ivm/tests/i18n.rs:13 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 - ტესტი: crates/ivm/tests/i18n.rs:71 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 
-## MAX_DEGREE (პროდუქტი: 1)
-
-- პროდუქტი: crates/iroha_core/src/zk.rs:106 — `let current = std::env::var("MAX_DEGREE")`
 
 ## MOCHI_CONFIG (პროდუქტი: 1)
 

@@ -255,7 +255,7 @@ Redes novas que iniciam with confidencialidade habilita characteration a politic
 - حدود التحمل (الإعدادات الافتراضية):
 -`max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`، `max_commitments_per_tx = 8`، `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`، `max_anchor_age_blocks = 10_000`. تؤدي الأدلة التي تتجاوز `verify_timeout_ms` إلى إحباط التعليمات الحتمية (بطاقة الاقتراع الخاصة بالحكم، البند `proof verification exceeded timeout`، `VerifyProof` ترجع الخطأ).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - حصص إضافية تضمن الحيوية: `max_proof_bytes_block`، `max_verify_calls_per_tx`، `max_verify_calls_per_block`، e `max_public_inputs` منشئو الكتل المحدودة؛ `reorg_depth_bound` (>= `max_anchor_age_blocks`) يحكم نقاط التفتيش الحدودية.
 - يؤدي تنفيذ وقت التشغيل الآن إلى إعادة المعاملات التي تتجاوز حدود المعاملات أو الكتلة، مما يؤدي إلى حدوث أخطاء `InvalidParameter` في المحددات والحفاظ على حالة دفتر الأستاذ غير المعدلة.
 - تقوم الذاكرة بتصفية المعاملات السرية مسبقًا بواسطة `vk_id`، وإثبات الإثبات ووظيفة التثبيت قبل استدعاء أو التحقق للحفاظ على استخدام الموارد المحدودة.

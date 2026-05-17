@@ -247,7 +247,7 @@ Documenta は、オペレーションのランブックのロケールをオー�
 - 期間を制限します (デフォルト設定可能):
 - `max_proof_size_bytes = 262_144`。
 - `max_nullifiers_per_tx = 8`、`max_commitments_per_tx = 8`、`max_confidential_ops_per_block = 256`。
-- `verify_timeout_ms = 750`、`max_anchor_age_blocks = 10_000`。 `verify_timeout_ms` 形式決定の指示を中止したことが証明されます (`proof verification exceeded timeout`、`VerifyProof` のレトルナ エラーによるガバナンスの投票用紙)。
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Cuotas adicionales aseguran liveness: `max_proof_bytes_block`、`max_verify_calls_per_tx`、`max_verify_calls_per_block`、y `max_public_inputs` acotan ブロック ビルダー。 `reorg_depth_bound` (>= `max_anchor_age_blocks`) 国境のチェックポイントを保持します。
 - ランタイムの実行時に、トランザクションまたはブロックの制限を超えたエラーが発生しました。`InvalidParameter` は、カンビオ上の帳簿上のエラーを決定します。
 - `vk_id` による事前フィルター処理の機密情報、長期にわたる証拠、アンカーの事前確認、および再帰的な管理に関する検証。

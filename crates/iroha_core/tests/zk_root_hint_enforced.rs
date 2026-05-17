@@ -45,8 +45,11 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
             ..cfg::Halo2::default()
         },
         fastpq: cfg::Fastpq {
-            execution_mode: cfg::FastpqExecutionMode::Auto,
-            poseidon_mode: cfg::FastpqPoseidonMode::Auto,
+            execution_mode: cfg::FastpqExecutionMode::Cpu,
+            poseidon_mode: cfg::FastpqPoseidonMode::Cpu,
+            proof_sidecar_queue_cap: defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
+            proof_sidecar_max_bytes: defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
+            proof_sidecar_max_retries: defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
             device_class: None,
             chip_family: None,
             gpu_kind: None,
@@ -203,18 +206,15 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
     ));
     let mut stx2 = block2.transaction();
     let bad_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
-    let bad_vk = bad_fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture verifying key");
     let bad_unshield = iroha_data_model::isi::zk::Unshield::new(
         asset_def_id.clone(),
         alice.clone(),
         1u128,
         vec![[9u8; 32]],
-        iroha_data_model::proof::ProofAttachment::new_inline(
+        iroha_data_model::proof::ProofAttachment::new_ref(
             "halo2/ipa".into(),
             bad_fixture.proof_box("halo2/ipa"),
-            bad_vk,
+            iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "unshield_vk"),
         ),
         Some(stale_root),
     );
@@ -246,17 +246,14 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
             .unwrap()
     };
     let ok_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
-    let ok_vk = ok_fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture verifying key");
     let ok_transfer = iroha_data_model::isi::zk::ZkTransfer::new(
         asset_def_id.clone(),
         Vec::new(),
         vec![[3u8; 32]],
-        iroha_data_model::proof::ProofAttachment::new_inline(
+        iroha_data_model::proof::ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ok_fixture.proof_box("halo2/ipa"),
-            ok_vk,
+            iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "transfer_vk"),
         ),
         Some(current_root),
     );

@@ -208,7 +208,7 @@ Libros de contabilidad confidenciales que contienen historias actualizadas sobre
 - Жесткие лимиты (настраиваемые значения по умолчанию):
 -`max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. Pruebas, превышающие `verify_timeout_ms`, детерминированно прерывают инструкцию (gobernanza-голосования эмитят `proof verification exceeded timeout`, `VerifyProof` возвращает ошибку).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Bloques de programación disponibles: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block` y `max_public_inputs`. constructores; `reorg_depth_bound` (≥ `max_anchor_age_blocks`) управляет puntos de control de la frontera de retención.
 - Runtime теперь отклоняет транзакции, превышающие эти por transacción o por límites de bloque, эмитируя детерминированные ошибки `InvalidParameter` и не изменяя состояние libro mayor.
 - Mempool filtra la información confidencial de las transmisiones según `vk_id`, prueba y anclaje del verificador, ограничить потребление ресурсов.- Los parámetros establecidos por el tiempo de espera o los límites establecidos; транзакции падают с явными ошибками. Los backends SIMD son opcionales, no hay ningún tipo de contabilidad contable.

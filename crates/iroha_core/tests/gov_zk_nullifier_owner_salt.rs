@@ -57,7 +57,7 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let domain_id: iroha_data_model::domain::DomainId =
-        DomainId::try_new("wonderland", "universal").unwrap();
+        iroha_data_model::domain::DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let acc = Account::new(alice_id.clone()).build(&alice_id);
     let escrow_acc = Account::new(escrow_id.clone()).build(&alice_id);

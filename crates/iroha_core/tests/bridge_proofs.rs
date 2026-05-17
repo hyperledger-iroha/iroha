@@ -15,17 +15,14 @@ use iroha_data_model::{
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-use sha2::{Digest as _, Sha256};
 
 fn bridge_proof_id(proof: &BridgeProof) -> ProofId {
     let encoded = norito::to_bytes(proof).expect("encode bridge proof");
     let backend = proof.backend_label();
-    let mut h = Sha256::new();
-    h.update(backend.as_bytes());
-    h.update(&encoded);
+    let proof = ProofBox::new(backend.clone(), encoded);
     ProofId {
         backend,
-        proof_hash: h.finalize().into(),
+        proof_hash: iroha_core::zk::hash_proof(&proof),
     }
 }
 

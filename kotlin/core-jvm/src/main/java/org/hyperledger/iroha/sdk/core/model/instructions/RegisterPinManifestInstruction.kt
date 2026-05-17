@@ -11,6 +11,7 @@ class RegisterPinManifestInstruction private constructor(
     @JvmField val digestHex: String,
     @JvmField val chunkerProfile: ChunkerProfile,
     @JvmField val chunkDigestSha3Hex: String,
+    @JvmField val contentLength: Long,
     @JvmField val pinPolicy: PinPolicy,
     @JvmField val submittedEpoch: Long,
     @JvmField val successorOfHex: String?,
@@ -26,6 +27,7 @@ class RegisterPinManifestInstruction private constructor(
         return digestHex == other.digestHex
             && chunkerProfile == other.chunkerProfile
             && chunkDigestSha3Hex == other.chunkDigestSha3Hex
+            && contentLength == other.contentLength
             && pinPolicy == other.pinPolicy
             && submittedEpoch == other.submittedEpoch
             && successorOfHex == other.successorOfHex
@@ -36,6 +38,7 @@ class RegisterPinManifestInstruction private constructor(
         var result = digestHex.hashCode()
         result = 31 * result + chunkerProfile.hashCode()
         result = 31 * result + chunkDigestSha3Hex.hashCode()
+        result = 31 * result + contentLength.hashCode()
         result = 31 * result + pinPolicy.hashCode()
         result = 31 * result + submittedEpoch.hashCode()
         result = 31 * result + (successorOfHex?.hashCode() ?: 0)
@@ -47,6 +50,7 @@ class RegisterPinManifestInstruction private constructor(
         private var digestHex: String? = null
         private var chunkerProfile: ChunkerProfile? = null
         private var chunkDigestSha3Hex: String? = null
+        private var contentLength: Long? = null
         private var pinPolicy: PinPolicy? = null
         private var submittedEpoch: Long? = null
         private var successorOfHex: String? = null
@@ -62,6 +66,11 @@ class RegisterPinManifestInstruction private constructor(
 
         fun setChunkDigestSha3Hex(chunkDigestSha3Hex: String) = apply {
             this.chunkDigestSha3Hex = requireNotNull(chunkDigestSha3Hex) { "chunkDigestSha3Hex" }
+        }
+
+        fun setContentLength(contentLength: Long) = apply {
+            require(contentLength >= 0) { "contentLength must be non-negative" }
+            this.contentLength = contentLength
         }
 
         fun setPinPolicy(pinPolicy: PinPolicy) = apply {
@@ -87,11 +96,12 @@ class RegisterPinManifestInstruction private constructor(
             val cp = checkNotNull(chunkerProfile) { "chunkerProfile must be set" }
             val cd = chunkDigestSha3Hex
             check(!cd.isNullOrBlank()) { "chunkDigestSha3Hex must be set" }
+            val cl = checkNotNull(contentLength) { "contentLength must be set" }
             val pp = checkNotNull(pinPolicy) { "pinPolicy must be set" }
             val se = checkNotNull(submittedEpoch) { "submittedEpoch must be set" }
 
-            val args = buildCanonicalArguments(dh, cp, cd, pp, se, successorOfHex, aliasBinding)
-            return RegisterPinManifestInstruction(dh, cp, cd, pp, se, successorOfHex, aliasBinding, args)
+            val args = buildCanonicalArguments(dh, cp, cd, cl, pp, se, successorOfHex, aliasBinding)
+            return RegisterPinManifestInstruction(dh, cp, cd, cl, pp, se, successorOfHex, aliasBinding, args)
         }
     }
 
@@ -287,7 +297,10 @@ class RegisterPinManifestInstruction private constructor(
         fun fromArguments(arguments: Map<String, String>): RegisterPinManifestInstruction {
             val digestHex = requireArg(arguments, "digest_hex")
             val chunkDigestSha3Hex = requireArg(arguments, "chunk_digest_sha3_256_hex")
+            val contentLength = requireLong(arguments, "content_length")
+            require(contentLength >= 0) { "contentLength must be non-negative" }
             val submittedEpoch = requireLong(arguments, "submitted_epoch")
+            require(submittedEpoch >= 0) { "submittedEpoch must be non-negative" }
             val successorOfHex = arguments["successor_of_hex"]
             val chunkerProfile = ChunkerProfile.fromArguments(arguments)
             val pinPolicy = PinPolicy.fromArguments(arguments)
@@ -297,6 +310,7 @@ class RegisterPinManifestInstruction private constructor(
                 digestHex = digestHex,
                 chunkerProfile = chunkerProfile,
                 chunkDigestSha3Hex = chunkDigestSha3Hex,
+                contentLength = contentLength,
                 pinPolicy = pinPolicy,
                 submittedEpoch = submittedEpoch,
                 successorOfHex = successorOfHex,
@@ -326,6 +340,7 @@ class RegisterPinManifestInstruction private constructor(
             digestHex: String,
             chunkerProfile: ChunkerProfile,
             chunkDigestSha3Hex: String,
+            contentLength: Long,
             pinPolicy: PinPolicy,
             submittedEpoch: Long,
             successorOfHex: String?,
@@ -334,6 +349,7 @@ class RegisterPinManifestInstruction private constructor(
             put("action", ACTION)
             put("digest_hex", digestHex)
             put("chunk_digest_sha3_256_hex", chunkDigestSha3Hex)
+            put("content_length", contentLength.toString())
             put("submitted_epoch", submittedEpoch.toString())
             if (!successorOfHex.isNullOrBlank()) {
                 put("successor_of_hex", successorOfHex)

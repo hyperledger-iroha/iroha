@@ -2,6 +2,38 @@
 
 Last updated: 2026-05-17
 
+## 2026-05-17 SoraFS paid pin adversarial test coverage
+
+- Added SoraFS paid-pin negative coverage for unfunded and underfunded public
+  registration, pre-fee validation failures that must not debit the submitter,
+  successor-chain rejection paths that must leave fee balances unchanged,
+  alias proof tampering that must not write a manifest or move fees,
+  duplicate digest/alias replay without a second fee charge, and storage ingest
+  with pending/retired records, missing fee metadata, forged fee payer,
+  embedded record digest mismatch, chunker profile mismatch, policy mismatches
+  across replicas/storage class/retention epoch, and tampered paid-record
+  content length.
+- Added SDK-side validation coverage so JavaScript, Kotlin/JVM, and Java
+  Android builders reject missing or negative SoraFS pin-register
+  `content_length` instead of emitting malformed register payloads, and reject
+  nonnumeric `content_length` during argument decoding. JavaScript request
+  validation also rejects alias bindings without proofs and malformed successor
+  digests before fetch; typed response normalization rejects negative pin-fee
+  receipt values.
+- Validation: `cargo fmt --all`, `git diff --check`,
+  `cargo test -p iroha_core --lib register_pin_manifest_rejects_unfunded_public_submission_without_side_effects -- --nocapture`,
+  `cargo test -p iroha_core --lib register_pin_manifest_rejects_insufficient_public_fee_without_side_effects -- --nocapture`,
+  `cargo test -p iroha_core --lib register_manifest_rejects -- --nocapture`,
+  `cargo test -p iroha_core --lib register_manifest_rejects_alias -- --nocapture`,
+  `cargo test -p iroha_core --lib register_manifest_rejects_empty_alias_proof_without_side_effects -- --nocapture`,
+  `cargo test -p iroha_torii --lib --features app_api storage_pin_rejects_paid_record -- --nocapture`,
+  and
+  `cargo test -p iroha_torii --lib --features app_api paid_record_even -- --nocapture`
+  are green. The focused JavaScript register-pin filter,
+  `node --test --test-name-pattern "registerSorafsPinManifest" javascript/iroha_js/test/toriiClient.test.js`,
+  is also green. Kotlin/Java Gradle validation is blocked because this host has
+  no Java runtime available.
+
 ## 2026-05-16 SoraFS paid pin registry enforcement
 
 - Public SoraFS pin registration now records content length and SoraFS pin-fee
@@ -10,15 +42,17 @@ Last updated: 2026-05-17
   storage-ingest authority.
 - Torii storage pin ingest now requires a matching approved paid registry record
   for manifest digest, chunk profile, content length, policy, chunk plan digest,
-  fee payer, fee asset, treasury, and amount. Legacy bearer-token/CIDR pin
-  admission no longer authorizes storage ingest.
+  and fee payer. The recorded fee asset, treasury, and amount are treated as the
+  committed on-chain receipt rather than repriced against later governance
+  changes. Legacy bearer-token/CIDR pin admission no longer authorizes storage
+  ingest.
 - Gateway admission now fails closed when the registry is unavailable, manifest
   envelopes are validated against signed registry metadata instead of merely
   detected, and unknown chunker profiles are rejected by Torii and `sorafs_node`.
 - CAR range responses now stream chunk files through `CarStreamingWriter`
   instead of buffering the full range response in memory.
 
-## 2026-05-16 Offline Note V2 local-final SDK semantics
+## 2026-05-17 Offline Note V2 local-final SDK semantics
 
 - Swift, Kotlin/JVM, and Java Android Offline Note V2 wallets now treat
   offline-to-offline `pay`/`accept` as the immediate, irrevocable value
@@ -26,6 +60,12 @@ Last updated: 2026-05-17
   `SPENDABLE`, and the recipient's matched receive-pending note becomes
   `SPENDABLE` after local token/proof verification; online sync is not part of
   the transfer path.
+- Swift, Kotlin/JVM, and Java Android now require trusted key certificates for
+  load, receive, pay, token acceptance, audit publication, and redeem flows.
+  The default verifier rejects certificates until the caller supplies trusted
+  issuer roots, and the included Ed25519 verifier checks the issuer signature
+  plus wallet/account role binding for sender, recipient, input-claim, and
+  output-claim certificates.
 - Audit publication is now an explicit optional online step
   (`publishAudit`) that submits evidence without mutating local wallet
   spendability. Wallet sync now reconciles redeem-pending notes only.
@@ -36,20 +76,58 @@ Last updated: 2026-05-17
 - Swift Keychain, Kotlin in-memory/Android secure, and Java in-memory/Android
   secure stores expose atomic note mutations so local-final state transitions
   cannot be split across separate reads and writes.
+- Swift Keychain persistence now writes revisioned ThisDeviceOnly records and
+  deletes the previous revision after each committed save. Kotlin Android and
+  Java Android secure stores now write each committed revision with a fresh
+  non-exportable Android Keystore key and delete the previous revision key, so
+  cloned app preferences or app-data rollback cannot decrypt an old wallet
+  snapshot once the device has observed the newer revision.
+- Android secure-store decryption no longer creates missing historical keys;
+  rolled-back ciphertext now fails closed without leaving orphan Keystore keys.
+- Legacy persisted `spendPending`/`SPEND_PENDING` notes decode as spent, and
+  `changePending`/`CHANGE_PENDING` notes decode as spendable, matching the
+  local-final first-release state machine.
+- Swift, Kotlin/JVM, and Java Android adversarial tests now cover the rejecting
+  default verifier, wrong issuer roots, receive-request account substitution,
+  tampered stored input certificates, forged output-claim certificates, and
+  forged input-claim certificate hashes. The latest coverage also rejects valid
+  certificates presented for the wrong wallet account, forged sender change
+  output certificates, and coherent audit sender-certificate substitutions that
+  recompute input claim hashes, token IDs, and recursive-proof public inputs.
+  A further negative pass covers wrong-chain receive requests, forged receive
+  output commitments, wrong-chain payment tokens, and payment-request-ID swaps
+  with recomputed token IDs and recursive-proof public inputs.
+  The latest claim-mutation pass also covers recipient-output amount and asset
+  substitutions, output-order swaps, and dropped recipient outputs with
+  recomputed token IDs and audit public inputs. Token identity adversarial
+  coverage now also rejects top-level token-id substitution, audit-bundle
+  token-id substitution, and stale recursive-proof public-input bindings.
+  Receive-request tampering coverage now includes asset-owner substitution and
+  amount substitution before the payer creates an otherwise coherent token.
+- The previously blocking `qr_stream_fixtures` bin now uses the exported
+  `norito::json!` macro form that compiles under the current Norito JSON
+  module layout, and the shared QR fixtures were regenerated.
 - Validation:
   - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift`
+  - `xcodebuild test -scheme IrohaSwift -destination 'id=7A8B8CC0-617D-49EA-BA33-3976C3E15517' -only-testing:IrohaSwiftTests/OfflineNoteV2Tests` from `IrohaSwift` on the iPhone 17 iOS 26.4.1 simulator
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain` from `kotlin`
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :offline-wallet-android:compileReleaseKotlin --console=plain` from `kotlin`
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew -Dandroid.test.mains=org.hyperledger.iroha.android.offline.OfflineNoteV2Test :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android`
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :android:compileDebugJavaWithJavac --console=plain` from `java/iroha_android`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :offline-wallet-android:compileDebugAndroidTestJavaWithJavac :offline-wallet-android:compileReleaseKotlin --console=plain` from `kotlin`
+  - Installed Android emulator tooling and an API 35 Google APIs ARM64 system
+    image with `sdkmanager`, created the `iroha_offline_api35` AVD, and booted
+    it headless for connected tests.
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_SERIAL=emulator-5554 ANDROID_HOME=/opt/homebrew/share/android-commandlinetools ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools PATH=/opt/homebrew/opt/openjdk@21/bin:/opt/homebrew/share/android-commandlinetools/platform-tools:/opt/homebrew/share/android-commandlinetools/emulator:$PATH ./gradlew :offline-wallet-android:connectedDebugAndroidTest --console=plain` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :android:compileDebugAndroidTestJavaWithJavac :android:compileDebugJavaWithJavac --console=plain` from `java/iroha_android`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_SERIAL=emulator-5554 ANDROID_HOME=/opt/homebrew/share/android-commandlinetools ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools PATH=/opt/homebrew/opt/openjdk@21/bin:/opt/homebrew/share/android-commandlinetools/platform-tools:/opt/homebrew/share/android-commandlinetools/emulator:$PATH ./gradlew :android:connectedDebugAndroidTest --console=plain` from `java/iroha_android`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-v2-fixtures cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --check`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-v2-fixtures cargo test -p iroha_data_model --lib --features test-fixtures,transparent_api offline_note_v2_wallet_derivations -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-v2-fixtures cargo run -p iroha_data_model --features test-fixtures --bin qr_stream_fixtures -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-v2-fixtures cargo test -p iroha_data_model --features test-fixtures,transparent_api offline_note_v2_wallet_derivations -- --nocapture`
   - `git diff --check`
-- A broader non-lib Rust test attempt,
-  `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-v2-fixtures cargo test -p iroha_data_model --features test-fixtures,transparent_api offline_note_v2_wallet_derivations -- --nocapture`,
-  still compiles unrelated test binaries and stops in
-  `crates/iroha_data_model/src/bin/qr_stream_fixtures.rs` because that bin uses
-  `json::json!` while the current import no longer exposes that macro path.
+- Device validation now includes Swift Offline Note V2 tests on an iOS
+  simulator plus Kotlin and Java Android Keystore rollback drills on a real
+  booted emulator. The Android tests restore a stale preferences snapshot after
+  a committed revision and verify that the deleted revision key makes the old
+  ciphertext fail decryption.
 
 ## 2026-05-17 SoraNet VPN hardening pass
 
@@ -59,25 +137,31 @@ Last updated: 2026-05-17
   and recomputes earned fees from the ticket tariff instead of trusting voucher
   envelopes.
 - Native VPN lease records now persist the quote policy and accepted settlement
-  receipt, and Torii receipt submission/listing reconstructs settlement context
-  from WSV `vpn_leases` instead of requiring process-local VPN session caches.
+  receipt. Torii active session lookup plus receipt submission/listing
+  reconstruct settlement context from WSV `vpn_leases` instead of requiring
+  process-local VPN session caches.
 - Relay/backend bridging now uses `vpn.backend_endpoint` with a default
   permissioned Unix socket. TCP endpoints require a shared bootstrap secret and
   use Norito bootstrap envelopes with timestamp, nonce, and keyed MAC; the
   backend rejects stale, replayed, or bad-MAC frames.
-- Local helper workers read connect payloads from stdin rather than argv,
-  reject mismatched metering seeds, and batch traffic state-file writes with a
-  forced shutdown flush.
-- Focused validation passed for data-model helper-ticket tests,
-  `sora-vpn-backend` bootstrap tests, helper voucher signing tests, relay VPN
-  voucher/backend tests, `cargo check -p iroha_torii --lib`, `git diff --check`
-  on the task-scoped files, and rustfmt on the touched Rust files. Full
-  `cargo fmt --all --check` is still blocked by pre-existing unrelated
-  formatting diffs, and the focused Torii VPN test run is blocked before
-  execution by an unrelated dev-dependency import failure for
-  `iroha_torii_shared::QueueErrorEnvelope`.
+- Local helper workers read magic-prefixed Norito connect-payload frames from
+  stdin rather than argv, reject mismatched metering seeds, and persist
+  magic-prefixed Norito state frames with batched traffic writes and a forced
+  shutdown flush.
+- Torii adversarial coverage now exercises WSV-backed session lookup after
+  cache loss for expired leases, non-active leases, and cross-account access,
+  plus WSV-backed receipt settlement rejection for wrong metering keys,
+  relay-side earned-fee inflation, and voucher substitution.
+- Focused validation passed for data-model helper-ticket tests, the full
+  `sora-vpn-backend` unit suite, the full `sora-vpn-controller` helper binary
+  suite, relay VPN voucher debt/earned-fee tests, Torii WSV-backed active
+  session and receipt-settlement tests, the Swift/Kotlin/JVM/Java Android,
+  Python, and JavaScript client Torii files, `git diff --check` on the
+  task-scoped files, and rustfmt on the touched Rust files. Full
+  `cargo fmt --all --check` is currently blocked by unrelated dirty-tree
+  formatting diffs in `crates/iroha_core/src/smartcontracts/isi/soracloud.rs`.
 
-## 2026-05-16 ZK audit hardening
+## 2026-05-17 ZK audit hardening
 
 - Confidential feature digests now commit to a `zk_policy_hash` covering
   consensus-relevant ZK verifier policy, and the digest is serialized through
@@ -85,18 +169,53 @@ Last updated: 2026-05-17
 - Proof and verifying-key commitments now use versioned, domain-separated,
   length-prefixed SHA-256 inputs so proof hashes and VK commitments cannot
   collide across domains or ambiguous backend/payload splits.
-- Generic `VerifyProof` now requires a registered `vk_ref`, rejects inline VKs,
-  and enforces active VK status, gas schedule, active circuit/version mapping,
+- Generic `VerifyProof` now requires a registered `vk_ref` and enforces active
+  VK status, gas schedule, active circuit/version mapping,
   circuit/schema/commitment binding, and backend guardrails before verification.
+- User-facing generic proof attachments are registry-only across the CLI,
+  Torii prover, Connect Norito bridge, JavaScript, Swift, and Python SDKs.
+  `ProofAttachment` no longer carries verifying-key bytes in the data model,
+  Norito wire shape, SDK builders, or test fixtures; key bytes remain only
+  inside verifier registry records or external key stores.
+- The vendored Halo2 environment-based max-degree override and its generated
+  env inventory documentation were removed. Circuit degree selection is no
+  longer mutable through a process environment variable.
 - Consensus proof paths no longer reject solely because local elapsed
   verification time exceeded `zk.verify_timeout`; elapsed time remains telemetry,
   while validity-affecting limits are committed through config policy.
 - CoreHost IVM ZK verification now threads the full ZK config and accepts
   registry-bound STARK/FRI envelopes when `zk-stark` is built and enabled,
   including batch syscall coverage alongside the existing Halo2 IPA path.
-- Validation is currently blocked before these focused crates by unrelated
-  dirty-tree `iroha_data_model` compile errors in Kaigi/FastPQ JSON derives,
-  SoraNet VPN ordering, and SoraFS pricing type mismatches.
+- Focused validation passed with isolated target directories:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-cleanup-dm cargo check -p iroha_data_model --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-cleanup-ivm cargo check -p ivm --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-cleanup-bridge cargo check -p connect_norito_bridge --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-cleanup-core-preverify cargo test -p iroha_core preverify_and_dedup_across_transactions_in_block --lib --features zk-preverify -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-cleanup-cli cargo test -p iroha_cli build_proof_attachment_from_json -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-cleanup-torii-rerun cargo test -p iroha_torii proofs_roundtrip_and_query_via_torii --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-cleanup-torii-rerun cargo test -p iroha_torii scan_and_report_single_attachment --lib -- --nocapture`
+  - `swift test --filter ProofAttachmentNoritoTests` from `IrohaSwift`
+  - `python3 -m compileall -q python/iroha_python/src/iroha_python`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-cleanup-js-native npm run build:native` from `javascript/iroha_js`
+  - `node --test test/instructionBuilders.test.js` from `javascript/iroha_js`
+- Additional registry-only attachment follow-up validation passed with isolated
+  target directories:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-dm-tests cargo check -p iroha_data_model --tests`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-ivm-tests cargo check -p ivm --tests`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-core-zk-tests cargo check -p iroha_core --tests --features zk-tests,zk-preverify,halo2-dev-tests`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-cli-tests cargo check -p iroha_cli --bins --tests`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-bridge-tests cargo check -p connect_norito_bridge --tests`
+  - `swift test --filter ProofAttachmentNoritoTests` from `IrohaSwift`
+  - `node --test test/instructionBuilders.test.js` from `javascript/iroha_js`
+  - `git diff --check`
+- `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-torii-tests cargo check -p iroha_torii --tests --features zk-tests,halo2-dev-tests`
+  is currently blocked by unrelated Torii test compile issues in
+  `sorafs_discovery`, `connect_gating`, `gov_mode_mismatch_and_autoclose`, and
+  `zk_vote_tally_handler`.
+  - Static stale-pattern scan for the removed env override, old VK hash formula,
+    timeout-as-rejection wording, and old SDK messages
+  - `git diff --check` on the ZK cleanup touch set
 
 ## 2026-05-16 Soracloud production V1 hardening
 
@@ -114,28 +233,58 @@ Last updated: 2026-05-17
 - The embedded runtime fails closed for uploaded-model private inference in V1.
   Status is limited to SoraFS-backed storage and model registry readiness until
   a real deterministic private runtime exists.
+- Uploaded-model V1 schema no longer carries private-runtime compatibility
+  metadata such as compile-profile hashes, private bundle roots, or privacy-mode
+  fields. Artifact links now use uploaded-model source provenance plus SoraFS
+  storage roots.
 - The JavaScript Soracloud HF helper no longer accepts `privateKeyHex`.
   Callers build an unsigned draft and assemble requests from external
   provenance signatures.
 
 ## 2026-05-17 FASTPQ verifier and proof sidecar hardening
 
-- FASTPQ V1 verification now recomputes the canonical CPU backend artifact from
-  the supplied batch before accepting proof-carried roots, FRI roots,
-  challenges, lookup product, and query openings. Relabelled proofs from a
-  different batch fail at root binding instead of relying on transcript drift.
-- Runtime FASTPQ proof generation now verifies each generated proof before
-  publishing it and enqueues successful proof snapshots into the existing Kura
-  per-block pipeline sidecar. The worker remains asynchronous after commit, so
-  block production does not wait for proof generation or sidecar merge I/O.
-- The FASTPQ JSON helper now uses Norito JSON derives/helpers instead of direct
-  `serde`/`serde_json` dependencies, and the proof/trace commitment path uses
-  CPU hashing for canonical roots and openings.
-- Validation note: `cargo check -p fastpq_prover --bins --lib` is currently
-  blocked before reaching `fastpq_prover` by unrelated dirty
-  `iroha_data_model` errors in SoraNet VPN and SoraFS pricing code.
+- FASTPQ V1 verification no longer rebuilds the prover-scale CPU backend
+  artifact. It checks the canonical batch commitment and public inputs, parses
+  proof-carried trace/lookup/AIR roots, binds the lookup product into the
+  transcript, authenticates sampled LDE/AIR/FRI Merkle openings, recomputes
+  sampled AIR composition values, and validates FRI query chains. Tampered roots,
+  lookup products, AIR openings, query chunks, and relabelled proofs now fail
+  through proof-content checks.
+- `Prover::prove` still self-verifies each generated proof before returning it;
+  that self-check uses the same verifier with limits sized to the generated
+  batch/proof, while public `verify(...)` keeps bounded default limits for
+  untrusted inputs.
+- FASTPQ runtime configuration now defaults to explicit `cpu`. The first-release
+  production modes are `cpu` and `gpu`; explicit `gpu` lane startup fails closed
+  when the backend or Poseidon preflight is unavailable instead of silently
+  falling back to CPU.
+- FASTPQ proof snapshots remain in the existing Kura pipeline sidecar flow, now
+  bounded by `fastpq.proof_sidecar_queue_cap`,
+  `fastpq.proof_sidecar_max_bytes`, and
+  `fastpq.proof_sidecar_max_retries`. Kura rejects oversized/overflowing
+  snapshots, retries pending sidecar merges up to the configured limit, records
+  missing entry hashes, and exports queue/event telemetry for sidecar enqueue,
+  write, retry, drop, and rejection paths.
+- Torii now exposes
+  `/v1/pipeline/recovery/{height}/fastpq-proofs` for public JSON retrieval from
+  existing pipeline sidecars, returning `404` when the sidecar is absent and an
+  empty proof list when the sidecar exists without FASTPQ proofs. `fastpq_prover`
+  also exposes helpers to canonicalize already-embedded AXT bindings and package
+  already-bound batches plus proofs as `AxtProofEnvelope`/`ProofBlob` without
+  adding binding metadata after proof generation.
+- Validation: `cargo fmt --all`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-release cargo test -p fastpq_prover`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-release cargo test -p iroha_config --test fastpq_queue_overrides`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-release cargo check -p iroha_core --lib`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-release cargo test -p iroha_core fastpq`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-release cargo check -p iroha_torii --lib`,
+  and
+  `CARGO_TARGET_DIR=target/codex-fastpq-release cargo test -p iroha_torii --test pipeline_recovery_endpoint`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-release cargo check -p irohad --bin irohad`,
+  and the task-scoped `git diff --check` are green. Full workspace clippy/test
+  were not run in this validation window.
 
-## 2026-05-16 Torii first-release API cleanup
+## 2026-05-17 Torii first-release API cleanup
 
 - Collapsed Torii API negotiation to the first-release `1.0` surface only and
   removed the previous sunset/old-version posture from the shared defaults.
@@ -150,17 +299,23 @@ Last updated: 2026-05-17
 - Standardized Torii runtime failures on the Norito `ErrorEnvelope` with
   optional `details` for reject codes, queue pressure, retry hints, endpoint
   names, and AXT metadata. Queue rejections and proof throttling now return
-  that envelope instead of legacy ad-hoc payloads.
+  that envelope instead of legacy ad-hoc payloads, and the stale legacy shared
+  queue-envelope type has been removed.
 - Removed the app contract-route API-token bypass so `torii.require_api_token`
   applies consistently to those routes.
-- Validation: `cargo fmt --all` and `git diff --check` are green. A focused
-  `cargo test -p iroha_torii_shared` attempt is currently blocked before the
-  Torii crates by unrelated dirty-tree compile errors in
-  `crates/iroha_data_model/src/soranet/vpn.rs` and
-  `crates/iroha_data_model/src/sorafs/pricing.rs`. A targeted
-  `node --test test/toriiClient.test.js` attempt for the JS client is blocked
-  because `javascript/iroha_js/native/iroha_js_host.node` is missing and the
-  package requires `npm run build:native` first.
+- Validation: `cargo fmt --all`, `git diff --check`,
+  `cargo test -p iroha_torii_shared`,
+  `cargo test -p iroha response_report::with_msg_decodes_shared_error_envelope_queue_details`,
+  and
+  `CARGO_TARGET_DIR=target/codex-openapi cargo test -p iroha_core pipeline_sidecar_decodes_missing_fastpq_proofs_as_empty -- --nocapture`
+  are green. Focused Swift, Python, Kotlin/JVM, Java Android, and JavaScript
+  client regressions for structured `ErrorEnvelope.details` reject codes are
+  also green after rebuilding the JS native binding and package `dist`.
+- Static Torii OpenAPI JSON snapshots were refreshed in unsigned mode. The
+  OpenAPI check now reaches manifest verification and fails only because the
+  signed manifest hash still points at the previous snapshot; an operator must
+  regenerate the manifest with the OpenAPI signing key or detached signature
+  envelope.
 
 ## 2026-05-16 Parallel apply event fixture refresh
 
@@ -9640,7 +9795,7 @@ Last updated: 2026-05-17
 
 ## 2026-04-23 Torii zk prover fixture alignment
 
-- `crates/iroha_torii/tests/zk_prover_integration.rs` now uses the supported `halo2/ipa:tiny-add` deterministic Halo2 fixture circuit instead of the unsupported `halo2/ipa:tiny-add-v1` alias, so the shared fixture helper emits inline verifying-key bytes again for the prover report integration coverage.
+- `crates/iroha_torii/tests/zk_prover_integration.rs` now uses the supported `halo2/ipa:tiny-add` deterministic Halo2 fixture circuit instead of the unsupported `halo2/ipa:tiny-add-v1` alias, so the shared fixture helper uses a registered verifying-key reference for the prover report integration coverage.
 - Focused validation for this fix:
   - `cargo test -p iroha_torii --test zk_prover_integration prover_reports_list_get_delete -- --nocapture`
   - `cargo test -p iroha_torii --test zk_prover_integration prover_reports_server_side_filters -- --nocapture`

@@ -3964,18 +3964,15 @@ impl Zk {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::Display)]
 #[strum(serialize_all = "snake_case")]
 pub enum FastpqExecutionMode {
-    /// Detect available accelerators and pick CPU/GPU automatically.
-    Auto,
     /// Force CPU execution regardless of detected accelerators.
     Cpu,
-    /// Prefer GPU execution; falls back to CPU if kernels are unavailable.
+    /// Force GPU execution; startup fails if kernels or preflight are unavailable.
     Gpu,
 }
 
 impl FastpqExecutionMode {
     fn into_actual(self) -> actual::FastpqExecutionMode {
         match self {
-            FastpqExecutionMode::Auto => actual::FastpqExecutionMode::Auto,
             FastpqExecutionMode::Cpu => actual::FastpqExecutionMode::Cpu,
             FastpqExecutionMode::Gpu => actual::FastpqExecutionMode::Gpu,
         }
@@ -3986,18 +3983,15 @@ impl FastpqExecutionMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::Display)]
 #[strum(serialize_all = "snake_case")]
 pub enum FastpqPoseidonMode {
-    /// Follow the execution mode (default behaviour).
-    Auto,
     /// Force CPU hashing even when FFT/LDE run on the GPU.
     Cpu,
-    /// Prefer GPU hashing regardless of the global execution mode (falls back to CPU if unavailable).
+    /// Force GPU hashing; startup fails if kernels or preflight are unavailable.
     Gpu,
 }
 
 impl FastpqPoseidonMode {
     fn into_actual(self) -> actual::FastpqPoseidonMode {
         match self {
-            FastpqPoseidonMode::Auto => actual::FastpqPoseidonMode::Auto,
             FastpqPoseidonMode::Cpu => actual::FastpqPoseidonMode::Cpu,
             FastpqPoseidonMode::Gpu => actual::FastpqPoseidonMode::Gpu,
         }
@@ -4055,6 +4049,15 @@ pub struct Fastpq {
         default = "defaults::zk::fastpq::POSEIDON_MODE.parse().unwrap()"
     )]
     pub poseidon_mode: FastpqPoseidonMode,
+    /// Maximum queued FASTPQ proof sidecar attachments.
+    #[config(default = "defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP")]
+    pub proof_sidecar_queue_cap: NonZeroUsize,
+    /// Maximum encoded FASTPQ proof snapshot accepted for sidecar persistence.
+    #[config(default = "defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES")]
+    pub proof_sidecar_max_bytes: Bytes<u64>,
+    /// Maximum merge attempts for a FASTPQ proof snapshot while the pipeline sidecar is pending.
+    #[config(default = "defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES")]
+    pub proof_sidecar_max_retries: NonZeroUsize,
     /// Optional device-class label exported via telemetry (e.g., `apple-m4`, `xeon-rtx-sm80`).
     #[config(env = "FASTPQ_DEVICE_CLASS")]
     pub device_class: Option<String>,
@@ -4109,9 +4112,17 @@ impl Fastpq {
             })
         }
 
+        assert!(
+            self.proof_sidecar_max_bytes.get() != 0,
+            "fastpq.proof_sidecar_max_bytes must be greater than zero"
+        );
+
         actual::Fastpq {
             execution_mode: self.execution_mode.into_actual(),
             poseidon_mode: self.poseidon_mode.into_actual(),
+            proof_sidecar_queue_cap: self.proof_sidecar_queue_cap,
+            proof_sidecar_max_bytes: self.proof_sidecar_max_bytes,
+            proof_sidecar_max_retries: self.proof_sidecar_max_retries,
             device_class: sanitize_label(self.device_class),
             chip_family: sanitize_label(self.chip_family),
             gpu_kind: sanitize_label(self.gpu_kind),

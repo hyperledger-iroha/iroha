@@ -1219,6 +1219,20 @@ fn system_paths() -> Map {
         )),
     );
     paths.insert(
+        iroha_torii_shared::uri::PIPELINE_FASTPQ_PROOFS.to_owned(),
+        Value::Object(json_get_operation(
+            "System",
+            "Fetch FASTPQ proof sidecars.",
+            "Return FASTPQ proof attachments from pipeline recovery metadata for the given height.",
+            "#/components/schemas/JsonValue",
+            vec![integer_path_param(
+                "height",
+                "Block height to inspect.",
+                Some("uint64"),
+            )],
+        )),
+    );
+    paths.insert(
         "/v1/debug/axt/cache".to_owned(),
         Value::Object(json_get_operation(
             "System",
@@ -4019,6 +4033,17 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/sorafs/pin/register".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Register paid pin manifest.",
+            "Submit a SoraFS manifest registration transaction. The request must include `content_length`; execution collects the public pin fee and records the committed fee receipt on-chain.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/sorafs/pin/{digest_hex}".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
@@ -4086,7 +4111,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Pin storage content.",
-            "Submit a storage pin request.",
+            "Submit a storage pin request. The manifest must already have an approved on-chain paid pin record matching the digest, chunker profile, policy, content length, chunk plan digest, and fee receipt payer.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -10566,11 +10591,109 @@ fn openapi_schemas() -> Map {
     schemas
 }
 
+fn queue_error_snapshot_schema() -> Value {
+    norito::json!({
+        "type": "object",
+        "required": ["state", "queued", "capacity", "saturated"],
+        "additionalProperties": false,
+        "properties": {
+            "state": {
+                "type": "string",
+                "description": "Queue state label, for example `healthy` or `saturated`."
+            },
+            "queued": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Current queued transaction count."
+            },
+            "capacity": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Configured queue capacity."
+            },
+            "saturated": {
+                "type": "boolean",
+                "description": "Whether the queue was saturated when the error was emitted."
+            }
+        }
+    })
+}
+
+fn axt_error_details_schema() -> Value {
+    norito::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "code": {
+                "type": "string",
+                "description": "Stable AXT rejection code."
+            },
+            "reason": {
+                "type": "string",
+                "description": "Human-readable AXT rejection label."
+            },
+            "snapshot_version": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "AXT policy snapshot version used to reject the request."
+            },
+            "dataspace": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Dataspace id involved in the rejection."
+            },
+            "lane": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Lane id involved in the rejection."
+            },
+            "next_min_handle_era": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Minimum handle era a client should use for retry."
+            },
+            "next_min_sub_nonce": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Minimum sub-nonce a client should use for retry."
+            }
+        }
+    })
+}
+
+fn error_details_schema() -> Value {
+    norito::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "reject_code": {
+                "type": "string",
+                "description": "ISO-20022-style or Torii-local rejection code when available."
+            },
+            "queue": {
+                "$ref": "#/components/schemas/QueueErrorSnapshot"
+            },
+            "retry_after_seconds": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Suggested retry delay in seconds for transient errors."
+            },
+            "endpoint": {
+                "type": "string",
+                "description": "Endpoint associated with throttling or version failures."
+            },
+            "axt": {
+                "$ref": "#/components/schemas/AxtErrorDetails"
+            }
+        }
+    })
+}
+
 fn shared_error_schema() -> Value {
     norito::json!({
         "type": "object",
         "required": ["code", "message"],
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
             "code": {
                 "type": "string",
@@ -10581,9 +10704,11 @@ fn shared_error_schema() -> Value {
                 "description": "Human readable error message."
             },
             "details": {
-                "type": ["object", "null"],
-                "description": "Optional machine-readable error context such as queue pressure, retry hints, rejection codes, endpoint names, or AXT metadata.",
-                "additionalProperties": true
+                "anyOf": [
+                    { "$ref": "#/components/schemas/ErrorDetails" },
+                    { "type": "null" }
+                ],
+                "description": "Optional machine-readable error context such as queue pressure, retry hints, rejection codes, endpoint names, or AXT metadata."
             }
         }
     })
@@ -10592,6 +10717,12 @@ fn shared_error_schema() -> Value {
 fn components_section() -> Value {
     let mut components = Map::new();
     let mut schemas = openapi_schemas();
+    schemas.insert("AxtErrorDetails".to_owned(), axt_error_details_schema());
+    schemas.insert(
+        "QueueErrorSnapshot".to_owned(),
+        queue_error_snapshot_schema(),
+    );
+    schemas.insert("ErrorDetails".to_owned(), error_details_schema());
     schemas.insert("ErrorResponse".to_owned(), shared_error_schema());
     components.insert("schemas".into(), Value::Object(schemas));
     Value::Object(components)
@@ -10842,6 +10973,54 @@ mod tests {
             .expect("schema description");
         assert!(description.contains("exactly one proof field"));
         assert!(description.contains("nested fields with those names remain signed"));
+    }
+
+    #[test]
+    fn generated_spec_documents_structured_error_details() {
+        let doc = generate_spec();
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("components schemas");
+        let error_response = schemas
+            .get("ErrorResponse")
+            .and_then(Value::as_object)
+            .expect("ErrorResponse schema");
+        assert_eq!(
+            error_response.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+        let details = error_response
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("details"))
+            .and_then(Value::as_object)
+            .expect("ErrorResponse details property");
+        let detail_refs = details
+            .get("anyOf")
+            .and_then(Value::as_array)
+            .expect("details anyOf");
+        assert!(detail_refs.iter().any(|entry| {
+            entry
+                .as_object()
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str)
+                == Some("#/components/schemas/ErrorDetails")
+        }));
+        let error_details = schemas
+            .get("ErrorDetails")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("ErrorDetails properties");
+        assert!(error_details.contains_key("reject_code"));
+        assert!(error_details.contains_key("retry_after_seconds"));
+        assert!(error_details.contains_key("queue"));
+        assert!(error_details.contains_key("axt"));
+        assert!(schemas.contains_key("QueueErrorSnapshot"));
+        assert!(schemas.contains_key("AxtErrorDetails"));
     }
 
     #[test]

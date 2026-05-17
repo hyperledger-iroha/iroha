@@ -214,7 +214,7 @@ Ledgers confidenciais devem reter historico suficiente para provar frescor de no
 - Límites de duros (configurados por defecto):
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. Pruebas que excedem `verify_timeout_ms` abortam a instrucao deterministicamente (ballots de Governance emitem `proof verification exceeded timeout`, `VerifyProof` retorna erro).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Cuotas adicionales que garantizan la vida útil: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, e `max_public_inputs` limitan a los constructores de bloques; `reorg_depth_bound` (>= `max_anchor_age_blocks`) gobierna la retención de puntos de control fronterizos.
 - Un tiempo de ejecución de ejecución ahora rejeita transacoes que excedem esses limites por transacao ou por bloco, emitiendo errores `InvalidParameter` deterministas y manteniendo el estado del libro mayor inalterado.
 - Mempool prefiltra transacoes confidenciais por `vk_id`, tamaño de prueba e idade de anclaje antes de invocar o verificador para mantener uso de recursos limitados.- Una verificación para determinar determinísticamente el tiempo de espera o la violación del límite; transacoes falham con errores explícitos. Los backends SIMD son opcionales pero no modifican la contabilidad de gas.
@@ -303,7 +303,7 @@ Ledgers confidenciais devem reter historico suficiente para provar frescor de no
    - [x] Handshake P2P anuncia `ConfidentialFeatureDigest` (resumen de backend + huellas dactilares de registro) y faltan discrepancias determinísticamente a través de `HandshakeConfidentialMismatch`.
    - [x] Elimina pánicos en rutas de ejecución confidencial y agrega activación de funciones para nodos incompatibles.
    - [] Aplicar presupuestos de tiempo de espera del verificador y límites de profundidad de reorganización para los puntos de control fronterizos.
-     - [x] Presupuestos de tiempo de espera de verificación aplicados; pruebas que excedem `verify_timeout_ms` agora falham deterministicamente.
+     - Verification timeout budgets are telemetry/operator budgets only; proofs fail deterministically on size, gas, public input, policy, or anchor-age bounds.
      - [x] Frontier checkpoints ahora respectivo `reorg_depth_bound`, podando checkpoints mais antigos que a janela configurada e mantendo snapshots deterministas.
    - Introducimos `AssetConfidentialPolicy`, política FSM y puertas de cumplimiento para instrucciones mint/transfer/reveal.
    - Confirme `conf_features` en los encabezados de bloque y recusar participar de validadores cuando compendios de registro/parámetros divergem.

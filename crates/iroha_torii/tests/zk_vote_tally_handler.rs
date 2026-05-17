@@ -60,11 +60,11 @@ async fn vote_tally_handler_returns_finalized_tally() {
     let vk_id = bundle.vk_id.clone();
     let proof_box =
         iroha_data_model::proof::ProofBox::new(backend.into(), bundle.proof_bytes.clone());
-    let vk_inline = bundle
+    let vk_box = bundle
         .vk_record
         .key
         .clone()
-        .expect("vote tally bundle must include inline VK");
+        .expect("vote tally bundle must include VK bytes");
     stx.world
         .executor()
         .clone()
@@ -95,7 +95,7 @@ async fn vote_tally_handler_returns_finalized_tally() {
             )),
         )
         .expect("grant CanEnactGovernance");
-    let report = iroha_core::zk::verify_backend_with_timing(backend, &proof_box, Some(&vk_inline));
+    let report = iroha_core::zk::verify_backend_with_timing(backend, &proof_box, Some(&vk_box));
     assert!(report.ok, "vote tally proof must verify: {report:?}");
     stx.world
         .executor()
@@ -145,10 +145,10 @@ async fn vote_tally_handler_returns_finalized_tally() {
     let finalize = iroha_data_model::isi::zk::FinalizeElection {
         election_id: eid.clone(),
         tally: vec![7, 2],
-        tally_proof: iroha_data_model::proof::ProofAttachment::new_inline(
+        tally_proof: iroha_data_model::proof::ProofAttachment::new_ref(
             backend.into(),
             proof_box,
-            vk_inline,
+            vk_id.clone(),
         ),
     };
     stx.world

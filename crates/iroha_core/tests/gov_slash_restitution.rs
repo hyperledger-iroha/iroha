@@ -31,7 +31,7 @@ fn setup_state(def_id: &AssetDefinitionId, receiver_id: &AccountId) -> State {
     let alice_id = ALICE_ID.clone();
     let escrow_id = BOB_ID.clone();
     let wonderland: iroha_data_model::domain::DomainId =
-        DomainId::try_new("wonderland", "universal").expect("domain");
+        iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain");
 
     let domain = Domain::new(wonderland.clone()).build(&alice_id);
     let alice_account = iroha_data_model::account::Account::new(ALICE_ID.clone()).build(&alice_id);

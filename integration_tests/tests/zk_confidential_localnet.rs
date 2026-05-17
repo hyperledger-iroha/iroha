@@ -32,7 +32,7 @@ use iroha_core::{
     },
     zk::test_utils::halo2_ivm_execution_envelope,
 };
-use iroha_data_model::proof::ProofAttachment;
+use iroha_data_model::proof::{ProofAttachment, VerifyingKeyId};
 use iroha_test_network::{NetworkBuilder, NetworkPeer};
 use iroha_test_samples::{BOB_ID, BOB_KEYPAIR};
 use sorafs_manifest::alias_cache::AliasCachePolicy;
@@ -98,11 +98,12 @@ fn live_halo2_attachment(seed: [u8; 32]) -> ProofAttachment {
         hash_for_live_proof(b"zk-confidential-localnet/events", seed),
         hash_for_live_proof(b"zk-confidential-localnet/gas-policy", seed),
     );
-    let vk_box = fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture must include a verifying key");
     let proof_box = fixture.proof_box("halo2/ipa");
-    ProofAttachment::new_inline("halo2/ipa".into(), proof_box, vk_box)
+    ProofAttachment::new_ref(
+        "halo2/ipa".into(),
+        proof_box,
+        VerifyingKeyId::new("halo2/ipa", "ivm_execution_halo2"),
+    )
 }
 
 fn attachment_with_corrupted_proof(seed: [u8; 32]) -> ProofAttachment {
@@ -117,15 +118,7 @@ fn attachment_with_corrupted_proof(seed: [u8; 32]) -> ProofAttachment {
 
 fn attachment_with_corrupted_vk(seed: [u8; 32]) -> ProofAttachment {
     let mut attachment = live_halo2_attachment(seed);
-    let vk_inline = attachment
-        .vk_inline
-        .as_mut()
-        .expect("live attachment must include inline verifying key");
-    if vk_inline.bytes.is_empty() {
-        vk_inline.bytes.push(0);
-    } else {
-        vk_inline.bytes[0] ^= 0x01;
-    }
+    attachment.vk_ref = VerifyingKeyId::new("halo2/ipa", "corrupted_ivm_execution_halo2");
     attachment
 }
 
@@ -3980,13 +3973,5 @@ fn corrupted_vk_helper_mutates_vk_bytes() {
     let seed = marker(223);
     let original = live_halo2_attachment(seed);
     let tampered = attachment_with_corrupted_vk(seed);
-    let original_vk = original
-        .vk_inline
-        .expect("live attachment should have inline vk")
-        .bytes;
-    let tampered_vk = tampered
-        .vk_inline
-        .expect("tampered attachment should have inline vk")
-        .bytes;
-    assert_ne!(tampered_vk, original_vk);
+    assert_ne!(tampered.vk_ref, original.vk_ref);
 }

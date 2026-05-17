@@ -211,7 +211,7 @@ fn gpu_available() -> bool {
                 if detected.is_none() {
                     tracing::warn!(
                         target: "fastpq::planner",
-                        "FASTPQ_GPU=gpu requested but no accelerator was detected; falling back to CPU"
+                        "FASTPQ_GPU=gpu requested but no accelerator was detected"
                     );
                 } else {
                     log_detected_backend(detected);
@@ -379,7 +379,7 @@ fn log_detected_backend(backend: Option<GpuBackend>) {
     } else {
         tracing::info!(
             target: "fastpq::planner",
-            "No supported GPU backend detected; using CPU fallback"
+            "No supported GPU backend detected"
         );
     }
 }
@@ -680,10 +680,11 @@ mod detection_tests {
     }
 
     #[test]
-    fn backend_config_defaults_to_auto_execution_mode() {
+    fn backend_config_defaults_to_cpu_execution_mode() {
         let params = CANONICAL_PARAMETER_SETS[0];
         let config = BackendConfig::new(params);
-        assert_eq!(config.execution_mode(), ExecutionMode::Auto);
+        assert_eq!(config.execution_mode(), ExecutionMode::Cpu);
+        assert_eq!(config.poseidon_mode(), PoseidonExecutionMode::Cpu);
     }
 }
 
@@ -913,8 +914,8 @@ impl BackendConfig {
     pub fn new(params: StarkParameterSet) -> Self {
         Self {
             params,
-            execution_mode: ExecutionMode::Auto,
-            poseidon_mode: PoseidonExecutionMode::Auto,
+            execution_mode: ExecutionMode::Cpu,
+            poseidon_mode: PoseidonExecutionMode::Cpu,
         }
     }
 

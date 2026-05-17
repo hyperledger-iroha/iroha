@@ -593,7 +593,12 @@ class HttpClientTransport(
 
         private fun buildRetryErrorCode(lastResponse: ClientResponse?, lastError: Throwable?): String = lastResponse?.statusCode?.toString() ?: lastError?.javaClass?.simpleName ?: "unknown"
         private fun resolveRoute(request: TransportRequest?): String = request?.uri?.rawPath ?: ""
-        private fun extractRejectCode(response: TransportResponse?): String? = if (response == null) null else HttpErrorMessageExtractor.extractRejectCode(response.headers, "x-iroha-reject-code")
+        private fun extractRejectCode(response: TransportResponse?): String? =
+            if (response == null) null else HttpErrorMessageExtractor.extractRejectCode(
+                response.headers,
+                "x-iroha-reject-code",
+                response.body,
+            )
         private fun extractTransactionHash(response: TransportResponse?): String? {
             if (response == null) return null
             for (headerName in listOf("x-iroha-transaction-hash", "x-iroha-tx-hash")) {

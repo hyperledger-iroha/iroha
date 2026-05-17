@@ -50,20 +50,19 @@ class AndroidOfflineNoteV2SecureStore @JvmOverloads constructor(
 
     @Synchronized
     fun delete(noteCommitment: ByteArray) {
-        val commitmentHex = hexLower(noteCommitment)
-        val index = indexSnapshot().toMutableSet()
-        index.remove(commitmentHex)
-        check(
-            preferences.edit()
-                .remove(noteKey(commitmentHex))
-                .putStringSet(INDEX_KEY, index)
-                .commit()
-        ) { "failed to delete Offline Note V2 wallet note" }
+        val notes = loadNotes()
+        notes.remove(hexLower(noteCommitment))
+        saveNotes(notes)
     }
 
     @Synchronized
     fun clear() {
+        val revision = currentRevision()
         check(preferences.edit().clear().commit()) { "failed to clear Offline Note V2 wallet notes" }
+        deleteKeyAlias(keyAlias)
+        if (revision > 0L) {
+            deleteKeyAlias(storeKeyAlias(revision))
+        }
     }
 
     private fun loadNotes(): MutableMap<String, OfflineNoteV2WalletNote> {
@@ -78,6 +77,8 @@ class AndroidOfflineNoteV2SecureStore @JvmOverloads constructor(
     private fun saveNotes(notes: Map<String, OfflineNoteV2WalletNote>) {
         val oldIndex = indexSnapshot()
         val newIndex = notes.keys.toSet()
+        val oldRevision = currentRevision()
+        val revision = oldRevision + 1L
         val editor = preferences.edit()
         for (oldCommitment in oldIndex) {
             if (!newIndex.contains(oldCommitment)) {
@@ -85,53 +86,92 @@ class AndroidOfflineNoteV2SecureStore @JvmOverloads constructor(
             }
         }
         for ((commitmentHex, note) in notes) {
-            editor.putString(noteKey(commitmentHex), encrypt(WalletNoteJsonCodec.encode(note)))
+            editor.putString(noteKey(commitmentHex), encrypt(WalletNoteJsonCodec.encode(note), revision))
         }
         editor.putStringSet(INDEX_KEY, newIndex)
+        editor.putLong(STORE_REVISION_KEY, revision)
+        if (oldRevision == 0L) {
+            deleteKeyAlias(keyAlias)
+        } else {
+            deleteKeyAlias(storeKeyAlias(oldRevision))
+        }
         check(editor.commit()) { "failed to persist Offline Note V2 wallet notes" }
     }
 
     private fun indexSnapshot(): Set<String> =
         preferences.getStringSet(INDEX_KEY, emptySet())?.toSet() ?: emptySet()
 
-    private fun encrypt(plaintext: ByteArray): String {
+    private fun currentRevision(): Long = preferences.getLong(STORE_REVISION_KEY, 0L)
+
+    private fun encrypt(plaintext: ByteArray, revision: Long): String {
         val cipher = Cipher.getInstance(AES_GCM)
-        cipher.init(Cipher.ENCRYPT_MODE, secretKey())
-        return VALUE_PREFIX +
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey(storeKeyAlias(revision), createIfMissing = true))
+        return VALUE_PREFIX_V2 +
+            revision +
+            ":" +
             b64(cipher.iv) +
             ":" +
             b64(cipher.doFinal(plaintext))
     }
 
     private fun decrypt(envelope: String): ByteArray {
-        require(envelope.startsWith(VALUE_PREFIX)) { "unknown Offline Note V2 wallet note envelope" }
-        val parts = envelope.removePrefix(VALUE_PREFIX).split(':')
-        require(parts.size == 2) { "invalid Offline Note V2 wallet note envelope" }
+        if (envelope.startsWith(VALUE_PREFIX)) {
+            val parts = envelope.removePrefix(VALUE_PREFIX).split(':')
+            require(parts.size == 2) { "invalid Offline Note V2 wallet note envelope" }
+            val cipher = Cipher.getInstance(AES_GCM)
+            cipher.init(
+                Cipher.DECRYPT_MODE,
+                secretKey(keyAlias, createIfMissing = false),
+                GCMParameterSpec(GCM_TAG_BITS, b64decode(parts[0])),
+            )
+            return cipher.doFinal(b64decode(parts[1]))
+        }
+        require(envelope.startsWith(VALUE_PREFIX_V2)) { "unknown Offline Note V2 wallet note envelope" }
+        val parts = envelope.removePrefix(VALUE_PREFIX_V2).split(':')
+        require(parts.size == 3) { "invalid Offline Note V2 wallet note envelope" }
+        val revision = parts[0].toLong()
         val cipher = Cipher.getInstance(AES_GCM)
-        cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(GCM_TAG_BITS, b64decode(parts[0])))
-        return cipher.doFinal(b64decode(parts[1]))
+        cipher.init(
+            Cipher.DECRYPT_MODE,
+            secretKey(storeKeyAlias(revision), createIfMissing = false),
+            GCMParameterSpec(GCM_TAG_BITS, b64decode(parts[1])),
+        )
+        return cipher.doFinal(b64decode(parts[2]))
     }
 
-    private fun secretKey(): SecretKey {
+    private fun secretKey(alias: String, createIfMissing: Boolean): SecretKey {
         val keyStore = KeyStore.getInstance(KEYSTORE_PROVIDER)
         keyStore.load(null)
-        (keyStore.getEntry(keyAlias, null) as? KeyStore.SecretKeyEntry)?.let {
+        (keyStore.getEntry(alias, null) as? KeyStore.SecretKeyEntry)?.let {
             return it.secretKey
         }
+        require(createIfMissing) { "missing Offline Note V2 store key for $alias" }
+        return generateSecretKey(alias)
+    }
+
+    private fun generateSecretKey(alias: String): SecretKey {
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE_PROVIDER)
-        generator.init(
-            KeyGenParameterSpec.Builder(
-                keyAlias,
-                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
-            )
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setKeySize(AES_KEY_BITS)
-                .setRandomizedEncryptionRequired(true)
-                .build()
+        val builder = KeyGenParameterSpec.Builder(
+            alias,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
         )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(AES_KEY_BITS)
+            .setRandomizedEncryptionRequired(true)
+        generator.init(builder.build())
         return generator.generateKey()
     }
+
+    private fun deleteKeyAlias(alias: String) {
+        val keyStore = KeyStore.getInstance(KEYSTORE_PROVIDER)
+        keyStore.load(null)
+        if (keyStore.containsAlias(alias)) {
+            keyStore.deleteEntry(alias)
+        }
+    }
+
+    private fun storeKeyAlias(revision: Long): String = "$keyAlias.rev.$revision"
 
     private fun noteKey(commitmentHex: String): String = "$NOTE_PREFIX$commitmentHex"
 
@@ -168,7 +208,7 @@ class AndroidOfflineNoteV2SecureStore @JvmOverloads constructor(
                 noteCommitment = hexBytes(asString(obj["note_commitment_hex"], "note_commitment_hex")),
                 noteSecret = b64decode(asString(obj["note_secret_base64"], "note_secret_base64")),
                 origin = decodeOrigin(requireObject(obj["origin"], "origin")),
-                state = OfflineNoteV2WalletNoteState.valueOf(asString(obj["state"], "state")),
+                state = decodeState(asString(obj["state"], "state")),
                 createdAtMs = asLong(obj["created_at_ms"], "created_at_ms"),
                 updatedAtMs = asLong(obj["updated_at_ms"], "updated_at_ms"),
             )
@@ -202,6 +242,13 @@ class AndroidOfflineNoteV2SecureStore @JvmOverloads constructor(
                 )
                 else -> throw IllegalArgumentException("unsupported Offline Note V2 origin kind")
             }
+
+        private fun decodeState(value: String): OfflineNoteV2WalletNoteState =
+            when (value) {
+                "SPEND_PENDING", "spendPending" -> OfflineNoteV2WalletNoteState.SPENT
+                "CHANGE_PENDING", "changePending" -> OfflineNoteV2WalletNoteState.SPENDABLE
+                else -> OfflineNoteV2WalletNoteState.valueOf(value)
+            }
     }
 
     companion object {
@@ -212,8 +259,10 @@ class AndroidOfflineNoteV2SecureStore @JvmOverloads constructor(
         private const val GCM_TAG_BITS = 128
         private const val AES_KEY_BITS = 256
         private const val INDEX_KEY = "note_index"
+        private const val STORE_REVISION_KEY = "store_revision"
         private const val NOTE_PREFIX = "note."
         private const val VALUE_PREFIX = "v1:"
+        private const val VALUE_PREFIX_V2 = "v2:"
     }
 }
 

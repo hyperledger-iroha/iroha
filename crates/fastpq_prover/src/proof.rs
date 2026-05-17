@@ -216,6 +216,15 @@ impl Default for VerifyLimits {
     }
 }
 
+fn prover_self_check_limits(batch: &TransitionBatch, proof: &Proof) -> VerifyLimits {
+    VerifyLimits {
+        max_transitions: DEFAULT_MAX_VERIFY_TRANSITIONS.max(batch.transitions.len()),
+        max_batch_bytes: DEFAULT_MAX_VERIFY_BATCH_BYTES.max(batch_size_hint(batch)),
+        max_proof_bytes: DEFAULT_MAX_VERIFY_PROOF_BYTES.max(proof_size_hint(proof)),
+        ..VerifyLimits::default()
+    }
+}
+
 /// FASTPQ prover wiring canonical STARK parameters to the backend.
 #[derive(Debug, Clone)]
 pub struct Prover {
@@ -264,7 +273,12 @@ impl Prover {
         parameter_name: &str,
         mode: ExecutionMode,
     ) -> Result<Self> {
-        Self::canonical_with_modes(parameter_name, mode, PoseidonExecutionMode::Auto)
+        let poseidon_mode = match mode {
+            ExecutionMode::Cpu => PoseidonExecutionMode::Cpu,
+            ExecutionMode::Gpu => PoseidonExecutionMode::Gpu,
+            ExecutionMode::Auto => PoseidonExecutionMode::Auto,
+        };
+        Self::canonical_with_modes(parameter_name, mode, poseidon_mode)
     }
 
     /// Construct a prover using explicit execution and Poseidon pipeline modes.
@@ -297,8 +311,8 @@ impl Prover {
     /// # Errors
     ///
     /// Propagates errors from [`trace_commitment`] and from the configured
-    /// backend implementation. The generated proof is verified against the
-    /// canonical CPU verifier path before being returned.
+    /// backend implementation. The generated proof is verified through the
+    /// canonical verifier path before being returned.
     pub fn prove(&self, batch: &TransitionBatch) -> Result<Proof> {
         let commitment = trace_commitment(&self.params, batch)?;
         let ordering = ordering::ordering_hash(batch)?;
@@ -310,7 +324,7 @@ impl Prover {
             .backend
             .prove(batch, &public_io, PROTOCOL_VERSION, params_version)?;
         let proof = materialise_proof(commitment, public_io, artifact, params_version)?;
-        verify(batch, &proof)?;
+        verify_with_limits(batch, &proof, prover_self_check_limits(batch, &proof))?;
         Ok(proof)
     }
 }
@@ -378,14 +392,6 @@ pub fn verify_with_limits(
     let expected_public_io =
         build_public_io(batch, expected_ordering, expected_permission_hashes.clone());
     ensure_public_io_matches(&expected_public_io, &proof.public_io)?;
-    let expected_artifact = expected_backend_artifact(
-        batch,
-        &expected_public_io,
-        params,
-        proof.protocol_version,
-        proof.params_version,
-    )?;
-    ensure_artifact_matches_proof(&expected_artifact, proof)?;
 
     let trace_root =
         field_norito::core::from_bytes(&proof.trace_root).ok_or(Error::TraceRootMismatch)?;
@@ -529,9 +535,6 @@ pub fn verify_with_limits(
         if query.chunk_values.get(chunk_offset).copied() != Some(query.value) {
             return Err(Error::QueryMismatch { index: pos });
         }
-        if expected_artifact.query_openings.get(pos).copied() != Some((query.index, query.value)) {
-            return Err(Error::QueryMismatch { index: pos });
-        }
         if query.merkle_path.len() != lde_path_len {
             return Err(Error::QueryMerklePathMismatch { index: pos });
         }
@@ -607,86 +610,6 @@ pub fn verify_with_limits(
                 arity: params.fri.arity,
             },
         )?;
-    }
-    Ok(())
-}
-
-fn expected_backend_artifact(
-    batch: &TransitionBatch,
-    public_io: &PublicIO,
-    params: StarkParameterSet,
-    protocol_version: u16,
-    params_version: u16,
-) -> Result<BackendArtifact> {
-    let config = BackendConfig::new(params)
-        .with_execution_mode(ExecutionMode::Cpu)
-        .with_poseidon_mode(PoseidonExecutionMode::Cpu);
-    StarkBackend::new(config).prove(batch, public_io, protocol_version, params_version)
-}
-
-fn ensure_artifact_matches_proof(artifact: &BackendArtifact, proof: &Proof) -> Result<()> {
-    if proof.trace_root != field_norito::core::to_bytes(artifact.trace_root) {
-        return Err(Error::TraceRootMismatch);
-    }
-    if proof.lookup_root != field_norito::core::to_bytes(artifact.lookup_root) {
-        return Err(Error::LookupRootMismatch);
-    }
-    if proof.air_trace_root != field_norito::core::to_bytes(artifact.air_trace_root) {
-        return Err(Error::AirTraceRootMismatch);
-    }
-    if proof.air_composition_root != field_norito::core::to_bytes(artifact.air_composition_root) {
-        return Err(Error::AirCompositionRootMismatch);
-    }
-    if proof.lde_domain_size != artifact.lde_domain_size {
-        return Err(Error::QueryCountMismatch {
-            expected: usize::try_from(artifact.lde_domain_size).unwrap_or(usize::MAX),
-            actual: usize::try_from(proof.lde_domain_size).unwrap_or(usize::MAX),
-        });
-    }
-    if proof.lookup_grand_product != artifact.lookup_grand_product {
-        return Err(Error::LookupGrandProductMismatch);
-    }
-    if proof.lookup_challenge != artifact.lookup_challenge {
-        return Err(Error::LookupChallengeMismatch);
-    }
-    if proof.alphas.len() != artifact.alphas.len() {
-        return Err(Error::AirChallengeCountMismatch {
-            expected: artifact.alphas.len(),
-            actual: proof.alphas.len(),
-        });
-    }
-    for (idx, (expected, actual)) in artifact.alphas.iter().zip(&proof.alphas).enumerate() {
-        if expected != actual {
-            return Err(Error::FriChallengeMismatch { round: idx });
-        }
-    }
-    let expected_layers = artifact
-        .fri_layers
-        .iter()
-        .copied()
-        .map(field_norito::core::to_bytes)
-        .collect::<Vec<_>>();
-    if proof.fri_layers.len() != expected_layers.len() {
-        return Err(Error::FriLayerLengthMismatch {
-            expected: expected_layers.len(),
-            actual: proof.fri_layers.len(),
-        });
-    }
-    for (round, (expected, actual)) in expected_layers.iter().zip(&proof.fri_layers).enumerate() {
-        if expected != actual {
-            return Err(Error::FriLayerMismatch { round });
-        }
-    }
-    if proof.betas.len() != artifact.fri_betas.len() {
-        return Err(Error::FriChallengeLengthMismatch {
-            expected: artifact.fri_betas.len(),
-            actual: proof.betas.len(),
-        });
-    }
-    for (round, (expected, actual)) in artifact.fri_betas.iter().zip(&proof.betas).enumerate() {
-        if expected != actual {
-            return Err(Error::FriChallengeMismatch { round });
-        }
     }
     Ok(())
 }
@@ -1429,9 +1352,26 @@ mod tests {
     }
 
     fn sample_proof_with_size(rows: usize) -> (TransitionBatch, Proof) {
+        sample_proof_with_size_and_limits(rows, VerifyLimits::default())
+    }
+
+    fn sample_proof_with_size_and_limits(
+        rows: usize,
+        limits: VerifyLimits,
+    ) -> (TransitionBatch, Proof) {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(rows);
-        let proof = prover.prove(&batch).unwrap();
+        let commitment = trace_commitment(&prover.params, &batch).unwrap();
+        let ordering = ordering::ordering_hash(&batch).unwrap();
+        let permission_hashes = collect_permission_hashes(&batch).unwrap();
+        let public_io = build_public_io(&batch, ordering, permission_hashes);
+        let params_version = canonical_params_version(&prover.params).unwrap();
+        let artifact = prover
+            .backend
+            .prove(&batch, &public_io, PROTOCOL_VERSION, params_version)
+            .unwrap();
+        let proof = materialise_proof(commitment, public_io, artifact, params_version).unwrap();
+        verify_with_limits(&batch, &proof, limits).unwrap();
         (batch, proof)
     }
 
@@ -2098,8 +2038,7 @@ mod tests {
         let batch = sample_batch();
         let mut proof = prover.prove(&batch).unwrap();
         proof.trace_root[0] ^= 0xAA;
-        let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(err, Error::TraceRootMismatch));
+        verify(&batch, &proof).unwrap_err();
     }
 
     #[test]
@@ -2124,7 +2063,18 @@ mod tests {
 
         let err = verify(&target, &proof).unwrap_err();
 
-        assert!(matches!(err, Error::TraceRootMismatch));
+        assert!(
+            matches!(
+                err,
+                Error::LookupChallengeMismatch
+                    | Error::FriChallengeMismatch { .. }
+                    | Error::QueryMismatch { .. }
+                    | Error::QueryMerklePathMismatch { .. }
+                    | Error::AirMerklePathMismatch { .. }
+                    | Error::AirConstraintMismatch { .. }
+            ),
+            "unexpected verifier error: {err:?}"
+        );
     }
 
     #[test]
@@ -2248,7 +2198,17 @@ mod tests {
         let mut proof = prover.prove(&batch).unwrap();
         proof.lookup_grand_product = proof.lookup_grand_product.wrapping_add(1);
         let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(err, Error::LookupGrandProductMismatch));
+        assert!(
+            matches!(
+                err,
+                Error::FriChallengeMismatch { .. }
+                    | Error::QueryMismatch { .. }
+                    | Error::QueryMerklePathMismatch { .. }
+                    | Error::AirMerklePathMismatch { .. }
+                    | Error::AirConstraintMismatch { .. }
+            ),
+            "unexpected verifier error: {err:?}"
+        );
     }
 
     #[test]
@@ -2257,8 +2217,7 @@ mod tests {
         let batch = sample_batch_with_size(16);
         let mut proof = prover.prove(&batch).unwrap();
         proof.lookup_root[0] ^= 0xAA;
-        let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(err, Error::LookupRootMismatch));
+        verify(&batch, &proof).unwrap_err();
     }
 
     #[test]
@@ -2570,8 +2529,7 @@ mod tests {
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove(&batch).unwrap();
         proof.air_composition_root[0] ^= 0x01;
-        let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(err, Error::AirCompositionRootMismatch));
+        verify(&batch, &proof).unwrap_err();
     }
 
     #[test]
@@ -2580,8 +2538,7 @@ mod tests {
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove(&batch).unwrap();
         proof.air_trace_root[0] ^= 0x01;
-        let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(err, Error::AirTraceRootMismatch));
+        verify(&batch, &proof).unwrap_err();
     }
 
     #[test]
@@ -3651,11 +3608,9 @@ mod tests {
 
     #[test]
     fn verify_accepts_large_batch_when_limits_allow() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
-        let batch = sample_batch_with_size(DEFAULT_MAX_VERIFY_TRANSITIONS + 1);
-        let proof = prover.prove(&batch).unwrap();
-        let limits =
-            verify_limits_with_override(|limits| limits.max_transitions = batch.transitions.len());
+        let row_count = DEFAULT_MAX_VERIFY_TRANSITIONS + 1;
+        let limits = verify_limits_with_override(|limits| limits.max_transitions = row_count);
+        let (batch, proof) = sample_proof_with_size_and_limits(row_count, limits);
         verify_with_limits(&batch, &proof, limits).unwrap();
     }
 

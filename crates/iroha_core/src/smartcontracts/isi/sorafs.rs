@@ -1114,7 +1114,7 @@ fn collect_public_pin_fee(
         .sorafs_pin_fee_treasury_account
         .clone();
     let source_id = AssetId::new(fee_asset_id.clone(), authority.clone());
-    let amount = Numeric::new(amount_nano, 0);
+    let amount = Numeric::new(amount_nano, 9);
 
     crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
         state_transaction,
@@ -2515,6 +2515,37 @@ mod sorafs_tests {
         state.world.assets.insert(asset_id, asset_value);
     }
 
+    fn pin_fee_balance(
+        stx: &crate::state::StateTransaction<'_, '_>,
+        account: &AccountId,
+    ) -> Numeric {
+        let asset_id = AssetId::new(stx.gov.sorafs_pin_fee_asset_id.clone(), account.clone());
+        stx.world
+            .assets
+            .get(&asset_id)
+            .map(|value| value.clone().into_inner())
+            .unwrap_or_else(Numeric::zero)
+    }
+
+    fn assert_pin_fee_balances_unchanged(
+        stx: &crate::state::StateTransaction<'_, '_>,
+        account: &AccountId,
+        account_balance_before: Numeric,
+        treasury: &AccountId,
+        treasury_balance_before: Numeric,
+    ) {
+        assert_eq!(
+            pin_fee_balance(stx, account),
+            account_balance_before,
+            "rejected pin registration must not charge the submitter"
+        );
+        assert_eq!(
+            pin_fee_balance(stx, treasury),
+            treasury_balance_before,
+            "rejected pin registration must not credit treasury"
+        );
+    }
+
     fn seed_provider_owners(
         stx: &mut crate::state::StateTransaction<'_, '_>,
         providers: &[ProviderId],
@@ -2678,6 +2709,9 @@ mod sorafs_tests {
         if let Some(perms) = stx.world.account_permissions.get_mut(&alice()) {
             perms.clear();
         }
+        let alice_balance_before = pin_fee_balance(&stx, &alice());
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
 
         let register = RegisterPinManifest {
             digest: default_digest(),
@@ -2689,6 +2723,13 @@ mod sorafs_tests {
             alias: None,
             successor_of: None,
         };
+        let expected_amount_nano = stx.world.sorafs_pricing.get().public_pin_fee_nano(
+            register.policy.storage_class,
+            register.content_length,
+            register.policy.min_replicas,
+            register.submitted_epoch,
+            register.policy.retention_epoch,
+        );
 
         register
             .execute(&alice(), &mut stx)
@@ -2712,7 +2753,108 @@ mod sorafs_tests {
             payment.treasury_account_id,
             stx.gov.sorafs_pin_fee_treasury_account
         );
-        assert!(payment.amount_nano > 0);
+        assert_eq!(payment.amount_nano, expected_amount_nano);
+        let paid_amount = Numeric::new(expected_amount_nano, 9);
+        assert_eq!(
+            pin_fee_balance(&stx, &alice()),
+            alice_balance_before
+                .checked_sub(paid_amount.clone())
+                .expect("alice has enough fee balance")
+        );
+        assert_eq!(
+            pin_fee_balance(&stx, &treasury_account),
+            treasury_balance_before
+                .checked_add(paid_amount)
+                .expect("treasury balance remains representable")
+        );
+    }
+
+    #[test]
+    fn register_pin_manifest_rejects_unfunded_public_submission_without_side_effects() {
+        let mut state = make_state();
+        seed_sorafs_permissions(&mut state, &bob());
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        if let Some(perms) = stx.world.account_permissions.get_mut(&alice()) {
+            perms.clear();
+        }
+
+        let alice_fee_asset = AssetId::new(stx.gov.sorafs_pin_fee_asset_id.clone(), alice());
+        stx.world.assets.remove(alice_fee_asset);
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
+
+        let register = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: None,
+        };
+        register
+            .execute(&alice(), &mut stx)
+            .expect_err("unfunded public pin registration must fail");
+
+        assert!(
+            stx.world.pin_manifests.get(&default_digest()).is_none(),
+            "failed paid registration must not leave a manifest record"
+        );
+        assert_eq!(pin_fee_balance(&stx, &alice()), Numeric::zero());
+        assert_eq!(
+            pin_fee_balance(&stx, &treasury_account),
+            treasury_balance_before,
+            "failed paid registration must not credit treasury"
+        );
+    }
+
+    #[test]
+    fn register_pin_manifest_rejects_insufficient_public_fee_without_side_effects() {
+        let mut state = make_state();
+        seed_sorafs_permissions(&mut state, &bob());
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        if let Some(perms) = stx.world.account_permissions.get_mut(&alice()) {
+            perms.clear();
+        }
+
+        let alice_fee_asset = AssetId::new(stx.gov.sorafs_pin_fee_asset_id.clone(), alice());
+        let low_balance = Numeric::new(1_u32, 9);
+        let (asset_id, asset_value) =
+            Asset::new(alice_fee_asset, low_balance.clone()).into_key_value();
+        stx.world.assets.insert(asset_id, asset_value);
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
+
+        let register = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: None,
+        };
+        register
+            .execute(&alice(), &mut stx)
+            .expect_err("underfunded public pin registration must fail");
+
+        assert!(
+            stx.world.pin_manifests.get(&default_digest()).is_none(),
+            "failed paid registration must not leave a manifest record"
+        );
+        assert_pin_fee_balances_unchanged(
+            &stx,
+            &alice(),
+            low_balance,
+            &treasury_account,
+            treasury_balance_before,
+        );
     }
 
     #[test]
@@ -2838,20 +2980,38 @@ mod sorafs_tests {
         successor_of: Option<ManifestDigest>,
         status: PinStatus,
     ) {
+        let policy = default_policy();
+        let content_length = default_content_length();
         let mut record = PinManifestRecord::new(
             digest,
             default_chunker(),
             chunk_digest,
-            default_policy(),
+            policy,
             alice(),
             5,
             None,
             successor_of,
             Metadata::default(),
-        );
+        )
+        .with_content_length(content_length);
         match status {
             PinStatus::Pending => {}
-            PinStatus::Approved(epoch) => record.approve(epoch, None),
+            PinStatus::Approved(epoch) => {
+                let amount_nano = stx.world.sorafs_pricing.get().public_pin_fee_nano(
+                    policy.storage_class,
+                    content_length,
+                    policy.min_replicas,
+                    5,
+                    policy.retention_epoch,
+                );
+                record.record_pin_fee_payment(PinFeePayment {
+                    paid_by: alice(),
+                    fee_asset_id: stx.gov.sorafs_pin_fee_asset_id.clone(),
+                    treasury_account_id: stx.gov.sorafs_pin_fee_treasury_account.clone(),
+                    amount_nano,
+                });
+                record.approve(epoch, None);
+            }
             PinStatus::Retired(epoch) => record.retire(epoch, None),
         }
         stx.world.pin_manifests.insert(digest, record);
@@ -2867,6 +3027,54 @@ mod sorafs_tests {
 
     fn default_alias_binding() -> ManifestAliasBinding {
         alias_binding_for(default_digest(), "sora", "docs", 0, 0)
+    }
+
+    fn assert_alias_registration_rejected_without_fee(
+        alias: ManifestAliasBinding,
+        expected_message: &str,
+    ) {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let alice_balance_before = pin_fee_balance(&stx, &alice());
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
+        let instruction = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: Some(alias),
+            successor_of: None,
+        };
+
+        let err = instruction
+            .execute(&alice(), &mut stx)
+            .expect_err("registration must reject adversarial alias");
+
+        match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => assert!(
+                message.contains(expected_message),
+                "expected error containing `{expected_message}`, got: {message}"
+            ),
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(
+            stx.world.pin_manifests.get(&default_digest()).is_none(),
+            "rejected alias registration must not store a pin manifest"
+        );
+        assert_pin_fee_balances_unchanged(
+            &stx,
+            &alice(),
+            alice_balance_before,
+            &treasury_account,
+            treasury_balance_before,
+        );
     }
 
     pub(super) fn replication_order_struct(
@@ -3561,6 +3769,9 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        let alice_balance_before = pin_fee_balance(&stx, &alice());
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
         let mut instruction = RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
@@ -3583,6 +3794,13 @@ mod sorafs_tests {
                 message
             )) if message.contains("manifest validation failed")
         ));
+        assert_pin_fee_balances_unchanged(
+            &stx,
+            &alice(),
+            alice_balance_before,
+            &treasury_account,
+            treasury_balance_before,
+        );
     }
 
     #[test]
@@ -3591,6 +3809,9 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        let alice_balance_before = pin_fee_balance(&stx, &alice());
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
         let mut instruction = RegisterPinManifest {
             digest: default_digest(),
             chunker: default_chunker(),
@@ -3613,6 +3834,13 @@ mod sorafs_tests {
                 message
             )) if message.contains("manifest validation failed")
         ));
+        assert_pin_fee_balances_unchanged(
+            &stx,
+            &alice(),
+            alice_balance_before,
+            &treasury_account,
+            treasury_balance_before,
+        );
     }
 
     #[test]
@@ -3780,6 +4008,9 @@ mod sorafs_tests {
         first
             .execute(&alice(), &mut stx)
             .expect("first alias registration succeeds");
+        let alice_balance_after_first = pin_fee_balance(&stx, &alice());
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_after_first = pin_fee_balance(&stx, &treasury_account);
 
         let second = RegisterPinManifest {
             digest: ManifestDigest::new([0xBB; 32]),
@@ -3804,6 +4035,16 @@ mod sorafs_tests {
             ),
             other => panic!("unexpected error: {other:?}"),
         }
+        assert_eq!(
+            pin_fee_balance(&stx, &alice()),
+            alice_balance_after_first,
+            "duplicate alias replay must not charge the submitter again"
+        );
+        assert_eq!(
+            pin_fee_balance(&stx, &treasury_account),
+            treasury_balance_after_first,
+            "duplicate alias replay must not credit treasury again"
+        );
     }
 
     #[test]
@@ -3825,6 +4066,9 @@ mod sorafs_tests {
         }
         .execute(&alice(), &mut stx)
         .expect("first manifest registration succeeds");
+        let alice_balance_after_first = pin_fee_balance(&stx, &alice());
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_after_first = pin_fee_balance(&stx, &treasury_account);
 
         let err = RegisterPinManifest {
             digest: default_digest(),
@@ -3846,6 +4090,108 @@ mod sorafs_tests {
             message.contains("already registered"),
             "unexpected error message: {message}"
         );
+        assert_eq!(
+            pin_fee_balance(&stx, &alice()),
+            alice_balance_after_first,
+            "duplicate digest replay must not charge the submitter again"
+        );
+        assert_eq!(
+            pin_fee_balance(&stx, &treasury_account),
+            treasury_balance_after_first,
+            "duplicate digest replay must not credit treasury again"
+        );
+    }
+
+    #[test]
+    fn register_manifest_rejects_empty_alias_proof_without_side_effects() {
+        let alias = ManifestAliasBinding {
+            name: "docs".into(),
+            namespace: "sora".into(),
+            proof: Vec::new(),
+        };
+        assert_alias_registration_rejected_without_fee(alias, "alias proof must not be empty");
+    }
+
+    #[test]
+    fn register_manifest_rejects_alias_proof_alias_mismatch_without_side_effects() {
+        let mut alias = alias_binding_for(default_digest(), "sora", "other", 0, 0);
+        alias.name = "docs".to_owned();
+        assert_alias_registration_rejected_without_fee(
+            alias,
+            "does not match requested alias `sora/docs`",
+        );
+    }
+
+    #[test]
+    fn register_manifest_rejects_alias_whitespace_without_side_effects() {
+        let alias = ManifestAliasBinding {
+            name: "docs ".into(),
+            namespace: "sora".into(),
+            proof: Vec::new(),
+        };
+        assert_alias_registration_rejected_without_fee(alias, "surrounding whitespace");
+    }
+
+    #[test]
+    fn register_manifest_rejects_malformed_alias_proof_without_side_effects() {
+        let alias = ManifestAliasBinding {
+            name: "docs".into(),
+            namespace: "sora".into(),
+            proof: vec![0xFF, 0x00, 0xAA],
+        };
+        assert_alias_registration_rejected_without_fee(alias, "alias proof failed verification");
+    }
+
+    #[test]
+    fn register_manifest_rejects_stale_alias_record_without_side_effects() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let requested_alias = default_alias_binding();
+        let stale_alias = alias_binding_for(second_digest(), "sora", "docs", 0, 0);
+        let stale_record =
+            ManifestAliasRecord::new(stale_alias.clone(), second_digest(), bob(), 1, 10);
+        stx.world
+            .manifest_aliases
+            .insert(ManifestAliasId::from(&stale_alias), stale_record);
+        let alice_balance_before = pin_fee_balance(&stx, &alice());
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
+
+        let err = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: Some(requested_alias),
+            successor_of: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("stale alias record must reject registration");
+
+        match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => assert!(
+                message.contains("alias `sora/docs` is already associated"),
+                "unexpected error message: {message}"
+            ),
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(
+            stx.world.pin_manifests.get(&default_digest()).is_none(),
+            "rejected stale-alias registration must not store a pin manifest"
+        );
+        assert_pin_fee_balances_unchanged(
+            &stx,
+            &alice(),
+            alice_balance_before,
+            &treasury_account,
+            treasury_balance_before,
+        );
     }
 
     #[test]
@@ -3854,6 +4200,9 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        let alice_balance_before = pin_fee_balance(&stx, &alice());
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
 
         let mismatched_alias = alias_binding_for(second_digest(), "sora", "docs", 0, 0);
         let instruction = RegisterPinManifest {
@@ -3880,6 +4229,13 @@ mod sorafs_tests {
             ),
             other => panic!("unexpected error: {other:?}"),
         }
+        assert_pin_fee_balances_unchanged(
+            &stx,
+            &alice(),
+            alice_balance_before,
+            &treasury_account,
+            treasury_balance_before,
+        );
     }
 
     #[test]
@@ -3888,6 +4244,9 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        let alice_balance_before = pin_fee_balance(&stx, &alice());
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
         let alias = ManifestAliasBinding {
             name: "Docs".into(),
             namespace: "sora".into(),
@@ -3917,6 +4276,13 @@ mod sorafs_tests {
             ),
             other => panic!("unexpected error: {other:?}"),
         }
+        assert_pin_fee_balances_unchanged(
+            &stx,
+            &alice(),
+            alice_balance_before,
+            &treasury_account,
+            treasury_balance_before,
+        );
     }
 
     #[test]
@@ -3967,6 +4333,9 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        let alice_balance_before = pin_fee_balance(&stx, &alice());
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
 
         let err = RegisterPinManifest {
             digest: default_digest(),
@@ -3990,6 +4359,13 @@ mod sorafs_tests {
             message.contains("cannot declare itself as successor"),
             "unexpected error message: {message}"
         );
+        assert_pin_fee_balances_unchanged(
+            &stx,
+            &alice(),
+            alice_balance_before,
+            &treasury_account,
+            treasury_balance_before,
+        );
     }
 
     #[test]
@@ -3998,6 +4374,9 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        let alice_balance_before = pin_fee_balance(&stx, &alice());
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
 
         let err = RegisterPinManifest {
             digest: default_digest(),
@@ -4021,6 +4400,13 @@ mod sorafs_tests {
             message.contains("is not registered"),
             "unexpected error message: {message}"
         );
+        assert_pin_fee_balances_unchanged(
+            &stx,
+            &alice(),
+            alice_balance_before,
+            &treasury_account,
+            treasury_balance_before,
+        );
     }
 
     #[test]
@@ -4030,6 +4416,9 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         insert_pending_manifest(&mut stx, second_digest(), [0xEE; 32]);
+        let alice_balance_before = pin_fee_balance(&stx, &alice());
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
 
         let err = RegisterPinManifest {
             digest: default_digest(),
@@ -4053,6 +4442,13 @@ mod sorafs_tests {
             message.contains("must be approved before registering successor"),
             "unexpected error message: {message}"
         );
+        assert_pin_fee_balances_unchanged(
+            &stx,
+            &alice(),
+            alice_balance_before,
+            &treasury_account,
+            treasury_balance_before,
+        );
     }
 
     #[test]
@@ -4068,6 +4464,9 @@ mod sorafs_tests {
             None,
             PinStatus::Retired(7),
         );
+        let alice_balance_before = pin_fee_balance(&stx, &alice());
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
 
         let err = RegisterPinManifest {
             digest: default_digest(),
@@ -4091,6 +4490,13 @@ mod sorafs_tests {
             message.contains("was retired at epoch 7"),
             "unexpected error message: {message}"
         );
+        assert_pin_fee_balances_unchanged(
+            &stx,
+            &alice(),
+            alice_balance_before,
+            &treasury_account,
+            treasury_balance_before,
+        );
     }
 
     #[test]
@@ -4106,6 +4512,9 @@ mod sorafs_tests {
             Some(third_digest()),
             PinStatus::Approved(5),
         );
+        let alice_balance_before = pin_fee_balance(&stx, &alice());
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
 
         let err = RegisterPinManifest {
             digest: third_digest(),
@@ -4129,6 +4538,13 @@ mod sorafs_tests {
             message.contains("would create a cycle"),
             "unexpected error message: {message}"
         );
+        assert_pin_fee_balances_unchanged(
+            &stx,
+            &alice(),
+            alice_balance_before,
+            &treasury_account,
+            treasury_balance_before,
+        );
     }
 
     #[test]
@@ -4151,6 +4567,9 @@ mod sorafs_tests {
             Some(second_digest()),
             PinStatus::Approved(5),
         );
+        let alice_balance_before = pin_fee_balance(&stx, &alice());
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
 
         let err = RegisterPinManifest {
             digest: fourth_digest(),
@@ -4173,6 +4592,13 @@ mod sorafs_tests {
         assert!(
             message.contains("forms a cycle"),
             "unexpected error message: {message}"
+        );
+        assert_pin_fee_balances_unchanged(
+            &stx,
+            &alice(),
+            alice_balance_before,
+            &treasury_account,
+            treasury_balance_before,
         );
     }
 

@@ -214,7 +214,7 @@ Les grands livres confidentiels doivent être suffisamment historiques pour prou
 - Limites durables (configurées par défaut) :
 -`max_proof_size_bytes = 262_144`.
 -`max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. Preuves que dépasser `verify_timeout_ms` a avorté une instrucao deterministicamente (les bulletins de vote de gouvernance émettent `proof verification exceeded timeout`, `VerifyProof` renvoient une erreur).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Quotas supplémentaires garantissant la vivacité : `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block` et `max_public_inputs` constructeurs de blocs limités ; `reorg_depth_bound` (>= `max_anchor_age_blocks`) régit le maintien des points de contrôle frontaliers.
 - L'exécution du runtime a récemment rejeté les transactions qui dépassent ses limites de transaction ou de blocage, émettant des erreurs `InvalidParameter` déterministes et en attendant l'état du grand livre modifié.
 - Mempool pré-filtre les transactions confidentielles par `vk_id`, tamanho de preuve et identité d'ancre avant d'invoquer ou de vérificateur pour une utilisation des ressources limitées.- Une vérification pour déterminer de manière déterministe le délai d'attente ou le dépassement de limite ; transacoes falham avec erreurs explicites. Backends SIMD est optionnel mais ne modifie pas la comptabilité du gaz.
@@ -303,7 +303,7 @@ Les grands livres confidentiels doivent être suffisamment historiques pour prou
    - [x] Handshake P2P annonce `ConfidentialFeatureDigest` (backend digest + empreintes digitales de registre) et de fausses disparités sont déterminées via `HandshakeConfidentialMismatch`.
    - [x] Remover panique les chemins d'exécution confidentiels et un rôle supplémentaire de contrôle pour les nœuds incompatibles.
    - [ ] Appliquer les budgets de délai d'attente pour vérifier et les limites de profondeur de réorganisation pour les points de contrôle frontaliers.
-     - [x] Budgets de timeout de verificacao appliqués ; preuves qui dépassent `verify_timeout_ms` agora falham deterministicamente.
+     - Verification timeout budgets are telemetry/operator budgets only; proofs fail deterministically on size, gas, public input, policy, or anchor-age bounds.
      - [x] Points de contrôle frontaliers il y a peu de temps `reorg_depth_bound`, j'ai pu ajouter des points de contrôle plus anciens qu'à janvier configurés et prendre des instantanés déterministes.
    - Introduisez `AssetConfidentialPolicy`, la politique FSM et les portes d'application pour les instructions de création/transfert/révélation.
    - Commit `conf_features` dans nos en-têtes de bloc et récuser la participation des validateurs lorsque les résumés de registre/paramètres divergent.

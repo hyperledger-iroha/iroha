@@ -109,10 +109,10 @@ fn zk_vote_get_tally_roundtrip_from_snapshot() {
     let finalize = iroha_data_model::isi::zk::FinalizeElection {
         election_id: election_id.clone(),
         tally: vec![4],
-        tally_proof: iroha_data_model::proof::ProofAttachment::new_inline(
+        tally_proof: iroha_data_model::proof::ProofAttachment::new_ref(
             "halo2/ipa".into(),
             fixture.proof_box("halo2/ipa"),
-            fixture.vk_box("halo2/ipa").expect("fixture verifying key"),
+            vk_id.clone(),
         ),
     };
     stx.world

@@ -845,17 +845,7 @@ impl MockWorldStateView {
         if proof.proof.bytes.is_empty() {
             return false;
         }
-        if proof.vk_inline.is_none() && proof.vk_ref.is_none() {
-            return false;
-        }
-        if let Some(vk) = &proof.vk_inline
-            && (vk.backend != proof.backend || vk.bytes.is_empty())
-        {
-            return false;
-        }
-        if let Some(id) = &proof.vk_ref
-            && !self.verifying_keys.contains_key(id)
-        {
+        if !self.verifying_keys.contains_key(&proof.vk_ref) {
             return false;
         }
         proof.envelope_hash.is_some()
@@ -1681,8 +1671,13 @@ impl MockWorldStateView {
 }
 
 fn hash_vk_bytes(backend: &str, bytes: &[u8]) -> [u8; 32] {
+    let backend_len = u64::try_from(backend.len()).expect("backend length must fit into u64");
+    let bytes_len = u64::try_from(bytes.len()).expect("VK length must fit into u64");
     let mut h = Sha256::new();
+    h.update(b"iroha:zk:v1:vk");
+    h.update(backend_len.to_be_bytes());
     h.update(backend.as_bytes());
+    h.update(bytes_len.to_be_bytes());
     h.update(bytes);
     h.finalize().into()
 }
@@ -1796,25 +1791,8 @@ impl ZkAssetVerifierBinding {
         if proof.backend.as_str() != self.id.backend {
             return false;
         }
-        let mut saw_binding = false;
-        if let Some(vk_id) = proof.vk_ref.as_ref() {
-            if vk_id != &self.id {
-                return false;
-            }
-            saw_binding = true;
-        }
-        if let Some(vk_inline) = proof.vk_inline.as_ref() {
-            if vk_inline.backend != self.id.backend {
-                return false;
-            }
-            if let Some(expected) = self.commitment {
-                let backend = proof.backend.to_string();
-                let digest = hash_vk_bytes(&backend, &vk_inline.bytes);
-                if digest != expected {
-                    return false;
-                }
-            }
-            saw_binding = true;
+        if proof.vk_ref != self.id {
+            return false;
         }
         if let Some(commitment) = proof.vk_commitment
             && let Some(expected) = self.commitment
@@ -1822,7 +1800,7 @@ impl ZkAssetVerifierBinding {
         {
             return false;
         }
-        saw_binding
+        true
     }
 }
 
@@ -6558,27 +6536,35 @@ mod tests_axt_policy_snapshot {
 mod tests_governance_elections {
     use iroha_data_model::{
         isi::BuiltInInstruction,
-        proof::{ProofAttachment, ProofBox, VerifyingKeyBox},
+        proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     };
 
     use super::*;
     use crate::Memory;
 
+    fn vote_vk_id() -> VerifyingKeyId {
+        VerifyingKeyId::new("halo2/ipa", "governance_vote_vk")
+    }
+
+    fn register_vote_vk(wsv: &mut MockWorldStateView) {
+        wsv.insert_verifying_key(vote_vk_id(), vec![0x02]);
+    }
+
     fn dummy_ballot_proof(hash: [u8; 32]) -> ProofAttachment {
-        let mut attachment = ProofAttachment::new_inline(
+        let mut attachment = ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![0x01]),
-            VerifyingKeyBox::new("halo2/ipa".into(), vec![0x02]),
+            vote_vk_id(),
         );
         attachment.envelope_hash = Some(hash);
         attachment
     }
 
     fn dummy_tally_proof(hash: [u8; 32]) -> ProofAttachment {
-        let mut attachment = ProofAttachment::new_inline(
+        let mut attachment = ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![0x11]),
-            VerifyingKeyBox::new("halo2/ipa".into(), vec![0x12]),
+            vote_vk_id(),
         );
         attachment.envelope_hash = Some(hash);
         attachment
@@ -6588,6 +6574,7 @@ mod tests_governance_elections {
     fn submit_ballot_requires_verify_and_rejects_duplicate_nullifier() {
         // Duplicate nullifier rejection using WSV helpers
         let mut wsv = MockWorldStateView::new();
+        register_vote_vk(&mut wsv);
         assert!(wsv.create_election("e1".to_string(), 2, [0u8; 32], 0, u64::MAX));
         let proof_ok = dummy_ballot_proof([1u8; 32]);
         assert!(wsv.submit_ballot("e1", vec![1, 2, 3], [7u8; 32], proof_ok));
@@ -6598,6 +6585,7 @@ mod tests_governance_elections {
     #[test]
     fn submit_ballot_enforces_time_window() {
         let mut wsv = MockWorldStateView::new();
+        register_vote_vk(&mut wsv);
         assert!(wsv.create_election("time-test".to_string(), 2, [0u8; 32], 10, 20));
 
         // Too early
@@ -6619,31 +6607,32 @@ mod tests_governance_elections {
     #[test]
     fn submit_ballot_rejects_invalid_proof() {
         let mut wsv = MockWorldStateView::new();
+        register_vote_vk(&mut wsv);
         assert!(wsv.create_election("proof-test".to_string(), 2, [0u8; 32], 0, u64::MAX));
         wsv.set_current_time_ms(1);
 
         // Missing envelope hash
-        let missing_hash = ProofAttachment::new_inline(
+        let missing_hash = ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![0x0a]),
-            VerifyingKeyBox::new("halo2/ipa".into(), vec![0x0b]),
+            vote_vk_id(),
         );
         assert!(!wsv.submit_ballot("proof-test", vec![0x20], [0x04; 32], missing_hash,));
 
         // Empty proof bytes
-        let mut empty_proof = ProofAttachment::new_inline(
+        let mut empty_proof = ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), Vec::new()),
-            VerifyingKeyBox::new("halo2/ipa".into(), vec![0x0c]),
+            vote_vk_id(),
         );
         empty_proof.envelope_hash = Some([0x06; 32]);
         assert!(!wsv.submit_ballot("proof-test", vec![0x21], [0x05; 32], empty_proof,));
 
-        // Inline VK mismatch should fail
-        let mut vk_mismatch = ProofAttachment::new_inline(
+        // Missing registry reference should fail.
+        let mut vk_mismatch = ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![0x0d]),
-            VerifyingKeyBox::new("other/zk".into(), vec![0x0e]),
+            VerifyingKeyId::new("halo2/ipa", "missing_vote_vk"),
         );
         vk_mismatch.envelope_hash = Some([0x07; 32]);
         assert!(!wsv.submit_ballot("proof-test", vec![0x22], [0x06; 32], vk_mismatch,));
@@ -6656,6 +6645,7 @@ mod tests_governance_elections {
     #[test]
     fn finalize_requires_valid_proof_and_sets_tally() {
         let mut wsv = MockWorldStateView::new();
+        register_vote_vk(&mut wsv);
         assert!(wsv.create_election("e2".to_string(), 3, [0u8; 32], 0, u64::MAX));
         let proof_ok = dummy_tally_proof([9u8; 32]);
         assert!(wsv.finalize_election("e2", vec![5, 2, 1], proof_ok));
@@ -6670,13 +6660,14 @@ mod tests_governance_elections {
     #[test]
     fn finalize_rejects_invalid_inputs() {
         let mut wsv = MockWorldStateView::new();
+        register_vote_vk(&mut wsv);
         assert!(wsv.create_election("e-invalid".to_string(), 2, [0u8; 32], 0, u64::MAX));
 
         // Missing envelope hash -> reject
-        let proof_missing = ProofAttachment::new_inline(
+        let proof_missing = ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![0x21]),
-            VerifyingKeyBox::new("halo2/ipa".into(), vec![0x22]),
+            vote_vk_id(),
         );
         assert!(!wsv.finalize_election("e-invalid", vec![1, 2], proof_missing));
 
@@ -6761,6 +6752,7 @@ mod tests_governance_elections {
     #[test]
     fn finalize_binds_to_verified_envelope_hash() {
         let mut wsv = MockWorldStateView::new();
+        register_vote_vk(&mut wsv);
         assert!(wsv.create_election("e-bind".to_string(), 2, [0u8; 32], 0, u64::MAX));
         let caller: AccountId = test_account_id(
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
@@ -6772,10 +6764,10 @@ mod tests_governance_elections {
         let fin = iroha_data_model::isi::zk::FinalizeElection {
             election_id: "e-bind".to_string(),
             tally: vec![4, 6],
-            tally_proof: iroha_data_model::proof::ProofAttachment::new_inline(
+            tally_proof: iroha_data_model::proof::ProofAttachment::new_ref(
                 "halo2/ipa".into(),
                 iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0x31]),
-                iroha_data_model::proof::VerifyingKeyBox::new("halo2/ipa".into(), vec![0x32, 0x33]),
+                vote_vk_id(),
             ),
         };
 
@@ -6796,6 +6788,7 @@ mod tests_governance_elections {
     #[test]
     fn finalize_rejects_mismatched_envelope_hash() {
         let mut wsv = MockWorldStateView::new();
+        register_vote_vk(&mut wsv);
         assert!(wsv.create_election("e-mismatch".to_string(), 2, [0u8; 32], 0, u64::MAX));
         let caller: AccountId = test_account_id(
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
@@ -6804,10 +6797,10 @@ mod tests_governance_elections {
         let mut host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
         host.__test_set_verified_tally([0xFE; 32]);
 
-        let mut tally_proof = iroha_data_model::proof::ProofAttachment::new_inline(
+        let mut tally_proof = iroha_data_model::proof::ProofAttachment::new_ref(
             "halo2/ipa".into(),
             iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0x41]),
-            iroha_data_model::proof::VerifyingKeyBox::new("halo2/ipa".into(), vec![0x42]),
+            vote_vk_id(),
         );
         tally_proof.envelope_hash = Some([0xEF; 32]); // mismatch
         let fin = iroha_data_model::isi::zk::FinalizeElection {
@@ -6832,6 +6825,7 @@ mod tests_governance_elections {
     fn malformed_verify_ballot_keeps_latch_off_and_submit_rejected() {
         // Host + VM with one election
         let mut wsv = MockWorldStateView::new();
+        register_vote_vk(&mut wsv);
         assert!(wsv.create_election("e1".to_string(), 2, [0u8; 32], 0, u64::MAX));
         let caller: AccountId = test_account_id(
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
@@ -6868,10 +6862,10 @@ mod tests_governance_elections {
         let sb = iroha_data_model::isi::zk::SubmitBallot {
             election_id: "e1".to_string(),
             ciphertext: vec![1, 2, 3],
-            ballot_proof: iroha_data_model::proof::ProofAttachment::new_inline(
+            ballot_proof: iroha_data_model::proof::ProofAttachment::new_ref(
                 "halo2/ipa".into(),
                 iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0x01]),
-                iroha_data_model::proof::VerifyingKeyBox::new("halo2/ipa".into(), vec![0x02]),
+                vote_vk_id(),
             ),
             nullifier: [7u8; 32],
         };
@@ -6902,6 +6896,7 @@ mod tests_governance_elections {
     #[test]
     fn host_submit_ballot_requires_matching_envelope_hash() {
         let mut wsv = MockWorldStateView::new();
+        register_vote_vk(&mut wsv);
         assert!(wsv.create_election("gov1".to_string(), 2, [0u8; 32], 0, u64::MAX));
         wsv.set_current_time_ms(100);
         let caller: AccountId = test_account_id(
@@ -6923,10 +6918,10 @@ mod tests_governance_elections {
         let submit = iroha_data_model::isi::zk::SubmitBallot {
             election_id: "gov1".to_string(),
             ciphertext: vec![0xaa, 0xbb, 0xcc],
-            ballot_proof: ProofAttachment::new_inline(
+            ballot_proof: ProofAttachment::new_ref(
                 "halo2/ipa".into(),
                 ProofBox::new("halo2/ipa".into(), vec![0x01]),
-                VerifyingKeyBox::new("halo2/ipa".into(), vec![0x02]),
+                vote_vk_id(),
             ),
             nullifier: [0x09; 32],
         };
@@ -6949,10 +6944,10 @@ mod tests_governance_elections {
             let host = host_ref.downcast_mut::<WsvHost>().unwrap();
             host.__test_push_verified_ballot([0x22; 32]);
         }
-        let mut mismatch_proof = ProofAttachment::new_inline(
+        let mut mismatch_proof = ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![0x03]),
-            VerifyingKeyBox::new("halo2/ipa".into(), vec![0x04]),
+            vote_vk_id(),
         );
         mismatch_proof.envelope_hash = Some([0x33; 32]);
         let submit_bad = iroha_data_model::isi::zk::SubmitBallot {
@@ -6978,6 +6973,7 @@ mod tests_governance_elections {
     #[test]
     fn malformed_verify_tally_keeps_latch_off_and_finalize_rejected() {
         let mut wsv = MockWorldStateView::new();
+        register_vote_vk(&mut wsv);
         assert!(wsv.create_election("e2".to_string(), 3, [0u8; 32], 0, u64::MAX));
         let caller: AccountId = test_account_id(
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
@@ -7013,10 +7009,10 @@ mod tests_governance_elections {
         let fe = iroha_data_model::isi::zk::FinalizeElection {
             election_id: "e2".to_string(),
             tally: vec![5, 2, 1],
-            tally_proof: iroha_data_model::proof::ProofAttachment::new_inline(
+            tally_proof: iroha_data_model::proof::ProofAttachment::new_ref(
                 "halo2/ipa".into(),
                 iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0x03]),
-                iroha_data_model::proof::VerifyingKeyBox::new("halo2/ipa".into(), vec![0x04]),
+                vote_vk_id(),
             ),
         };
         let ib_bytes = fe.encode_as_instruction_box();

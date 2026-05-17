@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 #if canImport(Security)
 import Security
 #endif
@@ -24,6 +25,7 @@ public enum OfflineNoteV2WalletError: Error, LocalizedError, Equatable {
     case invalidState
     case inputCertificateMismatch
     case proofVerificationFailed
+    case certificateVerificationFailed
 
     public var errorDescription: String? {
         switch self {
@@ -49,6 +51,8 @@ public enum OfflineNoteV2WalletError: Error, LocalizedError, Equatable {
             return "Selected Offline Note V2 input notes must use the same key certificate."
         case .proofVerificationFailed:
             return "Offline Note V2 recursive proof verification failed."
+        case .certificateVerificationFailed:
+            return "Offline Note V2 key certificate is not trusted for this wallet operation."
         }
     }
 }
@@ -219,6 +223,47 @@ public struct Halo2OfflineNoteV2ProofVerifier: OfflineNoteV2ProofVerifier {
 
     public func verifyRedeem(_ redemption: OfflineNoteRedeemV2) throws -> Bool {
         try Halo2OfflineNoteV2Prover.verifyRedeem(redemption)
+    }
+}
+
+public protocol OfflineNoteV2CertificateVerifier {
+    func verifyCertificate(_ certificate: OfflineNoteKeyCertificateV2) throws -> Bool
+}
+
+public struct RejectingOfflineNoteV2CertificateVerifier: OfflineNoteV2CertificateVerifier {
+    public init() {}
+
+    public func verifyCertificate(_ certificate: OfflineNoteKeyCertificateV2) throws -> Bool {
+        false
+    }
+}
+
+public struct Ed25519OfflineNoteV2CertificateVerifier: OfflineNoteV2CertificateVerifier {
+    private let trustedIssuerPublicKeys: [Data]
+
+    public init(trustedIssuerPublicKeys: [Data]) {
+        self.trustedIssuerPublicKeys = trustedIssuerPublicKeys
+    }
+
+    public func verifyCertificate(_ certificate: OfflineNoteKeyCertificateV2) throws -> Bool {
+        guard !trustedIssuerPublicKeys.isEmpty,
+              !certificate.platform.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !certificate.keyId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !certificate.deviceId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !certificate.assertionScheme.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !certificate.assertionKeyAlgorithm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !certificate.assertionPublicKey.isEmpty
+        else {
+            return false
+        }
+        let message = try certificate.signingBytes()
+        for root in trustedIssuerPublicKeys where root.count == 32 {
+            let publicKey = try Curve25519.Signing.PublicKey(rawRepresentation: root)
+            if publicKey.isValidSignature(certificate.issuerSignature, for: message) {
+                return true
+            }
+        }
+        return false
     }
 }
 
@@ -792,6 +837,7 @@ public final class OfflineNoteV2Wallet {
     private let syncResolver: OfflineNoteV2SyncResolver?
     private let proofProvider: OfflineNoteV2ProofProvider
     private let proofVerifier: OfflineNoteV2ProofVerifier
+    private let certificateVerifier: OfflineNoteV2CertificateVerifier
     private let randomSource: OfflineNoteV2RandomSource
     private let idGenerator: OfflineNoteV2IdGenerator
     private let clock: () -> UInt64
@@ -805,6 +851,7 @@ public final class OfflineNoteV2Wallet {
                 syncResolver: OfflineNoteV2SyncResolver? = nil,
                 proofProvider: OfflineNoteV2ProofProvider,
                 proofVerifier: OfflineNoteV2ProofVerifier = Halo2OfflineNoteV2ProofVerifier(),
+                certificateVerifier: OfflineNoteV2CertificateVerifier = RejectingOfflineNoteV2CertificateVerifier(),
                 randomSource: OfflineNoteV2RandomSource = SecureOfflineNoteV2RandomSource(),
                 idGenerator: OfflineNoteV2IdGenerator = UuidOfflineNoteV2IdGenerator(),
                 clock: @escaping () -> UInt64 = { UInt64(Date().timeIntervalSince1970 * 1000) }) {
@@ -817,6 +864,7 @@ public final class OfflineNoteV2Wallet {
         self.syncResolver = syncResolver
         self.proofProvider = proofProvider
         self.proofVerifier = proofVerifier
+        self.certificateVerifier = certificateVerifier
         self.randomSource = randomSource
         self.idGenerator = idGenerator
         self.clock = clock
@@ -837,6 +885,7 @@ public final class OfflineNoteV2Wallet {
             assetDefinitionId: assetDefinition(from: assetId),
             amount: amount
         )
+        try requireTrustedCertificate(context.keyCertificate, expectedAccountId: accountId)
         let noteSecret = try random32()
         let origin = try OfflineNoteCommitmentOriginV2.issuerLoad(OfflineNoteIssuerLoadOriginV2(
             operationId: context.operationId,
@@ -863,13 +912,15 @@ public final class OfflineNoteV2Wallet {
         guard response.noteCommitment == commitment else {
             throw OfflineNoteV2WalletError.issuerCommitmentMismatch
         }
+        let issuedCertificate = response.keyCertificate ?? context.keyCertificate
+        try requireTrustedCertificate(issuedCertificate, expectedAccountId: accountId)
         let now = clock()
         let note = try OfflineNoteV2WalletNote(
             chainId: chainId,
             accountId: accountId,
             assetId: assetId,
             amount: amount,
-            keyCertificate: response.keyCertificate ?? context.keyCertificate,
+            keyCertificate: issuedCertificate,
             noteCommitment: commitment,
             noteSecret: noteSecret,
             origin: origin,
@@ -884,6 +935,7 @@ public final class OfflineNoteV2Wallet {
     public func prepareReceive(assetDefinitionId: String, amount: String) throws -> OfflineNoteV2ReceiveRequest {
         let paymentRequestId = idGenerator.nextId(prefix: "payment-request")
         let keyCertificate = try attestationProvider.currentKeyCertificate()
+        try requireTrustedCertificate(keyCertificate, expectedAccountId: accountId)
         let assetId = walletAssetId(assetDefinitionId: assetDefinitionId, accountId: accountId)
         let noteSecret = try random32()
         let origin = try OfflineNoteCommitmentOriginV2.p2pOutput(OfflineNoteP2pOutputOriginV2(
@@ -928,6 +980,7 @@ public final class OfflineNoteV2Wallet {
         guard receiveRequest.chainId == chainId else {
             throw OfflineNoteV2WalletError.chainMismatch
         }
+        try requireTrustedCertificate(receiveRequest.keyCertificate, expectedAccountId: receiveRequest.accountId)
         try rejectReusedReceiveRequest(receiveRequest.paymentRequestId)
         let createdAtMs = clock()
         let requestedAmount = try OfflineNorito.parseCanonicalNumeric(receiveRequest.amount)
@@ -948,8 +1001,10 @@ public final class OfflineNoteV2Wallet {
         }
 
         let senderCertificate = selected[0].keyCertificate
+        try requireTrustedCertificate(senderCertificate, expectedAccountId: accountId)
         let senderCertificateHash = try senderCertificate.payloadHash()
         for note in selected {
+            try requireTrustedCertificate(note.keyCertificate, expectedAccountId: accountId)
             if try note.keyCertificate.payloadHash() != senderCertificateHash {
                 throw OfflineNoteV2WalletError.inputCertificateMismatch
             }
@@ -1025,6 +1080,7 @@ public final class OfflineNoteV2Wallet {
         )
         let audit = try draft.replacingRecursiveProof(proofProvider.proveAudit(draft))
         try audit.validateProofBinding()
+        try requireTrustedAuditCertificates(audit)
         guard try proofVerifier.verifyAudit(audit) else {
             throw OfflineNoteV2WalletError.proofVerificationFailed
         }
@@ -1116,6 +1172,7 @@ public final class OfflineNoteV2Wallet {
         guard current.state == .spendable else {
             throw OfflineNoteV2WalletError.invalidState
         }
+        try requireTrustedCertificate(current.keyCertificate, expectedAccountId: current.accountId)
         let inputNullifier = try deriveInputNullifier(current)
         let draft = try OfflineNoteRedeemV2(
             sourceNoteCommitment: current.noteCommitment,
@@ -1128,6 +1185,7 @@ public final class OfflineNoteV2Wallet {
         )
         let redemption = try draft.replacingRecursiveProof(proofProvider.proveRedeem(draft))
         try redemption.validateProofBinding()
+        try requireTrustedCertificate(redemption.senderKeyCertificate, expectedAccountId: current.accountId)
         guard try proofVerifier.verifyRedeem(redemption) else {
             throw OfflineNoteV2WalletError.proofVerificationFailed
         }
@@ -1230,6 +1288,33 @@ public final class OfflineNoteV2Wallet {
         else {
             throw OfflineNoteV2PaymentTokenCodecError.tokenIdMismatch
         }
+        try requireTrustedAuditCertificates(paymentToken.audit)
+    }
+
+    private func requireTrustedAuditCertificates(_ audit: OfflineNoteAuditBundleV2) throws {
+        try requireTrustedCertificate(audit.senderKeyCertificate)
+        let senderHash = try audit.senderKeyCertificate.payloadHash()
+        for claim in audit.inputClaims {
+            guard claim.keyCertificatePayloadHash == senderHash else {
+                throw OfflineNoteV2WalletError.certificateVerificationFailed
+            }
+            try requireTrustedCertificate(audit.senderKeyCertificate, expectedAccountId: assetAccount(from: claim.assetId))
+        }
+        for output in audit.outputClaims {
+            try requireTrustedCertificate(output.keyCertificate, expectedAccountId: assetAccount(from: output.assetId))
+        }
+    }
+
+    private func requireTrustedCertificate(
+        _ certificate: OfflineNoteKeyCertificateV2,
+        expectedAccountId: String? = nil
+    ) throws {
+        if let expectedAccountId, certificate.accountId != expectedAccountId {
+            throw OfflineNoteV2WalletError.certificateVerificationFailed
+        }
+        guard try certificateVerifier.verifyCertificate(certificate) else {
+            throw OfflineNoteV2WalletError.certificateVerificationFailed
+        }
     }
 
     private func random32() throws -> Data {
@@ -1265,4 +1350,12 @@ private func walletAssetId(assetDefinitionId: String, accountId: String) -> Stri
 
 private func assetDefinition(from assetIdOrDefinition: String) -> String {
     assetIdOrDefinition.split(separator: "#", maxSplits: 1).first.map(String.init) ?? assetIdOrDefinition
+}
+
+private func assetAccount(from assetId: String) -> String? {
+    let parts = assetId.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+    guard parts.count == 2 else {
+        return nil
+    }
+    return String(parts[1]).components(separatedBy: "#dataspace:").first
 }

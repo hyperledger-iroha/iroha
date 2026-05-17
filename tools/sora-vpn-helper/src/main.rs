@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)]
+
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::{
@@ -27,19 +29,20 @@ use iroha_crypto::{
         RuntimeParams, build_client_hello, client_handle_relay_hello,
     },
 };
-use iroha_data_model::{
-    Encode,
-    soranet::vpn::{
-        VPN_CELL_LEN, VPN_HELPER_TICKET_LEN, VPN_HELPER_TICKET_MAGIC,
-        VPN_USAGE_VOUCHER_CONTROL_MAGIC, VpnCellClassV1, VpnCellError, VpnCellFlagsV1,
-        VpnCellHeaderV1, VpnCellV1, VpnFlowLabelV1, VpnHelperTicketV1, VpnPaddedCellV1,
-        VpnTariffV1, VpnUsageVoucherBodyV1, VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1,
-    },
+use iroha_data_model::soranet::vpn::{
+    VPN_CELL_LEN, VPN_HELPER_TICKET_LEN, VPN_HELPER_TICKET_MAGIC, VPN_USAGE_VOUCHER_CONTROL_MAGIC,
+    VpnCellClassV1, VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1, VpnCellV1, VpnFlowLabelV1,
+    VpnHelperTicketV1, VpnPaddedCellV1, VpnTariffV1, VpnUsageVoucherBodyV1,
+    VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1,
 };
 use nix::{
     errno::Errno,
     sys::signal::{self, Signal},
     unistd::Pid,
+};
+use norito::{
+    codec::{Decode, Encode},
+    json::{self, Map as JsonMap, Number as JsonNumber, Value as JsonValue},
 };
 use quinn::{
     self, ClientConfig, ConnectError, Connection, ConnectionError, Endpoint, IdleTimeout,
@@ -53,7 +56,6 @@ use rustls::{
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
     pki_types::CertificateDer,
 };
-use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use tokio::{
@@ -72,6 +74,8 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 const CONTROLLER_KIND: &str = "linux-helperd";
 const PACKET_LEN_PREFIX_BYTES: usize = 2;
+const CONNECT_PAYLOAD_FRAME_MAGIC: &[u8; 8] = b"SVPNCP1\0";
+const STATE_FILE_FRAME_MAGIC: &[u8; 8] = b"SVPNST1\0";
 const DEFAULT_ROUTE_CMD: &str = "ip";
 const DEFAULT_ROUTE_SHOW_PREFIX: [&str; 2] = ["-o", "route"];
 const DEFAULT_USAGE_VOUCHER_INTERVAL_MS: u64 = 1_000;
@@ -113,8 +117,7 @@ enum Command {
     RunPacketEngine,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default)]
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 struct State {
     installed: bool,
     active: bool,
@@ -155,51 +158,39 @@ impl Default for State {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 struct ConnectPayload {
     session_id: String,
     relay_endpoint: String,
     exit_class: String,
     helper_ticket_hex: String,
-    #[serde(alias = "relay_tls_spki_sha256_hex")]
     relay_tls_spki_sha256_hex: String,
-    #[serde(alias = "padding_budget_ms")]
     padding_budget_ms: u16,
-    #[serde(default)]
     route_pushes: Vec<String>,
-    #[serde(default)]
     excluded_routes: Vec<String>,
-    #[serde(default)]
     dns_servers: Vec<String>,
-    #[serde(default)]
     tunnel_addresses: Vec<String>,
     mtu_bytes: u64,
-    #[serde(default)]
     lease_secs: u64,
-    #[serde(default)]
     lease_fee_nanos: u64,
-    #[serde(default)]
     metering_private_key_seed_hex: Option<String>,
-    #[serde(default = "default_usage_voucher_interval_ms")]
     usage_voucher_interval_ms: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq, Default)]
 struct AppliedNetworkState {
     interface_name: String,
     dns_backend: Option<DnsBackendState>,
     excluded_route_snapshots: Vec<ExcludedRouteSnapshot>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 enum DnsBackendState {
     Resolved { interface_name: String },
     ResolvConf { backup_path: String },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 struct ExcludedRouteSnapshot {
     cidr: String,
     family: IpFamily,
@@ -208,7 +199,7 @@ struct ExcludedRouteSnapshot {
 
 type RouteViaDev = (Option<String>, Option<String>);
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Encode, Decode, PartialEq, Eq)]
 enum IpFamily {
     V4,
     V6,
@@ -226,6 +217,13 @@ impl IpFamily {
         match self {
             Self::V4 => 32,
             Self::V6 => 128,
+        }
+    }
+
+    const fn as_json_label(self) -> &'static str {
+        match self {
+            Self::V4 => "V4",
+            Self::V6 => "V6",
         }
     }
 }
@@ -421,8 +419,7 @@ fn connect_command(raw_payload: Option<&str>) -> Result<(), ControllerError> {
     persist_state(&state)?;
 
     let current_exe = env::current_exe()?;
-    let payload_json = serde_json::to_string(&payload)
-        .map_err(|error| ControllerError::InvalidPayload(error.to_string()))?;
+    let payload_frame = encode_connect_payload_frame(&payload);
     let mut child = ProcessCommand::new(current_exe)
         .arg("run-tunnel")
         .stdin(Stdio::piped())
@@ -433,7 +430,7 @@ fn connect_command(raw_payload: Option<&str>) -> Result<(), ControllerError> {
         .stdin
         .as_mut()
         .ok_or_else(|| ControllerError::State("failed to open worker stdin".to_owned()))?
-        .write_all(payload_json.as_bytes())?;
+        .write_all(payload_frame.as_slice())?;
     let child_pid = child.id();
     state.pid = Some(child_pid);
     persist_state(&state)?;
@@ -2087,10 +2084,10 @@ fn current_state() -> State {
 
 fn load_state() -> State {
     let path = state_path();
-    let Ok(raw) = fs::read_to_string(path) else {
+    let Ok(bytes) = fs::read(path) else {
         return State::default();
     };
-    serde_json::from_str::<State>(&raw).unwrap_or_default()
+    decode_state_frame(&bytes).unwrap_or_default()
 }
 
 fn persist_state(state: &State) -> Result<(), ControllerError> {
@@ -2098,17 +2095,177 @@ fn persist_state(state: &State) -> Result<(), ControllerError> {
     if let Some(parent) = Path::new(&path).parent() {
         fs::create_dir_all(parent)?;
     }
-    let bytes = serde_json::to_vec(state)
-        .map_err(|error| ControllerError::State(format!("failed to encode state: {error}")))?;
+    let bytes = encode_state_frame(state);
     write_private_file(path.as_path(), &bytes)?;
     Ok(())
 }
 
 fn print_state(state: &State) -> Result<(), ControllerError> {
-    let rendered = serde_json::to_string(state)
+    let rendered = json::to_json(&state_json_value(state))
         .map_err(|error| ControllerError::State(format!("failed to render state: {error}")))?;
     println!("{rendered}");
     Ok(())
+}
+
+fn encode_state_frame(state: &State) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(STATE_FILE_FRAME_MAGIC.len() + 256);
+    bytes.extend_from_slice(STATE_FILE_FRAME_MAGIC);
+    bytes.extend_from_slice(&state.encode());
+    bytes
+}
+
+fn decode_state_frame(bytes: &[u8]) -> Result<State, ControllerError> {
+    if !bytes.starts_with(STATE_FILE_FRAME_MAGIC) {
+        return Err(ControllerError::State(
+            "state file is not a v1 Norito state frame".to_owned(),
+        ));
+    }
+    let mut payload = &bytes[STATE_FILE_FRAME_MAGIC.len()..];
+    let state = State::decode(&mut payload)
+        .map_err(|error| ControllerError::State(format!("failed to decode state: {error}")))?;
+    if !payload.is_empty() {
+        return Err(ControllerError::State(
+            "state file has trailing bytes after Norito payload".to_owned(),
+        ));
+    }
+    Ok(state)
+}
+
+fn encode_connect_payload_frame(payload: &ConnectPayload) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(CONNECT_PAYLOAD_FRAME_MAGIC.len() + 512);
+    bytes.extend_from_slice(CONNECT_PAYLOAD_FRAME_MAGIC);
+    bytes.extend_from_slice(&payload.encode());
+    bytes
+}
+
+fn decode_connect_payload_frame(bytes: &[u8]) -> Result<ConnectPayload, ControllerError> {
+    if !bytes.starts_with(CONNECT_PAYLOAD_FRAME_MAGIC) {
+        return Err(ControllerError::InvalidPayload(
+            "worker stdin is not a v1 Norito connect-payload frame".to_owned(),
+        ));
+    }
+    let mut payload = &bytes[CONNECT_PAYLOAD_FRAME_MAGIC.len()..];
+    let decoded = ConnectPayload::decode(&mut payload).map_err(|error| {
+        ControllerError::InvalidPayload(format!("failed to decode connect payload: {error}"))
+    })?;
+    if !payload.is_empty() {
+        return Err(ControllerError::InvalidPayload(
+            "connect-payload frame has trailing bytes".to_owned(),
+        ));
+    }
+    validate_connect_payload(decoded)
+}
+
+fn state_json_value(state: &State) -> JsonValue {
+    let mut map = JsonMap::new();
+    insert_bool(&mut map, "installed", state.installed);
+    insert_bool(&mut map, "active", state.active);
+    insert_string(&mut map, "controller_kind", &state.controller_kind);
+    insert_string_option(&mut map, "interface_name", state.interface_name.as_deref());
+    insert_string_option(
+        &mut map,
+        "network_service",
+        state.network_service.as_deref(),
+    );
+    insert_string(&mut map, "version", &state.version);
+    insert_string_option(
+        &mut map,
+        "controller_path",
+        state.controller_path.as_deref(),
+    );
+    insert_bool(&mut map, "repair_required", state.repair_required);
+    insert_u64(&mut map, "bytes_in", state.bytes_in);
+    insert_u64(&mut map, "bytes_out", state.bytes_out);
+    insert_string(&mut map, "message", &state.message);
+    match state.pid {
+        Some(pid) => insert_u64(&mut map, "pid", u64::from(pid)),
+        None => {
+            map.insert("pid".to_owned(), JsonValue::Null);
+        }
+    }
+    insert_string_option(&mut map, "session_id", state.session_id.as_deref());
+    insert_string_option(&mut map, "relay_endpoint", state.relay_endpoint.as_deref());
+    map.insert(
+        "applied_network".to_owned(),
+        state
+            .applied_network
+            .as_ref()
+            .map(applied_network_json_value)
+            .unwrap_or(JsonValue::Null),
+    );
+    JsonValue::Object(map)
+}
+
+fn applied_network_json_value(state: &AppliedNetworkState) -> JsonValue {
+    let mut map = JsonMap::new();
+    insert_string(&mut map, "interface_name", &state.interface_name);
+    map.insert(
+        "dns_backend".to_owned(),
+        state
+            .dns_backend
+            .as_ref()
+            .map(dns_backend_json_value)
+            .unwrap_or(JsonValue::Null),
+    );
+    map.insert(
+        "excluded_route_snapshots".to_owned(),
+        JsonValue::Array(
+            state
+                .excluded_route_snapshots
+                .iter()
+                .map(excluded_route_snapshot_json_value)
+                .collect(),
+        ),
+    );
+    JsonValue::Object(map)
+}
+
+fn dns_backend_json_value(state: &DnsBackendState) -> JsonValue {
+    let mut map = JsonMap::new();
+    match state {
+        DnsBackendState::Resolved { interface_name } => {
+            insert_string(&mut map, "kind", "resolved");
+            insert_string(&mut map, "interface_name", interface_name);
+        }
+        DnsBackendState::ResolvConf { backup_path } => {
+            insert_string(&mut map, "kind", "resolv-conf");
+            insert_string(&mut map, "backup_path", backup_path);
+        }
+    }
+    JsonValue::Object(map)
+}
+
+fn excluded_route_snapshot_json_value(snapshot: &ExcludedRouteSnapshot) -> JsonValue {
+    let mut map = JsonMap::new();
+    insert_string(&mut map, "cidr", &snapshot.cidr);
+    insert_string(&mut map, "family", snapshot.family.as_json_label());
+    insert_string_option(
+        &mut map,
+        "previous_route",
+        snapshot.previous_route.as_deref(),
+    );
+    JsonValue::Object(map)
+}
+
+fn insert_string(map: &mut JsonMap, key: &str, value: &str) {
+    map.insert(key.to_owned(), JsonValue::String(value.to_owned()));
+}
+
+fn insert_string_option(map: &mut JsonMap, key: &str, value: Option<&str>) {
+    map.insert(
+        key.to_owned(),
+        value
+            .map(|value| JsonValue::String(value.to_owned()))
+            .unwrap_or(JsonValue::Null),
+    );
+}
+
+fn insert_bool(map: &mut JsonMap, key: &str, value: bool) {
+    map.insert(key.to_owned(), JsonValue::Bool(value));
+}
+
+fn insert_u64(map: &mut JsonMap, key: &str, value: u64) {
+    map.insert(key.to_owned(), JsonValue::Number(JsonNumber::from(value)));
 }
 
 fn state_path() -> PathBuf {
@@ -2119,12 +2276,12 @@ fn state_path() -> PathBuf {
 
 fn default_state_path() -> PathBuf {
     if let Some(runtime_dir) = env::var_os("XDG_RUNTIME_DIR") {
-        return PathBuf::from(runtime_dir).join("sora-vpn-controller/state.json");
+        return PathBuf::from(runtime_dir).join("sora-vpn-controller/state.norito");
     }
     if let Some(home) = env::var_os("HOME") {
-        return PathBuf::from(home).join(".local/state/sora-vpn-controller/state.json");
+        return PathBuf::from(home).join(".local/state/sora-vpn-controller/state.norito");
     }
-    PathBuf::from("/var/lib/sora-vpn-controller/state.json")
+    PathBuf::from("/var/lib/sora-vpn-controller/state.norito")
 }
 
 fn write_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -2246,8 +2403,62 @@ fn parse_fixed_hex_32(value: &str, label: &str) -> Result<[u8; 32], ControllerEr
 
 fn parse_connect_payload(raw_payload: Option<&str>) -> Result<ConnectPayload, ControllerError> {
     let raw_payload = raw_payload.ok_or(ControllerError::MissingPayload)?;
-    let payload = serde_json::from_str::<ConnectPayload>(raw_payload)
+    let value: JsonValue = json::from_str(raw_payload)
         .map_err(|error| ControllerError::InvalidPayload(error.to_string()))?;
+    let object = value.as_object().ok_or_else(|| {
+        ControllerError::InvalidPayload("connect payload must be a JSON object".to_owned())
+    })?;
+    let payload = ConnectPayload {
+        session_id: require_json_string(object, &["sessionId", "session_id"], "sessionId")?,
+        relay_endpoint: require_json_string(
+            object,
+            &["relayEndpoint", "relay_endpoint"],
+            "relayEndpoint",
+        )?,
+        exit_class: optional_json_string(object, &["exitClass", "exit_class"])?.unwrap_or_default(),
+        helper_ticket_hex: require_json_string(
+            object,
+            &["helperTicketHex", "helper_ticket_hex"],
+            "helperTicketHex",
+        )?,
+        relay_tls_spki_sha256_hex: require_json_string(
+            object,
+            &["relayTlsSpkiSha256Hex", "relay_tls_spki_sha256_hex"],
+            "relayTlsSpkiSha256Hex",
+        )?,
+        padding_budget_ms: require_json_u16(
+            object,
+            &["paddingBudgetMs", "padding_budget_ms"],
+            "paddingBudgetMs",
+        )?,
+        route_pushes: optional_json_string_array(object, &["routePushes", "route_pushes"])?,
+        excluded_routes: optional_json_string_array(
+            object,
+            &["excludedRoutes", "excluded_routes"],
+        )?,
+        dns_servers: optional_json_string_array(object, &["dnsServers", "dns_servers"])?,
+        tunnel_addresses: optional_json_string_array(
+            object,
+            &["tunnelAddresses", "tunnel_addresses"],
+        )?,
+        mtu_bytes: require_json_u64(object, &["mtuBytes", "mtu_bytes"], "mtuBytes")?,
+        lease_secs: optional_json_u64(object, &["leaseSecs", "lease_secs"])?.unwrap_or_default(),
+        lease_fee_nanos: optional_json_u64(object, &["leaseFeeNanos", "lease_fee_nanos"])?
+            .unwrap_or_default(),
+        metering_private_key_seed_hex: optional_json_string(
+            object,
+            &["meteringPrivateKeySeedHex", "metering_private_key_seed_hex"],
+        )?,
+        usage_voucher_interval_ms: optional_json_u64(
+            object,
+            &["usageVoucherIntervalMs", "usage_voucher_interval_ms"],
+        )?
+        .unwrap_or_else(default_usage_voucher_interval_ms),
+    };
+    validate_connect_payload(payload)
+}
+
+fn validate_connect_payload(payload: ConnectPayload) -> Result<ConnectPayload, ControllerError> {
     if payload.session_id.trim().is_empty() {
         return Err(ControllerError::InvalidPayload(
             "sessionId must not be empty".to_owned(),
@@ -2286,9 +2497,102 @@ fn parse_connect_payload(raw_payload: Option<&str>) -> Result<ConnectPayload, Co
 }
 
 fn read_connect_payload_from_stdin() -> Result<ConnectPayload, ControllerError> {
-    let mut raw_payload = String::new();
-    io::stdin().read_to_string(&mut raw_payload)?;
-    parse_connect_payload(Some(raw_payload.trim()))
+    let mut raw_payload = Vec::new();
+    io::stdin().read_to_end(&mut raw_payload)?;
+    decode_connect_payload_frame(&raw_payload)
+}
+
+fn json_field<'a>(object: &'a JsonMap, keys: &[&str]) -> Option<&'a JsonValue> {
+    keys.iter().find_map(|key| object.get(*key))
+}
+
+fn require_json_string(
+    object: &JsonMap,
+    keys: &[&str],
+    label: &str,
+) -> Result<String, ControllerError> {
+    optional_json_string(object, keys)?.ok_or_else(|| {
+        ControllerError::InvalidPayload(format!("{label} must be a string and must be present"))
+    })
+}
+
+fn optional_json_string(
+    object: &JsonMap,
+    keys: &[&str],
+) -> Result<Option<String>, ControllerError> {
+    let Some(value) = json_field(object, keys) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    value
+        .as_str()
+        .map(|value| Some(value.to_owned()))
+        .ok_or_else(|| ControllerError::InvalidPayload(format!("{} must be a string", keys[0])))
+}
+
+fn require_json_u16(object: &JsonMap, keys: &[&str], label: &str) -> Result<u16, ControllerError> {
+    let value = require_json_u64(object, keys, label)?;
+    u16::try_from(value)
+        .map_err(|_| ControllerError::InvalidPayload(format!("{label} must fit into a u16")))
+}
+
+fn require_json_u64(object: &JsonMap, keys: &[&str], label: &str) -> Result<u64, ControllerError> {
+    optional_json_u64(object, keys)?.ok_or_else(|| {
+        ControllerError::InvalidPayload(format!("{label} must be an unsigned integer and present"))
+    })
+}
+
+fn optional_json_u64(object: &JsonMap, keys: &[&str]) -> Result<Option<u64>, ControllerError> {
+    let Some(value) = json_field(object, keys) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    if let Some(value) = value.as_u64() {
+        return Ok(Some(value));
+    }
+    if let Some(raw) = value.as_str() {
+        return raw.parse::<u64>().map(Some).map_err(|error| {
+            ControllerError::InvalidPayload(format!(
+                "{} must be an unsigned integer: {error}",
+                keys[0]
+            ))
+        });
+    }
+    Err(ControllerError::InvalidPayload(format!(
+        "{} must be an unsigned integer",
+        keys[0]
+    )))
+}
+
+fn optional_json_string_array(
+    object: &JsonMap,
+    keys: &[&str],
+) -> Result<Vec<String>, ControllerError> {
+    let Some(value) = json_field(object, keys) else {
+        return Ok(Vec::new());
+    };
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    let Some(values) = value.as_array() else {
+        return Err(ControllerError::InvalidPayload(format!(
+            "{} must be an array of strings",
+            keys[0]
+        )));
+    };
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            value.as_str().map(ToOwned::to_owned).ok_or_else(|| {
+                ControllerError::InvalidPayload(format!("{}[{index}] must be a string", keys[0]))
+            })
+        })
+        .collect()
 }
 
 fn parse_multiaddr(addr: &str) -> Result<ParsedMultiaddr, ControllerError> {
@@ -2566,6 +2870,37 @@ mod tests {
     }
 
     #[test]
+    fn connect_payload_worker_frame_roundtrips_as_norito() {
+        let payload = parse_connect_payload(Some(
+            r#"{"session_id":"session-1","relay_endpoint":"/ip4/127.0.0.1/udp/7777/quic","exit_class":"standard","helper_ticket_hex":"aa","relay_tls_spki_sha256_hex":"abababababababababababababababababababababababababababababababab","padding_budget_ms":15,"tunnel_addresses":["10.208.0.2/32"],"mtu_bytes":1280}"#,
+        ))
+        .expect("payload");
+        let frame = encode_connect_payload_frame(&payload);
+
+        assert!(frame.starts_with(CONNECT_PAYLOAD_FRAME_MAGIC));
+        assert_eq!(
+            decode_connect_payload_frame(&frame).expect("decode frame"),
+            payload
+        );
+    }
+
+    #[test]
+    fn state_frame_roundtrips_as_norito() {
+        let state = State {
+            active: true,
+            session_id: Some("session-1".to_owned()),
+            relay_endpoint: Some("/ip4/127.0.0.1/udp/7777/quic".to_owned()),
+            bytes_in: 7,
+            bytes_out: 9,
+            ..State::default()
+        };
+        let frame = encode_state_frame(&state);
+
+        assert!(frame.starts_with(STATE_FILE_FRAME_MAGIC));
+        assert_eq!(decode_state_frame(&frame).expect("decode state"), state);
+    }
+
+    #[test]
     fn decode_hex_accepts_prefixed_values() {
         let decoded = decode_hex("0x0A0b").expect("hex");
         assert_eq!(decoded, vec![0x0A, 0x0B]);
@@ -2616,19 +2951,13 @@ mod tests {
             tariff,
             expires_at_ms: 99_000,
         };
-        let raw_payload = serde_json::json!({
-            "sessionId": session_id,
-            "relayEndpoint": "/ip4/127.0.0.1/udp/7777/quic",
-            "exitClass": "standard",
-            "helperTicketHex": ticket.to_hex(&[0xAA; 32]),
-            "relayTlsSpkiSha256Hex": "ab".repeat(32),
-            "paddingBudgetMs": 15,
-            "tunnelAddresses": ["10.208.0.2/32"],
-            "mtuBytes": 1280,
-            "meteringPrivateKeySeedHex": "66".repeat(32),
-            "usageVoucherIntervalMs": 1
-        });
-        let payload = parse_connect_payload(Some(&raw_payload.to_string())).expect("payload");
+        let raw_payload = format!(
+            r#"{{"sessionId":"{session_id}","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"{}","relayTlsSpkiSha256Hex":"{}","paddingBudgetMs":15,"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280,"meteringPrivateKeySeedHex":"{}","usageVoucherIntervalMs":1}}"#,
+            ticket.to_hex(&[0xAA; 32]),
+            "ab".repeat(32),
+            "66".repeat(32)
+        );
+        let payload = parse_connect_payload(Some(&raw_payload)).expect("payload");
         let mut signer = UsageVoucherSigner::from_payload(&payload)
             .expect("signer")
             .expect("enabled signer");
@@ -2669,19 +2998,13 @@ mod tests {
             },
             expires_at_ms: 99_000,
         };
-        let raw_payload = serde_json::json!({
-            "sessionId": session_id,
-            "relayEndpoint": "/ip4/127.0.0.1/udp/7777/quic",
-            "exitClass": "standard",
-            "helperTicketHex": ticket.to_hex(&[0xAA; 32]),
-            "relayTlsSpkiSha256Hex": "ab".repeat(32),
-            "paddingBudgetMs": 15,
-            "tunnelAddresses": ["10.208.0.2/32"],
-            "mtuBytes": 1280,
-            "meteringPrivateKeySeedHex": "77".repeat(32),
-            "usageVoucherIntervalMs": 1
-        });
-        let payload = parse_connect_payload(Some(&raw_payload.to_string())).expect("payload");
+        let raw_payload = format!(
+            r#"{{"sessionId":"{session_id}","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"{}","relayTlsSpkiSha256Hex":"{}","paddingBudgetMs":15,"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280,"meteringPrivateKeySeedHex":"{}","usageVoucherIntervalMs":1}}"#,
+            ticket.to_hex(&[0xAA; 32]),
+            "ab".repeat(32),
+            "77".repeat(32)
+        );
+        let payload = parse_connect_payload(Some(&raw_payload)).expect("payload");
 
         let error = match UsageVoucherSigner::from_payload(&payload) {
             Ok(_) => panic!("wrong seed must fail"),
@@ -2798,7 +3121,7 @@ mod tests {
 
     #[test]
     fn cli_rejects_run_packet_engine_payload_argument() {
-        let payload = r#"{"sessionId":"session-1","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","relayTlsSpkiSha256Hex":"abababababababababababababababababababababababababababababababab","paddingBudgetMs":15,"routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280,"stateFilePath":"/tmp/state.json","packetEnginePath":"/tmp/engine","appGroupId":"group.org.sora.wallet.demo.vpn"}"#;
+        let payload = r#"{"sessionId":"session-1","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","relayTlsSpkiSha256Hex":"abababababababababababababababababababababababababababababababab","paddingBudgetMs":15,"routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280,"stateFilePath":"/tmp/state.norito","packetEnginePath":"/tmp/engine","appGroupId":"group.org.sora.wallet.demo.vpn"}"#;
         Cli::try_parse_from(["sora-vpn-controller", "run-packet-engine", payload])
             .expect_err("hidden worker payloads must be read from stdin");
         let cli = Cli::try_parse_from(["sora-vpn-controller", "run-packet-engine"]).expect("parse");

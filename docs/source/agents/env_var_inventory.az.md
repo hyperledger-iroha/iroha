@@ -667,9 +667,6 @@ _Sonuncu dəfə `python3 scripts/inventory_env_toggles.py --json docs/source/age
 - test: sandıqlar/ivm/testlər/i18n.rs:13 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 - test: sandıqlar/ivm/testlər/i18n.rs:71 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 
-## MAX_DEGREE (məhsul: 1)
-
-- məhsul: qutular/iroha_core/src/zk.rs:106 — `let current = std::env::var("MAX_DEGREE")`
 
 ## MOCHI_CONFIG (məhsul: 1)
 

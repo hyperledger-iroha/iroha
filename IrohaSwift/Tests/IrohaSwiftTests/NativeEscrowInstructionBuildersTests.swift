@@ -63,7 +63,7 @@ final class NativeEscrowInstructionBuildersTests: XCTestCase {
         let proof: [String: Any] = [
             "backend": "halo2/ipa",
             "proof": "proof-bytes",
-            "vk_inline": "vk-bytes",
+            "vk_ref": ["backend": "halo2/ipa", "name": "vk_escrow"],
         ]
         let open = try object(from: NativeEscrowInstructionBuilders.openAnonymousAssetEscrow(
             escrowId: "anonymous-escrow",

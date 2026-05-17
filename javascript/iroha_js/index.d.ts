@@ -750,11 +750,7 @@ export interface ConfidentialEncryptedPayloadInput {
 export interface ProofAttachmentInput {
   backend: string;
   proof: BinaryLike;
-  verifyingKeyRef?: VerifyingKeyIdLike | null;
-  verifyingKeyInline?: {
-    backend: string;
-    bytes: BinaryLike;
-  } | null;
+  verifyingKeyRef: VerifyingKeyIdLike;
   verifyingKeyCommitment?: BinaryLike | null;
   lanePrivacy?: {
     commitmentId: number;
@@ -6175,6 +6171,8 @@ export interface SorafsPinRegisterRequest {
   chunk_digest_sha3_256_hex?: string;
   chunkDigest?: string;
   chunk_digest?: string;
+  contentLength?: NumericLike;
+  content_length?: NumericLike;
   submittedEpoch?: NumericLike;
   submitted_epoch?: NumericLike;
   alias?: SorafsPinRegisterAliasInput | null;
@@ -6197,6 +6195,10 @@ export interface SorafsPinRegisterResponse {
   manifest_digest_hex: string;
   chunker_handle: string;
   submitted_epoch: number;
+  content_length: number;
+  pin_fee_nano: number;
+  pin_fee_asset_id: string;
+  pin_fee_treasury_account_id: string;
   alias: SorafsPinRegisterAliasRecord | null;
   successor_of_hex: string | null;
 }
@@ -6824,6 +6826,7 @@ export declare class ToriiHttpError extends Error {
     errorMessage?: string | null;
     bodyText?: string | null;
     bodyJson?: unknown;
+    details?: Record<string, unknown> | null;
   });
   readonly status: number;
   readonly statusText: string | null;
@@ -6833,6 +6836,7 @@ export declare class ToriiHttpError extends Error {
   readonly errorMessage: string | null;
   readonly bodyText: string | null;
   readonly bodyJson: unknown;
+  readonly details: Record<string, unknown> | null;
 }
 
 export declare class TransactionStatusError extends Error {

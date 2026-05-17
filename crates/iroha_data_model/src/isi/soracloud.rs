@@ -21,11 +21,9 @@ use crate::{
         FheExecutionPolicyV1, FheJobSpecV1, FheParamSetV1, SecretEnvelopeV1,
         SoraDeploymentBundleV1, SoraHfResourceProfileV1, SoraInrouHostCapabilityRecordV1,
         SoraInrouReplicaRuntimeStateV1, SoraModelHostCapabilityRecordV1,
-        SoraModelHostViolationKindV1, SoraModelPrivacyModeV1, SoraPrivateCompileProfileV1,
-        SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionStatusV1,
-        SoraPrivateInferenceSessionV1, SoraRuntimeReceiptV1, SoraServiceMailboxMessageV1,
+        SoraModelHostViolationKindV1, SoraRuntimeReceiptV1, SoraServiceMailboxMessageV1,
         SoraServiceRuntimeStateV1, SoraStateEncryptionV1, SoraStateMutationOperationV1,
-        SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
+        SoraUploadedModelBundleV1,
     },
     sorafs::pin_registry::StorageClass,
 };
@@ -1126,27 +1124,6 @@ impl PartialOrd for RegisterSoracloudUploadedModelBundle {
     }
 }
 
-/// Append one encrypted uploaded-model chunk into authoritative chain state.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct AppendSoracloudUploadedModelChunk {
-    /// Deterministic encrypted chunk metadata.
-    pub chunk: SoraUploadedModelChunkV1,
-    /// Provenance attestation over the chunk payload.
-    pub provenance: ManifestProvenance,
-}
-
-impl crate::seal::Instruction for AppendSoracloudUploadedModelChunk {}
-
-impl PartialOrd for AppendSoracloudUploadedModelChunk {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(encoded_order(self, other))
-    }
-}
-
 /// Seal an uploaded-model bundle and publish its artifact metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1166,8 +1143,6 @@ pub struct FinalizeSoracloudUploadedModelBundle {
     pub weight_version: String,
     /// Canonical uploaded-model bundle root.
     pub bundle_root: Hash,
-    /// Execution privacy mode exposed to apartments.
-    pub privacy_mode: SoraModelPrivacyModeV1,
     /// Artifact hash for the uploaded payload.
     pub weight_artifact_hash: Hash,
     /// Dataset reference or upload source label.
@@ -1185,122 +1160,6 @@ pub struct FinalizeSoracloudUploadedModelBundle {
 impl crate::seal::Instruction for FinalizeSoracloudUploadedModelBundle {}
 
 impl PartialOrd for FinalizeSoracloudUploadedModelBundle {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(encoded_order(self, other))
-    }
-}
-
-/// Admit a private compile profile for an uploaded-model bundle.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct AdmitSoracloudPrivateCompileProfile {
-    /// Service that owns the uploaded model.
-    pub service_name: Name,
-    /// Stable uploaded-model identifier.
-    pub model_id: String,
-    /// Version label pinned by the bundle.
-    pub weight_version: String,
-    /// Bundle root receiving the compile profile.
-    pub bundle_root: Hash,
-    /// Deterministic compile profile being admitted.
-    pub compile_profile: SoraPrivateCompileProfileV1,
-    /// Provenance attestation over the compile payload.
-    pub provenance: ManifestProvenance,
-}
-
-impl crate::seal::Instruction for AdmitSoracloudPrivateCompileProfile {}
-
-impl PartialOrd for AdmitSoracloudPrivateCompileProfile {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(encoded_order(self, other))
-    }
-}
-
-/// Explicitly bind an uploaded model version to an apartment.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct AllowSoracloudUploadedModel {
-    /// Apartment receiving the uploaded-model binding.
-    pub apartment_name: Name,
-    /// Service that owns the uploaded model.
-    pub service_name: Name,
-    /// Logical model name in the canonical registry plane.
-    pub model_name: String,
-    /// Stable uploaded-model identifier.
-    pub model_id: String,
-    /// Artifact identifier backing the binding.
-    pub artifact_id: String,
-    /// Version label pinned by the apartment.
-    pub weight_version: String,
-    /// Bundle root admitted for the apartment.
-    pub bundle_root: Hash,
-    /// Compile profile hash used for the private runtime.
-    pub compile_profile_hash: Hash,
-    /// Execution privacy mode bound to the apartment.
-    pub privacy_mode: SoraModelPrivacyModeV1,
-    /// Whether `allow_model_inference` must stay active.
-    pub require_model_inference: bool,
-    /// Provenance attestation over the allow payload.
-    pub provenance: ManifestProvenance,
-}
-
-impl crate::seal::Instruction for AllowSoracloudUploadedModel {}
-
-impl PartialOrd for AllowSoracloudUploadedModel {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(encoded_order(self, other))
-    }
-}
-
-/// Start an authoritative private inference session for an uploaded model.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct StartSoracloudPrivateInference {
-    /// Session metadata admitted for execution.
-    pub session: SoraPrivateInferenceSessionV1,
-    /// Provenance attestation over the session payload.
-    pub provenance: ManifestProvenance,
-}
-
-impl crate::seal::Instruction for StartSoracloudPrivateInference {}
-
-impl PartialOrd for StartSoracloudPrivateInference {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(encoded_order(self, other))
-    }
-}
-
-/// Record a deterministic checkpoint or output release for a private session.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct RecordSoracloudPrivateInferenceCheckpoint {
-    /// Stable session identifier being updated.
-    pub session_id: String,
-    /// New authoritative runtime status after the checkpoint is applied.
-    pub status: SoraPrivateInferenceSessionStatusV1,
-    /// Updated receipt root for the session.
-    pub receipt_root: Hash,
-    /// Total XOR nanos charged so far.
-    pub xor_cost_nanos: u128,
-    /// Deterministic checkpoint being published.
-    pub checkpoint: SoraPrivateInferenceCheckpointV1,
-}
-
-impl crate::seal::Instruction for RecordSoracloudPrivateInferenceCheckpoint {}
-
-impl PartialOrd for RecordSoracloudPrivateInferenceCheckpoint {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
@@ -1818,11 +1677,6 @@ impl_soracloud_decode_from_slice!(RegisterSoracloudUploadedModelBundle {
     provenance: ManifestProvenance,
 });
 
-impl_soracloud_decode_from_slice!(AppendSoracloudUploadedModelChunk {
-    chunk: SoraUploadedModelChunkV1,
-    provenance: ManifestProvenance,
-});
-
 impl_soracloud_decode_from_slice!(FinalizeSoracloudUploadedModelBundle {
     service_name: Name,
     model_name: String,
@@ -1830,49 +1684,12 @@ impl_soracloud_decode_from_slice!(FinalizeSoracloudUploadedModelBundle {
     artifact_id: String,
     weight_version: String,
     bundle_root: Hash,
-    privacy_mode: SoraModelPrivacyModeV1,
     weight_artifact_hash: Hash,
     dataset_ref: String,
     training_config_hash: Hash,
     reproducibility_hash: Hash,
     provenance_attestation_hash: Hash,
     provenance: ManifestProvenance,
-});
-
-impl_soracloud_decode_from_slice!(AdmitSoracloudPrivateCompileProfile {
-    service_name: Name,
-    model_id: String,
-    weight_version: String,
-    bundle_root: Hash,
-    compile_profile: SoraPrivateCompileProfileV1,
-    provenance: ManifestProvenance,
-});
-
-impl_soracloud_decode_from_slice!(AllowSoracloudUploadedModel {
-    apartment_name: Name,
-    service_name: Name,
-    model_name: String,
-    model_id: String,
-    artifact_id: String,
-    weight_version: String,
-    bundle_root: Hash,
-    compile_profile_hash: Hash,
-    privacy_mode: SoraModelPrivacyModeV1,
-    require_model_inference: bool,
-    provenance: ManifestProvenance,
-});
-
-impl_soracloud_decode_from_slice!(StartSoracloudPrivateInference {
-    session: SoraPrivateInferenceSessionV1,
-    provenance: ManifestProvenance,
-});
-
-impl_soracloud_decode_from_slice!(RecordSoracloudPrivateInferenceCheckpoint {
-    session_id: String,
-    status: SoraPrivateInferenceSessionStatusV1,
-    receipt_root: Hash,
-    xor_cost_nanos: u128,
-    checkpoint: SoraPrivateInferenceCheckpointV1,
 });
 
 impl_soracloud_decode_from_slice!(AdvanceSoracloudRollout {

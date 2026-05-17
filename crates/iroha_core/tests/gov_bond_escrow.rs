@@ -27,7 +27,7 @@ fn plain_ballot_locks_bond_into_escrow() {
     let alice_id = &*ALICE_ID;
     let bob_id = &*BOB_ID;
     let wonderland: iroha_data_model::domain::DomainId =
-        DomainId::try_new("wonderland", "universal").expect("domain");
+        iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain");
     // Build a minimal world with XOR-like asset and escrow account.
     let domain = Domain::new(wonderland.clone()).build(alice_id);
     let alice_account = iroha_data_model::account::Account::new(ALICE_ID.clone()).build(alice_id);

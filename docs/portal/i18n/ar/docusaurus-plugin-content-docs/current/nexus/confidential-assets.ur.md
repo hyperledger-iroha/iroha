@@ -234,7 +234,7 @@ Swift SDKs عبارة عن غراء JSON مفصل وتعليمات درع تنب
 - الحدود الصارمة (الافتراضيات القابلة للتكوين):
 -`max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`، `max_commitments_per_tx = 8`، `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`، `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` عدد كبير من تعليمات البراهين الحتمية لإجهاض البطاقة (تصدر بطاقات الاقتراع `proof verification exceeded timeout` بطاقة خطأ، `VerifyProof` تُرجع بطاقة خطأ).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - ضمان حيوية الحصص الإضافية: `max_proof_bytes_block`، `max_verify_calls_per_tx`، `max_verify_calls_per_block`، و`max_public_inputs` منشئو الكتل المرتبطون بالكرت؛ `reorg_depth_bound` (≥ `max_anchor_age_blocks`) التحكم في الاحتفاظ بنقاط التفتيش الحدودية.
 - وقت التشغيل لكل معاملة أو حدود لكل كتلة تتجاوز المعاملات رفض المعاملات، أخطاء `InvalidParameter` الحتمية تنبعث منها المعاملات وحالة دفتر الأستاذ دون تغيير.
 - Mempool `vk_id`، طول الإثبات، وعمر المرساة للمعاملات السرية للتصفية المسبقة، واستدعاء المدقق لاستخدام الموارد المحدود.
@@ -327,7 +327,7 @@ Swift SDKs عبارة عن غراء JSON مفصل وتعليمات درع تنب
    - ✅ مصافحة P2P `ConfidentialFeatureDigest` (ملخص الواجهة الخلفية + بصمات التسجيل) الإعلان عن کرتا ہے وعدم التطابق کو `HandshakeConfidentialMismatch` کے ذریعے فشل حتمي کرتا ہے.
    - ✅ مسارات التنفيذ السرية إزالة الذعر العقد والعقد غير المدعومة إضافة دور بوابة إضافة کیا گیا۔
    - ⚪ التحقق من ميزانيات المهلة ونقاط التفتيش الحدودية إعادة تنظيم حدود العمق فرض کرنا۔
-     - ✅ فرض ميزانيات مهلة التحقق ہوئے؛ `verify_timeout_ms` تجاوز البراهين السابقة والفشل الحتمي.
+     - Verification timeout budgets are telemetry/operator budgets only; proofs fail deterministically on size, gas, public input, policy, or anchor-age bounds.
      - ✅ نقاط التفتيش الحدودية اب `reorg_depth_bound` احترام کرتے ہیں، نافذة تكوين سے پرانے نقاط التفتيش تقليم کرتے ہوئے لقطات حتمية برقرار رکھتے ہیں۔
    - `AssetConfidentialPolicy`، سياسة ولايات ميكرونيزيا الموحدة، وتعليمات النعناع/النقل/الكشف، كل بوابات التنفيذ تقدم کریں.
    - رؤوس الكتل `conf_features` تلتزم بالتسجيل وتتباعد هضمات التسجيل/المعلمات حتى بعد رفض مشاركة المدقق.

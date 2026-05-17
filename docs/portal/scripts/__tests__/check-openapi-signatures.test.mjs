@@ -197,6 +197,53 @@ test('checkOpenApiSignatures allows opting out specific labels', async () => {
   assert.deepEqual(summary.checkedLabels, ['latest']);
 });
 
+test('checkOpenApiSignatures still validates unsigned label metadata', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openapi-signatures-allow-metadata-'));
+  const staticDir = join(tempRoot, 'static', 'openapi');
+  await mkdir(staticDir, {recursive: true});
+
+  const spec = Buffer.from('{"route":"/v1/current"}', 'utf8');
+  const sha = sha256Hex(spec);
+  const signature = signPayload(spec);
+  await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
+  await writeAsset(join(staticDir, 'versions', 'current', 'torii.json'), spec);
+  await writeJson(
+    join(staticDir, 'versions', 'current', 'manifest.json'),
+    buildManifest({
+      path: 'versions/current/torii.json',
+      payload: spec,
+      sha256: 'deadbeef',
+      signature: null,
+    }),
+  );
+
+  await writeJson(join(staticDir, 'versions.json'), {
+    versions: ['current'],
+    generatedAt: new Date().toISOString(),
+    entries: [
+      buildVersionEntry({
+        label: 'current',
+        path: 'versions/current/torii.json',
+        payload: spec,
+        sha256: sha,
+        manifestPath: 'versions/current/manifest.json',
+        signed: false,
+        signature: null,
+      }),
+    ],
+  });
+
+  await assert.rejects(
+    () =>
+      checkOpenApiSignatures({
+        staticDir,
+        versionsFile: join(staticDir, 'versions.json'),
+        allowUnsigned: ['current'],
+      }),
+    /manifest sha256 mismatch/i,
+  );
+});
+
 test('checkOpenApiSignatures rejects duplicate entry labels', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'openapi-signatures-duplicates-'));
   const staticDir = join(tempRoot, 'static', 'openapi');

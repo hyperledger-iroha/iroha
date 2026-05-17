@@ -987,7 +987,6 @@ fn prover_from_config(fastpq: &Fastpq) -> Result<fastpq_prover::Prover> {
 
 fn map_execution_mode(mode: FastpqExecutionMode) -> fastpq_prover::ExecutionMode {
     match mode {
-        FastpqExecutionMode::Auto => fastpq_prover::ExecutionMode::Auto,
         FastpqExecutionMode::Cpu => fastpq_prover::ExecutionMode::Cpu,
         FastpqExecutionMode::Gpu => fastpq_prover::ExecutionMode::Gpu,
     }
@@ -995,7 +994,6 @@ fn map_execution_mode(mode: FastpqExecutionMode) -> fastpq_prover::ExecutionMode
 
 fn map_poseidon_mode(mode: FastpqPoseidonMode) -> fastpq_prover::PoseidonExecutionMode {
     match mode {
-        FastpqPoseidonMode::Auto => fastpq_prover::PoseidonExecutionMode::Auto,
         FastpqPoseidonMode::Cpu => fastpq_prover::PoseidonExecutionMode::Cpu,
         FastpqPoseidonMode::Gpu => fastpq_prover::PoseidonExecutionMode::Gpu,
     }
@@ -1034,6 +1032,12 @@ mod tests {
         Fastpq {
             execution_mode: FastpqExecutionMode::Cpu,
             poseidon_mode: FastpqPoseidonMode::Cpu,
+            proof_sidecar_queue_cap:
+                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
+            proof_sidecar_max_bytes:
+                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
+            proof_sidecar_max_retries:
+                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
             device_class: None,
             chip_family: None,
             gpu_kind: None,

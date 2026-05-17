@@ -2430,12 +2430,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// Apply the active VK registry snapshot for verification-time binding.
     ///
     /// # Errors
-    /// Returns an error when a stored commitment does not match the inline verifying key bytes.
+    /// Returns an error when a stored commitment does not match the stored verifying key bytes.
     pub fn set_verifying_keys(
         &mut self,
         map: BTreeMap<VerifyingKeyId, VerifyingKeyRecord>,
     ) -> Result<(), ivm::VMError> {
-        // Early sanity: ensure commitments match inline keys when present.
+        // Early sanity: ensure commitments match stored key bytes when present.
         for rec in map.values() {
             if let Some(ref vk) = rec.key {
                 let c = crate::zk::hash_vk(vk);
@@ -5471,8 +5471,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         // in a VerifyProof instruction; this keeps ZK verify costs aligned with ISI gas.
         let backend: iroha_schema::Ident = "halo2/ipa".into();
         let proof = ProofBox::new(backend.clone(), payload.to_vec());
-        let vk = VerifyingKeyBox::new(backend.clone(), Vec::new());
-        let attachment = ProofAttachment::new_inline(backend, proof, vk);
+        let attachment = ProofAttachment::new_ref(
+            backend.clone(),
+            proof,
+            VerifyingKeyId::new(backend.as_str(), "ivm_gas_meter"),
+        );
         let instr = InstructionBox::from(DMZk::VerifyProof::new(attachment));
         crate::gas::meter_instruction(&instr)
     }
@@ -10147,10 +10150,10 @@ mod pointer_abi_tests {
     fn native_anonymous_escrow_syscalls_queue_expected_instructions() {
         fn proof_attachment(tag: &str) -> ProofAttachment {
             let backend: iroha_schema::Ident = "halo2/ipa/poly-open".into();
-            ProofAttachment::new_inline(
+            ProofAttachment::new_ref(
                 backend.clone(),
                 ProofBox::new(backend.clone(), tag.as_bytes().to_vec()),
-                VerifyingKeyBox::new(backend, Vec::new()),
+                VerifyingKeyId::new(backend.as_str(), tag),
             )
         }
 
@@ -16949,7 +16952,7 @@ seiyaku Vault {
     }
 
     #[test]
-    fn backend_label_prefers_inline_vk_and_prefix() {
+    fn backend_label_prefers_stored_vk_backend_and_prefix() {
         crate::test_alias::ensure();
         let mut rec = VerifyingKeyRecord::new_with_owner(
             1,
@@ -16961,12 +16964,12 @@ seiyaku Vault {
             [0u8; 32],
             [1u8; 32],
         );
-        // When no inline VK is present, use the circuit_id prefix before ':'
+        // When no stored VK bytes are present, use the circuit_id prefix before ':'
         assert_eq!(
             CoreHost::backend_label_for_record(&rec),
             "halo2/ipa".to_string()
         );
-        // Inline VK backend must override the circuit prefix
+        // Stored VK backend must override the circuit prefix.
         rec.key = Some(VerifyingKeyBox::new("custom/backend".into(), vec![1, 2, 3]));
         assert_eq!(
             CoreHost::backend_label_for_record(&rec),

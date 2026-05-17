@@ -59,6 +59,7 @@ import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 
 public final class HttpClientTransportTests {
+  private static final String VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00".repeat(248);
 
   private HttpClientTransportTests() {}
 
@@ -1629,6 +1630,7 @@ public final class HttpClientTransportTests {
     final VpnReceiptListResponse receipts = transport.listVpnReceipts(auth).join();
 
     assert sessionId.equals(session.sessionId()) : "VPN session id mismatch";
+    assert VPN_HELPER_TICKET_HEX.equals(session.helperTicketHex()) : "VPN helper ticket length mismatch";
     assert fetched.isPresent() : "VPN session lookup should be present";
     assert deleted.isPresent() : "VPN delete receipt should be present";
     assert "disconnected".equals(deleted.get().status()) : "VPN delete status mismatch";
@@ -2208,7 +2210,9 @@ public final class HttpClientTransportTests {
         + "\"dns_servers\":[\"1.1.1.1\"],"
         + "\"tunnel_addresses\":[\"10.208.0.2/32\"],"
         + "\"mtu_bytes\":1024,"
-        + "\"helper_ticket_hex\":\"cafe\","
+        + "\"helper_ticket_hex\":\""
+        + VPN_HELPER_TICKET_HEX
+        + "\","
         + "\"bytes_in\":0,"
         + "\"bytes_out\":0,"
         + "\"status\":\"active\""

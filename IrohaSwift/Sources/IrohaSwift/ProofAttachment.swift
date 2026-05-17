@@ -6,7 +6,6 @@ public enum ProofAttachmentError: Error, LocalizedError, Sendable {
     case missingVerifyingKey
     case emptyVerifyingKeyBackend
     case emptyVerifyingKeyName
-    case emptyVerifyingKeyBytes
     case invalidVerifyingKeySeparator
     case invalidVerifyingKeyCommitmentLength(expected: Int, actual: Int)
     case invalidEnvelopeHashLength(expected: Int, actual: Int)
@@ -18,13 +17,11 @@ public enum ProofAttachmentError: Error, LocalizedError, Sendable {
         case .emptyProof:
             return "Proof bytes must not be empty."
         case .missingVerifyingKey:
-            return "Proof attachment must include either verifyingKeyReference or verifyingKeyInline."
+            return "Proof attachment must include verifyingKeyReference."
         case .emptyVerifyingKeyBackend:
             return "Verifying key backend must not be empty."
         case .emptyVerifyingKeyName:
             return "Verifying key name must not be empty."
-        case .emptyVerifyingKeyBytes:
-            return "Verifying key bytes must not be empty."
         case .invalidVerifyingKeySeparator:
             return "Verifying key backend and name must not contain ':' characters."
         case let .invalidVerifyingKeyCommitmentLength(expected, actual):
@@ -46,19 +43,8 @@ public struct ProofAttachment: Sendable, Equatable {
         }
     }
 
-    public struct VerifyingKeyInline: Sendable, Equatable {
-        public let backend: String
-        public let bytes: Data
-
-        public init(backend: String, bytes: Data) {
-            self.backend = backend
-            self.bytes = bytes
-        }
-    }
-
     public enum VerifyingKey: Sendable, Equatable {
         case reference(VerifyingKeyReference)
-        case inline(VerifyingKeyInline)
     }
 
     public let backend: String
@@ -84,13 +70,6 @@ public struct ProofAttachment: Sendable, Equatable {
             try Self.ensureNoSeparator(normalizedRefBackend)
             try Self.ensureNoSeparator(normalizedName)
             normalizedKey = .reference(.init(backend: normalizedRefBackend, name: normalizedName))
-        case .inline(let inline):
-            let normalizedInlineBackend = try Self.normalizeNonEmpty(inline.backend, error: .emptyVerifyingKeyBackend)
-            guard !inline.bytes.isEmpty else {
-                throw ProofAttachmentError.emptyVerifyingKeyBytes
-            }
-            try Self.ensureNoSeparator(normalizedInlineBackend)
-            normalizedKey = .inline(.init(backend: normalizedInlineBackend, bytes: inline.bytes))
         }
         if let commitment = verifyingKeyCommitment {
             try Self.ensureFixedLength(commitment,
@@ -146,11 +125,6 @@ public struct ProofAttachment: Sendable, Equatable {
                 "backend": ref.backend,
                 "name": ref.name
             ]
-        case let .inline(inline):
-            payload["vk_inline"] = [
-                "backend": inline.backend,
-                "bytes_b64": inline.bytes.base64EncodedString()
-            ]
         }
         if let commitment = verifyingKeyCommitment {
             _ = try Self.fixedBytesPayload(commitment,
@@ -164,7 +138,7 @@ public struct ProofAttachment: Sendable, Equatable {
                                            makeError: ProofAttachmentError.invalidEnvelopeHashLength)
             payload["envelope_hash_hex"] = envelope.hexEncodedString()
         }
-        guard payload["vk_ref"] != nil || payload["vk_inline"] != nil else {
+        guard payload["vk_ref"] != nil else {
             throw ProofAttachmentError.missingVerifyingKey
         }
         return try JSONSerialization.data(withJSONObject: payload, options: [])
@@ -175,19 +149,13 @@ public struct ProofAttachment: Sendable, Equatable {
         writer.writeField(OfflineNorito.encodeString(backend))
         writer.writeField(Self.proofBoxPayload(backend: backend, bytes: proof))
 
-        let vkRef: VerifyingKeyReference?
-        let vkInline: VerifyingKeyInline?
+        let vkRef: VerifyingKeyReference
         switch verifyingKey {
         case let .reference(ref):
             vkRef = ref
-            vkInline = nil
-        case let .inline(inline):
-            vkInline = inline
-            vkRef = nil
         }
 
-        writer.writeField(try OfflineNorito.encodeOption(vkRef, encode: Self.verifyingKeyIdPayload))
-        writer.writeField(try OfflineNorito.encodeOption(vkInline, encode: Self.verifyingKeyBoxPayload))
+        writer.writeField(Self.verifyingKeyIdPayload(vkRef))
 
         let tail = envelopeHash != nil ? 2 : (verifyingKeyCommitment != nil ? 1 : 0)
         if tail >= 1 {
@@ -222,13 +190,6 @@ public struct ProofAttachment: Sendable, Equatable {
         var writer = OfflineNoritoWriter()
         writer.writeField(OfflineNorito.encodeString(ref.backend))
         writer.writeField(OfflineNorito.encodeString(ref.name))
-        return writer.data
-    }
-
-    private static func verifyingKeyBoxPayload(_ inline: VerifyingKeyInline) -> Data {
-        var writer = OfflineNoritoWriter()
-        writer.writeField(OfflineNorito.encodeString(inline.backend))
-        writer.writeField(OfflineNorito.encodeBytesVec(inline.bytes))
         return writer.data
     }
 

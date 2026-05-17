@@ -5,7 +5,7 @@ use iroha_data_model::{
         FastpqOperationKind, FastpqPublicInputs, FastpqRolePermissionDelta, FastpqStateTransition,
         FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY,
     },
-    nexus::{AxtFastpqBinding, AxtProofEnvelope},
+    nexus::{AxtFastpqBinding, AxtProofEnvelope, ProofBlob},
 };
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
 use sha2::Digest;
@@ -93,6 +93,71 @@ pub fn encode_axt_fastpq_payload(batch: &TransitionBatch, proof: Proof) -> Resul
         proof,
     };
     to_bytes(&payload).map_err(Error::Encode)
+}
+
+/// Decode and canonicalize the AXT binding already embedded in a `FastPQ` batch.
+///
+/// This helper never mutates the batch. It is intended for export paths that
+/// need to package proof material after the batch has already been bound before
+/// proof generation.
+///
+/// # Errors
+/// Returns [`Error::MissingMetadata`] when the batch carries no AXT binding and
+/// [`Error::InvalidAxtBinding`] when the embedded binding does not match the
+/// concrete batch metadata.
+pub fn embedded_axt_binding(batch: &TransitionBatch) -> Result<AxtFastpqBinding> {
+    let encoded = required_metadata(batch, AXT_FASTPQ_BINDING_METADATA_KEY)?;
+    let decoded: AxtFastpqBinding =
+        decode_from_bytes(encoded).map_err(|source| Error::TransferMetadataDecode { source })?;
+    let canonical = canonicalize_binding(&decoded)?;
+    verify_batch_matches_binding(batch, &canonical)?;
+    Ok(canonical)
+}
+
+/// Build an AXT proof envelope from an already AXT-bound batch and proof.
+///
+/// The batch must already contain canonical AXT metadata and the batch seal
+/// created before proof generation. This helper does not add or repair AXT
+/// binding metadata after the fact.
+///
+/// # Errors
+/// Returns an error when the embedded binding is missing/malformed, does not
+/// match the batch, or the proof payload cannot be encoded.
+pub fn axt_proof_envelope_from_bound_batch(
+    batch: &TransitionBatch,
+    proof: Proof,
+    manifest_root: [u8; 32],
+    da_commitment: Option<[u8; 32]>,
+) -> Result<AxtProofEnvelope> {
+    let binding = embedded_axt_binding(batch)?;
+    verify(batch, &proof)?;
+    Ok(AxtProofEnvelope {
+        dsid: DataSpaceId::new(binding.source_dsid),
+        manifest_root,
+        da_commitment,
+        proof: encode_axt_fastpq_payload(batch, proof)?,
+        fastpq_binding: Some(binding),
+        committed_amount: None,
+        amount_commitment: None,
+    })
+}
+
+/// Build an AXT proof blob from an already AXT-bound batch and proof.
+///
+/// # Errors
+/// Returns an error when envelope construction or Norito encoding fails.
+pub fn axt_proof_blob_from_bound_batch(
+    batch: &TransitionBatch,
+    proof: Proof,
+    manifest_root: [u8; 32],
+    da_commitment: Option<[u8; 32]>,
+    expiry_slot: Option<u64>,
+) -> Result<ProofBlob> {
+    let envelope = axt_proof_envelope_from_bound_batch(batch, proof, manifest_root, da_commitment)?;
+    Ok(ProofBlob {
+        payload: to_bytes(&envelope).map_err(Error::Encode)?,
+        expiry_slot,
+    })
 }
 
 /// Bind an already-captured FASTPQ batch to an AXT statement.
@@ -1474,6 +1539,52 @@ mod tests {
 
         let err = verify_axt_proof_envelope(&envelope).expect_err("raw proof must fail");
         assert!(matches!(err, Error::AxtProofPayloadDecode { .. }));
+    }
+
+    #[test]
+    fn axt_proof_blob_helper_accepts_already_bound_batch() {
+        let binding = sample_binding();
+        let batch = real_authorization_batch(&binding);
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+        let manifest_root = [0x42; 32];
+
+        let blob = axt_proof_blob_from_bound_batch(
+            &batch,
+            proof,
+            manifest_root,
+            Some([0x24; 32]),
+            Some(9),
+        )
+        .expect("AXT proof blob");
+        assert_eq!(blob.expiry_slot, Some(9));
+        assert!(iroha_data_model::nexus::proof_matches_manifest(
+            &blob,
+            DataSpaceId::new(binding.source_dsid),
+            manifest_root,
+        ));
+        let envelope: AxtProofEnvelope =
+            decode_from_bytes(&blob.payload).expect("decode AXT proof envelope");
+        verify_axt_proof_envelope(&envelope).expect("packaged AXT proof verifies");
+    }
+
+    #[test]
+    fn axt_proof_blob_helper_rejects_unbound_batch() {
+        let binding = sample_binding();
+        let mut batch = real_authorization_batch(&binding);
+        batch.metadata.remove(AXT_FASTPQ_BINDING_METADATA_KEY);
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+
+        let err = axt_proof_blob_from_bound_batch(&batch, proof, [0x42; 32], None, None)
+            .expect_err("unbound batch must fail");
+        assert!(
+            matches!(err, Error::MissingMetadata { key } if key == AXT_FASTPQ_BINDING_METADATA_KEY)
+        );
     }
 
     #[test]

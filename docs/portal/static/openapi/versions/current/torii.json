@@ -408,6 +408,45 @@
         ],
         "type": "object"
       },
+      "AxtErrorDetails": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "Stable AXT rejection code.",
+            "type": "string"
+          },
+          "dataspace": {
+            "description": "Dataspace id involved in the rejection.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane": {
+            "description": "Lane id involved in the rejection.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_min_handle_era": {
+            "description": "Minimum handle era a client should use for retry.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_min_sub_nonce": {
+            "description": "Minimum sub-nonce a client should use for retry.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reason": {
+            "description": "Human-readable AXT rejection label.",
+            "type": "string"
+          },
+          "snapshot_version": {
+            "description": "AXT policy snapshot version used to reject the request.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "BfvIdentifierPublicParameters": {
         "additionalProperties": false,
         "properties": {
@@ -1012,12 +1051,48 @@
         ],
         "type": "object"
       },
+      "ErrorDetails": {
+        "additionalProperties": false,
+        "properties": {
+          "axt": {
+            "$ref": "#/components/schemas/AxtErrorDetails"
+          },
+          "endpoint": {
+            "description": "Endpoint associated with throttling or version failures.",
+            "type": "string"
+          },
+          "queue": {
+            "$ref": "#/components/schemas/QueueErrorSnapshot"
+          },
+          "reject_code": {
+            "description": "ISO-20022-style or Torii-local rejection code when available.",
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "description": "Suggested retry delay in seconds for transient errors.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "ErrorResponse": {
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "code": {
             "description": "Application-specific error identifier.",
             "type": "string"
+          },
+          "details": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorDetails"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional machine-readable error context such as queue pressure, retry hints, rejection codes, endpoint names, or AXT metadata."
           },
           "message": {
             "description": "Human readable error message.",
@@ -2026,6 +2101,61 @@
         ],
         "type": "object"
       },
+      "OfflineV2IssuerBodyAuthRequest": {
+        "additionalProperties": true,
+        "description": "Offline V2 issuer POST body. Top-level account_id, timestamp_ms, nonce, and exactly one proof field authenticate the request body. The canonical signed body removes only top-level signature_base64 and witness_base64, so nested fields with those names remain signed business data.",
+        "oneOf": [
+          {
+            "not": {
+              "required": [
+                "witness_base64"
+              ]
+            },
+            "required": [
+              "signature_base64"
+            ]
+          },
+          {
+            "not": {
+              "required": [
+                "signature_base64"
+              ]
+            },
+            "required": [
+              "witness_base64"
+            ]
+          }
+        ],
+        "properties": {
+          "account_id": {
+            "description": "Canonical Iroha account id authorizing the issuer request.",
+            "type": "string"
+          },
+          "nonce": {
+            "description": "Caller-chosen replay nonce included in the canonical signing envelope.",
+            "type": "string"
+          },
+          "signature_base64": {
+            "description": "Base64 single-account signature over the body-auth canonical request.",
+            "type": "string"
+          },
+          "timestamp_ms": {
+            "description": "Unix timestamp in milliseconds included in the canonical signing envelope.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "witness_base64": {
+            "description": "Base64 Norito CanonicalRequestWitnessV1 for multisig accounts.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "timestamp_ms",
+          "nonce"
+        ],
+        "type": "object"
+      },
       "OperatorWebAuthnLoginResponse": {
         "additionalProperties": false,
         "properties": {
@@ -2464,7 +2594,7 @@
         "additionalProperties": false,
         "properties": {
           "account_id": {
-            "description": "Account selector for the device owner (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`); registrations are stored against the resolved canonical I105 account id.",
+            "description": "Account selector for the device owner (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`). The signed X-Iroha-Account header must resolve to the same canonical account; registrations are stored under that canonical I105 account id.",
             "type": "string"
           },
           "platform": {
@@ -2472,11 +2602,11 @@
             "type": "string"
           },
           "token": {
-            "description": "Device token.",
+            "description": "Provider device token. Use DELETE with this body shape to unregister; do not place tokens in URLs.",
             "type": "string"
           },
           "topics": {
-            "description": "Optional topics to subscribe the device to.",
+            "description": "Optional topic labels stored with the device; bounded by torii.push.max_topics_per_device.",
             "items": {
               "type": "string"
             },
@@ -2622,6 +2752,36 @@
           "epoch",
           "subject_block_hash",
           "phase"
+        ],
+        "type": "object"
+      },
+      "QueueErrorSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "capacity": {
+            "description": "Configured queue capacity.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "queued": {
+            "description": "Current queued transaction count.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "saturated": {
+            "description": "Whether the queue was saturated when the error was emitted.",
+            "type": "boolean"
+          },
+          "state": {
+            "description": "Queue state label, for example `healthy` or `saturated`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "queued",
+          "capacity",
+          "saturated"
         ],
         "type": "object"
       },
@@ -3541,116 +3701,25 @@
           "$ref": "#/components/schemas/ValidatorSetSnapshot"
         },
         "type": "array"
+      },
+      "XmlText": {
+        "description": "XML payload returned as UTF-8 text.",
+        "format": "xml",
+        "type": "string"
       }
     }
   },
   "info": {
-    "description": "HTTP surface for Torii. App endpoints accept optional canonical signing headers X-Iroha-Account/X-Iroha-Signature/X-Iroha-Timestamp-Ms/X-Iroha-Nonce.",
+    "description": "HTTP surface for Torii. Public blockchain reads are available without canonical request signing when they address public state; private dataspace and account-scoped views require canonical signing and permission checks.",
     "license": {
       "name": "Apache-2.0",
       "url": "https://www.apache.org/licenses/LICENSE-2.0"
     },
     "title": "Iroha Torii API",
-    "version": "0.0.0-dev"
+    "version": "1.0"
   },
   "openapi": "3.1.0",
   "paths": {
-    "/api_version": {
-      "get": {
-        "description": "Returns the block header version string. Responds with 503 if genesis is not committed.",
-        "responses": {
-          "200": {
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "description": "Successful response."
-          }
-        },
-        "summary": "Fetch the active API version.",
-        "tags": [
-          "System"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/block/stream": {
-      "get": {
-        "description": "Upgrade to the block stream WebSocket.",
-        "responses": {
-          "200": {
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "description": "Successful response."
-          }
-        },
-        "summary": "Connect to the block stream WebSocket.",
-        "tags": [
-          "Streams"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/configuration": {
-      "get": {
-        "description": "Return the live configuration snapshot.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch Torii configuration snapshot.",
-        "tags": [
-          "System"
-        ],
-        "x-iroha-tool-effect": "read"
-      },
-      "post": {
-        "description": "Submit configuration overrides for live reload.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Update Torii configuration.",
-        "tags": [
-          "System"
-        ],
-        "x-iroha-tool-effect": "operator"
-      }
-    },
     "/debug/pprof/profile": {
       "get": {
         "description": "Return a profiling payload for the configured duration.",
@@ -3670,28 +3739,6 @@
         "summary": "Capture a CPU profile.",
         "tags": [
           "System"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/events": {
-      "get": {
-        "description": "Upgrade to the event subscription WebSocket.",
-        "responses": {
-          "200": {
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "description": "Successful response."
-          }
-        },
-        "summary": "Connect to the event WebSocket.",
-        "tags": [
-          "Streams"
         ],
         "x-iroha-tool-effect": "read"
       }
@@ -3808,90 +3855,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/peers": {
-      "get": {
-        "description": "Return the peers snapshot as a list of peer ids.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PeerIdList"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "List online peers.",
-        "tags": [
-          "System"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/query": {
-      "post": {
-        "description": "Submit a SignedQuery encoded as Norito bytes.",
-        "requestBody": {
-          "content": {
-            "application/octet-stream": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            },
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "description": "Binary Norito payload.",
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Submit a signed query.",
-        "tags": [
-          "Queries"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/schema": {
-      "get": {
-        "description": "Return the schema payload used by the node build.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch the data model schema snapshot.",
-        "tags": [
-          "System"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
     "/status": {
       "get": {
         "description": "Returns the node status payload.",
@@ -3945,86 +3908,6 @@
           "System"
         ],
         "x-iroha-tool-effect": "read"
-      }
-    },
-    "/transaction": {
-      "post": {
-        "description": "Submit a versioned SignedTransaction encoded as Norito bytes. Internal TransactionEntrypoint envelopes are not accepted on this public route.",
-        "requestBody": {
-          "content": {
-            "application/octet-stream": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            },
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "description": "Binary Norito payload.",
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Submit a versioned signed transaction.",
-        "tags": [
-          "Transactions"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/transaction/entrypoint": {
-      "post": {
-        "description": "Submit a versioned TransactionEntrypoint encoded as Norito bytes. This route accepts sealed commitment/reveal entrypoints and other non-legacy transaction envelopes.",
-        "requestBody": {
-          "content": {
-            "application/octet-stream": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            },
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "description": "Binary Norito payload.",
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Submit a versioned transaction entrypoint.",
-        "tags": [
-          "Transactions"
-        ],
-        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/accounts": {
@@ -4834,6 +4717,28 @@
         "x-iroha-tool-effect": "write"
       }
     },
+    "/v1/api/version": {
+      "get": {
+        "description": "Returns the block header version string. Responds with 503 if genesis is not committed.",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful response."
+          }
+        },
+        "summary": "Fetch the active API version.",
+        "tags": [
+          "System"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/api/versions": {
       "get": {
         "description": "Return the supported Torii API versions and defaults.",
@@ -5120,6 +5025,28 @@
         "x-iroha-tool-effect": "write"
       }
     },
+    "/v1/blocks/stream": {
+      "get": {
+        "description": "Upgrade to the block stream WebSocket.",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful response."
+          }
+        },
+        "summary": "Connect to the block stream WebSocket.",
+        "tags": [
+          "Streams"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/bridge/finality/bundle/{height}": {
       "get": {
         "description": "Returns a commitment (block hash + authority set) and justification (signatures) alongside the block header and commit certificate for the requested height.",
@@ -5261,6 +5188,58 @@
           "Assets"
         ],
         "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/configuration": {
+      "get": {
+        "description": "Return the live configuration snapshot.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch Torii configuration snapshot.",
+        "tags": [
+          "System"
+        ],
+        "x-iroha-tool-effect": "read"
+      },
+      "post": {
+        "description": "Submit configuration overrides for live reload.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Update Torii configuration.",
+        "tags": [
+          "System"
+        ],
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/connect/session": {
@@ -7036,6 +7015,28 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/events/ws": {
+      "get": {
+        "description": "Upgrade to the event subscription WebSocket.",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful response."
+          }
+        },
+        "summary": "Connect to the event WebSocket.",
+        "tags": [
+          "Streams"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/explorer/accounts": {
       "get": {
         "description": "List accounts for explorer usage.",
@@ -8051,6 +8052,61 @@
         "x-iroha-tool-effect": "write"
       }
     },
+    "/v1/gov/citizens": {
+      "get": {
+        "description": "Return the exact number of accounts registered in the governance citizenship registry.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch citizenship registry count.",
+        "tags": [
+          "Governance"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/gov/citizens/{account_id}": {
+      "get": {
+        "description": "Return whether an account is registered in the governance citizenship registry.",
+        "parameters": [
+          {
+            "description": "Account id.",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch account citizenship status.",
+        "tags": [
+          "Governance"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/gov/contracts/{contract_address}": {
       "get": {
         "description": "Fetch the active governance binding for a canonical contract address.",
@@ -8635,9 +8691,95 @@
         "x-iroha-tool-effect": "write"
       }
     },
+    "/v1/iso20022/messages/{msg_id}": {
+      "get": {
+        "description": "Return the rich ISO 20022 message record by message id, including profile metadata and status history.",
+        "parameters": [
+          {
+            "description": "ISO 20022 message id.",
+            "in": "path",
+            "name": "msg_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch ISO 20022 message record.",
+        "tags": [
+          "ISO20022"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/iso20022/messages/{msg_id}/pacs002": {
+      "get": {
+        "description": "Return the current ISO 20022 payment status report for a bridged message.",
+        "parameters": [
+          {
+            "description": "ISO 20022 message id.",
+            "in": "path",
+            "name": "msg_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XmlText"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch ISO 20022 pacs.002 status XML.",
+        "tags": [
+          "ISO20022"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/iso20022/pacs008": {
       "post": {
         "description": "Submit a pacs.008 message for ISO 20022 bridging.",
+        "parameters": [
+          {
+            "description": "Optional ISO bridge rail profile. Overrides the `profile` query parameter.",
+            "in": "header",
+            "name": "X-Iroha-Iso-Profile",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional ISO bridge rail profile used when `X-Iroha-Iso-Profile` is absent.",
+            "in": "query",
+            "name": "profile",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -8670,6 +8812,26 @@
     "/v1/iso20022/pacs009": {
       "post": {
         "description": "Submit a pacs.009 message for ISO 20022 bridging.",
+        "parameters": [
+          {
+            "description": "Optional ISO bridge rail profile. Overrides the `profile` query parameter.",
+            "in": "header",
+            "name": "X-Iroha-Iso-Profile",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional ISO bridge rail profile used when `X-Iroha-Iso-Profile` is absent.",
+            "in": "query",
+            "name": "profile",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -10280,8 +10442,81 @@
       }
     },
     "/v1/notify/devices": {
+      "delete": {
+        "description": "Unregister a device token using the same signed JSON body shape. Tokens stay out of URLs and logs.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushRegisterDeviceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Device unregistration accepted."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid device request."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Canonical request signature is required or invalid."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Signed account does not match the device account."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Push registration rate limited."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Push provider is disabled or credentials are unavailable."
+          }
+        },
+        "summary": "Unregister a push device.",
+        "tags": [
+          "Push"
+        ],
+        "x-iroha-tool-effect": "write"
+      },
       "post": {
-        "description": "Register a device token for push notifications.",
+        "description": "Register a device token for push notifications. The JSON body is signed with canonical request headers; X-Iroha-Account must resolve to the same canonical account as account_id.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -10304,7 +10539,27 @@
                 }
               }
             },
-            "description": "Invalid device registration request."
+            "description": "Invalid device request."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Canonical request signature is required or invalid."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Signed account does not match the device account."
           },
           "429": {
             "content": {
@@ -10324,12 +10579,140 @@
                 }
               }
             },
-            "description": "Push registration is unavailable."
+            "description": "Push provider is disabled or credentials are unavailable."
           }
         },
         "summary": "Register a push device.",
         "tags": [
           "Push"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/offline/v2/audit": {
+      "post": {
+        "description": "POST an Offline V2 audit request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfflineV2IssuerBodyAuthRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Submit an Offline V2 audit request.",
+        "tags": [
+          "Offline"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/offline/v2/keys/refill": {
+      "post": {
+        "description": "POST issuer key-refill material. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfflineV2IssuerBodyAuthRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Refill Offline V2 issuer keys.",
+        "tags": [
+          "Offline"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/offline/v2/notes/issue": {
+      "post": {
+        "description": "POST an Offline V2 note issuance request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfflineV2IssuerBodyAuthRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Issue an Offline V2 note.",
+        "tags": [
+          "Offline"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/offline/v2/notes/redeem": {
+      "post": {
+        "description": "POST an Offline V2 note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfflineV2IssuerBodyAuthRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Redeem an Offline V2 note.",
+        "tags": [
+          "Offline"
         ],
         "x-iroha-tool-effect": "write"
       }
@@ -10640,6 +11023,28 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/peers": {
+      "get": {
+        "description": "Return the peers snapshot as a list of peer ids.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerIdList"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "List online peers.",
+        "tags": [
+          "System"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/pipeline/recovery/{height}": {
       "get": {
         "description": "Return pipeline recovery metadata for the given height.",
@@ -10672,6 +11077,160 @@
           "System"
         ],
         "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/pipeline/recovery/{height}/fastpq-proofs": {
+      "get": {
+        "description": "Return FASTPQ proof attachments from pipeline recovery metadata for the given height.",
+        "parameters": [
+          {
+            "description": "Block height to inspect.",
+            "in": "path",
+            "name": "height",
+            "required": true,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch FASTPQ proof sidecars.",
+        "tags": [
+          "System"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/pipeline/transaction-entrypoints": {
+      "post": {
+        "description": "Submit a versioned TransactionEntrypoint encoded as Norito bytes. This route accepts sealed commitment/reveal entrypoints and other non-legacy transaction envelopes.",
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            },
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "description": "Binary Norito payload.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Submit a versioned transaction entrypoint.",
+        "tags": [
+          "Transactions"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/pipeline/transactions": {
+      "post": {
+        "description": "Submit a versioned SignedTransaction encoded as Norito bytes. Internal TransactionEntrypoint envelopes are not accepted on this public route.",
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            },
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "description": "Binary Norito payload.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Submit a versioned signed transaction.",
+        "tags": [
+          "Transactions"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/pipeline/transactions/batch": {
+      "post": {
+        "description": "Submit a Norito-encoded batch of SignedTransaction payloads.",
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            },
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "description": "Binary Norito payload.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Submit a batch of versioned signed transactions.",
+        "tags": [
+          "Transactions"
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/pipeline/transactions/status": {
@@ -10836,6 +11395,46 @@
         "summary": "Fetch a proof record.",
         "tags": [
           "Proofs"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/query": {
+      "post": {
+        "description": "Submit a SignedQuery encoded as Norito bytes.",
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            },
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "description": "Binary Norito payload.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Submit a signed query.",
+        "tags": [
+          "Queries"
         ],
         "x-iroha-tool-effect": "read"
       }
@@ -11459,6 +12058,28 @@
         "summary": "Discover SCCP proof manifests.",
         "tags": [
           "Bridge"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/schema": {
+      "get": {
+        "description": "Return the schema payload used by the node build.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch the data model schema snapshot.",
+        "tags": [
+          "System"
         ],
         "x-iroha-tool-effect": "read"
       }
@@ -12533,6 +13154,38 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/sorafs/pin/register": {
+      "post": {
+        "description": "Submit a SoraFS manifest registration transaction. The request must include `content_length`; execution collects the public pin fee and records the committed fee receipt on-chain.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Register paid pin manifest.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
     "/v1/sorafs/pin/{digest_hex}": {
       "get": {
         "description": "Fetch a pin manifest by digest.",
@@ -12928,7 +13581,7 @@
     },
     "/v1/sorafs/storage/pin": {
       "post": {
-        "description": "Submit a storage pin request.",
+        "description": "Submit a storage pin request. The manifest must already have an approved on-chain paid pin record matching the digest, chunker profile, policy, content length, chunk plan digest, and fee receipt payer.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -14457,7 +15110,7 @@
     },
     "/v1/vpn/quotes": {
       "post": {
-        "description": "Create a signed XOR escrow quote for a Sora VPN lease.",
+        "description": "Create a signed XOR escrow quote for a Sora VPN lease. The request must include `metering_public_key_hex`; successful responses include `tx_instructions` with a native `OpenVpnLeaseEscrow` skeleton for client signing/submission.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -14509,7 +15162,7 @@
         "x-iroha-tool-effect": "read"
       },
       "post": {
-        "description": "Settle an active VPN lease from relay and client usage evidence.",
+        "description": "Settle an active VPN lease from relay and client usage evidence. Successful responses include `tx_instructions` with a native `SettleVpnLease` skeleton for operator signing/submission.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -14541,7 +15194,7 @@
     },
     "/v1/vpn/sessions": {
       "post": {
-        "description": "Create a signed Sora VPN session from a quote and committed XOR escrow payment.",
+        "description": "Create a signed Sora VPN session from a quote and committed native `OpenVpnLeaseEscrow` XOR payment transaction.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -15303,7 +15956,7 @@
       "name": "Sumeragi"
     },
     {
-      "description": "Offline V2 readiness endpoint under `/v1/offline/v2/readiness`.",
+      "description": "Offline V2 readiness and issuer endpoints. Issuer POSTs carry canonical auth in the JSON body instead of X-Iroha-* headers.",
       "name": "Offline"
     },
     {

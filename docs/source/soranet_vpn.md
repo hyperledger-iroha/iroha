@@ -45,9 +45,10 @@ the same deterministic framing.
   creation only succeeds after the wallet submits that exact native lease-open
   transaction and provides the committed transaction hash. Native `vpn_leases`
   are the settlement source of truth: Torii process-local quote/session/receipt
-  maps are live UX caches only, and `/v1/vpn/receipts` rebuilds settlement
-  context from WSV by lease id or relay receipt quote id within the on-chain
-  grace window.
+  maps are live UX caches only. Active session lookups can reconstruct an
+  unexpired active session from WSV after a Torii restart, and
+  `/v1/vpn/receipts` rebuilds settlement context from WSV by lease id or relay
+  receipt quote id within the on-chain grace window.
 - **Helper tickets:** Helper tickets are fixed 256-byte v1 frames. The MAC now
   covers the session, quote, account hash, relay id, payment hash, authorized
   Ed25519 metering public key, full deterministic tariff, and expiry. Relays
@@ -90,10 +91,12 @@ the same deterministic framing.
   the backend rejects bad MACs, stale timestamps, and replayed nonces, and Unix
   endpoints check peer credentials against the configured allowed uid/gid.
 - **Local helper secrecy:** Hidden helper workers read their connect payloads
-  from stdin instead of argv. Usage voucher signing derives the metering key and
-  tariff from the helper ticket, and helper traffic counters are batched in
-  memory with at-most-once-per-second state-file flushes plus a forced shutdown
-  flush.
+  from stdin instead of argv, and that stdin payload is a magic-prefixed Norito
+  frame rather than JSON. The helper's private state file is also a
+  magic-prefixed Norito frame; only the CLI status output remains JSON for local
+  UX. Usage voucher signing derives the metering key and tariff from the helper
+  ticket, and helper traffic counters are batched in memory with
+  at-most-once-per-second state-file flushes plus a forced shutdown flush.
 - **End-to-end metrics harness:** The adapter suite now includes a paced
   bridge→adapter round-trip that pumps data and cover cells over a duplex link
   and asserts ingress/egress counters for cover/data frames and bytes on both

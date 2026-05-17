@@ -248,7 +248,7 @@ Swift SDK енді арнайы JSON желімінсіз қалқан нұсқ�
 - Қатты шектеулер (конфигурацияланатын әдепкі):
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` мәнінен асатын дәлелдер нұсқаулықты айқын түрде тоқтатады (басқару бюллетендері `proof verification exceeded timeout` шығарады, `VerifyProof` қатені қайтарады).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Қосымша квоталар өмір сүруді қамтамасыз етеді: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block` және `max_public_inputs` байланыстырылған блок құрастырушылар; `reorg_depth_bound` (≥ `max_anchor_age_blocks`) шекаралық бақылау бекетін ұстауды басқарады.
 - Орындау уақытының орындалуы енді осы транзакцияға немесе блокқа шектеулерден асатын транзакцияларды қабылдамайды, детерминирленген `InvalidParameter` қателерін шығарады және бухгалтерлік кітап күйін өзгеріссіз қалдырады.
 - Mempool құпия транзакцияларды `vk_id`, дәлелдеу ұзақтығы және бекіту жасы бойынша ресурсты пайдалануды шектеуді сақтау үшін тексерушіні шақырмас бұрын алдын ала сүзеді.

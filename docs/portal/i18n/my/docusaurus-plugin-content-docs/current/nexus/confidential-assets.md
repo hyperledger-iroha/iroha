@@ -264,7 +264,7 @@ Swift SDK များသည် စိတ်ကြိုက် JSON ကော်
 - Hard limits (configurable defaults):
 - `max_proof_size_bytes = 262_144`။
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`။
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`။ `verify_timeout_ms` ထက်ကျော်လွန်သော အထောက်အထားများသည် ညွှန်ကြားချက်ကို အတိအကျ ပျက်ပြယ်သွားသည် (အုပ်ချုပ်မှုမဲများသည် `proof verification exceeded timeout`၊ `VerifyProof` သည် အမှားတစ်ခု ပြန်ဖြစ်သွားသည်)။
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - ထပ်လောင်းခွဲတမ်းများသည် အသက်ရှင်သန်မှုကို သေချာစေသည်- `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, နှင့် `max_public_inputs` ဘောင်းဘီဘလောက်တည်ဆောက်သူများ၊ `reorg_depth_bound` (≥ `max_anchor_age_blocks`) သည် နယ်ခြားစစ်ဆေးရေးဂိတ် ထိန်းသိမ်းမှုကို ထိန်းချုပ်သည်။
 - ယခု Runtime execution သည် ဤငွေလွှဲနှုန်းတစ်ခု သို့မဟုတ် တစ်တုံးကန့်သတ်ချက်များထက်ကျော်လွန်သော ငွေပေးငွေယူများကို ပယ်ချပြီး အဆုံးအဖြတ်ပေးသော `InvalidParameter` အမှားများကို ထုတ်လွှတ်ကာ လယ်ဂျာအခြေအနေကို မပြောင်းလဲပါ။
 - အရင်းအမြစ်အသုံးပြုမှုကို ကန့်သတ်ထားရန် အတည်ပြုသူအား မခေါ်ဆိုမီ အထောက်အထားအလျားနှင့် ကျောက်ဆူးခေတ် `vk_id` ဖြင့် လျှို့ဝှက်ငွေပေးငွေယူများကို Mempool မှ ကြိုတင်စစ်ထုတ်သည်။

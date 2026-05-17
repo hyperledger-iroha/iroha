@@ -235,7 +235,7 @@ SPDX-License-Identifier: Apache-2.0
 - سخت حدود (ترتیب دینے والے پہلے سے طے شدہ):
 - `max_proof_size_bytes = 262_144`۔
 - `max_nullifiers_per_tx = 8` ، `max_commitments_per_tx = 8` ، `max_confidential_ops_per_block = 256`۔
-- `verify_timeout_ms = 750` ، `max_anchor_age_blocks = 10_000`۔ `verify_timeout_ms` سے زیادہ ثبوت ہدایت کو طے شدہ طور پر اسقاط حمل کرتے ہیں (گورننس بالز `proof verification exceeded timeout` ، `VerifyProof` ایک غلطی لوٹاتا ہے)۔
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - اضافی کوٹے کو یقینی بنانا یقینی ہے: `max_proof_bytes_block` ، `max_verify_calls_per_tx` ، `max_verify_calls_per_block` ، اور `max_public_inputs` بلاک بلڈروں کو محدود کریں۔ `reorg_depth_bound` (> = `max_anchor_age_blocks`) بارڈر چوکیوں کو برقرار رکھنے پر حکومت کرتا ہے۔
 - رن ٹائم پھانسی اب ان حدود کو فی ٹرانزیکشن یا فی بلاک سے زیادہ لین دین کو مسترد کرتی ہے ، جس سے ڈٹرمینسٹک `InvalidParameter` غلطیاں خارج ہوتی ہیں اور لیجر اسٹیٹ کو برقرار رکھتے ہیں۔
 - میمپول پریفیلٹرز `vk_id` کے ذریعہ خفیہ لین دین ، ​​وسائل کی لمبائی اور اینکر کی عمر کی لمبائی اور اینکر کی عمر وسائل کے استعمال کو محدود کرنے کے لئے تصدیق کنندہ کو فون کرنے سے پہلے۔
@@ -329,7 +329,7 @@ SPDX-License-Identifier: Apache-2.0
    ۔
    - [x] خفیہ عملدرآمد کے راستوں میں گھبراہٹ کو ہٹا دیں اور غیر تعاون یافتہ نوڈس کے لئے رول گیٹنگ شامل کریں۔
    - [] فرنٹیئر چوکیوں کے لئے چیکر ٹائم آؤٹ بجٹ اور ریورج گہرائی کی حدوں کا اطلاق کریں۔
-     - [x] توثیق کے ٹائم آؤٹ بجٹ کا اطلاق ؛ `verify_timeout_ms` سے زیادہ ثبوت اب عزم کے مطابق ناکام ہوجاتے ہیں۔
+     - Verification timeout budgets are telemetry/operator budgets only; proofs fail deterministically on size, gas, public input, policy, or anchor-age bounds.
      ۔
    - `AssetConfidentialPolicy` ، پالیسی FSM اور ٹکسال/منتقلی/انکشاف ہدایات کے لئے نفاذ کے دروازے متعارف کروائیں۔
    - بلاک ہیڈر میں `conf_features` کا ارتکاب کریں اور جب رجسٹری ہضم/پیرامیٹرز کو ہضم کرتی ہے تو توثیق کرنے والوں کی شرکت سے انکار کردیں۔

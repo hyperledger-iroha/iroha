@@ -156,7 +156,7 @@ class TransactionDraft:
         audit_path: Iterable[Optional[bytes]],
         proof_backend: str,
         proof_bytes: bytes,
-        verifying_key_bytes: bytes,
+        verifying_key_name: str,
     ) -> TransactionDraft:
         """Attach a lane privacy Merkle proof used by Nexus commitment-only lanes.
 
@@ -172,7 +172,7 @@ class TransactionDraft:
                 "audit_path": list(audit_path),
                 "proof_backend": proof_backend,
                 "proof_bytes": proof_bytes,
-                "verifying_key_bytes": verifying_key_bytes,
+                "verifying_key_name": verifying_key_name,
             }
         )
         self._lane_privacy_attachments.append(attachment)

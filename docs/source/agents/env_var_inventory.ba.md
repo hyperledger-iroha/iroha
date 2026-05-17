@@ -667,9 +667,6 @@ _Һуңғы яңыртылған аша `python3 scripts/inventory_env_toggles.p
 - тест: йәшниктәр/вм/тестар/i18n.s:13 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 - тест: йәшниктәр/вм/тестар/i18n.rs:71 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 
-## MAX_DEGRE (прод: 1)
-
-- prod: йәшниктәр/ироха_ядро/срк/зк.р:106 — `let current = std::env::var("MAX_DEGREE")` X
 
 ## МОХИ_КОНФИГ (прод: 1)
 

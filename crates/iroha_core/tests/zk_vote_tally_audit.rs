@@ -42,19 +42,19 @@ mod tests {
     use super::zk_testkit;
 
     #[test]
-    fn vote_tally_proof_verifies_with_inline_vk() {
+    fn vote_tally_proof_verifies_with_vk_bytes() {
         let bundle = zk_testkit::vote_merkle8_bundle();
         let backend = bundle.backend;
         let proof_box = ProofBox::new(backend.into(), bundle.proof_bytes.clone());
-        let vk_inline = bundle
+        let vk_box = bundle
             .vk_record
             .key
             .as_ref()
-            .expect("bundle must include inline verifying key")
+            .expect("bundle must include verifying key bytes")
             .clone();
 
         assert!(
-            zk_backend::verify_backend(backend, &proof_box, Some(&vk_inline)),
+            zk_backend::verify_backend(backend, &proof_box, Some(&vk_box)),
             "expected untampered proof to verify"
         );
     }
@@ -63,18 +63,18 @@ mod tests {
     fn vote_tally_proof_rejects_commit_tampering() {
         let bundle = zk_testkit::vote_merkle8_bundle();
         let backend = bundle.backend;
-        let vk_inline = bundle
+        let vk_box = bundle
             .vk_record
             .key
             .as_ref()
-            .expect("bundle must include inline verifying key")
+            .expect("bundle must include verifying key bytes")
             .clone();
 
         let tampered_bytes = tamper_instance_column(bundle.proof_bytes.clone(), 0);
         let proof_box = ProofBox::new(backend.into(), tampered_bytes);
 
         assert!(
-            !zk_backend::verify_backend(backend, &proof_box, Some(&vk_inline)),
+            !zk_backend::verify_backend(backend, &proof_box, Some(&vk_box)),
             "commit column tampering must be rejected"
         );
     }
@@ -83,18 +83,18 @@ mod tests {
     fn vote_tally_proof_rejects_root_tampering() {
         let bundle = zk_testkit::vote_merkle8_bundle();
         let backend = bundle.backend;
-        let vk_inline = bundle
+        let vk_box = bundle
             .vk_record
             .key
             .as_ref()
-            .expect("bundle must include inline verifying key")
+            .expect("bundle must include verifying key bytes")
             .clone();
 
         let tampered_bytes = tamper_instance_column(bundle.proof_bytes.clone(), 1);
         let proof_box = ProofBox::new(backend.into(), tampered_bytes);
 
         assert!(
-            !zk_backend::verify_backend(backend, &proof_box, Some(&vk_inline)),
+            !zk_backend::verify_backend(backend, &proof_box, Some(&vk_box)),
             "root column tampering must be rejected"
         );
     }
@@ -273,7 +273,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let alice_id = (*ALICE_ID).clone();
         let domain_id: iroha_data_model::domain::DomainId =
-            DomainId::try_new("wonderland", "universal").expect("domain");
+            iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain");
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
         let alice = Account::new(alice_id.clone()).build(&alice_id);
         let world = World::with([domain], [alice], Vec::<AssetDefinition>::new());

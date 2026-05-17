@@ -12,7 +12,7 @@ use axum::{
 };
 use http_body_util::BodyExt as _;
 use iroha_core::zk::test_utils::halo2_fixture_envelope;
-use iroha_data_model::proof::ProofAttachment;
+use iroha_data_model::proof::{ProofAttachment, VerifyingKeyId};
 use iroha_torii::zk_attachments::AttachmentTenant;
 use tower::ServiceExt as _;
 
@@ -38,8 +38,11 @@ fn ensure_quota_config() {
 fn fixture_attachment_bytes() -> Vec<u8> {
     let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let proof = fixture.proof_box("halo2/ipa");
-    let vk = fixture.vk_box("halo2/ipa").expect("fixture vk bytes");
-    let attachment = ProofAttachment::new_inline("halo2/ipa".into(), proof, vk);
+    let attachment = ProofAttachment::new_ref(
+        "halo2/ipa".into(),
+        proof,
+        VerifyingKeyId::new("halo2/ipa", "vk"),
+    );
     norito::to_bytes(&attachment).expect("proof attachment bytes")
 }
 

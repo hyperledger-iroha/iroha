@@ -30245,6 +30245,52 @@ async fn handler_pipeline_recovery(
     )
 }
 
+async fn handler_pipeline_recovery_fastpq_proofs(
+    State(app): State<SharedAppState>,
+    AxPath(height): AxPath<u64>,
+) -> Result<impl IntoResponse, Error> {
+    let Some(sidecar) = app.kura.read_pipeline_metadata(height) else {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        )));
+    };
+
+    let mut root = norito::json::Map::new();
+    root.insert(
+        "height".to_string(),
+        norito::json::to_value(&sidecar.height).expect("serialize pipeline height"),
+    );
+    root.insert(
+        "block_hash".to_string(),
+        norito::json::to_value(&sidecar.block_hash.to_string())
+            .expect("serialize pipeline block hash"),
+    );
+    root.insert(
+        "proofs".to_string(),
+        norito::json::Value::Array(
+            sidecar
+                .fastpq_proofs
+                .iter()
+                .map(iroha_core::kura::FastpqProofSnapshot::to_json_value)
+                .collect(),
+        ),
+    );
+    match norito::json::to_json_pretty(&norito::json::Value::Object(root)) {
+        Ok(serialized) => {
+            let body = axum::body::Body::from(serialized);
+            Ok(axum::http::Response::builder()
+                .status(axum::http::StatusCode::OK)
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(body)
+                .unwrap())
+        }
+        Err(err) => Err(Error::SerializationFailure {
+            context: "pipeline_recovery_fastpq_proofs",
+            source: err,
+        }),
+    }
+}
+
 #[derive(JsonDeserialize, crate::json_macros::JsonSerialize, Clone, Debug)]
 struct PipelineStatusQuery {
     #[norito(default)]
@@ -34057,6 +34103,10 @@ impl Torii {
                 .route(
                     "/v1/pipeline/recovery/{height}",
                     get(handler_pipeline_recovery),
+                )
+                .route(
+                    uri::PIPELINE_FASTPQ_PROOFS,
+                    get(handler_pipeline_recovery_fastpq_proofs),
                 )
                 .route("/v1/policy", get(handler_policy))
         });
@@ -47814,21 +47864,6 @@ pub(crate) mod tests_runtime_handlers {
                 ),
             )
         }
-
-        fn execute_private_inference(
-            &self,
-            _request: iroha_core::soracloud_runtime::SoracloudPrivateInferenceExecutionRequest,
-        ) -> Result<
-            iroha_core::soracloud_runtime::SoracloudPrivateInferenceExecutionResult,
-            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
-        > {
-            Err(
-                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                    SoracloudRuntimeExecutionErrorKind::Unavailable,
-                    "test runtime does not implement private inference execution",
-                ),
-            )
-        }
     }
 
     #[derive(Clone)]
@@ -47905,21 +47940,6 @@ pub(crate) mod tests_runtime_handlers {
                 ),
             )
         }
-
-        fn execute_private_inference(
-            &self,
-            _request: iroha_core::soracloud_runtime::SoracloudPrivateInferenceExecutionRequest,
-        ) -> Result<
-            iroha_core::soracloud_runtime::SoracloudPrivateInferenceExecutionResult,
-            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
-        > {
-            Err(
-                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                    SoracloudRuntimeExecutionErrorKind::Unavailable,
-                    "test mailbox runtime does not implement private inference execution",
-                ),
-            )
-        }
     }
 
     #[derive(Clone)]
@@ -47985,21 +48005,6 @@ pub(crate) mod tests_runtime_handlers {
                 iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
                     SoracloudRuntimeExecutionErrorKind::Unavailable,
                     "test runtime handle does not implement apartment execution",
-                ),
-            )
-        }
-
-        fn execute_private_inference(
-            &self,
-            _request: iroha_core::soracloud_runtime::SoracloudPrivateInferenceExecutionRequest,
-        ) -> Result<
-            iroha_core::soracloud_runtime::SoracloudPrivateInferenceExecutionResult,
-            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
-        > {
-            Err(
-                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                    SoracloudRuntimeExecutionErrorKind::Unavailable,
-                    "test runtime handle does not implement private inference execution",
                 ),
             )
         }

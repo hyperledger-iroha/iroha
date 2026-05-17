@@ -49,9 +49,8 @@ fn vk_register_update_emit_events() {
 
     // Prepare a VK record and Register
     let id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_test");
-    let vk_inline =
-        iroha_data_model::proof::VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-    let commitment = iroha_core::zk::hash_vk(&vk_inline);
+    let vk_box = iroha_data_model::proof::VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
+    let commitment = iroha_core::zk::hash_vk(&vk_box);
     let mut rec = iroha_data_model::proof::VerifyingKeyRecord::new(
         1,
         "vk_test",
@@ -61,7 +60,7 @@ fn vk_register_update_emit_events() {
         commitment,
     );
     rec.vk_len = 3;
-    rec.key = Some(vk_inline.clone());
+    rec.key = Some(vk_box.clone());
     rec.status = ConfidentialStatus::Active;
     rec.gas_schedule_id = Some("halo2_default".into());
     let reg_insn: InstructionBox = iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
@@ -82,7 +81,7 @@ fn vk_register_update_emit_events() {
         commitment,
     );
     rec2.vk_len = 3;
-    rec2.key = Some(vk_inline);
+    rec2.key = Some(vk_box);
     rec2.status = ConfidentialStatus::Active;
     rec2.gas_schedule_id = Some("halo2_default".into());
     let upd: InstructionBox = iroha_data_model::isi::verifying_keys::UpdateVerifyingKey {

@@ -19,11 +19,12 @@ const PROOF_EVENT_TIMEOUT: Duration = Duration::from_secs(600);
 
 fn halo2_attachment() -> iroha::data_model::proof::ProofAttachment {
     let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
-    let vk_box = fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture must include a verifying key");
     let proof_box = fixture.proof_box("halo2/ipa");
-    iroha::data_model::proof::ProofAttachment::new_inline("halo2/ipa".into(), proof_box, vk_box)
+    iroha::data_model::proof::ProofAttachment::new_ref(
+        "halo2/ipa".into(),
+        proof_box,
+        iroha::data_model::proof::VerifyingKeyId::new("halo2/ipa", "event_vk"),
+    )
 }
 
 fn client_with_timeout(network: &Network) -> Client {
@@ -142,10 +143,10 @@ async fn proof_event_scenarios() -> Result<()> {
         )
         .await?;
 
-        let rejected_attachment = iroha::data_model::proof::ProofAttachment::new_inline(
+        let rejected_attachment = iroha::data_model::proof::ProofAttachment::new_ref(
             "groth16/bn254".into(),
             iroha::data_model::proof::ProofBox::new("groth16/bn254".into(), vec![0xaa]),
-            iroha::data_model::proof::VerifyingKeyBox::new("groth16/bn254".into(), vec![0xbb]),
+            iroha::data_model::proof::VerifyingKeyId::new("groth16/bn254", "event_rejected_vk"),
         );
         verify_proof_emits_event(
             &network,

@@ -94,7 +94,7 @@ public_inputs_schema_hash = 0xfae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be960
 - `backend tag = BackendTag::Halo2IpaPasta`
 - `curve = "pallas"`
 - `public_inputs_schema_hash = 0xfae4…64d3`
-- `commitment = sha256(backend || vk_bytes)`（32字节摘要）
+- `commitment = zk_hash_vk(backend, vk_bytes)`（32字节摘要）
 
 规范捆绑包包括一个内联验证密钥 (`key = Some(VerifyingKeyBox { … })`) 以及证明信封。 `vk_len`、`max_proof_bytes` 和可选元数据 URI 是从生成的工件中填充的。
 

@@ -178,7 +178,7 @@ Confidentiality enabled کے ساتھ شروع ہونے والی نئی networks
 - `ConfidentialEncryptedPayload` AEAD memo bytes کو `{ version, ephemeral_pubkey, nonce, ciphertext }` میں wrap کرتا ہے، default `version = CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1` XChaCha20-Poly1305 layout کیلئے۔
 - Canonical key-derivation vectors `docs/source/confidential_key_vectors.json` میں ہیں؛ CLI اور Torii endpoint ان fixtures کے خلاف regress کرتے ہیں۔
 - `asset::AssetDefinition` کو `confidential_policy: AssetConfidentialPolicy { mode, vk_set_hash, poseidon_params_id, pedersen_params_id, pending_transition }` ملتا ہے۔
-- `ZkAssetState` transfer/unshield verifiers کیلئے `(backend, name, commitment)` binding persist کرتا ہے؛ execution ان proofs کو reject کرتا ہے جن کا referenced یا inline verifying key registered commitment سے match نہ کرے۔
+- `ZkAssetState` transfer/unshield verifiers کیلئے `(backend, name, commitment)` binding persist کرتا ہے؛ execution ان proofs کو reject کرتا ہے جن کا referenced verifying key registered commitment سے match نہ کرے۔
 - `CommitmentTree` (per asset with frontier checkpoints), `NullifierSet` keyed by `(chain_id, asset_id, nullifier)`, `ZkVerifierEntry`, `PedersenParams`, `PoseidonParams` world state میں store ہوتے ہیں۔
 - Mempool early duplicate detection اور anchor age checks کیلئے transient `NullifierIndex` اور `AnchorIndex` structures maintain کرتا ہے۔
 - Norito schema updates میں public inputs کی canonical ordering شامل ہے؛ round-trip tests encoding determinism ensure کرتے ہیں۔
@@ -236,7 +236,7 @@ Local overrides کو operations runbook میں document کریں؛ retention win
 - Hard limits (configurable defaults):
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` سے زیادہ proofs instruction کو deterministic طور پر abort کرتے ہیں (governance ballots `proof verification exceeded timeout` emit کرتے ہیں، `VerifyProof` error return کرتا ہے)۔
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Additional quotas liveness ensure کرتے ہیں: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, اور `max_public_inputs` block builders کو bound کرتے ہیں؛ `reorg_depth_bound` (≥ `max_anchor_age_blocks`) frontier checkpoint retention govern کرتا ہے۔
 - Runtime اب per-transaction یا per-block limits exceed کرنے والی transactions reject کرتا ہے، deterministic `InvalidParameter` errors emit کرتا ہے اور ledger state unchanged رہتی ہے۔
 - Mempool `vk_id`, proof length، اور anchor age کے ذریعے confidential transactions کو prefilter کرتا ہے، verifier invoke کرنے سے پہلے resource usage bounded رکھتا ہے۔
@@ -331,7 +331,7 @@ Local overrides کو operations runbook میں document کریں؛ retention win
    - ✅ P2P handshake `ConfidentialFeatureDigest` (backend digest + registry fingerprints) advertise کرتا ہے اور mismatches کو `HandshakeConfidentialMismatch` کے ذریعے deterministic fail کرتا ہے۔
    - ✅ Confidential execution paths میں panics remove کئے گئے اور unsupported nodes کیلئے role gating add کیا گیا۔
    - ⚪ Verifier timeout budgets اور frontier checkpoints کیلئے reorg depth bounds enforce کرنا۔
-     - ✅ Verification timeout budgets enforce ہوئے؛ `verify_timeout_ms` سے تجاوز کرنے والی proofs اب deterministic fail ہوتی ہیں۔
+     - Verification timeout budgets are telemetry/operator budgets only; proofs fail deterministically on size, gas, public input, policy, or anchor-age bounds.
      - ✅ Frontier checkpoints اب `reorg_depth_bound` respect کرتے ہیں، configured window سے پرانے checkpoints prune کرتے ہوئے deterministic snapshots برقرار رکھتے ہیں۔
    - `AssetConfidentialPolicy`, policy FSM، اور mint/transfer/reveal instructions کیلئے enforcement gates introduce کریں۔
    - Block headers میں `conf_features` commit کریں اور registry/parameter digests diverge ہونے پر validator participation refuse کریں۔

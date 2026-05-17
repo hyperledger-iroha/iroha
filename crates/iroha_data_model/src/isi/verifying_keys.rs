@@ -6,7 +6,7 @@ isi! {
     pub struct RegisterVerifyingKey {
         /// Identifier of the verifying key (backend + name).
         pub id: VerifyingKeyId,
-        /// Verifying key record with version and commitment (and optional inline key).
+        /// Verifying key record with version, commitment, and optional stored key bytes.
         pub record: VerifyingKeyRecord,
     }
 }

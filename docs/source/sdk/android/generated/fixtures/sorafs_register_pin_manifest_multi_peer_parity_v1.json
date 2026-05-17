@@ -26,6 +26,7 @@
       "multihash_code": 31
     },
     "chunk_digest_sha3_256_hex": "13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482",
+    "content_length": 1048576,
     "policy": {
       "min_replicas": 3,
       "retention_epoch": 1725000000,

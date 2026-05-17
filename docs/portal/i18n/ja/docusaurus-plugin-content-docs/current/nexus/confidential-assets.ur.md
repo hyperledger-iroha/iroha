@@ -228,7 +228,7 @@ Swift SDK は、特注の JSON グルーを使用してシールド命令を発�
 - ハードリミット (設定可能なデフォルト):
 - `max_proof_size_bytes = 262_144`。
 - `max_nullifiers_per_tx = 8`、`max_commitments_per_tx = 8`、`max_confidential_ops_per_block = 256`。
-- `verify_timeout_ms = 750`、`max_anchor_age_blocks = 10_000`。 `verify_timeout_ms` 証明命令 決定論的中止 ہیں (ガバナンス投票 `proof verification exceeded timeout` 発行 کرتے ہیں، `VerifyProof` エラー リターンੁے)۔
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - 追加のクォータの活性化により、`max_proof_bytes_block`、`max_verify_calls_per_tx`、`max_verify_calls_per_block`、`max_public_inputs` ブロック ビルダーがバインドされます。 `reorg_depth_bound` (≥ `max_anchor_age_blocks`) フロンティアチェックポイント保持管理
 - 実行時、トランザクションごと、ブロックごとの制限を超過する トランザクションが拒否される 確定的 `InvalidParameter` エラーが発生する 台帳の状態が変化しない
 - Mempool `vk_id`、証明長さ、アンカー年齢、機密トランザクション、プレフィルター、ベリファイア呼び出し、リソース使用量の制限。

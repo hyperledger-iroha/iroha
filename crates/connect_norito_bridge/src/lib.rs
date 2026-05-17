@@ -46,7 +46,7 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     name::Name,
-    proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId},
+    proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     ram_lfe::RamLfeReceiptAttestation,
     ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId},
     rwa::RwaId,
@@ -1547,20 +1547,6 @@ fn parse_proof_attachment_value(value: &JsonValue) -> BridgeResult<ProofAttachme
             .ok_or(BridgeError::ProofAttachment)?;
         let id = VerifyingKeyId::new(vk_backend, name);
         ProofAttachment::new_ref(backend.clone(), proof.clone(), id)
-    } else if let Some(vk_inline) = value.get("vk_inline").and_then(JsonValue::as_object) {
-        let vk_backend = vk_inline
-            .get("backend")
-            .and_then(JsonValue::as_str)
-            .ok_or(BridgeError::ProofAttachment)?
-            .parse::<String>()
-            .map_err(|_| BridgeError::ProofAttachment)?;
-        let bytes_b64 = vk_inline
-            .get("bytes_b64")
-            .and_then(JsonValue::as_str)
-            .ok_or(BridgeError::ProofAttachment)?;
-        let bytes = decode_base64_bytes(bytes_b64)?;
-        let vk = VerifyingKeyBox::new(vk_backend, bytes);
-        ProofAttachment::new_inline(backend.clone(), proof.clone(), vk)
     } else {
         return Err(BridgeError::ProofAttachment);
     };

@@ -11,23 +11,13 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     env,
     fs, io,
-    io::Read as _,
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
-    str::FromStr as _,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use aes_gcm::{
-    Aes256Gcm, Nonce,
-    aead::{Aead as _, KeyInit as _, Payload},
-};
 use base64::Engine as _;
-use blake2::{
-    Blake2bVar,
-    digest::{Update as _, VariableOutput as _},
-};
 use eyre::{Report, Result, WrapErr, eyre};
 use iroha::{
     client::Client,
@@ -43,26 +33,20 @@ use iroha::{
         smart_contract::manifest::ManifestProvenance,
         soracloud::{
             AgentApartmentManifestV1, CANONICAL_REQUEST_WITNESS_VERSION_V1,
-            CanonicalRequestWitnessV1, PrivateModelSourceV1, SECRET_ENVELOPE_VERSION_V1,
+            CanonicalRequestWitnessV1,
             SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_INROU_MANIFEST_VERSION_V1,
             SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1, SORA_STATE_BINDING_VERSION_V1,
-            SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORA_UPLOADED_MODEL_CHUNK_VERSION_V1,
-            SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1, SecretEnvelopeEncryptionV1,
             SecretEnvelopeV1, SoraArtifactDistributionPolicyV1, SoraArtifactKindV1,
             SoraArtifactRefV1, SoraCertifiedResponsePolicyV1, SoraContainerManifestV1,
             SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraHfBackendFamilyV1,
             SoraHfModelFormatV1, SoraInrouGuestOsV1, SoraInrouManifestV1, SoraLeaseVolumeBindingV1,
             SoraLeaseVolumeKindV1, SoraMailboxContractV1, SoraModelHostCapabilityRecordV1,
-            SoraModelPrivacyModeV1, SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1,
-            SoraPrivateCompileProfileV1, SoraPrivateInferenceSessionV1,
+            SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1,
             SoraPublishedInrouGuestImageArtifactV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
             SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
             SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1,
             SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1, SoraUploadedModelBundleV1,
-            SoraUploadedModelChunkV1, SoraUploadedModelEncryptionRecipientV1,
-            SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
-            SoraUploadedModelPricingPolicyV1, SoraUploadedModelRuntimeFormatV1,
-            SoraUploadedModelWrappedKeyV1, encode_agent_artifact_allow_provenance_payload,
+            encode_agent_artifact_allow_provenance_payload,
             encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
             encode_agent_lease_renew_provenance_payload,
             encode_agent_message_ack_provenance_payload,
@@ -82,31 +66,24 @@ use iroha::{
             encode_model_host_withdraw_provenance_payload,
             encode_model_weight_promote_provenance_payload,
             encode_model_weight_register_provenance_payload,
-            encode_model_weight_rollback_provenance_payload,
-            encode_private_compile_profile_provenance_payload,
-            encode_private_inference_output_release_provenance_payload,
-            encode_private_inference_start_provenance_payload, encode_rollback_provenance_payload,
+            encode_model_weight_rollback_provenance_payload, encode_rollback_provenance_payload,
             encode_rollout_provenance_payload, encode_set_service_config_provenance_payload,
             encode_set_service_secret_provenance_payload,
             encode_training_job_checkpoint_provenance_payload,
             encode_training_job_retry_provenance_payload,
             encode_training_job_start_provenance_payload,
-            encode_uploaded_model_allow_provenance_payload,
             encode_uploaded_model_bundle_register_provenance_payload,
-            encode_uploaded_model_chunk_append_provenance_payload,
             encode_uploaded_model_finalize_provenance_payload,
         },
         sorafs::pin_registry::StorageClass,
     },
 };
-use iroha_config::parameters::defaults;
 use iroha_core::soracloud_runtime::{
     HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_TICKS,
     build_soracloud_hf_generated_agent_manifest, build_soracloud_hf_generated_service_bundle,
 };
 use iroha_crypto::{
-    Hash, HashOf, KeyGenOption, KeyPair, Signature,
-    kex::{KeyExchangeScheme as _, X25519Sha256},
+    Hash, KeyPair, Signature,
 };
 use iroha_primitives::json::Json;
 use norito::{
@@ -128,8 +105,10 @@ use tiny_keccak::{Hasher as _, Sha3};
 
 #[cfg(test)]
 use iroha::data_model::soracloud::{
-    SORA_PRIVATE_COMPILE_PROFILE_VERSION_V1, SORA_PRIVATE_INFERENCE_SESSION_VERSION_V1,
-    SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1, SoraPrivateInferenceSessionStatusV1,
+    SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
+    SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1, SoraUploadedModelEncryptionRecipientV1,
+    SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
+    SoraUploadedModelRuntimeFormatV1, SoraUploadedModelWrappedKeyV1,
 };
 
 use crate::{Run, RunContext};
@@ -156,11 +135,6 @@ const PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT: &str = "index.json";
 const HEADER_IROHA_ACCOUNT: &str = "X-Iroha-Account";
 const HEADER_IROHA_TIMESTAMP_MS: &str = "X-Iroha-Timestamp-Ms";
 const HEADER_IROHA_NONCE: &str = "X-Iroha-Nonce";
-const PRIVATE_MODEL_ARCHIVE_DOMAIN: &str = "soracloud.uploaded_model.archive.v1";
-const PRIVATE_MODEL_BUNDLE_KEY_AAD_DOMAIN: &str = "soracloud.uploaded_model.bundle_key_aad.v1";
-const PRIVATE_MODEL_CHUNK_AAD_DOMAIN: &str = "soracloud.uploaded_model.chunk_aad.v1";
-const PRIVATE_MODEL_WRAPPING_NONCE_BYTES: usize = 12;
-const PRIVATE_MODEL_CHUNK_NONCE_BYTES: usize = 12;
 const HEADER_IROHA_SIGNATURE: &str = "X-Iroha-Signature";
 const HEADER_IROHA_WITNESS: &str = "X-Iroha-Witness";
 
@@ -3007,58 +2981,6 @@ fn resolve_required_workspace_service_name(
     })
 }
 
-fn resolve_request_payload_service_name(
-    payload_service_name: &str,
-    service_name: Option<String>,
-    container_manifest: Option<&Path>,
-    service_manifest: Option<&Path>,
-    command_name: &str,
-) -> Result<String> {
-    let payload_service_name = payload_service_name.trim();
-    let resolved_service_name = resolve_optional_workspace_service_name(
-        service_name,
-        container_manifest,
-        service_manifest,
-        command_name,
-    )?;
-
-    match resolved_service_name {
-        Some(resolved_service_name) => {
-            if !payload_service_name.is_empty() && payload_service_name != resolved_service_name {
-                return Err(eyre!(
-                    "request payload service_name `{payload_service_name}` does not match the manifest-resolved service `{resolved_service_name}`"
-                ));
-            }
-            Ok(resolved_service_name)
-        }
-        None if !payload_service_name.is_empty() => Ok(payload_service_name.to_owned()),
-        None => Err(eyre!(
-            "`{command_name}` requires request payload `service_name` or a service identity via --service-name or --container plus --service"
-        )),
-    }
-}
-
-fn resolve_request_payload_service_name_name(
-    payload_service_name: &Name,
-    service_name: Option<String>,
-    container_manifest: Option<&Path>,
-    service_manifest: Option<&Path>,
-    command_name: &str,
-) -> Result<Name> {
-    let resolved_service_name = resolve_request_payload_service_name(
-        payload_service_name.as_ref(),
-        service_name,
-        container_manifest,
-        service_manifest,
-        command_name,
-    )?;
-    resolved_service_name.parse().wrap_err_with(|| {
-        format!(
-            "resolved service name `{resolved_service_name}` is not a valid Soracloud service name"
-        )
-    })
-}
-
 fn workspace_script_path_if_exists(workspace_dir: &Path, script_name: &str) -> Option<String> {
     let path = workspace_dir.join(script_name);
     path.is_file().then(|| path.to_string_lossy().into_owned())
@@ -5697,165 +5619,6 @@ impl ModelUploadEncryptionRecipientArgs {
     }
 }
 
-/// Arguments for `app soracloud model-upload-init`.
-#[derive(clap::Args, Debug)]
-pub struct ModelUploadInitArgs {
-    /// Path to a `SoraUploadedModelBundleV1` JSON document.
-    #[arg(long, value_name = "PATH")]
-    bundle_file: PathBuf,
-    /// Service name that owns the uploaded model.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Torii base URL for authoritative `model/upload/init`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutation.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
-}
-
-impl ModelUploadInitArgs {
-    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        let service_plan =
-            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
-        let mut bundle: SoraUploadedModelBundleV1 = load_json(&self.bundle_file)?;
-        bundle.service_name = resolve_request_payload_service_name_name(
-            &bundle.service_name,
-            self.service_name,
-            self.container.as_deref(),
-            self.service.as_deref(),
-            "iroha app soracloud model-upload-init",
-        )?;
-        let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        let request = signed_uploaded_model_bundle_init_request(bundle, authority, key_pair)?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/model/upload/init",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
-        let mut output = payload;
-        attach_service_plan_to_output(&mut output, service_plan)?;
-        Ok(output)
-    }
-}
-
-/// Arguments for `app soracloud model-upload-chunk`.
-#[derive(clap::Args, Debug)]
-pub struct ModelUploadChunkArgs {
-    /// Path to a `SoraUploadedModelChunkV1` JSON document.
-    #[arg(long, value_name = "PATH")]
-    chunk_file: PathBuf,
-    /// Service name that owns the uploaded model.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Torii base URL for authoritative `model/upload/chunk`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutation.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
-}
-
-impl ModelUploadChunkArgs {
-    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        let service_plan =
-            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
-        let mut chunk: SoraUploadedModelChunkV1 = load_json(&self.chunk_file)?;
-        chunk.service_name = resolve_request_payload_service_name_name(
-            &chunk.service_name,
-            self.service_name,
-            self.container.as_deref(),
-            self.service.as_deref(),
-            "iroha app soracloud model-upload-chunk",
-        )?;
-        let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        let request = signed_uploaded_model_chunk_request(chunk, authority, key_pair)?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/model/upload/chunk",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
-        let mut output = payload;
-        attach_service_plan_to_output(&mut output, service_plan)?;
-        Ok(output)
-    }
-}
-
-/// Arguments for `app soracloud model-upload-finalize`.
-#[derive(clap::Args, Debug)]
-pub struct ModelUploadFinalizeArgs {
-    /// Path to an `UploadedModelFinalizePayload` JSON document.
-    #[arg(long, value_name = "PATH")]
-    request_file: PathBuf,
-    /// Service name that owns the uploaded model.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Torii base URL for authoritative `model/upload/finalize`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutation.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
-}
-
-impl ModelUploadFinalizeArgs {
-    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        let service_plan =
-            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
-        let mut payload: UploadedModelFinalizePayload = load_json(&self.request_file)?;
-        payload.service_name = resolve_request_payload_service_name(
-            payload.service_name.as_str(),
-            self.service_name,
-            self.container.as_deref(),
-            self.service.as_deref(),
-            "iroha app soracloud model-upload-finalize",
-        )?;
-        let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        let request = signed_uploaded_model_finalize_request(payload, authority, key_pair)?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/model/upload/finalize",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
-        let mut output = payload;
-        attach_service_plan_to_output(&mut output, service_plan)?;
-        Ok(output)
-    }
-}
-
 /// Arguments for `app soracloud model-upload-register`.
 #[derive(clap::Args, Debug)]
 pub struct ModelUploadRegisterArgs {
@@ -5889,18 +5652,21 @@ impl ModelUploadRegisterArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let service_plan =
             maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
-        let mut bundle: SoraUploadedModelBundleV1 = load_json(&self.bundle_file)?;
-        bundle.service_name = resolve_request_payload_service_name_name(
-            &bundle.service_name,
+        let resolved_service_name = resolve_optional_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
             self.service.as_deref(),
             "iroha app soracloud model-upload-register",
         )?;
-        let finalize: UploadedModelFinalizePayload = load_json(&self.request_file)?;
-        let request = signed_uploaded_model_register_request(
-            bundle, finalize, authority, key_pair,
+        let mut bundle: SoraUploadedModelBundleV1 = load_json(&self.bundle_file)?;
+        let mut finalize: UploadedModelFinalizePayload = load_json(&self.request_file)?;
+        apply_uploaded_model_register_service_name_override(
+            &mut bundle,
+            &mut finalize,
+            resolved_service_name.as_deref(),
         )?;
+        let request =
+            signed_uploaded_model_register_request(bundle, finalize, authority, key_pair)?;
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let (_, payload) = post_torii_soracloud_mutation(
             torii_url,
@@ -5913,6 +5679,21 @@ impl ModelUploadRegisterArgs {
         attach_service_plan_to_output(&mut output, service_plan)?;
         Ok(output)
     }
+}
+
+fn apply_uploaded_model_register_service_name_override(
+    bundle: &mut SoraUploadedModelBundleV1,
+    finalize: &mut UploadedModelFinalizePayload,
+    service_name: Option<&str>,
+) -> Result<()> {
+    let Some(service_name) = service_name else {
+        return Ok(());
+    };
+    bundle.service_name = service_name.parse().wrap_err_with(|| {
+        format!("resolved service name `{service_name}` is not a valid Soracloud service name")
+    })?;
+    finalize.service_name = service_name.to_owned();
+    Ok(())
 }
 
 /// Arguments for `app soracloud model-upload-status`.
@@ -5939,9 +5720,6 @@ pub struct ModelUploadStatusArgs {
     /// Optional bundle-root filter.
     #[arg(long, value_name = "HASH")]
     bundle_root: Option<Hash>,
-    /// Optional compile-profile hash filter.
-    #[arg(long, value_name = "HASH")]
-    compile_profile_hash: Option<Hash>,
     /// Torii base URL for authoritative `model/upload/status`.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
@@ -5972,456 +5750,10 @@ impl ModelUploadStatusArgs {
             self.model_id.as_deref(),
             self.model_name.as_deref(),
             self.bundle_root,
-            self.compile_profile_hash,
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
         let mut output = payload;
-        attach_service_plan_to_output(&mut output, service_plan)?;
-        Ok(output)
-    }
-}
-
-/// Arguments for `app soracloud model-compile`.
-#[derive(clap::Args, Debug)]
-pub struct ModelCompileArgs {
-    /// Path to a `PrivateCompilePayload` JSON document.
-    #[arg(long, value_name = "PATH")]
-    request_file: PathBuf,
-    /// Service name that owns the uploaded model.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Torii base URL for authoritative `model/compile`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutation.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
-}
-
-impl ModelCompileArgs {
-    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        let service_plan =
-            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
-        let mut payload: PrivateCompilePayload = load_json(&self.request_file)?;
-        payload.service_name = resolve_request_payload_service_name(
-            payload.service_name.as_str(),
-            self.service_name,
-            self.container.as_deref(),
-            self.service.as_deref(),
-            "iroha app soracloud model-compile",
-        )?;
-        let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        let request = signed_private_compile_request(payload, authority, key_pair)?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/model/compile",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
-        let mut output = payload;
-        attach_service_plan_to_output(&mut output, service_plan)?;
-        Ok(output)
-    }
-}
-
-/// Arguments for `app soracloud model-compile-status`.
-#[derive(clap::Args, Debug)]
-pub struct ModelCompileStatusArgs {
-    /// Service name that owns the uploaded model.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Uploaded-model pinned weight version.
-    #[arg(long, value_name = "VERSION")]
-    weight_version: String,
-    /// Optional uploaded-model identifier.
-    #[arg(long, value_name = "ID", conflicts_with = "model_name")]
-    model_id: Option<String>,
-    /// Optional logical model name used to resolve the uploaded-model record.
-    #[arg(long, value_name = "NAME", conflicts_with = "model_id")]
-    model_name: Option<String>,
-    /// Optional bundle-root filter.
-    #[arg(long, value_name = "HASH")]
-    bundle_root: Option<Hash>,
-    /// Optional compile-profile hash filter.
-    #[arg(long, value_name = "HASH")]
-    compile_profile_hash: Option<Hash>,
-    /// Torii base URL for authoritative `model/compile/status`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane query.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
-}
-
-impl ModelCompileStatusArgs {
-    fn run(self) -> Result<norito::json::Value> {
-        let service_plan =
-            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
-        let service_name = resolve_required_workspace_service_name(
-            self.service_name,
-            self.container.as_deref(),
-            self.service.as_deref(),
-            "iroha app soracloud model-compile-status",
-        )?;
-        let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        let (_, payload) = fetch_torii_soracloud_uploaded_model_status(
-            torii_url,
-            "v1/soracloud/model/compile/status",
-            &service_name,
-            &self.weight_version,
-            self.model_id.as_deref(),
-            self.model_name.as_deref(),
-            self.bundle_root,
-            self.compile_profile_hash,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
-        let mut output = payload;
-        attach_service_plan_to_output(&mut output, service_plan)?;
-        Ok(output)
-    }
-}
-
-/// Arguments for `app soracloud model-allow`.
-#[derive(clap::Args, Debug)]
-pub struct ModelAllowArgs {
-    /// Path to an `UploadedModelAllowPayload` JSON document.
-    #[arg(long, value_name = "PATH")]
-    request_file: PathBuf,
-    /// Service name that owns the uploaded model.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Torii base URL for authoritative `model/allow`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutation.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
-}
-
-impl ModelAllowArgs {
-    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        let service_plan =
-            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
-        let mut payload: UploadedModelAllowPayload = load_json(&self.request_file)?;
-        payload.service_name = resolve_request_payload_service_name(
-            payload.service_name.as_str(),
-            self.service_name,
-            self.container.as_deref(),
-            self.service.as_deref(),
-            "iroha app soracloud model-allow",
-        )?;
-        let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        let request = signed_uploaded_model_allow_request(payload, authority, key_pair)?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/model/allow",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
-        let mut output = payload;
-        attach_service_plan_to_output(&mut output, service_plan)?;
-        Ok(output)
-    }
-}
-
-/// Arguments for `app soracloud model-run-private`.
-#[derive(clap::Args, Debug)]
-pub struct ModelRunPrivateArgs {
-    /// Path to a `SoraPrivateInferenceSessionV1` JSON document.
-    #[arg(long, value_name = "PATH")]
-    session_file: PathBuf,
-    /// Service name that owns the uploaded model.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Torii base URL for authoritative `model/run-private`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutation.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
-}
-
-impl ModelRunPrivateArgs {
-    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        let service_plan =
-            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
-        let mut session: SoraPrivateInferenceSessionV1 = load_json(&self.session_file)?;
-        session.service_name = resolve_request_payload_service_name_name(
-            &session.service_name,
-            self.service_name,
-            self.container.as_deref(),
-            self.service.as_deref(),
-            "iroha app soracloud model-run-private",
-        )?;
-        let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        let mut output = execute_private_inference_start(
-            torii_url,
-            session,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-            authority,
-            key_pair,
-        )?;
-        attach_service_plan_to_output(&mut output, service_plan)?;
-        Ok(output)
-    }
-}
-
-/// Arguments for `app soracloud model-run-status`.
-#[derive(clap::Args, Debug)]
-pub struct ModelRunStatusArgs {
-    /// Private inference session identifier.
-    #[arg(long, value_name = "ID")]
-    session_id: String,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to project the local service plan.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to project the local service plan.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Torii base URL for authoritative `model/run-status`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane query.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
-}
-
-impl ModelRunStatusArgs {
-    fn run(self) -> Result<norito::json::Value> {
-        let service_plan =
-            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
-        let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        let (_, mut payload) = fetch_torii_soracloud_private_inference_status(
-            torii_url,
-            &self.session_id,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
-        attach_service_plan_to_output(&mut payload, service_plan)?;
-        Ok(payload)
-    }
-}
-
-/// Arguments for `app soracloud model-decrypt-output`.
-#[derive(clap::Args, Debug)]
-pub struct ModelDecryptOutputArgs {
-    /// Private inference session identifier.
-    #[arg(long, value_name = "ID")]
-    session_id: String,
-    /// Decryption request identifier to release.
-    #[arg(long, value_name = "ID")]
-    decrypt_request_id: String,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to project the local service plan.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to project the local service plan.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Torii base URL for authoritative `model/decrypt-output`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutation.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
-}
-
-impl ModelDecryptOutputArgs {
-    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        let service_plan =
-            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
-        let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        let mut output = execute_private_inference_output_release(
-            torii_url,
-            &self.session_id,
-            &self.decrypt_request_id,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-            authority,
-            key_pair,
-        )?;
-        attach_service_plan_to_output(&mut output, service_plan)?;
-        Ok(output)
-    }
-}
-
-/// Arguments for `app soracloud model-publish-private`.
-#[derive(clap::Args, Debug)]
-pub struct ModelPublishPrivateArgs {
-    /// Path to a prepared `PrivateModelPublishPlan` JSON document.
-    #[arg(long, value_name = "PATH", conflicts_with = "draft_file")]
-    plan_file: Option<PathBuf>,
-    /// Path to a source-backed `PrivateModelPublishDraft` JSON document.
-    #[arg(long, value_name = "PATH", conflicts_with = "plan_file")]
-    draft_file: Option<PathBuf>,
-    /// Optional path where the prepared publish plan should be written.
-    #[arg(long, value_name = "PATH", requires = "draft_file")]
-    emit_plan_file: Option<PathBuf>,
-    /// Optional service binding for the uploaded-model publish workflow.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Torii base URL for authoritative uploaded-model control-plane routes.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutations and queries.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
-}
-
-impl ModelPublishPrivateArgs {
-    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        enum PendingPrivateModelPublishInput {
-            Plan(PrivateModelPublishPlan),
-            Draft(PathBuf, PrivateModelPublishDraft),
-        }
-
-        let Self {
-            plan_file,
-            draft_file,
-            emit_plan_file,
-            service_name,
-            container,
-            service,
-            torii_url,
-            api_token,
-            timeout_secs,
-        } = self;
-        let container_manifest = container.as_deref();
-        let service_manifest = service.as_deref();
-        let service_plan = maybe_service_local_plan(container_manifest, service_manifest)?;
-
-        let mut prepared_plan_path = None;
-        let pending_input = match (plan_file.as_deref(), draft_file.as_deref()) {
-            (Some(plan_file), None) => {
-                let plan: PrivateModelPublishPlan = load_json(plan_file)?;
-                resolve_request_payload_service_name_name(
-                    &plan.bundle.service_name,
-                    service_name.clone(),
-                    container_manifest,
-                    service_manifest,
-                    "iroha app soracloud model-publish-private",
-                )?;
-                PendingPrivateModelPublishInput::Plan(plan)
-            }
-            (None, Some(draft_file)) => {
-                let mut draft: PrivateModelPublishDraft = load_json(draft_file)?;
-                draft.service_name = resolve_request_payload_service_name(
-                    &draft.service_name,
-                    service_name.clone(),
-                    container_manifest,
-                    service_manifest,
-                    "iroha app soracloud model-publish-private",
-                )?;
-                PendingPrivateModelPublishInput::Draft(draft_file.to_path_buf(), draft)
-            }
-            (Some(_), Some(_)) => {
-                return Err(eyre!(
-                    "exactly one of --plan-file or --draft-file must be provided"
-                ));
-            }
-            (None, None) => {
-                return Err(eyre!(
-                    "one of --plan-file or --draft-file is required for model-publish-private"
-                ));
-            }
-        };
-        let torii_url = require_torii_url(torii_url.as_deref())?;
-        let (_, recipient_payload) = fetch_torii_soracloud_uploaded_model_encryption_recipient(
-            torii_url,
-            api_token.as_deref(),
-            timeout_secs,
-        )?;
-        let recipient_value = recipient_payload.get("recipient").cloned().ok_or_else(|| {
-            eyre!("uploaded-model encryption recipient response is missing `recipient`")
-        })?;
-        let recipient: SoraUploadedModelEncryptionRecipientV1 =
-            json::from_value(recipient_value)
-                .wrap_err("failed to decode uploaded-model encryption recipient response")?;
-        let plan = match pending_input {
-            PendingPrivateModelPublishInput::Plan(plan) => plan,
-            PendingPrivateModelPublishInput::Draft(draft_path, draft) => {
-                let plan = prepare_private_model_publish_plan_from_draft(
-                    &draft_path,
-                    draft,
-                    recipient.clone(),
-                )?;
-                if let Some(path) = emit_plan_file.as_deref() {
-                    write_json(path, &plan)?;
-                    prepared_plan_path = Some(path.display().to_string());
-                }
-                plan
-            }
-        };
-
-        let mut output = execute_private_model_publish_plan(
-            torii_url,
-            plan,
-            Some(recipient),
-            api_token.as_deref(),
-            timeout_secs,
-            authority,
-            key_pair,
-        )?;
-        if let Some(path) = prepared_plan_path
-            && let Some(root) = output.as_object_mut()
-        {
-            root.insert("prepared_plan_file".to_owned(), json::Value::String(path));
-        }
         attach_service_plan_to_output(&mut output, service_plan)?;
         Ok(output)
     }
@@ -8876,50 +8208,6 @@ struct SignedModelWeightRollbackRequest {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-struct UploadedModelBundleInitPayload {
-    bundle: SoraUploadedModelBundleV1,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedUploadedModelBundleInitRequest {
-    payload: UploadedModelBundleInitPayload,
-    provenance: ManifestProvenance,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    authority: Option<AccountId>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    private_key: Option<ExposedPrivateKey>,
-}
-
-#[derive(
-    Clone,
-    Debug,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
-struct UploadedModelChunkPayload {
-    chunk: SoraUploadedModelChunkV1,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedUploadedModelChunkRequest {
-    payload: UploadedModelChunkPayload,
-    provenance: ManifestProvenance,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    authority: Option<AccountId>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    private_key: Option<ExposedPrivateKey>,
-}
-
-#[derive(
-    Clone,
-    Debug,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
 struct UploadedModelFinalizePayload {
     service_name: String,
     model_name: String,
@@ -8927,22 +8215,11 @@ struct UploadedModelFinalizePayload {
     artifact_id: String,
     weight_version: String,
     bundle_root: Hash,
-    privacy_mode: SoraModelPrivacyModeV1,
     weight_artifact_hash: Hash,
     dataset_ref: String,
     training_config_hash: Hash,
     reproducibility_hash: Hash,
     provenance_attestation_hash: Hash,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedUploadedModelFinalizeRequest {
-    payload: UploadedModelFinalizePayload,
-    provenance: ManifestProvenance,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    authority: Option<AccountId>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -8957,7 +8234,6 @@ struct UploadedModelRegisterPayload {
     bundle: SoraUploadedModelBundleV1,
     model_name: String,
     artifact_id: String,
-    privacy_mode: SoraModelPrivacyModeV1,
     weight_artifact_hash: Hash,
     dataset_ref: String,
     training_config_hash: Hash,
@@ -8976,197 +8252,11 @@ struct SignedUploadedModelRegisterRequest {
     private_key: Option<ExposedPrivateKey>,
 }
 
-#[derive(
-    Clone,
-    Debug,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
-struct PrivateCompilePayload {
-    service_name: String,
-    model_id: String,
-    weight_version: String,
-    bundle_root: Hash,
-    compile_profile: SoraPrivateCompileProfileV1,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedPrivateCompileRequest {
-    payload: PrivateCompilePayload,
-    provenance: ManifestProvenance,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    authority: Option<AccountId>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    private_key: Option<ExposedPrivateKey>,
-}
-
-#[derive(
-    Clone,
-    Debug,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
-struct UploadedModelAllowPayload {
-    apartment_name: String,
-    service_name: String,
-    model_name: String,
-    model_id: String,
-    artifact_id: String,
-    weight_version: String,
-    bundle_root: Hash,
-    compile_profile_hash: Hash,
-    privacy_mode: SoraModelPrivacyModeV1,
-    require_model_inference: bool,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedUploadedModelAllowRequest {
-    payload: UploadedModelAllowPayload,
-    provenance: ManifestProvenance,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    authority: Option<AccountId>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    private_key: Option<ExposedPrivateKey>,
-}
-
-#[derive(
-    Clone,
-    Debug,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
-struct PrivateInferenceRunPayload {
-    session: SoraPrivateInferenceSessionV1,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedPrivateInferenceRunRequest {
-    payload: PrivateInferenceRunPayload,
-    provenance: ManifestProvenance,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    authority: Option<AccountId>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    private_key: Option<ExposedPrivateKey>,
-}
-
-#[derive(
-    Clone,
-    Debug,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
-struct PrivateInferenceOutputReleasePayload {
-    session_id: String,
-    decrypt_request_id: String,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct SignedPrivateInferenceOutputReleaseRequest {
-    payload: PrivateInferenceOutputReleasePayload,
-    provenance: ManifestProvenance,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    authority: Option<AccountId>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    private_key: Option<ExposedPrivateKey>,
-}
-
-#[derive(
-    Clone,
-    Debug,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
-struct PrivateInferenceFinalizeRequest {
-    session_id: String,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct PrivateModelPublishPlan {
-    bundle: SoraUploadedModelBundleV1,
-    #[norito(default)]
-    chunks: Vec<SoraUploadedModelChunkV1>,
-    finalize: UploadedModelFinalizePayload,
-    compile_profile: SoraPrivateCompileProfileV1,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    allow_model: Option<UploadedModelAllowPayload>,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct PrivateModelPublishDraft {
-    source: PrivateModelSourceV1,
-    service_name: String,
-    model_name: String,
-    model_id: String,
-    artifact_id: String,
-    weight_version: String,
-    family: String,
-    #[norito(default)]
-    modalities: Vec<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    runtime_format: Option<SoraUploadedModelRuntimeFormatV1>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    privacy_mode: Option<SoraModelPrivacyModeV1>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pricing_policy: Option<SoraUploadedModelPricingPolicyV1>,
-    decryption_policy_ref: String,
-    dataset_ref: String,
-    compile_profile: SoraPrivateCompileProfileV1,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    allow_model: Option<PrivateModelAllowDraft>,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct PrivateModelAllowDraft {
-    apartment_name: String,
-    #[norito(default = "default_private_model_allow_inference")]
-    require_model_inference: bool,
-}
-
-fn default_private_model_allow_inference() -> bool {
-    true
-}
-
-#[derive(Clone, Debug)]
-struct PrivateModelSourceEntry {
-    relative_path: String,
-    absolute_path: PathBuf,
-    file_bytes: u64,
-}
-
-struct ResolvedPrivateModelSource {
-    source_dir: PathBuf,
-    _tempdir: Option<PrivateModelSourceTempDir>,
-}
-
-#[derive(Clone, Copy)]
-struct PrivateModelHfSourceConfig<'a> {
-    api_base_url: &'a str,
-    hub_base_url: &'a str,
-    max_files: u32,
-    max_file_bytes: u64,
-    max_total_bytes: u64,
-}
-
-struct PrivateModelSourceTempDir {
+struct SoracloudTempDir {
     path: PathBuf,
 }
 
-impl PrivateModelSourceTempDir {
+impl SoracloudTempDir {
     fn new(prefix: &str) -> Result<Self> {
         for _ in 0..8 {
             let mut suffix = [0_u8; 8];
@@ -9182,7 +8272,7 @@ impl PrivateModelSourceTempDir {
             }
         }
         Err(eyre!(
-            "failed to allocate a unique temporary directory for private-model source normalization"
+            "failed to allocate a unique Soracloud temporary directory"
         ))
     }
 
@@ -9191,91 +8281,9 @@ impl PrivateModelSourceTempDir {
     }
 }
 
-impl Drop for PrivateModelSourceTempDir {
+impl Drop for SoracloudTempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
-    }
-}
-
-type UploadedModelBundleRootTuple<'a> = (
-    &'a str,
-    &'a str,
-    &'a str,
-    &'a str,
-    Vec<String>,
-    Hash,
-    SoraUploadedModelRuntimeFormatV1,
-    u64,
-    u64,
-    Hash,
-    Hash,
-    SoraUploadedModelEncryptionRecipientV1,
-    SoraUploadedModelWrappedKeyV1,
-    SoraUploadedModelPricingPolicyV1,
-    &'a str,
-);
-
-struct UploadedModelBundleRootPayload<'a> {
-    service_name: &'a str,
-    model_id: &'a str,
-    weight_version: &'a str,
-    family: &'a str,
-    modalities: &'a Vec<String>,
-    plaintext_root: Hash,
-    runtime_format: SoraUploadedModelRuntimeFormatV1,
-    plaintext_bytes: u64,
-    ciphertext_bytes: u64,
-    compile_profile_hash: Hash,
-    chunk_manifest_root: Hash,
-    upload_recipient: &'a SoraUploadedModelEncryptionRecipientV1,
-    wrapped_bundle_key: &'a SoraUploadedModelWrappedKeyV1,
-    pricing_policy: &'a SoraUploadedModelPricingPolicyV1,
-    decryption_policy_ref: &'a str,
-}
-
-impl norito::core::NoritoSerialize for UploadedModelBundleRootPayload<'_> {
-    fn schema_hash() -> [u8; 16]
-    where
-        Self: Sized,
-    {
-        norito::core::type_name_schema_hash::<UploadedModelBundleRootTuple<'static>>()
-    }
-
-    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::Error> {
-        let current = norito::core::get_decode_flags();
-        let defaults = norito::core::default_encode_flags();
-        let dynamic_mask = norito::core::header_flags::PACKED_SEQ;
-        let static_defaults = defaults & !dynamic_mask;
-        let merged = if current == 0 {
-            defaults
-        } else {
-            let current_dynamic = current & dynamic_mask;
-            let current_static = current & !dynamic_mask;
-            let effective_static = if current_static == 0 {
-                static_defaults
-            } else {
-                current_static | static_defaults
-            };
-            current_dynamic | effective_static
-        };
-        let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(merged, merged);
-
-        serialize_tuple_field(&mut writer, &self.service_name)?;
-        serialize_tuple_field(&mut writer, &self.model_id)?;
-        serialize_tuple_field(&mut writer, &self.weight_version)?;
-        serialize_tuple_field(&mut writer, &self.family)?;
-        serialize_tuple_field(&mut writer, self.modalities)?;
-        serialize_tuple_field(&mut writer, &self.plaintext_root)?;
-        serialize_tuple_field(&mut writer, &self.runtime_format)?;
-        serialize_tuple_field(&mut writer, &self.plaintext_bytes)?;
-        serialize_tuple_field(&mut writer, &self.ciphertext_bytes)?;
-        serialize_tuple_field(&mut writer, &self.compile_profile_hash)?;
-        serialize_tuple_field(&mut writer, &self.chunk_manifest_root)?;
-        serialize_tuple_field(&mut writer, self.upload_recipient)?;
-        serialize_tuple_field(&mut writer, self.wrapped_bundle_key)?;
-        serialize_tuple_field(&mut writer, self.pricing_policy)?;
-        serialize_tuple_field(&mut writer, &self.decryption_policy_ref)?;
-        Ok(())
     }
 }
 
@@ -9963,7 +8971,7 @@ fn publish_public_service_discovery(
         url.to_string()
     });
 
-    let tempdir = PrivateModelSourceTempDir::new("iroha-public-service-discovery")
+    let tempdir = SoracloudTempDir::new("iroha-public-service-discovery")
         .wrap_err("failed to create temporary public discovery dir")?;
     let discovery_stub = SoracloudPublicServiceDiscoveryV1 {
         schema_version: PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1,
@@ -10688,7 +9696,7 @@ fn publish_inrou_guest_image_artifacts(
             .map(|member_path| validate_local_inrou_member(&inrou_dir, &format!("/inrou/{member_path}")))
             .collect::<Result<Vec<_>>>()?;
 
-        let staged_artifact = PrivateModelSourceTempDir::new("iroha-inrou-guest-image-artifact")
+        let staged_artifact = SoracloudTempDir::new("iroha-inrou-guest-image-artifact")
             .wrap_err_with(|| {
                 format!(
                     "failed to stage guest-image artifact for {}",
@@ -11191,16 +10199,6 @@ fn parse_hf_repo_id_arg(repo_id: &str) -> Result<String> {
 
 fn parse_hf_revision_arg(revision: &str) -> Result<String> {
     normalize_hf_token("--revision", revision, HF_REVISION_MAX_BYTES)
-}
-
-fn validate_private_model_hf_revision(revision: &str) -> Result<String> {
-    let normalized = parse_hf_revision_arg(revision)?;
-    if normalized.len() != 40 || !normalized.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(eyre!(
-            "uploaded-model Hugging Face snapshot revision must be a pinned 40-character commit SHA"
-        ));
-    }
-    Ok(normalized)
 }
 
 fn resolve_hf_revision_arg(revision: Option<&str>) -> Result<String> {
@@ -12281,118 +11279,6 @@ fn signed_model_weight_rollback_request(
     })
 }
 
-fn encode_uploaded_model_bundle_init_signature_payload(
-    payload: &UploadedModelBundleInitPayload,
-) -> Result<Vec<u8>> {
-    encode_uploaded_model_bundle_register_provenance_payload(payload.bundle.clone())
-        .wrap_err("failed to encode uploaded model init signature payload")
-}
-
-fn signed_uploaded_model_bundle_init_request(
-    bundle: SoraUploadedModelBundleV1,
-    _authority: &AccountId,
-    key_pair: &KeyPair,
-) -> Result<SignedUploadedModelBundleInitRequest> {
-    bundle
-        .validate()
-        .wrap_err("invalid uploaded model bundle")?;
-    let payload = UploadedModelBundleInitPayload { bundle };
-    let encoded = encode_uploaded_model_bundle_init_signature_payload(&payload)?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
-    Ok(SignedUploadedModelBundleInitRequest {
-        payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
-        authority: None,
-        private_key: None,
-    })
-}
-
-fn encode_uploaded_model_chunk_signature_payload(
-    payload: &UploadedModelChunkPayload,
-) -> Result<Vec<u8>> {
-    encode_uploaded_model_chunk_append_provenance_payload(payload.chunk.clone())
-        .wrap_err("failed to encode uploaded model chunk signature payload")
-}
-
-fn signed_uploaded_model_chunk_request(
-    chunk: SoraUploadedModelChunkV1,
-    _authority: &AccountId,
-    key_pair: &KeyPair,
-) -> Result<SignedUploadedModelChunkRequest> {
-    chunk.validate().wrap_err("invalid uploaded model chunk")?;
-    let payload = UploadedModelChunkPayload { chunk };
-    let encoded = encode_uploaded_model_chunk_signature_payload(&payload)?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
-    Ok(SignedUploadedModelChunkRequest {
-        payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
-        authority: None,
-        private_key: None,
-    })
-}
-
-fn encode_uploaded_model_finalize_signature_payload(
-    payload: &UploadedModelFinalizePayload,
-) -> Result<Vec<u8>> {
-    encode_uploaded_model_finalize_provenance_payload(
-        payload.service_name.as_str(),
-        payload.model_name.as_str(),
-        payload.model_id.as_str(),
-        payload.artifact_id.as_str(),
-        payload.weight_version.as_str(),
-        payload.bundle_root,
-        payload.privacy_mode,
-        payload.weight_artifact_hash,
-        payload.dataset_ref.as_str(),
-        payload.training_config_hash,
-        payload.reproducibility_hash,
-        payload.provenance_attestation_hash,
-    )
-    .wrap_err("failed to encode uploaded model finalize signature payload")
-}
-
-fn signed_uploaded_model_finalize_request(
-    payload: UploadedModelFinalizePayload,
-    _authority: &AccountId,
-    key_pair: &KeyPair,
-) -> Result<SignedUploadedModelFinalizeRequest> {
-    if payload.service_name.trim().is_empty() {
-        return Err(eyre!("finalize service_name must not be empty"));
-    }
-    if payload.model_name.trim().is_empty() {
-        return Err(eyre!("finalize model_name must not be empty"));
-    }
-    if payload.model_id.trim().is_empty() {
-        return Err(eyre!("finalize model_id must not be empty"));
-    }
-    if payload.artifact_id.trim().is_empty() {
-        return Err(eyre!("finalize artifact_id must not be empty"));
-    }
-    if payload.weight_version.trim().is_empty() {
-        return Err(eyre!("finalize weight_version must not be empty"));
-    }
-    if payload.dataset_ref.trim().is_empty() {
-        return Err(eyre!("finalize dataset_ref must not be empty"));
-    }
-    let encoded = encode_uploaded_model_finalize_signature_payload(&payload)?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
-    Ok(SignedUploadedModelFinalizeRequest {
-        payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
-        authority: None,
-        private_key: None,
-    })
-}
-
 fn signed_uploaded_model_register_request(
     bundle: SoraUploadedModelBundleV1,
     finalize: UploadedModelFinalizePayload,
@@ -12441,7 +11327,6 @@ fn signed_uploaded_model_register_request(
         bundle,
         model_name: finalize.model_name,
         artifact_id: finalize.artifact_id,
-        privacy_mode: finalize.privacy_mode,
         weight_artifact_hash: finalize.weight_artifact_hash,
         dataset_ref: finalize.dataset_ref,
         training_config_hash: finalize.training_config_hash,
@@ -12460,7 +11345,6 @@ fn signed_uploaded_model_register_request(
         payload.artifact_id.as_str(),
         payload.bundle.weight_version.as_str(),
         payload.bundle.bundle_root,
-        payload.privacy_mode,
         payload.weight_artifact_hash,
         payload.dataset_ref.as_str(),
         payload.training_config_hash,
@@ -12477,169 +11361,6 @@ fn signed_uploaded_model_register_request(
         finalize_provenance: ManifestProvenance {
             signer: key_pair.public_key().clone(),
             signature: Signature::new(key_pair.private_key(), &finalize_encoded),
-        },
-        authority: None,
-        private_key: None,
-    })
-}
-
-fn uploaded_model_compile_profile_hash(compile_profile: &SoraPrivateCompileProfileV1) -> Hash {
-    let hash_of: HashOf<SoraPrivateCompileProfileV1> = HashOf::new(compile_profile);
-    hash_of.into()
-}
-
-fn encode_private_compile_signature_payload(payload: &PrivateCompilePayload) -> Result<Vec<u8>> {
-    encode_private_compile_profile_provenance_payload(
-        payload.service_name.as_str(),
-        payload.model_id.as_str(),
-        payload.weight_version.as_str(),
-        payload.bundle_root,
-        payload.compile_profile.clone(),
-    )
-    .wrap_err("failed to encode private compile signature payload")
-}
-
-fn signed_private_compile_request(
-    payload: PrivateCompilePayload,
-    _authority: &AccountId,
-    key_pair: &KeyPair,
-) -> Result<SignedPrivateCompileRequest> {
-    if payload.service_name.trim().is_empty() {
-        return Err(eyre!("compile service_name must not be empty"));
-    }
-    if payload.model_id.trim().is_empty() {
-        return Err(eyre!("compile model_id must not be empty"));
-    }
-    if payload.weight_version.trim().is_empty() {
-        return Err(eyre!("compile weight_version must not be empty"));
-    }
-    payload
-        .compile_profile
-        .validate()
-        .wrap_err("invalid private compile profile")?;
-    let encoded = encode_private_compile_signature_payload(&payload)?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
-    Ok(SignedPrivateCompileRequest {
-        payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
-        authority: None,
-        private_key: None,
-    })
-}
-
-fn encode_uploaded_model_allow_signature_payload(
-    payload: &UploadedModelAllowPayload,
-) -> Result<Vec<u8>> {
-    encode_uploaded_model_allow_provenance_payload(
-        payload.apartment_name.as_str(),
-        payload.service_name.as_str(),
-        payload.model_name.as_str(),
-        payload.model_id.as_str(),
-        payload.artifact_id.as_str(),
-        payload.weight_version.as_str(),
-        payload.bundle_root,
-        payload.compile_profile_hash,
-        payload.privacy_mode,
-        payload.require_model_inference,
-    )
-    .wrap_err("failed to encode uploaded model allow signature payload")
-}
-
-fn signed_uploaded_model_allow_request(
-    payload: UploadedModelAllowPayload,
-    _authority: &AccountId,
-    key_pair: &KeyPair,
-) -> Result<SignedUploadedModelAllowRequest> {
-    for (field_name, value) in [
-        ("apartment_name", payload.apartment_name.as_str()),
-        ("service_name", payload.service_name.as_str()),
-        ("model_name", payload.model_name.as_str()),
-        ("model_id", payload.model_id.as_str()),
-        ("artifact_id", payload.artifact_id.as_str()),
-        ("weight_version", payload.weight_version.as_str()),
-    ] {
-        if value.trim().is_empty() {
-            return Err(eyre!("allow-model {field_name} must not be empty"));
-        }
-    }
-    let encoded = encode_uploaded_model_allow_signature_payload(&payload)?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
-    Ok(SignedUploadedModelAllowRequest {
-        payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
-        authority: None,
-        private_key: None,
-    })
-}
-
-fn encode_private_inference_run_signature_payload(
-    payload: &PrivateInferenceRunPayload,
-) -> Result<Vec<u8>> {
-    encode_private_inference_start_provenance_payload(payload.session.clone())
-        .wrap_err("failed to encode private inference start signature payload")
-}
-
-fn signed_private_inference_run_request(
-    session: SoraPrivateInferenceSessionV1,
-    _authority: &AccountId,
-    key_pair: &KeyPair,
-) -> Result<SignedPrivateInferenceRunRequest> {
-    session
-        .validate()
-        .wrap_err("invalid private inference session")?;
-    let payload = PrivateInferenceRunPayload { session };
-    let encoded = encode_private_inference_run_signature_payload(&payload)?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
-    Ok(SignedPrivateInferenceRunRequest {
-        payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
-        authority: None,
-        private_key: None,
-    })
-}
-
-fn encode_private_inference_output_release_signature_payload(
-    payload: &PrivateInferenceOutputReleasePayload,
-) -> Result<Vec<u8>> {
-    encode_private_inference_output_release_provenance_payload(
-        payload.session_id.as_str(),
-        payload.decrypt_request_id.as_str(),
-    )
-    .wrap_err("failed to encode private inference output release signature payload")
-}
-
-fn signed_private_inference_output_release_request(
-    session_id: &str,
-    decrypt_request_id: &str,
-    _authority: &AccountId,
-    key_pair: &KeyPair,
-) -> Result<SignedPrivateInferenceOutputReleaseRequest> {
-    if session_id.trim().is_empty() {
-        return Err(eyre!("--session-id must not be empty"));
-    }
-    if decrypt_request_id.trim().is_empty() {
-        return Err(eyre!("--decrypt-request-id must not be empty"));
-    }
-    let payload = PrivateInferenceOutputReleasePayload {
-        session_id: session_id.trim().to_owned(),
-        decrypt_request_id: decrypt_request_id.trim().to_owned(),
-    };
-    let encoded = encode_private_inference_output_release_signature_payload(&payload)?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
-    Ok(SignedPrivateInferenceOutputReleaseRequest {
-        payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
         },
         authority: None,
         private_key: None,
@@ -13469,234 +12190,6 @@ fn build_message_ack_output(
     Ok(output)
 }
 
-fn compute_uploaded_model_chunk_manifest_root(chunks: &[SoraUploadedModelChunkV1]) -> Result<Hash> {
-    let manifest = chunks
-        .iter()
-        .map(|chunk| {
-            (
-                chunk.ordinal,
-                chunk.offset_bytes,
-                chunk.plaintext_len,
-                chunk.ciphertext_len,
-                chunk.ciphertext_hash,
-            )
-        })
-        .collect::<Vec<_>>();
-    let encoded =
-        norito::to_bytes(&manifest).wrap_err("failed to encode uploaded-model chunk manifest")?;
-    Ok(Hash::new(encoded))
-}
-
-fn validate_private_model_publish_plan(plan: &PrivateModelPublishPlan) -> Result<Hash> {
-    plan.bundle
-        .validate()
-        .wrap_err("invalid uploaded-model bundle")?;
-    plan.compile_profile
-        .validate()
-        .wrap_err("invalid private compile profile")?;
-    if plan.chunks.is_empty() {
-        return Err(eyre!(
-            "publish plan must contain at least one uploaded-model chunk"
-        ));
-    }
-    if usize::try_from(plan.bundle.chunk_count).unwrap_or(usize::MAX) != plan.chunks.len() {
-        return Err(eyre!(
-            "publish plan chunk count ({}) does not match bundle.chunk_count ({})",
-            plan.chunks.len(),
-            plan.bundle.chunk_count
-        ));
-    }
-
-    let compile_profile_hash = uploaded_model_compile_profile_hash(&plan.compile_profile);
-    if plan.bundle.compile_profile_hash != compile_profile_hash {
-        return Err(eyre!(
-            "publish plan compile profile hash does not match bundle.compile_profile_hash"
-        ));
-    }
-
-    let mut seen_ordinals = BTreeSet::new();
-    let mut sorted_chunks = plan.chunks.clone();
-    sorted_chunks.sort_by_key(|chunk| chunk.ordinal);
-    let mut next_offset = 0_u64;
-    let mut plaintext_bytes = 0_u64;
-    let mut ciphertext_bytes = 0_u64;
-    for (expected_ordinal, chunk) in sorted_chunks.iter().enumerate() {
-        chunk.validate().wrap_err("invalid uploaded-model chunk")?;
-        if chunk.service_name != plan.bundle.service_name {
-            return Err(eyre!(
-                "chunk ordinal {} service_name does not match bundle service_name",
-                chunk.ordinal
-            ));
-        }
-        if chunk.model_id != plan.bundle.model_id {
-            return Err(eyre!(
-                "chunk ordinal {} model_id does not match bundle model_id",
-                chunk.ordinal
-            ));
-        }
-        if chunk.weight_version != plan.bundle.weight_version {
-            return Err(eyre!(
-                "chunk ordinal {} weight_version does not match bundle weight_version",
-                chunk.ordinal
-            ));
-        }
-        if chunk.bundle_root != plan.bundle.bundle_root {
-            return Err(eyre!(
-                "chunk ordinal {} bundle_root does not match bundle bundle_root",
-                chunk.ordinal
-            ));
-        }
-        if !seen_ordinals.insert(chunk.ordinal) {
-            return Err(eyre!(
-                "chunk ordinal {} is duplicated in the publish plan",
-                chunk.ordinal
-            ));
-        }
-        let expected_ordinal = u32::try_from(expected_ordinal).unwrap_or(u32::MAX);
-        if chunk.ordinal != expected_ordinal {
-            return Err(eyre!(
-                "chunk ordinals must be contiguous from zero; expected {}, found {}",
-                expected_ordinal,
-                chunk.ordinal
-            ));
-        }
-        if chunk.offset_bytes != next_offset {
-            return Err(eyre!(
-                "chunk ordinal {} offset {} does not match expected next offset {}",
-                chunk.ordinal,
-                chunk.offset_bytes,
-                next_offset
-            ));
-        }
-        let envelope_ciphertext_len =
-            u32::try_from(chunk.encrypted_payload.ciphertext.len()).unwrap_or(u32::MAX);
-        if chunk.ciphertext_len != envelope_ciphertext_len {
-            return Err(eyre!(
-                "chunk ordinal {} ciphertext_len does not match envelope ciphertext length",
-                chunk.ordinal
-            ));
-        }
-        if Hash::new(chunk.encrypted_payload.ciphertext.as_slice()) != chunk.ciphertext_hash {
-            return Err(eyre!(
-                "chunk ordinal {} ciphertext_hash does not match encrypted payload bytes",
-                chunk.ordinal
-            ));
-        }
-        next_offset = next_offset.saturating_add(u64::from(chunk.plaintext_len));
-        plaintext_bytes = plaintext_bytes.saturating_add(u64::from(chunk.plaintext_len));
-        ciphertext_bytes = ciphertext_bytes.saturating_add(u64::from(chunk.ciphertext_len));
-    }
-
-    if plaintext_bytes != plan.bundle.plaintext_bytes {
-        return Err(eyre!(
-            "publish plan plaintext byte sum {} does not match bundle.plaintext_bytes {}",
-            plaintext_bytes,
-            plan.bundle.plaintext_bytes
-        ));
-    }
-    if ciphertext_bytes != plan.bundle.ciphertext_bytes {
-        return Err(eyre!(
-            "publish plan ciphertext byte sum {} does not match bundle.ciphertext_bytes {}",
-            ciphertext_bytes,
-            plan.bundle.ciphertext_bytes
-        ));
-    }
-    let chunk_manifest_root = compute_uploaded_model_chunk_manifest_root(&sorted_chunks)?;
-    if chunk_manifest_root != plan.bundle.chunk_manifest_root {
-        return Err(eyre!(
-            "publish plan chunk manifest root does not match bundle.chunk_manifest_root"
-        ));
-    }
-
-    if plan.finalize.service_name.trim().is_empty()
-        || plan.finalize.model_name.trim().is_empty()
-        || plan.finalize.model_id.trim().is_empty()
-        || plan.finalize.artifact_id.trim().is_empty()
-        || plan.finalize.weight_version.trim().is_empty()
-        || plan.finalize.dataset_ref.trim().is_empty()
-    {
-        return Err(eyre!(
-            "publish plan finalize payload contains empty required fields"
-        ));
-    }
-    if plan.finalize.service_name != plan.bundle.service_name.to_string() {
-        return Err(eyre!(
-            "publish plan finalize service_name does not match bundle"
-        ));
-    }
-    if plan.finalize.model_id != plan.bundle.model_id {
-        return Err(eyre!(
-            "publish plan finalize model_id does not match bundle"
-        ));
-    }
-    if plan.finalize.weight_version != plan.bundle.weight_version {
-        return Err(eyre!(
-            "publish plan finalize weight_version does not match bundle"
-        ));
-    }
-    if plan.finalize.bundle_root != plan.bundle.bundle_root {
-        return Err(eyre!(
-            "publish plan finalize bundle_root does not match bundle"
-        ));
-    }
-
-    if let Some(allow_model) = plan.allow_model.as_ref() {
-        if allow_model.apartment_name.trim().is_empty()
-            || allow_model.service_name.trim().is_empty()
-            || allow_model.model_name.trim().is_empty()
-            || allow_model.model_id.trim().is_empty()
-            || allow_model.artifact_id.trim().is_empty()
-            || allow_model.weight_version.trim().is_empty()
-        {
-            return Err(eyre!(
-                "publish plan allow-model payload contains empty required fields"
-            ));
-        }
-        if allow_model.service_name != plan.finalize.service_name {
-            return Err(eyre!(
-                "publish plan allow-model service_name does not match finalize payload"
-            ));
-        }
-        if allow_model.model_name != plan.finalize.model_name {
-            return Err(eyre!(
-                "publish plan allow-model model_name does not match finalize payload"
-            ));
-        }
-        if allow_model.model_id != plan.finalize.model_id {
-            return Err(eyre!(
-                "publish plan allow-model model_id does not match finalize payload"
-            ));
-        }
-        if allow_model.artifact_id != plan.finalize.artifact_id {
-            return Err(eyre!(
-                "publish plan allow-model artifact_id does not match finalize payload"
-            ));
-        }
-        if allow_model.weight_version != plan.finalize.weight_version {
-            return Err(eyre!(
-                "publish plan allow-model weight_version does not match finalize payload"
-            ));
-        }
-        if allow_model.bundle_root != plan.finalize.bundle_root {
-            return Err(eyre!(
-                "publish plan allow-model bundle_root does not match finalize payload"
-            ));
-        }
-        if allow_model.compile_profile_hash != compile_profile_hash {
-            return Err(eyre!(
-                "publish plan allow-model compile_profile_hash does not match compile profile"
-            ));
-        }
-        if allow_model.privacy_mode != plan.finalize.privacy_mode {
-            return Err(eyre!(
-                "publish plan allow-model privacy_mode does not match finalize payload"
-            ));
-        }
-    }
-
-    Ok(compile_profile_hash)
-}
-
 fn serialize_tuple_field<W, T>(writer: &mut W, value: &T) -> Result<(), norito::Error>
 where
     W: std::io::Write,
@@ -13728,1405 +12221,6 @@ fn enter_default_norito_encode_flags() -> norito::core::DecodeFlagsGuard {
         current_dynamic | effective_static
     };
     norito::core::DecodeFlagsGuard::enter_with_hint(merged, merged)
-}
-
-fn hash_encoded<T>(value: &T) -> Result<Hash>
-where
-    T: norito::core::NoritoSerialize,
-{
-    let encoded = to_bytes(value).wrap_err("failed to encode deterministic hash payload")?;
-    Ok(Hash::new(encoded))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn compute_uploaded_model_bundle_root(
-    service_name: &Name,
-    model_id: &str,
-    weight_version: &str,
-    family: &str,
-    modalities: &Vec<String>,
-    plaintext_root: Hash,
-    runtime_format: SoraUploadedModelRuntimeFormatV1,
-    plaintext_bytes: u64,
-    ciphertext_bytes: u64,
-    compile_profile_hash: Hash,
-    chunk_manifest_root: Hash,
-    upload_recipient: &SoraUploadedModelEncryptionRecipientV1,
-    wrapped_bundle_key: &SoraUploadedModelWrappedKeyV1,
-    pricing_policy: &SoraUploadedModelPricingPolicyV1,
-    decryption_policy_ref: &str,
-) -> Result<Hash> {
-    hash_encoded(&UploadedModelBundleRootPayload {
-        service_name: service_name.as_ref(),
-        model_id,
-        weight_version,
-        family,
-        modalities,
-        plaintext_root,
-        runtime_format,
-        plaintext_bytes,
-        ciphertext_bytes,
-        compile_profile_hash,
-        chunk_manifest_root,
-        upload_recipient,
-        wrapped_bundle_key,
-        pricing_policy,
-        decryption_policy_ref,
-    })
-}
-
-fn prepare_private_model_publish_plan_from_draft(
-    draft_path: &Path,
-    draft: PrivateModelPublishDraft,
-    recipient: SoraUploadedModelEncryptionRecipientV1,
-) -> Result<PrivateModelPublishPlan> {
-    let chunk_plaintext_bytes = defaults::nexus::uploaded_models::CHUNK_PLAINTEXT_BYTES;
-    let hf_source_config = default_private_model_hf_source_config();
-    let mut rng = rand::rng();
-    prepare_private_model_publish_plan_from_draft_with_source_config_and_rng(
-        draft_path,
-        draft,
-        recipient,
-        hf_source_config,
-        chunk_plaintext_bytes,
-        &mut rng,
-    )
-}
-
-fn default_private_model_hf_source_config() -> PrivateModelHfSourceConfig<'static> {
-    PrivateModelHfSourceConfig {
-        api_base_url: defaults::soracloud_runtime::hf::API_BASE_URL,
-        hub_base_url: defaults::soracloud_runtime::hf::HUB_BASE_URL,
-        max_files: defaults::soracloud_runtime::hf::IMPORT_MAX_FILES,
-        max_file_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES,
-        max_total_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES,
-    }
-}
-
-#[cfg(test)]
-fn prepare_private_model_publish_plan_from_draft_with_rng<R>(
-    draft_path: &Path,
-    draft: PrivateModelPublishDraft,
-    recipient: SoraUploadedModelEncryptionRecipientV1,
-    chunk_plaintext_bytes: u64,
-    rng: &mut R,
-) -> Result<PrivateModelPublishPlan>
-where
-    R: rand::CryptoRng + rand::RngCore,
-{
-    let hf_source_config = default_private_model_hf_source_config();
-    prepare_private_model_publish_plan_from_draft_with_source_config_and_rng(
-        draft_path,
-        draft,
-        recipient,
-        hf_source_config,
-        chunk_plaintext_bytes,
-        rng,
-    )
-}
-
-fn prepare_private_model_publish_plan_from_draft_with_source_config_and_rng<R>(
-    draft_path: &Path,
-    draft: PrivateModelPublishDraft,
-    recipient: SoraUploadedModelEncryptionRecipientV1,
-    hf_source_config: PrivateModelHfSourceConfig<'_>,
-    chunk_plaintext_bytes: u64,
-    rng: &mut R,
-) -> Result<PrivateModelPublishPlan>
-where
-    R: rand::CryptoRng + rand::RngCore,
-{
-    validate_private_model_publish_draft(&draft)?;
-    recipient
-        .validate()
-        .wrap_err("invalid uploaded-model encryption recipient")?;
-    if chunk_plaintext_bytes == 0 {
-        return Err(eyre!("uploaded-model chunk size must be greater than zero"));
-    }
-
-    let resolved_source =
-        resolve_private_model_source(draft_path, &draft.source, hf_source_config)?;
-    let source_entries = collect_private_model_source_entries(&resolved_source.source_dir)?;
-    validate_private_model_source_entries(&draft, &source_entries)?;
-    let source_entries = admitted_private_model_source_entries(&source_entries);
-
-    let service_name: Name = draft
-        .service_name
-        .parse()
-        .wrap_err("invalid uploaded-model draft service_name")?;
-    let compile_profile = draft.compile_profile.clone();
-    let compile_profile_hash = uploaded_model_compile_profile_hash(&compile_profile);
-    let runtime_format = draft
-        .runtime_format
-        .unwrap_or(SoraUploadedModelRuntimeFormatV1::HuggingFaceSafetensors);
-    let privacy_mode = draft
-        .privacy_mode
-        .unwrap_or(SoraModelPrivacyModeV1::PrivateExecution);
-    let pricing_policy = draft.pricing_policy.unwrap_or_default();
-    let modalities = if draft.modalities.is_empty() {
-        vec!["text".to_owned()]
-    } else {
-        draft.modalities.clone()
-    };
-
-    let (wrapped_bundle_key, bundle_key) = wrap_uploaded_model_bundle_key(&recipient, &draft, rng)?;
-    let (plaintext_root, mut chunks, plaintext_bytes, ciphertext_bytes) =
-        build_private_model_chunks(
-            &service_name,
-            &draft.model_id,
-            &draft.weight_version,
-            &source_entries,
-            chunk_plaintext_bytes,
-            &bundle_key,
-            rng,
-        )?;
-    let chunk_manifest_root = compute_uploaded_model_chunk_manifest_root(&chunks)?;
-    let bundle_root = compute_uploaded_model_bundle_root(
-        &service_name,
-        &draft.model_id,
-        &draft.weight_version,
-        &draft.family,
-        &modalities,
-        plaintext_root,
-        runtime_format,
-        plaintext_bytes,
-        ciphertext_bytes,
-        compile_profile_hash,
-        chunk_manifest_root,
-        &recipient,
-        &wrapped_bundle_key,
-        &pricing_policy,
-        &draft.decryption_policy_ref,
-    )?;
-    for chunk in &mut chunks {
-        chunk.bundle_root = bundle_root;
-    }
-
-    let bundle = SoraUploadedModelBundleV1 {
-        schema_version: SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
-        service_name: service_name.clone(),
-        model_id: draft.model_id.clone(),
-        weight_version: draft.weight_version.clone(),
-        family: draft.family.clone(),
-        modalities: modalities.clone(),
-        plaintext_root,
-        runtime_format,
-        bundle_root,
-        sorafs_manifest_digest: iroha::data_model::sorafs::pin_registry::ManifestDigest::new(
-            [0xA5; 32],
-        ),
-        chunk_count: u32::try_from(chunks.len()).unwrap_or(u32::MAX),
-        plaintext_bytes,
-        ciphertext_bytes,
-        compile_profile_hash,
-        chunk_manifest_root,
-        upload_recipient: recipient,
-        wrapped_bundle_key,
-        pricing_policy,
-        decryption_policy_ref: draft.decryption_policy_ref.clone(),
-    };
-
-    let weight_artifact_hash = hash_encoded(&(
-        "uploaded-model-weight",
-        draft.service_name.as_str(),
-        draft.model_name.as_str(),
-        draft.model_id.as_str(),
-        draft.artifact_id.as_str(),
-        draft.weight_version.as_str(),
-        bundle_root,
-    ))?;
-    let training_config_hash = hash_encoded(&(
-        "private-compile-profile",
-        compile_profile.clone(),
-        runtime_format,
-    ))?;
-    let reproducibility_hash = hash_encoded(&(
-        "chunk-reproducibility",
-        draft.service_name.as_str(),
-        draft.model_id.as_str(),
-        chunks
-            .iter()
-            .map(|chunk| {
-                (
-                    chunk.ordinal,
-                    chunk.offset_bytes,
-                    chunk.plaintext_len,
-                    chunk.ciphertext_len,
-                    chunk.ciphertext_hash,
-                )
-            })
-            .collect::<Vec<_>>(),
-    ))?;
-    let provenance_attestation_hash = hash_encoded(&(
-        "uploaded-model-attestation",
-        weight_artifact_hash,
-        training_config_hash,
-        reproducibility_hash,
-        draft.dataset_ref.as_str(),
-    ))?;
-    let finalize = UploadedModelFinalizePayload {
-        service_name: draft.service_name.clone(),
-        model_name: draft.model_name.clone(),
-        model_id: draft.model_id.clone(),
-        artifact_id: draft.artifact_id.clone(),
-        weight_version: draft.weight_version.clone(),
-        bundle_root,
-        privacy_mode,
-        weight_artifact_hash,
-        dataset_ref: draft.dataset_ref.clone(),
-        training_config_hash,
-        reproducibility_hash,
-        provenance_attestation_hash,
-    };
-    let allow_model = draft.allow_model.map(|allow| UploadedModelAllowPayload {
-        apartment_name: allow.apartment_name,
-        service_name: draft.service_name.clone(),
-        model_name: draft.model_name.clone(),
-        model_id: draft.model_id.clone(),
-        artifact_id: draft.artifact_id.clone(),
-        weight_version: draft.weight_version.clone(),
-        bundle_root,
-        compile_profile_hash,
-        privacy_mode,
-        require_model_inference: allow.require_model_inference,
-    });
-
-    let plan = PrivateModelPublishPlan {
-        bundle,
-        chunks,
-        finalize,
-        compile_profile,
-        allow_model,
-    };
-    validate_private_model_publish_plan(&plan)?;
-    Ok(plan)
-}
-
-fn validate_private_model_publish_draft(draft: &PrivateModelPublishDraft) -> Result<()> {
-    for (field, value) in [
-        ("service_name", draft.service_name.as_str()),
-        ("model_name", draft.model_name.as_str()),
-        ("model_id", draft.model_id.as_str()),
-        ("artifact_id", draft.artifact_id.as_str()),
-        ("weight_version", draft.weight_version.as_str()),
-        ("family", draft.family.as_str()),
-        (
-            "decryption_policy_ref",
-            draft.decryption_policy_ref.as_str(),
-        ),
-        ("dataset_ref", draft.dataset_ref.as_str()),
-    ] {
-        if value.trim().is_empty() {
-            return Err(eyre!("uploaded-model draft `{field}` must not be empty"));
-        }
-    }
-    match &draft.source {
-        PrivateModelSourceV1::LocalDir(source) => {
-            if source.path.trim().is_empty() {
-                return Err(eyre!("uploaded-model draft source.path must not be empty"));
-            }
-        }
-        PrivateModelSourceV1::HuggingFaceSnapshot(source) => {
-            parse_hf_repo_id_arg(&source.repo)?;
-            validate_private_model_hf_revision(&source.revision)?;
-        }
-    }
-    if let Some(allow) = draft.allow_model.as_ref()
-        && allow.apartment_name.trim().is_empty()
-    {
-        return Err(eyre!(
-            "uploaded-model draft allow_model.apartment_name must not be empty"
-        ));
-    }
-    draft
-        .compile_profile
-        .validate()
-        .wrap_err("invalid uploaded-model draft compile profile")?;
-    if draft.compile_profile.family.trim() != draft.family.trim() {
-        return Err(eyre!(
-            "uploaded-model draft family must match compile_profile.family"
-        ));
-    }
-    if let Some(runtime_format) = draft.runtime_format
-        && runtime_format != SoraUploadedModelRuntimeFormatV1::HuggingFaceSafetensors
-    {
-        return Err(eyre!(
-            "uploaded-model draft runtime_format must be `HuggingFaceSafetensors` in v1"
-        ));
-    }
-    Ok(())
-}
-
-fn resolve_private_model_source(
-    draft_path: &Path,
-    source: &PrivateModelSourceV1,
-    hf_source_config: PrivateModelHfSourceConfig<'_>,
-) -> Result<ResolvedPrivateModelSource> {
-    match source {
-        PrivateModelSourceV1::LocalDir(source) => Ok(ResolvedPrivateModelSource {
-            source_dir: resolve_private_model_local_source_dir(draft_path, &source.path)?,
-            _tempdir: None,
-        }),
-        PrivateModelSourceV1::HuggingFaceSnapshot(source) => {
-            let repo = parse_hf_repo_id_arg(&source.repo)?;
-            let revision = validate_private_model_hf_revision(&source.revision)?;
-            let tempdir = PrivateModelSourceTempDir::new("iroha-private-model-source")
-                .wrap_err("failed to create temporary Hugging Face snapshot directory")?;
-            let source_dir = tempdir.path().join("snapshot");
-            fs::create_dir_all(&source_dir)
-                .wrap_err_with(|| format!("failed to create `{}`", source_dir.display()))?;
-            download_private_model_hf_snapshot(&source_dir, &repo, &revision, hf_source_config)?;
-            Ok(ResolvedPrivateModelSource {
-                source_dir,
-                _tempdir: Some(tempdir),
-            })
-        }
-    }
-}
-
-fn resolve_private_model_local_source_dir(draft_path: &Path, source_dir: &str) -> Result<PathBuf> {
-    let source_dir = Path::new(source_dir);
-    let resolved = if source_dir.is_absolute() {
-        source_dir.to_path_buf()
-    } else {
-        draft_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(source_dir)
-    };
-    let metadata = fs::metadata(&resolved).wrap_err_with(|| {
-        format!(
-            "failed to read uploaded-model source directory `{}`",
-            resolved.display()
-        )
-    })?;
-    if !metadata.is_dir() {
-        return Err(eyre!(
-            "uploaded-model source `{}` is not a directory",
-            resolved.display()
-        ));
-    }
-    resolved
-        .canonicalize()
-        .wrap_err_with(|| format!("failed to canonicalize `{}`", resolved.display()))
-}
-
-enum PrivateModelSourcePathDisposition {
-    Admitted,
-    Ignorable,
-    Unsupported(&'static str),
-}
-
-fn download_private_model_hf_snapshot(
-    destination_root: &Path,
-    repo_id: &str,
-    revision: &str,
-    config: PrivateModelHfSourceConfig<'_>,
-) -> Result<()> {
-    let client = BlockingHttpClient::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .wrap_err("failed to build Hugging Face snapshot HTTP client")?;
-    let info_url = hf_model_info_url(config.api_base_url, repo_id, revision)?;
-    let response = client
-        .get(info_url.clone())
-        .send()
-        .wrap_err_with(|| format!("fetch Hugging Face model info from {info_url}"))?;
-    if !response.status().is_success() {
-        return Err(eyre!(
-            "Hugging Face model info request for `{repo_id}` revision `{revision}` returned {}",
-            response.status()
-        ));
-    }
-    let model_info_bytes = response
-        .bytes()
-        .wrap_err_with(|| format!("read Hugging Face model info response from {info_url}"))?
-        .to_vec();
-    let model_info: norito::json::Value =
-        norito::json::from_slice(&model_info_bytes).wrap_err("decode Hugging Face model info")?;
-    let resolved_commit = model_info
-        .get("sha")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| eyre!("Hugging Face model info is missing `sha`"))?;
-    if !resolved_commit.eq_ignore_ascii_case(revision) {
-        return Err(eyre!(
-            "Hugging Face revision `{revision}` resolved to `{resolved_commit}`; provide a pinned commit SHA"
-        ));
-    }
-
-    let mut sibling_paths = model_info
-        .get("siblings")
-        .and_then(norito::json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| entry.get("rfilename").and_then(norito::json::Value::as_str))
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    sibling_paths.sort();
-    sibling_paths.dedup();
-    if sibling_paths.is_empty() {
-        return Err(eyre!(
-            "Hugging Face snapshot `{repo_id}` revision `{revision}` did not expose any files"
-        ));
-    }
-
-    let mut admitted_paths = Vec::new();
-    for path in sibling_paths {
-        match classify_private_model_source_path(&path) {
-            PrivateModelSourcePathDisposition::Admitted => admitted_paths.push(path),
-            PrivateModelSourcePathDisposition::Ignorable => {}
-            PrivateModelSourcePathDisposition::Unsupported(reason) => {
-                return Err(eyre!(
-                    "Hugging Face snapshot file `{path}` is not admitted for private-model publish v1: {reason}"
-                ));
-            }
-        }
-    }
-    if admitted_paths.is_empty() {
-        return Err(eyre!(
-            "Hugging Face snapshot `{repo_id}` revision `{revision}` does not contain admitted model files"
-        ));
-    }
-    if admitted_paths.len() > usize::try_from(config.max_files).unwrap_or(usize::MAX) {
-        return Err(eyre!(
-            "Hugging Face snapshot `{repo_id}` exceeds the admitted file limit ({})",
-            config.max_files
-        ));
-    }
-
-    let mut total_bytes = 0_u64;
-    for relative_path in admitted_paths {
-        let file_url = hf_repo_file_url(config.hub_base_url, repo_id, revision, &relative_path)?;
-        let response = client
-            .get(file_url.clone())
-            .send()
-            .wrap_err_with(|| format!("fetch Hugging Face snapshot file from {file_url}"))?;
-        if !response.status().is_success() {
-            return Err(eyre!(
-                "Hugging Face snapshot file `{relative_path}` returned {}",
-                response.status()
-            ));
-        }
-        let file_bytes = response
-            .bytes()
-            .wrap_err_with(|| format!("read Hugging Face snapshot file from {file_url}"))?
-            .to_vec();
-        let file_bytes_len = u64::try_from(file_bytes.len()).unwrap_or(u64::MAX);
-        if file_bytes_len > config.max_file_bytes {
-            return Err(eyre!(
-                "Hugging Face snapshot file `{relative_path}` exceeds the per-file limit ({})",
-                config.max_file_bytes
-            ));
-        }
-        total_bytes = total_bytes.saturating_add(file_bytes_len);
-        if total_bytes > config.max_total_bytes {
-            return Err(eyre!(
-                "Hugging Face snapshot `{repo_id}` exceeds the total admitted byte limit ({})",
-                config.max_total_bytes
-            ));
-        }
-        fs::write(destination_root.join(&relative_path), file_bytes).wrap_err_with(|| {
-            format!(
-                "write `{}`",
-                destination_root.join(&relative_path).display()
-            )
-        })?;
-    }
-
-    Ok(())
-}
-
-fn collect_private_model_source_entries(source_dir: &Path) -> Result<Vec<PrivateModelSourceEntry>> {
-    let mut entries = Vec::new();
-    collect_private_model_source_entries_recursive(source_dir, source_dir, &mut entries)?;
-    entries.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    if entries.is_empty() {
-        return Err(eyre!(
-            "uploaded-model source directory `{}` does not contain any admitted files",
-            source_dir.display()
-        ));
-    }
-    Ok(entries)
-}
-
-fn collect_private_model_source_entries_recursive(
-    root: &Path,
-    current: &Path,
-    entries: &mut Vec<PrivateModelSourceEntry>,
-) -> Result<()> {
-    let mut children = fs::read_dir(current)
-        .wrap_err_with(|| format!("failed to read source directory `{}`", current.display()))?
-        .collect::<std::io::Result<Vec<_>>>()
-        .wrap_err_with(|| format!("failed to enumerate `{}`", current.display()))?;
-    children.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
-
-    for child in children {
-        let file_type = child.file_type().wrap_err_with(|| {
-            format!("failed to read file type for `{}`", child.path().display())
-        })?;
-        let name = child
-            .file_name()
-            .into_string()
-            .map_err(|_| eyre!("uploaded-model source paths must be valid UTF-8"))?;
-        if should_skip_private_model_source_entry(&name) {
-            continue;
-        }
-        let path = child.path();
-        if file_type.is_symlink() {
-            return Err(eyre!(
-                "uploaded-model source path `{}` must not contain symlinks",
-                path.display()
-            ));
-        }
-        if file_type.is_dir() {
-            collect_private_model_source_entries_recursive(root, &path, entries)?;
-            continue;
-        }
-        if !file_type.is_file() {
-            continue;
-        }
-        let relative_path = normalize_private_model_source_relative_path(root, &path)?;
-        let metadata = child
-            .metadata()
-            .wrap_err_with(|| format!("failed to read file metadata for `{}`", path.display()))?;
-        entries.push(PrivateModelSourceEntry {
-            relative_path,
-            absolute_path: path,
-            file_bytes: metadata.len(),
-        });
-    }
-    Ok(())
-}
-
-fn should_skip_private_model_source_entry(name: &str) -> bool {
-    matches!(
-        name,
-        ".git" | ".hg" | ".svn" | "__MACOSX" | ".DS_Store" | "Thumbs.db"
-    ) || name.starts_with('.')
-}
-
-fn normalize_private_model_source_relative_path(root: &Path, path: &Path) -> Result<String> {
-    let relative = path.strip_prefix(root).wrap_err_with(|| {
-        format!(
-            "failed to compute uploaded-model relative path for `{}`",
-            path.display()
-        )
-    })?;
-    let mut components = Vec::new();
-    for component in relative.components() {
-        match component {
-            std::path::Component::Normal(value) => {
-                let component = value
-                    .to_str()
-                    .ok_or_else(|| eyre!("uploaded-model source paths must be valid UTF-8"))?;
-                components.push(component.to_owned());
-            }
-            std::path::Component::CurDir => {}
-            _ => {
-                return Err(eyre!(
-                    "uploaded-model source path `{}` is not normalized",
-                    path.display()
-                ));
-            }
-        }
-    }
-    if components.is_empty() {
-        return Err(eyre!(
-            "uploaded-model source path `{}` must not resolve to the root directory",
-            path.display()
-        ));
-    }
-    Ok(components.join("/"))
-}
-
-fn normalize_hf_base_url(raw: &str) -> Result<reqwest::Url> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(eyre!("empty Hugging Face base URL"));
-    }
-    let with_scheme = if trimmed.contains("://") {
-        trimmed.to_owned()
-    } else {
-        format!("https://{trimmed}")
-    };
-    let mut url = reqwest::Url::parse(&with_scheme).wrap_err("parse Hugging Face base URL")?;
-    let normalized_path = match url.path().trim_end_matches('/') {
-        "" => "/".to_owned(),
-        path => path.to_owned(),
-    };
-    url.set_path(&normalized_path);
-    Ok(url)
-}
-
-fn hf_model_info_url(
-    api_base_url: &str,
-    repo_id: &str,
-    requested_revision: &str,
-) -> Result<reqwest::Url> {
-    let mut url = normalize_hf_base_url(api_base_url)?;
-    {
-        let mut segments = url
-            .path_segments_mut()
-            .map_err(|_| eyre!("Hugging Face API base URL cannot be a base"))?;
-        for component in ["models"]
-            .into_iter()
-            .chain(repo_id.split('/'))
-            .chain(["revision", requested_revision].into_iter())
-        {
-            segments.push(component);
-        }
-    }
-    Ok(url)
-}
-
-fn hf_repo_file_url(
-    hub_base_url: &str,
-    repo_id: &str,
-    requested_revision: &str,
-    file_path: &str,
-) -> Result<reqwest::Url> {
-    let mut url = normalize_hf_base_url(hub_base_url)?;
-    {
-        let mut segments = url
-            .path_segments_mut()
-            .map_err(|_| eyre!("Hugging Face Hub base URL cannot be a base"))?;
-        for component in repo_id
-            .split('/')
-            .chain(["resolve", requested_revision].into_iter())
-            .chain(file_path.split('/'))
-        {
-            segments.push(component);
-        }
-    }
-    Ok(url)
-}
-
-fn classify_private_model_source_path(path: &str) -> PrivateModelSourcePathDisposition {
-    let normalized = path.trim().to_ascii_lowercase();
-    if normalized.is_empty() {
-        return PrivateModelSourcePathDisposition::Unsupported("empty file paths are not admitted");
-    }
-    if normalized.contains('/') {
-        return PrivateModelSourcePathDisposition::Unsupported(
-            "nested directories are not admitted in the v1 Hugging Face safetensors layout",
-        );
-    }
-    if matches!(
-        normalized.as_str(),
-        "readme.md"
-            | "license"
-            | "license.txt"
-            | "license.md"
-            | "copying"
-            | "copying.txt"
-            | "notice"
-            | "notice.txt"
-    ) {
-        return PrivateModelSourcePathDisposition::Ignorable;
-    }
-    if matches!(
-        normalized.as_str(),
-        "config.json"
-            | "generation_config.json"
-            | "tokenizer.json"
-            | "tokenizer_config.json"
-            | "special_tokens_map.json"
-            | "vocab.json"
-            | "vocab.txt"
-            | "merges.txt"
-            | "tokenizer.model"
-            | "sentencepiece.bpe.model"
-            | "added_tokens.json"
-            | "processor_config.json"
-            | "preprocessor_config.json"
-            | "image_processor_config.json"
-            | "chat_template.jinja"
-    ) || normalized.ends_with(".safetensors")
-        || normalized.ends_with(".safetensors.index.json")
-    {
-        return PrivateModelSourcePathDisposition::Admitted;
-    }
-    if normalized.ends_with(".gguf") {
-        return PrivateModelSourcePathDisposition::Unsupported(
-            "GGUF weights are not supported by private-model publish v1",
-        );
-    }
-    if normalized.ends_with(".onnx") {
-        return PrivateModelSourcePathDisposition::Unsupported(
-            "ONNX weights are not supported by private-model publish v1",
-        );
-    }
-    if matches!(
-        normalized.as_str(),
-        "pytorch_model.bin" | "pytorch_model.bin.index.json" | "rust_model.ot"
-    ) {
-        return PrivateModelSourcePathDisposition::Unsupported(
-            "non-safetensors weight layouts are not supported by private-model publish v1",
-        );
-    }
-    PrivateModelSourcePathDisposition::Unsupported(
-        "only the root-level Hugging Face safetensors layout is admitted in v1",
-    )
-}
-
-fn admitted_private_model_source_entries(
-    entries: &[PrivateModelSourceEntry],
-) -> Vec<PrivateModelSourceEntry> {
-    entries
-        .iter()
-        .filter(|entry| {
-            matches!(
-                classify_private_model_source_path(&entry.relative_path),
-                PrivateModelSourcePathDisposition::Admitted
-            )
-        })
-        .cloned()
-        .collect()
-}
-
-fn validate_private_model_source_entries(
-    draft: &PrivateModelPublishDraft,
-    entries: &[PrivateModelSourceEntry],
-) -> Result<()> {
-    let mut admitted_entries = Vec::new();
-    for entry in entries {
-        match classify_private_model_source_path(&entry.relative_path) {
-            PrivateModelSourcePathDisposition::Admitted => admitted_entries.push(entry),
-            PrivateModelSourcePathDisposition::Ignorable => {}
-            PrivateModelSourcePathDisposition::Unsupported(reason) => {
-                return Err(eyre!(
-                    "uploaded-model source file `{}` is not admitted for private-model publish v1: {reason}",
-                    entry.relative_path
-                ));
-            }
-        }
-    }
-    let has_config = admitted_entries
-        .iter()
-        .any(|entry| entry.relative_path == "config.json");
-    if !has_config {
-        return Err(eyre!(
-            "uploaded-model source must include `config.json` at the repository root"
-        ));
-    }
-    let has_safetensors = admitted_entries
-        .iter()
-        .any(|entry| entry.relative_path.ends_with(".safetensors"));
-    if !has_safetensors {
-        return Err(eyre!(
-            "uploaded-model source must include at least one `.safetensors` weight shard"
-        ));
-    }
-    let has_tokenizer = admitted_entries.iter().any(|entry| {
-        matches!(
-            entry.relative_path.as_str(),
-            "tokenizer.json"
-                | "tokenizer.model"
-                | "tokenizer_config.json"
-                | "special_tokens_map.json"
-                | "vocab.json"
-                | "vocab.txt"
-                | "merges.txt"
-                | "sentencepiece.bpe.model"
-                | "added_tokens.json"
-        )
-    });
-    if !has_tokenizer {
-        return Err(eyre!(
-            "uploaded-model source must include tokenizer assets such as `tokenizer.json` or `tokenizer.model`"
-        ));
-    }
-    let requires_processor = draft
-        .modalities
-        .iter()
-        .any(|modality| modality.eq_ignore_ascii_case("image"));
-    if requires_processor {
-        let has_processor = admitted_entries.iter().any(|entry| {
-            matches!(
-                entry.relative_path.as_str(),
-                "processor_config.json"
-                    | "preprocessor_config.json"
-                    | "image_processor_config.json"
-            )
-        });
-        if !has_processor {
-            return Err(eyre!(
-                "image-capable uploaded-model sources must include processor/preprocessor metadata"
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn wrap_uploaded_model_bundle_key<R>(
-    recipient: &SoraUploadedModelEncryptionRecipientV1,
-    draft: &PrivateModelPublishDraft,
-    rng: &mut R,
-) -> Result<(SoraUploadedModelWrappedKeyV1, [u8; 32])>
-where
-    R: rand::CryptoRng + rand::RngCore,
-{
-    if recipient.kem != SoraUploadedModelKeyEncapsulationV1::X25519HkdfSha256 {
-        return Err(eyre!(
-            "unsupported uploaded-model recipient KEM {:?}",
-            recipient.kem
-        ));
-    }
-    if recipient.aead != SoraUploadedModelKeyWrapAeadV1::Aes256Gcm {
-        return Err(eyre!(
-            "unsupported uploaded-model recipient AEAD {:?}",
-            recipient.aead
-        ));
-    }
-
-    let mut bundle_key = [0_u8; 32];
-    rng.fill_bytes(&mut bundle_key);
-    let mut seed = [0_u8; 32];
-    rng.fill_bytes(&mut seed);
-
-    let scheme = X25519Sha256::new();
-    let (ephemeral_public, ephemeral_secret) = scheme.keypair(KeyGenOption::UseSeed(seed.to_vec()));
-    let remote_public = X25519Sha256::decode_public_key(&recipient.public_key_bytes)
-        .wrap_err("failed to decode uploaded-model recipient public key")?;
-    let wrapping_key = scheme
-        .compute_shared_secret(&ephemeral_secret, &remote_public)
-        .wrap_err("failed to derive uploaded-model bundle wrapping key")?;
-    let cipher = Aes256Gcm::new_from_slice(wrapping_key.payload())
-        .map_err(|_| eyre!("failed to construct uploaded-model bundle wrapper"))?;
-    let mut nonce = [0_u8; PRIVATE_MODEL_WRAPPING_NONCE_BYTES];
-    rng.fill_bytes(&mut nonce);
-    let ephemeral_public_key = X25519Sha256::encode_public_key(&ephemeral_public);
-    let aad = to_bytes(&(
-        PRIVATE_MODEL_BUNDLE_KEY_AAD_DOMAIN,
-        draft.service_name.as_str(),
-        draft.model_id.as_str(),
-        draft.weight_version.as_str(),
-        recipient.key_id.as_str(),
-        recipient.key_version.get(),
-        recipient.public_key_fingerprint,
-        ephemeral_public_key.clone(),
-    ))
-    .wrap_err("failed to encode uploaded-model bundle-key AAD")?;
-    let ciphertext = cipher
-        .encrypt(
-            Nonce::from_slice(&nonce),
-            Payload {
-                msg: &bundle_key,
-                aad: &aad,
-            },
-        )
-        .map_err(|_| eyre!("failed to wrap uploaded-model bundle key"))?;
-
-    Ok((
-        SoraUploadedModelWrappedKeyV1 {
-            schema_version: SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1,
-            recipient_key_id: recipient.key_id.clone(),
-            recipient_key_version: recipient.key_version,
-            kem: recipient.kem,
-            aead: recipient.aead,
-            ephemeral_public_key,
-            nonce: nonce.to_vec(),
-            ciphertext_hash: Hash::new(ciphertext.as_slice()),
-            wrapped_key_ciphertext: ciphertext,
-            aad_digest: Hash::new(aad),
-        },
-        bundle_key,
-    ))
-}
-
-fn build_private_model_chunks<R>(
-    service_name: &Name,
-    model_id: &str,
-    weight_version: &str,
-    entries: &[PrivateModelSourceEntry],
-    chunk_plaintext_bytes: u64,
-    bundle_key: &[u8; 32],
-    rng: &mut R,
-) -> Result<(Hash, Vec<SoraUploadedModelChunkV1>, u64, u64)>
-where
-    R: rand::CryptoRng + rand::RngCore,
-{
-    let manifest_entries = entries
-        .iter()
-        .map(|entry| (entry.relative_path.clone(), entry.file_bytes))
-        .collect::<Vec<_>>();
-    let archive_header = to_bytes(&(PRIVATE_MODEL_ARCHIVE_DOMAIN, manifest_entries))
-        .wrap_err("failed to encode uploaded-model plaintext archive header")?;
-    let chunk_plaintext_len =
-        usize::try_from(chunk_plaintext_bytes).wrap_err("chunk plaintext bytes exceed usize")?;
-    let mut hasher =
-        Blake2bVar::new(Hash::LENGTH).map_err(|_| eyre!("failed to construct plaintext hasher"))?;
-    let mut current_chunk = Vec::with_capacity(chunk_plaintext_len);
-    let mut chunks = Vec::new();
-    let mut plaintext_total = 0_u64;
-    let mut ciphertext_total = 0_u64;
-    let key_id = private_model_bundle_key_id(bundle_key);
-    let key_version = NonZeroU32::new(1).expect("non-zero uploaded-model bundle key version");
-
-    push_private_model_plaintext_bytes(
-        &archive_header,
-        chunk_plaintext_len,
-        &mut hasher,
-        &mut current_chunk,
-        &mut chunks,
-        &mut plaintext_total,
-        &mut ciphertext_total,
-        service_name,
-        model_id,
-        weight_version,
-        bundle_key,
-        &key_id,
-        key_version,
-        rng,
-    )?;
-
-    let mut read_buffer = vec![0_u8; 64 * 1024];
-    for entry in entries {
-        let mut file = fs::File::open(&entry.absolute_path).wrap_err_with(|| {
-            format!(
-                "failed to open uploaded-model source file `{}`",
-                entry.absolute_path.display()
-            )
-        })?;
-        loop {
-            let read = file.read(&mut read_buffer).wrap_err_with(|| {
-                format!(
-                    "failed to read uploaded-model source file `{}`",
-                    entry.absolute_path.display()
-                )
-            })?;
-            if read == 0 {
-                break;
-            }
-            push_private_model_plaintext_bytes(
-                &read_buffer[..read],
-                chunk_plaintext_len,
-                &mut hasher,
-                &mut current_chunk,
-                &mut chunks,
-                &mut plaintext_total,
-                &mut ciphertext_total,
-                service_name,
-                model_id,
-                weight_version,
-                bundle_key,
-                &key_id,
-                key_version,
-                rng,
-            )?;
-        }
-    }
-
-    if !current_chunk.is_empty() {
-        let chunk = encrypt_uploaded_model_chunk(
-            service_name,
-            model_id,
-            weight_version,
-            u32::try_from(chunks.len()).unwrap_or(u32::MAX),
-            chunk_plaintext_bytes,
-            &current_chunk,
-            bundle_key,
-            &key_id,
-            key_version,
-            rng,
-        )?;
-        ciphertext_total = ciphertext_total.saturating_add(u64::from(chunk.ciphertext_len));
-        chunks.push(chunk);
-    }
-
-    if chunks.is_empty() {
-        return Err(eyre!(
-            "uploaded-model source did not produce any encrypted chunk payloads"
-        ));
-    }
-
-    let mut hash_bytes = [0_u8; Hash::LENGTH];
-    hasher
-        .finalize_variable(&mut hash_bytes)
-        .map_err(|_| eyre!("failed to finalize uploaded-model plaintext hash"))?;
-    Ok((
-        Hash::prehashed(hash_bytes),
-        chunks,
-        plaintext_total,
-        ciphertext_total,
-    ))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn push_private_model_plaintext_bytes<R>(
-    bytes: &[u8],
-    chunk_plaintext_len: usize,
-    hasher: &mut Blake2bVar,
-    current_chunk: &mut Vec<u8>,
-    chunks: &mut Vec<SoraUploadedModelChunkV1>,
-    plaintext_total: &mut u64,
-    ciphertext_total: &mut u64,
-    service_name: &Name,
-    model_id: &str,
-    weight_version: &str,
-    bundle_key: &[u8; 32],
-    key_id: &str,
-    key_version: NonZeroU32,
-    rng: &mut R,
-) -> Result<()>
-where
-    R: rand::CryptoRng + rand::RngCore,
-{
-    hasher.update(bytes);
-    *plaintext_total =
-        plaintext_total.saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
-    let mut remaining = bytes;
-    while !remaining.is_empty() {
-        let available = chunk_plaintext_len.saturating_sub(current_chunk.len());
-        let take = available.min(remaining.len());
-        current_chunk.extend_from_slice(&remaining[..take]);
-        remaining = &remaining[take..];
-        if current_chunk.len() == chunk_plaintext_len {
-            let chunk = encrypt_uploaded_model_chunk(
-                service_name,
-                model_id,
-                weight_version,
-                u32::try_from(chunks.len()).unwrap_or(u32::MAX),
-                u64::try_from(chunk_plaintext_len).unwrap_or(u64::MAX),
-                current_chunk,
-                bundle_key,
-                key_id,
-                key_version,
-                rng,
-            )?;
-            *ciphertext_total = ciphertext_total.saturating_add(u64::from(chunk.ciphertext_len));
-            chunks.push(chunk);
-            current_chunk.clear();
-        }
-    }
-    Ok(())
-}
-
-fn encrypt_uploaded_model_chunk<R>(
-    service_name: &Name,
-    model_id: &str,
-    weight_version: &str,
-    ordinal: u32,
-    chunk_plaintext_bytes: u64,
-    plaintext: &[u8],
-    bundle_key: &[u8; 32],
-    key_id: &str,
-    key_version: NonZeroU32,
-    rng: &mut R,
-) -> Result<SoraUploadedModelChunkV1>
-where
-    R: rand::CryptoRng + rand::RngCore,
-{
-    let cipher = Aes256Gcm::new_from_slice(bundle_key)
-        .map_err(|_| eyre!("failed to construct uploaded-model chunk encryptor"))?;
-    let offset_bytes = u64::from(ordinal).saturating_mul(chunk_plaintext_bytes);
-    let plaintext_len = u32::try_from(plaintext.len())
-        .wrap_err("uploaded-model chunk plaintext exceeds u32 length")?;
-    let aad = to_bytes(&(
-        PRIVATE_MODEL_CHUNK_AAD_DOMAIN,
-        service_name.as_ref(),
-        model_id,
-        weight_version,
-        ordinal,
-        offset_bytes,
-        plaintext_len,
-    ))
-    .wrap_err("failed to encode uploaded-model chunk AAD")?;
-    let mut nonce = [0_u8; PRIVATE_MODEL_CHUNK_NONCE_BYTES];
-    rng.fill_bytes(&mut nonce);
-    let ciphertext = cipher
-        .encrypt(
-            Nonce::from_slice(&nonce),
-            Payload {
-                msg: plaintext,
-                aad: &aad,
-            },
-        )
-        .map_err(|_| eyre!("failed to encrypt uploaded-model plaintext chunk"))?;
-    let ciphertext_len = u32::try_from(ciphertext.len())
-        .wrap_err("uploaded-model encrypted chunk exceeds u32 length")?;
-    let ciphertext_hash = Hash::new(ciphertext.as_slice());
-    Ok(SoraUploadedModelChunkV1 {
-        schema_version: SORA_UPLOADED_MODEL_CHUNK_VERSION_V1,
-        service_name: service_name.clone(),
-        model_id: model_id.to_owned(),
-        weight_version: weight_version.to_owned(),
-        bundle_root: Hash::new(b"pending-bundle-root"),
-        ordinal,
-        offset_bytes,
-        plaintext_len,
-        ciphertext_len,
-        ciphertext_hash,
-        encrypted_payload: SecretEnvelopeV1 {
-            schema_version: SECRET_ENVELOPE_VERSION_V1,
-            encryption: SecretEnvelopeEncryptionV1::ClientCiphertext,
-            key_id: key_id.to_owned(),
-            key_version,
-            nonce: nonce.to_vec(),
-            ciphertext,
-            commitment: ciphertext_hash,
-            aad_digest: Some(Hash::new(aad)),
-        },
-    })
-}
-
-fn private_model_bundle_key_id(bundle_key: &[u8; 32]) -> String {
-    let fingerprint = Hash::new(bundle_key);
-    format!(
-        "soracloud-upload-bundle:{}",
-        fingerprint.to_string().chars().take(16).collect::<String>()
-    )
-}
-
-fn execute_private_inference_start(
-    torii_url: &str,
-    session: SoraPrivateInferenceSessionV1,
-    api_token: Option<&str>,
-    timeout_secs: u64,
-    authority: &AccountId,
-    key_pair: &KeyPair,
-) -> Result<norito::json::Value> {
-    let session_id = session.session_id.clone();
-    let request = signed_private_inference_run_request(session, authority, key_pair)?;
-    let (_, initial_payload) = post_torii_soracloud_mutation(
-        torii_url,
-        "v1/soracloud/model/run-private",
-        &request,
-        api_token,
-        timeout_secs,
-    )?;
-    let finalize_request = PrivateInferenceFinalizeRequest {
-        session_id: session_id.clone(),
-    };
-    let (_, finalize_payload) = post_torii_soracloud_mutation(
-        torii_url,
-        "v1/soracloud/model/run-private/finalize",
-        &finalize_request,
-        api_token,
-        timeout_secs,
-    )?;
-    let (_, mut final_status) = fetch_torii_soracloud_private_inference_status(
-        torii_url,
-        &session_id,
-        api_token,
-        timeout_secs,
-    )?;
-    if let Some(root) = final_status.as_object_mut() {
-        if let Some(value) = extract_json_field(&initial_payload, "submitted_tx_hash")? {
-            root.insert("start_submitted_tx_hash".to_owned(), value);
-        }
-        if let Some(value) = extract_json_field(&finalize_payload, "submitted_tx_hash")? {
-            root.insert("finalize_submitted_tx_hash".to_owned(), value);
-        }
-        root.insert(
-            "submission_mode".to_owned(),
-            json::Value::String("client_signed".to_owned()),
-        );
-    }
-    Ok(final_status)
-}
-
-fn execute_private_inference_output_release(
-    torii_url: &str,
-    session_id: &str,
-    decrypt_request_id: &str,
-    api_token: Option<&str>,
-    timeout_secs: u64,
-    authority: &AccountId,
-    key_pair: &KeyPair,
-) -> Result<norito::json::Value> {
-    let request = signed_private_inference_output_release_request(
-        session_id,
-        decrypt_request_id,
-        authority,
-        key_pair,
-    )?;
-    let (_, release_payload) = post_torii_soracloud_mutation(
-        torii_url,
-        "v1/soracloud/model/decrypt-output",
-        &request,
-        api_token,
-        timeout_secs,
-    )?;
-    let (_, mut final_status) = fetch_torii_soracloud_private_inference_status(
-        torii_url,
-        session_id,
-        api_token,
-        timeout_secs,
-    )?;
-    if let Some(root) = final_status.as_object_mut() {
-        if let Some(value) = extract_json_field(&release_payload, "submitted_tx_hash")? {
-            root.insert("release_submitted_tx_hash".to_owned(), value);
-        }
-        root.insert(
-            "submission_mode".to_owned(),
-            json::Value::String("client_signed".to_owned()),
-        );
-    }
-    Ok(final_status)
-}
-
-fn execute_private_model_publish_plan(
-    torii_url: &str,
-    plan: PrivateModelPublishPlan,
-    authoritative_recipient: Option<SoraUploadedModelEncryptionRecipientV1>,
-    api_token: Option<&str>,
-    timeout_secs: u64,
-    authority: &AccountId,
-    key_pair: &KeyPair,
-) -> Result<norito::json::Value> {
-    let compile_profile_hash = validate_private_model_publish_plan(&plan)?;
-    let recipient = if let Some(recipient) = authoritative_recipient {
-        recipient
-    } else {
-        let (_, recipient_payload) = fetch_torii_soracloud_uploaded_model_encryption_recipient(
-            torii_url,
-            api_token,
-            timeout_secs,
-        )?;
-        let recipient_value = recipient_payload.get("recipient").cloned().ok_or_else(|| {
-            eyre!("uploaded-model encryption recipient response is missing `recipient`")
-        })?;
-        json::from_value(recipient_value)
-            .wrap_err("failed to decode uploaded-model encryption recipient response")?
-    };
-    if recipient != plan.bundle.upload_recipient {
-        return Err(eyre!(
-            "publish plan bundle upload_recipient does not match the authoritative Torii encryption recipient"
-        ));
-    }
-
-    let service_name = plan.bundle.service_name.to_string();
-    let model_id = plan.bundle.model_id.clone();
-    let weight_version = plan.bundle.weight_version.clone();
-    let chunk_count = plan.chunks.len();
-
-    let mut chunk_upload_hashes = Vec::with_capacity(chunk_count);
-    let init_request =
-        signed_uploaded_model_bundle_init_request(plan.bundle.clone(), authority, key_pair)?;
-    let (_, init_payload) = post_torii_soracloud_mutation(
-        torii_url,
-        "v1/soracloud/model/upload/init",
-        &init_request,
-        api_token,
-        timeout_secs,
-    )?;
-
-    let mut sorted_chunks = plan.chunks.clone();
-    sorted_chunks.sort_by_key(|chunk| chunk.ordinal);
-    for chunk in sorted_chunks {
-        let request = signed_uploaded_model_chunk_request(chunk, authority, key_pair)?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/model/upload/chunk",
-            &request,
-            api_token,
-            timeout_secs,
-        )?;
-        chunk_upload_hashes
-            .push(extract_json_field(&payload, "submitted_tx_hash")?.unwrap_or(json::Value::Null));
-    }
-
-    let finalize_request =
-        signed_uploaded_model_finalize_request(plan.finalize.clone(), authority, key_pair)?;
-    let (_, finalize_payload) = post_torii_soracloud_mutation(
-        torii_url,
-        "v1/soracloud/model/upload/finalize",
-        &finalize_request,
-        api_token,
-        timeout_secs,
-    )?;
-
-    let compile_request = signed_private_compile_request(
-        PrivateCompilePayload {
-            service_name: service_name.clone(),
-            model_id: model_id.clone(),
-            weight_version: weight_version.clone(),
-            bundle_root: plan.bundle.bundle_root,
-            compile_profile: plan.compile_profile.clone(),
-        },
-        authority,
-        key_pair,
-    )?;
-    let (_, compile_payload) = post_torii_soracloud_mutation(
-        torii_url,
-        "v1/soracloud/model/compile",
-        &compile_request,
-        api_token,
-        timeout_secs,
-    )?;
-
-    let allow_payload = if let Some(allow_model) = plan.allow_model.clone() {
-        let request = signed_uploaded_model_allow_request(allow_model, authority, key_pair)?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/model/allow",
-            &request,
-            api_token,
-            timeout_secs,
-        )?;
-        Some(payload)
-    } else {
-        None
-    };
-
-    let (_, upload_status) = fetch_torii_soracloud_uploaded_model_status(
-        torii_url,
-        "v1/soracloud/model/compile/status",
-        &service_name,
-        &weight_version,
-        Some(&model_id),
-        None,
-        Some(plan.bundle.bundle_root),
-        Some(compile_profile_hash),
-        api_token,
-        timeout_secs,
-    )?;
-
-    let mut root = norito::json::Map::new();
-    root.insert("service_name".to_owned(), json::Value::String(service_name));
-    root.insert("model_id".to_owned(), json::Value::String(model_id));
-    root.insert(
-        "weight_version".to_owned(),
-        json::Value::String(weight_version),
-    );
-    root.insert(
-        "bundle_root".to_owned(),
-        json::to_value(&plan.bundle.bundle_root)?,
-    );
-    root.insert(
-        "compile_profile_hash".to_owned(),
-        json::to_value(&compile_profile_hash)?,
-    );
-    root.insert(
-        "chunk_count".to_owned(),
-        json::to_value(&u64::try_from(chunk_count).unwrap_or(u64::MAX))?,
-    );
-    if let Some(value) = extract_json_field(&init_payload, "submitted_tx_hash")? {
-        root.insert("upload_init_submitted_tx_hash".to_owned(), value);
-    }
-    root.insert(
-        "chunk_submitted_tx_hashes".to_owned(),
-        json::Value::Array(chunk_upload_hashes),
-    );
-    if let Some(value) = extract_json_field(&finalize_payload, "submitted_tx_hash")? {
-        root.insert("upload_finalize_submitted_tx_hash".to_owned(), value);
-    }
-    if let Some(value) = extract_json_field(&compile_payload, "submitted_tx_hash")? {
-        root.insert("compile_submitted_tx_hash".to_owned(), value);
-    }
-    if let Some(allow_payload) = allow_payload.as_ref() {
-        if let Some(value) = extract_json_field(allow_payload, "submitted_tx_hash")? {
-            root.insert("allow_submitted_tx_hash".to_owned(), value);
-        }
-        root.insert("allow_response".to_owned(), allow_payload.clone());
-    }
-    root.insert(
-        "encryption_recipient_verified".to_owned(),
-        json::Value::Bool(true),
-    );
-    root.insert("upload_status".to_owned(), upload_status);
-    Ok(json::Value::Object(root))
 }
 
 fn find_agent_autonomy_run_id(
@@ -15750,7 +12844,6 @@ fn fetch_torii_soracloud_uploaded_model_status(
     model_id: Option<&str>,
     model_name: Option<&str>,
     bundle_root: Option<Hash>,
-    compile_profile_hash: Option<Hash>,
     api_token: Option<&str>,
     timeout_secs: u64,
 ) -> Result<(String, norito::json::Value)> {
@@ -15785,12 +12878,6 @@ fn fetch_torii_soracloud_uploaded_model_status(
         if let Some(bundle_root) = bundle_root {
             query.append_pair("bundle_root", &json::to_json(&bundle_root)?);
         }
-        if let Some(compile_profile_hash) = compile_profile_hash {
-            query.append_pair(
-                "compile_profile_hash",
-                &json::to_json(&compile_profile_hash)?,
-            );
-        }
     }
     let timeout = Duration::from_secs(timeout_secs.max(1));
     let client = BlockingHttpClient::builder()
@@ -15819,53 +12906,6 @@ fn fetch_torii_soracloud_uploaded_model_status(
     }
     let payload: norito::json::Value = json::from_slice(&body)
         .wrap_err("failed to decode Torii uploaded-model status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
-}
-
-fn fetch_torii_soracloud_private_inference_status(
-    torii_url: &str,
-    session_id: &str,
-    api_token: Option<&str>,
-    timeout_secs: u64,
-) -> Result<(String, norito::json::Value)> {
-    let session_id = session_id.trim();
-    if session_id.is_empty() {
-        return Err(eyre!("--session-id must not be empty"));
-    }
-    let mut endpoint = reqwest::Url::parse(torii_url)
-        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
-        .join("v1/soracloud/model/run-status")
-        .wrap_err("failed to derive /v1/soracloud/model/run-status URL from --torii-url")?;
-    endpoint
-        .query_pairs_mut()
-        .append_pair("session_id", session_id);
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for private inference status")?;
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii private inference status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/model/run-status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii private inference status JSON payload")?;
     Ok((endpoint.to_string(), payload))
 }
 
@@ -22675,10 +19715,8 @@ iroha app sorafs toolkit pack ./frontend/dist \
 mod tests {
     use super::*;
     use iroha::data_model::soracloud::{
-        PrivateModelHuggingFaceSnapshotSourceV1, PrivateModelLocalDirSourceV1,
         SoraInrouGuestImageV1, SoraInrouGuestIsaV1, SoraServiceExecutionPlaneV1,
     };
-    use rand::SeedableRng as _;
     use std::{
         collections::BTreeMap,
         io::Write as _,
@@ -22745,20 +19783,6 @@ mod tests {
         )
     }
 
-    fn sample_secret_envelope(seed: u8) -> SecretEnvelopeV1 {
-        let ciphertext = vec![seed; 24];
-        SecretEnvelopeV1 {
-            schema_version: SECRET_ENVELOPE_VERSION_V1,
-            encryption: SecretEnvelopeEncryptionV1::ClientCiphertext,
-            key_id: format!("key-{seed}"),
-            key_version: NonZeroU32::new(1).expect("non-zero key version"),
-            nonce: vec![seed; 12],
-            commitment: Hash::new(ciphertext.as_slice()),
-            ciphertext,
-            aad_digest: Some(Hash::new([seed.wrapping_add(1)])),
-        }
-    }
-
     fn sample_uploaded_model_encryption_recipient() -> SoraUploadedModelEncryptionRecipientV1 {
         let public_key_bytes = vec![7_u8; 32];
         SoraUploadedModelEncryptionRecipientV1 {
@@ -22788,65 +19812,7 @@ mod tests {
         }
     }
 
-    fn sample_private_compile_profile() -> SoraPrivateCompileProfileV1 {
-        SoraPrivateCompileProfileV1 {
-            schema_version: SORA_PRIVATE_COMPILE_PROFILE_VERSION_V1,
-            family: "hf-transformers".to_owned(),
-            quantization: "int8".to_owned(),
-            opset_version: "v1".to_owned(),
-            max_context: 4096,
-            max_images: 2,
-            vision_patch_policy: "224-square".to_owned(),
-            fhe_param_set: "fhe-1".to_owned(),
-            execution_policy: "policy-a".to_owned(),
-        }
-    }
-
-    fn sample_uploaded_model_chunks() -> Vec<SoraUploadedModelChunkV1> {
-        let chunk0 = sample_secret_envelope(0x10);
-        let chunk1 = sample_secret_envelope(0x20);
-        let bundle_root = Hash::new(b"bundle-root");
-        vec![
-            SoraUploadedModelChunkV1 {
-                schema_version: SORA_UPLOADED_MODEL_CHUNK_VERSION_V1,
-                service_name: "private_models".parse().expect("service name"),
-                model_id: "upload-1".to_owned(),
-                weight_version: "1.0.0".to_owned(),
-                bundle_root,
-                ordinal: 0,
-                offset_bytes: 0,
-                plaintext_len: 24,
-                ciphertext_len: u32::try_from(chunk0.ciphertext.len()).expect("ciphertext len"),
-                ciphertext_hash: Hash::new(chunk0.ciphertext.as_slice()),
-                encrypted_payload: chunk0,
-            },
-            SoraUploadedModelChunkV1 {
-                schema_version: SORA_UPLOADED_MODEL_CHUNK_VERSION_V1,
-                service_name: "private_models".parse().expect("service name"),
-                model_id: "upload-1".to_owned(),
-                weight_version: "1.0.0".to_owned(),
-                bundle_root,
-                ordinal: 1,
-                offset_bytes: 24,
-                plaintext_len: 24,
-                ciphertext_len: u32::try_from(chunk1.ciphertext.len()).expect("ciphertext len"),
-                ciphertext_hash: Hash::new(chunk1.ciphertext.as_slice()),
-                encrypted_payload: chunk1,
-            },
-        ]
-    }
-
     fn sample_uploaded_model_bundle() -> SoraUploadedModelBundleV1 {
-        let chunks = sample_uploaded_model_chunks();
-        let compile_profile = sample_private_compile_profile();
-        let plaintext_bytes = chunks
-            .iter()
-            .map(|chunk| u64::from(chunk.plaintext_len))
-            .sum::<u64>();
-        let ciphertext_bytes = chunks
-            .iter()
-            .map(|chunk| u64::from(chunk.ciphertext_len))
-            .sum::<u64>();
         SoraUploadedModelBundleV1 {
             schema_version: SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
             service_name: "private_models".parse().expect("service name"),
@@ -22860,12 +19826,10 @@ mod tests {
             sorafs_manifest_digest: iroha::data_model::sorafs::pin_registry::ManifestDigest::new(
                 [0xA5; 32],
             ),
-            chunk_count: u32::try_from(chunks.len()).expect("chunk count"),
-            plaintext_bytes,
-            ciphertext_bytes,
-            compile_profile_hash: uploaded_model_compile_profile_hash(&compile_profile),
-            chunk_manifest_root: compute_uploaded_model_chunk_manifest_root(&chunks)
-                .expect("chunk manifest root"),
+            chunk_count: 1,
+            plaintext_bytes: 48,
+            ciphertext_bytes: 64,
+            chunk_manifest_root: Hash::new(b"sorafs-chunk-manifest"),
             upload_recipient: sample_uploaded_model_encryption_recipient(),
             wrapped_bundle_key: sample_uploaded_model_wrapped_key(),
             pricing_policy: Default::default(),
@@ -22882,7 +19846,6 @@ mod tests {
             artifact_id: "artifact-1".to_owned(),
             weight_version: bundle.weight_version,
             bundle_root: bundle.bundle_root,
-            privacy_mode: SoraModelPrivacyModeV1::PrivateExecution,
             weight_artifact_hash: Hash::new(b"artifact-hash"),
             dataset_ref: "dataset://synthetic/v1".to_owned(),
             training_config_hash: Hash::new(b"train-config"),
@@ -22891,77 +19854,15 @@ mod tests {
         }
     }
 
-    fn sample_uploaded_model_allow_payload() -> UploadedModelAllowPayload {
-        let finalize = sample_uploaded_model_finalize_payload();
-        UploadedModelAllowPayload {
-            apartment_name: "ops_agent".to_owned(),
-            service_name: finalize.service_name.clone(),
-            model_name: finalize.model_name.clone(),
-            model_id: finalize.model_id.clone(),
-            artifact_id: finalize.artifact_id.clone(),
-            weight_version: finalize.weight_version.clone(),
-            bundle_root: finalize.bundle_root,
-            compile_profile_hash: uploaded_model_compile_profile_hash(
-                &sample_private_compile_profile(),
-            ),
-            privacy_mode: finalize.privacy_mode,
-            require_model_inference: true,
-        }
-    }
-
-    fn sample_private_compile_payload() -> PrivateCompilePayload {
-        let bundle = sample_uploaded_model_bundle();
-        PrivateCompilePayload {
-            service_name: bundle.service_name.to_string(),
-            model_id: bundle.model_id,
-            weight_version: bundle.weight_version,
-            bundle_root: bundle.bundle_root,
-            compile_profile: sample_private_compile_profile(),
-        }
-    }
-
-    fn sample_private_inference_session() -> SoraPrivateInferenceSessionV1 {
-        let bundle = sample_uploaded_model_bundle();
-        SoraPrivateInferenceSessionV1 {
-            schema_version: SORA_PRIVATE_INFERENCE_SESSION_VERSION_V1,
-            session_id: "session-1".to_owned(),
-            apartment: "ops_agent".parse().expect("apartment"),
-            service_name: bundle.service_name,
-            model_id: bundle.model_id,
-            weight_version: bundle.weight_version,
-            bundle_root: bundle.bundle_root,
-            input_commitments: vec![Hash::new(b"input-1")],
-            token_budget: 128,
-            image_budget: 1,
-            status: SoraPrivateInferenceSessionStatusV1::Admitted,
-            receipt_root: Hash::new(b"receipt-root"),
-            xor_cost_nanos: 0,
-        }
-    }
-
-    fn sample_private_model_publish_draft(
-        source: PrivateModelSourceV1,
-    ) -> PrivateModelPublishDraft {
-        PrivateModelPublishDraft {
-            source,
-            service_name: "private_models".to_owned(),
-            model_name: "vision-model".to_owned(),
-            model_id: "upload-1".to_owned(),
-            artifact_id: "artifact-1".to_owned(),
-            weight_version: "1.0.0".to_owned(),
-            family: "hf-transformers".to_owned(),
-            modalities: vec!["text".to_owned()],
-            runtime_format: Some(SoraUploadedModelRuntimeFormatV1::HuggingFaceSafetensors),
-            privacy_mode: Some(SoraModelPrivacyModeV1::PrivateExecution),
-            pricing_policy: Some(Default::default()),
-            decryption_policy_ref: "policy://release/default".to_owned(),
-            dataset_ref: "dataset://synthetic/v1".to_owned(),
-            compile_profile: sample_private_compile_profile(),
-            allow_model: Some(PrivateModelAllowDraft {
-                apartment_name: "ops_agent".to_owned(),
-                require_model_inference: true,
-            }),
-        }
+    fn uploaded_model_register_validation_error(
+        bundle: SoraUploadedModelBundleV1,
+        finalize: UploadedModelFinalizePayload,
+    ) -> String {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        signed_uploaded_model_register_request(bundle, finalize, &authority, &key_pair)
+            .expect_err("uploaded-model register request must be rejected")
+            .to_string()
     }
 
     #[test]
@@ -23111,21 +20012,6 @@ mod tests {
             )
         );
         assert_eq!(publication.manifest_id_hex, None);
-    }
-
-    fn write_sample_uploaded_model_source(dir: &Path) {
-        fs::create_dir_all(dir).expect("create uploaded-model source dir");
-        fs::write(
-            dir.join("config.json"),
-            br#"{"architectures":["TestModel"]}"#,
-        )
-        .expect("write config");
-        fs::write(dir.join("tokenizer.json"), br#"{"model":"test"}"#).expect("write tokenizer");
-        fs::write(
-            dir.join("model-00001-of-00001.safetensors"),
-            b"deterministic-safetensors-payload",
-        )
-        .expect("write weights");
     }
 
     fn write_test_inrou_guest_images(inrou_dir: &Path, label: &str) {
@@ -25398,7 +22284,6 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             model_id: None,
             model_name: Some("fare-model".to_owned()),
             bundle_root: None,
-            compile_profile_hash: None,
             torii_url: Some(server.base_url.clone()),
             api_token: None,
             timeout_secs: 5,
@@ -25421,302 +22306,6 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
         assert_eq!(
             request.path,
             "/v1/soracloud/model/upload/status?service_name=echo_console&weight_version=v1&model_name=fare-model"
-        );
-    }
-
-    #[test]
-    fn model_compile_status_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("model_compile_status_service_name_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
-
-        let response = norito::json!({
-            "service_name": "echo_console",
-            "weight_version": "v1",
-            "model_name": "fare-model",
-            "compile_status": "ready"
-        });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/model/compile/status?service_name=echo_console&weight_version=v1&model_name=fare-model"
-                .to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&response).expect("encode model compile status response"),
-            },
-        )]));
-
-        let output = ModelCompileStatusArgs {
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
-            weight_version: "v1".to_owned(),
-            model_id: None,
-            model_name: Some("fare-model".to_owned()),
-            bundle_root: None,
-            compile_profile_hash: None,
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run()
-        .expect("model-compile-status should succeed");
-
-        assert_eq!(
-            output
-                .get("service_name")
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-        assert_manifest_pair_service_plan(&output);
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| request.method == "GET")
-            .expect("model compile status request");
-        assert_eq!(
-            request.path,
-            "/v1/soracloud/model/compile/status?service_name=echo_console&weight_version=v1&model_name=fare-model"
-        );
-    }
-
-    #[test]
-    fn model_compile_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("model_compile_service_name_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
-
-        let request_file = dir.join("private_compile_payload.json");
-        let mut payload = sample_private_compile_payload();
-        payload.service_name.clear();
-        fs::write(
-            &request_file,
-            json::to_vec(&payload).expect("encode compile payload"),
-        )
-        .expect("write compile payload");
-
-        let response = norito::json!({ "tx_instructions": [] });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/model/compile".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&response).expect("encode model compile response"),
-            },
-        )]));
-
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
-        install_mock_submission_config(&authority, &key_pair);
-        let output = ModelCompileArgs {
-            request_file,
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run(&authority, &key_pair)
-        .expect("model-compile should succeed");
-
-        assert_manifest_pair_service_plan(&output);
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| {
-                request.method == "POST" && request.path == "/v1/soracloud/model/compile"
-            })
-            .expect("model compile request");
-        let body: norito::json::Value =
-            json::from_slice(&request.body).expect("decode model compile request");
-        assert_eq!(
-            body.get("payload")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|payload| payload.get("service_name"))
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-    }
-
-    #[test]
-    fn model_compile_args_reject_conflicting_payload_service_name_against_manifest_pair() {
-        let dir = temp_dir("model_compile_conflicting_service_name_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
-
-        let request_file = dir.join("private_compile_payload.json");
-        let payload = sample_private_compile_payload();
-        fs::write(
-            &request_file,
-            json::to_vec(&payload).expect("encode compile payload"),
-        )
-        .expect("write compile payload");
-
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let error = ModelCompileArgs {
-            request_file,
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
-            torii_url: Some("http://127.0.0.1:1".to_owned()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run(&authority, &key_pair)
-        .expect_err("conflicting compile payload service_name must fail");
-
-        assert!(
-            error
-                .to_string()
-                .contains("request payload service_name `private_models` does not match the manifest-resolved service `echo_console`")
-        );
-    }
-
-    #[test]
-    fn model_allow_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("model_allow_service_name_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
-
-        let request_file = dir.join("uploaded_model_allow_payload.json");
-        let mut payload = sample_uploaded_model_allow_payload();
-        payload.service_name.clear();
-        fs::write(
-            &request_file,
-            json::to_vec(&payload).expect("encode allow payload"),
-        )
-        .expect("write allow payload");
-
-        let response = norito::json!({ "tx_instructions": [] });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/model/allow".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&response).expect("encode model allow response"),
-            },
-        )]));
-
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
-        install_mock_submission_config(&authority, &key_pair);
-        let output = ModelAllowArgs {
-            request_file,
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run(&authority, &key_pair)
-        .expect("model-allow should succeed");
-
-        assert_manifest_pair_service_plan(&output);
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/model/allow")
-            .expect("model allow request");
-        let body: norito::json::Value =
-            json::from_slice(&request.body).expect("decode model allow request");
-        assert_eq!(
-            body.get("payload")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|payload| payload.get("service_name"))
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-    }
-
-    #[test]
-    fn model_upload_init_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("model_upload_init_service_name_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
-
-        let bundle_file = dir.join("uploaded_model_bundle.json");
-        let mut bundle = sample_uploaded_model_bundle();
-        bundle.service_name = "echo_console".parse().expect("service name");
-        fs::write(&bundle_file, json::to_vec(&bundle).expect("encode bundle"))
-            .expect("write bundle");
-
-        let response = norito::json!({ "tx_instructions": [] });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/model/upload/init".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&response).expect("encode model upload init response"),
-            },
-        )]));
-
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
-        install_mock_submission_config(&authority, &key_pair);
-        let output = ModelUploadInitArgs {
-            bundle_file,
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run(&authority, &key_pair)
-        .expect("model-upload-init should succeed");
-
-        assert_manifest_pair_service_plan(&output);
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| {
-                request.method == "POST" && request.path == "/v1/soracloud/model/upload/init"
-            })
-            .expect("model upload init request");
-        let body: norito::json::Value =
-            json::from_slice(&request.body).expect("decode model upload init request");
-        assert_eq!(
-            body.get("payload")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|payload| payload.get("bundle"))
-                .and_then(norito::json::Value::as_object)
-                .and_then(|bundle| bundle.get("service_name"))
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
         );
     }
 
@@ -25773,615 +22362,6 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             request.path,
             "/v1/soracloud/model/upload/encryption-recipient"
         );
-    }
-
-    #[test]
-    fn model_upload_init_args_reject_conflicting_payload_service_name_against_manifest_pair() {
-        let dir = temp_dir("model_upload_init_conflicting_service_name_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
-
-        let bundle_file = dir.join("uploaded_model_bundle.json");
-        let bundle = sample_uploaded_model_bundle();
-        fs::write(&bundle_file, json::to_vec(&bundle).expect("encode bundle"))
-            .expect("write bundle");
-
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let error = ModelUploadInitArgs {
-            bundle_file,
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
-            torii_url: Some("http://127.0.0.1:1".to_owned()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run(&authority, &key_pair)
-        .expect_err("conflicting upload bundle service_name must fail");
-
-        assert!(error
-            .to_string()
-            .contains("request payload service_name `private_models` does not match the manifest-resolved service `echo_console`"));
-    }
-
-    #[test]
-    fn model_upload_chunk_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("model_upload_chunk_service_name_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
-
-        let chunk_file = dir.join("uploaded_model_chunk.json");
-        let mut chunk = sample_uploaded_model_chunks()
-            .into_iter()
-            .next()
-            .expect("sample chunk");
-        chunk.service_name = "echo_console".parse().expect("service name");
-        fs::write(&chunk_file, json::to_vec(&chunk).expect("encode chunk")).expect("write chunk");
-
-        let response = norito::json!({ "tx_instructions": [] });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/model/upload/chunk".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&response).expect("encode model upload chunk response"),
-            },
-        )]));
-
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
-        install_mock_submission_config(&authority, &key_pair);
-        let output = ModelUploadChunkArgs {
-            chunk_file,
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run(&authority, &key_pair)
-        .expect("model-upload-chunk should succeed");
-
-        assert_manifest_pair_service_plan(&output);
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| {
-                request.method == "POST" && request.path == "/v1/soracloud/model/upload/chunk"
-            })
-            .expect("model upload chunk request");
-        let body: norito::json::Value =
-            json::from_slice(&request.body).expect("decode model upload chunk request");
-        assert_eq!(
-            body.get("payload")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|payload| payload.get("chunk"))
-                .and_then(norito::json::Value::as_object)
-                .and_then(|chunk| chunk.get("service_name"))
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-    }
-
-    #[test]
-    fn model_upload_finalize_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("model_upload_finalize_service_name_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
-
-        let request_file = dir.join("uploaded_model_finalize_payload.json");
-        let mut payload = sample_uploaded_model_finalize_payload();
-        payload.service_name = "echo_console".to_owned();
-        fs::write(
-            &request_file,
-            json::to_vec(&payload).expect("encode finalize payload"),
-        )
-        .expect("write finalize payload");
-
-        let response = norito::json!({ "tx_instructions": [] });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/model/upload/finalize".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&response).expect("encode model upload finalize response"),
-            },
-        )]));
-
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
-        install_mock_submission_config(&authority, &key_pair);
-        let output = ModelUploadFinalizeArgs {
-            request_file,
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run(&authority, &key_pair)
-        .expect("model-upload-finalize should succeed");
-
-        assert_manifest_pair_service_plan(&output);
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| {
-                request.method == "POST" && request.path == "/v1/soracloud/model/upload/finalize"
-            })
-            .expect("model upload finalize request");
-        let body: norito::json::Value =
-            json::from_slice(&request.body).expect("decode model upload finalize request");
-        assert_eq!(
-            body.get("payload")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|payload| payload.get("service_name"))
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-    }
-
-    #[test]
-    fn model_run_private_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("model_run_private_service_name_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
-
-        let session_file = dir.join("private_inference_session.json");
-        let mut session = sample_private_inference_session();
-        session.service_name = "echo_console".parse().expect("service name");
-        fs::write(
-            &session_file,
-            json::to_vec(&session).expect("encode session"),
-        )
-        .expect("write session");
-
-        let response = norito::json!({ "tx_instructions": [] });
-        let status_response = norito::json!({
-            "session_id": "session-1",
-            "service_name": "echo_console",
-            "status": "Submitted"
-        });
-        let server = MockHttpServer::start(BTreeMap::from([
-            (
-                "/v1/soracloud/model/run-private".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&response).expect("encode run-private response"),
-                },
-            ),
-            (
-                "/v1/soracloud/model/run-private/finalize".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&response).expect("encode finalize response"),
-                },
-            ),
-            (
-                "/v1/soracloud/model/run-status?session_id=session-1".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&status_response).expect("encode run-status response"),
-                },
-            ),
-        ]));
-
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
-        install_mock_submission_config(&authority, &key_pair);
-        let output = ModelRunPrivateArgs {
-            session_file,
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run(&authority, &key_pair)
-        .expect("model-run-private should succeed");
-
-        assert_manifest_pair_service_plan(&output);
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| {
-                request.method == "POST" && request.path == "/v1/soracloud/model/run-private"
-            })
-            .expect("model run-private request");
-        let body: norito::json::Value =
-            json::from_slice(&request.body).expect("decode model run-private request");
-        assert_eq!(
-            body.get("payload")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|payload| payload.get("session"))
-                .and_then(norito::json::Value::as_object)
-                .and_then(|session| session.get("service_name"))
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-    }
-
-    #[test]
-    fn model_run_status_args_can_attach_service_plan_from_manifest_pair() {
-        let dir = temp_dir("model_run_status_service_plan_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
-
-        let status_response = norito::json!({
-            "session_id": "session-1",
-            "service_name": "echo_console",
-            "status": "Submitted"
-        });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/model/run-status?session_id=session-1".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&status_response).expect("encode run-status response"),
-            },
-        )]));
-
-        let output = ModelRunStatusArgs {
-            session_id: "session-1".to_owned(),
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run()
-        .expect("model-run-status should succeed");
-
-        assert_manifest_pair_service_plan(&output);
-        assert_eq!(
-            output
-                .get("session_id")
-                .and_then(norito::json::Value::as_str),
-            Some("session-1")
-        );
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| request.method == "GET")
-            .expect("model run-status request");
-        assert_eq!(
-            request.path,
-            "/v1/soracloud/model/run-status?session_id=session-1"
-        );
-    }
-
-    #[test]
-    fn model_decrypt_output_args_can_attach_service_plan_from_manifest_pair() {
-        let dir = temp_dir("model_decrypt_output_service_plan_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
-
-        let response = norito::json!({ "tx_instructions": [], "submitted_tx_hash": "tx-1" });
-        let status_response = norito::json!({
-            "session_id": "session-1",
-            "service_name": "echo_console",
-            "status": "Decrypting"
-        });
-        let server = MockHttpServer::start(BTreeMap::from([
-            (
-                "/v1/soracloud/model/decrypt-output".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&response).expect("encode decrypt-output response"),
-                },
-            ),
-            (
-                "/v1/soracloud/model/run-status?session_id=session-1".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&status_response).expect("encode run-status response"),
-                },
-            ),
-        ]));
-
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
-        install_mock_submission_config(&authority, &key_pair);
-        let output = ModelDecryptOutputArgs {
-            session_id: "session-1".to_owned(),
-            decrypt_request_id: "decrypt-1".to_owned(),
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run(&authority, &key_pair)
-        .expect("model-decrypt-output should succeed");
-
-        assert_manifest_pair_service_plan(&output);
-        assert_eq!(
-            output
-                .get("submission_mode")
-                .and_then(norito::json::Value::as_str),
-            Some("client_signed")
-        );
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| {
-                request.method == "POST" && request.path == "/v1/soracloud/model/decrypt-output"
-            })
-            .expect("model decrypt-output request");
-        let body: norito::json::Value =
-            json::from_slice(&request.body).expect("decode decrypt-output request");
-        assert_eq!(
-            body.get("payload")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|payload| payload.get("session_id"))
-                .and_then(norito::json::Value::as_str),
-            Some("session-1")
-        );
-    }
-
-    #[test]
-    fn model_publish_private_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("model_publish_private_service_name_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
-
-        let source_dir = dir.join("model");
-        write_sample_uploaded_model_source(&source_dir);
-        let draft_path = dir.join("private_model_publish_draft.json");
-        let plan_file = dir.join("private_model_publish_plan.json");
-        let mut draft = sample_private_model_publish_draft(PrivateModelSourceV1::LocalDir(
-            PrivateModelLocalDirSourceV1 {
-                path: "model".to_owned(),
-            },
-        ));
-        draft.service_name = "echo_console".to_owned();
-        let mut rng = rand::rngs::StdRng::from_seed([17_u8; 32]);
-        let plan = prepare_private_model_publish_plan_from_draft_with_rng(
-            &draft_path,
-            draft,
-            sample_uploaded_model_encryption_recipient(),
-            32,
-            &mut rng,
-        )
-        .expect("prepare publish plan");
-        fs::write(
-            &plan_file,
-            json::to_vec(&plan).expect("encode publish plan"),
-        )
-        .expect("write publish plan");
-
-        let mut compile_status_url =
-            reqwest::Url::parse("http://127.0.0.1:1").expect("compile status base URL");
-        compile_status_url
-            .path_segments_mut()
-            .expect("compile status path segments")
-            .extend(["v1", "soracloud", "model", "compile", "status"]);
-        compile_status_url
-            .query_pairs_mut()
-            .append_pair("service_name", "echo_console")
-            .append_pair("weight_version", "1.0.0")
-            .append_pair("model_id", "upload-1")
-            .append_pair(
-                "bundle_root",
-                &json::to_json(&plan.bundle.bundle_root).expect("encode bundle root"),
-            )
-            .append_pair(
-                "compile_profile_hash",
-                &json::to_json(&plan.bundle.compile_profile_hash)
-                    .expect("encode compile profile hash"),
-            );
-        let compile_status_path = format!(
-            "{}?{}",
-            compile_status_url.path(),
-            compile_status_url
-                .query()
-                .expect("compile status query string should exist"),
-        );
-        let response = norito::json!({ "tx_instructions": [], "submitted_tx_hash": "tx-1" });
-        let status_response = norito::json!({
-            "service_name": "echo_console",
-            "model_id": "upload-1",
-            "weight_version": "1.0.0",
-            "compile_status": "ready"
-        });
-        let recipient_response = json::Value::Object(norito::json::Map::from_iter([(
-            "recipient".to_owned(),
-            json::to_value(&sample_uploaded_model_encryption_recipient())
-                .expect("encode uploaded-model recipient"),
-        )]));
-        let server = MockHttpServer::start(BTreeMap::from([
-            (
-                "/v1/soracloud/model/upload/encryption-recipient".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&recipient_response)
-                        .expect("encode uploaded-model recipient response"),
-                },
-            ),
-            (
-                "/v1/soracloud/model/upload/init".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&response).expect("encode model upload init response"),
-                },
-            ),
-            (
-                "/v1/soracloud/model/upload/chunk".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&response).expect("encode model upload chunk response"),
-                },
-            ),
-            (
-                "/v1/soracloud/model/upload/finalize".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&response).expect("encode model upload finalize response"),
-                },
-            ),
-            (
-                "/v1/soracloud/model/compile".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&response).expect("encode model compile response"),
-                },
-            ),
-            (
-                "/v1/soracloud/model/allow".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&response).expect("encode model allow response"),
-                },
-            ),
-            (
-                compile_status_path,
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&status_response).expect("encode model compile status"),
-                },
-            ),
-        ]));
-
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
-        install_mock_submission_config(&authority, &key_pair);
-        let output = ModelPublishPrivateArgs {
-            plan_file: Some(plan_file),
-            draft_file: None,
-            emit_plan_file: None,
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run(&authority, &key_pair)
-        .expect("model-publish-private should succeed");
-
-        assert_eq!(
-            output
-                .get("service_name")
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-        assert_manifest_pair_service_plan(&output);
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| {
-                request.method == "POST" && request.path == "/v1/soracloud/model/upload/init"
-            })
-            .expect("model upload init request");
-        let body: norito::json::Value =
-            json::from_slice(&request.body).expect("decode model upload init request");
-        assert_eq!(
-            body.get("payload")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|payload| payload.get("bundle"))
-                .and_then(norito::json::Value::as_object)
-                .and_then(|bundle| bundle.get("service_name"))
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-    }
-
-    #[test]
-    fn model_publish_private_args_reject_conflicting_draft_service_name_against_manifest_pair() {
-        let dir = temp_dir("model_publish_private_conflicting_service_name_from_manifest_pair");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "echo_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::HttpService,
-            overwrite: false,
-        }
-        .run()
-        .expect("http-service init should succeed");
-
-        let source_dir = dir.join("model");
-        write_sample_uploaded_model_source(&source_dir);
-        let draft_file = dir.join("private_model_publish_draft.json");
-        let draft = sample_private_model_publish_draft(PrivateModelSourceV1::LocalDir(
-            PrivateModelLocalDirSourceV1 {
-                path: "model".to_owned(),
-            },
-        ));
-        fs::write(
-            &draft_file,
-            json::to_vec(&draft).expect("encode publish draft"),
-        )
-        .expect("write publish draft");
-
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let error = ModelPublishPrivateArgs {
-            plan_file: None,
-            draft_file: Some(draft_file),
-            emit_plan_file: None,
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
-            torii_url: Some("http://127.0.0.1:1".to_owned()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run(&authority, &key_pair)
-        .expect_err("conflicting publish draft service_name must fail");
-
-        assert!(error
-            .to_string()
-            .contains("request payload service_name `private_models` does not match the manifest-resolved service `echo_console`"));
     }
 
     #[test]
@@ -27724,366 +23704,115 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
     }
 
     #[test]
-    fn signed_uploaded_model_bundle_init_request_uses_verifiable_signature() {
+    fn signed_uploaded_model_register_request_uses_verifiable_signatures() {
         let key_pair = KeyPair::random();
         let authority = AccountId::new(key_pair.public_key().clone());
         let bundle = sample_uploaded_model_bundle();
-        let request = signed_uploaded_model_bundle_init_request(bundle, &authority, &key_pair)
-            .expect("signed uploaded-model init request");
-        let payload = encode_uploaded_model_bundle_init_signature_payload(&request.payload)
-            .expect("encode payload");
+        let finalize = sample_uploaded_model_finalize_payload();
+        let request = signed_uploaded_model_register_request(bundle, finalize, &authority, &key_pair)
+            .expect("signed uploaded-model register request");
+        let bundle_payload = encode_uploaded_model_bundle_register_provenance_payload(
+            request.payload.bundle.clone(),
+        )
+        .expect("encode bundle payload");
         request
-            .provenance
+            .bundle_provenance
             .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
+            .verify(&request.bundle_provenance.signer, &bundle_payload)
+            .expect("bundle signature should verify");
+        let finalize_payload = encode_uploaded_model_finalize_provenance_payload(
+            request.payload.bundle.service_name.as_ref(),
+            request.payload.model_name.as_str(),
+            request.payload.bundle.model_id.as_str(),
+            request.payload.artifact_id.as_str(),
+            request.payload.bundle.weight_version.as_str(),
+            request.payload.bundle.bundle_root,
+            request.payload.weight_artifact_hash,
+            request.payload.dataset_ref.as_str(),
+            request.payload.training_config_hash,
+            request.payload.reproducibility_hash,
+            request.payload.provenance_attestation_hash,
+        )
+        .expect("encode finalize payload");
+        request
+            .finalize_provenance
+            .signature
+            .verify(&request.finalize_provenance.signer, &finalize_payload)
+            .expect("finalize signature should verify");
         assert!(request.authority.is_none());
         assert!(request.private_key.is_none());
     }
 
     #[test]
-    fn signed_uploaded_model_chunk_request_uses_verifiable_signature() {
+    fn uploaded_model_register_service_name_override_updates_bundle_and_finalize() {
         let key_pair = KeyPair::random();
         let authority = AccountId::new(key_pair.public_key().clone());
-        let chunk = sample_uploaded_model_chunks()
-            .into_iter()
-            .next()
-            .expect("sample chunk");
-        let request = signed_uploaded_model_chunk_request(chunk, &authority, &key_pair)
-            .expect("signed uploaded-model chunk request");
-        let payload = encode_uploaded_model_chunk_signature_payload(&request.payload)
-            .expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &payload)
-            .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+        let mut bundle = sample_uploaded_model_bundle();
+        let mut finalize = sample_uploaded_model_finalize_payload();
+        bundle.service_name = "legacy_models".parse().expect("legacy service name");
+        finalize.service_name = "legacy_models".to_owned();
+
+        apply_uploaded_model_register_service_name_override(
+            &mut bundle,
+            &mut finalize,
+            Some("resolved_models"),
+        )
+        .expect("apply service-name override");
+
+        assert_eq!(bundle.service_name.as_ref(), "resolved_models");
+        assert_eq!(finalize.service_name, "resolved_models");
+        let request =
+            signed_uploaded_model_register_request(bundle, finalize, &authority, &key_pair)
+                .expect("override should keep register request signable");
+        assert_eq!(
+            request.payload.bundle.service_name.as_ref(),
+            "resolved_models"
+        );
     }
 
     #[test]
-    fn signed_uploaded_model_finalize_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let payload = sample_uploaded_model_finalize_payload();
-        let request = signed_uploaded_model_finalize_request(payload, &authority, &key_pair)
-            .expect("signed uploaded-model finalize request");
-        let encoded = encode_uploaded_model_finalize_signature_payload(&request.payload)
-            .expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &encoded)
-            .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
-    }
-
-    #[test]
-    fn signed_private_compile_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
+    fn signed_uploaded_model_register_request_rejects_mismatched_finalize_fields() {
         let bundle = sample_uploaded_model_bundle();
-        let payload = PrivateCompilePayload {
-            service_name: bundle.service_name.to_string(),
-            model_id: bundle.model_id,
-            weight_version: bundle.weight_version,
-            bundle_root: bundle.bundle_root,
-            compile_profile: sample_private_compile_profile(),
-        };
-        let request = signed_private_compile_request(payload, &authority, &key_pair)
-            .expect("signed private compile request");
-        let encoded =
-            encode_private_compile_signature_payload(&request.payload).expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &encoded)
-            .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
+
+        let mut finalize = sample_uploaded_model_finalize_payload();
+        finalize.service_name = "other_models".to_owned();
+        let error = uploaded_model_register_validation_error(bundle.clone(), finalize);
+        assert!(error.contains("must match bundle service_name"));
+
+        let mut finalize = sample_uploaded_model_finalize_payload();
+        finalize.model_id = "other-upload".to_owned();
+        let error = uploaded_model_register_validation_error(bundle.clone(), finalize);
+        assert!(error.contains("must match bundle model_id"));
+
+        let mut finalize = sample_uploaded_model_finalize_payload();
+        finalize.weight_version = "2.0.0".to_owned();
+        let error = uploaded_model_register_validation_error(bundle.clone(), finalize);
+        assert!(error.contains("must match bundle weight_version"));
+
+        let mut finalize = sample_uploaded_model_finalize_payload();
+        finalize.bundle_root = Hash::new(b"tampered-bundle-root");
+        let error = uploaded_model_register_validation_error(bundle, finalize);
+        assert!(error.contains("bundle_root must match"));
     }
 
     #[test]
-    fn signed_uploaded_model_allow_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let payload = sample_uploaded_model_allow_payload();
-        let request = signed_uploaded_model_allow_request(payload, &authority, &key_pair)
-            .expect("signed uploaded-model allow request");
-        let encoded = encode_uploaded_model_allow_signature_payload(&request.payload)
-            .expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &encoded)
-            .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
-    }
+    fn signed_uploaded_model_register_request_rejects_empty_finalize_fields() {
+        let bundle = sample_uploaded_model_bundle();
 
-    #[test]
-    fn signed_private_inference_run_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let request = signed_private_inference_run_request(
-            sample_private_inference_session(),
-            &authority,
-            &key_pair,
-        )
-        .expect("signed private inference run request");
-        let encoded = encode_private_inference_run_signature_payload(&request.payload)
-            .expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &encoded)
-            .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
-    }
+        let mut finalize = sample_uploaded_model_finalize_payload();
+        finalize.model_name = " \t ".to_owned();
+        let error = uploaded_model_register_validation_error(bundle.clone(), finalize);
+        assert!(error.contains("model_name must not be empty"));
 
-    #[test]
-    fn signed_private_inference_output_release_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let request = signed_private_inference_output_release_request(
-            "session-1",
-            "decrypt-1",
-            &authority,
-            &key_pair,
-        )
-        .expect("signed private inference output release request");
-        let encoded = encode_private_inference_output_release_signature_payload(&request.payload)
-            .expect("encode payload");
-        request
-            .provenance
-            .signature
-            .verify(&request.provenance.signer, &encoded)
-            .expect("signature should verify");
-        assert!(request.authority.is_none());
-        assert!(request.private_key.is_none());
-    }
+        let mut finalize = sample_uploaded_model_finalize_payload();
+        finalize.artifact_id.clear();
+        let error = uploaded_model_register_validation_error(bundle.clone(), finalize);
+        assert!(error.contains("artifact_id must not be empty"));
 
-    #[test]
-    fn validate_private_model_publish_plan_accepts_consistent_plan() {
-        let plan = PrivateModelPublishPlan {
-            bundle: sample_uploaded_model_bundle(),
-            chunks: sample_uploaded_model_chunks(),
-            finalize: sample_uploaded_model_finalize_payload(),
-            compile_profile: sample_private_compile_profile(),
-            allow_model: Some(sample_uploaded_model_allow_payload()),
-        };
-        let compile_profile_hash =
-            validate_private_model_publish_plan(&plan).expect("valid publish plan");
-        assert_eq!(
-            compile_profile_hash,
-            uploaded_model_compile_profile_hash(&plan.compile_profile)
-        );
-    }
-
-    #[test]
-    fn validate_private_model_publish_plan_rejects_gap_in_ordinals() {
-        let mut chunks = sample_uploaded_model_chunks();
-        chunks[1].ordinal = 2;
-        let plan = PrivateModelPublishPlan {
-            bundle: sample_uploaded_model_bundle(),
-            chunks,
-            finalize: sample_uploaded_model_finalize_payload(),
-            compile_profile: sample_private_compile_profile(),
-            allow_model: None,
-        };
-        let err = validate_private_model_publish_plan(&plan)
-            .expect_err("gap in chunk ordinals must fail");
-        assert!(err.to_string().contains("contiguous from zero"));
-    }
-
-    #[test]
-    fn prepare_private_model_publish_plan_from_draft_builds_valid_plan() {
-        let tempdir = tempfile::tempdir().expect("create temp dir");
-        let source_dir = tempdir.path().join("model");
-        write_sample_uploaded_model_source(&source_dir);
-        let draft_path = tempdir.path().join("draft.json");
-        let draft = sample_private_model_publish_draft(PrivateModelSourceV1::LocalDir(
-            PrivateModelLocalDirSourceV1 {
-                path: "model".to_owned(),
-            },
-        ));
-        let mut rng = rand::rngs::StdRng::from_seed([7_u8; 32]);
-
-        let plan = prepare_private_model_publish_plan_from_draft_with_rng(
-            &draft_path,
-            draft,
-            sample_uploaded_model_encryption_recipient(),
-            32,
-            &mut rng,
-        )
-        .expect("prepare publish plan");
-
-        assert!(plan.chunks.len() >= 2);
-        for (ordinal, chunk) in plan.chunks.iter().enumerate() {
-            let ordinal = u32::try_from(ordinal).expect("ordinal fits");
-            assert_eq!(chunk.ordinal, ordinal);
-            assert_eq!(chunk.offset_bytes, u64::from(ordinal) * 32);
-        }
-        assert_eq!(
-            plan.allow_model
-                .as_ref()
-                .expect("allow-model payload")
-                .compile_profile_hash,
-            plan.bundle.compile_profile_hash
-        );
-        validate_private_model_publish_plan(&plan).expect("generated plan validates");
-    }
-
-    #[test]
-    fn prepare_private_model_publish_plan_from_draft_rejects_missing_config() {
-        let tempdir = tempfile::tempdir().expect("create temp dir");
-        let source_dir = tempdir.path().join("model");
-        fs::create_dir_all(&source_dir).expect("create source dir");
-        fs::write(
-            source_dir.join("model-00001-of-00001.safetensors"),
-            b"weights-only",
-        )
-        .expect("write weights");
-        fs::write(source_dir.join("tokenizer.json"), br#"{"model":"test"}"#)
-            .expect("write tokenizer");
-        let draft_path = tempdir.path().join("draft.json");
-        let draft = sample_private_model_publish_draft(PrivateModelSourceV1::LocalDir(
-            PrivateModelLocalDirSourceV1 {
-                path: "model".to_owned(),
-            },
-        ));
-        let mut rng = rand::rngs::StdRng::from_seed([9_u8; 32]);
-
-        let err = prepare_private_model_publish_plan_from_draft_with_rng(
-            &draft_path,
-            draft,
-            sample_uploaded_model_encryption_recipient(),
-            32,
-            &mut rng,
-        )
-        .expect_err("missing config must fail");
-        assert!(err.to_string().contains("config.json"));
-    }
-
-    #[test]
-    fn validate_private_model_publish_draft_rejects_unpinned_hf_revision() {
-        let draft = sample_private_model_publish_draft(PrivateModelSourceV1::HuggingFaceSnapshot(
-            PrivateModelHuggingFaceSnapshotSourceV1 {
-                repo: "openai-community/gpt2".to_owned(),
-                revision: "main".to_owned(),
-            },
-        ));
-
-        let err = validate_private_model_publish_draft(&draft)
-            .expect_err("unpinned Hugging Face revision must fail");
-        assert!(err.to_string().contains("pinned 40-character commit SHA"));
-    }
-
-    #[test]
-    fn prepare_private_model_publish_plan_from_draft_rejects_unsupported_extra_layout_file() {
-        let tempdir = tempfile::tempdir().expect("create temp dir");
-        let source_dir = tempdir.path().join("model");
-        write_sample_uploaded_model_source(&source_dir);
-        fs::write(source_dir.join("weights.gguf"), b"unsupported").expect("write gguf");
-        let draft_path = tempdir.path().join("draft.json");
-        let draft = sample_private_model_publish_draft(PrivateModelSourceV1::LocalDir(
-            PrivateModelLocalDirSourceV1 {
-                path: "model".to_owned(),
-            },
-        ));
-        let mut rng = rand::rngs::StdRng::from_seed([11_u8; 32]);
-
-        let err = prepare_private_model_publish_plan_from_draft_with_rng(
-            &draft_path,
-            draft,
-            sample_uploaded_model_encryption_recipient(),
-            32,
-            &mut rng,
-        )
-        .expect_err("unsupported extra layout must fail");
-        assert!(err.to_string().contains("weights.gguf"));
-        assert!(err.to_string().contains("GGUF"));
-    }
-
-    #[test]
-    fn prepare_private_model_publish_plan_from_pinned_hf_snapshot_builds_valid_plan() {
-        let revision = "0123456789abcdef0123456789abcdef01234567";
-        let mock_info = norito::json!({
-            "sha": revision,
-            "siblings": [
-                { "rfilename": "README.md" },
-                { "rfilename": "config.json" },
-                { "rfilename": "tokenizer.json" },
-                { "rfilename": "model-00001-of-00001.safetensors" }
-            ]
-        });
-        let server = MockHttpServer::start(BTreeMap::from([
-            (
-                format!("/api/models/openai-community/gpt2/revision/{revision}"),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&mock_info).expect("encode mock model info"),
-                },
-            ),
-            (
-                format!("/openai-community/gpt2/resolve/{revision}/config.json"),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: br#"{"architectures":["TestModel"]}"#.to_vec(),
-                },
-            ),
-            (
-                format!("/openai-community/gpt2/resolve/{revision}/tokenizer.json"),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: br#"{"model":"test"}"#.to_vec(),
-                },
-            ),
-            (
-                format!(
-                    "/openai-community/gpt2/resolve/{revision}/model-00001-of-00001.safetensors"
-                ),
-                MockHttpResponse {
-                    content_type: "application/octet-stream",
-                    body: b"deterministic-safetensors-payload".to_vec(),
-                },
-            ),
-        ]));
-        let draft_path = Path::new("/tmp/private-model-draft.json");
-        let draft = sample_private_model_publish_draft(PrivateModelSourceV1::HuggingFaceSnapshot(
-            PrivateModelHuggingFaceSnapshotSourceV1 {
-                repo: "openai-community/gpt2".to_owned(),
-                revision: revision.to_owned(),
-            },
-        ));
-        let mut rng = rand::rngs::StdRng::from_seed([13_u8; 32]);
-        let api_base_url = format!("{}/api", server.base_url);
-        let hf_source_config = PrivateModelHfSourceConfig {
-            api_base_url: &api_base_url,
-            hub_base_url: &server.base_url,
-            max_files: 8,
-            max_file_bytes: 1024,
-            max_total_bytes: 4096,
-        };
-
-        let plan = prepare_private_model_publish_plan_from_draft_with_source_config_and_rng(
-            draft_path,
-            draft,
-            sample_uploaded_model_encryption_recipient(),
-            hf_source_config,
-            32,
-            &mut rng,
-        )
-        .expect("prepare publish plan from pinned HF snapshot");
-
-        assert_eq!(
-            plan.bundle.runtime_format,
-            SoraUploadedModelRuntimeFormatV1::HuggingFaceSafetensors
-        );
-        validate_private_model_publish_plan(&plan).expect("generated plan validates");
+        let mut finalize = sample_uploaded_model_finalize_payload();
+        finalize.dataset_ref = "\n".to_owned();
+        let error = uploaded_model_register_validation_error(bundle, finalize);
+        assert!(error.contains("dataset_ref must not be empty"));
     }
 
     #[test]
@@ -28104,7 +23833,6 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             None,
             None,
             None,
-            None,
             5,
         )
         .expect_err("invalid URL must fail");
@@ -28112,10 +23840,20 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
     }
 
     #[test]
-    fn fetch_private_inference_status_rejects_invalid_url() {
-        let err = fetch_torii_soracloud_private_inference_status("not-a-url", "session-1", None, 5)
-            .expect_err("invalid URL must fail");
-        assert!(err.to_string().contains("invalid --torii-url"));
+    fn fetch_uploaded_model_status_requires_model_identifier_before_network() {
+        let err = fetch_torii_soracloud_uploaded_model_status(
+            "http://127.0.0.1:1",
+            "v1/soracloud/model/upload/status",
+            "private_models",
+            "1.0.0",
+            None,
+            Some(" "),
+            None,
+            None,
+            5,
+        )
+        .expect_err("missing uploaded-model identifier must fail locally");
+        assert!(err.to_string().contains("--model-id or --model-name is required"));
     }
 
     #[test]

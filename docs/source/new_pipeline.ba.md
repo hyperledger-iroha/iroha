@@ -628,7 +628,7 @@ ZK verification placement
   must be deterministic and produce identical accept/reject outcomes.
 
 Implementation notes (current)
-- Executor performs stateless pre‑verification for `SignedTransaction::WithProofs` attachments: backend tag sanity, and per‑block dedup by `(proof hash, vk_commitment?)` when `vk_commitment` is present in the attachment or inline VK is provided; falls back to `(proof hash, backend)`.
+- Executor performs stateless pre‑verification for `SignedTransaction::WithProofs` attachments: backend tag sanity, and per‑block dedup by `(proof hash, vk_commitment?)` when `vk_commitment` is present in the attachment or `vk_ref` resolves a registry commitment; falls back to `(proof hash, backend)`.
 - Stateful path provides `VerifyProof` ISI that records verification outcome into WSV (`proofs` storage). The real Halo2 backend is always linked; proofs are verified using `plonk::verify_proof` with the appropriate `Params<C>` and verifying key derived from the backend tag’s `<circuit-id>`.
   - Transparent Halo2 (IPA over Pasta): proofs are verified using `plonk::verify_proof` with IPA PCS and `Params::<EqAffine>` derived transparently.
     - VK/Params encoding (ZK1):
@@ -648,7 +648,7 @@ Implementation notes (current)
     - Proof encoding (ZK1 preferred): `ZK1` with `PROF` and instance columns `I10P` (Pasta Fp).
     - Built‑in circuit ids include tiny smoke circuits used in tests: `tiny-add-v1`, `tiny-add-2rows-v1`, `tiny-add-public-v1`, `tiny-id-public-v1`.
     - See `docs/source/zk1_envelope.md` for the canonical ZK1 TLV layout and safety bounds.
-- VK lifecycle and registry are managed via `RegisterVerifyingKey`, `UpdateVerifyingKey`, and `DeprecateVerifyingKey` ISIs. Inline VKs are checked against their 32‑byte commitments.
+- VK lifecycle and registry are managed via `RegisterVerifyingKey`, `UpdateVerifyingKey`, and `DeprecateVerifyingKey` ISIs. Proof attachments reference registered VK records by `vk_ref`; verifying-key bytes are stored only in registry/external records and are not carried inline.
 
 DoS hardening
 - Set per‑tx compute, memory, and syscall caps; enforce step/time budgets for

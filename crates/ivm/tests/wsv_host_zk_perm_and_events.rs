@@ -212,10 +212,10 @@ fn unshield_requires_verify_even_with_permission() {
     vm.set_host(host);
 
     // Build Unshield instruction envelope and attempt without prior ZK_VERIFY_UNSHIELD
-    use iroha_data_model::proof::{ProofAttachment, ProofBox, VerifyingKeyBox};
+    use iroha_data_model::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
     let proof = ProofBox::new("halo2/ipa".into(), Vec::new());
-    let vk = VerifyingKeyBox::new("halo2/ipa".into(), Vec::new());
-    let attach = ProofAttachment::new_inline("halo2/ipa".into(), proof, vk);
+    let vk_ref = VerifyingKeyId::new("halo2/ipa", "unshield_vk");
+    let attach = ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_ref);
     let attach_val = norito::json::to_value(&attach).expect("attach to json");
     let inputs_val: norito::json::Value =
         norito::json::Value::Array(vec![norito::json::Value::Array(
@@ -305,30 +305,13 @@ fn zk_transfer_requires_matching_vk_reference() {
         iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0xBB]),
         vk_other.clone(),
     );
-    let proof_missing = iroha_data_model::proof::ProofAttachment {
-        backend: "halo2/ipa".into(),
-        proof: iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0xCC]),
-        vk_ref: None,
-        vk_inline: None,
-        vk_commitment: None,
-        envelope_hash: None,
-        lane_privacy: None,
-    };
-    let proof_inline = iroha_data_model::proof::ProofAttachment::new_inline(
+    let proof_missing = iroha_data_model::proof::ProofAttachment::new_ref(
         "halo2/ipa".into(),
-        iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0xDD]),
-        iroha_data_model::proof::VerifyingKeyBox::new("halo2/ipa".into(), vec![7u8; 4]),
-    );
-    let proof_inline_bad_backend = iroha_data_model::proof::ProofAttachment::new_inline(
-        "halo2/ipa".into(),
-        iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0xEE]),
-        iroha_data_model::proof::VerifyingKeyBox::new("halo2/ipa".into(), vec![8u8; 4]),
+        iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0xCC]),
+        VerifyingKeyId::new("halo2/ipa", "missing_vk_ref"),
     );
     let proof_json_ref = norito::json::to_value(&proof_ref).expect("proof to json");
     let proof_json_other = norito::json::to_value(&proof_other).expect("proof to json");
-    let proof_json_inline = norito::json::to_value(&proof_inline).expect("proof to json");
-    let proof_json_inline_bad =
-        norito::json::to_value(&proof_inline_bad_backend).expect("proof to json");
     let proof_json_missing = norito::json::to_value(&proof_missing).expect("proof to json");
 
     let mk_inputs = |seed: u64| {
@@ -363,15 +346,6 @@ fn zk_transfer_requires_matching_vk_reference() {
         ("type", json_value("zk.ZkTransfer")),
         ("payload", mk_payload(proof_json_missing.clone(), 64)),
     ]);
-    let transfer_env_inline = json_object([
-        ("type", json_value("zk.ZkTransfer")),
-        ("payload", mk_payload(proof_json_inline.clone(), 96)),
-    ]);
-    let transfer_env_inline_bad = json_object([
-        ("type", json_value("zk.ZkTransfer")),
-        ("payload", mk_payload(proof_json_inline_bad.clone(), 128)),
-    ]);
-
     // Without verify latch, execution fails
     let tlv = make_tlv(
         PointerType::Json as u16,
@@ -455,53 +429,5 @@ fn zk_transfer_requires_matching_vk_reference() {
     let err = host
         .syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
         .expect_err("missing verifying key must fail");
-    assert!(matches!(err, ivm::VMError::PermissionDenied));
-
-    // Re-arm and allow inline verifying key with matching backend
-    let env_bytes = build_open_verify_envelope_bytes();
-    let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &env_bytes);
-    vm.memory
-        .preload_input(env_offset, &tlv_env)
-        .expect("preload verify env");
-    vm.set_register(10, ptr_env);
-    let gas = host
-        .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
-        .expect("verify");
-    assert_eq!(gas, verify_gas(env_bytes.len()));
-    assert_eq!(vm.register(10), 1);
-
-    let tlv = make_tlv(
-        PointerType::Json as u16,
-        &norito::json::to_vec(&transfer_env_inline).unwrap(),
-    );
-    let ptr = vm.alloc_input_tlv(&tlv).unwrap();
-    vm.set_register(10, ptr);
-    let gas = host
-        .syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
-        .expect("inline vk ok");
-    assert_eq!(gas, mutation_gas(json_payload_len(&transfer_env_inline)));
-
-    // Inline with mismatched backend must be rejected
-    let env_bytes = build_open_verify_envelope_bytes();
-    let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &env_bytes);
-    vm.memory
-        .preload_input(env_offset, &tlv_env)
-        .expect("preload verify env");
-    vm.set_register(10, ptr_env);
-    let gas = host
-        .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
-        .expect("verify");
-    assert_eq!(gas, verify_gas(env_bytes.len()));
-    assert_eq!(vm.register(10), 1);
-
-    let tlv = make_tlv(
-        PointerType::Json as u16,
-        &norito::json::to_vec(&transfer_env_inline_bad).unwrap(),
-    );
-    let ptr = vm.alloc_input_tlv(&tlv).unwrap();
-    vm.set_register(10, ptr);
-    let err = host
-        .syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
-        .expect_err("inline backend mismatch must fail");
     assert!(matches!(err, ivm::VMError::PermissionDenied));
 }

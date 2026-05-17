@@ -35,10 +35,10 @@ fn decode_typed_submitballot_fallback_yields_permission_denied_without_verify() 
     let sb = iroha_data_model::isi::zk::SubmitBallot {
         election_id: "e1".to_string(),
         ciphertext: vec![1, 2, 3],
-        ballot_proof: iroha_data_model::proof::ProofAttachment::new_inline(
+        ballot_proof: iroha_data_model::proof::ProofAttachment::new_ref(
             "halo2/ipa".into(),
             iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0x01]),
-            iroha_data_model::proof::VerifyingKeyBox::new("halo2/ipa".into(), vec![0x02]),
+            iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "ballot_vk"),
         ),
         nullifier: [7u8; 32],
     };
@@ -90,10 +90,10 @@ fn decode_typed_finalize_fallback_yields_permission_denied_without_verify() {
     let fin = iroha_data_model::isi::zk::FinalizeElection {
         election_id: "e2".to_string(),
         tally: vec![5, 2, 1],
-        tally_proof: iroha_data_model::proof::ProofAttachment::new_inline(
+        tally_proof: iroha_data_model::proof::ProofAttachment::new_ref(
             "halo2/ipa".into(),
             iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0x03]),
-            iroha_data_model::proof::VerifyingKeyBox::new("halo2/ipa".into(), vec![0x04]),
+            iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "tally_vk"),
         ),
     };
     let body = fin.encode_as_instruction_box();

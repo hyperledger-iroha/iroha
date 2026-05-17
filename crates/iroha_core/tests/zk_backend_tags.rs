@@ -26,6 +26,28 @@ fn new_block_ctx() -> (State, iroha_data_model::block::BlockHeader) {
     (state, header)
 }
 
+fn vk_record(
+    circuit_id: &str,
+    backend_tag: iroha_data_model::zk::BackendTag,
+    curve: &str,
+    vk_box: iroha_data_model::proof::VerifyingKeyBox,
+    schema_hash: [u8; 32],
+) -> iroha_data_model::proof::VerifyingKeyRecord {
+    let mut record = iroha_data_model::proof::VerifyingKeyRecord::new(
+        1,
+        circuit_id,
+        backend_tag,
+        curve,
+        schema_hash,
+        iroha_core::zk::hash_vk(&vk_box),
+    );
+    record.vk_len = vk_box.bytes.len() as u32;
+    record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+    record.key = Some(vk_box);
+    record.gas_schedule_id = Some("halo2_default".into());
+    record
+}
+
 #[test]
 fn groth16_backend_tag_is_unsupported() {
     let (state, header) = new_block_ctx();
@@ -33,14 +55,32 @@ fn groth16_backend_tag_is_unsupported() {
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
 
-    // Build a transaction with proofs carrying one inline Groth16 attachment
+    let mut stx = block.transaction();
+
+    // Build a transaction with proofs carrying one Groth16 attachment.
     let chain: ChainId = "test-chain".parse().unwrap();
     let authority = ALICE_ID.clone();
     let private_key = iroha_test_samples::ALICE_KEYPAIR.private_key().clone();
-    let attach = iroha_data_model::proof::ProofAttachment::new_inline(
+    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("groth16/bn254", "vk_groth16");
+    let vk_box =
+        iroha_data_model::proof::VerifyingKeyBox::new("groth16/bn254".into(), vec![7, 7, 7]);
+    let reg_vk: InstructionBox = iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
+        id: vk_id.clone(),
+        record: vk_record(
+            "groth16/bn254:unsupported",
+            iroha_data_model::zk::BackendTag::Groth16,
+            "bn254",
+            vk_box,
+            [0u8; 32],
+        ),
+    }
+    .into();
+    exec.execute_instruction(&mut stx, &authority, reg_vk)
+        .expect("register vk");
+    let attach = iroha_data_model::proof::ProofAttachment::new_ref(
         "groth16/bn254".into(),
         iroha_data_model::proof::ProofBox::new("groth16/bn254".into(), vec![1, 2, 3, 4]),
-        iroha_data_model::proof::VerifyingKeyBox::new("groth16/bn254".into(), vec![7, 7, 7]),
+        vk_id,
     );
     let tx: SignedTransaction = TransactionBuilder::new(chain, authority.clone())
         .with_executable(Executable::Instructions(
@@ -49,7 +89,6 @@ fn groth16_backend_tag_is_unsupported() {
         .with_attachments(iroha_data_model::proof::ProofAttachmentList(vec![attach]))
         .sign(&private_key);
 
-    let mut stx = block.transaction();
     let err = exec
         .execute_transaction(&mut stx, &authority, tx, &mut ivm_cache)
         .expect_err("unsupported backend should be rejected at pre-verify");
@@ -77,10 +116,25 @@ fn halo2_curve_mismatch_rejected_as_curve_not_allowed() {
     let vk_box = halo2_fixture
         .vk_box("halo2/pasta/ipa")
         .expect("fixture verifying key");
-    let attach = iroha_data_model::proof::ProofAttachment::new_inline(
+    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/pasta/ipa", "vk_curve");
+    let mut stx = block.transaction();
+    let reg_vk: InstructionBox = iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
+        id: vk_id.clone(),
+        record: vk_record(
+            "halo2/pasta/ipa/tiny-add",
+            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            "pasta",
+            vk_box,
+            halo2_fixture.schema_hash,
+        ),
+    }
+    .into();
+    exec.execute_instruction(&mut stx, &authority, reg_vk)
+        .expect("register vk");
+    let attach = iroha_data_model::proof::ProofAttachment::new_ref(
         "halo2/pasta/ipa".into(),
         halo2_fixture.proof_box("halo2/pasta/ipa"),
-        vk_box,
+        vk_id,
     );
     let tx: SignedTransaction = TransactionBuilder::new(chain, authority.clone())
         .with_executable(Executable::Instructions(
@@ -89,7 +143,6 @@ fn halo2_curve_mismatch_rejected_as_curve_not_allowed() {
         .with_attachments(iroha_data_model::proof::ProofAttachmentList(vec![attach]))
         .sign(&private_key);
 
-    let mut stx = block.transaction();
     let err = exec
         .execute_transaction(&mut stx, &authority, tx, &mut ivm_cache)
         .expect_err("curve mismatch should be rejected");

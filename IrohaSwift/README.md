@@ -610,6 +610,11 @@ generation/verification, transaction submission, and persistent storage.
 redeem-pending note records after redeem finality. The SDK includes an in-memory store, a
 `ToriiOfflineNoteV2IssuerClient` for body-signed key-refill plus note-issue
 loads, and a direct `IrohaSDK` audit/redeem submitter.
+`OfflineNoteV2KeychainStore` writes wallet state through revisioned
+ThisDeviceOnly Keychain records and deletes the previous revision after each
+commit, so app-container rollback cannot revive an earlier note set without the
+deleted revision item. Legacy `spendPending` records decode as `spent`, and
+legacy `changePending` records decode as `spendable`.
 Issuance is accepted only from an offline escrow manager with `CanManageOfflineEscrow`, and the
 one-use key certificate must be signed over its canonical payload. Redemption proofs bind the
 source note commitment, nullifiers, certified key payload, recipient, asset, and amount to a
@@ -750,8 +755,8 @@ let request = try UnshieldRequest(
 try await sdk.submit(unshield: request, keypair: keypair)
 ```
 
-`ProofAttachment` mirrors the Norito schema (`backend`, `proof_b64`, `vk_ref`/`vk_inline`, optional
-`vk_commitment_hex`/`envelope_hash_hex`), keeping Swift clients aligned with Rust and JS builders.
+`ProofAttachment` emits registry-bound envelopes (`backend`, `proof_b64`, `vk_ref`, optional
+`vk_commitment_hex`/`envelope_hash_hex`); embedded key bytes are not accepted by the Swift builder.
 
 ### Multisig spec builder
 

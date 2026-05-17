@@ -646,38 +646,8 @@ impl From<crate::isi::soracloud::RegisterSoracloudUploadedModelBundle> for Instr
     }
 }
 
-impl From<crate::isi::soracloud::AppendSoracloudUploadedModelChunk> for InstructionBox {
-    fn from(i: crate::isi::soracloud::AppendSoracloudUploadedModelChunk) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
 impl From<crate::isi::soracloud::FinalizeSoracloudUploadedModelBundle> for InstructionBox {
     fn from(i: crate::isi::soracloud::FinalizeSoracloudUploadedModelBundle) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::soracloud::AdmitSoracloudPrivateCompileProfile> for InstructionBox {
-    fn from(i: crate::isi::soracloud::AdmitSoracloudPrivateCompileProfile) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::soracloud::AllowSoracloudUploadedModel> for InstructionBox {
-    fn from(i: crate::isi::soracloud::AllowSoracloudUploadedModel) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::soracloud::StartSoracloudPrivateInference> for InstructionBox {
-    fn from(i: crate::isi::soracloud::StartSoracloudPrivateInference) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::soracloud::RecordSoracloudPrivateInferenceCheckpoint> for InstructionBox {
-    fn from(i: crate::isi::soracloud::RecordSoracloudPrivateInferenceCheckpoint) -> Self {
         InstructionBox(Box::new(i))
     }
 }

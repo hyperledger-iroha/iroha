@@ -2059,8 +2059,13 @@ fn minimal_config_snapshot() {
                     enforce_transcript_label_ascii: true,
                 },
                 fastpq: Fastpq {
-                    execution_mode: Auto,
-                    poseidon_mode: Auto,
+                    execution_mode: Cpu,
+                    poseidon_mode: Cpu,
+                    proof_sidecar_queue_cap: 1024,
+                    proof_sidecar_max_bytes: Bytes(
+                        1048576,
+                    ),
+                    proof_sidecar_max_retries: 16,
                     device_class: None,
                     chip_family: None,
                     gpu_kind: None,

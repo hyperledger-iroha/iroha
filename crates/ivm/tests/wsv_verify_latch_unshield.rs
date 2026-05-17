@@ -323,7 +323,7 @@ fn unshield_accepts_and_checks_inline_verifying_key() {
     assert!(wsv.register_domain(&caller, domain));
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     assert!(wsv.register_asset_definition(&caller, asset.clone(), Mintable::Infinitely));
-    let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_inline_ok");
+    let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_unshield_ok");
     let vk_bytes_good = vec![0x11, 0x22, 0x33, 0x44];
     wsv.insert_verifying_key(vk_id.clone(), vk_bytes_good.clone());
     wsv.grant_permission(&caller, PermissionToken::RegisterZkAsset(asset.clone()));
@@ -355,10 +355,10 @@ fn unshield_accepts_and_checks_inline_verifying_key() {
         assert_eq!(vm.register(10), 1);
     }
 
-    let good_attachment = iroha_data_model::proof::ProofAttachment::new_inline(
+    let good_attachment = iroha_data_model::proof::ProofAttachment::new_ref(
         "halo2/ipa".into(),
         iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0x10]),
-        iroha_data_model::proof::VerifyingKeyBox::new("halo2/ipa".into(), vk_bytes_good.clone()),
+        vk_id.clone(),
     );
     let env_good = json_object([
         ("type", json_value("zk.Unshield")),
@@ -383,7 +383,7 @@ fn unshield_accepts_and_checks_inline_verifying_key() {
     {
         let gas = host
             .syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
-            .expect("inline vk should succeed");
+            .expect("registered vk_ref should succeed");
         assert_eq!(gas, mutation_gas(json_payload_len(&env_good)));
     }
 
@@ -400,13 +400,10 @@ fn unshield_accepts_and_checks_inline_verifying_key() {
         assert_eq!(vm.register(10), 1);
     }
 
-    let bad_attachment = iroha_data_model::proof::ProofAttachment::new_inline(
+    let bad_attachment = iroha_data_model::proof::ProofAttachment::new_ref(
         "halo2/ipa".into(),
         iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0x11]),
-        iroha_data_model::proof::VerifyingKeyBox::new(
-            "halo2/ipa".into(),
-            vec![0xDE, 0xAD, 0xBE, 0xEF],
-        ),
+        VerifyingKeyId::new("halo2/ipa", "vk_unshield_mismatch"),
     );
     let env_bad = json_object([
         ("type", json_value("zk.Unshield")),
@@ -430,6 +427,6 @@ fn unshield_accepts_and_checks_inline_verifying_key() {
     vm.set_register(10, ptr_bad);
     let err = host
         .syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
-        .expect_err("inline mismatch must fail");
+        .expect_err("vk_ref mismatch must fail");
     assert!(matches!(err, ivm::VMError::PermissionDenied));
 }

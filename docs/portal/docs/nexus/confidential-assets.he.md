@@ -244,7 +244,7 @@ Ledgers חסויים חייבים לשמור מספיק היסטוריה כדי 
 - מגבלות קשיחות (ברירות מחדל ניתנות לקונפיג):
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. proofs שחורגים מ-`verify_timeout_ms` מפסיקים את ההוראה דטרמיניסטית (ballots של governance מפיקים `proof verification exceeded timeout`, `VerifyProof` מחזיר שגיאה).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - מכסות נוספות מבטיחות liveness: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, ו-`max_public_inputs` מגבילים block builders; `reorg_depth_bound` (≥ `max_anchor_age_blocks`) שולט בשימור frontier checkpoints.
 - ה-runtime דוחה טרנזקציות שחורגות ממגבלות per-transaction או per-block, מוציא שגיאות `InvalidParameter` דטרמיניסטיות ומשאיר את מצב ה-ledger ללא שינוי.
 - Mempool מסנן מראש טרנזקציות חסויות לפי `vk_id`, אורך proof וגיל anchor לפני הפעלת verifier כדי להגביל שימוש במשאבים.

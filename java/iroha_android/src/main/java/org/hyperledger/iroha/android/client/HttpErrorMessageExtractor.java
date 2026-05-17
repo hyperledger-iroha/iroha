@@ -32,6 +32,26 @@ final class HttpErrorMessageExtractor {
     return null;
   }
 
+  static String extractRejectCode(
+      final Map<String, List<String>> headers, final String headerName, final byte[] body) {
+    final String fromHeader = extractRejectCode(headers, headerName);
+    if (fromHeader != null) {
+      return fromHeader;
+    }
+    if (body == null || body.length == 0) {
+      return null;
+    }
+    final String text = new String(body, StandardCharsets.UTF_8).trim();
+    if (text.isEmpty()) {
+      return null;
+    }
+    try {
+      return extractStructuredRejectCode(JsonParser.parse(text));
+    } catch (final RuntimeException ignored) {
+      return null;
+    }
+  }
+
   static String extractMessage(final byte[] body) {
     if (body == null || body.length == 0) {
       return null;
@@ -97,6 +117,55 @@ final class HttpErrorMessageExtractor {
       }
     }
     return null;
+  }
+
+  private static String extractStructuredRejectCode(final Object value) {
+    if (value instanceof List<?>) {
+      for (final Object entry : (List<?>) value) {
+        final String nested = extractStructuredRejectCode(entry);
+        if (nested != null) {
+          return nested;
+        }
+      }
+      return null;
+    }
+    if (!(value instanceof Map<?, ?>)) {
+      return null;
+    }
+    final Map<?, ?> map = (Map<?, ?>) value;
+    for (final String key : new String[] {"reject_code", "rejectCode"}) {
+      final String direct = coerceNonBlankString(getCaseInsensitiveValue(map, key));
+      if (direct != null) {
+        return direct;
+      }
+    }
+    final Object details = getCaseInsensitiveValue(map, "details");
+    if (details instanceof Map<?, ?>) {
+      final Map<?, ?> detailsMap = (Map<?, ?>) details;
+      for (final String key : new String[] {"reject_code", "rejectCode"}) {
+        final String nested = coerceNonBlankString(getCaseInsensitiveValue(detailsMap, key));
+        if (nested != null) {
+          return nested;
+        }
+      }
+      final Object axt = getCaseInsensitiveValue(detailsMap, "axt");
+      if (axt instanceof Map<?, ?>) {
+        final Map<?, ?> axtMap = (Map<?, ?>) axt;
+        final String axtCode = coerceNonBlankString(getCaseInsensitiveValue(axtMap, "code"));
+        if (axtCode != null) {
+          return axtCode;
+        }
+      }
+    }
+    return null;
+  }
+
+  private static String coerceNonBlankString(final Object value) {
+    if (value == null) {
+      return null;
+    }
+    final String text = String.valueOf(value).trim();
+    return text.isEmpty() ? null : text;
   }
 
   private static Object getCaseInsensitiveValue(final Map<?, ?> map, final String candidateKey) {

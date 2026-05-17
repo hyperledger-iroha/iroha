@@ -1,4 +1,4 @@
-use super::{lookup, permutation, Assigned, Error};
+use super::{Assigned, Error, lookup, permutation};
 use crate::circuit::layouter::SyncDeps;
 use crate::dev::metadata;
 use crate::{
@@ -11,7 +11,6 @@ use ff::Field;
 use itertools::Itertools;
 use sealed::SealedPhase;
 use std::collections::HashMap;
-use std::env::var;
 use std::fmt::Debug;
 use std::{
     convert::TryFrom,
@@ -2290,14 +2289,6 @@ impl<F: Field> ConstraintSystem<F> {
                 .max()
                 .unwrap_or(0),
         );
-
-        fn get_max_degree() -> usize {
-            var("MAX_DEGREE")
-                .unwrap_or_else(|_| "64".to_string())
-                .parse()
-                .expect("Cannot parse MAX_DEGREE env var as usize")
-        }
-        degree = std::cmp::min(degree, get_max_degree());
 
         std::cmp::max(degree, self.minimum_degree.unwrap_or(1))
     }

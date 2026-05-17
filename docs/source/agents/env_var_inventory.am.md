@@ -667,9 +667,6 @@ translator: machine-google-reviewed
 ሙከራ፡ ሳጥኖች/ivm/tess/i18n.rs:13 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 ሙከራ፡ ሳጥኖች/ivm/tess/i18n.rs:71 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 
-## ማክስ_ዲግሪ (ምርት፡ 1)
-
-- ፕሮድ፡ crates/iroha_core/src/zk.rs:106 — `let current = std::env::var("MAX_DEGREE")`
 
 ## MOCHI_CONFIG (ምርት፡ 1)
 

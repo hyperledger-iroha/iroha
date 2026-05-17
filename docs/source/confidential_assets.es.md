@@ -248,7 +248,7 @@ paso a paso.
 - Límites estrictos (valores predeterminados configurables):
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. Las pruebas que exceden `verify_timeout_ms` anulan la instrucción de manera determinista (las boletas de gobernanza emiten `proof verification exceeded timeout`, `VerifyProof` devuelve un error).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Cuotas adicionales garantizan la vida: constructores de bloques enlazados `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block` e `max_public_inputs`; `reorg_depth_bound` (≥ `max_anchor_age_blocks`) rige la retención en los puntos de control fronterizos.
 - La ejecución en tiempo de ejecución ahora rechaza las transacciones que exceden estos límites por transacción o por bloque, lo que emite errores deterministas `InvalidParameter` y deja el estado del libro mayor sin cambios.
 - Mempool filtra previamente las transacciones confidenciales por `vk_id`, longitud de la prueba y antigüedad del anclaje antes de invocar al verificador para mantener limitado el uso de recursos.
@@ -337,7 +337,7 @@ paso a paso.
    - ✅ El protocolo de enlace P2P anuncia `ConfidentialFeatureDigest` (resumen de backend + huellas digitales de registro) y falla en las discrepancias de forma determinista a través de `HandshakeConfidentialMismatch`.
    - ✅ Elimine los pánicos en rutas de ejecución confidenciales y agregue control de roles para nodos sin capacidad de coincidencia.
    - ⚪ Hacer cumplir los presupuestos de tiempo de espera de los verificadores y reorganizar los límites de profundidad para los puntos de control fronterizos.
-     - ✅ Se aplican presupuestos de tiempo de espera de verificación; Las pruebas que superan `verify_timeout_ms` ahora fallan de forma determinista.
+     - Verification timeout budgets are telemetry/operator budgets only; proofs fail deterministically on size, gas, public input, policy, or anchor-age bounds.
      - ✅ Los puntos de control fronterizos ahora respetan `reorg_depth_bound`, eliminando los puntos de control más antiguos que la ventana configurada y manteniendo instantáneas deterministas.
    - Introducir `AssetConfidentialPolicy`, política FSM y puertas de cumplimiento para instrucciones de acuñación/transferencia/revelación.
    - Confirme `conf_features` en los encabezados de bloque y rechace la participación del validador cuando los resúmenes de registros/parámetros diverjan.

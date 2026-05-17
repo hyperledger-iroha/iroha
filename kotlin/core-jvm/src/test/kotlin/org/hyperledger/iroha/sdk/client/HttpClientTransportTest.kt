@@ -571,6 +571,7 @@ class HttpClientTransportTest {
         val receipts = transport.listVpnReceipts(auth).join()
 
         assertEquals(sessionId, session.sessionId)
+        assertEquals(vpnHelperTicketHex(), session.helperTicketHex)
         assertTrue(fetched.isPresent)
         assertEquals(sessionId, fetched.get().quoteId)
         assertTrue(deleted.isPresent)
@@ -740,6 +741,32 @@ class HttpClientTransportTest {
         assertTrue(executor.observedExpectedHash)
     }
 
+    @Test
+    fun errorEnvelopeDetailsProvideRejectCode() {
+        val body = """
+            {
+              "code": "queue_full",
+              "message": "transaction queue is at capacity",
+              "details": {
+                "reject_code": "TX_QUEUE_FULL",
+                "retry_after_seconds": 1,
+                "queue": {
+                  "state": "saturated",
+                  "queued": 128,
+                  "capacity": 128,
+                  "saturated": true
+                }
+              }
+            }
+        """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+
+        assertEquals(
+            "TX_QUEUE_FULL",
+            HttpErrorMessageExtractor.extractRejectCode(emptyMap(), "x-iroha-reject-code", body),
+        )
+        assertEquals("transaction queue is at capacity", HttpErrorMessageExtractor.extractMessage(body))
+    }
+
     private fun readBody(request: TransportRequest): String =
         String(request.body, StandardCharsets.UTF_8)
 
@@ -803,6 +830,8 @@ class HttpClientTransportTest {
             }
         """.trimIndent()
 
+    private fun vpnHelperTicketHex(): String = "5356504e48543100" + "00".repeat(248)
+
     private fun vpnSessionJson(sessionId: String, paymentTxHash: String): String =
         """
             {
@@ -829,7 +858,7 @@ class HttpClientTransportTest {
               "dns_servers": ["1.1.1.1"],
               "tunnel_addresses": ["10.208.0.2/32"],
               "mtu_bytes": 1024,
-              "helper_ticket_hex": "cafe",
+              "helper_ticket_hex": "${vpnHelperTicketHex()}",
               "bytes_in": 0,
               "bytes_out": 0,
               "status": "active"

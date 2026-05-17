@@ -5268,7 +5268,7 @@ impl Compiler {
                         } => {
                             use iroha_data_model::{
                                 isi::zk as DMZk,
-                                proof::{ProofAttachment, ProofBox, VerifyingKeyBox},
+                                proof::{ProofAttachment, ProofBox, VerifyingKeyId},
                             };
                             let require_literal =
                                 |label: &str, temp: &ir::Temp| -> Result<String, String> {
@@ -5311,15 +5311,11 @@ impl Compiler {
                                         format!("build_submit_ballot_inline proof literal {e}");
                                     i18n::translate(self.lang, Message::SemanticError(&err))
                                 })?;
-                            let vk_literal = require_literal("vk", vk)?;
-                            let vk_bytes = decode_hex_or_raw_bytes(&vk_literal).map_err(|e| {
-                                let err = format!("build_submit_ballot_inline vk literal {e}");
-                                i18n::translate(self.lang, Message::SemanticError(&err))
-                            })?;
-                            let pa = ProofAttachment::new_inline(
+                            let vk_ref = require_literal("vk_ref", vk)?;
+                            let pa = ProofAttachment::new_ref(
                                 backend_str.clone(),
                                 ProofBox::new(backend_str.clone(), proof_bytes),
-                                VerifyingKeyBox::new(backend_str, vk_bytes),
+                                VerifyingKeyId::new(backend_str, vk_ref),
                             );
                             let sb = DMZk::SubmitBallot {
                                 election_id: eid,
@@ -5348,7 +5344,7 @@ impl Compiler {
                             use iroha_data_model::{
                                 isi::zk as DMZk,
                                 prelude::*,
-                                proof::{ProofAttachment, ProofBox, VerifyingKeyBox},
+                                proof::{ProofAttachment, ProofBox, VerifyingKeyId},
                             };
                             let require_literal =
                                 |label: &str, temp: &ir::Temp| -> Result<String, String> {
@@ -5418,15 +5414,11 @@ impl Compiler {
                                     let err = format!("build_unshield_inline proof literal {e}");
                                     i18n::translate(self.lang, Message::SemanticError(&err))
                                 })?;
-                            let vk_literal = require_literal("vk", vk)?;
-                            let vk_bytes = decode_hex_or_raw_bytes(&vk_literal).map_err(|e| {
-                                let err = format!("build_unshield_inline vk literal {e}");
-                                i18n::translate(self.lang, Message::SemanticError(&err))
-                            })?;
-                            let pa = ProofAttachment::new_inline(
+                            let vk_ref = require_literal("vk_ref", vk)?;
+                            let pa = ProofAttachment::new_ref(
                                 backend_str.clone(),
                                 ProofBox::new(backend_str.clone(), proof_bytes),
-                                VerifyingKeyBox::new(backend_str, vk_bytes),
+                                VerifyingKeyId::new(backend_str, vk_ref),
                             );
                             let uz = DMZk::Unshield {
                                 asset: ad,

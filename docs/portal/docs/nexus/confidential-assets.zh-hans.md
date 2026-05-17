@@ -266,7 +266,7 @@ Swift SDK 现在可以发出屏蔽指令，无需定制 JSON 胶水：构造一�
 - 硬限制（可配置的默认值）：
 - `max_proof_size_bytes = 262_144`。
 - `max_nullifiers_per_tx = 8`、`max_commitments_per_tx = 8`、`max_confidential_ops_per_block = 256`。
-- `verify_timeout_ms = 750`、`max_anchor_age_blocks = 10_000`。超过 `verify_timeout_ms` 的证明会确定性地中止指令（治理选票发出 `proof verification exceeded timeout`，`VerifyProof` 返回错误）。
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - 额外配额确保活性：`max_proof_bytes_block`、`max_verify_calls_per_tx`、`max_verify_calls_per_block` 和 `max_public_inputs` 绑​​定块构建器； `reorg_depth_bound` (≥ `max_anchor_age_blocks`) 管理边境检查点保留。
 - 运行时执行现在会拒绝超出这些每笔交易或每块限制的交易，发出确定性 `InvalidParameter` 错误并使账本状态保持不变。
 - Mempool 在调用验证器之前通过 `vk_id`、证明长度和锚年龄预过滤机密交易以限制资源使用。

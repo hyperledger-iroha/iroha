@@ -440,6 +440,101 @@ def _canonical_body_bytes(body: Optional[Union[str, bytes, bytearray, memoryview
     raise TypeError("canonical request body must be bytes-like or a string")
 
 
+def _non_empty_string(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        trimmed = value.strip()
+        return trimmed or None
+    return None
+
+
+def _error_body_message(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        return _non_empty_string(value)
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray, str)):
+        for entry in value:
+            nested = _error_body_message(entry)
+            if nested:
+                return nested
+        return None
+    if not isinstance(value, Mapping):
+        return None
+    for key in (
+        "message",
+        "error",
+        "errors",
+        "detail",
+        "details",
+        "reason",
+        "rejection_reason",
+        "description",
+    ):
+        for raw_key, nested_value in value.items():
+            if isinstance(raw_key, str) and raw_key.lower() == key:
+                nested = _error_body_message(nested_value)
+                if nested:
+                    return nested
+    return None
+
+
+def _error_body_reject_code(value: Any) -> Optional[str]:
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray, str)):
+        for entry in value:
+            nested = _error_body_reject_code(entry)
+            if nested:
+                return nested
+        return None
+    if not isinstance(value, Mapping):
+        return None
+    lowered = {
+        raw_key.lower(): nested_value
+        for raw_key, nested_value in value.items()
+        if isinstance(raw_key, str)
+    }
+    direct = _non_empty_string(lowered.get("reject_code")) or _non_empty_string(
+        lowered.get("rejectcode")
+    )
+    if direct:
+        return direct
+    details = lowered.get("details")
+    if isinstance(details, Mapping):
+        detail_values = {
+            raw_key.lower(): nested_value
+            for raw_key, nested_value in details.items()
+            if isinstance(raw_key, str)
+        }
+        nested = _non_empty_string(detail_values.get("reject_code")) or _non_empty_string(
+            detail_values.get("rejectcode")
+        )
+        if nested:
+            return nested
+        axt = detail_values.get("axt")
+        if isinstance(axt, Mapping):
+            for raw_key, nested_value in axt.items():
+                if isinstance(raw_key, str) and raw_key.lower() == "code":
+                    return _non_empty_string(nested_value)
+    return None
+
+
+def _format_error_body(text: str) -> str:
+    stripped = text.strip()
+    if not stripped:
+        return ""
+    try:
+        payload = json.loads(stripped)
+    except (TypeError, ValueError):
+        return stripped
+    message = _error_body_message(payload)
+    reject_code = _error_body_reject_code(payload)
+    if message and reject_code and reject_code not in message:
+        return f"{message}; reject_code={reject_code}"
+    if message:
+        return message
+    compact = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    if reject_code:
+        return f"{compact}; reject_code={reject_code}"
+    return compact
+
+
 def canonical_request_message(
     method: str,
     path: str,
@@ -5645,7 +5740,7 @@ class ToriiClient:
         expected_set = set(expected)
         if response.status_code in expected_set:
             return
-        message = response.text
+        message = _format_error_body(response.text)
         raise RuntimeError(
             f"unexpected status {response.status_code}; expected {sorted(expected_set)}; body={message}"
         )

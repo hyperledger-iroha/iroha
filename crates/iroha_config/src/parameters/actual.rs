@@ -1947,22 +1947,18 @@ pub struct Acceleration {
 /// Execution mode for the FASTPQ prover backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FastpqExecutionMode {
-    /// Detect available accelerators at runtime and pick the best option.
-    Auto,
     /// Force CPU execution even if accelerators are present.
     Cpu,
-    /// Force GPU execution (falls back to CPU if kernels are unavailable at runtime).
+    /// Force GPU execution; startup fails if kernels or preflight are unavailable.
     Gpu,
 }
 
 /// Poseidon pipeline override for the FASTPQ prover backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FastpqPoseidonMode {
-    /// Follow the global execution mode (default).
-    Auto,
     /// Force CPU hashing even if FFT/LDE use the GPU.
     Cpu,
-    /// Prefer GPU hashing even if the global execution mode falls back to CPU.
+    /// Force GPU hashing; startup fails if kernels or preflight are unavailable.
     Gpu,
 }
 
@@ -1971,8 +1967,14 @@ pub enum FastpqPoseidonMode {
 pub struct Fastpq {
     /// Execution mode used when initialising the prover backend.
     pub execution_mode: FastpqExecutionMode,
-    /// Poseidon pipeline override (defaults to the execution mode when `Auto`).
+    /// Poseidon pipeline override.
     pub poseidon_mode: FastpqPoseidonMode,
+    /// Maximum queued FASTPQ proof sidecar attachments.
+    pub proof_sidecar_queue_cap: NonZeroUsize,
+    /// Maximum encoded FASTPQ proof snapshot accepted for sidecar persistence.
+    pub proof_sidecar_max_bytes: Bytes<u64>,
+    /// Maximum merge attempts for a FASTPQ proof snapshot while the pipeline sidecar is pending.
+    pub proof_sidecar_max_retries: NonZeroUsize,
     /// Optional telemetry label describing the host/device class.
     pub device_class: Option<String>,
     /// Optional chip-family label used for telemetry slicing.

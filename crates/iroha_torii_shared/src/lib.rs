@@ -54,6 +54,8 @@ pub mod uri {
     pub const SUBSCRIPTION: &str = "/v1/events/ws";
     /// URI for inspecting proof retention state and pruning candidates.
     pub const PROOF_RETENTION_STATUS: &str = "/v1/proofs/retention";
+    /// URI used to fetch FASTPQ proof sidecars for a committed block height.
+    pub const PIPELINE_FASTPQ_PROOFS: &str = "/v1/pipeline/recovery/{height}/fastpq-proofs";
     /// The web socket uri used to subscribe to blocks stream.
     pub const BLOCKS_STREAM: &str = "/v1/blocks/stream";
     /// Debug endpoint exposing cached AXT proof state per dataspace.

@@ -152,6 +152,7 @@ enum CommandKind {
         manifest: PathBuf,
         signing_key: Option<PathBuf>,
         signature_envelope: Option<PathBuf>,
+        unsigned_manifest: bool,
     },
     OpenApiVerify {
         spec: PathBuf,
@@ -1115,12 +1116,14 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
             manifest,
             signing_key,
             signature_envelope,
+            unsigned_manifest,
         } => generate_openapi(
             outputs,
             allow_stub,
             manifest,
             signing_key,
             signature_envelope,
+            unsigned_manifest,
         )?,
         CommandKind::OpenApiVerify {
             spec,
@@ -2008,6 +2011,7 @@ where
             let mut manifest_path: Option<PathBuf> = None;
             let mut signing_key: Option<PathBuf> = None;
             let mut signature_envelope: Option<PathBuf> = None;
+            let mut unsigned_manifest = false;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
@@ -2036,6 +2040,7 @@ where
                         };
                         signature_envelope = Some(normalize_path(Path::new(&path))?);
                     }
+                    "--unsigned-manifest" => unsigned_manifest = true,
                     flag => return Err(format!("unknown flag for openapi: {flag}").into()),
                 }
             }
@@ -2043,6 +2048,12 @@ where
             if signing_key.is_some() && signature_envelope.is_some() {
                 return Err(
                     "openapi flags --sign and --signature-envelope are mutually exclusive".into(),
+                );
+            }
+            if unsigned_manifest && (signing_key.is_some() || signature_envelope.is_some()) {
+                return Err(
+                    "openapi flag --unsigned-manifest cannot be combined with --sign or --signature-envelope"
+                        .into(),
                 );
             }
 
@@ -2059,6 +2070,7 @@ where
                 manifest: manifest_path.unwrap_or_else(default_openapi_manifest_path),
                 signing_key,
                 signature_envelope,
+                unsigned_manifest,
             })
         }
         "da-threat-model-report" => {
@@ -9766,6 +9778,7 @@ fn generate_openapi(
     manifest: PathBuf,
     signing_key: Option<PathBuf>,
     signature_envelope: Option<PathBuf>,
+    unsigned_manifest: bool,
 ) -> Result<(), Box<dyn Error>> {
     let spec = match try_generate_router_openapi() {
         Ok(Some(value)) => value,
@@ -9804,11 +9817,11 @@ fn generate_openapi(
         println!("wrote {}", path.display());
     }
 
-    if signing_key.is_some() || signature_envelope.is_some() {
+    if signing_key.is_some() || signature_envelope.is_some() || unsigned_manifest {
         let canonical = default_openapi_path();
         if !outputs.contains(&canonical) {
             return Err(
-                "signed OpenAPI manifests require generating docs/portal/static/openapi/torii.json; include the canonical output path"
+                "OpenAPI manifests require generating docs/portal/static/openapi/torii.json; include the canonical output path"
                     .into(),
             );
         }
@@ -9817,6 +9830,8 @@ fn generate_openapi(
         } else if let Some(signature_envelope) = signature_envelope {
             let signature = load_signature_envelope(&signature_envelope)?;
             write_openapi_manifest_with_signature(&canonical, &manifest, signature)?;
+        } else {
+            write_openapi_manifest_unsigned(&canonical, &manifest)?;
         }
     }
 
@@ -9871,7 +9886,7 @@ fn write_openapi_manifest(
         )
     })?;
     let signature = sign_manifest_payload(&spec_bytes, signing_key)?;
-    write_openapi_manifest_from_bytes(spec_path, manifest_path, &spec_bytes, signature)
+    write_openapi_manifest_from_bytes(spec_path, manifest_path, &spec_bytes, Some(signature))
 }
 
 fn write_openapi_manifest_with_signature(
@@ -9886,14 +9901,27 @@ fn write_openapi_manifest_with_signature(
         )
     })?;
     verify_manifest_signature(&signature, &spec_bytes)?;
-    write_openapi_manifest_from_bytes(spec_path, manifest_path, &spec_bytes, signature)
+    write_openapi_manifest_from_bytes(spec_path, manifest_path, &spec_bytes, Some(signature))
+}
+
+fn write_openapi_manifest_unsigned(
+    spec_path: &Path,
+    manifest_path: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let spec_bytes = fs::read(spec_path).map_err(|err| {
+        format!(
+            "failed to read {} for unsigned manifest generation: {err}",
+            spec_path.display()
+        )
+    })?;
+    write_openapi_manifest_from_bytes(spec_path, manifest_path, &spec_bytes, None)
 }
 
 fn write_openapi_manifest_from_bytes(
     spec_path: &Path,
     manifest_path: &Path,
     spec_bytes: &[u8],
-    signature: SignatureEnvelope,
+    signature: Option<SignatureEnvelope>,
 ) -> Result<(), Box<dyn Error>> {
     let sha256_hex = hex::encode(Sha256::digest(spec_bytes));
     let blake3_hex = blake3::hash(spec_bytes).to_hex().to_string();
@@ -10403,6 +10431,48 @@ mod openapi_tests {
         assert!(
             message.contains("mutually exclusive"),
             "expected mutually exclusive message, got {message}"
+        );
+    }
+
+    #[test]
+    fn openapi_unsigned_manifest_mode_conflicts_with_signing() {
+        let args = [
+            "xtask",
+            "openapi",
+            "--unsigned-manifest",
+            "--signature-envelope",
+            "signature.json",
+        ];
+        let iter = args.into_iter().map(String::from);
+        let err = match parse_command(iter) {
+            Ok(_) => panic!("unsigned manifest and signed modes must fail"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("cannot be combined"),
+            "expected cannot be combined message, got {message}"
+        );
+    }
+
+    #[test]
+    fn unsigned_openapi_manifest_verifies_when_allowed() {
+        let tmp = tempdir().expect("tempdir");
+        let spec_path = tmp.path().join("spec.json");
+        fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
+        let manifest_path = tmp.path().join("manifest.json");
+
+        write_openapi_manifest_unsigned(&spec_path, &manifest_path)
+            .expect("write unsigned manifest");
+        verify_openapi_manifest(&spec_path, &manifest_path, true, None)
+            .expect("unsigned manifest should verify when allowed");
+
+        let err = verify_openapi_manifest(&spec_path, &manifest_path, false, None)
+            .expect_err("unsigned manifest should fail without opt-in");
+        let message = err.to_string();
+        assert!(
+            message.contains("missing signature"),
+            "expected missing signature message, got {message}"
         );
     }
 
@@ -11461,7 +11531,7 @@ fn print_usage() {
         "    Run the hosted-HTTP Inrou smoke harness for PortableVm, Firecracker/KVM, or a mixed-host inventory gate."
     );
     eprintln!(
-        "  cargo xtask openapi [--output <path>] [--allow-stub] [--sign <key>|--signature-envelope <path>]"
+        "  cargo xtask openapi [--output <path>] [--allow-stub] [--sign <key>|--signature-envelope <path>|--unsigned-manifest]"
     );
     eprintln!(
         "    Generate the Torii OpenAPI spec from a live Torii router. Defaults to docs/portal/static/openapi/torii.json; use --allow-stub only for emergency stub output"

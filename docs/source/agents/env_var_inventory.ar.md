@@ -667,9 +667,6 @@ _آخر تحديث عبر `python3 scripts/inventory_env_toggles.py --json docs/
 - الاختبار: الصناديق/ivm/tests/i18n.rs:13 - `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 - الاختبار: الصناديق/ivm/tests/i18n.rs:71 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 
-## MAX_DEGREE (المنتج: 1)
-
-- المنتج: صناديق/iroha_core/src/zk.rs:106 — `let current = std::env::var("MAX_DEGREE")`
 
 ## MOCHI_CONFIG (المنتج: 1)
 

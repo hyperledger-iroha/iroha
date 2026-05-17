@@ -25,7 +25,7 @@ use crate::{
         ENTRY_HASH_METADATA_KEY, FASTPQ_CANONICAL_PARAMETER_SET, FastpqWitnessContext,
         TranscriptBatchError, batches_from_bundles, batches_from_exec_witness,
     },
-    kura::{FastpqProofSnapshot, Kura},
+    kura::{FastpqProofEnqueueResult, FastpqProofSnapshot, Kura},
 };
 
 /// Handle used to submit FASTPQ prover jobs.
@@ -228,14 +228,8 @@ fn preflight_prover_modes_with_preflights(
         "fastpq lane: Poseidon GPU preflight completed"
     );
     if !poseidon_ok {
-        if matches!(mode, ProverExecutionMode::Gpu)
-            || matches!(poseidon_mode, ProverPoseidonMode::Gpu)
-        {
-            warn!("fastpq lane: explicit GPU prover backend failed preflight; lane disabled");
-            return None;
-        }
-        warn!("fastpq lane: using CPU prover backend after Poseidon GPU preflight failed");
-        return Some((ProverExecutionMode::Cpu, ProverPoseidonMode::Cpu));
+        warn!("fastpq lane: GPU prover backend failed preflight; lane disabled");
+        return None;
     }
     Some((mode, poseidon_mode))
 }
@@ -303,7 +297,6 @@ fn metal_overrides_from_config(cfg: &Fastpq) -> MetalOverrides {
 
 fn map_execution_mode(mode: FastpqExecutionMode) -> ProverExecutionMode {
     match mode {
-        FastpqExecutionMode::Auto => ProverExecutionMode::Auto,
         FastpqExecutionMode::Cpu => ProverExecutionMode::Cpu,
         FastpqExecutionMode::Gpu => ProverExecutionMode::Gpu,
     }
@@ -311,17 +304,17 @@ fn map_execution_mode(mode: FastpqExecutionMode) -> ProverExecutionMode {
 
 fn map_poseidon_mode(mode: FastpqPoseidonMode) -> ProverPoseidonMode {
     match mode {
-        FastpqPoseidonMode::Auto => ProverPoseidonMode::Auto,
         FastpqPoseidonMode::Cpu => ProverPoseidonMode::Cpu,
         FastpqPoseidonMode::Gpu => ProverPoseidonMode::Gpu,
     }
 }
 
 #[cfg(feature = "fastpq-gpu")]
-fn should_preflight_poseidon(mode: ProverExecutionMode, poseidon_mode: ProverPoseidonMode) -> bool {
+fn should_preflight_poseidon(
+    _mode: ProverExecutionMode,
+    poseidon_mode: ProverPoseidonMode,
+) -> bool {
     matches!(poseidon_mode, ProverPoseidonMode::Gpu)
-        || (matches!(poseidon_mode, ProverPoseidonMode::Auto)
-            && !matches!(mode, ProverExecutionMode::Cpu))
 }
 
 fn process_job(engine: &Arc<dyn FastpqProofEngine>, job: &FastpqWitnessJob, kura: Option<&Kura>) {
@@ -369,26 +362,48 @@ fn process_job(engine: &Arc<dyn FastpqProofEngine>, job: &FastpqWitnessJob, kura
         match engine.prove(&batch) {
             Ok(output) => {
                 proved = proved.saturating_add(1);
-                if let Some((kura, entry_hash, batch_index, transition_count)) =
-                    kura.zip(entry_hash).and_then(|(kura, entry_hash)| {
-                        let batch_index = u32::try_from(idx).ok()?;
-                        let transition_count = u32::try_from(batch.transitions.len()).ok()?;
-                        Some((kura, entry_hash, batch_index, transition_count))
-                    })
-                {
-                    kura.enqueue_fastpq_proof_snapshot(FastpqProofSnapshot {
-                        height: job.height,
-                        block_hash: job.block_hash,
-                        entry_hash,
-                        batch_index,
-                        parameter: batch.parameter.clone(),
-                        transition_count,
-                        trace_commitment: output.trace_commitment,
-                        proof_digest: output.proof_digest,
-                        batch: batch.clone(),
-                        proof: output.proof_bytes.clone(),
-                    });
-                    persisted = persisted.saturating_add(1);
+                if let Some(kura) = kura {
+                    if let Some((entry_hash, batch_index, transition_count)) =
+                        entry_hash.and_then(|entry_hash| {
+                            let batch_index = u32::try_from(idx).ok()?;
+                            let transition_count = u32::try_from(batch.transitions.len()).ok()?;
+                            Some((entry_hash, batch_index, transition_count))
+                        })
+                    {
+                        match kura.enqueue_fastpq_proof_snapshot(FastpqProofSnapshot {
+                            height: job.height,
+                            block_hash: job.block_hash,
+                            entry_hash,
+                            batch_index,
+                            parameter: batch.parameter.clone(),
+                            transition_count,
+                            trace_commitment: output.trace_commitment,
+                            proof_digest: output.proof_digest,
+                            batch: batch.clone(),
+                            proof: output.proof_bytes.clone(),
+                        }) {
+                            FastpqProofEnqueueResult::Enqueued { .. } => {
+                                persisted = persisted.saturating_add(1);
+                            }
+                            result => {
+                                warn!(
+                                    height = job.height,
+                                    view = job.view,
+                                    entry_hash = entry_hash_hex,
+                                    ?result,
+                                    "fastpq lane: proof snapshot was not enqueued for persistence"
+                                );
+                            }
+                        }
+                    } else {
+                        kura.record_fastpq_missing_entry_hash();
+                        warn!(
+                            height = job.height,
+                            view = job.view,
+                            batch_index = idx,
+                            "fastpq lane: missing entry hash; proof snapshot not persisted"
+                        );
+                    }
                 }
                 debug!(
                     height = job.height,
@@ -475,6 +490,12 @@ mod tests {
         let cfg = Fastpq {
             execution_mode: FastpqExecutionMode::Cpu,
             poseidon_mode: FastpqPoseidonMode::Cpu,
+            proof_sidecar_queue_cap:
+                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
+            proof_sidecar_max_bytes:
+                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
+            proof_sidecar_max_retries:
+                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
             device_class: None,
             chip_family: None,
             gpu_kind: None,
@@ -614,15 +635,21 @@ mod tests {
 
     #[test]
     #[cfg(feature = "fastpq-gpu")]
-    fn prover_poseidon_preflight_failure_preserves_digest_acceleration() {
+    fn prover_poseidon_preflight_failure_disables_explicit_gpu_lane() {
         let _digest_lock = super::super::DIGEST_ACCELERATION_TEST_LOCK
             .lock()
             .expect("digest acceleration test lock poisoned");
         let previous = crate::fastpq::poseidon_digest_acceleration_enabled();
         crate::fastpq::set_poseidon_digest_acceleration_enabled(false);
         let cfg = Fastpq {
-            execution_mode: FastpqExecutionMode::Auto,
-            poseidon_mode: FastpqPoseidonMode::Auto,
+            execution_mode: FastpqExecutionMode::Gpu,
+            poseidon_mode: FastpqPoseidonMode::Gpu,
+            proof_sidecar_queue_cap:
+                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
+            proof_sidecar_max_bytes:
+                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
+            proof_sidecar_max_retries:
+                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
             device_class: None,
             chip_family: None,
             gpu_kind: None,
@@ -635,20 +662,21 @@ mod tests {
             metal_debug_fused: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
         };
 
-        let (mode, poseidon_mode) = preflight_prover_modes_with_preflights(
+        let preflight = preflight_prover_modes_with_preflights(
             &cfg,
-            ProverExecutionMode::Auto,
-            ProverPoseidonMode::Auto,
+            ProverExecutionMode::Gpu,
+            ProverPoseidonMode::Gpu,
             || false,
             || true,
-        )
-        .expect("auto GPU preflight may resolve to CPU");
+        );
 
-        assert!(matches!(mode, ProverExecutionMode::Cpu));
-        assert!(matches!(poseidon_mode, ProverPoseidonMode::Cpu));
+        assert!(
+            preflight.is_none(),
+            "explicit GPU preflight must fail closed"
+        );
         assert!(
             crate::fastpq::poseidon_digest_acceleration_enabled(),
-            "BN254 digest acceleration must stay enabled after the prover lane falls back to CPU"
+            "BN254 digest acceleration records its own successful preflight before lane disable"
         );
         crate::fastpq::set_poseidon_digest_acceleration_enabled(previous);
     }
@@ -705,6 +733,12 @@ mod tests {
         let cfg = Fastpq {
             execution_mode: FastpqExecutionMode::Gpu,
             poseidon_mode: FastpqPoseidonMode::Gpu,
+            proof_sidecar_queue_cap:
+                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
+            proof_sidecar_max_bytes:
+                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
+            proof_sidecar_max_retries:
+                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
             device_class: None,
             chip_family: None,
             gpu_kind: None,

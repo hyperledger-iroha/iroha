@@ -248,7 +248,7 @@ lockstep.
 - Ҡаты сикләүҙәр (конфигурацияланған ғәҙәттәгесә):
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms`-тан артып киткән дәлилдәр детерминистик яҡтан инструкцияны туҡтатты (идара итеү бюллетендәре `proof verification exceeded timeout`, `VerifyProof` хатаны ҡайтара).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Өҫтәмә квоталар йәнлелекте тәьмин итә: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, һәм `max_public_inputs` сикләнгән блок төҙөүселәр; `reorg_depth_bound`X (≥ `max_anchor_age_blocks`) сик буйы тикшерелеүе пунктын һаҡлауҙы идара итә.
 - Йүгереп йөрөү хәҙер был операцияларҙы кире ҡаға, был пер-транзакция йәки пер-блок сиктәрен арттырып, детерминистик `InvalidParameter` хаталарын сығара һәм баш китабының үҙгәрешһеҙ ҡалдыра.
 - `vk_id`, иҫбатлау оҙонлоғо һәм якорь йәше буйынса конфиденциаль операциялар мембульталы префильтрҙар ресурстарҙы ҡулланыуҙы сикләү өсөн тикшеренеүсегә мөрәжәғәт иткәнсе.

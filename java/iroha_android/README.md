@@ -1114,6 +1114,11 @@ interfaces so Android apps can bind them to Torii, Android Keystore, and
 app-specific persistence; `sync()` additionally accepts a transaction-outcome
 resolver for finalizing redeem-pending note records after Torii observes the
 redeem transaction outcome.
+`AndroidOfflineNoteV2SecureStore` rotates a non-exportable Android Keystore key
+on every committed wallet-state revision and rejects app-data rollback or
+cloned preference snapshots after the old revision key has been deleted. Legacy
+`SPEND_PENDING` records decode as `SPENT`, and legacy `CHANGE_PENDING` records
+decode as `SPENDABLE`.
 the core module includes an in-memory store,
 `IrohaOfflineNoteV2TransactionSubmitter`, and
 `ToriiOfflineNoteV2IssuerClient` for body-signed key-refill plus note-issue

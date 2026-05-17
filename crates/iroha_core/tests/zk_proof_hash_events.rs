@@ -58,21 +58,15 @@ fn zk_events_carry_proof_hash_in_metadata_inserted() {
     let pr_transfer = transfer_fixture.proof_box("halo2/ipa");
     let unshield_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let pr_unshield = unshield_fixture.proof_box("halo2/ipa");
-    let vk_transfer = transfer_fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture verifying key");
-    let vk_unshield = unshield_fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture verifying key");
-    let attach_t = iroha_data_model::proof::ProofAttachment::new_inline(
+    let attach_t = iroha_data_model::proof::ProofAttachment::new_ref(
         "halo2/ipa".into(),
         pr_transfer.clone(),
-        vk_transfer,
+        iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "transfer_vk"),
     );
-    let attach_u = iroha_data_model::proof::ProofAttachment::new_inline(
+    let attach_u = iroha_data_model::proof::ProofAttachment::new_ref(
         "halo2/ipa".into(),
         pr_unshield.clone(),
-        vk_unshield,
+        iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "unshield_vk"),
     );
     let expected_hash_transfer = iroha_core::zk::hash_proof(&pr_transfer);
     let expected_hash_unshield = iroha_core::zk::hash_proof(&pr_unshield);

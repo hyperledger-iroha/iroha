@@ -14,7 +14,14 @@ android {
 
     defaultConfig {
         minSdk = 24
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
+    }
+
+    sourceSets {
+        getByName("androidTest") {
+            assets.srcDir("../../fixtures/offline")
+        }
     }
 
     compileOptions {
@@ -49,6 +56,8 @@ dependencies {
     testImplementation(libs.junit.params)
     testRuntimeOnly(libs.junit.jupiter.engine)
     testRuntimeOnly(libs.junit.platform.launcher)
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }
 
 tasks.withType<Test>().configureEach {

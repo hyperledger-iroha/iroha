@@ -3706,7 +3706,6 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.backend.measured_bytes_extra());
             total = total.saturating_add(self.proof.measured_bytes_extra());
             total = total.saturating_add(self.vk_ref.measured_bytes_extra());
-            total = total.saturating_add(self.vk_inline.measured_bytes_extra());
             total = total.saturating_add(self.vk_commitment.measured_bytes_extra());
             total = total.saturating_add(self.envelope_hash.measured_bytes_extra());
             total = total.saturating_add(self.lane_privacy.measured_bytes_extra());

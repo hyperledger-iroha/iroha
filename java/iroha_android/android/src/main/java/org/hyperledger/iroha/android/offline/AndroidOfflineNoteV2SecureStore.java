@@ -31,8 +31,10 @@ public final class AndroidOfflineNoteV2SecureStore implements OfflineNoteV2Store
   private static final int GCM_TAG_BITS = 128;
   private static final int AES_KEY_BITS = 256;
   private static final String INDEX_KEY = "note_index";
+  private static final String STORE_REVISION_KEY = "store_revision";
   private static final String NOTE_PREFIX = "note.";
   private static final String VALUE_PREFIX = "v1:";
+  private static final String VALUE_PREFIX_V2 = "v2:";
 
   private final SharedPreferences preferences;
   private final String keyAlias;
@@ -85,24 +87,20 @@ public final class AndroidOfflineNoteV2SecureStore implements OfflineNoteV2Store
   }
 
   public synchronized void delete(final byte[] noteCommitment) {
-    final String commitmentHex = OfflineNoteV2Wallet.hexLower(noteCommitment);
-    final Set<String> index = indexSnapshot();
-    index.remove(commitmentHex);
-    final boolean deleted =
-        preferences
-            .edit()
-            .remove(noteKey(commitmentHex))
-            .putStringSet(INDEX_KEY, index)
-            .commit();
-    if (!deleted) {
-      throw new IllegalStateException("failed to delete Offline Note V2 wallet note");
-    }
+    final Map<String, OfflineNoteV2WalletNote> notes = loadNotes();
+    notes.remove(OfflineNoteV2Wallet.hexLower(noteCommitment));
+    saveNotes(notes);
   }
 
   public synchronized void clear() {
+    final long revision = currentRevision();
     final boolean cleared = preferences.edit().clear().commit();
     if (!cleared) {
       throw new IllegalStateException("failed to clear Offline Note V2 wallet notes");
+    }
+    deleteKeyAlias(keyAlias);
+    if (revision > 0L) {
+      deleteKeyAlias(storeKeyAlias(revision));
     }
   }
 
@@ -125,25 +123,41 @@ public final class AndroidOfflineNoteV2SecureStore implements OfflineNoteV2Store
     final SharedPreferences.Editor editor = preferences.edit();
     final Set<String> oldIndex = indexSnapshot();
     final Set<String> newIndex = new HashSet<>(notes.keySet());
+    final long oldRevision = currentRevision();
+    final long revision = oldRevision + 1L;
     for (final String oldCommitment : oldIndex) {
       if (!newIndex.contains(oldCommitment)) {
         editor.remove(noteKey(oldCommitment));
       }
     }
     for (final Map.Entry<String, OfflineNoteV2WalletNote> entry : notes.entrySet()) {
-      editor.putString(noteKey(entry.getKey()), encrypt(OfflineNoteV2WalletNoteJsonCodec.encode(entry.getValue())));
+      editor.putString(
+          noteKey(entry.getKey()),
+          encrypt(OfflineNoteV2WalletNoteJsonCodec.encode(entry.getValue()), revision));
     }
     editor.putStringSet(INDEX_KEY, newIndex);
+    editor.putLong(STORE_REVISION_KEY, revision);
+    if (oldRevision == 0L) {
+      deleteKeyAlias(keyAlias);
+    } else {
+      deleteKeyAlias(storeKeyAlias(oldRevision));
+    }
     if (!editor.commit()) {
       throw new IllegalStateException("failed to persist Offline Note V2 wallet notes");
     }
   }
 
-  private String encrypt(final byte[] plaintext) {
+  private long currentRevision() {
+    return preferences.getLong(STORE_REVISION_KEY, 0L);
+  }
+
+  private String encrypt(final byte[] plaintext, final long revision) {
     try {
       final Cipher cipher = Cipher.getInstance(AES_GCM);
-      cipher.init(Cipher.ENCRYPT_MODE, secretKey());
-      return VALUE_PREFIX
+      cipher.init(Cipher.ENCRYPT_MODE, secretKey(storeKeyAlias(revision), true));
+      return VALUE_PREFIX_V2
+          + revision
+          + ":"
           + Base64.getEncoder().encodeToString(cipher.getIV())
           + ":"
           + Base64.getEncoder().encodeToString(cipher.doFinal(plaintext));
@@ -153,50 +167,89 @@ public final class AndroidOfflineNoteV2SecureStore implements OfflineNoteV2Store
   }
 
   private byte[] decrypt(final String envelope) {
-    if (!envelope.startsWith(VALUE_PREFIX)) {
+    if (envelope.startsWith(VALUE_PREFIX)) {
+      final String[] parts = envelope.substring(VALUE_PREFIX.length()).split(":", -1);
+      if (parts.length != 2) {
+        throw new IllegalStateException("invalid Offline Note V2 wallet note envelope");
+      }
+      try {
+        final Cipher cipher = Cipher.getInstance(AES_GCM);
+        cipher.init(
+            Cipher.DECRYPT_MODE,
+            secretKey(keyAlias, false),
+            new GCMParameterSpec(GCM_TAG_BITS, Base64.getDecoder().decode(parts[0])));
+        return cipher.doFinal(Base64.getDecoder().decode(parts[1]));
+      } catch (final GeneralSecurityException e) {
+        throw new IllegalStateException("failed to decrypt Offline Note V2 wallet note", e);
+      }
+    }
+    if (!envelope.startsWith(VALUE_PREFIX_V2)) {
       throw new IllegalStateException("unknown Offline Note V2 wallet note envelope");
     }
-    final String[] parts = envelope.substring(VALUE_PREFIX.length()).split(":", -1);
-    if (parts.length != 2) {
+    final String[] parts = envelope.substring(VALUE_PREFIX_V2.length()).split(":", -1);
+    if (parts.length != 3) {
       throw new IllegalStateException("invalid Offline Note V2 wallet note envelope");
     }
+    final long revision = Long.parseLong(parts[0]);
     try {
       final Cipher cipher = Cipher.getInstance(AES_GCM);
       cipher.init(
           Cipher.DECRYPT_MODE,
-          secretKey(),
-          new GCMParameterSpec(GCM_TAG_BITS, Base64.getDecoder().decode(parts[0])));
-      return cipher.doFinal(Base64.getDecoder().decode(parts[1]));
+          secretKey(storeKeyAlias(revision), false),
+          new GCMParameterSpec(GCM_TAG_BITS, Base64.getDecoder().decode(parts[1])));
+      return cipher.doFinal(Base64.getDecoder().decode(parts[2]));
     } catch (final GeneralSecurityException e) {
       throw new IllegalStateException("failed to decrypt Offline Note V2 wallet note", e);
     }
   }
 
-  private SecretKey secretKey() throws GeneralSecurityException {
+  private SecretKey secretKey(final String alias, final boolean createIfMissing) throws GeneralSecurityException {
     final KeyStore keyStore = KeyStore.getInstance(KEYSTORE_PROVIDER);
     try {
       keyStore.load(null);
     } catch (final java.io.IOException e) {
       throw new GeneralSecurityException("failed to load Android Keystore", e);
     }
-    if (keyStore.containsAlias(keyAlias)) {
-      final SecretKey key = (SecretKey) keyStore.getKey(keyAlias, null);
+    if (keyStore.containsAlias(alias)) {
+      final SecretKey key = (SecretKey) keyStore.getKey(alias, null);
       if (key != null) {
         return key;
       }
     }
+    if (!createIfMissing) {
+      throw new GeneralSecurityException("missing Offline Note V2 store key for " + alias);
+    }
+    return generateSecretKey(alias);
+  }
+
+  private SecretKey generateSecretKey(final String alias) throws GeneralSecurityException {
     final KeyGenerator generator =
         KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE_PROVIDER);
-    final KeyGenParameterSpec spec =
+    final KeyGenParameterSpec.Builder builder =
         new KeyGenParameterSpec.Builder(
-                keyAlias, KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
+                alias, KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
             .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
             .setKeySize(AES_KEY_BITS)
-            .setRandomizedEncryptionRequired(true)
-            .build();
-    generator.init(spec);
+            .setRandomizedEncryptionRequired(true);
+    generator.init(builder.build());
     return generator.generateKey();
+  }
+
+  private void deleteKeyAlias(final String alias) {
+    try {
+      final KeyStore keyStore = KeyStore.getInstance(KEYSTORE_PROVIDER);
+      keyStore.load(null);
+      if (keyStore.containsAlias(alias)) {
+        keyStore.deleteEntry(alias);
+      }
+    } catch (final GeneralSecurityException | java.io.IOException e) {
+      throw new IllegalStateException("failed to delete Offline Note V2 store key", e);
+    }
+  }
+
+  private String storeKeyAlias(final long revision) {
+    return keyAlias + ".rev." + revision;
   }
 
   private static String noteKey(final String commitmentHex) {

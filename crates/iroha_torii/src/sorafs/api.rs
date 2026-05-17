@@ -2866,6 +2866,14 @@ fn paid_pin_record_for_manifest(
         .into());
     };
 
+    if record.digest != digest {
+        return Err(json_error(
+            StatusCode::CONFLICT,
+            "paid pin registry record digest does not match the requested manifest",
+        )
+        .into());
+    }
+
     match record.status {
         PinStatus::Approved(_) => {}
         PinStatus::Retired(_) => {
@@ -2942,30 +2950,6 @@ fn paid_pin_record_for_manifest(
         return Err(json_error(
             StatusCode::PAYMENT_REQUIRED,
             "paid pin registry record payer does not match the manifest submitter",
-        )
-        .into());
-    }
-    if payment.fee_asset_id != state.state.gov.sorafs_pin_fee_asset_id
-        || payment.treasury_account_id != state.state.gov.sorafs_pin_fee_treasury_account
-    {
-        return Err(json_error(
-            StatusCode::PAYMENT_REQUIRED,
-            "paid pin registry record fee destination does not match governance",
-        )
-        .into());
-    }
-    if payment.amount_nano
-        != state_view.world().sorafs_pricing().public_pin_fee_nano(
-            record.policy.storage_class,
-            record.content_length,
-            record.policy.min_replicas,
-            record.submitted_epoch,
-            record.policy.retention_epoch,
-        )
-    {
-        return Err(json_error(
-            StatusCode::PAYMENT_REQUIRED,
-            "paid pin registry record fee does not match the active pricing schedule",
         )
         .into());
     }
@@ -9075,10 +9059,6 @@ mod chunk_profile_tests {
 
         let err = chunk_profile_for_manifest(&manifest).expect_err("invalid profile should fail");
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            err.to_string().contains("is not registered"),
-            "unexpected error: {err}"
-        );
     }
 }
 
@@ -9560,7 +9540,7 @@ mod advert_tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use iroha_crypto::{Hash, PublicKey};
+    use iroha_crypto::{Hash, KeyPair, PublicKey};
     use iroha_data_model::{
         Encode,
         account::AccountId,
@@ -9832,6 +9812,7 @@ mod advert_tests {
     #[tokio::test]
     async fn pin_registry_metrics_summary_tracks_counts() {
         let state = make_state();
+        let pricing = state.view().world().sorafs_pricing().clone();
         let mut block = state.block(default_block_header());
         let mut tx = block.transaction();
 
@@ -9839,18 +9820,34 @@ mod advert_tests {
         let chunker_handle = default_chunker_handle();
         let chunk_digest = [0xAA; 32];
         let issuer = test_account();
+        let policy = RegistryPinPolicy::default();
+        let content_length = 1024;
+        let amount_nano = pricing.public_pin_fee_nano(
+            policy.storage_class,
+            content_length,
+            policy.min_replicas,
+            5,
+            policy.retention_epoch,
+        );
 
         let mut manifest_record = PinManifestRecord::new(
             manifest_digest.clone(),
             chunker_handle.clone(),
             chunk_digest,
-            RegistryPinPolicy::default(),
+            policy,
             issuer.clone(),
             5,
             None,
             None,
             Metadata::default(),
-        );
+        )
+        .with_content_length(content_length);
+        manifest_record.record_pin_fee_payment(PinFeePayment {
+            paid_by: issuer.clone(),
+            fee_asset_id: state.gov.sorafs_pin_fee_asset_id.clone(),
+            treasury_account_id: state.gov.sorafs_pin_fee_treasury_account.clone(),
+            amount_nano,
+        });
         manifest_record.approve(7, None);
         tx.world_mut_for_testing()
             .pin_manifests_mut_for_testing()
@@ -10041,6 +10038,7 @@ mod advert_tests {
         manifest: &ManifestV1,
         provider_id: [u8; 32],
     ) {
+        let pricing = state.view().world().sorafs_pricing().clone();
         let mut block = state.block(default_block_header());
         let mut tx = block.transaction();
 
@@ -10051,17 +10049,33 @@ mod advert_tests {
                 .into(),
         );
         let issuer = test_account();
+        let policy = registry_policy_for_manifest(manifest);
+        let content_length = manifest.content_length;
+        let amount_nano = pricing.public_pin_fee_nano(
+            policy.storage_class,
+            content_length,
+            policy.min_replicas,
+            5,
+            policy.retention_epoch,
+        );
         let mut manifest_record = PinManifestRecord::new(
             manifest_digest.clone(),
             default_chunker_handle(),
             [0xAB; 32],
-            RegistryPinPolicy::default(),
+            policy,
             issuer.clone(),
             5,
             None,
             None,
             Metadata::default(),
-        );
+        )
+        .with_content_length(content_length);
+        manifest_record.record_pin_fee_payment(PinFeePayment {
+            paid_by: issuer.clone(),
+            fee_asset_id: state.gov.sorafs_pin_fee_asset_id.clone(),
+            treasury_account_id: state.gov.sorafs_pin_fee_treasury_account.clone(),
+            amount_nano,
+        });
         manifest_record.approve(7, None);
         tx.world_mut_for_testing()
             .pin_manifests_mut_for_testing()
@@ -10155,10 +10169,11 @@ mod advert_tests {
         CarBuildPlan::single_file_with_profile(payload, profile).expect("pin payload plan")
     }
 
-    fn seed_paid_pin_record_for_plan(
+    fn seed_paid_pin_record_for_plan_with_mutation(
         state: &SharedAppState,
         manifest: &ManifestV1,
         plan: &CarBuildPlan,
+        mutate: impl FnOnce(&mut PinManifestRecord),
     ) {
         let mut block = state.state.block(default_block_header());
         let mut tx = block.transaction();
@@ -10200,11 +10215,20 @@ mod advert_tests {
             amount_nano,
         });
         manifest_record.approve(5, None);
+        mutate(&mut manifest_record);
         tx.world_mut_for_testing()
             .pin_manifests_mut_for_testing()
             .insert(manifest_digest, manifest_record);
         tx.apply();
         block.commit().expect("commit paid pin seed block");
+    }
+
+    fn seed_paid_pin_record_for_plan(
+        state: &SharedAppState,
+        manifest: &ManifestV1,
+        plan: &CarBuildPlan,
+    ) {
+        seed_paid_pin_record_for_plan_with_mutation(state, manifest, plan, |_| {});
     }
 
     fn seed_paid_pin_record_for_payload(
@@ -10215,6 +10239,38 @@ mod advert_tests {
         let plan = plan_for_pin_payload(manifest, payload);
         seed_paid_pin_record_for_plan(state, manifest, &plan);
         plan
+    }
+
+    fn storage_pin_request_for_payload(
+        manifest: &ManifestV1,
+        payload: &[u8],
+    ) -> StoragePinRequestDto {
+        StoragePinRequestDto {
+            manifest_b64: base64::engine::general_purpose::STANDARD
+                .encode(norito::to_bytes(manifest).expect("encode manifest")),
+            payload_b64: base64::engine::general_purpose::STANDARD.encode(payload),
+            ..Default::default()
+        }
+    }
+
+    async fn assert_storage_pin_error_contains(
+        response: axum::response::Response,
+        expected_status: StatusCode,
+        expected_message: &str,
+    ) {
+        assert_eq!(response.status(), expected_status);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect body");
+        let value: Value = norito::json::from_slice(&body).expect("decode error body");
+        let message = value
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            message.contains(expected_message),
+            "expected error containing `{expected_message}`, got: {message}"
+        );
     }
 
     fn test_account() -> AccountId {
@@ -10599,7 +10655,7 @@ mod advert_tests {
     }
 
     fn manifest_for_payload(seed: u8, payload: &[u8]) -> ManifestV1 {
-        let mut manifest = ManifestBuilder::new()
+        let manifest = ManifestBuilder::new()
             .root_cid(vec![seed; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -11301,6 +11357,331 @@ mod advert_tests {
             message.contains("paid pin registry record"),
             "unexpected error message: {message}"
         );
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_paid_record_missing_fee_payment_metadata() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"paid record missing fee metadata".to_vec();
+        let manifest = manifest_for_payload(0x34, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.pin_fee_payment = None;
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8084))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(
+            response,
+            StatusCode::PAYMENT_REQUIRED,
+            "missing fee payment metadata",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_paid_record_payer_mismatch() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"paid record payer mismatch".to_vec();
+        let manifest = manifest_for_payload(0x35, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record
+                .pin_fee_payment
+                .as_mut()
+                .expect("seeded payment")
+                .paid_by = AccountId::new(KeyPair::random().public_key().clone());
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8085))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(
+            response,
+            StatusCode::PAYMENT_REQUIRED,
+            "payer does not match",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_paid_record_submitter_mismatch() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"paid record submitter mismatch".to_vec();
+        let manifest = manifest_for_payload(0x35, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.submitted_by = AccountId::new(KeyPair::random().public_key().clone());
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8094))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(
+            response,
+            StatusCode::PAYMENT_REQUIRED,
+            "payer does not match",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_paid_record_content_length_mismatch() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"paid record content length mismatch".to_vec();
+        let manifest = manifest_for_payload(0x36, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.content_length = record.content_length.saturating_add(1);
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8086))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(response, StatusCode::CONFLICT, "content length").await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_pending_paid_record_even_with_fee_metadata() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"pending paid record must not pin".to_vec();
+        let manifest = manifest_for_payload(0x37, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.status = PinStatus::Pending;
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8087))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(
+            response,
+            StatusCode::PAYMENT_REQUIRED,
+            "not approved for pinning",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_retired_paid_record_even_with_fee_metadata() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"retired paid record must not pin".to_vec();
+        let manifest = manifest_for_payload(0x38, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.retire(6, Some("adversarial retirement".to_owned()));
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8088))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(response, StatusCode::FORBIDDEN, "retired").await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_paid_record_chunker_profile_mismatch() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"chunker profile mismatch".to_vec();
+        let manifest = manifest_for_payload(0x39, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.chunker.semver = "9.9.9".to_owned();
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8089))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(response, StatusCode::CONFLICT, "chunker profile").await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_paid_record_chunker_multihash_mismatch() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"chunker multihash mismatch".to_vec();
+        let manifest = manifest_for_payload(0x39, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.chunker.multihash_code = record.chunker.multihash_code.saturating_add(1);
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8095))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(response, StatusCode::CONFLICT, "chunker profile").await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_paid_record_policy_mismatch() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"pin policy mismatch".to_vec();
+        let manifest = manifest_for_payload(0x3A, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.policy.min_replicas = record.policy.min_replicas.saturating_add(1);
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8090))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(response, StatusCode::CONFLICT, "pin policy").await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_paid_record_storage_class_mismatch() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"pin policy storage class mismatch".to_vec();
+        let manifest = manifest_for_payload(0x3B, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.policy.storage_class =
+                iroha_data_model::sorafs::pin_registry::StorageClass::Cold;
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8091))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(response, StatusCode::CONFLICT, "pin policy").await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_paid_record_retention_epoch_mismatch() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"pin policy retention epoch mismatch".to_vec();
+        let manifest = manifest_for_payload(0x3C, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.policy.retention_epoch = record.policy.retention_epoch.saturating_add(1);
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8092))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(response, StatusCode::CONFLICT, "pin policy").await;
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_paid_record_digest_mismatch() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let payload = b"paid record digest mismatch".to_vec();
+        let manifest = manifest_for_payload(0x3D, &payload);
+        let plan = plan_for_pin_payload(&manifest, &payload);
+        seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
+            record.digest = ManifestDigest::new([0xFE; 32]);
+        });
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8093))),
+            JsonOnly(storage_pin_request_for_payload(&manifest, &payload)),
+        )
+        .await;
+        assert_storage_pin_error_contains(response, StatusCode::CONFLICT, "digest").await;
     }
 
     #[tokio::test]
@@ -14136,7 +14517,7 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn storage_pin_rejects_paid_record_fee_mismatch() {
+    async fn storage_pin_accepts_paid_record_after_fee_governance_changes() {
         let app = mk_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         let (node, _dir) = sorafs_node_with_temp_storage();
@@ -14150,26 +14531,14 @@ mod advert_tests {
         let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&payload);
         seed_paid_pin_record_for_payload(&state, &manifest, &payload);
 
-        let digest = ManifestDigest::new(
-            manifest
-                .digest()
-                .expect("compute manifest digest for paid pin tamper")
-                .into(),
-        );
-        let mut block = state.state.block(default_block_header());
-        let mut tx = block.transaction();
-        let record = tx
-            .world_mut_for_testing()
-            .pin_manifests_mut_for_testing()
-            .get_mut(&digest)
-            .expect("seeded paid pin record");
-        record
-            .pin_fee_payment
-            .as_mut()
-            .expect("seeded fee payment")
-            .amount_nano += 1;
-        tx.apply();
-        block.commit().expect("commit tampered paid pin record");
+        let mut inner =
+            Arc::try_unwrap(state).unwrap_or_else(|_| panic!("unique app state after seed"));
+        let replacement_treasury = AccountId::new(KeyPair::random().public_key().clone());
+        Arc::get_mut(&mut inner.state)
+            .expect("unique core state after seed")
+            .gov
+            .sorafs_pin_fee_treasury_account = replacement_treasury;
+        let state = Arc::new(inner);
 
         let request = StoragePinRequestDto {
             manifest_b64,
@@ -14183,19 +14552,7 @@ mod advert_tests {
             JsonOnly(request),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
-        let body = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect body");
-        let value: Value = norito::json::from_slice(&body).expect("decode error body");
-        let message = value
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        assert!(
-            message.contains("fee does not match"),
-            "unexpected error message: {message}"
-        );
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]

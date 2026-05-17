@@ -657,8 +657,8 @@ mod halo2_bundle {
         vk_record.max_proof_bytes = proof_bytes.len() as u32;
 
         let proof_box = ProofBox::new(backend.into(), proof_bytes.clone());
-        let vk_inline = vk_record.key.as_ref().expect("inline vk populated").clone();
-        let report = zk::verify_backend_with_timing(backend, &proof_box, Some(&vk_inline));
+        let vk_box = vk_record.key.as_ref().expect("VK bytes populated").clone();
+        let report = zk::verify_backend_with_timing(backend, &proof_box, Some(&vk_box));
         assert!(report.ok, "vote tally proof must verify: {report:?}");
 
         VoteTallyProofBundle {

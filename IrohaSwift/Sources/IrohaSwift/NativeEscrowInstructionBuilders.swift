@@ -64,6 +64,9 @@ private enum NativeEscrowInstructionPayloadBuilder {
         guard !proof.isEmpty else {
             throw NativeEscrowInstructionBuilderError.invalidValue(field: "proof")
         }
+        guard proof["vk_ref"] != nil else {
+            throw NativeEscrowInstructionBuilderError.invalidValue(field: "proof.vk_ref")
+        }
         payload["proof"] = proof
     }
 

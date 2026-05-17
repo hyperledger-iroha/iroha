@@ -667,9 +667,6 @@ _Վերջին անգամ թարմացվել է `python3 scripts/inventory_env_to
 - փորձարկում՝ crates/ivm/tests/i18n.rs:13 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 - փորձարկում՝ crates/ivm/tests/i18n.rs:71 — `let old_lc_messages = env::var("LC_MESSAGES").ok();`
 
-## MAX_GREE (արդյունք՝ 1)
-
-- արդ.՝ crates/iroha_core/src/zk.rs:106 — `let current = std::env::var("MAX_DEGREE")`
 
 ## MOCHI_CONFIG (արդյունք՝ 1)
 

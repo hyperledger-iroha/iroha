@@ -264,7 +264,7 @@ Swift SDK-ներն այժմ կարող են վահանի հրահանգներ ա
 - Կոշտ սահմաններ (կարգավորելի կանխադրվածներ).
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`:
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`: `verify_timeout_ms`-ը գերազանցող ապացույցները դետերմինիստական ​​կերպով դադարեցնում են հրահանգը (կառավարման քվեաթերթիկները թողարկում են `proof verification exceeded timeout`, `VerifyProof`-ը սխալ է վերադարձնում):
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Լրացուցիչ քվոտաները ապահովում են աշխուժություն. `reorg_depth_bound` (≥ `max_anchor_age_blocks`) կարգավորում է սահմանային անցակետի պահպանումը:
 - Runtime execution-ն այժմ մերժում է գործարքները, որոնք գերազանցում են այս մեկ գործարքի կամ մեկ բլոկի սահմանաչափերը՝ արտանետելով `InvalidParameter` որոշիչ սխալներ և անփոփոխ թողնելով գրանցամատյանի վիճակը:
 - Mempool-ը նախապես զտում է գաղտնի գործարքները ըստ `vk_id`-ի, ապացույցի երկարության և խարիսխի տարիքի՝ նախքան ստուգիչին կանչելը, որպեսզի ռեսուրսների օգտագործումը սահմանափակ լինի:

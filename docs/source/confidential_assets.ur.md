@@ -251,7 +251,7 @@ Norito انکوڈر میں `ConfidentialEncryptedPayload`
 - سخت حدود (ترتیب دینے والے پہلے سے طے شدہ):
 - `max_proof_size_bytes = 262_144`۔
 - `max_nullifiers_per_tx = 8` ، `max_commitments_per_tx = 8` ، `max_confidential_ops_per_block = 256`۔
-- `verify_timeout_ms = 750` ، `max_anchor_age_blocks = 10_000`۔ `verify_timeout_ms` سے تجاوز کرنے والے ثبوت ہدایت کو طے شدہ طور پر اسقاط حمل کرتے ہیں (گورننس بیلٹ `proof verification exceeded timeout` ، `VerifyProof` ایک غلطی لوٹاتا ہے)۔
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - اضافی کوٹے کو یقینی بنانا یقینی ہے: `max_proof_bytes_block` ، `max_verify_calls_per_tx` ، `max_verify_calls_per_block` ، اور `max_public_inputs` پابند بلاک بلڈرز ؛ `reorg_depth_bound` (≥ `max_anchor_age_blocks`) فرنٹیئر چوکی برقرار رکھنے پر حکومت کرتا ہے۔
 -رن ٹائم پھانسی اب ان لین دین کو مسترد کرتی ہے جو ان فی ٹرانزیکشن یا فی بلاک حدود سے تجاوز کرتی ہے ، جس سے تشخیصی `InvalidParameter` غلطیاں خارج ہوتی ہیں اور لیجر اسٹیٹ کو کوئی تبدیلی نہیں ہوتی ہیں۔
 - میمپول پریفورٹرز خفیہ لین دین `vk_id` ، پروف لمبائی ، اور اینکر ایج کے ذریعہ وسائل کے استعمال کو پابند رکھنے کے لئے تصدیق کنندہ کی درخواست کرنے سے پہلے۔
@@ -340,7 +340,7 @@ Norito انکوڈر میں `ConfidentialEncryptedPayload`
    - ✅ P2P ہینڈ شیک `ConfidentialFeatureDigest` (پسدید ڈائجسٹ + رجسٹری فنگر پرنٹس) کی تشہیر کرتا ہے اور `HandshakeConfidentialMismatch` کے ذریعہ عادت کے ساتھ مماثلت کو ناکام کرتا ہے۔
    - pecost خفیہ عملدرآمد کے راستوں میں گھبراہٹ کو ہٹا دیں اور بغیر کسی مماثل صلاحیت کے نوڈس کے لئے کردار گیٹنگ شامل کریں۔
    - for فرنٹیئر چوکیوں کے لئے تصدیق کنندہ ٹائم آؤٹ بجٹ اور ریورج گہرائی کی حدوں کو نافذ کریں۔
-     - ✅ تصدیق کے ٹائم آؤٹ بجٹ نافذ ؛ `verify_timeout_ms` سے زیادہ ثبوت اب عزم کے مطابق ناکام ہوجاتے ہیں۔
+     - Verification timeout budgets are telemetry/operator budgets only; proofs fail deterministically on size, gas, public input, policy, or anchor-age bounds.
      - ✅ فرنٹیئر چوکیاں اب `reorg_depth_bound` کا احترام کرتی ہیں ، جس میں تعی .ن شدہ ونڈو سے بڑی کٹائیوں کی کٹائیوں کا تعی .ن کیا جاتا ہے جبکہ اس نے سنیپ شاٹس کو برقرار رکھا ہے۔
    - `AssetConfidentialPolicy` ، پالیسی FSM ، اور ٹکسال/منتقلی/انکشاف ہدایات کے لئے نفاذ کے دروازے متعارف کروائیں۔
    - بلاک ہیڈر میں `conf_features` کا ارتکاب کریں اور جب رجسٹری/پیرامیٹر ہضم ہوتا ہے تو اس سے انکار کرنے والے کی شرکت سے انکار کریں۔

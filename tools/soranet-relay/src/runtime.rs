@@ -4876,6 +4876,37 @@ mod tests {
     }
 
     #[test]
+    fn vpn_voucher_debt_window_rejects_wrong_metering_public_key() {
+        let helper_ticket = sample_helper_ticket([0xA5; 16]);
+        let wrong_key_pair = KeyPair::from_seed(vec![0x77; 32], Algorithm::Ed25519);
+        let body = iroha_data_model::soranet::vpn::VpnUsageVoucherBodyV1 {
+            session_id: helper_ticket.session_id,
+            quote_id: helper_ticket.quote_id,
+            relay_id: helper_ticket.relay_id,
+            sequence: 1,
+            ingress_bytes: 1,
+            egress_bytes: 1,
+            active_ms: 1_000,
+            issued_at_ms: 2_000,
+        };
+        let voucher = iroha_data_model::soranet::vpn::VpnUsageVoucherV1 {
+            signature: iroha_crypto::Signature::new(wrong_key_pair.private_key(), &body.encode()),
+            client_public_key: wrong_key_pair.public_key().clone(),
+            body,
+        };
+        let envelope = VpnUsageVoucherEnvelopeV1 {
+            earned_fee_nanos: helper_ticket.tariff.earned_fee_nanos(&voucher.body),
+            voucher,
+        };
+        let mut window = VpnVoucherDebtWindow::new(&helper_ticket, 64);
+
+        let error = window
+            .accept_envelope(&envelope)
+            .expect_err("wrong metering key must fail");
+        assert!(error.to_string().contains("public key"));
+    }
+
+    #[test]
     fn vpn_usage_voucher_control_updates_receipt() {
         let helper_ticket = sample_helper_ticket([0xA4; 16]);
         let key_pair = sample_metering_key_pair();
@@ -4922,7 +4953,10 @@ mod tests {
             },
             earned_fee_nanos: 54,
         };
-        assert!(window.accept_envelope(&lower_fee_envelope).is_err());
+        let lower_fee_error = window
+            .accept_envelope(&lower_fee_envelope)
+            .expect_err("wrong earned fee must fail");
+        assert!(lower_fee_error.to_string().contains("earned fee"));
 
         let metrics = Arc::new(Metrics::new());
         metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");

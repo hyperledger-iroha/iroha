@@ -29,7 +29,7 @@ profile that exposes Prometheus metrics (`telemetry_profile = "extended"` or
   `torii.zk_prover_max_inflight`, `torii.zk_prover_max_scan_bytes`, and
   `torii.zk_prover_max_scan_millis`. Backend and circuit scope is governed by
   `torii.zk_prover_allowed_backends` and `torii.zk_prover_allowed_circuits`.
-  When a registry entry omits inline VK bytes, the prover loads key bytes from
+  When a registry entry omits embedded VK bytes, the prover loads key bytes from
   `torii.zk_prover_keys_dir` using `<backend>__<name>.vk` naming.
 - **Telemetry surface** – Metrics registered in
   `crates/iroha_telemetry::metrics` and exposed under `/metrics`.

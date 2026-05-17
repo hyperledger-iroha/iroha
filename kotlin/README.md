@@ -48,7 +48,12 @@ app's Torii/outcome index observes redeem finality.
 JVM core includes an in-memory store, `IrohaOfflineNoteV2TransactionSubmitter`,
 and `ToriiOfflineNoteV2IssuerClient` for Torii key-refill plus note-issue
 loads. Apps provide canonical auth and a device-binding provider; Android
-secure storage remains in the platform wallet layer.
+secure storage remains in the platform wallet layer. The Android
+`AndroidOfflineNoteV2SecureStore` rotates a non-exportable Android Keystore key
+on every committed wallet-state revision and rejects app-data rollback or
+cloned preference snapshots when the old revision key is no longer present.
+Legacy `SPEND_PENDING` records are migrated to `SPENT`, and legacy
+`CHANGE_PENDING` records are migrated to `SPENDABLE`.
 
 ---
 

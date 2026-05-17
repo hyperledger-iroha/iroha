@@ -2712,10 +2712,21 @@ pub mod zk {
 
     /// FASTPQ prover defaults.
     pub mod fastpq {
-        /// Default execution mode for the FASTPQ prover (`auto`, `cpu`, or `gpu`).
-        pub const EXECUTION_MODE: &str = "auto";
-        /// Default Poseidon pipeline mode (mirrors execution mode unless overridden).
-        pub const POSEIDON_MODE: &str = "auto";
+        use std::num::NonZeroUsize;
+
+        use iroha_config_base::util::Bytes;
+        use nonzero_ext::nonzero;
+
+        /// Default execution mode for the FASTPQ prover (`cpu` or `gpu`).
+        pub const EXECUTION_MODE: &str = "cpu";
+        /// Default Poseidon pipeline mode (`cpu` or `gpu`).
+        pub const POSEIDON_MODE: &str = "cpu";
+        /// Maximum queued FASTPQ proof sidecar attachments.
+        pub const PROOF_SIDECAR_QUEUE_CAP: NonZeroUsize = nonzero!(1024_usize);
+        /// Maximum encoded FASTPQ proof snapshot accepted for sidecar persistence.
+        pub const PROOF_SIDECAR_MAX_BYTES: Bytes<u64> = Bytes(1024 * 1024);
+        /// Maximum attempts to merge a FASTPQ proof snapshot into a pending pipeline sidecar.
+        pub const PROOF_SIDECAR_MAX_RETRIES: NonZeroUsize = nonzero!(16_usize);
         /// Optional override for the Metal command-buffer cap (None = derive automatically).
         pub const METAL_MAX_IN_FLIGHT: Option<usize> = None;
         /// Optional override for Metal threadgroup width (None = derive automatically).

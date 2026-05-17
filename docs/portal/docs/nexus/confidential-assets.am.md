@@ -250,7 +250,7 @@ SPDX-License-Identifier: Apache-2.0
 - ከባድ ገደቦች (ሊዋቀሩ የሚችሉ ነባሪዎች)
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`፣ `max_commitments_per_tx = 8`፣ `max_confidential_ops_per_block = 256`።
-- `verify_timeout_ms = 750`፣ `max_anchor_age_blocks = 10_000`። ከ`verify_timeout_ms` በላይ የሆኑ ማረጋገጫዎች መመሪያውን በቆራጥነት ያቋርጣሉ (የመንግስት ድምጽ መስጫ ወረቀቶች `proof verification exceeded timeout` ያወጣል፣ `VerifyProof` ስህተት ይመልሳል)።
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - ተጨማሪ ኮታዎች መኖርን ያረጋግጣሉ፡- `max_proof_bytes_block`፣ `max_verify_calls_per_tx`፣ `max_verify_calls_per_block`፣ እና `max_public_inputs` የታሰሩ ብሎክ ግንበኞች። `reorg_depth_bound` (≥ `max_anchor_age_blocks`) የድንበር ፍተሻ ነጥብ ማቆየትን ይቆጣጠራል።
 - የአሂድ ጊዜ ማስፈጸሚያ አሁን ከእነዚህ የግብይት ወይም በየብሎክ ገደቦች የሚበልጡ ግብይቶችን ውድቅ ያደርጋል፣ ቆራጥ የሆኑ `InvalidParameter` ስህተቶችን በማመንጨት እና የመመዝገቢያ ሁኔታ ሳይለወጥ ይተወዋል።
 - የሜምፑል ቅድመ ማጣሪያዎች ሚስጥራዊ ግብይቶችን በ`vk_id`፣ የማረጋገጫ ርዝመት እና የመልህቅ ዕድሜ አረጋጋጩን ከመጥራቱ በፊት የሀብት አጠቃቀምን ገድቦ ይይዛል።

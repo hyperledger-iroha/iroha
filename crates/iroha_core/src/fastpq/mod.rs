@@ -109,7 +109,7 @@ pub(crate) fn configure_poseidon_digest_acceleration(cfg: &Fastpq) {
 pub(crate) fn poseidon_digest_acceleration_configured(cfg: &Fastpq) -> bool {
     match cfg.poseidon_mode {
         FastpqPoseidonMode::Cpu => false,
-        FastpqPoseidonMode::Auto | FastpqPoseidonMode::Gpu => true,
+        FastpqPoseidonMode::Gpu => true,
     }
 }
 
@@ -1352,21 +1352,6 @@ mod tests {
     #[test]
     fn digest_acceleration_respects_configured_modes() {
         let _guard = DigestAccelerationGuard::new();
-        let auto = fastpq_cfg(FastpqExecutionMode::Auto, FastpqPoseidonMode::Auto);
-        assert!(poseidon_digest_acceleration_configured(&auto));
-        assert!(configure_poseidon_digest_acceleration_with_preflight(
-            &auto,
-            || true
-        ));
-        assert!(poseidon_digest_acceleration_enabled());
-
-        set_poseidon_digest_acceleration_enabled(true);
-        assert!(!configure_poseidon_digest_acceleration_with_preflight(
-            &auto,
-            || false
-        ));
-        assert!(!poseidon_digest_acceleration_enabled());
-
         let explicit_gpu = fastpq_cfg(FastpqExecutionMode::Cpu, FastpqPoseidonMode::Gpu);
         assert!(poseidon_digest_acceleration_configured(&explicit_gpu));
         assert!(configure_poseidon_digest_acceleration_with_preflight(
@@ -1375,17 +1360,9 @@ mod tests {
         ));
         assert!(poseidon_digest_acceleration_enabled());
 
-        let auto_cpu_lane = fastpq_cfg(FastpqExecutionMode::Cpu, FastpqPoseidonMode::Auto);
-        assert!(poseidon_digest_acceleration_configured(&auto_cpu_lane));
-        assert!(configure_poseidon_digest_acceleration_with_preflight(
-            &auto_cpu_lane,
-            || true
-        ));
-        assert!(poseidon_digest_acceleration_enabled());
-
         set_poseidon_digest_acceleration_enabled(true);
         assert!(!configure_poseidon_digest_acceleration_with_preflight(
-            &auto_cpu_lane,
+            &explicit_gpu,
             || false
         ));
         assert!(!poseidon_digest_acceleration_enabled());
@@ -1400,18 +1377,13 @@ mod tests {
     }
 
     #[test]
-    fn configure_digest_acceleration_uses_deterministic_cpu_fallback_without_backend() {
+    fn configure_digest_acceleration_keeps_cpu_mode_disabled() {
         let _guard = DigestAccelerationGuard::new();
-        let auto = fastpq_cfg(FastpqExecutionMode::Auto, FastpqPoseidonMode::Auto);
+        let cpu = fastpq_cfg(FastpqExecutionMode::Cpu, FastpqPoseidonMode::Cpu);
 
-        configure_poseidon_digest_acceleration(&auto);
+        configure_poseidon_digest_acceleration(&cpu);
 
-        #[cfg(feature = "fastpq-gpu")]
-        let expected = fastpq_prover::preflight_bn254_poseidon_word_batches();
-        #[cfg(not(feature = "fastpq-gpu"))]
-        let expected = false;
-
-        assert_eq!(poseidon_digest_acceleration_enabled(), expected);
+        assert!(!poseidon_digest_acceleration_enabled());
     }
 
     #[test]
@@ -2027,6 +1999,12 @@ mod tests {
         Fastpq {
             execution_mode,
             poseidon_mode,
+            proof_sidecar_queue_cap:
+                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
+            proof_sidecar_max_bytes:
+                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
+            proof_sidecar_max_retries:
+                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
             device_class: None,
             chip_family: None,
             gpu_kind: None,

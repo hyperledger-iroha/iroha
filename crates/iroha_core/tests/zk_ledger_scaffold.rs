@@ -67,8 +67,8 @@ fn native_ipa_envelope_bytes() -> Vec<u8> {
 fn native_ipa_attachment() -> iroha_data_model::proof::ProofAttachment {
     let backend = "halo2/ipa/poly-open";
     let proof = iroha_data_model::proof::ProofBox::new(backend.into(), native_ipa_envelope_bytes());
-    let vk = iroha_data_model::proof::VerifyingKeyBox::new(backend.into(), Vec::new());
-    iroha_data_model::proof::ProofAttachment::new_inline(backend.into(), proof, vk)
+    let vk_ref = iroha_data_model::proof::VerifyingKeyId::new(backend, "native_ipa_vk");
+    iroha_data_model::proof::ProofAttachment::new_ref(backend.into(), proof, vk_ref)
 }
 
 #[test]
@@ -1239,8 +1239,11 @@ fn zk_roots_are_bounded_in_world_state() {
             ..cfg::Halo2::default()
         },
         fastpq: cfg::Fastpq {
-            execution_mode: cfg::FastpqExecutionMode::Auto,
-            poseidon_mode: cfg::FastpqPoseidonMode::Auto,
+            execution_mode: cfg::FastpqExecutionMode::Cpu,
+            poseidon_mode: cfg::FastpqPoseidonMode::Cpu,
+            proof_sidecar_queue_cap: defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
+            proof_sidecar_max_bytes: defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
+            proof_sidecar_max_retries: defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
             device_class: None,
             chip_family: None,
             gpu_kind: None,
@@ -1399,8 +1402,11 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
             ..cfg::Halo2::default()
         },
         fastpq: cfg::Fastpq {
-            execution_mode: cfg::FastpqExecutionMode::Auto,
-            poseidon_mode: cfg::FastpqPoseidonMode::Auto,
+            execution_mode: cfg::FastpqExecutionMode::Cpu,
+            poseidon_mode: cfg::FastpqPoseidonMode::Cpu,
+            proof_sidecar_queue_cap: defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
+            proof_sidecar_max_bytes: defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
+            proof_sidecar_max_retries: defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
             device_class: None,
             chip_family: None,
             gpu_kind: None,

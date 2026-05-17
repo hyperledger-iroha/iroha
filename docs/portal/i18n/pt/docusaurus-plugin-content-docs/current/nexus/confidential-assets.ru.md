@@ -231,7 +231,7 @@ Documente a implementação local no runbook de operações; governança-politic
 - Жесткие лимиты (настраиваемые значения по умолчанию):
 -`max_proof_size_bytes = 262_144`.
 -`max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
--`verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. Provas, превышающие `verify_timeout_ms`, детерминированно прерывают инструкцию (governance-голосования эмитят `proof verification exceeded timeout`, `VerifyProof` foi removido).
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` is an operator latency budget for telemetry and backpressure; consensus validity is determined by deterministic bounds such as proof size, gas, public input counts, registry policy, and anchor age.
 - Os cabos originais são de qualidade: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block` e `max_public_inputs` construir construtores de blocos; `reorg_depth_bound` (≥ `max_anchor_age_blocks`) управляет pontos de verificação de fronteira de retenção.
 - Runtime теперь отклоняет транзакции, превышающие эти por transação ou limites por bloco, эмитируя детерминированные ошибки `InvalidParameter` e não há registro de registro.
 - Mempool предварительно фильтрует конфиденциальные транзакции по `vk_id`, длине prova e возрасту âncora para o verificador вызова, чтобы ограничить потребление ресурсов.
