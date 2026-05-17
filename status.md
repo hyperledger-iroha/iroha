@@ -2,6 +2,14 @@
 
 Last updated: 2026-05-16
 
+## 2026-05-16 Parallel apply event fixture refresh
+
+- Refreshed the `parallel_apply` event snapshots for asset-definition key-value,
+  key-value/NFT lifecycle, and mint/burn/transfer coverage so the fixtures
+  match the current Norito event encodings and emitted lifecycle events.
+- Focused validation is green for
+  `cargo test -p iroha_core --test parallel_apply -- --nocapture`.
+
 ## 2026-05-16 Sumeragi delivered RBC READY repair
 
 - Delivered RBC rebroadcast now replays the cached READY set directly to every
