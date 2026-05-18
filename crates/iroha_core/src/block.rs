@@ -17699,6 +17699,69 @@ mod tests {
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
     }
 
+    #[test]
+    fn native_amx_receipt_records_participant_dataspace_legs() {
+        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
+            .parse()
+            .expect("valid chain id");
+        let (authority_id, keypair) = gen_account_in("wonderland");
+        let paynet = DataSpaceId::new(7);
+        let cbuae = DataSpaceId::new(8);
+        let tx = TransactionBuilder::new(chain_id, authority_id)
+            .with_instructions([
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("merchant", "paynet").expect("domain id"),
+                ))),
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("treasury", "cbuae").expect("domain id"),
+                ))),
+            ])
+            .sign(keypair.private_key());
+        let tx_hash = AcceptedTransaction::prepare_signed_metadata(&tx).signed_hash;
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: paynet,
+                alias: "paynet".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: cbuae,
+                alias: "cbuae".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let world = World::new();
+        let world_view = world.view();
+
+        let receipt = native_amx_receipt_for_transaction(
+            &tx,
+            tx_hash,
+            42,
+            crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            &dataspace_catalog,
+            &world_view,
+        )
+        .expect("mixed dataspace transaction should produce native AMX receipt");
+
+        assert_eq!(receipt.version, 1);
+        assert_eq!(receipt.source_id.as_slice(), tx_hash.as_ref());
+        assert_eq!(receipt.lane_id, LaneId::SINGLE);
+        assert_eq!(receipt.dataspace_id, DataSpaceId::UNIVERSAL);
+        assert_eq!(receipt.block_height, 42);
+        assert_eq!(
+            receipt
+                .legs
+                .iter()
+                .map(|leg| (leg.dataspace_id, leg.prepared, leg.committed))
+                .collect::<Vec<_>>(),
+            vec![(paynet, true, true), (cbuae, true, true)]
+        );
+    }
+
     fn seed_domain_name_lease(world: &mut World, owner: &AccountId, domain_id: &DomainId) {
         let selector = crate::sns::selector_for_domain(domain_id).expect("selector");
         let address =

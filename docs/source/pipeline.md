@@ -216,6 +216,13 @@ Operator access (Torii)
   instructions, rejected detached evaluation, and overlay build errors. The
   same aggregate reasons are exported through
   `pipeline_detached_fallback_reason{reason=...}` telemetry.
+- Fee-bearing transactions add an implicit global fee write to their scheduling
+  access set, so fee debits, gas settlement, and Nexus receipts cannot reorder
+  around each other silently. The detached merge path now replays fee/gas/Nexus
+  postprocessing for simple transparent single-transfer deltas in the same
+  `StateTransaction`; fee-bearing deltas with data-trigger ordering concerns or
+  unsupported detached effects continue to report the `fee_postprocessing`
+  fallback reason.
 - IVM dynamic access scheduling uses the overlay prepass output when available:
   the VM run that builds the overlay can also capture the host state access log,
   avoiding a separate dynamic access VM run before DAG construction.

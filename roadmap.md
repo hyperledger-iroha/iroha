@@ -18,14 +18,16 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Transaction pipeline follow-ups
 
-- Represent fee charging, gas settlement receipts, and Nexus fee receipts as
-  deterministic detached deltas for the simple eligible cases. Until then,
-  fee-enabled transactions intentionally remain visible as
-  `fee_postprocessing` detached fallback reasons in Sumeragi status and
-  pipeline telemetry.
+- Broaden fee/gas/Nexus detached postprocessing beyond the current simple
+  transparent single-transfer case. Remaining work includes deterministic
+  receipt/effect representation for multi-instruction and multi-asset deltas,
+  plus data-trigger-aware fee event ordering. Those shapes intentionally remain
+  visible as `fee_postprocessing` detached fallback reasons in Sumeragi status
+  and pipeline telemetry.
 - Broaden validation from the focused scheduler, dynamic IVM access, telemetry,
-  and receipt-hash tests to the next long `cargo test --workspace` corridor
-  once the repository-wide dirty worktree settles.
+  fee-enabled transfer, query-continuation, and receipt-hash tests to the next
+  long `cargo test --workspace` corridor once the repository-wide dirty
+  worktree settles.
 
 ## Torii query API follow-ups
 
@@ -53,10 +55,8 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## ZK audit validation follow-ups
 
-- Broaden the remaining ZK validation beyond the focused cleanup corridor:
-  run policy-hash state tests, P2P confidential digest tests, IVM CoreHost
-  STARK/Halo2 guardrail tests with the relevant ZK features enabled before
-  folding the full workspace ZK corridor into the next long validation budget.
+- Fold the now-green focused ZK cleanup corridor into the next long
+  `cargo test --workspace` / CI validation budget.
 
 ## Soracloud production follow-ups
 

@@ -15,8 +15,21 @@ Last updated: 2026-05-18
 - Added focused coverage for replay-backed bounded starts not materializing the
   tail and for Arc-backed stored bounded continuation returning the next page
   with bounded metadata.
-- Validation: in progress; Cargo is currently queued behind existing package
-  cache/build locks in this workspace.
+- Validation: focused query coverage is green with
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-query-api-check cargo check
+  -p iroha_core --lib`,
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-query-api-check cargo test
+  -p iroha_core --lib
+  stored_unsorted_bounded_replay_cursor_does_not_materialize_tail_on_start --
+  --nocapture`,
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-query-api-check cargo test
+  -p iroha_core --lib bounded_stored_arc_continuation_replays_one_page --
+  --nocapture`,
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-query-api-check cargo check
+  -p iroha_torii --tests`, and
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-query-api-check cargo clippy
+  -p iroha_core -p iroha_torii --all-targets -- -D warnings`; `cargo fmt
+  --all --check` and `git diff --check` are also green.
 
 ## 2026-05-18 Kura optional WSV sidecar recovery
 
@@ -159,15 +172,22 @@ Last updated: 2026-05-18
   postprocessing, user-provided executor, durable state, unsupported
   instruction, rejected detached evaluation, and overlay build error; telemetry
   exports the same aggregate reasons through
-  `pipeline_detached_fallback_reason{reason=...}`. Fee postprocessing remains a
-  sequential fallback path until its side effects can be represented exactly as
-  deterministic detached deltas.
-- Validation: `cargo check -p iroha_telemetry`, targeted
+  `pipeline_detached_fallback_reason{reason=...}`.
+- Fee-bearing transactions now participate in deterministic scheduling with an
+  implicit global fee write. Simple transparent single-transfer detached deltas
+  can merge without `fee_postprocessing` fallback and then run fee/gas/Nexus
+  postprocessing in the same `StateTransaction`; data-trigger-sensitive or more
+  complex fee-bearing detached deltas still fall back deliberately.
+- Validation: `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo check
+  -p iroha_telemetry`, targeted
   `rustfmt --edition 2024 --check`, and `git diff --check` on the touched
   pipeline/telemetry files are green. After the dirty-worktree query iterator
   blocker was cleared, focused validation is also green with
   `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo check -p
   iroha_core`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
+  fee_enabled_single_transfer_uses_detached_merge_without_fee_fallback --lib --
+  --nocapture`,
   `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
   scheduler_variant_tests --lib -- --nocapture`,
   `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
@@ -215,6 +235,22 @@ Last updated: 2026-05-18
     native binding SHA-256.
   - `node --test test/instructionBuilders.test.js` from `javascript/iroha_js/`
     is green: 87 tests passed.
+  - `CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test -p iroha_core guardrails --lib --features zk-stark -- --nocapture`
+    is green: 7 guardrail tests passed.
+  - `CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test -p iroha_core zk_verify_batch --lib --features zk-stark -- --nocapture`
+    is green: 4 CoreHost batch registry-binding tests passed.
+  - `CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test -p iroha_core zk_policy_hash --lib -- --nocapture`
+    is green: 3 policy-hash tests passed.
+  - `CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test -p iroha_core confidential_digest --lib -- --nocapture`
+    is green: 4 confidential-digest tests passed.
+  - `CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test -p iroha_core dummy_block_populates_proof_policy_hash --lib -- --nocapture`
+    is green.
+  - `CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test -p iroha_p2p confidential_digest_roundtrip_preserves_zk_policy_hash --lib -- --nocapture`
+    is green.
+  - `CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test -p iroha_core --test ivm_corehost_envelope_hash_bind -- --nocapture`
+    is green.
+  - `CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test -p iroha_core --test ivm_corehost_zk_gate --test ivm_corehost_halo2_disabled_latch --features zk-tests,zk-ipa-native -- --nocapture`
+    is green: 1 disabled-latch test and 4 gate tests passed.
   - A later duplicate rerun of the Halo2 role test hit local disk exhaustion
     while linking; stale generated `target/codex-*` artifacts were partially
     cleared to restore working space. The earlier focused test result above is
@@ -248,9 +284,24 @@ Last updated: 2026-05-18
   itself to be `Send + Sync + 'static`; only owned stored output values keep
   those bounds. This unblocks focused `iroha_core` validation while preserving
   the shared live-query store's thread-safe cursor values.
-- Validation for the query-bound fixes is folded into the 2026-05-18 Kura/status
-  corridor above: focused `iroha_core` query tests, `integration_tests --test
-  consensus_and_da`, and workspace clippy are green there.
+- Focused validation is green with `CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds
+  cargo test -p iroha_core --lib mixed_domain_write_targets -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test -p iroha_core --lib
+  dataspace_scoped_permission_grant_routes_mixed_dataspaces_to_universal --
+  --nocapture`, `CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test -p
+  iroha_core --lib
+  transfer_restricted_asset_uses_destination_dataspace_binding_and_policy --
+  --nocapture`, `CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test -p
+  iroha_core --lib
+  mint_global_asset_allows_universal_amx_route_for_non_universal_home --
+  --nocapture`, `CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test -p
+  iroha_core --lib stored_unsorted_bounded -- --nocapture`,
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test
+  -p iroha_core --lib native_amx_receipt_records_participant_dataspace_legs
+  -- --nocapture`, and `CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test
+  -p iroha_data_model
+  native_amx_receipts_change_lane_block_commitment_hash_inputs --
+  --nocapture`. Full workspace testing remains a long-corridor follow-up.
 
 ## 2026-05-17 Torii query API bounded-count fast path
 
