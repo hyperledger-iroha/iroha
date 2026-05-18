@@ -19481,11 +19481,7 @@ impl State {
                         .parse()
                         .expect("default SoraFS pin fee asset id"),
                 sorafs_pin_fee_treasury_account:
-                    iroha_data_model::account::AccountId::parse_encoded(
-                        &iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account(),
-                    )
-                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                    .expect("default SoraFS pin fee treasury account"),
+                    iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account_id(),
                 sorafs_pricing: PricingScheduleRecord::default(),
                 sorafs_penalty: iroha_config::parameters::actual::SorafsPenaltyPolicy::default(),
                 sorafs_repair_escalation:
@@ -33648,11 +33644,9 @@ pub(crate) mod deserialize {
                 iroha_config::parameters::defaults::governance::sorafs_pin_fee::asset_id()
                     .parse()
                     .expect("default SoraFS pin fee asset id"),
-            sorafs_pin_fee_treasury_account: iroha_data_model::account::AccountId::parse_encoded(
-                &iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account(),
-            )
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .expect("default SoraFS pin fee treasury account"),
+            sorafs_pin_fee_treasury_account:
+                iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account_id(
+                ),
             sorafs_pricing:
                 iroha_data_model::sorafs::pricing::PricingScheduleRecord::launch_default(),
             sorafs_penalty: iroha_config::parameters::actual::SorafsPenaltyPolicy::default(),
