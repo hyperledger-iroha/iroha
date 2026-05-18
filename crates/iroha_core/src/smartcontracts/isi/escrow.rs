@@ -396,9 +396,16 @@ pub(crate) fn is_native_escrow_custody_asset(
     state_transaction: &StateTransaction<'_, '_>,
     source_id: &AssetId,
 ) -> Result<bool, Error> {
-    let resolved_id = state_transaction
-        .world
-        .resolve_asset_id_for_current_scope(source_id)?;
+    let resolved_id = if matches!(
+        source_id.scope(),
+        iroha_data_model::asset::AssetBalanceScope::Dataspace(_)
+    ) {
+        source_id.clone()
+    } else {
+        state_transaction
+            .world
+            .resolve_asset_id_for_current_scope(source_id)?
+    };
     Ok(state_transaction
         .world
         .asset_escrows

@@ -882,7 +882,7 @@ mod query_errors_handling {
                     .header("content-type", "application/json")
                     .body(capabilities_body.clone())
                     .expect("capabilities response")),
-                "/query" => {
+                p if p == torii_uri::QUERY => {
                     query_seen_clone.store(true, Ordering::Relaxed);
                     Ok(ok_empty_response())
                 }

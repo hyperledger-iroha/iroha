@@ -1,7 +1,7 @@
 //! Query functionality. The common error type is also defined here,
 //! alongside functions for converting them into HTTP responses.
 
-use std::{collections::BinaryHeap, num::NonZeroU64};
+use std::{collections::BinaryHeap, num::NonZeroU64, sync::Weak};
 
 use eyre::Result;
 use iroha_config::parameters::{
@@ -12,9 +12,9 @@ use iroha_data_model::{
     escrow::{AnonymousAssetEscrowRecord, AssetEscrowRecord},
     prelude::*,
     query::{
-        CommittedTransaction, QueryBox, QueryOutput, QueryOutputBatchBox, QueryRequest,
-        QueryResponse, SingularQueryBox, SingularQueryOutputBox,
-        dsl::{EvaluateSelector, HasProjection, SelectorMarker},
+        CommittedTransaction, QueryBox, QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple,
+        QueryRequest, QueryResponse, SingularQueryBox, SingularQueryOutputBox,
+        dsl::{CompoundPredicate, EvaluateSelector, HasProjection, SelectorMarker},
         error::QueryExecutionFail as Error,
         parameters::{DEFAULT_FETCH_SIZE, QueryParams, SortOrder},
     },
@@ -25,10 +25,13 @@ use crate::{
     query::{
         cursor::ErasedQueryIterator,
         pagination::Paginate as _,
-        store::{DeferredQueryContinuation, LiveQueryStoreHandle, PreparedQueryStart},
+        store::{
+            DeferredQueryContinuation, LiveQueryStoreHandle, PagedQueryContinuation,
+            PreparedPagedQueryStart, PreparedQueryStart,
+        },
     },
     smartcontracts::ValidQuery,
-    state::{StateReadOnly, WorldReadOnly},
+    state::{State, StateReadOnly, WorldReadOnly},
 };
 
 #[inline]
@@ -1154,6 +1157,113 @@ where
     })
 }
 
+fn collect_unsorted_bounded_page<I>(
+    iter: I,
+    selector: SelectorTuple<I::Item>,
+    params: &QueryParams,
+    limits: QueryLimits,
+    returned_offset: u64,
+) -> Result<(QueryOutputBatchBoxTuple, usize, bool), Error>
+where
+    I: Iterator<Item: SortableQueryOutput>,
+    I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
+    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
+    QueryOutputBatchBox: From<Vec<I::Item>>,
+{
+    let fetch_size = params
+        .fetch_size
+        .fetch_size
+        .unwrap_or(iroha_data_model::query::parameters::DEFAULT_FETCH_SIZE);
+    if fetch_size.get() > limits.max_fetch_size {
+        return Err(Error::FetchSizeTooBig);
+    }
+
+    let remaining_limit = params
+        .pagination
+        .limit_value()
+        .map(|limit| limit.get().saturating_sub(returned_offset));
+    if remaining_limit == Some(0) {
+        return Err(Error::CursorDone);
+    }
+
+    let source_offset = params
+        .pagination
+        .offset_value()
+        .saturating_add(returned_offset);
+    let source_offset = usize::try_from(source_offset).unwrap_or(usize::MAX);
+    let fetch_size_usize = usize::try_from(fetch_size.get()).unwrap_or(usize::MAX);
+    let first_take = remaining_limit.map_or(fetch_size_usize, |limit| {
+        usize::try_from(limit)
+            .unwrap_or(usize::MAX)
+            .min(fetch_size_usize)
+    });
+
+    let mut iter = iter.skip(source_offset).peekable();
+    let first_batch_values: Vec<_> = iter.by_ref().take(first_take).collect();
+    let batch_len = first_batch_values.len();
+    let mut batch_iter =
+        ErasedQueryIterator::new(first_batch_values.into_iter(), selector, fetch_size);
+    let (first_batch, _next) = batch_iter.next_batch(0)?;
+
+    let batch_len_u64 = u64::try_from(batch_len).unwrap_or(u64::MAX);
+    let limit_allows_more = remaining_limit != Some(batch_len_u64);
+    let has_more = batch_len > 0 && limit_allows_more && iter.peek().is_some();
+
+    Ok((first_batch, batch_len, has_more))
+}
+
+fn prepare_stored_unsorted_bounded_replay_start<I, Q>(
+    iter: I,
+    query: Q,
+    predicate: CompoundPredicate<I::Item>,
+    selector: SelectorTuple<I::Item>,
+    params: &QueryParams,
+    limits: QueryLimits,
+    replay_state: Weak<State>,
+) -> Result<PreparedPagedQueryStart, Error>
+where
+    I: Iterator<Item: SortableQueryOutput>,
+    I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
+    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
+    QueryOutputBatchBox: From<Vec<I::Item>>,
+    Q: ValidQuery<Item = I::Item> + Clone + Send + Sync + 'static,
+{
+    let (first_batch, batch_len, has_more) =
+        collect_unsorted_bounded_page(iter, selector.clone(), params, limits, 0)?;
+    if !has_more {
+        return Ok(PreparedPagedQueryStart {
+            first_batch,
+            paged_continuation: None,
+        });
+    }
+
+    let first_cursor = NonZeroU64::new(u64::try_from(batch_len).unwrap_or(u64::MAX))
+        .expect("stored bounded continuation requires a non-empty first batch");
+    let params_for_replay = params.clone();
+    let continuation = PagedQueryContinuation::new(first_cursor, move |cursor| {
+        let state = replay_state.upgrade().ok_or(Error::Expired)?;
+        let view = state.query_view();
+        let iter = ValidQuery::execute(query.clone(), predicate.clone(), &view)?;
+        let (batch, batch_len, has_more) = collect_unsorted_bounded_page(
+            iter,
+            selector.clone(),
+            &params_for_replay,
+            limits,
+            cursor,
+        )?;
+        let next_cursor = has_more.then(|| {
+            NonZeroU64::new(cursor.saturating_add(u64::try_from(batch_len).unwrap_or(u64::MAX)))
+                .expect("cursor remains non-zero after a non-empty page")
+        });
+        Ok((batch, next_cursor))
+    });
+
+    Ok(PreparedPagedQueryStart {
+        first_batch,
+        paged_continuation: Some(continuation),
+    })
+}
+
 fn handle_iter_start_stored<I>(
     iter: I,
     selector: SelectorTuple<I::Item>,
@@ -1181,6 +1291,53 @@ where
 
     let batched = apply_query_postprocessing(iter, selector, params, limits)?;
     live_query_store.handle_iter_start(batched, authority, gas_budget)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_iter_start_stored_replayable<I, Q>(
+    iter: I,
+    query: Q,
+    predicate: CompoundPredicate<I::Item>,
+    selector: SelectorTuple<I::Item>,
+    params: &QueryParams,
+    limits: QueryLimits,
+    live_query_store: &LiveQueryStoreHandle,
+    authority: &AccountId,
+    gas_budget: Option<u64>,
+    replay_state: Option<Weak<State>>,
+) -> Result<QueryOutput, Error>
+where
+    I: Iterator<Item: SortableQueryOutput>,
+    I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
+    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
+    QueryOutputBatchBox: From<Vec<I::Item>>,
+    Q: ValidQuery<Item = I::Item> + Clone + Send + Sync + 'static,
+{
+    if params.sorting.sort_by_metadata_key.is_none()
+        && limits.count_mode == QueryCountMode::Bounded
+        && let Some(replay_state) = replay_state
+    {
+        let prepared = prepare_stored_unsorted_bounded_replay_start(
+            iter,
+            query,
+            predicate,
+            selector,
+            params,
+            limits,
+            replay_state,
+        )?;
+        return live_query_store.handle_iter_start_paged_prepared(prepared, authority, gas_budget);
+    }
+
+    handle_iter_start_stored(
+        iter,
+        selector,
+        params,
+        limits,
+        live_query_store,
+        authority,
+        gas_budget,
+    )
 }
 
 struct IncrementalSortedValues<T> {
@@ -1873,17 +2030,43 @@ impl ValidQueryRequest {
         })
     }
 
-    /// Execute a validated query request
+    /// Execute a validated query request.
     ///
     /// # Errors
     ///
     /// Returns an error if the query execution fails.
-    #[allow(clippy::too_many_lines)] // not much we can do, we _need_ to list all the box types here
     pub fn execute(
         self,
         live_query_store: &LiveQueryStoreHandle,
         state: &impl StateReadOnly,
         authority: &AccountId,
+    ) -> Result<QueryResponse, Error> {
+        self.execute_stored_inner(live_query_store, state, authority, None)
+    }
+
+    /// Execute a validated query request with an optional state handle for
+    /// bounded stored cursors that can replay one continuation page at a time.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query execution fails.
+    pub fn execute_with_replay_state(
+        self,
+        live_query_store: &LiveQueryStoreHandle,
+        state: &impl StateReadOnly,
+        authority: &AccountId,
+        replay_state: Weak<State>,
+    ) -> Result<QueryResponse, Error> {
+        self.execute_stored_inner(live_query_store, state, authority, Some(replay_state))
+    }
+
+    #[allow(clippy::too_many_lines)] // not much we can do, we _need_ to list all the box types here
+    fn execute_stored_inner(
+        self,
+        live_query_store: &LiveQueryStoreHandle,
+        state: &impl StateReadOnly,
+        authority: &AccountId,
+        replay_state: Option<Weak<State>>,
     ) -> Result<QueryResponse, Error> {
         let Self { request, limits } = self;
         match request {
@@ -1919,11 +2102,12 @@ impl ValidQueryRequest {
                     live_query_store: &LiveQueryStoreHandle,
                     authority: &AccountId,
                     gas_budget: Option<u64>,
+                    replay_state: Option<Weak<State>>,
                     decode: F,
                 ) -> Result<Option<QueryResponse>, Error>
                 where
                     T: Send + Sync + 'static,
-                    Q: super::super::ValidQuery<Item = T>,
+                    Q: super::super::ValidQuery<Item = T> + Clone + Send + Sync + 'static,
                     T: HasProjection<SelectorMarker, AtomType = ()>
                         + HasProjection<PredicateMarker>
                         + crate::smartcontracts::isi::query::SortableQueryOutput
@@ -1941,17 +2125,21 @@ impl ValidQueryRequest {
                             return Ok(None);
                         };
                         // Execute the concrete ValidQuery with provided predicate
-                        let iter = ValidQuery::execute(concrete, erased.predicate_cloned(), state)?;
+                        let predicate = erased.predicate_cloned();
+                        let iter = ValidQuery::execute(concrete.clone(), predicate.clone(), state)?;
 
                         // Postprocess and register a live iterator (or prepared fast-start).
-                        let output = handle_iter_start_stored(
+                        let output = handle_iter_start_stored_replayable(
                             iter,
+                            concrete,
+                            predicate,
                             erased.selector_cloned(),
                             params,
                             limits,
                             live_query_store,
                             authority,
                             gas_budget,
+                            replay_state,
                         )?;
                         return Ok(Some(QueryResponse::Iterable(output)));
                     }
@@ -1986,15 +2174,20 @@ impl ValidQueryRequest {
                                     dec(&iter_query.predicate_bytes)?;
                                 let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                     dec(&iter_query.selector_bytes)?;
-                                let iter = ValidQuery::execute(<$find>::new(), pred, state)?;
-                                let output = handle_iter_start_stored(
+                                let concrete = <$find>::new();
+                                let iter =
+                                    ValidQuery::execute(concrete.clone(), pred.clone(), state)?;
+                                let output = handle_iter_start_stored_replayable(
                                     iter,
+                                    concrete,
+                                    pred,
                                     sel,
                                     params,
                                     limits,
                                     live_query_store,
                                     authority,
                                     stored_cursor_budget,
+                                    replay_state.clone(),
                                 )?;
                                 return Ok(QueryResponse::Iterable(output));
                             }};
@@ -2015,15 +2208,19 @@ impl ValidQueryRequest {
                                     .map_err(|_| {
                                         Error::Conversion("failed to decode query payload".into())
                                     })?;
-                                let iter = ValidQuery::execute(concrete, pred, state)?;
-                                let output = handle_iter_start_stored(
+                                let iter =
+                                    ValidQuery::execute(concrete.clone(), pred.clone(), state)?;
+                                let output = handle_iter_start_stored_replayable(
                                     iter,
+                                    concrete,
+                                    pred,
                                     sel,
                                     params,
                                     limits,
                                     live_query_store,
                                     authority,
                                     stored_cursor_budget,
+                                    replay_state.clone(),
                                 )?;
                                 return Ok(QueryResponse::Iterable(output));
                             }};
@@ -2034,15 +2231,20 @@ impl ValidQueryRequest {
                                     dec(&iter_query.predicate_bytes)?;
                                 let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                     dec(&iter_query.selector_bytes)?;
-                                let iter = ValidQuery::execute(<$find>::new(), pred, state)?;
-                                let output = handle_iter_start_stored(
+                                let concrete = <$find>::new();
+                                let iter =
+                                    ValidQuery::execute(concrete.clone(), pred.clone(), state)?;
+                                let output = handle_iter_start_stored_replayable(
                                     iter,
+                                    concrete,
+                                    pred,
                                     sel,
                                     params,
                                     limits,
                                     live_query_store,
                                     authority,
                                     stored_cursor_budget,
+                                    replay_state.clone(),
                                 )?;
                                 return Ok(QueryResponse::Iterable(output));
                             }};
@@ -2220,15 +2422,19 @@ impl ValidQueryRequest {
                                 dec(&iter_query.predicate_bytes)?;
                             let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                 dec(&iter_query.selector_bytes)?;
-                            let iter = ValidQuery::execute(<$find>::new(), pred, state)?;
-                            let output = handle_iter_start_stored(
+                            let concrete = <$find>::new();
+                            let iter = ValidQuery::execute(concrete.clone(), pred.clone(), state)?;
+                            let output = handle_iter_start_stored_replayable(
                                 iter,
+                                concrete,
+                                pred,
                                 sel,
                                 params,
                                 limits,
                                 live_query_store,
                                 authority,
                                 stored_cursor_budget,
+                                replay_state.clone(),
                             )?;
                             return Ok(QueryResponse::Iterable(output));
                         }};
@@ -2476,15 +2682,19 @@ impl ValidQueryRequest {
                                 dec(&iter_query.predicate_bytes)?;
                             let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                 dec(&iter_query.selector_bytes)?;
-                            let iter = ValidQuery::execute(<$find>::new(), pred, state)?;
-                            let output = handle_iter_start_stored(
+                            let concrete = <$find>::new();
+                            let iter = ValidQuery::execute(concrete.clone(), pred.clone(), state)?;
+                            let output = handle_iter_start_stored_replayable(
                                 iter,
+                                concrete,
+                                pred,
                                 sel,
                                 params,
                                 limits,
                                 live_query_store,
                                 authority,
                                 stored_cursor_budget,
+                                replay_state.clone(),
                             )?;
                             return Ok(QueryResponse::Iterable(output));
                         }};
@@ -2608,6 +2818,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<
                             iroha_data_model::query::domain::prelude::FindDomainsByAccountId,
@@ -2628,6 +2839,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<iroha_data_model::query::domain::prelude::FindDomains>(e)
                             .or(Some(iroha_data_model::query::domain::prelude::FindDomains))
@@ -2648,6 +2860,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<iroha_data_model::query::account::prelude::FindAccounts>(
                             e,
@@ -2671,6 +2884,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<
                             iroha_data_model::query::account::prelude::FindAccountsWithAsset,
@@ -2691,6 +2905,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<
                             iroha_data_model::query::asset::prelude::FindAssetsByAccountId,
@@ -2711,6 +2926,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<iroha_data_model::query::asset::prelude::FindAssets>(e)
                             .or(Some(iroha_data_model::query::asset::prelude::FindAssets))
@@ -2730,6 +2946,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<
                             iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
@@ -2753,6 +2970,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<
                             iroha_data_model::query::repo::prelude::FindRepoAgreements,
@@ -2776,6 +2994,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<iroha_data_model::query::nft::prelude::FindNftsByAccountId>(
                             e,
@@ -2796,6 +3015,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<iroha_data_model::query::nft::prelude::FindNfts>(e)
                             .or(Some(iroha_data_model::query::nft::prelude::FindNfts))
@@ -2815,6 +3035,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<iroha_data_model::query::role::prelude::FindRoles>(e)
                             .or(Some(iroha_data_model::query::role::prelude::FindRoles))
@@ -2835,6 +3056,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<iroha_data_model::query::role::prelude::FindRoleIds>(e)
                             .or(Some(iroha_data_model::query::role::prelude::FindRoleIds))
@@ -2854,6 +3076,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<
                             iroha_data_model::query::role::prelude::FindRolesByAccountId,
@@ -2874,6 +3097,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<
                             iroha_data_model::query::proof::prelude::FindProofRecords,
@@ -2897,6 +3121,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<
                             iroha_data_model::query::proof::prelude::FindProofRecordsByBackend,
@@ -2917,6 +3142,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<
                             iroha_data_model::query::proof::prelude::FindProofRecordsByStatus,
@@ -2937,6 +3163,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<iroha_data_model::query::peer::prelude::FindPeers>(e)
                             .or(Some(iroha_data_model::query::peer::prelude::FindPeers))
@@ -2956,6 +3183,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<
                             iroha_data_model::query::trigger::prelude::FindActiveTriggerIds,
@@ -2979,6 +3207,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<iroha_data_model::query::trigger::prelude::FindTriggers>(
                             e,
@@ -3002,6 +3231,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<
                             iroha_data_model::query::transaction::prelude::FindTransactions,
@@ -3025,6 +3255,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<iroha_data_model::query::block::prelude::FindBlocks>(e)
                             .or(Some(iroha_data_model::query::block::prelude::FindBlocks))
@@ -3044,6 +3275,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<iroha_data_model::query::block::prelude::FindBlockHeaders>(
                             e,
@@ -3067,6 +3299,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<
                             iroha_data_model::query::oracle::prelude::FindOracleFeeds,
@@ -3090,6 +3323,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<
                             iroha_data_model::query::oracle::prelude::FindOracleHistoryByFeedId,
@@ -3110,6 +3344,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<
                             iroha_data_model::query::oracle::prelude::FindOracleProviderStatsByFeedId,
@@ -3130,6 +3365,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<
                             iroha_data_model::query::oracle::prelude::FindOracleDisputesByFeedId,
@@ -3150,6 +3386,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<
                             iroha_data_model::query::oracle::prelude::FindOracleDisputes,
@@ -3173,6 +3410,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<
                             iroha_data_model::query::oracle::prelude::FindOracleChanges,
@@ -3196,6 +3434,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     stored_cursor_budget,
+                    replay_state.clone(),
                     |e| {
                         try_decode_query::<
                             iroha_data_model::query::oracle::prelude::FindTwitterBindingsByUaid,
@@ -4509,6 +4748,83 @@ mod tests {
             expected_ids.len(),
             "continuations should not revisit the source iterator"
         );
+    }
+
+    #[tokio::test]
+    async fn stored_unsorted_bounded_replay_cursor_does_not_materialize_tail_on_start() {
+        use std::sync::{
+            Arc, Weak,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        use iroha_data_model::{
+            domain::Domain,
+            query::{
+                domain::prelude::FindDomains,
+                dsl::CompoundPredicate,
+                parameters::{FetchSize, Pagination, QueryParams, Sorting},
+            },
+        };
+        use nonzero_ext::nonzero;
+
+        let domains = ["d1", "d2", "d3", "d4", "d5"]
+            .into_iter()
+            .map(|name| Domain::new(DomainId::try_new(name, "universal").unwrap()).build(&ALICE_ID))
+            .collect::<Vec<_>>();
+        let expected_ids = domains
+            .iter()
+            .map(|domain| domain.id.clone())
+            .collect::<Vec<_>>();
+        let visited = Arc::new(AtomicUsize::new(0));
+        let visited_for_iter = Arc::clone(&visited);
+        let iter = domains.into_iter().inspect(move |_| {
+            visited_for_iter.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting::default(),
+            fetch_size: FetchSize::new(Some(nonzero!(2_u64))),
+        };
+        let prepared = prepare_stored_unsorted_bounded_replay_start(
+            iter,
+            FindDomains,
+            CompoundPredicate::PASS,
+            SelectorTuple::<Domain>::default(),
+            &params,
+            QueryLimits::default().with_count_mode(QueryCountMode::Bounded),
+            Weak::<State>::new(),
+        )
+        .expect("bounded replay prepared start");
+
+        assert_eq!(
+            visited.load(Ordering::SeqCst),
+            3,
+            "replay-backed bounded start should consume only the first batch plus a probe"
+        );
+
+        let handle = LiveQueryStore::start_test();
+        let first = handle
+            .handle_iter_start_paged_prepared(prepared, &ALICE_ID, None)
+            .expect("store prepared");
+        assert_eq!(first.remaining_items, None);
+        assert!(first.has_more);
+        let (first_batch, first_remaining_hint, cursor) = first.into_parts();
+        assert_eq!(first_remaining_hint, 0);
+        assert_eq!(
+            domain_ids_from_batch(first_batch),
+            expected_ids[0..2].to_vec()
+        );
+        assert_eq!(
+            visited.load(Ordering::SeqCst),
+            3,
+            "storing the cursor must not force tail materialization"
+        );
+
+        let err = handle
+            .handle_iter_continue(cursor.expect("first cursor"))
+            .expect_err("missing replay state expires the cursor");
+        assert!(matches!(err, Error::Expired));
     }
 
     fn domain_ids_from_batch(

@@ -7597,7 +7597,7 @@ mod tests {
         kex::{KeyExchangeScheme, X25519Sha256 as KexAlgo},
     };
     use iroha_primitives::addr::SocketAddr;
-    use norito::codec::Encode;
+    use norito::codec::{DecodeAll, Encode};
     use tokio::io::AsyncWrite;
 
     use super::{Connection, SoranetHandshakeConfig, cryptographer::Cryptographer, state::*};
@@ -7707,6 +7707,27 @@ mod tests {
         } else {
             assert_eq!(without, with);
         }
+    }
+
+    #[test]
+    fn confidential_digest_roundtrip_preserves_zk_policy_hash() {
+        let digest = crate::ConfidentialFeatureDigest::new(
+            Some([0x11; 32]),
+            Some(7),
+            Some(11),
+            Some(13),
+            Some([0xA5; 32]),
+        );
+        let handshake = HandshakeConfidentialDigest::from(&digest);
+        let encoded = handshake.encode();
+        let mut slice = encoded.as_slice();
+        let decoded = HandshakeConfidentialDigest::decode_all(&mut slice)
+            .expect("decode confidential handshake digest");
+
+        assert!(slice.is_empty(), "digest decode should consume all bytes");
+        let roundtrip = crate::ConfidentialFeatureDigest::from(decoded);
+        assert_eq!(roundtrip, digest);
+        assert_eq!(roundtrip.zk_policy_hash, Some([0xA5; 32]));
     }
 
     #[test]

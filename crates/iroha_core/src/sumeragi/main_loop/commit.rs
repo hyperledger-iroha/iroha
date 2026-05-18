@@ -4238,7 +4238,13 @@ impl Actor {
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
         let local_idx = self.local_validator_index_for_topology(&signature_topology)?;
-        let (chain_order_hash, rechain_seq) = self.vnext_chain_order_binding_for(height, view);
+        let (chain_order_hash, rechain_seq) = self
+            .vnext_chain_order_binding_for_signature_topology(
+                height,
+                view,
+                consensus_mode,
+                &signature_topology,
+            );
         let key = (
             crate::sumeragi::consensus::Phase::Commit,
             height,
@@ -5150,6 +5156,7 @@ impl Actor {
         view: u64,
         epoch: u64,
         signer: ValidatorIndex,
+        chain_order_binding: Option<(Hash, u64)>,
         highest_qc: Option<crate::sumeragi::consensus::QcRef>,
         roots: Option<(Hash, Hash)>,
     ) -> Option<crate::sumeragi::consensus::Vote> {
@@ -5170,7 +5177,9 @@ impl Actor {
                 let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
                 (zero_root, zero_root)
             };
-        let (chain_order_hash, rechain_seq) = self.vnext_chain_order_binding_for(height, view);
+        let (chain_order_hash, rechain_seq) = chain_order_binding.unwrap_or_else(|| {
+            self.vnext_chain_order_binding_for_phase(phase, block_hash, height, view)
+        });
         let mut vote = crate::sumeragi::consensus::Vote {
             phase,
             block_hash,
@@ -5490,6 +5499,12 @@ impl Actor {
             view,
             epoch,
             local_idx,
+            Some(self.vnext_chain_order_binding_for_signature_topology(
+                height,
+                view,
+                consensus_mode,
+                &signature_topology,
+            )),
             None,
             roots,
         ) else {
@@ -5724,6 +5739,12 @@ impl Actor {
             view,
             epoch,
             local_idx,
+            Some(self.vnext_chain_order_binding_for_signature_topology(
+                height,
+                view,
+                consensus_mode,
+                &signature_topology,
+            )),
             Some(highest_qc),
             None,
         ) else {

@@ -33,15 +33,11 @@ Completed history lives in `status.md`. This file should only track unfinished w
   endpoints that expose concrete response models instead of generic JSON, so
   every bounded response documents `has_more`, optional `total`, and
   `count_mode` consistently.
-- Rework the MV/world iterator boundary so stored iterable cursors can keep
-  unsorted bounded continuations lazily. The current live-query store is
-  `Send + Sync`, while several WSV query implementations expose boxed
-  iterators without `Send`/`Sync`, so the safe shared-store path still owns the
-  continuation values before storing a cursor.
 - Add sustained load benchmarks for signed iterable queries, account alias
   projections, asset holders, and generic aggregate queries under concurrent
-  HTTP clients. The current coverage is focused micro-benchmarking of first
-  batch count-mode cost in the core snapshot path.
+  HTTP clients, including deep stored-cursor continuation runs over the
+  Arc-backed bounded replay path. The current coverage is focused
+  micro-benchmarking of first-batch count-mode cost in the core snapshot path.
 - Profile whether asset-holder, account-asset, and contract-activity predicates
   need explicit indexes or materialized views after the bounded-count path is
   deployed under realistic Torii traffic.
@@ -59,10 +55,8 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 - Broaden the remaining ZK validation beyond the focused cleanup corridor:
   run policy-hash state tests, P2P confidential digest tests, IVM CoreHost
-  STARK/Halo2 guardrail tests, and the JavaScript SDK ZK fixture suite after
-  rebuilding the native binding/checksum manifest, with the relevant ZK
-  features enabled before folding the full workspace ZK corridor into the next
-  long validation budget.
+  STARK/Halo2 guardrail tests with the relevant ZK features enabled before
+  folding the full workspace ZK corridor into the next long validation budget.
 
 ## Soracloud production follow-ups
 
@@ -72,10 +66,12 @@ Completed history lives in `status.md`. This file should only track unfinished w
   artifact-pin admission. Committed receipt state and the
   `RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction now exist;
   Torii exposes both the private execution route and committed receipt query
-  route. Remaining work is OpenAPI snapshots, SDK parser coverage,
-  decryption-policy release hooks beyond policy-id binding, SDK submission
-  helpers for the returned receipt instruction, and multi-peer private
-  execution integration coverage.
+  route, and the JavaScript SDK exposes unsigned execute/query helpers plus
+  receipt-instruction extraction. Kotlin core and Java Android now mirror the
+  response parsers and receipt-instruction extraction helper. Remaining work is
+  OpenAPI snapshots, JDK-backed mobile SDK validation, decryption-policy release
+  hooks beyond policy-id binding, and multi-peer private execution integration
+  coverage.
 - Add operator documentation for the SoraFS pin-and-register upload workflow,
   including approved-pin evidence, runtime submission gas-asset config, and
   external signing of JavaScript Soracloud provenance payloads.

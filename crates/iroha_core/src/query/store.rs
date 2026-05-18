@@ -27,6 +27,11 @@ use tokio::task::JoinHandle;
 use super::cursor::ErasedQueryIterator;
 
 type DeferredMaterializer = Box<dyn FnOnce() -> ErasedQueryIterator + Send + Sync>;
+type PagedBatcher = Box<
+    dyn Fn(u64) -> Result<(QueryOutputBatchBoxTuple, Option<NonZeroU64>), QueryExecutionFail>
+        + Send
+        + Sync,
+>;
 
 /// Prepared output for iterable query start.
 ///
@@ -39,6 +44,14 @@ pub(crate) struct PreparedQueryStart {
     pub remaining_items: Option<u64>,
     /// Deferred continuation state. `None` means query is already drained.
     pub deferred_continuation: Option<DeferredQueryContinuation>,
+}
+
+/// Prepared output for a cursor that computes each continuation page on demand.
+pub(crate) struct PreparedPagedQueryStart {
+    /// Precomputed first response batch.
+    pub first_batch: QueryOutputBatchBoxTuple,
+    /// Deferred page continuation state. `None` means query is already drained.
+    pub paged_continuation: Option<PagedQueryContinuation>,
 }
 
 /// Deferred continuation for stored iterable queries.
@@ -85,10 +98,59 @@ impl fmt::Debug for DeferredQueryContinuation {
     }
 }
 
+/// Continuation that materializes one page per `Continue` request.
+pub(crate) struct PagedQueryContinuation {
+    expected_cursor: NonZeroU64,
+    next_page: PagedBatcher,
+}
+
+impl PagedQueryContinuation {
+    /// Construct paged continuation state.
+    pub(crate) fn new<F>(expected_cursor: NonZeroU64, next_page: F) -> Self
+    where
+        F: Fn(u64) -> Result<(QueryOutputBatchBoxTuple, Option<NonZeroU64>), QueryExecutionFail>
+            + Send
+            + Sync
+            + 'static,
+    {
+        Self {
+            expected_cursor,
+            next_page: Box::new(next_page),
+        }
+    }
+
+    fn expected_cursor(&self) -> NonZeroU64 {
+        self.expected_cursor
+    }
+
+    fn next_batch(
+        &mut self,
+        cursor: u64,
+    ) -> Result<(QueryOutputBatchBoxTuple, Option<NonZeroU64>), QueryExecutionFail> {
+        if self.expected_cursor.get() != cursor {
+            return Err(QueryExecutionFail::CursorMismatch);
+        }
+        let (batch, next_cursor) = (self.next_page)(cursor)?;
+        if let Some(next_cursor) = next_cursor {
+            self.expected_cursor = next_cursor;
+        }
+        Ok((batch, next_cursor))
+    }
+}
+
+impl fmt::Debug for PagedQueryContinuation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PagedQueryContinuation")
+            .field("expected_cursor", &self.expected_cursor)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug)]
 enum LiveQuery {
     Ready(ErasedQueryIterator),
     Deferred(DeferredQueryContinuation),
+    Paged(PagedQueryContinuation),
 }
 
 impl LiveQuery {
@@ -98,6 +160,10 @@ impl LiveQuery {
 
     fn deferred(continuation: DeferredQueryContinuation) -> Self {
         Self::Deferred(continuation)
+    }
+
+    fn paged(continuation: PagedQueryContinuation) -> Self {
+        Self::Paged(continuation)
     }
 
     fn next_batch(
@@ -115,6 +181,7 @@ impl LiveQuery {
                 *self = Self::Ready(live_query);
                 next_batch
             }
+            Self::Paged(continuation) => continuation.next_batch(cursor),
         }
     }
 
@@ -122,6 +189,7 @@ impl LiveQuery {
         match self {
             Self::Ready(live_query) => live_query.remaining(),
             Self::Deferred(continuation) => continuation.remaining_items,
+            Self::Paged(_) => None,
         }
     }
 }
@@ -404,6 +472,42 @@ impl LiveQueryStoreHandle {
         Ok(Self::construct_query_response(
             first_batch,
             remaining_items,
+            query_id,
+            next_cursor,
+            gas_budget,
+        ))
+    }
+
+    /// Construct and store a bounded response whose continuation computes one
+    /// page per request instead of storing a fully materialized tail.
+    ///
+    /// # Errors
+    /// Mirrors [`Self::handle_iter_start`] for capacity and authority quota failures.
+    pub(crate) fn handle_iter_start_paged_prepared(
+        &self,
+        PreparedPagedQueryStart {
+            first_batch,
+            paged_continuation,
+        }: PreparedPagedQueryStart,
+        authority: &AccountId,
+        gas_budget: Option<u64>,
+    ) -> Result<QueryOutput, QueryExecutionFail> {
+        let query_id = self.store.next_query_id();
+        let next_cursor = paged_continuation
+            .as_ref()
+            .map(PagedQueryContinuation::expected_cursor);
+
+        if let Some(paged_continuation) = paged_continuation {
+            self.store.insert_new_query(
+                query_id.clone(),
+                LiveQuery::paged(paged_continuation),
+                authority.clone(),
+            )?;
+        }
+
+        Ok(Self::construct_query_response(
+            first_batch,
+            None,
             query_id,
             next_cursor,
             gas_budget,

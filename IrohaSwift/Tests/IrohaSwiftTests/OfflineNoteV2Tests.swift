@@ -849,6 +849,66 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertFalse(assembler.write(offset: 1, chunk: Data([0x09, 0x09])))
     }
 
+    func testOfflineNoteV2NfcApduRangeWriteCopiesOnlyRequestedWindow() throws {
+        let payload = Data([0xA0, 0x10, 0x20, 0x30, 0x40, 0xB0])
+        let cases: [(offset: Int, range: Range<Data.Index>, expected: Data)] = [
+            (
+                0,
+                payload.index(payload.startIndex, offsetBy: 1)..<payload.index(payload.startIndex, offsetBy: 3),
+                Data([0x10, 0x20])
+            ),
+            (
+                7,
+                payload.index(payload.startIndex, offsetBy: 2)..<payload.index(payload.startIndex, offsetBy: 5),
+                Data([0x20, 0x30, 0x40])
+            ),
+            (
+                0xFFFE,
+                payload.index(payload.startIndex, offsetBy: 4)..<payload.index(payload.startIndex, offsetBy: 5),
+                Data([0x40])
+            ),
+        ]
+
+        for testCase in cases {
+            let apdu = try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(
+                offset: testCase.offset,
+                payloadBytes: payload,
+                range: testCase.range
+            )
+
+            guard case let .writeChunk(offset, bytes) = OfflineNoteV2NfcApduProtocol.parseCommand(apdu) else {
+                XCTFail("expected write chunk command")
+                continue
+            }
+            XCTAssertEqual(offset, testCase.offset)
+            XCTAssertEqual(bytes, testCase.expected)
+            XCTAssertFalse(bytes.contains(0xA0))
+            XCTAssertFalse(bytes.contains(0xB0))
+        }
+    }
+
+    func testOfflineNoteV2NfcApduRangeWriteCopiesExtendedWindowWithoutSentinels() throws {
+        var payload = Data([0xA0])
+        payload.append(Data(repeating: 0x7B, count: Int(UInt8.max) + 1))
+        payload.append(0xB0)
+        let range = payload.index(after: payload.startIndex)..<payload.index(before: payload.endIndex)
+
+        let apdu = try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(
+            offset: 0x100,
+            payloadBytes: payload,
+            range: range
+        )
+
+        XCTAssertEqual(
+            Data(apdu.prefix(7)),
+            Data([0x80, 0x21, 0x01, 0x00, 0x00, 0x01, 0x00])
+        )
+        XCTAssertEqual(
+            OfflineNoteV2NfcApduProtocol.parseCommand(apdu),
+            .writeChunk(offset: 0x100, bytes: Data(repeating: 0x7B, count: Int(UInt8.max) + 1))
+        )
+    }
+
     func testOfflineNoteV2NearbyEnvelopeRoundTripsPairingPaymentAndAck() throws {
         let fixture = try Self.loadFixture()
         let token = try OfflineNoteV2PaymentTokenCodec.decodeNorito(Self.base64(fixture.sdkInterop.paymentTokenNoritoBase64))

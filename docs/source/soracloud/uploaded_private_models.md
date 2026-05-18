@@ -90,6 +90,20 @@ accepts explicit `count_mode=exact` when clients need a `total`. It includes
 pagination metadata (`returned_items`, `remaining_items`, `has_more`,
 `count_mode`) alongside the receipt records.
 
+The JavaScript SDK exposes unsigned helpers for this V1 flow:
+`buildSoracloudPrivateUploadedModelExecuteRequest`,
+`buildSoracloudPrivateUploadedModelReceiptQuery`, and
+`privateUploadedModelReceiptInstruction`. These helpers normalize the Torii
+request/query shapes, reject embedded signing secrets, and extract the returned
+receipt instruction skeleton for external transaction signing.
+
+The Kotlin core SDK and Java Android SDK mirror the client-visible response
+parsers for private execute and committed receipt-list responses. Both expose a
+helper that extracts the
+`RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction skeleton from
+the Torii response so mobile clients can pass it to their normal external
+transaction signing pipeline.
+
 ## Production Gates
 
 Soracloud production deployments must enable `soracloud_runtime.production_mode`

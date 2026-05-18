@@ -4,6 +4,7 @@
 //! callers (Torii, pipeline harnesses, etc.) can reuse the same validation,
 //! metrics, and policy enforcement.
 
+use std::sync::Arc;
 #[cfg(feature = "telemetry")]
 use std::time::Instant;
 
@@ -86,6 +87,79 @@ pub fn run_on_snapshot_with_mode(
             .map_err(SnapshotQueryError::Execution)?,
         CursorMode::Stored => validated
             .execute(live_query_store, &view, authority)
+            .map_err(SnapshotQueryError::Execution)?,
+    };
+
+    #[cfg(feature = "telemetry")]
+    {
+        let telemetry = view.telemetry;
+        if telemetry.is_enabled()
+            && let QueryResponse::Iterable(ref output) = response
+        {
+            let elapsed_ms = telemetry_start.elapsed().as_secs_f64() * 1000.0;
+            let mode_label = match mode {
+                CursorMode::Ephemeral => "ephemeral",
+                CursorMode::Stored => "stored",
+            };
+            telemetry.observe_snapshot_iterable(mode_label, elapsed_ms, output);
+        }
+    }
+
+    Ok(response)
+}
+
+/// Execute a query with an owning state handle available to bounded stored
+/// cursors for one-page-at-a-time continuations.
+///
+/// This keeps the first response cheap for Torii's Arc-owned state path while
+/// preserving the existing borrowed-state API for callers that cannot provide a
+/// state handle. The initial request still validates and reads from one query
+/// view; unsorted bounded continuations may open a fresh query view per page
+/// instead of retaining the fully materialized tail.
+///
+/// # Errors
+/// Returns a validation error if the request is rejected by the executor, or an execution
+/// error if producing results fails.
+pub fn run_on_snapshot_with_mode_arc(
+    state: &Arc<State>,
+    live_query_store: &LiveQueryStoreHandle,
+    authority: &AccountId,
+    request: QueryRequest,
+    mode: CursorMode,
+    limits: QueryLimits,
+) -> Result<QueryResponse, SnapshotQueryError> {
+    let view = state.query_view();
+
+    if matches!(mode, CursorMode::Ephemeral) && matches!(request, QueryRequest::Continue(_)) {
+        return Err(SnapshotQueryError::Validation(
+            ValidationFail::NotPermitted(
+                "cursor continuation requires stored cursor mode".to_owned(),
+            ),
+        ));
+    }
+
+    if let (CursorMode::Stored, QueryRequest::Continue(cursor)) = (&mode, &request) {
+        let min_gas = view.pipeline().query_stored_min_gas_units;
+        if min_gas > 0 && cursor.gas_budget.unwrap_or(0) < min_gas {
+            return Err(SnapshotQueryError::Validation(
+                ValidationFail::NotPermitted(format!(
+                    "stored cursor continuation requires at least {min_gas} gas units"
+                )),
+            ));
+        }
+    }
+
+    let validated = ValidQueryRequest::validate_for_client_parts(request, authority, &view, limits)
+        .map_err(SnapshotQueryError::Validation)?;
+
+    #[cfg(feature = "telemetry")]
+    let telemetry_start = Instant::now();
+    let response = match mode {
+        CursorMode::Ephemeral => validated
+            .execute_ephemeral(live_query_store, &view, authority)
+            .map_err(SnapshotQueryError::Execution)?,
+        CursorMode::Stored => validated
+            .execute_with_replay_state(live_query_store, &view, authority, Arc::downgrade(state))
             .map_err(SnapshotQueryError::Execution)?,
     };
 
@@ -434,6 +508,90 @@ mod tests {
 
         assert_eq!(seen, snapshot_ids);
         assert!(!seen.contains(&DomainId::try_new("d3", "universal").unwrap()));
+    }
+
+    #[tokio::test]
+    async fn bounded_stored_arc_continuation_replays_one_page() {
+        use crate::smartcontracts::isi::query::QueryCountMode;
+
+        let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
+        let d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
+        let d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);
+        let account = alice_account();
+        let world = World::with([d1.clone(), d2.clone(), d3.clone()], [account], []);
+
+        let kura = Kura::blank_kura_for_testing();
+        let store = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_with_chain(
+            world,
+            kura,
+            store.clone(),
+            ChainId::from("chain"),
+        ));
+
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting::default(),
+            fetch_size: FetchSize::new(nonzero_ext::nonzero!(2_u64).into()),
+        };
+        let payload =
+            norito::codec::Encode::encode(&iroha_data_model::query::domain::prelude::FindDomains);
+        let erased = iroha_data_model::query::ErasedIterQuery::<Domain>::new(
+            iroha_data_model::query::dsl::CompoundPredicate::PASS,
+            iroha_data_model::query::dsl::SelectorTuple::default(),
+            payload,
+        );
+        let qbox: iroha_data_model::query::QueryBox<_> = Box::new(erased);
+        let req = iroha_data_model::query::QueryRequest::Start(
+            iroha_data_model::query::QueryWithParams::new(&qbox, params),
+        );
+        let limits = QueryLimits::default().with_count_mode(QueryCountMode::Bounded);
+
+        let iroha_data_model::query::QueryResponse::Iterable(first) =
+            run_on_snapshot_with_mode_arc(
+                &state,
+                &store,
+                &ALICE_ID,
+                req,
+                CursorMode::Stored,
+                limits,
+            )
+            .expect("query ok")
+        else {
+            panic!("expected iterable")
+        };
+        assert_eq!(first.remaining_items, None);
+        assert!(first.has_more);
+        let (batch, remaining_hint, cursor) = first.into_parts();
+        assert_eq!(remaining_hint, 0);
+        let first_domains = match batch.into_iter().next().expect("slice") {
+            iroha_data_model::query::QueryOutputBatchBox::Domain(v) => v,
+            other => panic!("unexpected batch variant: {other:?}"),
+        };
+        assert_eq!(first_domains, vec![d1, d2]);
+
+        let cursor = cursor.expect("bounded stored cursor");
+        let iroha_data_model::query::QueryResponse::Iterable(next) = run_on_snapshot_with_mode_arc(
+            &state,
+            &store,
+            &ALICE_ID,
+            iroha_data_model::query::QueryRequest::Continue(cursor),
+            CursorMode::Stored,
+            limits,
+        )
+        .expect("continuation ok") else {
+            panic!("expected iterable")
+        };
+        assert_eq!(next.remaining_items, None);
+        assert!(!next.has_more);
+        let (batch, remaining_hint, cursor) = next.into_parts();
+        assert_eq!(remaining_hint, 0);
+        assert!(cursor.is_none());
+        let next_domains = match batch.into_iter().next().expect("slice") {
+            iroha_data_model::query::QueryOutputBatchBox::Domain(v) => v,
+            other => panic!("unexpected batch variant: {other:?}"),
+        };
+        assert_eq!(next_domains, vec![d3]);
     }
 
     #[tokio::test]

@@ -10572,6 +10572,11 @@ impl DetachedStateTransactionDelta {
                 .any(|(_, action)| transfer_events.iter().any(|event| action.filter.matches(event)))
     }
 
+    /// Return true when fee postprocessing can be replayed after this detached delta.
+    pub(crate) fn supports_detached_fee_postprocessing(&self) -> bool {
+        self.single_transfer_delta().is_some()
+    }
+
     /// Record an addition to an account's numeric asset balance.
     pub fn add_asset_add(
         &mut self,
@@ -11214,6 +11219,23 @@ impl DetachedStateTransactionDelta {
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &iroha_data_model::account::AccountId,
     ) -> Option<TransactionResultInner> {
+        Some(
+            self.merge_single_transfer_effects_into_transaction(state_transaction, authority)?
+                .and_then(|()| state_transaction.execute_data_triggers_dfs(authority)),
+        )
+    }
+
+    /// Merge a single transparent numeric transfer into an existing transaction without triggers.
+    ///
+    /// Returns `None` when the delta is not exactly one transparent transfer.
+    ///
+    /// # Errors
+    /// Returns a transaction rejection when transfer validation fails.
+    pub(crate) fn merge_single_transfer_effects_into_transaction(
+        &self,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &iroha_data_model::account::AccountId,
+    ) -> Option<Result<(), iroha_data_model::transaction::error::TransactionRejectionReason>> {
         let (source_id, destination, amount) = self.single_transfer_delta()?;
         Some(
             crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
@@ -11224,8 +11246,7 @@ impl DetachedStateTransactionDelta {
                 amount,
             )
             .map_err(ValidationFail::InstructionFailed)
-            .map_err(iroha_data_model::transaction::error::TransactionRejectionReason::Validation)
-            .and_then(|()| state_transaction.execute_data_triggers_dfs(authority)),
+            .map_err(iroha_data_model::transaction::error::TransactionRejectionReason::Validation),
         )
     }
 

@@ -5286,7 +5286,7 @@ mod evidence_http_tests {
                 store.lock().expect("lock snapshot store").push(snapshot);
                 match path.as_str() {
                     "/v1/pipeline/transactions/status" => Ok(empty_response(StatusCode::OK)),
-                    "/query" => {
+                    p if p == torii_uri::QUERY => {
                         let response = QueryResponse::Iterable(QueryOutput {
                             batch: QueryOutputBatchBoxTuple {
                                 tuple: vec![QueryOutputBatchBox::CommittedTransaction(Vec::new())],
@@ -5320,7 +5320,7 @@ mod evidence_http_tests {
         let snapshots = store.lock().expect("snapshot lock");
         assert_eq!(snapshots.len(), 2);
         assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
-        assert_eq!(snapshots[1].url.path(), "/query");
+        assert_eq!(snapshots[1].url.path(), torii_uri::QUERY);
     }
 
     #[test]
@@ -5434,7 +5434,7 @@ mod evidence_http_tests {
                     "/v1/pipeline/transactions/status" => {
                         Ok(json_response(StatusCode::OK, &status_body))
                     }
-                    "/query" => {
+                    p if p == torii_uri::QUERY => {
                         let response = QueryResponse::Iterable(QueryOutput {
                             batch: QueryOutputBatchBoxTuple {
                                 tuple: vec![QueryOutputBatchBox::CommittedTransaction(vec![
@@ -5647,7 +5647,7 @@ mod evidence_http_tests {
                     "/v1/pipeline/transactions/status" => {
                         Ok(json_response(StatusCode::OK, &status_body))
                     }
-                    "/query" => {
+                    p if p == torii_uri::QUERY => {
                         let response = QueryResponse::Iterable(QueryOutput {
                             batch: QueryOutputBatchBoxTuple {
                                 tuple: vec![QueryOutputBatchBox::CommittedTransaction(vec![
@@ -5678,7 +5678,7 @@ mod evidence_http_tests {
         let snapshots = store.lock().expect("snapshot lock");
         assert_eq!(snapshots.len(), 2);
         assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
-        assert_eq!(snapshots[1].url.path(), "/query");
+        assert_eq!(snapshots[1].url.path(), torii_uri::QUERY);
         assert_eq!(
             snapshots[0]
                 .url
@@ -5884,7 +5884,7 @@ mod evidence_http_tests {
                 let path = snapshot.url.path().to_string();
                 store.lock().expect("lock snapshot store").push(snapshot);
                 match path.as_str() {
-                    "/query" => {
+                    p if p == torii_uri::QUERY => {
                         let response = QueryResponse::Iterable(QueryOutput {
                             batch: QueryOutputBatchBoxTuple {
                                 tuple: vec![QueryOutputBatchBox::CommittedTransaction(vec![
@@ -5990,7 +5990,7 @@ mod evidence_http_tests {
                 store.lock().expect("lock snapshot store").push(snapshot);
                 match path.as_str() {
                     "/v1/pipeline/transactions/status" => Ok(empty_response(StatusCode::NOT_FOUND)),
-                    "/query" => Err(eyre::Report::from(Error::new(
+                    p if p == torii_uri::QUERY => Err(eyre::Report::from(Error::new(
                         ErrorKind::ConnectionRefused,
                         "torii down",
                     ))),
@@ -6019,7 +6019,7 @@ mod evidence_http_tests {
         let snapshots = store.lock().expect("snapshot lock");
         assert_eq!(snapshots.len(), 2);
         assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
-        assert_eq!(snapshots[1].url.path(), "/query");
+        assert_eq!(snapshots[1].url.path(), torii_uri::QUERY);
         assert_eq!(
             snapshots[0]
                 .url
@@ -16882,7 +16882,7 @@ mod tests {
                         StatusCode::BAD_REQUEST,
                         r#"{"code":"transaction_rejected","message":"failed to accept transaction: missing gas_limit in transaction metadata"}"#,
                     ),
-                    "/query" => {
+                    p if p == torii_uri::QUERY => {
                         let response = QueryResponse::Iterable(QueryOutput {
                             batch: QueryOutputBatchBoxTuple {
                                 tuple: vec![QueryOutputBatchBox::CommittedTransaction(Vec::new())],
@@ -17046,7 +17046,7 @@ mod tests {
             .cloned()
             .expect("request snapshot");
         assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(snapshot.url.path(), "/configuration");
+        assert_eq!(snapshot.url.path(), torii_uri::CONFIGURATION);
         assert!(
             snapshot
                 .headers
@@ -17118,7 +17118,7 @@ mod tests {
             .cloned()
             .expect("request snapshot");
         assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/configuration");
+        assert_eq!(snapshot.url.path(), torii_uri::CONFIGURATION);
         assert!(
             snapshot
                 .headers

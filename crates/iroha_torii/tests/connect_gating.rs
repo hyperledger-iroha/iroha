@@ -41,6 +41,7 @@ fn spawn_test_server(listener: tokio::net::TcpListener, app: axum::Router) {
 #[allow(clippy::too_many_lines)]
 fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::actual::Root {
     use iroha_config::parameters::actual as A;
+    use iroha_config::parameters::defaults::governance::sorafs_pin_fee;
     use iroha_crypto::{
         Algorithm, KeyPair,
         soranet::handshake::{
@@ -1175,16 +1176,15 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             viral_incentives: iroha_config::parameters::actual::ViralIncentives::default(),
             sorafs_pin_policy:
                 iroha_config::parameters::actual::SorafsPinPolicyConstraints::default(),
-            sorafs_pin_fee_asset_id:
-                iroha_config::parameters::defaults::governance::sorafs_pin_fee::asset_id()
-                    .parse()
-                    .expect("default SoraFS pin fee asset id"),
-            sorafs_pin_fee_treasury_account: iroha_data_model::account::AccountId::parse_encoded(
-                &iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account(
-                ),
-            )
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .expect("default SoraFS pin fee treasury account"),
+            sorafs_pin_fee_asset_id: sorafs_pin_fee::asset_id()
+                .parse()
+                .expect("valid default SoraFS pin fee asset id"),
+            sorafs_pin_fee_treasury_account:
+                iroha_data_model::account::AccountId::parse_encoded(
+                    &sorafs_pin_fee::treasury_account(),
+                )
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .expect("valid default SoraFS pin fee treasury account"),
             sorafs_pricing:
                 iroha_data_model::sorafs::pricing::PricingScheduleRecord::launch_default(),
             alias_teu_minimum:

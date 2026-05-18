@@ -4145,12 +4145,25 @@ pub mod query {
                 let __asset_definition_id = asset_def_id.clone();
                 AssetDefinition::numeric(__asset_definition_id.clone())
                     .with_name(__asset_definition_id.name().to_string())
-                    .with_alias(Some("xor#paynet".parse().expect("asset alias")))
             }
             .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
             .build(&ALICE_ID);
 
-            let world = World::with([domain], [account], [asset_def]);
+            let mut world = World::with([domain], [account], [asset_def]);
+            let alias: iroha_data_model::asset::AssetDefinitionAlias =
+                "xor#paynet".parse().expect("asset alias");
+            world
+                .asset_definition_aliases
+                .insert(alias.clone(), asset_def_id.clone());
+            world.asset_definition_alias_bindings.insert(
+                asset_def_id.clone(),
+                crate::state::AssetDefinitionAliasBindingRecord {
+                    alias,
+                    lease_expiry_ms: None,
+                    grace_until_ms: None,
+                    bound_at_ms: 0,
+                },
+            );
             let kura = Kura::blank_kura_for_testing();
             let query_store = LiveQueryStore::start_test();
             let state = State::new(world, kura, query_store);

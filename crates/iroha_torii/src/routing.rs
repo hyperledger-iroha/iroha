@@ -4251,7 +4251,7 @@ pub(crate) async fn execute_verified_query_with_opts(
 ) -> Result<iroha_data_model::query::QueryResponse> {
     use iroha_core::{
         query::snapshot::{
-            CursorMode as LaneCursorMode, SnapshotQueryError, run_on_snapshot_with_mode,
+            CursorMode as LaneCursorMode, SnapshotQueryError, run_on_snapshot_with_mode_arc,
         },
         smartcontracts::isi::query::{QueryCountMode, QueryLimits},
     };
@@ -4337,7 +4337,7 @@ pub(crate) async fn execute_verified_query_with_opts(
     };
     let limits = QueryLimits::new(app_query_limits().max_fetch_size).with_count_mode(count_mode);
     let resp = tokio::task::spawn_blocking(move || {
-        run_on_snapshot_with_mode(
+        run_on_snapshot_with_mode_arc(
             &state_cloned,
             &store_cloned,
             &authority_cloned,

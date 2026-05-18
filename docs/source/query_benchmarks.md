@@ -49,6 +49,10 @@ Core benches (`queries.rs`):
   - Sort by ID (10k)
   - First-batch snapshot query count-mode comparison:
     `snapshot_find_domains_count_mode_first_batch/{ephemeral,stored}/{exact,bounded}`
+  - Stored bounded continuations in Torii use the Arc-backed snapshot runner,
+    so the first response reads only the first page plus a probe and later
+    continuations replay one page at a time instead of retaining a materialized
+    tail.
 - FindAssetDefinitions
   - Iterate and count (10k)
 
@@ -98,6 +102,6 @@ inspect the report variance.
 ## Next Steps
 
 - Add Torii server-path benches for signed and app query handlers under
-  concurrent clients.
+  concurrent clients, including deep stored-cursor continuation workloads.
 - Add selection (projection) once server-side projections are reintroduced.
 - Expand to triggers and blocks with synthetic state builders.

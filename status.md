@@ -2,6 +2,22 @@
 
 Last updated: 2026-05-18
 
+## 2026-05-18 Torii bounded stored query continuations
+
+- Torii's Arc-owned snapshot query path now registers unsorted bounded stored
+  cursors as replay continuations: the start response consumes only the first
+  page plus a probe, and each `Continue` request reopens a query view and
+  materializes one page instead of retaining a fully materialized tail in the
+  live-query store.
+- The borrowed-state stored path remains available for callers that cannot
+  provide a `State` handle; sorted and exact-count stored queries keep their
+  existing snapshot-materialized cursor behavior.
+- Added focused coverage for replay-backed bounded starts not materializing the
+  tail and for Arc-backed stored bounded continuation returning the next page
+  with bounded metadata.
+- Validation: in progress; Cargo is currently queued behind existing package
+  cache/build locks in this workspace.
+
 ## 2026-05-18 Kura optional WSV sidecar recovery
 
 - Kura commit manifests remain Norito sidecars for replay verification of the
@@ -90,6 +106,15 @@ Last updated: 2026-05-18
   writer rejects receipts whose finalized uploaded-model bundle is not the
   deterministic quantized CPU format or whose manifest, bundle root, or policy
   binding diverges from the admitted bundle.
+- The JavaScript SDK now has unsigned private uploaded-model helpers for
+  deterministic CPU execute requests, committed receipt queries, and extraction
+  of the returned `RecordSoracloudPrivateUploadedModelExecutionReceipt`
+  transaction-instruction skeleton. The helpers reject embedded signing secrets
+  and preserve external signing as the only transaction path.
+- The Kotlin core SDK and Java Android SDK now include parser models for
+  private uploaded-model execute responses, committed receipt-list responses,
+  and the unsigned receipt-instruction skeleton helper, keeping mobile clients
+  aligned with the JavaScript extraction flow.
 - Validation: `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds
   cargo test -p iroha_data_model
   private_uploaded_model_execution_receipt_round_trips_and_validates --
@@ -100,9 +125,12 @@ Last updated: 2026-05-18
   iroha_torii --lib
   private_uploaded_model_execute_requires_finalized_quantized_bundle_and_active_artifacts
   -- --nocapture` is also green. `cargo check -p iroha_core` is green with the
-  committed receipt store wired into world views/transactions. OpenAPI
-  snapshots, SDK parser coverage, and multi-peer private execution integration
-  coverage remain open.
+  committed receipt store wired into world views/transactions.
+  `npm run build:dist` and `node --test test/soracloud.test.js` are green from
+  `javascript/iroha_js`. Local Kotlin/Java Gradle parser validation was
+  attempted but blocked in this shell because no Java runtime is installed.
+  OpenAPI snapshots, JDK-backed mobile SDK validation, and multi-peer private
+  execution integration coverage remain open.
 
 ## 2026-05-18 Torii space-directory pagination metadata
 
@@ -181,10 +209,12 @@ Last updated: 2026-05-18
     is green.
   - `swift test` from `IrohaSwift/` is green: 828 tests executed, 101 skipped,
     0 failures.
+  - `npm run build:native` from `javascript/iroha_js/` rebuilt
+    `native/iroha_js_host.node` and refreshed
+    `native/iroha_js_host.checksums.json`; the manifest now matches the local
+    native binding SHA-256.
   - `node --test test/instructionBuilders.test.js` from `javascript/iroha_js/`
-    is blocked before test execution by a pre-existing native binding checksum
-    mismatch for `native/iroha_js_host.node`; rebuild the JavaScript native
-    binding/checksum manifest before rerunning that SDK fixture.
+    is green: 87 tests passed.
   - A later duplicate rerun of the Halo2 role test hit local disk exhaustion
     while linking; stale generated `target/codex-*` artifacts were partially
     cleared to restore working space. The earlier focused test result above is

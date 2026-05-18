@@ -4,9 +4,14 @@ import test from "node:test";
 import {
   assembleSoracloudHfDeployRequest,
   buildSoracloudHfDeployDraft,
+  buildSoracloudPrivateUploadedModelExecuteRequest,
+  buildSoracloudPrivateUploadedModelReceiptQuery,
+  privateUploadedModelReceiptInstruction,
 } from "../src/index.js";
 
 const CANONICAL_XOR_ASSET_DEFINITION_ID = "61CtjvNd9T3THAR65GsMVHr82Bjc";
+const PRIVATE_RECEIPT_WIRE_ID =
+  "iroha_data_model::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt";
 
 function validHfDeployInput(overrides = {}) {
   return {
@@ -17,6 +22,40 @@ function validHfDeployInput(overrides = {}) {
     leaseTermMs: "3600000",
     leaseAssetDefinitionId: CANONICAL_XOR_ASSET_DEFINITION_ID,
     baseFeeNanos: "1",
+    ...overrides,
+  };
+}
+
+function validPrivateArtifact(role, overrides = {}) {
+  return {
+    schemaVersion: 1,
+    sorafsManifestDigest: `${role}-manifest-digest`,
+    artifactHash: `${role}-artifact-hash`,
+    ciphertextBytes: 64,
+    artifactRole: role,
+    ...overrides,
+  };
+}
+
+function validPrivateExecuteInput(overrides = {}) {
+  return {
+    serviceName: "portal",
+    weightVersion: "v1",
+    modelId: "upload-1",
+    policyId: "policy-1",
+    model: {
+      inputLen: 2,
+      outputLen: 1,
+      weightsI8: [3, -2],
+      biasI32: [1],
+      outputShift: 1,
+      outputMin: -16,
+      outputMax: 16,
+    },
+    plaintextInputI32: [5, -3],
+    inputArtifact: validPrivateArtifact("input"),
+    outputArtifact: validPrivateArtifact("output"),
+    emittedSequence: 17,
     ...overrides,
   };
 }
@@ -553,6 +592,146 @@ test("assembleSoracloudHfDeployRequest rejects unknown draft payload fields", ()
         },
       ),
     /draft payload symbols are not accepted/,
+  );
+});
+
+test("buildSoracloudPrivateUploadedModelExecuteRequest normalizes deterministic CPU requests", () => {
+  const request = buildSoracloudPrivateUploadedModelExecuteRequest(
+    validPrivateExecuteInput({ bundleRoot: "bundle-root" }),
+  );
+
+  assert.equal(request.service_name, "portal");
+  assert.equal(request.model_id, "upload-1");
+  assert.equal(request.weight_version, "v1");
+  assert.equal(request.bundle_root, "bundle-root");
+  assert.deepEqual(request.model, {
+    input_len: 2,
+    output_len: 1,
+    weights_i8: [3, -2],
+    bias_i32: [1],
+    output_shift: 1,
+    output_min: -16,
+    output_max: 16,
+  });
+  assert.deepEqual(request.plaintext_input_i32, [5, -3]);
+  assert.deepEqual(request.input_artifact, {
+    schema_version: 1,
+    sorafs_manifest_digest: "input-manifest-digest",
+    artifact_hash: "input-artifact-hash",
+    ciphertext_bytes: 64,
+    artifact_role: "input",
+  });
+  assert.equal(Object.hasOwn(request, "private_key"), false);
+});
+
+test("buildSoracloudPrivateUploadedModelExecuteRequest accepts modelName selector", () => {
+  const request = buildSoracloudPrivateUploadedModelExecuteRequest(
+    validPrivateExecuteInput({
+      modelId: undefined,
+      modelName: "vision",
+    }),
+  );
+
+  assert.equal(request.model_name, "vision");
+  assert.equal(Object.hasOwn(request, "model_id"), false);
+});
+
+test("buildSoracloudPrivateUploadedModelExecuteRequest rejects malformed deterministic CPU requests", () => {
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({ modelName: "vision" }),
+      ),
+    /exactly one of modelId or modelName/,
+  );
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({
+          model: {
+            ...validPrivateExecuteInput().model,
+            weightsI8: [1],
+          },
+        }),
+      ),
+    /model\.weightsI8 length must equal inputLen \* outputLen/,
+  );
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({
+          inputArtifact: validPrivateArtifact("output"),
+        }),
+      ),
+    /inputArtifact\.artifactRole must be input/,
+  );
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({ privateKeyHex: "00" }),
+      ),
+    /privateKeyHex is not accepted/,
+  );
+});
+
+test("buildSoracloudPrivateUploadedModelReceiptQuery normalizes filters", () => {
+  const query = buildSoracloudPrivateUploadedModelReceiptQuery({
+    receiptId: "receipt",
+    serviceName: "portal",
+    modelId: "upload-1",
+    weightVersion: "v1",
+    limit: "25",
+    countMode: "exact",
+  });
+
+  assert.deepEqual(query, {
+    receipt_id: "receipt",
+    service_name: "portal",
+    model_id: "upload-1",
+    weight_version: "v1",
+    limit: "25",
+    count_mode: "exact",
+  });
+});
+
+test("buildSoracloudPrivateUploadedModelReceiptQuery rejects unknown count mode", () => {
+  assert.throws(
+    () => buildSoracloudPrivateUploadedModelReceiptQuery({ countMode: "full" }),
+    /countMode must be bounded or exact/,
+  );
+});
+
+test("privateUploadedModelReceiptInstruction extracts receipt transaction skeleton", () => {
+  const instruction = privateUploadedModelReceiptInstruction({
+    receipt: { receipt_id: "receipt" },
+    tx_instructions: [
+      {
+        wire_id: PRIVATE_RECEIPT_WIRE_ID,
+        payload_hex: "0a0b0c",
+      },
+    ],
+  });
+
+  assert.deepEqual(instruction, {
+    wire_id: PRIVATE_RECEIPT_WIRE_ID,
+    payload_hex: "0a0b0c",
+  });
+});
+
+test("privateUploadedModelReceiptInstruction rejects unrelated instruction skeletons", () => {
+  assert.throws(
+    () =>
+      privateUploadedModelReceiptInstruction({
+        tx_instructions: [{ wire_id: "other", payload_hex: "0a" }],
+      }),
+    /RecordSoracloudPrivateUploadedModelExecutionReceipt/,
+  );
+  assert.throws(
+    () =>
+      privateUploadedModelReceiptInstruction({
+        tx_instructions: [{ wire_id: PRIVATE_RECEIPT_WIRE_ID, payload_hex: "zz" }],
+      }),
+    /payload_hex must be non-empty hex/,
   );
 });
 

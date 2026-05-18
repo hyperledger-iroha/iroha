@@ -21275,7 +21275,7 @@ impl Actor {
 
         let topology = super::network_topology::Topology::new(commit_topology);
         let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
-        self.vnext_chain_order_binding_for_ordered_validators(
+        self.vnext_chain_order_binding_for_concrete_order(
             height,
             view,
             consensus_mode,
@@ -21316,6 +21316,47 @@ impl Actor {
         .unwrap_or_else(|_| (crate::sumeragi::consensus::default_chain_order_hash(), 0))
     }
 
+    fn vnext_chain_order_binding_for_concrete_order(
+        &self,
+        height: u64,
+        view: u64,
+        consensus_mode: ConsensusMode,
+        ordered_validators: Vec<PeerId>,
+    ) -> (Hash, u64) {
+        if let Some(binding) =
+            self.vnext_round_binding_if_compatible(height, view, &ordered_validators)
+        {
+            return binding;
+        }
+        self.vnext_chain_order_binding_for_ordered_validators(
+            height,
+            view,
+            consensus_mode,
+            ordered_validators,
+        )
+    }
+
+    fn vnext_round_binding_if_compatible(
+        &self,
+        height: u64,
+        view: u64,
+        ordered_validators: &[PeerId],
+    ) -> Option<(Hash, u64)> {
+        let round = self.vnext_rounds.get(&(height, view))?;
+        if round.chain_order.rechain_seq != 0
+            || round.chain_order.ordered_validators.as_slice() == ordered_validators
+        {
+            return Some((round.chain_order.hash(), round.chain_order.rechain_seq));
+        }
+        debug!(
+            height,
+            view,
+            round_chain_order_hash = %round.chain_order.hash(),
+            "ignoring stale zero-rechain vNext round binding for concrete validator order"
+        );
+        None
+    }
+
     pub(super) fn vnext_chain_order_binding_for_signature_topology(
         &self,
         height: u64,
@@ -21323,10 +21364,7 @@ impl Actor {
         consensus_mode: ConsensusMode,
         signature_topology: &super::network_topology::Topology,
     ) -> (Hash, u64) {
-        if let Some(round) = self.vnext_rounds.get(&(height, view)) {
-            return (round.chain_order.hash(), round.chain_order.rechain_seq);
-        }
-        self.vnext_chain_order_binding_for_ordered_validators(
+        self.vnext_chain_order_binding_for_concrete_order(
             height,
             view,
             consensus_mode,
@@ -21335,12 +21373,18 @@ impl Actor {
     }
 
     pub(super) fn vnext_chain_order_binding_for(&self, height: u64, view: u64) -> (Hash, u64) {
-        if let Some(round) = self.vnext_rounds.get(&(height, view)) {
-            return (round.chain_order.hash(), round.chain_order.rechain_seq);
+        if let Some((base_order, _)) = self.base_vnext_chain_order_and_quorum_for(height, view) {
+            if let Some(binding) =
+                self.vnext_round_binding_if_compatible(height, view, &base_order.ordered_validators)
+            {
+                return binding;
+            }
+            return (base_order.hash(), base_order.rechain_seq);
         }
 
-        self.base_vnext_chain_order_and_quorum_for(height, view)
-            .map(|(order, _)| (order.hash(), order.rechain_seq))
+        self.vnext_rounds
+            .get(&(height, view))
+            .map(|round| (round.chain_order.hash(), round.chain_order.rechain_seq))
             .unwrap_or_else(|| (crate::sumeragi::consensus::default_chain_order_hash(), 0))
     }
 
@@ -21351,10 +21395,6 @@ impl Actor {
         height: u64,
         view: u64,
     ) -> (Hash, u64) {
-        if let Some(round) = self.vnext_rounds.get(&(height, view)) {
-            return (round.chain_order.hash(), round.chain_order.rechain_seq);
-        }
-
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let commit_topology = if matches!(phase, crate::sumeragi::consensus::Phase::NewView) {
             self.roster_for_new_view_with_mode(block_hash, height, view, consensus_mode)
@@ -21375,9 +21415,6 @@ impl Actor {
         &self,
         qc: &crate::sumeragi::consensus::Qc,
     ) -> (Hash, u64) {
-        if let Some(round) = self.vnext_rounds.get(&(qc.height, qc.view)) {
-            return (round.chain_order.hash(), round.chain_order.rechain_seq);
-        }
         if !qc.validator_set.is_empty()
             && qc.validator_set_hash_version == VALIDATOR_SET_HASH_VERSION_V1
             && HashOf::new(&qc.validator_set) == qc.validator_set_hash
@@ -21391,6 +21428,9 @@ impl Actor {
                 prf_seed,
                 qc.validator_set.clone(),
             );
+        }
+        if let Some(round) = self.vnext_rounds.get(&(qc.height, qc.view)) {
+            return (round.chain_order.hash(), round.chain_order.rechain_seq);
         }
         self.vnext_chain_order_binding_for_phase(
             qc.phase,

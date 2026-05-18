@@ -1172,6 +1172,177 @@ fn bind_vote_to_signature_topology_chain_order(
     vote.rechain_seq = rechain_seq;
 }
 
+fn install_stale_zero_rechain_vnext_round(
+    actor: &mut Actor,
+    height: u64,
+    view: u64,
+    ordered_validators: Vec<PeerId>,
+) -> (Hash, u64) {
+    assert!(
+        !ordered_validators.is_empty(),
+        "test vNext order requires validators"
+    );
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let quorum = actor
+        .vnext_quorum_policy(consensus_mode, &ordered_validators)
+        .expect("test order should satisfy vNext quorum policy");
+    let critical_prefix_len = quorum
+        .smallest_satisfying_prefix_len(&ordered_validators)
+        .expect("test order should have a quorum prefix");
+    let epoch = actor
+        .roster_validation_cache
+        .expected_epoch(height, consensus_mode);
+    let chain_order = super::vnext::ChainOrder::new(
+        height,
+        view,
+        epoch,
+        0,
+        ordered_validators,
+        critical_prefix_len,
+        critical_prefix_len,
+    )
+    .expect("test chain order should be valid");
+    let binding = (chain_order.hash(), chain_order.rechain_seq);
+    let config = super::vnext::PerformanceFaultConfig::from(&actor.config.vnext);
+    actor.ensure_vnext_round((height, view), chain_order, quorum, config);
+    binding
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn npos_binding_uses_concrete_roster_over_stale_zero_rechain_round() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 1_u64;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x71; Hash::LENGTH]));
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    assert_eq!(consensus_mode, ConsensusMode::Npos);
+    let roster = actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+    assert!(roster.len() > 1, "test requires a multi-validator roster");
+    let topology = super::network_topology::Topology::new(roster);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let expected = actor.vnext_chain_order_binding_for_ordered_validators(
+        height,
+        view,
+        consensus_mode,
+        signature_topology.as_ref().to_vec(),
+    );
+
+    let mut stale_order = signature_topology.as_ref().to_vec();
+    stale_order.rotate_left(1);
+    let stale = install_stale_zero_rechain_vnext_round(actor, height, view, stale_order);
+    assert_ne!(
+        stale, expected,
+        "test must install a different stale round binding"
+    );
+
+    let actual = actor.vnext_chain_order_binding_for_signature_topology(
+        height,
+        view,
+        consensus_mode,
+        &signature_topology,
+    );
+    assert_eq!(
+        actual, expected,
+        "signature-topology binding should ignore mismatched zero-rechain round state"
+    );
+
+    let vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch: actor.epoch_for_height(height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    assert_eq!(
+        actor.vnext_chain_order_binding_for_vote(&vote),
+        expected,
+        "phase-derived vote binding should use the concrete vote roster"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn npos_qc_binding_uses_embedded_roster_over_stale_zero_rechain_round() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 1_u64;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x72; Hash::LENGTH]));
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    assert_eq!(consensus_mode, ConsensusMode::Npos);
+    let roster = actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+    assert!(roster.len() > 1, "test requires a multi-validator roster");
+    let topology = super::network_topology::Topology::new(roster);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let expected = actor.vnext_chain_order_binding_for_ordered_validators(
+        height,
+        view,
+        consensus_mode,
+        signature_topology.as_ref().to_vec(),
+    );
+
+    let mut stale_order = signature_topology.as_ref().to_vec();
+    stale_order.rotate_left(1);
+    let stale = install_stale_zero_rechain_vnext_round(actor, height, view, stale_order);
+    assert_ne!(
+        stale, expected,
+        "test must install a different stale round binding"
+    );
+
+    let validator_set = topology.as_ref().to_vec();
+    let qc = crate::sumeragi::consensus::Qc {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch: actor.epoch_for_height(height),
+        chain_order_hash: stale.0,
+        rechain_seq: stale.1,
+        mode_tag: super::NPOS_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set,
+        aggregate: crate::sumeragi::consensus::QcAggregate {
+            signers_bitmap: Vec::new(),
+            bls_aggregate_signature: Vec::new(),
+        },
+    };
+
+    assert_eq!(
+        actor.vnext_chain_order_binding_for_qc(&qc),
+        expected,
+        "self-described QC binding should use the embedded validator set"
+    );
+
+    harness.shutdown.send();
+}
+
 fn sign_vote_for_canonical_signer(
     vote: &mut crate::sumeragi::consensus::Vote,
     chain: &ChainId,

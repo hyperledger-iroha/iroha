@@ -9271,3 +9271,73 @@ export function assembleSoracloudHfDeployRequest(
     generatedApartment?: SoracloudManifestProvenance;
   },
 ): SoracloudHfDeployRequest;
+
+export interface SoracloudPrivateArtifactRefInput {
+  schemaVersion?: number | bigint | string;
+  schema_version?: number | bigint | string;
+  sorafsManifestDigest?: string;
+  sorafs_manifest_digest?: string;
+  artifactHash?: string;
+  artifact_hash?: string;
+  ciphertextBytes?: number | bigint | string;
+  ciphertext_bytes?: number | bigint | string;
+  artifactRole?: "input" | "output";
+  artifact_role?: "input" | "output";
+}
+
+export interface SoracloudPrivateQuantizedCpuModelInput {
+  inputLen?: number | bigint | string;
+  input_len?: number | bigint | string;
+  outputLen?: number | bigint | string;
+  output_len?: number | bigint | string;
+  weightsI8?: number[];
+  weights_i8?: number[];
+  biasI32?: number[];
+  bias_i32?: number[];
+  outputShift?: number | bigint | string;
+  output_shift?: number | bigint | string;
+  outputMin?: number;
+  output_min?: number;
+  outputMax?: number;
+  output_max?: number;
+}
+
+export interface SoracloudPrivateUploadedModelExecuteInput {
+  serviceName: string;
+  weightVersion: string;
+  modelId?: string;
+  modelName?: string;
+  bundleRoot?: string;
+  policyId: string;
+  model: SoracloudPrivateQuantizedCpuModelInput;
+  plaintextInputI32: number[];
+  inputArtifact: SoracloudPrivateArtifactRefInput;
+  outputArtifact: SoracloudPrivateArtifactRefInput;
+  emittedSequence: number | bigint | string;
+}
+
+export interface SoracloudPrivateUploadedModelReceiptQueryInput {
+  receiptId?: string;
+  serviceName?: string;
+  modelId?: string;
+  weightVersion?: string;
+  limit?: number | bigint | string;
+  countMode?: "bounded" | "exact";
+}
+
+export interface SoracloudTxInstruction {
+  wire_id: string;
+  payload_hex: string;
+}
+
+export function buildSoracloudPrivateUploadedModelExecuteRequest(
+  input: SoracloudPrivateUploadedModelExecuteInput,
+): Record<string, unknown>;
+
+export function buildSoracloudPrivateUploadedModelReceiptQuery(
+  input?: SoracloudPrivateUploadedModelReceiptQueryInput,
+): Record<string, string>;
+
+export function privateUploadedModelReceiptInstruction(
+  response: Record<string, unknown>,
+): SoracloudTxInstruction;

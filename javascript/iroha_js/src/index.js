@@ -77,7 +77,10 @@ export {
 } from "./canonicalRequest.js";
 export {
   assembleSoracloudHfDeployRequest,
+  buildSoracloudPrivateUploadedModelExecuteRequest,
+  buildSoracloudPrivateUploadedModelReceiptQuery,
   buildSoracloudHfDeployDraft,
+  privateUploadedModelReceiptInstruction,
 } from "./soracloud.js";
 export {
   buildTouchManifest,

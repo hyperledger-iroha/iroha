@@ -51,8 +51,7 @@ function optionalString(input, field) {
   return value.trim();
 }
 
-function normalizeIntegerString(input, field) {
-  const value = input?.[field];
+function normalizeIntegerStringValue(value, field) {
   const normalized = typeof value === "bigint" ? value.toString() : String(value ?? "");
   if (!/^[0-9]+$/.test(normalized)) {
     throw new TypeError(`${field} must be a non-negative integer`);
@@ -60,21 +59,33 @@ function normalizeIntegerString(input, field) {
   return BigInt(normalized).toString();
 }
 
-function normalizeSafeInteger(input, field) {
-  const normalized = normalizeIntegerString(input, field);
-  const value = Number(normalized);
-  if (!Number.isSafeInteger(value)) {
+function normalizeIntegerString(input, field) {
+  return normalizeIntegerStringValue(input?.[field], field);
+}
+
+function normalizeSafeIntegerValue(value, field) {
+  const normalized = normalizeIntegerStringValue(value, field);
+  const numeric = Number(normalized);
+  if (!Number.isSafeInteger(numeric)) {
     throw new TypeError(`${field} must fit in a safe JavaScript integer`);
   }
-  return value;
+  return numeric;
+}
+
+function normalizeSafeInteger(input, field) {
+  return normalizeSafeIntegerValue(input?.[field], field);
+}
+
+function normalizeSafePositiveIntegerValue(value, field) {
+  const normalized = normalizeSafeIntegerValue(value, field);
+  if (normalized <= 0) {
+    throw new TypeError(`${field} must be greater than zero`);
+  }
+  return normalized;
 }
 
 function normalizeSafePositiveInteger(input, field) {
-  const value = normalizeSafeInteger(input, field);
-  if (value <= 0) {
-    throw new TypeError(`${field} must be greater than zero`);
-  }
-  return value;
+  return normalizeSafePositiveIntegerValue(input?.[field], field);
 }
 
 function normalizeSignedI32(value, field) {
@@ -100,7 +111,10 @@ function normalizeArray(input, field) {
 }
 
 function normalizeHashLike(input, field) {
-  const value = input?.[field];
+  return normalizeHashLikeValue(input?.[field], field);
+}
+
+function normalizeHashLikeValue(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
     throw new TypeError(`${field} must be a non-empty string`);
   }
@@ -133,21 +147,21 @@ function normalizePrivateArtifactRef(input, field, expectedRole) {
     throw new TypeError(`${field}.artifactRole must be ${expectedRole}`);
   }
   return {
-    schema_version: normalizeSafePositiveInteger(
-      { value: artifact.schemaVersion ?? artifact.schema_version },
-      "value",
+    schema_version: normalizeSafePositiveIntegerValue(
+      artifact.schemaVersion ?? artifact.schema_version,
+      `${field}.schemaVersion`,
     ),
-    sorafs_manifest_digest: normalizeHashLike(
-      { value: artifact.sorafsManifestDigest ?? artifact.sorafs_manifest_digest },
-      "value",
+    sorafs_manifest_digest: normalizeHashLikeValue(
+      artifact.sorafsManifestDigest ?? artifact.sorafs_manifest_digest,
+      `${field}.sorafsManifestDigest`,
     ),
-    artifact_hash: normalizeHashLike(
-      { value: artifact.artifactHash ?? artifact.artifact_hash },
-      "value",
+    artifact_hash: normalizeHashLikeValue(
+      artifact.artifactHash ?? artifact.artifact_hash,
+      `${field}.artifactHash`,
     ),
-    ciphertext_bytes: normalizeSafePositiveInteger(
-      { value: artifact.ciphertextBytes ?? artifact.ciphertext_bytes },
-      "value",
+    ciphertext_bytes: normalizeSafePositiveIntegerValue(
+      artifact.ciphertextBytes ?? artifact.ciphertext_bytes,
+      `${field}.ciphertextBytes`,
     ),
     artifact_role: role,
   };
@@ -159,13 +173,13 @@ function normalizeQuantizedCpuModel(input) {
     throw new TypeError("model must be an object");
   }
   rejectSoracloudSigningSecrets(model);
-  const inputLen = normalizeSafePositiveInteger(
-    { value: model.inputLen ?? model.input_len },
-    "value",
+  const inputLen = normalizeSafePositiveIntegerValue(
+    model.inputLen ?? model.input_len,
+    "model.inputLen",
   );
-  const outputLen = normalizeSafePositiveInteger(
-    { value: model.outputLen ?? model.output_len },
-    "value",
+  const outputLen = normalizeSafePositiveIntegerValue(
+    model.outputLen ?? model.output_len,
+    "model.outputLen",
   );
   const weights = normalizeArray(
     { value: model.weightsI8 ?? model.weights_i8 },
@@ -181,9 +195,9 @@ function normalizeQuantizedCpuModel(input) {
   if (bias.length !== outputLen) {
     throw new TypeError("model.biasI32 length must equal outputLen");
   }
-  const outputShift = normalizeSafeInteger(
-    { value: model.outputShift ?? model.output_shift },
-    "value",
+  const outputShift = normalizeSafeIntegerValue(
+    model.outputShift ?? model.output_shift,
+    "model.outputShift",
   );
   if (outputShift > 30) {
     throw new TypeError("model.outputShift must be <= 30");
