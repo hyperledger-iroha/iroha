@@ -124,9 +124,8 @@ pub(crate) const APPLICATION_NORITO: &str = "application/x-norito";
 
 fn sorafs_pin_register_gas_asset_id() -> Option<String> {
     [
+        "IROHA_SORAFS_PIN_REGISTER_GAS_ASSET_ID",
         "IROHA_SORAFS_GAS_ASSET_ID",
-        "IROHA_SORACLOUD_GAS_ASSET_ID",
-        "IROHA_GAS_ASSET_ID",
     ]
     .into_iter()
     .find_map(|key| {
@@ -4841,6 +4840,7 @@ mod evidence_http_tests {
             manifest_digest_hex.as_str(),
             chunk_digest_hex.as_str(),
             descriptor,
+            manifest.content_length,
         );
 
         let policy_map = obj
@@ -4864,6 +4864,7 @@ mod evidence_http_tests {
         manifest_digest_hex: &str,
         chunk_digest_hex: &str,
         descriptor: &sorafs_manifest::chunker_registry::ChunkerProfileDescriptor,
+        content_length: u64,
     ) {
         let authority_str = authority.to_string();
         assert_eq!(
@@ -4879,6 +4880,11 @@ mod evidence_http_tests {
             obj.get("chunk_digest_sha3_256_hex")
                 .and_then(norito::json::Value::as_str),
             Some(chunk_digest_hex)
+        );
+        assert_eq!(
+            obj.get("content_length")
+                .and_then(norito::json::Value::as_u64),
+            Some(content_length)
         );
         assert_eq!(
             obj.get("chunker_profile_id")
@@ -9517,6 +9523,10 @@ impl Client {
         map.insert(
             "chunk_digest_sha3_256_hex".into(),
             norito::json::Value::from(hex::encode(chunk_digest_sha3_256)),
+        );
+        map.insert(
+            "content_length".into(),
+            norito::json::Value::from(manifest.content_length),
         );
         map.insert(
             "submitted_epoch".into(),
