@@ -2341,11 +2341,8 @@ impl Default for Governance {
             sorafs_pin_fee_asset_id: defaults::governance::sorafs_pin_fee::asset_id()
                 .parse()
                 .expect("default SoraFS pin fee asset id"),
-            sorafs_pin_fee_treasury_account: AccountId::parse_encoded(
-                &defaults::governance::sorafs_pin_fee::treasury_account(),
-            )
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .expect("default SoraFS pin fee treasury account"),
+            sorafs_pin_fee_treasury_account:
+                defaults::governance::sorafs_pin_fee::treasury_account_id(),
             sorafs_pricing: PricingScheduleRecord::launch_default(),
             sorafs_penalty: SorafsPenaltyPolicy::default(),
             sorafs_repair_escalation: RepairEscalationPolicyV1::default(),

@@ -3482,6 +3482,8 @@ pub mod governance {
 
     /// Default SoraFS public pin fee configuration.
     pub mod sorafs_pin_fee {
+        use iroha_data_model::account::AccountId;
+
         /// XOR asset definition used to collect public pin fees.
         pub fn asset_id() -> String {
             super::super::nexus::fees::fee_asset_id()
@@ -3490,6 +3492,16 @@ pub mod governance {
         /// Treasury account that receives public pin fees.
         pub fn treasury_account() -> String {
             super::super::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string()
+        }
+
+        /// Treasury account parsed under the default Sora chain discriminant.
+        pub fn treasury_account_id() -> AccountId {
+            let _default_chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                super::super::common::chain_discriminant(),
+            );
+            AccountId::parse_encoded(&treasury_account())
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .expect("default SoraFS pin fee treasury account")
         }
     }
 
