@@ -545,6 +545,9 @@ fn minimal_config_snapshot() {
                 query_burst_per_authority: Some(
                     50,
                 ),
+                query_max_inflight: 128,
+                query_heavy_max_inflight: 32,
+                query_queue_timeout: 25ms,
                 tx_rate_per_authority_per_sec: Some(
                     10000,
                 ),
@@ -2254,6 +2257,28 @@ fn minimal_config_snapshot() {
                     max_retention_epoch: None,
                     allowed_storage_classes: None,
                 },
+                sorafs_pin_fee_asset_id: AssetDefinitionId {
+                    aid_bytes: [
+                        135,
+                        90,
+                        13,
+                        251,
+                        89,
+                        152,
+                        65,
+                        103,
+                        146,
+                        177,
+                        110,
+                        48,
+                        130,
+                        149,
+                        55,
+                        45,
+                    ],
+                    projection: None,
+                },
+                sorafs_pin_fee_treasury_account: sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB,
                 sorafs_pricing: PricingScheduleRecord {
                     version: 1,
                     currency_code: "xor",
