@@ -1049,6 +1049,7 @@ fn extract_response_string(response: Option<&Value>, key: &str) -> Value {
 mod tests {
     use super::*;
     use iroha_i18n::{Bundle, Language, Localizer};
+    use iroha_torii_shared::uri as torii_uri;
     use std::{
         io::{Read as _, Write as _},
         net::{TcpListener, TcpStream},
@@ -1343,7 +1344,7 @@ mod tests {
                 }),
             ),
             ("GET", "/v1/node/capabilities") => MockResponse::text(404, "not advertised"),
-            ("POST", "/transaction") => MockResponse::text(200, ""),
+            ("POST", path) if path == torii_uri::TRANSACTION => MockResponse::text(200, ""),
             ("GET", "/v1/pipeline/transactions/status") => {
                 let hash = Url::parse(&format!("http://localhost{}", request.path))
                     .ok()
@@ -1363,7 +1364,9 @@ mod tests {
                     }),
                 )
             }
-            ("POST", "/query") => MockResponse::text(404, "query unavailable in mock"),
+            ("POST", path) if path == torii_uri::QUERY => {
+                MockResponse::text(404, "query unavailable in mock")
+            }
             _ => MockResponse::text(404, "not found"),
         }
     }
@@ -1463,7 +1466,8 @@ mod tests {
         assert!(
             requests
                 .iter()
-                .any(|request| request.method == "POST" && path_only(&request.path) == "/transaction")
+                .any(|request| request.method == "POST"
+                    && path_only(&request.path) == torii_uri::TRANSACTION)
         );
     }
 
