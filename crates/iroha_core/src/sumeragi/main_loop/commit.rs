@@ -7906,10 +7906,7 @@ impl Actor {
             let no_participation = snapshot.no_participation.clone();
             let late_reveals_total = snapshot.late_reveals.len();
 
-            let finalized_record =
-                self.snapshot_to_vrf_record(snapshot, true, election_outcome.clone());
-            self.pending_npos_vrf_records
-                .insert(finalized_record.epoch, finalized_record);
+            self.stage_vrf_snapshot(snapshot, true, election_outcome.clone())?;
             if let Some(manager) = self.epoch_manager.as_ref() {
                 let new_epoch = manager.epoch();
                 let record_exists = {
@@ -7919,9 +7916,7 @@ impl Actor {
                 };
                 if !record_exists {
                     let seed_snapshot = manager.snapshot_current_epoch(roster_len_hint, height);
-                    let seed_record = self.snapshot_to_vrf_record(seed_snapshot, false, None);
-                    self.pending_npos_vrf_records
-                        .insert(seed_record.epoch, seed_record);
+                    self.stage_vrf_snapshot(seed_snapshot, false, None)?;
                 }
             }
 
@@ -8017,18 +8012,30 @@ impl Actor {
             return;
         };
         for record in &effects.vrf_epoch_seals {
-            let remove_pending = self
-                .pending_npos_vrf_records
-                .get(&record.epoch)
-                .is_none_or(|pending| Self::committed_vrf_record_covers_pending(record, pending));
-            if remove_pending {
-                self.pending_npos_vrf_records.remove(&record.epoch);
-            } else {
-                debug!(
-                    epoch = record.epoch,
-                    committed_updated_at_height = record.updated_at_height,
-                    "retaining newer pending VRF epoch record after stale committed seal"
-                );
+            if let Some(pending) = self.pending_npos_vrf_records.get(&record.epoch).cloned() {
+                if Self::committed_vrf_record_covers_pending(record, &pending) {
+                    self.pending_npos_vrf_records.remove(&record.epoch);
+                } else if let Some(merged) = Self::merge_vrf_epoch_records(record, &pending) {
+                    debug!(
+                        epoch = record.epoch,
+                        committed_updated_at_height = record.updated_at_height,
+                        pending_updated_at_height = pending.updated_at_height,
+                        "retaining committed-compatible pending VRF epoch record after stale committed seal"
+                    );
+                    if &merged == record {
+                        self.pending_npos_vrf_records.remove(&record.epoch);
+                    } else {
+                        self.pending_npos_vrf_records.insert(record.epoch, merged);
+                    }
+                } else {
+                    warn!(
+                        epoch = record.epoch,
+                        committed_updated_at_height = record.updated_at_height,
+                        pending_updated_at_height = pending.updated_at_height,
+                        "dropping pending VRF epoch record that conflicts with committed seal"
+                    );
+                    self.pending_npos_vrf_records.remove(&record.epoch);
+                }
             }
             if let Some((activate_at, roster, apply_now)) =
                 Self::activation_plan_from_vrf_record(height, record)

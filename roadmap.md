@@ -68,10 +68,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
   Torii exposes both the private execution route and committed receipt query
   route, and the JavaScript SDK exposes unsigned execute/query helpers plus
   receipt-instruction extraction. Kotlin core and Java Android now mirror the
-  response parsers and receipt-instruction extraction helper. Remaining work is
-  OpenAPI snapshots, JDK-backed mobile SDK validation, decryption-policy release
-  hooks beyond policy-id binding, and multi-peer private execution integration
-  coverage.
+  response parsers and receipt-instruction extraction helper. The OpenAPI route
+  schemas and Torii decryption-request release hook are now implemented.
+  Remaining work is JDK-backed mobile SDK validation and multi-peer private
+  execution integration coverage.
 - Add operator documentation for the SoraFS pin-and-register upload workflow,
   including approved-pin evidence, runtime submission gas-asset config, and
   external signing of JavaScript Soracloud provenance payloads.
@@ -109,9 +109,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
   the scalar fallback active until the preflight passes.
 - Runtime Poseidon parity gates now fail closed: column hashing disables the GPU
   path after dispatch/self-test/count/parity mismatches, and Merkle parent-pair
-  hashing disables its GPU path after sampled CPU parity mismatch. Remaining
-  work is hardware proof on real Metal and CUDA hosts plus telemetry/dashboard
-  wiring for the disable counters.
+  hashing disables its GPU path after sampled CPU parity mismatch. Prometheus
+  telemetry now records accelerator disable counters and sampled parity-failure
+  counters. Remaining work is hardware proof on real Metal and CUDA hosts plus
+  dashboard/alert wiring for those counters.
 - Rebuild the parked low-level Poseidon fused column+parent kernels with real
   Metal and CUDA parity proof before putting them back on the hot path. The
   acceptance run needs scalar-equivalent leaf/parent vectors, a bench sample

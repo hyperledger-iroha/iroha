@@ -156740,6 +156740,163 @@ async fn unfinalized_vrf_snapshot_strips_penalties_but_preserves_application_mar
     harness.shutdown.send();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn stage_vrf_snapshot_preserves_committed_vrf_observations() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 10;
+    consensus_cfg.npos.vrf.commit_deadline_offset_blocks = 3;
+    consensus_cfg.npos.vrf.reveal_deadline_offset_blocks = 7;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    harness
+        .actor
+        .epoch_manager
+        .as_mut()
+        .expect("epoch manager available")
+        .set_params(10, 3, 7);
+
+    let committed_participant = VrfParticipantRecord {
+        signer: 0,
+        commitment: Some([0x10; 32]),
+        reveal: Some([0x20; 32]),
+        last_updated_height: 40,
+    };
+    {
+        let state = Arc::get_mut(&mut harness.actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        block.vrf_epochs.insert(
+            4,
+            VrfEpochRecord {
+                epoch: 4,
+                seed: [0x44; 32],
+                epoch_length: 10,
+                commit_deadline_offset: 3,
+                reveal_deadline_offset: 7,
+                roster_len: 4,
+                finalized: false,
+                updated_at_height: 40,
+                participants: vec![committed_participant],
+                late_reveals: Vec::new(),
+                committed_no_reveal: Vec::new(),
+                no_participation: Vec::new(),
+                penalties_applied: false,
+                penalties_applied_at_height: None,
+                validator_election: None,
+            },
+        );
+        block.commit();
+    }
+
+    let snapshot = EpochSnapshot {
+        epoch: 4,
+        seed: [0x44; 32],
+        commits: vec![(1, [0x11; 32])],
+        reveals: Vec::new(),
+        late_reveals: Vec::new(),
+        committed_no_reveal: Vec::new(),
+        no_participation: Vec::new(),
+        roster_len: 4,
+        updated_at_height: 41,
+    };
+
+    harness
+        .actor
+        .stage_vrf_snapshot(snapshot, false, None)
+        .expect("compatible snapshot should stage");
+
+    let staged = harness
+        .actor
+        .pending_npos_vrf_records
+        .get(&4)
+        .expect("merged record should remain pending");
+    assert_eq!(staged.updated_at_height, 41);
+    assert_eq!(staged.participants.len(), 2);
+    assert_eq!(staged.participants[0].signer, 0);
+    assert_eq!(staged.participants[0].commitment, Some([0x10; 32]));
+    assert_eq!(staged.participants[0].reveal, Some([0x20; 32]));
+    assert_eq!(staged.participants[1].signer, 1);
+    assert_eq!(staged.participants[1].commitment, Some([0x11; 32]));
+    assert_eq!(staged.participants[1].reveal, None);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stage_vrf_snapshot_drops_conflicting_pending_record() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 10;
+    consensus_cfg.npos.vrf.commit_deadline_offset_blocks = 3;
+    consensus_cfg.npos.vrf.reveal_deadline_offset_blocks = 7;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    harness
+        .actor
+        .epoch_manager
+        .as_mut()
+        .expect("epoch manager available")
+        .set_params(10, 3, 7);
+
+    let committed = VrfEpochRecord {
+        epoch: 5,
+        seed: [0x55; 32],
+        epoch_length: 10,
+        commit_deadline_offset: 3,
+        reveal_deadline_offset: 7,
+        roster_len: 4,
+        finalized: false,
+        updated_at_height: 50,
+        participants: Vec::new(),
+        late_reveals: Vec::new(),
+        committed_no_reveal: Vec::new(),
+        no_participation: Vec::new(),
+        penalties_applied: false,
+        penalties_applied_at_height: None,
+        validator_election: None,
+    };
+    {
+        let state = Arc::get_mut(&mut harness.actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        block.vrf_epochs.insert(5, committed.clone());
+        block.commit();
+    }
+
+    let mut conflicting_pending = committed.clone();
+    conflicting_pending.seed = [0x66; 32];
+    conflicting_pending.updated_at_height = 51;
+    harness
+        .actor
+        .pending_npos_vrf_records
+        .insert(5, conflicting_pending);
+
+    let snapshot = EpochSnapshot {
+        epoch: 5,
+        seed: [0x77; 32],
+        commits: vec![(1, [0x11; 32])],
+        reveals: Vec::new(),
+        late_reveals: Vec::new(),
+        committed_no_reveal: Vec::new(),
+        no_participation: Vec::new(),
+        roster_len: 4,
+        updated_at_height: 52,
+    };
+
+    harness
+        .actor
+        .stage_vrf_snapshot(snapshot, false, None)
+        .expect("conflicting snapshot should be dropped without poisoning proposals");
+
+    assert!(
+        !harness.actor.pending_npos_vrf_records.contains_key(&5),
+        "pending seal that cannot extend committed VRF state must be removed"
+    );
+
+    harness.shutdown.send();
+}
+
 #[test]
 fn pending_rbc_chunk_eviction_records_drop_counts() {
     let now = Instant::now();

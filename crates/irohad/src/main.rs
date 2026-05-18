@@ -7958,6 +7958,32 @@ fn install_fastpq_poseidon_probe(labels: &FastpqDeviceLabels) {
     });
 }
 
+#[cfg(feature = "telemetry")]
+fn install_fastpq_gpu_event_probe(labels: &FastpqDeviceLabels) {
+    let telemetry_labels = labels.clone();
+    fastpq_prover::set_poseidon_gpu_event_observer(move |accelerator, event, reason, backend| {
+        let gpu_kind = backend.map_or(telemetry_labels.gpu_kind.as_ref(), |kind| kind.as_str());
+        let metrics = iroha_telemetry::metrics::global_or_default();
+        match event {
+            "disabled" => metrics.inc_fastpq_gpu_disable(
+                accelerator,
+                reason,
+                telemetry_labels.device_class.as_ref(),
+                telemetry_labels.chip_family.as_ref(),
+                gpu_kind,
+            ),
+            "sampled_parity_failure" => metrics.inc_fastpq_gpu_parity_failure(
+                accelerator,
+                reason,
+                telemetry_labels.device_class.as_ref(),
+                telemetry_labels.chip_family.as_ref(),
+                gpu_kind,
+            ),
+            _ => {}
+        }
+    });
+}
+
 #[cfg(all(feature = "telemetry", feature = "fastpq-gpu", target_os = "macos"))]
 fn install_fastpq_queue_probe(labels: FastpqDeviceLabels) {
     use fastpq_prover::{
@@ -8064,6 +8090,8 @@ fn run_main(build_line: BuildLine) -> ReportResult<(), MainError> {
     install_fastpq_execution_mode_probe(&fastpq_device_labels);
     #[cfg(feature = "telemetry")]
     install_fastpq_poseidon_probe(&fastpq_device_labels);
+    #[cfg(feature = "telemetry")]
+    install_fastpq_gpu_event_probe(&fastpq_device_labels);
     #[cfg(all(feature = "telemetry", feature = "fastpq-gpu", target_os = "macos"))]
     install_fastpq_queue_probe(fastpq_device_labels.clone());
 
