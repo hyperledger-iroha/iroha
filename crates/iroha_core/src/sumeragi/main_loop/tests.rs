@@ -25253,8 +25253,26 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc_impl() {
     harness.shutdown.send();
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn commit_outcome_persists_roster_sidecar_from_vote_log_and_flushes_fetch_requests() {
+#[test]
+fn commit_outcome_persists_roster_sidecar_from_vote_log_and_flushes_fetch_requests() {
+    let join_handle =
+        crate::sumeragi::sumeragi_thread_builder("sumeragi-commit-sidecar-vote-log-test")
+            .spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to build Tokio runtime for vote-log sidecar test")
+                    .block_on(
+                        commit_outcome_persists_roster_sidecar_from_vote_log_and_flushes_fetch_requests_impl(),
+                    );
+            })
+            .expect("failed to spawn vote-log sidecar test thread");
+    join_handle
+        .join()
+        .expect("vote-log sidecar test thread panicked");
+}
+
+async fn commit_outcome_persists_roster_sidecar_from_vote_log_and_flushes_fetch_requests_impl() {
     use crate::sumeragi::status;
 
     let _history_guard = status::commit_history_test_guard();
