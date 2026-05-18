@@ -389,16 +389,14 @@ pub fn verify_with_limits(
 
     let expected_permission_hashes = collect_permission_hashes(batch)?;
     let expected_ordering = ordering::ordering_hash(batch)?;
-    let expected_public_io =
-        build_public_io(batch, expected_ordering, expected_permission_hashes.clone());
+    let expected_public_io = build_public_io(batch, expected_ordering, expected_permission_hashes);
     ensure_public_io_matches(&expected_public_io, &proof.public_io)?;
     let lde_domain_size = usize::try_from(proof.lde_domain_size)
         .map_err(|_| Error::QueryIndexOverflow { index: usize::MAX })?;
     if lde_domain_size == 0 {
         return Err(Error::QueryIndexOutOfRange { index: 0, len: 0 });
     }
-    ensure_proof_bound_to_batch_artifact(&params, batch, &expected_public_io, proof)?;
-
+    ensure_trace_root_matches_batch(&params, batch, proof)?;
     let trace_root =
         field_norito::core::from_bytes(&proof.trace_root).ok_or(Error::TraceRootMismatch)?;
     let lde_root =
@@ -615,76 +613,19 @@ pub fn verify_with_limits(
     Ok(())
 }
 
-fn ensure_proof_bound_to_batch_artifact(
+fn ensure_trace_root_matches_batch(
     params: &StarkParameterSet,
     batch: &TransitionBatch,
-    public_io: &PublicIO,
     proof: &Proof,
 ) -> Result<()> {
-    let expected = StarkBackend::new(BackendConfig::new(*params)).prove(
-        batch,
-        public_io,
-        proof.protocol_version,
-        proof.params_version,
-    )?;
-    if proof.trace_root != field_norito::core::to_bytes(expected.trace_root) {
+    let trace = trace::build_trace(batch)?;
+    let column_digests = trace::column_hashes(&trace, params)?;
+    let expected_trace_root = trace::merkle_root_with_first_level(
+        column_digests.leaves(),
+        column_digests.fused_parents(),
+    );
+    if proof.trace_root != field_norito::core::to_bytes(expected_trace_root) {
         return Err(Error::TraceRootMismatch);
-    }
-    if proof.lookup_root != field_norito::core::to_bytes(expected.lookup_root) {
-        return Err(Error::LookupRootMismatch);
-    }
-    if proof.air_trace_root != field_norito::core::to_bytes(expected.air_trace_root) {
-        return Err(Error::AirTraceRootMismatch);
-    }
-    if proof.air_composition_root != field_norito::core::to_bytes(expected.air_composition_root) {
-        return Err(Error::AirCompositionRootMismatch);
-    }
-    if proof.lde_domain_size != expected.lde_domain_size {
-        return Err(Error::LookupRootMismatch);
-    }
-    if proof.lookup_grand_product != expected.lookup_grand_product {
-        return Err(Error::LookupGrandProductMismatch);
-    }
-    if proof.lookup_challenge != expected.lookup_challenge {
-        return Err(Error::LookupChallengeMismatch);
-    }
-    if proof.alphas.len() != expected.alphas.len() {
-        return Err(Error::AirChallengeCountMismatch {
-            expected: expected.alphas.len(),
-            actual: proof.alphas.len(),
-        });
-    }
-    for (idx, (&actual, &expected)) in proof.alphas.iter().zip(&expected.alphas).enumerate() {
-        if actual != expected {
-            return Err(Error::FriChallengeMismatch { round: idx });
-        }
-    }
-    if proof.fri_layers.len() != expected.fri_layers.len() {
-        return Err(Error::FriLayerLengthMismatch {
-            expected: expected.fri_layers.len(),
-            actual: proof.fri_layers.len(),
-        });
-    }
-    for (round, (&actual, &expected)) in proof
-        .fri_layers
-        .iter()
-        .zip(&expected.fri_layers)
-        .enumerate()
-    {
-        if actual != field_norito::core::to_bytes(expected) {
-            return Err(Error::FriLayerMismatch { round });
-        }
-    }
-    if proof.betas.len() != expected.fri_betas.len() {
-        return Err(Error::FriChallengeLengthMismatch {
-            expected: expected.fri_betas.len(),
-            actual: proof.betas.len(),
-        });
-    }
-    for (round, (&actual, &expected)) in proof.betas.iter().zip(&expected.fri_betas).enumerate() {
-        if actual != expected {
-            return Err(Error::FriChallengeMismatch { round });
-        }
     }
     Ok(())
 }
@@ -2173,6 +2114,353 @@ mod tests {
     }
 
     #[test]
+    fn verify_rejects_valid_field_trace_root_from_other_batch() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(8);
+        let foreign = sample_batch_with_size(9);
+        let mut proof = prover.prove(&batch).unwrap();
+        let foreign_proof = prover.prove(&foreign).unwrap();
+        proof.trace_root = foreign_proof.trace_root;
+
+        let err = verify(&batch, &proof).unwrap_err();
+
+        assert!(
+            matches!(err, Error::TraceRootMismatch),
+            "unexpected verifier error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_same_shape_foreign_trace_root() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(8);
+        let mut foreign = batch.clone();
+        foreign.transitions[2].post_value[0] ^= 0x5A;
+        let mut proof = prover.prove(&batch).unwrap();
+        let foreign_proof = prover.prove(&foreign).unwrap();
+        proof.trace_root = foreign_proof.trace_root;
+
+        let err = verify(&batch, &proof).unwrap_err();
+
+        assert!(
+            matches!(err, Error::TraceRootMismatch),
+            "unexpected verifier error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn verify_limits_reject_before_trace_root_binding() {
+        let (batch, mut proof) = sample_proof_with_size(32);
+        proof.trace_root[0] ^= 0x01;
+        let limits = verify_limits_with_override(|limits| limits.max_proof_bytes = 0);
+
+        let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                Error::VerifierLimitExceeded {
+                    limit: "max_proof_bytes",
+                    ..
+                }
+            ),
+            "unexpected verifier error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn verify_batch_size_limit_rejects_before_trace_root_binding() {
+        let (batch, mut proof) = sample_proof_with_size(32);
+        proof.trace_root[0] ^= 0x01;
+        let limits = verify_limits_with_override(|limits| limits.max_batch_bytes = 0);
+
+        let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                Error::VerifierLimitExceeded {
+                    limit: "max_batch_bytes",
+                    ..
+                }
+            ),
+            "unexpected verifier error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn verify_query_count_limit_rejects_before_trace_root_binding() {
+        let (batch, mut proof) = sample_proof_with_size(32);
+        proof.trace_root[0] ^= 0x01;
+        let limits = verify_limits_with_override(|limits| limits.max_queries = 0);
+
+        let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                Error::VerifierLimitExceeded {
+                    limit: "max_queries",
+                    ..
+                }
+            ),
+            "unexpected verifier error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn verify_transition_limit_rejects_before_trace_root_binding() {
+        let (batch, mut proof) = sample_proof_with_size(32);
+        proof.trace_root[0] ^= 0x01;
+        let limits = verify_limits_with_override(|limits| limits.max_transitions = 0);
+
+        let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                Error::VerifierLimitExceeded {
+                    limit: "max_transitions",
+                    ..
+                }
+            ),
+            "unexpected verifier error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn verify_fri_layer_limit_rejects_before_trace_root_binding() {
+        let (batch, mut proof) = sample_proof_with_size(32);
+        proof.trace_root[0] ^= 0x01;
+        let limits = verify_limits_with_override(|limits| limits.max_fri_layers = 0);
+
+        let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                Error::VerifierLimitExceeded {
+                    limit: "max_fri_layers",
+                    ..
+                }
+            ),
+            "unexpected verifier error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn verify_query_path_limit_rejects_before_trace_root_binding() {
+        let (batch, mut proof) = sample_proof_with_size(32);
+        proof.trace_root[0] ^= 0x01;
+        let limits = verify_limits_with_override(|limits| limits.max_query_path_len = 0);
+
+        let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                Error::VerifierLimitExceeded {
+                    limit: "max_query_path_len",
+                    ..
+                }
+            ),
+            "unexpected verifier error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn verify_air_row_limit_rejects_before_trace_root_binding() {
+        let (batch, mut proof) = sample_proof_with_size(32);
+        proof.trace_root[0] ^= 0x01;
+        let limits = verify_limits_with_override(|limits| limits.max_air_row_values = 0);
+
+        let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                Error::VerifierLimitExceeded {
+                    limit: "max_air_row_values",
+                    ..
+                }
+            ),
+            "unexpected verifier error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn verify_fri_value_limit_rejects_before_trace_root_binding() {
+        let (batch, mut proof) = sample_proof_with_size(32);
+        proof.trace_root[0] ^= 0x01;
+        let limits = verify_limits_with_override(|limits| limits.max_fri_round_values = 0);
+
+        let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                Error::VerifierLimitExceeded {
+                    limit: "max_fri_round_values",
+                    ..
+                }
+            ),
+            "unexpected verifier error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn verify_zero_lde_domain_rejects_before_trace_root_binding() {
+        let (batch, mut proof) = sample_proof_with_size(32);
+        proof.lde_domain_size = 0;
+        proof.trace_root[0] ^= 0x01;
+
+        let err = verify(&batch, &proof).unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::QueryIndexOutOfRange { index: 0, len: 0 }
+        ));
+    }
+
+    #[test]
+    fn verify_protocol_version_rejects_before_trace_root_binding() {
+        let (batch, mut proof) = sample_proof_with_size(8);
+        proof.protocol_version = PROTOCOL_VERSION.wrapping_add(1);
+        proof.trace_root[0] ^= 0xAA;
+
+        let err = verify(&batch, &proof).unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::UnsupportedProtocolVersion {
+                version
+            } if version == PROTOCOL_VERSION + 1
+        ));
+    }
+
+    #[test]
+    fn verify_parameter_version_rejects_before_trace_root_binding() {
+        let (batch, mut proof) = sample_proof_with_size(8);
+        proof.params_version = proof.params_version.wrapping_add(1);
+        proof.trace_root[0] ^= 0xAA;
+
+        let err = verify(&batch, &proof).unwrap_err();
+
+        assert!(matches!(err, Error::ParameterVersionMismatch { .. }));
+    }
+
+    #[test]
+    fn verify_parameter_mismatch_rejects_before_trace_root_binding() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let mut batch = sample_batch();
+        let mut proof = prover.prove(&batch).unwrap();
+        batch.parameter = "fastpq-lane-latency".to_owned();
+        proof.trace_root[0] ^= 0xAA;
+
+        let err = verify(&batch, &proof).unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::ParameterMismatch {
+                expected,
+                actual,
+            } if expected == "fastpq-lane-balanced" && actual == "fastpq-lane-latency"
+        ));
+    }
+
+    #[test]
+    fn verify_public_io_mismatch_rejects_before_trace_root_binding() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch();
+        let mut proof = prover.prove(&batch).unwrap();
+        proof.public_io.slot = proof.public_io.slot.wrapping_add(1);
+        proof.trace_root[0] ^= 0xAA;
+
+        let err = verify(&batch, &proof).unwrap_err();
+
+        assert!(matches!(err, Error::PublicIoMismatch { field: "slot" }));
+    }
+
+    #[test]
+    fn verify_rejects_commitment_mismatch_before_trace_root_binding() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch();
+        let mut proof = prover.prove(&batch).unwrap();
+        proof.trace_commitment = Hash::new(b"tampered-fastpq-commitment");
+        proof.trace_root[0] ^= 0xAA;
+
+        let err = verify(&batch, &proof).unwrap_err();
+
+        assert!(matches!(err, Error::CommitmentMismatch));
+    }
+
+    #[test]
+    fn verify_rejects_trace_root_before_malformed_deep_roots() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch();
+        let mut proof = prover.prove(&batch).unwrap();
+        proof.trace_root[0] ^= 0xAA;
+        proof.lookup_root[8] = 1;
+        proof.air_trace_root[8] = 1;
+        proof.air_composition_root[8] = 1;
+
+        let err = verify(&batch, &proof).unwrap_err();
+
+        assert!(
+            matches!(err, Error::TraceRootMismatch),
+            "unexpected verifier error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_valid_field_lookup_root_tamper_after_trace_binding() {
+        let (batch, mut proof) = sample_proof_with_size(32);
+        proof.lookup_root = field_norito::core::to_bytes(42);
+
+        let err = verify(&batch, &proof).unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                Error::LookupChallengeMismatch | Error::QueryMerklePathMismatch { .. }
+            ),
+            "unexpected verifier error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_valid_field_air_trace_root_tamper_after_trace_binding() {
+        let (batch, mut proof) = sample_proof_with_size(32);
+        proof.air_trace_root = field_norito::core::to_bytes(43);
+
+        let err = verify(&batch, &proof).unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                Error::FriChallengeMismatch { .. } | Error::AirMerklePathMismatch { .. }
+            ),
+            "unexpected verifier error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_valid_field_air_composition_root_tamper_after_trace_binding() {
+        let (batch, mut proof) = sample_proof_with_size(32);
+        proof.air_composition_root = field_norito::core::to_bytes(44);
+
+        let err = verify(&batch, &proof).unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                Error::FriChallengeMismatch { .. } | Error::AirMerklePathMismatch { .. }
+            ),
+            "unexpected verifier error: {err:?}"
+        );
+    }
+
+    #[test]
     fn verify_rejects_tampered_commitment() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
@@ -3410,7 +3698,7 @@ mod tests {
         let err = verify(&batch, &proof).unwrap_err();
 
         assert!(
-            matches!(err, Error::LookupRootMismatch),
+            matches!(err, Error::LookupRootMismatch | Error::QueryMismatch { .. }),
             "unexpected verifier error: {err:?}"
         );
     }

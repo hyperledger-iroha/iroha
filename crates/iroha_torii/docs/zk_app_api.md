@@ -36,10 +36,10 @@ Notes
 - Prover reports persist under `./storage/torii/zk_prover/reports/{id}.json`.
 - Base directory is configured with `torii.data_dir`; tests/dev harnesses can override with `data_dir::OverrideGuard`.
 - IVM derive/prove require bytecode with the IVM ZK mode bit set (`mode & ZK != 0`) and request metadata that includes `gas_limit`.
-- `/v1/zk/ivm/derive` accepts verifying keys with backend `halo2/ipa` or `stark/fri-v1` (including `stark/fri-v1/...` variants) (must be compatible with `ivm-execution-v1`).
-- `/v1/zk/ivm/prove` accepts `vk_ref.backend` `halo2/ipa` and `stark/fri-v1` (including `stark/fri-v1/...` variants) when the node is built with `zk-stark`.
-- STARK verification (`stark/fri-v1` family) is supported when built with feature `zk-stark` and enabled via config (`zk.stark.enabled=true`).
-- For `halo2/*` and `stark/fri-v1` backends, proof bytes are expected to be a Norito-encoded `OpenVerifyEnvelope`.
+- `/v1/zk/ivm/derive` accepts verifying keys with backend `halo2/ipa` or `stark/fri` (including `stark/fri/...` variants) (must be compatible with `ivm-execution-v1`).
+- `/v1/zk/ivm/prove` accepts `vk_ref.backend` `halo2/ipa` and `stark/fri` (including `stark/fri/...` variants) when the node is built with `zk-stark`.
+- STARK verification (`stark/fri` family) is supported when built with feature `zk-stark` and enabled via config (`zk.stark.enabled=true`).
+- For `halo2/*` and `stark/fri` backends, proof bytes are expected to be a Norito-encoded `OpenVerifyEnvelope`.
 - For STARK wrappers, `OpenVerifyEnvelope.public_inputs` carries schema-descriptor bytes; concrete public input values are carried in `StarkFriOpenProofV1.public_inputs`.
 
 ## Configuration
@@ -124,9 +124,9 @@ Tip: These keys map to the `iroha_config::parameters::user::Torii` section and a
   proof attachments do not carry verifying-key bytes.
 - Proving keys: for `halo2/ipa`, the IVM prove helper (`/v1/zk/ivm/prove`) loads proving key bytes from the same directory using `<backend>__<name>.pk` naming.
   The `.pk` file must match the resolved verifying key and uses Halo2 `SerdeFormat::Processed` serialization.
-  The STARK path (`stark/fri-v1`) does not require a separate `.pk` artifact.
+  The STARK path (`stark/fri`) does not require a separate `.pk` artifact.
 - Privacy: neither `/v1/zk/ivm/derive` nor `/v1/zk/ivm/prove` expose plaintext gas usage (`gas_used`). Gas usage is committed inside `gas_policy_commitment`.
-- Execution semantics: `/v1/zk/ivm/prove` executes bytecode from the request (`authority`, `metadata`, `bytecode`) and derives the authoritative `IvmProved` payload on-node before generating `ivm-execution-v1` proof attachments (`halo2/ipa` or `stark/fri-v1`).
+- Execution semantics: `/v1/zk/ivm/prove` executes bytecode from the request (`authority`, `metadata`, `bytecode`) and derives the authoritative `IvmProved` payload on-node before generating `ivm-execution-v1` proof attachments (`halo2/ipa` or `stark/fri`).
 - Request body: `{ vk_ref: { backend, name }, authority, metadata, bytecode, proved? }` where optional `proved` is treated as a strict consistency check against node-derived execution output.
 - Nodes can still deterministically replay bytecode during admission as an additional safety check. `pipeline.ivm_proved.skip_replay` controls whether that extra replay check is skipped for full-semantics execution circuits.
 - Metrics: `torii_zk_ivm_prove_inflight` (jobs currently proving) and `torii_zk_ivm_prove_queued` (jobs queued waiting for an inflight slot) expose IVM prove helper queue pressure.

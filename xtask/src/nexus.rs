@@ -228,6 +228,7 @@ fn sample_commitments() -> Vec<CommitmentFixture> {
                     ),
                 ],
                 nexus_fee_receipts: Vec::new(),
+                native_amx_receipts: Vec::new(),
             },
         },
         CommitmentFixture {
@@ -272,6 +273,7 @@ fn sample_commitments() -> Vec<CommitmentFixture> {
                     ),
                 ],
                 nexus_fee_receipts: Vec::new(),
+                native_amx_receipts: Vec::new(),
             },
         },
     ]

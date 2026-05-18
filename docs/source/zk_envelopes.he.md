@@ -24,7 +24,7 @@ translator: manual
 - IPA (Pallas, native): ‏`halo2/ipa-v1/poly-open`
 - IPA (BN254): ‏`halo2/ipa/ipa-v1/poly-open`
 - IPA (Goldilocks): ‏`halo2/goldilocks-ipa-v1/poly-open`
-- STARK (native): ‏`stark/fri-v1/<profile>` (לדוגמה, ‏`stark/fri-v1/sha256-goldilocks-v1`)
+- STARK (native): ‏`stark/fri/<profile>` (לדוגמה, ‏`stark/fri/sha256-goldilocks-v1`)
 
 הערות כלליות
 - Norito משמש לקידוד המעטפות והמטענים הפנימיים. אלא אם צוין אחרת, סקלרים הם ליטל אנדיאן לפי טיפוס המבנה.

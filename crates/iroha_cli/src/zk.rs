@@ -1798,7 +1798,7 @@ mod tests {
         let json = r#"{
             "backend": "halo2/ipa",
             "proof_b64": "AA==",
-            "vk_ref": { "backend": "stark/fri-v1", "name": "vk_transfer" }
+            "vk_ref": { "backend": "stark/fri", "name": "vk_transfer" }
         }"#;
         let v = norito::json::from_str(json).expect("vk backend mismatch json");
         let err = build_proof_attachment_from_json(&v).expect_err("vk backend mismatch rejected");
@@ -1822,7 +1822,7 @@ mod tests {
     fn build_proof_attachment_from_json_rejects_bridge_only_proof_backend_shadow() {
         let json = r#"{
             "backend": "halo2/ipa",
-            "proof_backend": "stark/fri-v1",
+            "proof_backend": "stark/fri",
             "proof_b64": "AA==",
             "vk_ref": { "backend": "halo2/ipa", "name": "vk_transfer" }
         }"#;
@@ -1857,6 +1857,36 @@ mod tests {
         let v = norito::json::from_str(json).expect("blank vk_ref name json");
         let err = build_proof_attachment_from_json(&v).expect_err("blank vk_ref name rejected");
         assert!(format!("{err}").contains("vk_ref.name must be non-empty"));
+    }
+
+    #[test]
+    fn build_proof_attachment_from_json_rejects_blank_backend_fields() {
+        for (json, expected) in [
+            (
+                r#"{
+                    "backend": "   ",
+                    "proof_b64": "AA==",
+                    "vk_ref": { "backend": "halo2/ipa", "name": "vk_transfer" }
+                }"#,
+                "backend must be non-empty",
+            ),
+            (
+                r#"{
+                    "backend": "halo2/ipa",
+                    "proof_b64": "AA==",
+                    "vk_ref": { "backend": "   ", "name": "vk_transfer" }
+                }"#,
+                "vk_ref.backend must match backend",
+            ),
+        ] {
+            let v = norito::json::from_str(json).expect("blank backend json");
+            let err =
+                build_proof_attachment_from_json(&v).expect_err("blank backend field rejected");
+            assert!(
+                format!("{err}").contains(expected),
+                "expected error to mention {expected}, got {err}"
+            );
+        }
     }
 
     #[test]

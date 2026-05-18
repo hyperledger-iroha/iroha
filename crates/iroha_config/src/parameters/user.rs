@@ -15280,6 +15280,17 @@ pub struct Torii {
     /// The upper limit of the number of live queries for a single user.
     #[config(default = "defaults::torii::QUERY_STORE_CAPACITY_PER_USER")]
     pub query_store_capacity_per_user: NonZeroUsize,
+    /// Maximum concurrent query executions admitted by Torii.
+    #[config(default = "defaults::torii::QUERY_MAX_INFLIGHT")]
+    pub query_max_inflight: NonZeroUsize,
+    /// Maximum concurrent heavy query executions admitted by Torii.
+    #[config(default = "defaults::torii::QUERY_HEAVY_MAX_INFLIGHT")]
+    pub query_heavy_max_inflight: NonZeroUsize,
+    /// Maximum time a query waits for execution capacity before Torii rejects it.
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::torii::QUERY_QUEUE_TIMEOUT_MS))"
+    )]
+    pub query_queue_timeout_ms: DurationMs,
     /// Capacity of the broadcast channel used for Torii events/SSE/webhooks.
     #[config(default = "default_events_buffer_capacity()")]
     pub events_buffer_capacity: NonZeroUsize,
@@ -16047,6 +16058,9 @@ impl Torii {
                 .query_burst_per_authority
                 .or(super::defaults::torii::QUERY_BURST_PER_AUTHORITY)
                 .and_then(std::num::NonZeroU32::new),
+            query_max_inflight: self.query_max_inflight,
+            query_heavy_max_inflight: self.query_heavy_max_inflight,
+            query_queue_timeout: self.query_queue_timeout_ms.get(),
             tx_rate_per_authority_per_sec: self
                 .tx_rate_per_authority_per_sec
                 .or(super::defaults::torii::TX_RATE_PER_AUTHORITY_PER_SEC)

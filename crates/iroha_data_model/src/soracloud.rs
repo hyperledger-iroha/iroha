@@ -94,6 +94,10 @@ pub const SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1: u16 = 1;
 pub const SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraUploadedModelWrappedKeyV1`].
 pub const SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraPrivateModelArtifactRefV1`].
+pub const SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraPrivateUploadedModelExecutionReceiptV1`].
+pub const SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraHfSourceRecordV1`].
 pub const SORA_HF_SOURCE_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraModelHostCapabilityRecordV1`].
@@ -6245,6 +6249,8 @@ pub enum SoraUploadedModelRuntimeFormatV1 {
     /// Hugging Face-style safetensors repository layout.
     #[default]
     HuggingFaceSafetensors,
+    /// Deterministic quantized CPU operator-set v1.
+    DeterministicQuantizedCpuV1,
 }
 
 /// Policy pricing for uploaded-model storage.
@@ -6552,6 +6558,37 @@ impl SoraUploadedModelBundleV1 {
                 field: "modalities",
             });
         }
+        let mut seen_modalities = BTreeSet::new();
+        for modality in &self.modalities {
+            let normalized = modality.trim();
+            if normalized.is_empty() {
+                return Err(SoracloudManifestError::EmptyField {
+                    manifest: "sora uploaded model bundle",
+                    field: "modalities",
+                });
+            }
+            if normalized != modality {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "sora uploaded model bundle",
+                    field: "modalities",
+                    reason: "entries must be canonical without surrounding whitespace".to_string(),
+                });
+            }
+            if modality.chars().any(char::is_control) {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "sora uploaded model bundle",
+                    field: "modalities",
+                    reason: "entries must not contain control characters".to_string(),
+                });
+            }
+            if !seen_modalities.insert(modality.as_str()) {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "sora uploaded model bundle",
+                    field: "modalities",
+                    reason: "entries must be unique".to_string(),
+                });
+            }
+        }
         self.upload_recipient.validate()?;
         self.wrapped_bundle_key.validate()?;
         if self.upload_recipient.key_id != self.wrapped_bundle_key.recipient_key_id {
@@ -6589,6 +6626,168 @@ impl SoraUploadedModelBundleV1 {
                 reason:
                     "chunk_count, plaintext_bytes, and ciphertext_bytes must be greater than zero"
                         .to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// SoraFS-backed encrypted artifact reference for private uploaded-model execution.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraPrivateModelArtifactRefV1 {
+    /// Schema version; must equal [`SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1`].
+    pub schema_version: u16,
+    /// Approved active `SoraFS` manifest digest containing the encrypted artifact.
+    pub sorafs_manifest_digest: ManifestDigest,
+    /// Commitment over the encrypted artifact bytes.
+    pub artifact_hash: Hash,
+    /// Total encrypted bytes stored by `SoraFS` for the artifact.
+    pub ciphertext_bytes: u64,
+    /// Stable artifact role, for example `input` or `output`.
+    pub artifact_role: String,
+}
+
+impl SoraPrivateModelArtifactRefV1 {
+    /// Validate encrypted artifact metadata.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when artifact metadata is malformed.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        if self.schema_version != SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1 {
+            return Err(SoracloudManifestError::UnsupportedVersion {
+                manifest: "sora private model artifact ref",
+                expected: SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        if self.ciphertext_bytes == 0 {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "sora private model artifact ref",
+                field: "ciphertext_bytes",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        let role = self.artifact_role.trim();
+        if role.is_empty() {
+            return Err(SoracloudManifestError::EmptyField {
+                manifest: "sora private model artifact ref",
+                field: "artifact_role",
+            });
+        }
+        if role != self.artifact_role || role.chars().any(char::is_control) {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "sora private model artifact ref",
+                field: "artifact_role",
+                reason: "must be canonical and free of control characters".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Receipt committed for deterministic private uploaded-model execution.
+///
+/// The receipt intentionally carries only commitments and encrypted artifact
+/// references. Plaintext input and output bytes remain outside chain state.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraPrivateUploadedModelExecutionReceiptV1 {
+    /// Schema version; must equal
+    /// [`SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1`].
+    pub schema_version: u16,
+    /// Deterministic receipt identifier.
+    pub receipt_id: Hash,
+    /// Service that owns the uploaded model.
+    pub service_name: Name,
+    /// Stable uploaded-model identifier.
+    pub model_id: String,
+    /// Pinned weight version label.
+    pub weight_version: String,
+    /// Deterministic runtime version that defines operator semantics.
+    pub runtime_version: String,
+    /// Approved `SoraFS` manifest digest for the encrypted model package.
+    pub model_manifest_digest: ManifestDigest,
+    /// Canonical uploaded-model bundle root.
+    pub model_bundle_root: Hash,
+    /// Decryption or release policy identifier used by the execution.
+    pub policy_id: String,
+    /// Encrypted input artifact persisted outside chain state.
+    pub input_artifact: SoraPrivateModelArtifactRefV1,
+    /// Encrypted output artifact persisted outside chain state.
+    pub output_artifact: SoraPrivateModelArtifactRefV1,
+    /// Commitment over the canonical plaintext input envelope.
+    pub input_commitment: Hash,
+    /// Commitment over the canonical plaintext output envelope.
+    pub output_commitment: Hash,
+    /// Commitment over the runtime request envelope.
+    pub request_commitment: Hash,
+    /// Commitment over the runtime result envelope.
+    pub result_commitment: Hash,
+    /// Monotonic Soracloud sequence that emitted the receipt.
+    pub emitted_sequence: u64,
+}
+
+impl SoraPrivateUploadedModelExecutionReceiptV1 {
+    /// Validate private uploaded-model execution receipt metadata.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the receipt is malformed.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        if self.schema_version != SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1 {
+            return Err(SoracloudManifestError::UnsupportedVersion {
+                manifest: "sora private uploaded model execution receipt",
+                expected: SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        for (field, value) in [
+            ("model_id", self.model_id.as_str()),
+            ("weight_version", self.weight_version.as_str()),
+            ("runtime_version", self.runtime_version.as_str()),
+            ("policy_id", self.policy_id.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(SoracloudManifestError::EmptyField {
+                    manifest: "sora private uploaded model execution receipt",
+                    field,
+                });
+            }
+            if value.trim() != value || value.chars().any(char::is_control) {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "sora private uploaded model execution receipt",
+                    field,
+                    reason: "must be canonical and free of control characters".to_string(),
+                });
+            }
+        }
+        if self.emitted_sequence == 0 {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "sora private uploaded model execution receipt",
+                field: "emitted_sequence",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        self.input_artifact.validate()?;
+        self.output_artifact.validate()?;
+        if self.input_artifact.artifact_role != "input" {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "sora private uploaded model execution receipt",
+                field: "input_artifact.artifact_role",
+                reason: "must be `input`".to_string(),
+            });
+        }
+        if self.output_artifact.artifact_role != "output" {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "sora private uploaded model execution receipt",
+                field: "output_artifact.artifact_role",
+                reason: "must be `output`".to_string(),
             });
         }
         Ok(())
@@ -10970,38 +11169,41 @@ pub mod prelude {
         SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1, SORA_MODEL_ARTIFACT_RECORD_VERSION_V1,
         SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1, SORA_MODEL_REGISTRY_VERSION_V1,
         SORA_MODEL_WEIGHT_AUDIT_EVENT_VERSION_V1, SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1,
-        SORA_RUNTIME_RECEIPT_VERSION_V1, SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
-        SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1, SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
-        SORA_SERVICE_MANIFEST_VERSION_V1, SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
-        SORA_SERVICE_RUNTIME_STATE_VERSION_V1, SORA_SERVICE_STATE_ENTRY_VERSION_V1,
-        SORA_STATE_BINDING_VERSION_V1, SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1,
-        SORA_TRAINING_JOB_RECORD_VERSION_V1, SecretEnvelopeEncryptionV1, SecretEnvelopeV1,
-        SoraAgentApartmentActionV1, SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1,
-        SoraAgentArtifactAllowRuleV1, SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1,
-        SoraAgentPersistentStateV1, SoraAgentRuntimeStatusV1, SoraAgentWalletDailySpendEntryV1,
-        SoraAgentWalletSpendRequestV1, SoraArtifactKindV1, SoraArtifactRefV1,
-        SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraConfigExportTargetV1,
-        SoraConfigExportV1, SoraContainerManifestRefV1, SoraContainerManifestV1,
-        SoraContainerRuntimeV1, SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1,
-        SoraHfBackendFamilyV1, SoraHfModelFormatV1, SoraHfModelSizeBucketV1,
-        SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1,
-        SoraHfPlacementRecordV1, SoraHfPlacementStatusV1, SoraHfResourceProfileV1,
-        SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1,
-        SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1,
-        SoraHfSourceRecordV1, SoraHfSourceStatusV1, SoraLifecycleHooksV1, SoraMailboxContractV1,
+        SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
+        SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1, SORA_RUNTIME_RECEIPT_VERSION_V1,
+        SORA_SERVICE_AUDIT_EVENT_VERSION_V1, SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+        SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1, SORA_SERVICE_MANIFEST_VERSION_V1,
+        SORA_SERVICE_ROLLOUT_STATE_VERSION_V1, SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
+        SORA_SERVICE_STATE_ENTRY_VERSION_V1, SORA_STATE_BINDING_VERSION_V1,
+        SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1, SORA_TRAINING_JOB_RECORD_VERSION_V1,
+        SecretEnvelopeEncryptionV1, SecretEnvelopeV1, SoraAgentApartmentActionV1,
+        SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraAgentArtifactAllowRuleV1,
+        SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1, SoraAgentPersistentStateV1,
+        SoraAgentRuntimeStatusV1, SoraAgentWalletDailySpendEntryV1, SoraAgentWalletSpendRequestV1,
+        SoraArtifactKindV1, SoraArtifactRefV1, SoraCapabilityPolicyV1,
+        SoraCertifiedResponsePolicyV1, SoraConfigExportTargetV1, SoraConfigExportV1,
+        SoraContainerManifestRefV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
+        SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1, SoraHfBackendFamilyV1,
+        SoraHfModelFormatV1, SoraHfModelSizeBucketV1, SoraHfPlacementHostAssignmentV1,
+        SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1,
+        SoraHfPlacementStatusV1, SoraHfResourceProfileV1, SoraHfSharedLeaseActionV1,
+        SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1,
+        SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1,
+        SoraHfSourceStatusV1, SoraLifecycleHooksV1, SoraMailboxContractV1,
         SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1,
         SoraModelHostCapabilityRecordV1, SoraModelProvenanceKindV1, SoraModelProvenanceRefV1,
         SoraModelRegistryV1, SoraModelWeightActionV1, SoraModelWeightAuditEventV1,
-        SoraModelWeightVersionRecordV1, SoraNetworkPolicyV1, SoraResourceLimitsV1,
-        SoraRolloutPolicyV1, SoraRolloutStageV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
-        SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceDeploymentStateV1,
-        SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceHealthStatusV1,
-        SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1, SoraServiceManifestV1,
-        SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1, SoraServiceStateEntryV1,
-        SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
-        SoraStateMutationOperationV1, SoraStateScopeV1, SoraTlsModeV1, SoraTrainingJobActionV1,
-        SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1, SoraTrainingJobStatusV1,
-        SoracloudManifestError, encode_agent_artifact_allow_provenance_payload,
+        SoraModelWeightVersionRecordV1, SoraNetworkPolicyV1, SoraPrivateModelArtifactRefV1,
+        SoraPrivateUploadedModelExecutionReceiptV1, SoraResourceLimitsV1, SoraRolloutPolicyV1,
+        SoraRolloutStageV1, SoraRouteTargetV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
+        SoraServiceAuditEventV1, SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1,
+        SoraServiceHandlerV1, SoraServiceHealthStatusV1, SoraServiceLifecycleActionV1,
+        SoraServiceMailboxMessageV1, SoraServiceManifestV1, SoraServiceRolloutStateV1,
+        SoraServiceRuntimeStateV1, SoraServiceStateEntryV1, SoraStateBindingV1,
+        SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateMutationOperationV1,
+        SoraStateScopeV1, SoraTlsModeV1, SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1,
+        SoraTrainingJobRecordV1, SoraTrainingJobStatusV1, SoracloudManifestError,
+        encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
         encode_agent_message_send_provenance_payload,
@@ -11117,6 +11319,16 @@ mod tests {
                 storage_xor_nanos: 10,
             },
             decryption_policy_ref: "policy/v1".to_string(),
+        }
+    }
+
+    fn sample_private_model_artifact_ref(role: &str, seed: u8) -> SoraPrivateModelArtifactRefV1 {
+        SoraPrivateModelArtifactRefV1 {
+            schema_version: SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
+            sorafs_manifest_digest: ManifestDigest::new([seed; 32]),
+            artifact_hash: sample_hash(seed.wrapping_add(1)),
+            ciphertext_bytes: 128,
+            artifact_role: role.to_string(),
         }
     }
 
@@ -14709,6 +14921,74 @@ mod tests {
             SoracloudManifestError::InvalidField {
                 manifest: "sora uploaded model bundle",
                 field: "chunk_count",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn uploaded_model_bundle_validation_rejects_adversarial_modalities() {
+        for modalities in [
+            vec![" ".to_string()],
+            vec!["text\nimage".to_string()],
+            vec!["text".to_string(), "text".to_string()],
+        ] {
+            let mut bundle = sample_uploaded_model_bundle();
+            bundle.modalities = modalities;
+
+            let error = bundle
+                .validate()
+                .expect_err("malformed modalities must fail closed");
+            assert!(matches!(
+                error,
+                SoracloudManifestError::EmptyField {
+                    manifest: "sora uploaded model bundle",
+                    field: "modalities",
+                } | SoracloudManifestError::InvalidField {
+                    manifest: "sora uploaded model bundle",
+                    field: "modalities",
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn private_uploaded_model_execution_receipt_round_trips_and_validates() {
+        let mut receipt = SoraPrivateUploadedModelExecutionReceiptV1 {
+            schema_version: SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
+            receipt_id: sample_hash(1),
+            service_name: sample_name("private_model_host"),
+            model_id: "upload-1".to_string(),
+            weight_version: "v1".to_string(),
+            runtime_version: "soracloud.quantized-cpu.v1".to_string(),
+            model_manifest_digest: ManifestDigest::new([0xA5; 32]),
+            model_bundle_root: sample_hash(31),
+            policy_id: "policy/v1".to_string(),
+            input_artifact: sample_private_model_artifact_ref("input", 0x11),
+            output_artifact: sample_private_model_artifact_ref("output", 0x22),
+            input_commitment: sample_hash(0x41),
+            output_commitment: sample_hash(0x42),
+            request_commitment: sample_hash(0x43),
+            result_commitment: sample_hash(0x44),
+            emitted_sequence: 7,
+        };
+        receipt.validate().expect("valid private receipt");
+
+        let encoded = norito::to_bytes(&receipt).expect("encode private receipt");
+        let decoded: SoraPrivateUploadedModelExecutionReceiptV1 =
+            norito::decode_from_bytes(&encoded).expect("decode private receipt");
+        assert_eq!(decoded, receipt);
+
+        receipt.output_artifact.artifact_role = "plaintext".to_string();
+        let error = receipt
+            .validate()
+            .expect_err("output artifact must stay role-bound");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                manifest: "sora private uploaded model execution receipt",
+                field: "output_artifact.artifact_role",
                 ..
             }
         ));

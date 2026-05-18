@@ -4435,7 +4435,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     .iter()
                     .map(|batch| u64::try_from(batch.len()).unwrap_or(u64::MAX))
                     .fold(0_u64, u64::saturating_add);
-                returned.saturating_add(output.remaining_items)
+                returned.saturating_add(output.remaining_items_hint())
             }
         }
     }
@@ -11642,7 +11642,7 @@ seiyaku AliasPayout {{
             panic!("expected iterable query response");
         };
         assert_eq!(output.batch.len(), 1);
-        assert_eq!(output.remaining_items, 0);
+        assert_eq!(output.remaining_items, Some(0));
 
         let response_len = u64::try_from(tlv.payload.len()).unwrap_or(u64::MAX);
         let gas_ctx = QueryGasContext::from_request(&request);

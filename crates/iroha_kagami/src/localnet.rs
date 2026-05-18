@@ -1131,10 +1131,14 @@ fn generate_localnet_with_line<T: Write>(
     // Iroha2 localnets intentionally keep DA disabled, so the rendered config does not satisfy
     // the current runtime parser's DA-on invariant. Only derive and embed the proof-policy bundle
     // when the selected build line actually enables DA/RBC.
-    let da_proof_policies = if da_rbc_enabled {
-        Some(resolve_localnet_da_proof_policies(&bootstrap_config)?)
+    let (da_proof_policies, zk_policy_hash) = if da_rbc_enabled {
+        let config = parse_localnet_peer_config(&bootstrap_config)?;
+        (
+            Some(resolve_localnet_da_proof_policies(&config)),
+            iroha_core::state::compute_zk_consensus_policy_hash(&config.zk),
+        )
     } else {
-        None
+        (None, iroha_core::state::default_zk_consensus_policy_hash())
     };
     let genesis = genesis
         .with_consensus_mode(opts.consensus_mode)
@@ -1146,7 +1150,10 @@ fn generate_localnet_with_line<T: Write>(
         chain_discriminant,
         &genesis_json_path,
         &genesis_signed_path,
-        da_proof_policies,
+        GenesisConsensusPolicies {
+            da_proof_policies,
+            zk_policy_hash,
+        },
     )?;
     tui::success("Genesis ready");
 
@@ -2942,6 +2949,11 @@ fn append_localnet_npos_bootstrap(
     Ok(builder.build_raw())
 }
 
+struct GenesisConsensusPolicies {
+    da_proof_policies: Option<DaProofPolicyBundle>,
+    zk_policy_hash: [u8; 32],
+}
+
 fn write_genesis(
     genesis: &RawGenesisTransaction,
     genesis_public_key: &iroha_crypto::PublicKey,
@@ -2949,7 +2961,7 @@ fn write_genesis(
     chain_discriminant: Option<u16>,
     json_path: &Path,
     signed_path: &Path,
-    da_proof_policies: Option<DaProofPolicyBundle>,
+    policies: GenesisConsensusPolicies,
 ) -> Result<()> {
     let chain_discriminant =
         chain_discriminant.unwrap_or_else(iroha_data_model::account::address::chain_discriminant);
@@ -2961,7 +2973,11 @@ fn write_genesis(
     let genesis_key_pair = KeyPair::new(genesis_public_key.clone(), genesis_private_key.0)
         .wrap_err("make genesis key pair")?;
     let block = genesis
-        .build_and_sign_with_da_proof_policies(&genesis_key_pair, da_proof_policies)
+        .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
+            &genesis_key_pair,
+            policies.da_proof_policies,
+            Some(policies.zk_policy_hash),
+        )
         .wrap_err("sign genesis block")?;
     let framed = block.0.encode_wire().wrap_err("frame genesis block")?;
     let mut file = BufWriter::new(File::create(signed_path)?);
@@ -2969,18 +2985,19 @@ fn write_genesis(
     Ok(())
 }
 
-fn resolve_localnet_da_proof_policies(rendered_config: &str) -> Result<DaProofPolicyBundle> {
+fn parse_localnet_peer_config(rendered_config: &str) -> Result<actual::Root> {
     let table = rendered_config.parse::<toml::Table>().map_err(|err| {
         eyre!(
-            "failed to parse rendered peer config as TOML while deriving DA proof policies: {err}"
+            "failed to parse rendered peer config as TOML while deriving consensus policies: {err}"
         )
     })?;
-    let config = actual::Root::from_toml_source(TomlSource::inline(table)).map_err(|err| {
-        eyre!("failed to parse generated peer config while deriving DA proof policies: {err}")
-    })?;
-    Ok(iroha_core::da::proof_policy_bundle(
-        &config.nexus.lane_config,
-    ))
+    actual::Root::from_toml_source(TomlSource::inline(table)).map_err(|err| {
+        eyre!("failed to parse generated peer config while deriving consensus policies: {err}")
+    })
+}
+
+fn resolve_localnet_da_proof_policies(config: &actual::Root) -> DaProofPolicyBundle {
+    iroha_core::da::proof_policy_bundle(&config.nexus.lane_config)
 }
 
 fn generate_genesis_key_pair(
@@ -5547,6 +5564,8 @@ mod tests {
         let source = TomlSource::from_file(temp.path().join("peer0.toml")).expect("read config");
         let parsed = actual::Root::from_toml_source(source).expect("config should parse");
         let expected_hash = iroha_core::da::proof_policy_bundle_hash(&parsed.nexus.lane_config);
+        let expected_zk_policy_hash =
+            iroha_core::state::compute_zk_consensus_policy_hash(&parsed.zk);
 
         let bytes = fs::read(temp.path().join("genesis.signed.nrt")).expect("read signed genesis");
         let block =
@@ -5556,6 +5575,15 @@ mod tests {
             block.header().da_proof_policies_hash(),
             Some(expected_hash),
             "signed genesis should embed the same DA proof policy bundle as peer configs",
+        );
+        assert_eq!(
+            block
+                .header()
+                .confidential_features()
+                .expect("signed genesis should carry confidential feature digest")
+                .zk_policy_hash,
+            Some(expected_zk_policy_hash),
+            "signed genesis should embed the same ZK policy hash as peer configs",
         );
     }
 

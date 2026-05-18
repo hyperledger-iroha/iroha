@@ -133,7 +133,34 @@ function deepEqualCanonical(left, right) {
 }
 
 function requireAllowedDraftPayloadFields(payload) {
+  for (const field of REJECTED_SIGNING_SECRET_FIELDS) {
+    if (field in payload) {
+      if (!Object.hasOwn(payload, field)) {
+        throw new TypeError(`draft payload.${field} must be an own property`);
+      }
+      throw new TypeError(`draft payload.${field} is not accepted`);
+    }
+  }
+  for (const field of HF_DEPLOY_PAYLOAD_FIELDS) {
+    if (field in payload && !Object.hasOwn(payload, field)) {
+      throw new TypeError(`draft payload.${field} must be an own property`);
+    }
+  }
+  for (const field of Object.getOwnPropertyNames(payload)) {
+    if (!HF_DEPLOY_PAYLOAD_FIELDS.has(field)) {
+      throw new TypeError(`draft payload.${field} is not accepted`);
+    }
+    if (!Object.getOwnPropertyDescriptor(payload, field)?.enumerable) {
+      throw new TypeError(`draft payload.${field} must be enumerable`);
+    }
+  }
+  if (Object.getOwnPropertySymbols(payload).length > 0) {
+    throw new TypeError("draft payload symbols are not accepted");
+  }
   for (const field in payload) {
+    if (!Object.hasOwn(payload, field)) {
+      throw new TypeError(`draft payload.${field} must be an own property`);
+    }
     if (!HF_DEPLOY_PAYLOAD_FIELDS.has(field)) {
       throw new TypeError(`draft payload.${field} is not accepted`);
     }
@@ -240,14 +267,17 @@ export function buildSoracloudHfDeployDraft(input = {}) {
 }
 
 function requireProvenance(provenances, field) {
+  rejectSoracloudSigningSecrets(provenances);
   if (
     provenances == null ||
     typeof provenances !== "object" ||
+    Array.isArray(provenances) ||
     !Object.hasOwn(provenances, field)
   ) {
     throw new TypeError(`${field} provenance must include signer and signature`);
   }
   const provenance = provenances[field];
+  rejectSoracloudSigningSecrets(provenance);
   if (
     provenance == null ||
     typeof provenance !== "object" ||
@@ -269,8 +299,10 @@ function requireProvenance(provenances, field) {
 
 function requireDraftSigningPayload(draft, field, label, expectedPayload) {
   if (
+    !Object.hasOwn(draft, "provenancePayloads") ||
     draft.provenancePayloads == null ||
     typeof draft.provenancePayloads !== "object" ||
+    Array.isArray(draft.provenancePayloads) ||
     !Object.hasOwn(draft.provenancePayloads, field)
   ) {
     throw new TypeError(`draft provenancePayloads.${field} is required`);
@@ -280,6 +312,9 @@ function requireDraftSigningPayload(draft, field, label, expectedPayload) {
     signingPayload == null ||
     typeof signingPayload !== "object" ||
     Array.isArray(signingPayload) ||
+    !Object.hasOwn(signingPayload, "schema") ||
+    !Object.hasOwn(signingPayload, "label") ||
+    !Object.hasOwn(signingPayload, "payload") ||
     signingPayload.schema !== PROVENANCE_SCHEMA ||
     signingPayload.label !== label ||
     typeof signingPayload.payload !== "object" ||
@@ -288,6 +323,15 @@ function requireDraftSigningPayload(draft, field, label, expectedPayload) {
   ) {
     throw new TypeError(`draft provenancePayloads.${field} is required`);
   }
+  rejectSoracloudSigningSecrets(signingPayload);
+  for (const payloadField in signingPayload.payload) {
+    if (!Object.hasOwn(signingPayload.payload, payloadField)) {
+      throw new TypeError(
+        `draft provenancePayloads.${field} payload.${payloadField} must be an own property`,
+      );
+    }
+  }
+  rejectSoracloudSigningSecrets(signingPayload.payload);
   if (!deepEqualCanonical(signingPayload.payload, expectedPayload)) {
     throw new TypeError(`draft provenancePayloads.${field} payload must match draft payload`);
   }
@@ -301,8 +345,12 @@ function requireDraftSigningPayload(draft, field, label, expectedPayload) {
  * @returns {{ payload: Record<string, unknown>, provenance: { signer: string, signature: string }, generated_service_provenance: { signer: string, signature: string }, generated_apartment_provenance?: { signer: string, signature: string } }}
  */
 export function assembleSoracloudHfDeployRequest(draft, provenances = {}) {
+  rejectSoracloudSigningSecrets(draft);
   if (
     draft == null ||
+    typeof draft !== "object" ||
+    Array.isArray(draft) ||
+    !Object.hasOwn(draft, "payload") ||
     typeof draft.payload !== "object" ||
     draft.payload == null ||
     Array.isArray(draft.payload)

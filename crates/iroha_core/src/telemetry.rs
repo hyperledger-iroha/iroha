@@ -4018,6 +4018,22 @@ impl StateTelemetry {
         }
     }
 
+    /// Set detached-fallback count for a specific reason in the latest validated block.
+    pub fn set_pipeline_detached_fallback_reason(
+        &self,
+        lane_id: LaneId,
+        reason: &'static str,
+        count: u64,
+    ) {
+        if self.nexus_lane_metrics_enabled() {
+            self.record_lane_placeholders(lane_id);
+            self.metrics
+                .pipeline_detached_fallback_reason
+                .with_label_values(&[reason])
+                .set(count);
+        }
+    }
+
     /// Observe snapshot query lane iterable metrics for a completed first batch.
     pub fn observe_snapshot_iterable(
         &self,
@@ -4043,7 +4059,7 @@ impl StateTelemetry {
             self.metrics
                 .query_snapshot_lane_remaining_items
                 .with_label_values(&[mode_label])
-                .set(output.remaining_items);
+                .set(output.remaining_items_hint());
             if output.continue_cursor.is_some() {
                 self.metrics
                     .query_snapshot_lane_cursors_total
@@ -11834,9 +11850,17 @@ mod tests {
         st.set_pipeline_detached_prepared(LaneId::SINGLE, 3);
         st.set_pipeline_detached_merged(LaneId::SINGLE, 2);
         st.set_pipeline_detached_fallback(LaneId::SINGLE, 1);
+        st.set_pipeline_detached_fallback_reason(LaneId::SINGLE, "fee_postprocessing", 1);
         assert_eq!(metrics.pipeline_detached_prepared.get(), 3);
         assert_eq!(metrics.pipeline_detached_merged.get(), 2);
         assert_eq!(metrics.pipeline_detached_fallback.get(), 1);
+        assert_eq!(
+            metrics
+                .pipeline_detached_fallback_reason
+                .with_label_values(&["fee_postprocessing"])
+                .get(),
+            1
+        );
     }
 
     #[test]

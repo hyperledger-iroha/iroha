@@ -354,7 +354,7 @@ fn preverify_rejects_proof_backend_mismatch_before_lookup() {
 
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
         "halo2/ipa".into(),
-        iroha_data_model::proof::ProofBox::new("stark/fri-v1".into(), vec![1, 2, 3]),
+        iroha_data_model::proof::ProofBox::new("stark/fri".into(), vec![1, 2, 3]),
         iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_mismatch"),
     );
     let tx = signed_empty_tx_with_attachments(iroha_data_model::proof::ProofAttachmentList(vec![
@@ -386,7 +386,7 @@ fn preverify_rejects_vk_ref_backend_mismatch_before_lookup() {
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
         "halo2/ipa".into(),
         fixture.proof_box("halo2/ipa"),
-        iroha_data_model::proof::VerifyingKeyId::new("stark/fri-v1", "vk_mismatch"),
+        iroha_data_model::proof::VerifyingKeyId::new("stark/fri", "vk_mismatch"),
     );
     let tx = signed_empty_tx_with_attachments(iroha_data_model::proof::ProofAttachmentList(vec![
         attachment,
@@ -523,7 +523,7 @@ fn verifyproof_rejects_proof_backend_mismatch_before_lookup() {
 
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
         "halo2/ipa".into(),
-        iroha_data_model::proof::ProofBox::new("stark/fri-v1".into(), vec![1, 2, 3]),
+        iroha_data_model::proof::ProofBox::new("stark/fri".into(), vec![1, 2, 3]),
         iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_not_consulted"),
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
@@ -549,7 +549,7 @@ fn verifyproof_rejects_vk_ref_backend_mismatch_before_lookup() {
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
         "halo2/ipa".into(),
         fixture.proof_box("halo2/ipa"),
-        iroha_data_model::proof::VerifyingKeyId::new("stark/fri-v1", "vk_not_consulted"),
+        iroha_data_model::proof::VerifyingKeyId::new("stark/fri", "vk_not_consulted"),
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
     let err = exec

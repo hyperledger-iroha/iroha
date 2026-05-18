@@ -27,7 +27,7 @@ Backends (tags)
 - IPA (Pallas, native): `halo2/ipa-v1/poly-open`
 - IPA (BN254): `halo2/ipa/ipa-v1/poly-open`
 - IPA (Goldilocks): `halo2/goldilocks-ipa-v1/poly-open`
-- STARK (native): `stark/fri-v1/<profile>` (e.g., `stark/fri-v1/sha256-goldilocks-v1`)
+- STARK (native): `stark/fri/<profile>` (e.g., `stark/fri/sha256-goldilocks-v1`)
 
 General notes
 - Norito encoding is used for the envelopes and their nested payloads. Unless
@@ -232,7 +232,7 @@ Example (Rust)
 	let env = StarkVerifyEnvelopeV1 { /* fill params, proof, transcript */ };
 	let bytes = norito::to_bytes(&env).unwrap();
 	// Verify the raw envelope bytes with `verify_stark_fri_envelope(&bytes)`.
-	// Note: `verify_backend(\"stark/fri-v1/*\", ...)` expects a Norito `OpenVerifyEnvelope` wrapper.
+	// Note: `verify_backend(\"stark/fri/*\", ...)` expects a Norito `OpenVerifyEnvelope` wrapper.
 	```
 
 Example (JSON-like, annotated)

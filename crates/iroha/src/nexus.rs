@@ -220,6 +220,7 @@ mod tests {
                 timestamp_ms: 1_700_000_000_000,
             }],
             nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
         }
     }
 

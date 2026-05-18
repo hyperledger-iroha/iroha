@@ -782,6 +782,78 @@ pub mod isi {
         }
     }
 
+    fn unique_account_dataspace_hint(
+        state_transaction: &StateTransaction<'_, '_>,
+        account_id: &AccountId,
+    ) -> Result<Option<DataSpaceId>, Error> {
+        let hierarchy = state_transaction
+            .world
+            .account_scope_hierarchy(account_id)
+            .map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("account {account_id} dataspace scope could not be resolved: {err}")
+                        .into(),
+                )
+            })?;
+        let mut dataspaces = hierarchy
+            .keys()
+            .copied()
+            .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL);
+        let first = dataspaces.next();
+        if let (Some(first), Some(second)) = (first, dataspaces.next()) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "account {account_id} is bound to multiple dataspaces ({} and {}); use an explicit dataspace-scoped asset id for transparent cross-dataspace asset use",
+                    first.as_u64(),
+                    second.as_u64()
+                )
+                .into(),
+            ));
+        }
+        Ok(first)
+    }
+
+    fn transfer_source_dataspace_hint(
+        state_transaction: &StateTransaction<'_, '_>,
+        source_id: &AssetId,
+    ) -> Result<Option<DataSpaceId>, Error> {
+        let route_dataspace = state_transaction
+            .current_dataspace_id
+            .or(state_transaction.world.current_dataspace_id);
+        if let iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace) = source_id.scope()
+        {
+            if let Some(route_dataspace) = route_dataspace
+                && route_dataspace != DataSpaceId::UNIVERSAL
+                && route_dataspace != *dataspace
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "source asset scope must match the non-universal execution dataspace".into(),
+                ));
+            }
+            return Ok(Some(*dataspace));
+        }
+        if route_dataspace.is_some_and(|dataspace| dataspace != DataSpaceId::UNIVERSAL) {
+            return Ok(route_dataspace);
+        }
+        unique_account_dataspace_hint(state_transaction, source_id.account())
+            .map(|hint| hint.or(route_dataspace))
+    }
+
+    fn transfer_destination_dataspace_hint(
+        state_transaction: &StateTransaction<'_, '_>,
+        destination_id: &AssetId,
+    ) -> Result<Option<DataSpaceId>, Error> {
+        if let iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace) =
+            destination_id.scope()
+        {
+            return Ok(Some(*dataspace));
+        }
+        unique_account_dataspace_hint(state_transaction, destination_id.account()).map(|hint| {
+            hint.or(state_transaction.current_dataspace_id)
+                .or(state_transaction.world.current_dataspace_id)
+        })
+    }
+
     fn dataspace_id_for_alias_segment(
         catalog: &DataSpaceCatalog,
         dataspace_alias: &str,
@@ -839,10 +911,11 @@ pub mod isi {
 
         if let Some(route_dataspace) = route_dataspace
             && route_dataspace != home_dataspace
+            && route_dataspace != DataSpaceId::UNIVERSAL
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "global asset {definition_id} {operation} must execute on authoritative dataspace {}; current route is {}",
+                    "global asset {definition_id} {operation} must execute on authoritative dataspace {} or the universal AMX coordinator; current route is {}",
                     home_dataspace.as_u64(),
                     route_dataspace.as_u64()
                 )
@@ -1013,14 +1086,12 @@ pub mod isi {
             source_id.definition(),
             "transfer",
         )?;
+        let source_dataspace = transfer_source_dataspace_hint(state_transaction, source_id)?;
         let source_id = state_transaction
             .world
-            .resolve_asset_id_for_current_scope(source_id)?;
-        let destination_dataspace = state_transaction
-            .world
-            .dataspace_for_account(destination_id.account())
-            .or(state_transaction.current_dataspace_id)
-            .or(state_transaction.world.current_dataspace_id);
+            .resolve_asset_id_for_scope_hint(source_id, source_dataspace)?;
+        let destination_dataspace =
+            transfer_destination_dataspace_hint(state_transaction, destination_id)?;
         let destination_id = state_transaction
             .world
             .resolve_asset_id_for_scope_hint(destination_id, destination_dataspace)?;
@@ -4060,6 +4131,63 @@ pub mod query {
         }
 
         #[test]
+        fn mint_global_asset_allows_universal_amx_route_for_non_universal_home() {
+            let home_dataspace = DataSpaceId::new(7);
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let account = build_account_in_domain(&ALICE_ID, &domain_id);
+            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
+            let asset_def = {
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+                    .with_alias(Some("xor#paynet".parse().expect("asset alias")))
+            }
+            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
+            .build(&ALICE_ID);
+
+            let world = World::with([domain], [account], [asset_def]);
+            let kura = Kura::blank_kura_for_testing();
+            let query_store = LiveQueryStore::start_test();
+            let state = State::new(world, kura, query_store);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            block.nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
+                iroha_data_model::nexus::DataSpaceMetadata::default(),
+                iroha_data_model::nexus::DataSpaceMetadata {
+                    id: home_dataspace,
+                    alias: "paynet".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog");
+            let mut stx = block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+
+            let mint_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
+            Mint::asset_numeric(5_u32, mint_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("universal AMX coordinator can mutate non-universal global asset home");
+
+            assert_eq!(
+                stx.world
+                    .asset(&mint_id)
+                    .expect("minted global asset")
+                    .value()
+                    .clone()
+                    .into_inner(),
+                Numeric::new(5, 0)
+            );
+        }
+
+        #[test]
         fn transfer_restricted_asset_rejects_cross_dataspace_scope() {
             let domain_id: DomainId =
                 DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -4272,8 +4400,8 @@ pub mod query {
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
-            stx.current_dataspace_id = Some(source_dataspace);
-            stx.world.current_dataspace_id = Some(source_dataspace);
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             seed_test_call_hash(&mut stx, 0xB3);
 
             Transfer::asset_numeric(

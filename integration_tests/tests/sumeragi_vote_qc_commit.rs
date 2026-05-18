@@ -1,6 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Ensure Sumeragi commits blocks end-to-end using the Vote/QC pipeline.
 
+use std::time::{Duration, Instant};
+
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::{
@@ -46,7 +48,18 @@ fn commits_via_vote_qc_pipeline() -> Result<()> {
                 .await
         })?;
 
-        let accounts = client.query(FindAccounts).execute_all()?;
+        let account_visibility_deadline = Instant::now() + Duration::from_secs(30);
+        let accounts = loop {
+            let accounts = client.query(FindAccounts).execute_all()?;
+            if accounts
+                .iter()
+                .any(|account| account.id() == &new_account_id)
+                || Instant::now() >= account_visibility_deadline
+            {
+                break accounts;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        };
         assert!(
             accounts
                 .iter()

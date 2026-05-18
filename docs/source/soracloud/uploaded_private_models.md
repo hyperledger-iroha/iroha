@@ -11,10 +11,13 @@ uploaded-model path:
 
 - `POST /v1/soracloud/model/upload/register`
 
-Torii also exposes read-only upload readiness endpoints:
+Torii also exposes upload readiness and deterministic private execution
+endpoints:
 
 - `GET /v1/soracloud/model/upload/encryption-recipient`
 - `GET /v1/soracloud/model/upload/status`
+- `POST /v1/soracloud/model/upload/private/execute`
+- `GET /v1/soracloud/model/upload/private/receipts`
 
 ## Register Flow
 
@@ -58,11 +61,34 @@ model id.
 
 ## Runtime Posture
 
-Production V1 does not expose private uploaded-model execution. Uploaded-model
-status is limited to storage and registry readiness. Any future private runtime
-must land as a real deterministic runtime with commitments, receipts,
-decryption-policy release, and cross-peer determinism tests before public
-execution APIs are added.
+Production V1 exposes only the deterministic quantized CPU private runtime for
+uploaded models admitted with `DeterministicQuantizedCpuV1`. The CPU runtime is
+the authoritative semantics: fixed signed-integer linear operations,
+nearest-away-from-zero rounding, saturating output bounds, and stable receipt
+commitments. Hardware acceleration is not part of the V1 correctness surface.
+
+The private execution route validates that the finalized uploaded-model bundle
+is backed by an active approved SoraFS pin, validates encrypted input and output
+artifact references against active approved SoraFS pins, executes the CPU
+reference runtime, and returns:
+
+- `SoraPrivateUploadedModelExecutionReceiptV1`, containing only commitments,
+  runtime version, policy id, bundle identifiers, and encrypted artifact
+  references;
+- `tx_instructions`, containing a canonical
+  `RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction payload for
+  client signing and transaction submission.
+
+Plaintext input and output are runtime-local and must not be written to chain
+state. Committed chain state stores receipt commitments and encrypted artifact
+references only.
+
+Committed private uploaded-model receipts can be queried with optional
+`receipt_id`, `service_name`, `model_id`, `weight_version`, `limit`, and
+`count_mode` filters. The list response defaults to `count_mode=bounded` and
+accepts explicit `count_mode=exact` when clients need a `total`. It includes
+pagination metadata (`returned_items`, `remaining_items`, `has_more`,
+`count_mode`) alongside the receipt records.
 
 ## Production Gates
 
@@ -82,7 +108,10 @@ Focused V1 coverage should include:
 - approved active SoraFS pin succeeds;
 - missing, pending, and retired SoraFS pins fail;
 - world state contains no uploaded-model bytes;
-- removed private execution endpoints return not found;
+- deterministic quantized CPU private execution emits stable receipts and a
+  receipt-recording transaction instruction;
+- receipt recording rejects non-deterministic uploaded-model formats and
+  mismatched manifest, bundle-root, or policy bindings;
 - production config rejects missing Inrou enablement or gas asset;
 - zero-backend Inrou hosts emit no host adverts;
 - JavaScript Soracloud helpers expose unsigned drafts and do not accept raw

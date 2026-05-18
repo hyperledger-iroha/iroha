@@ -484,6 +484,98 @@ where
     }
 }
 
+/// Derive access for a transaction whose overlay has already been built.
+pub(crate) fn derive_for_prepared_overlay_with_source<R>(
+    tx: &SignedTransaction,
+    state_ro: &R,
+    overlay: &crate::pipeline::overlay::TxOverlay,
+    access_log: Option<&ivm::host::AccessLog>,
+    dynamic_prepass: bool,
+) -> (AccessSet, Option<AccessSetSource>)
+where
+    R: StateReadOnly + QueryStateSource,
+{
+    match tx.instructions() {
+        Executable::Instructions(_) => with_stateful_admission_keys(
+            tx,
+            derive_from_overlay_artifacts(overlay, None, Some(state_ro), false),
+            None,
+        ),
+        Executable::IvmProved(_) => with_stateful_admission_keys(
+            tx,
+            derive_from_overlay_artifacts(overlay, None, Some(state_ro), false),
+            None,
+        ),
+        Executable::ContractCall(_) | Executable::Ivm(_) => {
+            let (hint_set, hint_source) =
+                derive_for_transaction_with_source(tx, Some(state_ro), IvmStrategy::Conservative);
+            if matches!(
+                hint_source,
+                Some(AccessSetSource::ManifestHints | AccessSetSource::EntrypointHints)
+            ) {
+                return (hint_set, hint_source);
+            }
+            if !dynamic_prepass {
+                return (hint_set, hint_source);
+            }
+
+            let set = derive_from_overlay_artifacts(overlay, access_log, Some(state_ro), true);
+            let source = if is_conservative_global(&set) {
+                AccessSetSource::ConservativeFallback
+            } else {
+                AccessSetSource::PrepassMerge
+            };
+            with_stateful_admission_keys(tx, set, Some(source))
+        }
+    }
+}
+
+fn derive_from_overlay_artifacts<R>(
+    overlay: &crate::pipeline::overlay::TxOverlay,
+    access_log: Option<&ivm::host::AccessLog>,
+    state_ro: Option<&R>,
+    conservative_if_empty: bool,
+) -> AccessSet
+where
+    R: StateReadOnly + QueryStateSource,
+{
+    let mut set = AccessSet::new();
+    let max_depth = state_ro
+        .map(|state| {
+            state
+                .world()
+                .parameters()
+                .smart_contract()
+                .execution_depth()
+        })
+        .unwrap_or(0);
+    let mut visited_triggers = BTreeSet::new();
+    for isi in overlay.instructions() {
+        set.union_with(derive_from_instruction(
+            isi,
+            state_ro,
+            &mut visited_triggers,
+            0,
+            max_depth,
+        ));
+    }
+    if let Some(log) = access_log {
+        merge_access_log(&mut set, log);
+    }
+    for path in overlay.durable_state_overlay().keys() {
+        set.add_write(access_key_from_state_log(&path.to_string()));
+    }
+    if conservative_if_empty && set.read_keys.is_empty() && set.write_keys.is_empty() {
+        AccessSet::global()
+    } else {
+        set
+    }
+}
+
+fn is_conservative_global(set: &AccessSet) -> bool {
+    set.read_keys.is_empty() && set.write_keys.len() == 1 && set.write_keys.contains("*")
+}
+
 fn manifest_matches_embedded_contract(bytecode: &[u8], manifest: &ContractManifest) -> bool {
     ivm::verify_contract_artifact(bytecode)
         .map(|verified| manifest.signature_payload() == verified.manifest.signature_payload())

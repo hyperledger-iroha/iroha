@@ -142,16 +142,13 @@ public enum OfflineNoteV2NfcApduProtocol {
         range: Range<Data.Index>
     ) throws -> Data {
         try requireValidOffset(offset)
+        try requireValidPayloadRange(range, in: payloadBytes)
         let length = payloadBytes.distance(from: range.lowerBound, to: range.upperBound)
         try requireChunkLength(length, maxChunkLength: maxExtendedWriteChunkBytes)
         var apdu = Data()
         apdu.reserveCapacity(commandHeaderLength(forPayloadLength: length) + length)
         appendCommandHeader(&apdu, instruction: insWriteChunk, offset: offset, length: length)
-        payloadBytes.withUnsafeBytes { rawBuffer in
-            guard let baseAddress = rawBuffer.bindMemory(to: UInt8.self).baseAddress else { return }
-            let lowerBound = payloadBytes.distance(from: payloadBytes.startIndex, to: range.lowerBound)
-            apdu.append(baseAddress.advanced(by: lowerBound), count: length)
-        }
+        apdu.append(contentsOf: payloadBytes[range])
         return apdu
     }
 
@@ -383,6 +380,16 @@ public enum OfflineNoteV2NfcApduProtocol {
     private static func requireChunkLength(_ length: Int, maxChunkLength: Int) throws {
         guard length > 0, length <= maxChunkLength else {
             throw OfflineNoteV2NfcApduError.invalidChunkLength
+        }
+    }
+
+    private static func requireValidPayloadRange(
+        _ range: Range<Data.Index>,
+        in payloadBytes: Data
+    ) throws {
+        guard range.lowerBound >= payloadBytes.startIndex,
+              range.upperBound <= payloadBytes.endIndex else {
+            throw OfflineNoteV2NfcApduError.invalidOffset
         }
     }
 

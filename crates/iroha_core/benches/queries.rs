@@ -9,12 +9,15 @@
 )]
 use std::sync::LazyLock;
 
-use criterion::Criterion;
+use criterion::{BenchmarkId, Criterion};
 use iroha_core::{
     prelude::*,
     query::snapshot::{CursorMode as LaneCursorMode, run_on_snapshot, run_on_snapshot_with_mode},
     query::store::LiveQueryStore,
-    smartcontracts::{Execute, ValidQuery, isi::query::QueryLimits},
+    smartcontracts::{
+        Execute, ValidQuery,
+        isi::query::{QueryCountMode, QueryLimits},
+    },
     state::{State, World},
 };
 use iroha_crypto::{Algorithm, KeyPair};
@@ -268,6 +271,72 @@ fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
             std::hint::black_box(v.len());
         })
     });
+
+    let mut count_group = c.benchmark_group("snapshot_find_domains_count_mode_first_batch");
+    for count_mode in [QueryCountMode::Exact, QueryCountMode::Bounded] {
+        let label = match count_mode {
+            QueryCountMode::Exact => "exact",
+            QueryCountMode::Bounded => "bounded",
+        };
+        let limits = QueryLimits::default().with_count_mode(count_mode);
+
+        count_group.bench_with_input(
+            BenchmarkId::new("ephemeral", label),
+            &limits,
+            |b, limits| {
+                b.iter(|| {
+                    let request = iroha_data_model::query::QueryRequest::Start(
+                        iroha_data_model::query::QueryWithParams::new(&qbox, params.clone()),
+                    );
+                    let resp =
+                        run_on_snapshot(&state, &query_handle, &authority_id, request, *limits)
+                            .expect("lane ok");
+                    let iroha_data_model::query::QueryResponse::Iterable(first) = resp else {
+                        panic!("expected iterable")
+                    };
+                    let (batch, _rem, cur) = first.into_parts();
+                    if let Some(cur) = cur {
+                        query_handle.drop_query(&cur.query);
+                    }
+                    let v = match batch.into_iter().next().expect("slice") {
+                        iroha_data_model::query::QueryOutputBatchBox::Domain(v) => v,
+                        _ => unreachable!(),
+                    };
+                    std::hint::black_box(v.len());
+                })
+            },
+        );
+
+        count_group.bench_with_input(BenchmarkId::new("stored", label), &limits, |b, limits| {
+            b.iter(|| {
+                let request = iroha_data_model::query::QueryRequest::Start(
+                    iroha_data_model::query::QueryWithParams::new(&qbox, params.clone()),
+                );
+                let resp = run_on_snapshot_with_mode(
+                    &state,
+                    &query_handle,
+                    &authority_id,
+                    request,
+                    LaneCursorMode::Stored,
+                    *limits,
+                )
+                .expect("lane ok");
+                let iroha_data_model::query::QueryResponse::Iterable(first) = resp else {
+                    panic!("expected iterable")
+                };
+                let (batch, _rem, cur) = first.into_parts();
+                if let Some(cur) = cur {
+                    query_handle.drop_query(&cur.query);
+                }
+                let v = match batch.into_iter().next().expect("slice") {
+                    iroha_data_model::query::QueryOutputBatchBox::Domain(v) => v,
+                    _ => unreachable!(),
+                };
+                std::hint::black_box(v.len());
+            })
+        });
+    }
+    count_group.finish();
 }
 
 fn bench_snapshot_vs_live_find_assets_first_batch(c: &mut Criterion) {

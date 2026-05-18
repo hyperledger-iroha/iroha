@@ -188,6 +188,18 @@ fn decode_confidential_registry_meta(
     })
 }
 
+fn confidential_handshake_policy_digest(
+    digest: iroha_data_model::confidential::ConfidentialFeatureDigest,
+) -> iroha_data_model::confidential::ConfidentialFeatureDigest {
+    iroha_data_model::confidential::ConfidentialFeatureDigest::new(
+        None,
+        None,
+        None,
+        digest.conf_rules_version,
+        digest.zk_policy_hash,
+    )
+}
+
 fn decode_consensus_handshake_meta(
     payload: &Json,
 ) -> Result<ConsensusHandshakeMeta, norito::Error> {
@@ -412,6 +424,25 @@ mod handshake_payload_tests {
         let decoded =
             parse_confidential_registry_hash(&payload).expect("decode null confidential payload");
         assert_eq!(decoded, None);
+    }
+
+    #[test]
+    fn confidential_handshake_digest_excludes_height_dependent_registry_fields() {
+        let digest = iroha_data_model::confidential::ConfidentialFeatureDigest::new(
+            Some([1; 32]),
+            Some(7),
+            Some(9),
+            Some(1),
+            Some([2; 32]),
+        );
+
+        let handshake = confidential_handshake_policy_digest(digest);
+
+        assert_eq!(handshake.vk_set_hash, None);
+        assert_eq!(handshake.poseidon_params_id, None);
+        assert_eq!(handshake.pedersen_params_id, None);
+        assert_eq!(handshake.conf_rules_version, Some(1));
+        assert_eq!(handshake.zk_policy_hash, Some([2; 32]));
     }
 }
 
@@ -3894,6 +3925,9 @@ impl Iroha {
         // Apply pipeline config before replay so config-backed execution policy such as
         // pipeline.gas is identical to the live path that originally committed the block.
         state.set_pipeline(config.pipeline.clone());
+        // Apply ZK config before replay/genesis validation so confidential feature digests match
+        // the runtime policy advertised by peer configs and committed by signed genesis.
+        state.set_zk(config.zk.clone());
         state
             .set_nexus(config.nexus.clone())
             .map_err(|err| Report::new(err).change_context(StartError::InitKura))
@@ -4156,7 +4190,7 @@ impl Iroha {
             enabled: config.confidential.enabled,
             assume_valid: config.confidential.assume_valid,
             verifier_backend: config.confidential.verifier_backend.clone(),
-            features: Some(confidential_features),
+            features: Some(confidential_handshake_policy_digest(confidential_features)),
         };
         let crypto_caps = iroha_p2p::CryptoHandshakeCaps {
             sm_enabled: config.crypto.sm_helpers_enabled(),

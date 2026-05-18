@@ -1,8 +1,50 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-05-17
+Last updated: 2026-05-18
 
 Completed history lives in `status.md`. This file should only track unfinished work.
+
+## Cross-dataspace AMX follow-ups
+
+- Add a multi-peer integration corridor that proves native AMX receipts emitted
+  by the universal coordinator survive block relay, Sumeragi status export, and
+  downstream audit consumption.
+- Extend SDK/OpenAPI convenience models for lane settlement commitments so
+  native AMX receipt legs are first-class in client responses instead of only
+  available through generic commitment decoding.
+- If future coordinator execution supports partial prepare failure inside a
+  batch, extend `NativeAmxReceipt` with explicit abort evidence. Finalized
+  receipts currently represent only successfully committed native AMX batches.
+
+## Transaction pipeline follow-ups
+
+- Represent fee charging, gas settlement receipts, and Nexus fee receipts as
+  deterministic detached deltas for the simple eligible cases. Until then,
+  fee-enabled transactions intentionally remain visible as
+  `fee_postprocessing` detached fallback reasons in Sumeragi status and
+  pipeline telemetry.
+- Broaden validation from the focused scheduler, dynamic IVM access, telemetry,
+  and receipt-hash tests to the next long `cargo test --workspace` corridor
+  once the repository-wide dirty worktree settles.
+
+## Torii query API follow-ups
+
+- Audit endpoint-specific OpenAPI schemas and SDK convenience parsers for app
+  endpoints that expose concrete response models instead of generic JSON, so
+  every bounded response documents `has_more`, optional `total`, and
+  `count_mode` consistently.
+- Rework the MV/world iterator boundary so stored iterable cursors can keep
+  unsorted bounded continuations lazily. The current live-query store is
+  `Send + Sync`, while several WSV query implementations expose boxed
+  iterators without `Send`/`Sync`, so the safe shared-store path still owns the
+  continuation values before storing a cursor.
+- Add sustained load benchmarks for signed iterable queries, account alias
+  projections, asset holders, and generic aggregate queries under concurrent
+  HTTP clients. The current coverage is focused micro-benchmarking of first
+  batch count-mode cost in the core snapshot path.
+- Profile whether asset-holder, account-asset, and contract-activity predicates
+  need explicit indexes or materialized views after the bounded-count path is
+  deployed under realistic Torii traffic.
 
 ## SoraFS paid pin validation follow-ups
 
@@ -16,14 +58,24 @@ Completed history lives in `status.md`. This file should only track unfinished w
 ## ZK audit validation follow-ups
 
 - Broaden the remaining ZK validation beyond the focused cleanup corridor:
-  run policy-hash state tests, P2P confidential digest tests, and IVM CoreHost
-  STARK/Halo2 guardrail tests with the relevant ZK features enabled, then fold
-  the full workspace ZK corridor into the next long validation budget.
+  run policy-hash state tests, P2P confidential digest tests, IVM CoreHost
+  STARK/Halo2 guardrail tests, and the JavaScript SDK ZK fixture suite after
+  rebuilding the native binding/checksum manifest, with the relevant ZK
+  features enabled before folding the full workspace ZK corridor into the next
+  long validation budget.
 
 ## Soracloud production follow-ups
 
-- Design and implement a real deterministic private uploaded-model runtime
-  before adding any private execution production route family.
+- Broaden the deterministic quantized CPU uploaded-model route into the full
+  production request/status/receipt corridor. The core evaluator, receipt
+  schema, and guarded Torii execute route now exist with active SoraFS
+  artifact-pin admission. Committed receipt state and the
+  `RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction now exist;
+  Torii exposes both the private execution route and committed receipt query
+  route. Remaining work is OpenAPI snapshots, SDK parser coverage,
+  decryption-policy release hooks beyond policy-id binding, SDK submission
+  helpers for the returned receipt instruction, and multi-peer private
+  execution integration coverage.
 - Add operator documentation for the SoraFS pin-and-register upload workflow,
   including approved-pin evidence, runtime submission gas-asset config, and
   external signing of JavaScript Soracloud provenance payloads.
@@ -59,6 +111,11 @@ Completed history lives in `status.md`. This file should only track unfinished w
 - Fix Metal/CUDA Poseidon Merkle parent-pair batch parity so the guarded
   FASTPQ trace Merkle-pair accelerator can enable on real GPU backends. Keep
   the scalar fallback active until the preflight passes.
+- Runtime Poseidon parity gates now fail closed: column hashing disables the GPU
+  path after dispatch/self-test/count/parity mismatches, and Merkle parent-pair
+  hashing disables its GPU path after sampled CPU parity mismatch. Remaining
+  work is hardware proof on real Metal and CUDA hosts plus telemetry/dashboard
+  wiring for the disable counters.
 - Rebuild the parked low-level Poseidon fused column+parent kernels with real
   Metal and CUDA parity proof before putting them back on the hot path. The
   acceptance run needs scalar-equivalent leaf/parent vectors, a bench sample
@@ -264,10 +321,13 @@ Completed history lives in `status.md`. This file should only track unfinished w
     FASTPQ proof sidecar persistence, adds sidecar telemetry, exposes
     `/v1/pipeline/recovery/{height}/fastpq-proofs`, and adds AXT packaging
     helpers for already-bound batches.
-  - Focused `fastpq_prover`, `iroha_config`, `iroha_core fastpq`, and Torii
-    recovery endpoint checks are green as of 2026-05-17 with
-    `CARGO_TARGET_DIR=target/codex-fastpq-release`. The remaining open work is
-    only to fold the slice into the next full workspace clippy/test corridor.
+  - Focused `fastpq_prover`, `iroha_config`, `iroha_core fastpq`, Torii recovery
+    endpoint, confidential localnet restart/recovery, and explicit
+    `fastpq-gpu` release checks are green as of 2026-05-17 with
+    `CARGO_TARGET_DIR=target/codex-fastpq-release` and
+    `CARGO_TARGET_DIR=target/codex-fastpq-gpu`. The full workspace all-target
+    clippy corridor is also green; the remaining open work is only the next
+    multi-hour `cargo test --workspace` corridor.
   - AXT proof envelopes now require FastPQ V1 verifier labels at both the
     production FastPQ binding layer and the standalone IVM host envelope-shape
     layer. DefaultHost, CoreHost, and WSVHost reject raw proof bytes and
@@ -1078,7 +1138,20 @@ Completed history lives in `status.md`. This file should only track unfinished w
   native `OpenVpnLeaseEscrow` and `SettleVpnLease` transactions, then retire
   the legacy in-memory receipt endpoint after a public relay/helper/Torii
   canary.
-- Broaden Kura replay determinism beyond the focused unit corridor.
+- Broaden Kura replay determinism beyond the current unit and consensus
+  integration corridor.
+  - Sidecar recovery semantics are now aligned with the memory-only WSV model:
+    commit manifests and WSV checkpoints are optional verification metadata,
+    while intact Kura blocks remain the recovery source of truth. Remaining
+    work should prove replay equivalence from blocks, not make sidecars
+    mandatory.
+  - Commit-worker coverage now proves that injected WSV checkpoint and commit
+    manifest write failures after state commit are reported as sidecar
+    warnings, not ledger data loss or commit rollback.
+  - The broad `integration_tests --test consensus_and_da` target is green after
+    the memory-only WSV sidecar changes, including DA restart/rehydration and
+    the mode-cutover and vote-QC regressions exposed by the first workspace
+    rerun.
   - Add a multi-block replay fixture that replays committed blocks into a fresh
     state and compares canonical WSV snapshot bytes against the originally
     committed WSV.
@@ -1093,9 +1166,6 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - Profile the post-commit canonical WSV checkpoint hash under sustained load
     and either record the accepted overhead or replace it with a cheaper
     committed state-root path.
-  - Decide whether a failed post-commit WSV checkpoint write should escalate the
-    peer immediately after the block is committed, instead of only logging and
-    failing later replay.
   - If operators need a network-authenticated replay proof, promote the WSV root
     from a local Kura sidecar into block-committed or certificate-bound metadata.
 - Broaden alias auto-renew mutation coverage beyond the focused onboarding grant.

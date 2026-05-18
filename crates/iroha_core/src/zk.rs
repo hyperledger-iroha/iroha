@@ -47,7 +47,7 @@ pub mod confidential_v2;
 
 #[cfg(feature = "zk-preverify")]
 use iroha_crypto::streaming::TransportCapabilityResolutionSnapshot;
-use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
+use iroha_data_model::proof::{ProofBox, VerifyingKeyBox, VerifyingKeyId};
 #[cfg(feature = "zk-preverify")]
 use ivm::halo2::VMExecutionCircuit;
 #[cfg(feature = "zk-halo2")]
@@ -622,6 +622,32 @@ fn hash_domain_separated_payload(domain: &[u8], backend: &str, bytes: &[u8]) -> 
 pub fn hash_proof(proof: &ProofBox) -> [u8; 32] {
     hash_domain_separated_payload(b"iroha:zk:v1:proof", &proof.backend, &proof.bytes)
 }
+
+/// Block-local key for cryptographically preverified proof results.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PreverifiedProofKey {
+    /// Domain-separated hash of the proof payload.
+    pub proof_hash: [u8; 32],
+    /// Registered verifying-key reference used for the verification result.
+    pub vk_ref: VerifyingKeyId,
+    /// Commitment of the registered verifying-key bytes used for verification.
+    pub vk_commitment: [u8; 32],
+}
+
+impl PreverifiedProofKey {
+    /// Build a preverified-result key from the proof payload and registered key binding.
+    #[must_use]
+    pub fn new(proof: &ProofBox, vk_ref: &VerifyingKeyId, vk_commitment: [u8; 32]) -> Self {
+        Self {
+            proof_hash: hash_proof(proof),
+            vk_ref: vk_ref.clone(),
+            vk_commitment,
+        }
+    }
+}
+
+/// Block-local preverified proof result map.
+pub type PreverifiedProofMap = std::collections::BTreeMap<PreverifiedProofKey, bool>;
 
 /// Compute a stable, domain-separated 32-byte hash of the verifying key payload.
 pub fn hash_vk(vk: &VerifyingKeyBox) -> [u8; 32] {
@@ -11200,6 +11226,38 @@ mod trace_proving_queue_tests {
                 .iter()
                 .map(|p| p.backend.clone())
                 .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[cfg(test)]
+mod preverified_key_tests {
+    use super::*;
+
+    #[test]
+    fn preverified_proof_key_binds_vk_reference_and_commitment() {
+        let proof = ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]);
+        let vk_ref = VerifyingKeyId::new("halo2/ipa", "vk_a");
+        let commitment = [7u8; 32];
+        let key = PreverifiedProofKey::new(&proof, &vk_ref, commitment);
+        let mut map = PreverifiedProofMap::new();
+        map.insert(key, true);
+
+        assert_eq!(
+            map.get(&PreverifiedProofKey::new(&proof, &vk_ref, commitment)),
+            Some(&true)
+        );
+        assert_eq!(
+            map.get(&PreverifiedProofKey::new(
+                &proof,
+                &VerifyingKeyId::new("halo2/ipa", "vk_b"),
+                commitment
+            )),
+            None
+        );
+        assert_eq!(
+            map.get(&PreverifiedProofKey::new(&proof, &vk_ref, [8u8; 32])),
+            None
         );
     }
 }

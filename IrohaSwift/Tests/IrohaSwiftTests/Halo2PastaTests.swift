@@ -1315,49 +1315,27 @@ final class Halo2PastaTests: XCTestCase {
         let redeem = try Self.redeem(fixture)
 
         let auditValues = try OfflineNoteV2InstanceBuilder.auditInstanceValues(for: audit)
-        XCTAssertEqual(auditValues.publicValues, [
-            10_824_800_885_290_844_948,
-            15_151_284_004_855_530_341,
-            682_827_931_954_959_523,
-            2_997_907_592_441_225_331,
-            2,
-            1,
-            2,
-            52,
-            52,
-            10_501_978_166_393_894_855,
-            4_541_302_008_852_631_594,
-            14_301_997_445_998_398_819,
-            6_291_239_797_061_482_249,
-            10_250_917_156_915_577_682,
-            4_255_680_284_261_914_026,
-            0,
-        ])
+        let expectedAuditPublicValues = try Self.expectedAuditPublicValues(fixture: fixture, audit: audit)
+        XCTAssertEqual(auditValues.publicValues, expectedAuditPublicValues)
+        XCTAssertEqual(
+            try Self.hashFromPublicValues(auditValues.publicValues),
+            try Self.hex(fixture.chainVectors.audit.publicInputsHash)
+        )
         XCTAssertEqual(auditValues.inputAmounts, [52, 0, 0, 0])
         XCTAssertEqual(auditValues.outputAmounts, [5, 47])
         XCTAssertEqual(auditValues.publicInstanceColumns()[0], [OfflineNoteV2InstanceValues.instanceScalarBytes(
-            10_824_800_885_290_844_948
+            expectedAuditPublicValues[0]
         )])
 
         let redeemValues = try OfflineNoteV2InstanceBuilder.redeemInstanceValues(for: redeem)
-        XCTAssertEqual(redeemValues.publicValues, [
-            13_974_433_450_111_837_069,
-            14_171_811_034_843_873_315,
-            13_261_090_121_326_126_279,
-            5_996_084_144_072_341_510,
-            1,
-            1,
-            1,
-            5,
-            5,
-            5_848_654_337_230_894_112,
-            0,
-            1_820_988_789_059_089_119,
-            11_754_262_799_708_764_079,
-            14_321_512_708_931_732_790,
-            0,
-            0,
-        ])
+        XCTAssertEqual(
+            redeemValues.publicValues,
+            try Self.expectedRedeemPublicValues(fixture: fixture, redemption: redeem)
+        )
+        XCTAssertEqual(
+            try Self.hashFromPublicValues(redeemValues.publicValues),
+            try Self.hex(fixture.chainVectors.redeem.publicInputsHash)
+        )
         XCTAssertEqual(redeemValues.inputAmounts, [5, 0, 0, 0])
         XCTAssertEqual(redeemValues.outputAmounts, [5, 0])
     }
@@ -1942,6 +1920,95 @@ final class Halo2PastaTests: XCTestCase {
         )
     }
 
+    private static func expectedAuditPublicValues(
+        fixture: Halo2OfflineInteropFixture,
+        audit: OfflineNoteAuditBundleV2
+    ) throws -> [UInt64] {
+        let vector = fixture.chainVectors.audit
+        let publicHashLimbs = try hashLimbsLE(hex(vector.publicInputsHash))
+        let inputClaimHashes = try audit.inputClaims.map { try $0.claimHash() }
+        let outputClaimHashes = try audit.outputClaims.map {
+            try OfflineNoteIssuedClaimV2.fromAuditOutput($0).claimHash()
+        }
+        return try publicHashLimbs + [
+            2,
+            UInt64(audit.inputClaims.count),
+            UInt64(audit.outputClaims.count),
+            52,
+            52,
+            hashLimb0Sum(audit.inputNullifiers),
+            hashLimb0Sum(audit.outputCommitments),
+            hashLimb0(audit.senderKeyCertificate.payloadHash()),
+            hashLimb0(hex(vector.tokenId)),
+            hashLimb0Sum(inputClaimHashes),
+            hashLimb0Sum(outputClaimHashes),
+            0,
+        ]
+    }
+
+    private static func expectedRedeemPublicValues(
+        fixture: Halo2OfflineInteropFixture,
+        redemption: OfflineNoteRedeemV2
+    ) throws -> [UInt64] {
+        let vector = fixture.chainVectors.redeem
+        let publicHashLimbs = try hashLimbsLE(hex(vector.publicInputsHash))
+        return try publicHashLimbs + [
+            1,
+            UInt64(redemption.inputNullifiers.count),
+            1,
+            5,
+            5,
+            hashLimb0Sum(redemption.inputNullifiers),
+            0,
+            hashLimb0(redemption.senderKeyCertificate.payloadHash()),
+            hashLimb0(hex(vector.sourceNoteCommitment)),
+            hashLimb0(redemption.issuedClaim().claimHash()),
+            0,
+            0,
+        ]
+    }
+
+    private static func hashFromPublicValues(_ publicValues: [UInt64]) throws -> Data {
+        guard publicValues.count >= 4 else {
+            throw Halo2PastaFixtureError.invalidPublicValueCount(publicValues.count)
+        }
+        var out = Data()
+        for value in publicValues.prefix(4) {
+            var word = value
+            for _ in 0..<8 {
+                out.append(UInt8(word & 0xff))
+                word >>= 8
+            }
+        }
+        return out
+    }
+
+    private static func hashLimb0Sum(_ hashes: [Data]) throws -> UInt64 {
+        try hashes.reduce(UInt64(0)) { sum, hash in
+            sum &+ (try hashLimb0(hash))
+        }
+    }
+
+    private static func hashLimb0(_ hash: Data) throws -> UInt64 {
+        try hashLimbsLE(hash)[0]
+    }
+
+    private static func hashLimbsLE(_ hash: Data) throws -> [UInt64] {
+        guard hash.count == 32 else {
+            throw Halo2PastaFixtureError.invalidHashLength(hash.count)
+        }
+        var limbs = [UInt64](repeating: 0, count: 4)
+        for idx in 0..<4 {
+            let start = idx * 8
+            var value: UInt64 = 0
+            for offset in 0..<8 {
+                value |= UInt64(hash[start + offset]) << UInt64(offset * 8)
+            }
+            limbs[idx] = value
+        }
+        return limbs
+    }
+
     private static func loadFixture() throws -> Halo2OfflineInteropFixture {
         let testFile = URL(fileURLWithPath: #filePath)
         let fixtureURL = testFile
@@ -1971,6 +2038,8 @@ final class Halo2PastaTests: XCTestCase {
 private enum Halo2PastaFixtureError: Error {
     case invalidHex(String)
     case invalidBase64
+    case invalidHashLength(Int)
+    case invalidPublicValueCount(Int)
 }
 
 private struct Halo2OfflineInteropFixture: Decodable {

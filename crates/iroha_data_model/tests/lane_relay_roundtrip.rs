@@ -79,6 +79,7 @@ fn sample_settlement() -> LaneBlockCommitment {
         swap_metadata: None,
         receipts: vec![receipt],
         nexus_fee_receipts: Vec::new(),
+        native_amx_receipts: Vec::new(),
     }
 }
 

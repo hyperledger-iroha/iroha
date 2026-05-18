@@ -7205,6 +7205,8 @@ pub struct Metrics {
     pub pipeline_detached_merged: GenericGauge<AtomicU64>,
     /// Detached pipeline: number of txs that fell back to direct apply
     pub pipeline_detached_fallback: GenericGauge<AtomicU64>,
+    /// Detached pipeline: fallback count by reason for the latest validated block
+    pub pipeline_detached_fallback_reason: GenericGaugeVec<AtomicU64>,
     /// BLS signature micro-batches verified via aggregate (same-message) in latest block
     pub pipeline_sig_bls_agg_same: GenericGauge<AtomicU64>,
     /// BLS signature micro-batches verified via aggregate (multi-message) in latest block
@@ -11596,6 +11598,14 @@ impl Default for Metrics {
             "Detached pipeline: txs that fell back to direct apply in the latest validated block",
         )
         .expect("Infallible");
+        let pipeline_detached_fallback_reason = GenericGaugeVec::new(
+            Opts::new(
+                "pipeline_detached_fallback_reason",
+                "Detached pipeline: fallback count by reason in the latest validated block",
+            ),
+            &["reason"],
+        )
+        .expect("Infallible");
         let merge_ledger_entries_total = IntCounter::new(
             "merge_ledger_entries_total",
             "Total merge-ledger entries appended on this node",
@@ -14030,7 +14040,8 @@ impl Default for Metrics {
             registry,
             pipeline_detached_prepared,
             pipeline_detached_merged,
-            pipeline_detached_fallback
+            pipeline_detached_fallback,
+            pipeline_detached_fallback_reason
         );
         register!(
             registry,
@@ -14752,6 +14763,7 @@ impl Default for Metrics {
             pipeline_detached_prepared,
             pipeline_detached_merged,
             pipeline_detached_fallback,
+            pipeline_detached_fallback_reason,
             merge_ledger_entries_total,
             merge_ledger_latest_epoch,
             merge_ledger_latest_root_hex,

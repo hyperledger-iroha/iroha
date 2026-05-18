@@ -910,6 +910,7 @@ fn rng_lane_relay_envelope(rng: &mut DeterministicRng) -> LaneRelayEnvelope {
         swap_metadata: None,
         receipts: vec![receipt],
         nexus_fee_receipts: Vec::new(),
+        native_amx_receipts: Vec::new(),
     };
     let qc = if rng.next_bool() {
         let validator_set: Vec<PeerId> = Vec::new();
@@ -2400,6 +2401,7 @@ fn sample_lane_commitment_fixture() -> LaneBlockCommitment {
         }),
         receipts: vec![receipt],
         nexus_fee_receipts: Vec::new(),
+        native_amx_receipts: Vec::new(),
     }
 }
 
@@ -2416,6 +2418,7 @@ fn sample_lane_commitment_fixture_without_metadata() -> LaneBlockCommitment {
         swap_metadata: None,
         receipts: Vec::new(),
         nexus_fee_receipts: Vec::new(),
+        native_amx_receipts: Vec::new(),
     }
 }
 

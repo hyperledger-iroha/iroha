@@ -509,6 +509,7 @@ fn build_relay_artifacts(
         swap_metadata: None,
         receipts: Vec::new(),
         nexus_fee_receipts: Vec::new(),
+        native_amx_receipts: Vec::new(),
     };
     let base = LaneRelayEnvelope::new(block_header, None, None, settlement_commitment, 0)
         .map_err(|err| format!("failed to build lane relay envelope: {err}"))?

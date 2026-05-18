@@ -104,10 +104,10 @@ use iroha_data_model::{
         SoraInrouServicePlacementRecordV1, SoraModelArtifactAuditEventV1,
         SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
         SoraModelHostViolationEvidenceRecordV1, SoraModelRegistryV1, SoraModelWeightAuditEventV1,
-        SoraModelWeightVersionRecordV1, SoraRuntimeReceiptV1, SoraServiceAuditEventV1,
-        SoraServiceDeploymentStateV1, SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
-        SoraServiceStateEntryV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
-        SoraUploadedModelBundleV1,
+        SoraModelWeightVersionRecordV1, SoraPrivateUploadedModelExecutionReceiptV1,
+        SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceDeploymentStateV1,
+        SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraServiceStateEntryV1,
+        SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1, SoraUploadedModelBundleV1,
     },
     soradns::{
         DirectoryId, DirectoryRotationPolicyV1, PendingDirectoryDraftV1, ResolverDirectoryRecordV1,
@@ -491,6 +491,9 @@ macro_rules! build_world_block {
             soracloud_inrou_service_placements: $state.soracloud_inrou_service_placements.$method(),
             soracloud_mailbox_messages: $state.soracloud_mailbox_messages.$method(),
             soracloud_runtime_receipts: $state.soracloud_runtime_receipts.$method(),
+            soracloud_private_uploaded_model_execution_receipts: $state
+                .soracloud_private_uploaded_model_execution_receipts
+                .$method(),
             capacity_declarations: $state.capacity_declarations.$method(),
             capacity_fee_ledger: $state.capacity_fee_ledger.$method(),
             capacity_disputes: $state.capacity_disputes.$method(),
@@ -698,6 +701,9 @@ macro_rules! build_world_transaction {
                 .transaction(),
             soracloud_mailbox_messages: $state.soracloud_mailbox_messages.transaction(),
             soracloud_runtime_receipts: $state.soracloud_runtime_receipts.transaction(),
+            soracloud_private_uploaded_model_execution_receipts: $state
+                .soracloud_private_uploaded_model_execution_receipts
+                .transaction(),
             capacity_declarations: $state.capacity_declarations.transaction(),
             capacity_fee_ledger: $state.capacity_fee_ledger.transaction(),
             capacity_disputes: $state.capacity_disputes.transaction(),
@@ -1888,6 +1894,9 @@ pub struct World {
     pub(crate) soracloud_mailbox_messages: Storage<Hash, SoraServiceMailboxMessageV1>,
     /// Soracloud runtime receipts keyed by deterministic receipt id.
     pub(crate) soracloud_runtime_receipts: Storage<Hash, SoraRuntimeReceiptV1>,
+    /// Private uploaded-model execution receipts keyed by deterministic receipt id.
+    pub(crate) soracloud_private_uploaded_model_execution_receipts:
+        Storage<Hash, SoraPrivateUploadedModelExecutionReceiptV1>,
     /// Capacity declarations keyed by provider identifier.
     #[norito(skip)]
     pub(crate) capacity_declarations: Storage<ProviderId, CapacityDeclarationRecord>,
@@ -2345,6 +2354,9 @@ pub struct WorldBlock<'world> {
     pub(crate) soracloud_mailbox_messages: StorageBlock<'world, Hash, SoraServiceMailboxMessageV1>,
     /// Soracloud runtime receipts keyed by receipt id.
     pub(crate) soracloud_runtime_receipts: StorageBlock<'world, Hash, SoraRuntimeReceiptV1>,
+    /// Private uploaded-model execution receipts keyed by receipt id.
+    pub(crate) soracloud_private_uploaded_model_execution_receipts:
+        StorageBlock<'world, Hash, SoraPrivateUploadedModelExecutionReceiptV1>,
     /// Capacity declarations keyed by provider identifier.
     pub(crate) capacity_declarations: StorageBlock<'world, ProviderId, CapacityDeclarationRecord>,
     /// Capacity fee ledger entries per provider.
@@ -2976,6 +2988,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Soracloud runtime receipts keyed by receipt id.
     pub(crate) soracloud_runtime_receipts:
         StorageTransaction<'block, 'world, Hash, SoraRuntimeReceiptV1>,
+    /// Private uploaded-model execution receipts keyed by receipt id.
+    pub(crate) soracloud_private_uploaded_model_execution_receipts:
+        StorageTransaction<'block, 'world, Hash, SoraPrivateUploadedModelExecutionReceiptV1>,
     /// Capacity declarations keyed by provider identifier.
     pub(crate) capacity_declarations:
         StorageTransaction<'block, 'world, ProviderId, CapacityDeclarationRecord>,
@@ -4395,6 +4410,9 @@ pub struct WorldView<'world> {
     pub(crate) soracloud_mailbox_messages: StorageView<'world, Hash, SoraServiceMailboxMessageV1>,
     /// Soracloud runtime receipts keyed by receipt id.
     pub(crate) soracloud_runtime_receipts: StorageView<'world, Hash, SoraRuntimeReceiptV1>,
+    /// Private uploaded-model execution receipts keyed by receipt id.
+    pub(crate) soracloud_private_uploaded_model_execution_receipts:
+        StorageView<'world, Hash, SoraPrivateUploadedModelExecutionReceiptV1>,
     /// Capacity declarations keyed by provider identifier.
     pub(crate) capacity_declarations: StorageView<'world, ProviderId, CapacityDeclarationRecord>,
     /// Capacity fee ledger entries per provider.
@@ -6319,13 +6337,13 @@ mod governance_slash_map_json {
 pub type CouncilState = crate::governance::state::ParliamentTerm;
 
 #[derive(Debug, Clone)]
-struct PipelineParallelism {
+pub(crate) struct PipelineParallelism {
     workers: usize,
     pool: Option<std::sync::Arc<rayon::ThreadPool>>,
 }
 
 impl PipelineParallelism {
-    fn new(pipeline: &iroha_config::parameters::actual::Pipeline) -> Self {
+    pub(crate) fn new(pipeline: &iroha_config::parameters::actual::Pipeline) -> Self {
         let workers = if pipeline.workers == 0 {
             std::thread::available_parallelism()
                 .map(|count| count.get())
@@ -6347,11 +6365,11 @@ impl PipelineParallelism {
         Self { workers, pool }
     }
 
-    fn workers(&self) -> usize {
+    pub(crate) fn workers(&self) -> usize {
         self.workers
     }
 
-    fn pool(&self) -> Option<std::sync::Arc<rayon::ThreadPool>> {
+    pub(crate) fn pool(&self) -> Option<std::sync::Arc<rayon::ThreadPool>> {
         self.pool.clone()
     }
 }
@@ -7102,9 +7120,8 @@ pub struct StateBlock<'state> {
     pub(crate) _curr_block: BlockHeader,
     #[cfg(feature = "zk-preverify")]
     pub(crate) zk_dedup: crate::zk::DedupCache,
-    /// Optional preverified batch results for this block (`proof_hash` -> ok)
-    pub(crate) preverified_batch:
-        Option<std::sync::Arc<std::collections::BTreeMap<[u8; 32], bool>>>,
+    /// Optional preverified batch results for this block.
+    pub(crate) preverified_batch: Option<std::sync::Arc<crate::zk::PreverifiedProofMap>>,
     /// Successful overlays (transactions, triggers, deterministic updates) committed in this block.
     committed_fragments: usize,
     /// True while rebuilding state from already committed Kura blocks.
@@ -7489,10 +7506,9 @@ pub struct StateTransaction<'block, 'state> {
     pub(crate) rwa_generated_id_ordinal: u64,
     /// Remaining executor fuel budget for runtime executor validation in this transaction.
     pub(crate) executor_fuel_remaining: Option<u64>,
-    /// Optional view of block-level preverified proofs (`proof_hash` -> ok)
+    /// Optional view of block-level preverified proofs.
     #[cfg_attr(not(feature = "zk-preverify"), allow(dead_code))]
-    pub(crate) preverified_batch:
-        Option<std::sync::Arc<std::collections::BTreeMap<[u8; 32], bool>>>,
+    pub(crate) preverified_batch: Option<std::sync::Arc<crate::zk::PreverifiedProofMap>>,
     /// Block-level transfer transcript accumulator shared across transactions.
     fastpq_transcripts:
         &'block mut BTreeMap<Hash, Vec<iroha_data_model::fastpq::TransferTranscript>>,
@@ -12367,6 +12383,20 @@ impl World {
         &mut self.soracloud_runtime_receipts
     }
 
+    /// Provides mutable access to private uploaded-model execution receipts for tests and API scaffolding.
+    pub fn soracloud_private_uploaded_model_execution_receipts_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<Hash, SoraPrivateUploadedModelExecutionReceiptV1> {
+        &mut self.soracloud_private_uploaded_model_execution_receipts
+    }
+
+    /// Provides mutable access to SoraFS pin manifests for tests and API scaffolding.
+    pub fn pin_manifests_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<ManifestDigest, PinManifestRecord> {
+        &mut self.pin_manifests
+    }
+
     /// Creates a [`World`] with these [`Domain`]s and [`Peer`]s.
     pub fn with<D, A, Ad>(domains: D, accounts: A, asset_definitions: Ad) -> Self
     where
@@ -13224,6 +13254,9 @@ impl World {
             soracloud_inrou_service_placements: self.soracloud_inrou_service_placements.view(),
             soracloud_mailbox_messages: self.soracloud_mailbox_messages.view(),
             soracloud_runtime_receipts: self.soracloud_runtime_receipts.view(),
+            soracloud_private_uploaded_model_execution_receipts: self
+                .soracloud_private_uploaded_model_execution_receipts
+                .view(),
             capacity_declarations: self.capacity_declarations.view(),
             capacity_fee_ledger: self.capacity_fee_ledger.view(),
             capacity_disputes: self.capacity_disputes.view(),
@@ -13810,6 +13843,10 @@ pub trait WorldReadOnly {
     ) -> &impl StorageReadOnly<Hash, SoraServiceMailboxMessageV1>;
     /// Soracloud runtime receipts keyed by receipt id (read-only).
     fn soracloud_runtime_receipts(&self) -> &impl StorageReadOnly<Hash, SoraRuntimeReceiptV1>;
+    /// Private uploaded-model execution receipts keyed by receipt id (read-only).
+    fn soracloud_private_uploaded_model_execution_receipts(
+        &self,
+    ) -> &impl StorageReadOnly<Hash, SoraPrivateUploadedModelExecutionReceiptV1>;
     /// Repo agreement registry (read-only).
     fn repo_agreements(&self) -> &impl StorageReadOnly<RepoAgreementId, RepoAgreement>;
     /// Repo agreement ids keyed by initiating account (read-only).
@@ -15172,6 +15209,11 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<Hash, SoraRuntimeReceiptV1> {
                 &self.soracloud_runtime_receipts
             }
+            fn soracloud_private_uploaded_model_execution_receipts(
+                &self,
+            ) -> &impl StorageReadOnly<Hash, SoraPrivateUploadedModelExecutionReceiptV1> {
+                &self.soracloud_private_uploaded_model_execution_receipts
+            }
             fn repo_agreements(&self) -> &impl StorageReadOnly<RepoAgreementId, RepoAgreement> {
                 &self.repo_agreements
             }
@@ -15619,6 +15661,7 @@ impl<'world> WorldBlock<'world> {
             soracloud_inrou_service_placements,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
+            soracloud_private_uploaded_model_execution_receipts,
             capacity_declarations,
             capacity_fee_ledger,
             capacity_disputes,
@@ -15723,6 +15766,7 @@ impl<'world> WorldBlock<'world> {
         soracloud_inrou_service_placements.commit();
         soracloud_mailbox_messages.commit();
         soracloud_runtime_receipts.commit();
+        soracloud_private_uploaded_model_execution_receipts.commit();
         capacity_disputes.commit();
         capacity_fee_ledger.commit();
         capacity_declarations.commit();
@@ -16879,6 +16923,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             soracloud_inrou_service_placements,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
+            soracloud_private_uploaded_model_execution_receipts,
             capacity_declarations,
             capacity_fee_ledger,
             capacity_disputes,
@@ -16972,6 +17017,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         soracloud_inrou_service_placements.apply();
         soracloud_mailbox_messages.apply();
         soracloud_runtime_receipts.apply();
+        soracloud_private_uploaded_model_execution_receipts.apply();
         capacity_disputes.apply();
         capacity_fee_ledger.apply();
         capacity_declarations.apply();
@@ -24003,6 +24049,111 @@ pub fn compute_vk_set_hash(world: &impl WorldReadOnly) -> Option<[u8; 32]> {
     compute_vk_set_hash_from_statuses(world, &statuses)
 }
 
+/// Build the default ZK configuration used before node configuration is applied.
+#[must_use]
+pub fn default_zk_config() -> iroha_config::parameters::actual::Zk {
+    iroha_config::parameters::actual::Zk {
+        halo2: iroha_config::parameters::actual::Halo2 {
+            enabled: iroha_config::parameters::defaults::zk::halo2::ENABLED,
+            curve: iroha_config::parameters::actual::ZkCurve::Pallas,
+            backend: iroha_config::parameters::actual::Halo2Backend::Ipa,
+            max_k: iroha_config::parameters::defaults::zk::halo2::MAX_K,
+            verifier_budget_ms: iroha_config::parameters::defaults::zk::halo2::VERIFIER_BUDGET_MS,
+            verifier_max_batch: iroha_config::parameters::defaults::zk::halo2::VERIFIER_MAX_BATCH,
+            ..iroha_config::parameters::actual::Halo2::default()
+        },
+        fastpq: iroha_config::parameters::actual::Fastpq {
+            execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Cpu,
+            poseidon_mode: iroha_config::parameters::actual::FastpqPoseidonMode::Cpu,
+            proof_sidecar_queue_cap:
+                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
+            proof_sidecar_max_bytes:
+                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
+            proof_sidecar_max_retries:
+                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
+            device_class: None,
+            chip_family: None,
+            gpu_kind: None,
+            metal_queue_fanout: None,
+            metal_queue_column_threshold: None,
+            metal_max_in_flight: None,
+            metal_threadgroup_width: None,
+            metal_trace: iroha_config::parameters::defaults::zk::fastpq::METAL_TRACE,
+            metal_debug_enum: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_ENUM,
+            metal_debug_fused: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
+        },
+        stark: iroha_config::parameters::actual::Stark::default(),
+        root_history_cap: iroha_config::parameters::defaults::zk::ledger::ROOT_HISTORY_CAP,
+        ballot_history_cap: iroha_config::parameters::defaults::zk::vote::BALLOT_HISTORY_CAP,
+        empty_root_on_empty: iroha_config::parameters::defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY,
+        merkle_depth: iroha_config::parameters::defaults::zk::ledger::EMPTY_ROOT_DEPTH,
+        preverify_max_bytes: iroha_config::parameters::defaults::zk::preverify::MAX_BYTES,
+        preverify_budget_bytes: iroha_config::parameters::defaults::zk::preverify::BUDGET_BYTES,
+        proof_history_cap: iroha_config::parameters::defaults::zk::proof::RECORD_HISTORY_CAP,
+        proof_retention_grace_blocks:
+            iroha_config::parameters::defaults::zk::proof::RETENTION_GRACE_BLOCKS,
+        proof_prune_batch: iroha_config::parameters::defaults::zk::proof::PRUNE_BATCH_SIZE,
+        bridge_proof_max_range_len:
+            iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_RANGE_LEN,
+        bridge_proof_max_past_age_blocks:
+            iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
+        bridge_proof_max_future_drift_blocks:
+            iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
+        poseidon_params_id: iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
+        pedersen_params_id: iroha_config::parameters::defaults::confidential::PEDERSEN_PARAMS_ID,
+        kaigi_roster_join_vk: None,
+        kaigi_roster_leave_vk: None,
+        kaigi_usage_vk: None,
+        max_proof_size_bytes:
+            iroha_config::parameters::defaults::confidential::MAX_PROOF_SIZE_BYTES,
+        max_nullifiers_per_tx:
+            iroha_config::parameters::defaults::confidential::MAX_NULLIFIERS_PER_TX,
+        max_commitments_per_tx:
+            iroha_config::parameters::defaults::confidential::MAX_COMMITMENTS_PER_TX,
+        max_confidential_ops_per_block:
+            iroha_config::parameters::defaults::confidential::MAX_CONFIDENTIAL_OPS_PER_BLOCK,
+        verify_timeout: iroha_config::parameters::defaults::confidential::VERIFY_TIMEOUT,
+        max_anchor_age_blocks:
+            iroha_config::parameters::defaults::confidential::MAX_ANCHOR_AGE_BLOCKS,
+        max_proof_bytes_block:
+            iroha_config::parameters::defaults::confidential::MAX_PROOF_BYTES_BLOCK,
+        max_verify_calls_per_tx:
+            iroha_config::parameters::defaults::confidential::MAX_VERIFY_CALLS_PER_TX,
+        max_verify_calls_per_block:
+            iroha_config::parameters::defaults::confidential::MAX_VERIFY_CALLS_PER_BLOCK,
+        max_public_inputs: iroha_config::parameters::defaults::confidential::MAX_PUBLIC_INPUTS,
+        reorg_depth_bound: iroha_config::parameters::defaults::confidential::REORG_DEPTH_BOUND,
+        policy_transition_delay_blocks:
+            iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
+        policy_transition_window_blocks:
+            iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+        tree_roots_history_len:
+            iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
+        tree_frontier_checkpoint_interval:
+            iroha_config::parameters::defaults::confidential::TREE_FRONTIER_CHECKPOINT_INTERVAL,
+        registry_max_vk_entries:
+            iroha_config::parameters::defaults::confidential::REGISTRY_MAX_VK_ENTRIES,
+        registry_max_params_entries:
+            iroha_config::parameters::defaults::confidential::REGISTRY_MAX_PARAMS_ENTRIES,
+        registry_max_delta_per_block:
+            iroha_config::parameters::defaults::confidential::REGISTRY_MAX_DELTA_PER_BLOCK,
+        gas: iroha_config::parameters::actual::ConfidentialGas {
+            proof_base: iroha_config::parameters::defaults::confidential::gas::PROOF_BASE,
+            per_public_input:
+                iroha_config::parameters::defaults::confidential::gas::PER_PUBLIC_INPUT,
+            per_proof_byte: iroha_config::parameters::defaults::confidential::gas::PER_PROOF_BYTE,
+            per_nullifier: iroha_config::parameters::defaults::confidential::gas::PER_NULLIFIER,
+            per_commitment: iroha_config::parameters::defaults::confidential::gas::PER_COMMITMENT,
+        },
+    }
+}
+
+/// Compute the default ZK policy hash used for signing built-in genesis blocks.
+#[must_use]
+pub fn default_zk_consensus_policy_hash() -> [u8; 32] {
+    compute_zk_consensus_policy_hash(&default_zk_config())
+}
+
 fn zk_policy_put_bytes(hasher: &mut Sha256, bytes: &[u8]) {
     let len = u64::try_from(bytes.len()).expect("ZK policy field length must fit into u64");
     Sha2Digest::update(hasher, len.to_be_bytes());
@@ -24086,19 +24237,16 @@ fn halo2_backend_tag(backend: iroha_config::parameters::actual::Halo2Backend) ->
 }
 
 /// Compute the ZK policy hash committed in confidential feature digests.
+///
+/// The hash covers consensus-relevant configuration only. Binary capability mismatches are handled
+/// by runtime validation and peer handshake caps, so offline genesis signing remains independent of
+/// the helper binary's feature set.
 #[must_use]
 pub fn compute_zk_consensus_policy_hash(
     zk_config: &iroha_config::parameters::actual::Zk,
 ) -> [u8; 32] {
     let mut h = Sha256::new();
     zk_policy_put_bytes(&mut h, b"iroha:zk:consensus-policy:v1");
-
-    zk_policy_put_bool(
-        &mut h,
-        "compiled.halo2",
-        cfg!(any(feature = "zk-halo2", feature = "zk-halo2-ipa")),
-    );
-    zk_policy_put_bool(&mut h, "compiled.stark", cfg!(feature = "zk-stark"));
 
     zk_policy_put_bool(&mut h, "halo2.enabled", zk_config.halo2.enabled);
     zk_policy_put_str(&mut h, "halo2.curve", zk_curve_tag(zk_config.halo2.curve));
@@ -26177,16 +26325,13 @@ impl<'state> StateBlock<'state> {
             Some(u64::try_from(entrypoint_index).unwrap_or(u64::MAX));
     }
 
-    /// Install a block-level preverified batch map (`proof_hash` -> ok).
+    /// Install a block-level preverified batch map.
     ///
     /// This acts as a block-scope aggregator for ZK verification results
     /// computed earlier in the pipeline (e.g., background batch checks).
     /// Execution of `RegisterProof` will prefer this cache over invoking
     /// backend verifiers, keeping the hot path deterministic and cheap.
-    pub fn set_preverified_batch(
-        &mut self,
-        map: std::sync::Arc<std::collections::BTreeMap<[u8; 32], bool>>,
-    ) {
+    pub fn set_preverified_batch(&mut self, map: std::sync::Arc<crate::zk::PreverifiedProofMap>) {
         self.preverified_batch = Some(map);
     }
 }
@@ -26255,19 +26400,21 @@ impl StateTransaction<'_, '_> {
         )
     }
 
-    /// Lookup a preverified batch result for a proof if present.
+    /// Lookup a preverified batch result for a proof and verifying-key binding if present.
     ///
     /// Returns `Some(true|false)` when a result is available in the current
-    /// block's aggregator cache, or `None` if the proof was not part of the
-    /// preverification batch.
+    /// block's aggregator cache, or `None` if the proof/key binding was not
+    /// part of the preverification batch.
     pub fn lookup_preverified_proof(
         &self,
         proof: &iroha_data_model::proof::ProofBox,
+        vk_ref: &iroha_data_model::proof::VerifyingKeyId,
+        vk_commitment: [u8; 32],
     ) -> Option<bool> {
-        let h = crate::zk::hash_proof(proof);
+        let key = crate::zk::PreverifiedProofKey::new(proof, vk_ref, vk_commitment);
         self.preverified_batch
             .as_ref()
-            .and_then(|m| m.get(&h).copied())
+            .and_then(|m| m.get(&key).copied())
     }
 }
 
@@ -30538,13 +30685,15 @@ mod permission_cache_tests {
 
 #[cfg(not(feature = "zk-preverify"))]
 impl StateTransaction<'_, '_> {
-    /// Lookup a preverified batch result for a proof if present.
+    /// Lookup a preverified batch result for a proof and verifying-key binding if present.
     ///
     /// When `zk-preverify` feature is disabled, batch preverification is unavailable,
     /// so this always returns `None` and the caller should perform normal verification.
     pub fn lookup_preverified_proof(
         &self,
         _proof: &iroha_data_model::proof::ProofBox,
+        _vk_ref: &iroha_data_model::proof::VerifyingKeyId,
+        _vk_commitment: [u8; 32],
     ) -> Option<bool> {
         None
     }
@@ -32782,6 +32931,10 @@ pub(crate) mod deserialize {
             take_optional_default(&mut map, "soracloud_mailbox_messages")?;
         let soracloud_runtime_receipts =
             take_optional_default(&mut map, "soracloud_runtime_receipts")?;
+        let soracloud_private_uploaded_model_execution_receipts = take_optional_default(
+            &mut map,
+            "soracloud_private_uploaded_model_execution_receipts",
+        )?;
         let pin_manifests = take_optional_default(&mut map, "pin_manifests")?;
         let zk_assets = take_optional_default(&mut map, "zk_assets")?;
         let elections = take_optional_default(&mut map, "elections")?;
@@ -32933,6 +33086,7 @@ pub(crate) mod deserialize {
             soracloud_inrou_service_placements,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
+            soracloud_private_uploaded_model_execution_receipts,
             capacity_declarations: Storage::default(),
             capacity_fee_ledger: Storage::default(),
             capacity_disputes: Storage::default(),
@@ -38225,6 +38379,7 @@ mod tests {
                 timestamp_ms: 1_700_000_000_000,
             }],
             nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
         };
         let envelope =
             LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0).expect("valid envelope");
@@ -38880,6 +39035,7 @@ mod tests {
                 timestamp_ms: 1_700_000_000_000,
             }],
             nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
         };
         let envelope = LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0)
             .expect("lane relay envelope");
@@ -39017,6 +39173,7 @@ mod tests {
                 timestamp_ms: 1_700_000_000_000,
             }],
             nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
         };
         let envelope = LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0)
             .expect("lane relay envelope");
@@ -46823,6 +46980,14 @@ mod tests {
         assert_eq!(
             digest.zk_policy_hash,
             Some(compute_zk_consensus_policy_hash(&view.zk))
+        );
+    }
+
+    #[test]
+    fn default_zk_policy_hash_uses_default_zk_config() {
+        assert_eq!(
+            default_zk_consensus_policy_hash(),
+            compute_zk_consensus_policy_hash(&default_zk_config())
         );
     }
 

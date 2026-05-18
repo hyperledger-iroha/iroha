@@ -5291,7 +5291,8 @@ mod evidence_http_tests {
                             batch: QueryOutputBatchBoxTuple {
                                 tuple: vec![QueryOutputBatchBox::CommittedTransaction(Vec::new())],
                             },
-                            remaining_items: 0,
+                            remaining_items: Some(0),
+                            has_more: false,
                             continue_cursor: None,
                         });
                         Ok(norito_response(StatusCode::OK, &response))
@@ -5440,7 +5441,8 @@ mod evidence_http_tests {
                                     committed.clone(),
                                 ])],
                             },
-                            remaining_items: 0,
+                            remaining_items: Some(0),
+                            has_more: false,
                             continue_cursor: None,
                         });
                         Ok(norito_response(StatusCode::OK, &response))
@@ -5652,7 +5654,8 @@ mod evidence_http_tests {
                                     committed.clone(),
                                 ])],
                             },
-                            remaining_items: 0,
+                            remaining_items: Some(0),
+                            has_more: false,
                             continue_cursor: None,
                         });
                         Ok(norito_response(StatusCode::OK, &response))
@@ -5888,7 +5891,8 @@ mod evidence_http_tests {
                                     committed.clone(),
                                 ])],
                             },
-                            remaining_items: 0,
+                            remaining_items: Some(0),
+                            has_more: false,
                             continue_cursor: None,
                         });
                         Ok(norito_response(StatusCode::OK, &response))
@@ -12409,6 +12413,7 @@ mod subscription_http_tests {
             provider: Some(provider.to_string()),
             limit: Some(10),
             offset: 5,
+            count_mode: Some("exact".to_string()),
         };
         let subscription_request = SubscriptionCreateRequest {
             authority: subscriber.clone(),
@@ -12426,6 +12431,7 @@ mod subscription_http_tests {
             status: Some("active".to_string()),
             limit: Some(25),
             offset: 2,
+            count_mode: Some("exact".to_string()),
         };
         let action_request = SubscriptionActionRequest {
             authority: subscriber.clone(),
@@ -12451,7 +12457,9 @@ mod subscription_http_tests {
                 plan_id: plan_id.clone(),
                 plan: plan.clone(),
             }],
-            total: 1,
+            total: Some(1),
+            has_more: false,
+            count_mode: "exact".to_string(),
         };
         let subscription_create_response = SubscriptionCreateResponse {
             ok: true,
@@ -12468,7 +12476,9 @@ mod subscription_http_tests {
                 invoice: None,
                 plan: Some(plan.clone()),
             }],
-            total: 1,
+            total: Some(1),
+            has_more: false,
+            count_mode: "exact".to_string(),
         };
         let subscription_get_response = SubscriptionGetResponse {
             subscription_id: subscription_id.clone(),
@@ -14256,6 +14266,7 @@ mod tests {
                 timestamp_ms: 1_724_000_000_000,
             }],
             nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
         };
         let da_hash = Some(HashOf::from_untyped_unchecked(Hash::prehashed(
             [0xDD; Hash::LENGTH],
@@ -14523,6 +14534,7 @@ mod tests {
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
         };
         let block_header = BlockHeader::new(
             NonZeroU64::new(block_height).expect("nonzero height"),
@@ -16875,7 +16887,8 @@ mod tests {
                             batch: QueryOutputBatchBoxTuple {
                                 tuple: vec![QueryOutputBatchBox::CommittedTransaction(Vec::new())],
                             },
-                            remaining_items: 0,
+                            remaining_items: Some(0),
+                            has_more: false,
                             continue_cursor: None,
                         });
                         HttpResponse::builder()
@@ -17539,6 +17552,7 @@ mod tests {
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
         };
         let relay = LaneRelayEnvelope::new(block_header, None, None, settlement.clone(), 0)
             .expect("construct relay envelope");
@@ -17695,6 +17709,7 @@ mod tests {
                 timestamp_ms: 1_724_000_000_000,
             }],
             nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
         };
         let da_hash = Some(HashOf::from_untyped_unchecked(Hash::prehashed(
             [0xDD; Hash::LENGTH],

@@ -1072,6 +1072,7 @@ mod tests {
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
         };
         LaneRelayEnvelope::new(header, None, None, settlement_commitment, 0)
             .expect("valid envelope")

@@ -47,7 +47,7 @@ fn take_len_prefixed_slice<'a>(
 /// Opaque zero-knowledge proof bytes tagged with a backend identifier.
 ///
 /// - `backend`: schema identifier for the proof backend (e.g., "halo2/ipa",
-///   "groth16/bn254", "stark/fri-v1"). The exact strings are out of scope for
+///   "groth16/bn254", "stark/fri"). The exact strings are out of scope for
 ///   this container and are treated as application-level identifiers.
 /// - `bytes`: proof payload as produced by the backend. Consumers interpret the
 ///   bytes according to `backend`.
@@ -1186,10 +1186,50 @@ mod tests {
     }
 
     #[test]
+    fn proof_attachment_decode_rejects_blank_backend_fields() {
+        let cases = [
+            (
+                ProofAttachment::new_ref(
+                    "   ".into(),
+                    ProofBox::new("   ".into(), vec![1, 2, 3]),
+                    VerifyingKeyId::new("   ", "vk_1"),
+                ),
+                "backend",
+            ),
+            (
+                ProofAttachment::new_ref(
+                    "halo2/ipa".into(),
+                    ProofBox::new("   ".into(), vec![1, 2, 3]),
+                    VerifyingKeyId::new("halo2/ipa", "vk_1"),
+                ),
+                "proof.backend",
+            ),
+            (
+                ProofAttachment::new_ref(
+                    "halo2/ipa".into(),
+                    ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+                    VerifyingKeyId::new("   ", "vk_1"),
+                ),
+                "vk_ref.backend",
+            ),
+        ];
+
+        for (attachment, expected_field) in cases {
+            let encoded = norito::to_bytes(&attachment).expect("encode blank backend attachment");
+            let err = norito::decode_from_bytes::<ProofAttachment>(&encoded)
+                .expect_err("blank backend fields must not decode");
+            assert!(
+                err.to_string().contains(expected_field),
+                "expected error to mention {expected_field}, got {err}"
+            );
+        }
+    }
+
+    #[test]
     fn proof_attachment_decode_rejects_backend_mismatches() {
         for (proof_backend, vk_backend, expected_field) in [
-            ("stark/fri-v1", "halo2/ipa", "proof.backend"),
-            ("halo2/ipa", "stark/fri-v1", "vk_ref.backend"),
+            ("stark/fri", "halo2/ipa", "proof.backend"),
+            ("halo2/ipa", "stark/fri", "vk_ref.backend"),
         ] {
             let attachment = ProofAttachment::new_ref(
                 "halo2/ipa".into(),
@@ -1214,7 +1254,7 @@ mod tests {
         let list = ProofAttachmentList(vec![ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
-            VerifyingKeyId::new("stark/fri-v1", "vk_1"),
+            VerifyingKeyId::new("stark/fri", "vk_1"),
         )]);
         let encoded = norito::to_bytes(&list).expect("encode mismatched attachment list");
         let json = format!("\"{}\"", STANDARD.encode(encoded));
@@ -1339,7 +1379,7 @@ mod tests {
     fn proof_attachment_json_rejects_backend_mismatches() {
         let proof_backend_json = r#"{
             "backend": "halo2/ipa",
-            "proof": { "backend": "stark/fri-v1", "bytes": [1, 2, 3] },
+            "proof": { "backend": "stark/fri", "bytes": [1, 2, 3] },
             "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" }
         }"#;
         let err = norito::json::from_str::<ProofAttachment>(proof_backend_json)
@@ -1349,7 +1389,7 @@ mod tests {
         let vk_backend_json = r#"{
             "backend": "halo2/ipa",
             "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
-            "vk_ref": { "backend": "stark/fri-v1", "name": "vk_1" }
+            "vk_ref": { "backend": "stark/fri", "name": "vk_1" }
         }"#;
         let err = norito::json::from_str::<ProofAttachment>(vk_backend_json)
             .expect_err("vk_ref backend mismatch must be rejected");
@@ -1389,6 +1429,46 @@ mod tests {
         let err = norito::json::from_str::<ProofAttachment>(json)
             .expect_err("blank verifying key names must be rejected");
         assert!(err.to_string().contains("vk_ref.name"));
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn proof_attachment_json_rejects_blank_backend_fields() {
+        let cases = [
+            (
+                r#"{
+                    "backend": "   ",
+                    "proof": { "backend": "   ", "bytes": [1, 2, 3] },
+                    "vk_ref": { "backend": "   ", "name": "vk_1" }
+                }"#,
+                "backend",
+            ),
+            (
+                r#"{
+                    "backend": "halo2/ipa",
+                    "proof": { "backend": "   ", "bytes": [1, 2, 3] },
+                    "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" }
+                }"#,
+                "proof.backend",
+            ),
+            (
+                r#"{
+                    "backend": "halo2/ipa",
+                    "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
+                    "vk_ref": { "backend": "   ", "name": "vk_1" }
+                }"#,
+                "vk_ref.backend",
+            ),
+        ];
+
+        for (json, expected_field) in cases {
+            let err = norito::json::from_str::<ProofAttachment>(json)
+                .expect_err("blank backend fields must be rejected");
+            assert!(
+                err.to_string().contains(expected_field),
+                "expected error to mention {expected_field}, got {err}"
+            );
+        }
     }
 
     #[test]

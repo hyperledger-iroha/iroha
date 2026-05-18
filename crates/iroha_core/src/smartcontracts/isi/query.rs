@@ -90,6 +90,16 @@ pub trait SortableQueryOutput {
 #[derive(Debug, Copy, Clone)]
 pub struct QueryLimits {
     max_fetch_size: u64,
+    count_mode: QueryCountMode,
+}
+
+/// Whether query pagination should compute exact counts or only bounded continuation metadata.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum QueryCountMode {
+    /// Compute exact totals and remaining item counts.
+    Exact,
+    /// Stop once enough items are available to answer the requested page and `has_more`.
+    Bounded,
 }
 
 impl QueryLimits {
@@ -116,7 +126,15 @@ impl QueryLimits {
     pub fn new(max_fetch_size: u64) -> Self {
         Self {
             max_fetch_size: max_fetch_size.max(1),
+            count_mode: QueryCountMode::Exact,
         }
+    }
+
+    /// Return limits with a different count mode.
+    #[must_use]
+    pub fn with_count_mode(mut self, count_mode: QueryCountMode) -> Self {
+        self.count_mode = count_mode;
+        self
     }
 }
 
@@ -741,7 +759,7 @@ pub fn apply_query_postprocessing<I>(
     limits: QueryLimits,
 ) -> Result<ErasedQueryIterator, Error>
 where
-    I: Iterator<Item: SortableQueryOutput + Send + Sync + 'static>,
+    I: Iterator<Item: SortableQueryOutput>,
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
     <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
@@ -944,7 +962,7 @@ fn prepare_stored_sorted_start<I>(
     budget_items: Option<u64>,
 ) -> Result<PreparedQueryStart, Error>
 where
-    I: Iterator<Item: SortableQueryOutput + Send + Sync + 'static>,
+    I: Iterator<Item: SortableQueryOutput>,
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
     <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
@@ -1032,7 +1050,7 @@ where
     if remaining_items == 0 {
         return Ok(PreparedQueryStart {
             first_batch,
-            remaining_items,
+            remaining_items: Some(remaining_items),
             deferred_continuation: None,
         });
     }
@@ -1042,7 +1060,7 @@ where
     let continuation_limit =
         NonZeroU64::new(remaining_items).expect("continuation limit must be non-zero");
     let deferred_continuation =
-        DeferredQueryContinuation::new(first_cursor, remaining_items, move || {
+        DeferredQueryContinuation::new(first_cursor, Some(remaining_items), move || {
             let mut values = Vec::with_capacity(deferred_raw_values.len());
             let mut sort_keys = Vec::with_capacity(deferred_raw_values.len());
             for value in deferred_raw_values {
@@ -1064,7 +1082,74 @@ where
 
     Ok(PreparedQueryStart {
         first_batch,
-        remaining_items,
+        remaining_items: Some(remaining_items),
+        deferred_continuation: Some(deferred_continuation),
+    })
+}
+
+fn prepare_stored_unsorted_bounded_start<I>(
+    iter: I,
+    selector: SelectorTuple<I::Item>,
+    params: &QueryParams,
+    limits: QueryLimits,
+) -> Result<PreparedQueryStart, Error>
+where
+    I: Iterator<Item: SortableQueryOutput>,
+    I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
+    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
+    QueryOutputBatchBox: From<Vec<I::Item>>,
+{
+    let fetch_size = params
+        .fetch_size
+        .fetch_size
+        .unwrap_or(iroha_data_model::query::parameters::DEFAULT_FETCH_SIZE);
+    if fetch_size.get() > limits.max_fetch_size {
+        return Err(Error::FetchSizeTooBig);
+    }
+
+    let offset = usize::try_from(params.pagination.offset_value()).unwrap_or(usize::MAX);
+    let limit = params
+        .pagination
+        .limit_value()
+        .map(|limit| usize::try_from(limit.get()).unwrap_or(usize::MAX));
+    let fetch_size_usize = usize::try_from(fetch_size.get()).unwrap_or(usize::MAX);
+    let first_take = limit.map_or(fetch_size_usize, |limit| limit.min(fetch_size_usize));
+    let mut iter = iter.skip(offset).peekable();
+    let first_batch_values: Vec<_> = iter.by_ref().take(first_take).collect();
+    let batch_len = first_batch_values.len();
+    let selector_for_deferred = selector.clone();
+    let mut batch_iter =
+        ErasedQueryIterator::new(first_batch_values.into_iter(), selector, fetch_size);
+    let (first_batch, _next) = batch_iter.next_batch(0)?;
+
+    let remaining_limit = limit.map(|limit| limit.saturating_sub(batch_len));
+    let has_more = remaining_limit != Some(0) && iter.peek().is_some();
+    if !has_more {
+        return Ok(PreparedQueryStart {
+            first_batch,
+            remaining_items: None,
+            deferred_continuation: None,
+        });
+    }
+
+    let first_cursor = NonZeroU64::new(u64::try_from(batch_len).unwrap_or(u64::MAX))
+        .expect("stored bounded continuation requires a non-empty first batch");
+    let deferred_values: Vec<_> = match remaining_limit {
+        Some(remaining_limit) => iter.take(remaining_limit).collect(),
+        None => iter.collect(),
+    };
+    let deferred_continuation = DeferredQueryContinuation::new(first_cursor, None, move || {
+        ErasedQueryIterator::new_streaming_with_cursor(
+            deferred_values.into_iter(),
+            selector_for_deferred,
+            fetch_size,
+            first_cursor.get(),
+        )
+    });
+
+    Ok(PreparedQueryStart {
+        first_batch,
+        remaining_items: None,
         deferred_continuation: Some(deferred_continuation),
     })
 }
@@ -1079,13 +1164,18 @@ fn handle_iter_start_stored<I>(
     gas_budget: Option<u64>,
 ) -> Result<QueryOutput, Error>
 where
-    I: Iterator<Item: SortableQueryOutput + Send + Sync + 'static>,
+    I: Iterator<Item: SortableQueryOutput>,
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
     <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
-    if let Some(fast) = stored_sorted_fast_start_params(params, limits)? {
-        let prepared = prepare_stored_sorted_start(iter, selector, fast, None)?;
+    if params.sorting.sort_by_metadata_key.is_some() {
+        if let Some(fast) = stored_sorted_fast_start_params(params, limits)? {
+            let prepared = prepare_stored_sorted_start(iter, selector, fast, None)?;
+            return live_query_store.handle_iter_start_prepared(prepared, authority, gas_budget);
+        }
+    } else if limits.count_mode == QueryCountMode::Bounded {
+        let prepared = prepare_stored_unsorted_bounded_start(iter, selector, params, limits)?;
         return live_query_store.handle_iter_start_prepared(prepared, authority, gas_budget);
     }
 
@@ -1203,7 +1293,7 @@ fn apply_query_postprocessing_ephemeral_with_budget<I>(
     budget_items: Option<u64>,
 ) -> Result<(QueryOutput, u64), Error>
 where
-    I: Iterator<Item: SortableQueryOutput + Send + Sync + 'static>,
+    I: Iterator<Item: SortableQueryOutput>,
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
     <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
@@ -1215,6 +1305,41 @@ where
     let max_fetch = limits.max_fetch_size;
     if batch_size.get() > max_fetch {
         return Err(Error::FetchSizeTooBig);
+    }
+
+    if limits.count_mode == QueryCountMode::Bounded && params.sorting.sort_by_metadata_key.is_none()
+    {
+        let fetch_size = usize::try_from(batch_size.get()).unwrap_or(usize::MAX);
+        let offset = usize::try_from(params.pagination.offset_value()).unwrap_or(usize::MAX);
+        let limit = params.pagination.limit_value().map(|limit| limit.get());
+        let probe = limit.map_or_else(
+            || fetch_size.saturating_add(1),
+            |limit| {
+                usize::try_from(limit)
+                    .unwrap_or(usize::MAX)
+                    .min(fetch_size.saturating_add(1))
+            },
+        );
+        let mut processed = 0_u64;
+        let mut has_more = false;
+        let mut first_batch_values = Vec::with_capacity(fetch_size.min(1024));
+        for value in iter.skip(offset).take(probe) {
+            processed = processed.saturating_add(1);
+            if budget_items.is_some_and(|limit| processed > limit) {
+                return Err(Error::GasBudgetExceeded);
+            }
+            if first_batch_values.len() < fetch_size {
+                first_batch_values.push(value);
+            } else {
+                has_more = true;
+                break;
+            }
+        }
+
+        let mut batch_iter =
+            ErasedQueryIterator::new(first_batch_values.into_iter(), selector, batch_size);
+        let (batch, _next) = batch_iter.next_batch(0)?;
+        return Ok((QueryOutput::new_bounded(batch, has_more, None), processed));
     }
 
     if let Some(key) = params.sorting.sort_by_metadata_key.as_ref() {
@@ -1319,7 +1444,7 @@ fn apply_query_postprocessing_with_budget<I>(
     budget_items: Option<u64>,
 ) -> Result<(ErasedQueryIterator, u64), Error>
 where
-    I: Iterator<Item: SortableQueryOutput + Send + Sync + 'static>,
+    I: Iterator<Item: SortableQueryOutput>,
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
     <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
@@ -1592,7 +1717,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .expect("postprocess sorted query");
 
         assert_eq!(processed_items, 3);
-        assert_eq!(iter.remaining(), 1);
+        assert_eq!(iter.remaining(), Some(1));
     }
 
     #[test]
@@ -4254,6 +4379,136 @@ mod tests {
         assert_eq!(remaining, 1);
         assert_eq!(processed_items, 3);
         assert_eq!(domain_ids_from_batch(batch), vec![d1.id, d2.id]);
+    }
+
+    #[tokio::test]
+    async fn ephemeral_unsorted_bounded_count_stops_after_probe_item() {
+        use iroha_data_model::{
+            domain::Domain,
+            query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
+        };
+        use nonzero_ext::nonzero;
+
+        let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
+        let d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
+        let d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);
+        let d4 = Domain::new(DomainId::try_new("d4", "universal").unwrap()).build(&ALICE_ID);
+
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting::default(),
+            fetch_size: FetchSize {
+                fetch_size: Some(nonzero!(2_u64)),
+            },
+        };
+        let selector = SelectorTuple::<Domain>::default();
+
+        let (output, processed_items) = apply_query_postprocessing_ephemeral_with_budget(
+            vec![d1.clone(), d2.clone(), d3, d4].into_iter(),
+            selector,
+            &params,
+            QueryLimits::default().with_count_mode(QueryCountMode::Bounded),
+            None,
+        )
+        .expect("postprocess");
+
+        assert_eq!(output.remaining_items, None);
+        assert!(output.has_more);
+        let (batch, remaining_hint, cursor) = output.into_parts();
+        assert!(cursor.is_none());
+        assert_eq!(remaining_hint, 0);
+        assert_eq!(processed_items, 3);
+        assert_eq!(domain_ids_from_batch(batch), vec![d1.id, d2.id]);
+    }
+
+    #[tokio::test]
+    async fn stored_unsorted_bounded_cursor_materializes_owned_tail_without_exact_count() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        use iroha_data_model::{
+            domain::Domain,
+            query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
+        };
+        use nonzero_ext::nonzero;
+
+        let domains = ["d1", "d2", "d3", "d4", "d5"]
+            .into_iter()
+            .map(|name| Domain::new(DomainId::try_new(name, "universal").unwrap()).build(&ALICE_ID))
+            .collect::<Vec<_>>();
+        let expected_ids = domains
+            .iter()
+            .map(|domain| domain.id.clone())
+            .collect::<Vec<_>>();
+        let visited = Arc::new(AtomicUsize::new(0));
+        let visited_for_iter = Arc::clone(&visited);
+        let iter = domains.into_iter().inspect(move |_| {
+            visited_for_iter.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting::default(),
+            fetch_size: FetchSize::new(Some(nonzero!(2_u64))),
+        };
+        let prepared = prepare_stored_unsorted_bounded_start(
+            iter,
+            SelectorTuple::<Domain>::default(),
+            &params,
+            QueryLimits::default().with_count_mode(QueryCountMode::Bounded),
+        )
+        .expect("bounded prepared start");
+
+        assert_eq!(
+            visited.load(Ordering::SeqCst),
+            expected_ids.len(),
+            "stored bounded start must own the continuation tail before inserting it into the shared live query store"
+        );
+        assert_eq!(prepared.remaining_items, None);
+        assert!(prepared.deferred_continuation.is_some());
+
+        let handle = LiveQueryStore::start_test();
+        let first = handle
+            .handle_iter_start_prepared(prepared, &ALICE_ID, None)
+            .expect("store prepared");
+        assert_eq!(first.remaining_items, None);
+        assert!(first.has_more);
+        let (first_batch, first_remaining_hint, cursor) = first.into_parts();
+        assert_eq!(first_remaining_hint, 0);
+        assert_eq!(
+            domain_ids_from_batch(first_batch),
+            expected_ids[0..2].to_vec()
+        );
+
+        let second = handle
+            .handle_iter_continue(cursor.expect("first cursor"))
+            .expect("second page");
+        assert_eq!(second.remaining_items, None);
+        assert!(second.has_more);
+        let (second_batch, _, cursor) = second.into_parts();
+        assert_eq!(
+            domain_ids_from_batch(second_batch),
+            expected_ids[2..4].to_vec()
+        );
+
+        let third = handle
+            .handle_iter_continue(cursor.expect("second cursor"))
+            .expect("third page");
+        assert_eq!(third.remaining_items, None);
+        assert!(!third.has_more);
+        let (third_batch, _, cursor) = third.into_parts();
+        assert!(cursor.is_none());
+        assert_eq!(
+            domain_ids_from_batch(third_batch),
+            expected_ids[4..5].to_vec()
+        );
+        assert_eq!(
+            visited.load(Ordering::SeqCst),
+            expected_ids.len(),
+            "continuations should not revisit the source iterator"
+        );
     }
 
     fn domain_ids_from_batch(

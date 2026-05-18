@@ -2785,6 +2785,11 @@ impl Network {
             .as_ref()
             .map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config));
         let nexus_config = actual_config.as_ref().map(|config| config.nexus.clone());
+        let zk_config = actual_config.as_ref().map(|config| config.zk.clone());
+        let confidential_policy_hash = Some(actual_config.as_ref().map_or_else(
+            iroha_core::state::default_zk_consensus_policy_hash,
+            |config| iroha_core::state::compute_zk_consensus_policy_hash(&config.zk),
+        ));
         let consensus_handshake_meta = consensus_handshake_parameter(&self.consensus_profile);
 
         if let Some(cached_genesis) = self.cached_genesis.get() {
@@ -2911,6 +2916,7 @@ impl Network {
                 &peer_topology,
                 &self.genesis_key_pair,
                 nexus_config.as_ref(),
+                zk_config.as_ref(),
             );
             let _ = self.cached_genesis_augmented.set(augmented.clone());
             return augmented;
@@ -2926,7 +2932,9 @@ impl Network {
             genesis_crypto,
             da_proof_policies,
             nexus_config,
+            zk_config,
             Some(consensus_handshake_meta),
+            confidential_policy_hash,
         );
         let _ = self.cached_genesis.set(genesis.clone());
         genesis
@@ -4935,6 +4943,7 @@ impl NetworkBuilder {
                 &peer_topology,
                 &genesis_key_pair,
                 resolved_npos_config.as_ref().map(|config| &config.nexus),
+                resolved_npos_config.as_ref().map(|config| &config.zk),
             );
             cached_genesis
                 .set(block)
@@ -5247,12 +5256,19 @@ impl NetworkBuilder {
         let da_proof_policies = resolved_npos_config
             .as_ref()
             .map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config));
+        let confidential_policy_hash = Some(resolved_npos_config.as_ref().map_or_else(
+            iroha_core::state::default_zk_consensus_policy_hash,
+            |config| iroha_core::state::compute_zk_consensus_policy_hash(&config.zk),
+        ));
         let genesis_crypto = resolved_npos_config
             .as_ref()
             .map(|config| config::manifest_crypto_from_actual(&config.crypto));
         let nexus_config = resolved_npos_config
             .as_ref()
             .map(|config| config.nexus.clone());
+        let zk_config = resolved_npos_config
+            .as_ref()
+            .map(|config| config.zk.clone());
         let preview_genesis = config::genesis_with_keypair_and_post_topology_with_policies(
             genesis_isi.clone(),
             genesis_post_topology_isi.clone(),
@@ -5263,7 +5279,9 @@ impl NetworkBuilder {
             genesis_crypto,
             da_proof_policies,
             nexus_config,
+            zk_config,
             None,
+            confidential_policy_hash,
         );
         let parameter_state = consensus_parameters_from_genesis(&preview_genesis);
         let npos_timeout_overrides = resolved_npos_config
@@ -5787,6 +5805,7 @@ impl NetworkPeer {
         let reset_for_bootstrap =
             Self::should_reset_kura_for_bootstrap(has_genesis, run_num as usize);
         self.prepare_kura_storage_dir(&storage_dir, reset_for_bootstrap)?;
+        let existing_genesis_path = self.restart_genesis_file(has_genesis);
 
         {
             let mut live = self
@@ -5805,9 +5824,18 @@ impl NetworkPeer {
 
         let config_layers: Vec<Table> = storage_layers;
         let config_path = self
-            .write_run_config(config_layers.iter().map(Cow::Borrowed), genesis, run_num)
+            .write_run_config(
+                config_layers.iter().map(Cow::Borrowed),
+                genesis,
+                existing_genesis_path.as_deref(),
+                run_num,
+            )
             .await?;
-        let genesis_path = has_genesis.then(|| self.dir.join(format!("run-{run_num}-genesis.nrt")));
+        let genesis_path = if has_genesis {
+            Some(self.dir.join(format!("run-{run_num}-genesis.nrt")))
+        } else {
+            existing_genesis_path
+        };
         let stdout_path = self.dir.join(format!("run-{run_num}-stdout.log"));
         let stderr_path = self.dir.join(format!("run-{run_num}-stderr.log"));
         {
@@ -7120,10 +7148,17 @@ impl NetworkPeer {
         Ok(framed)
     }
 
+    fn restart_genesis_file(&self, has_genesis: bool) -> Option<PathBuf> {
+        (!has_genesis)
+            .then(|| self.dir.join("run-1-genesis.nrt"))
+            .filter(|path| fs::metadata(path).is_ok_and(|meta| meta.is_file()))
+    }
+
     async fn write_run_config<T: AsRef<Table>>(
         &self,
         cfg_extra_layers: impl Iterator<Item = T>,
         genesis: Option<&GenesisBlock>,
+        existing_genesis_path: Option<&Path>,
         run: usize,
     ) -> Result<PathBuf> {
         // Recreate the base layer for every run to avoid stale/missing configs
@@ -7158,6 +7193,9 @@ impl NetworkPeer {
             init_instruction_registry();
             let framed = Self::canonical_genesis_bytes(block)?;
             tokio::fs::write(path, framed).await?;
+        } else if let Some(path) = existing_genesis_path {
+            final_config =
+                final_config.write(["genesis", "file"], path.to_string_lossy().to_string());
         }
         let path = self.dir.join(format!("run-{run}-config.toml"));
         tokio::fs::write(&path, toml::to_string(&final_config)?).await?;
@@ -10612,6 +10650,34 @@ exit 0
     }
 
     #[test]
+    fn genesis_embeds_zk_policy_hash_from_config_layers() {
+        init_instruction_registry();
+        let network =
+            build_with_isolated_permit(NetworkBuilder::new().with_peers(4).with_config_layer(
+                |layer| {
+                    layer.write(["zk", "halo2", "enabled"], true);
+                },
+            ));
+
+        let config_layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
+        let peer = network.peers().first().expect("network should have peers");
+        let actual = resolve_actual_config(peer, &config_layers)
+            .expect("should resolve full config for genesis");
+        let expected = iroha_core::state::compute_zk_consensus_policy_hash(&actual.zk);
+
+        let genesis = network.genesis();
+        assert_eq!(
+            genesis
+                .0
+                .header()
+                .confidential_features()
+                .and_then(|digest| digest.zk_policy_hash),
+            Some(expected),
+            "genesis should commit to the ZK policy resolved from config layers"
+        );
+    }
+
+    #[test]
     fn resolve_actual_config_applies_sora_profile_when_required() {
         let config_layers = vec![Table::new().write(["sorafs", "storage", "enabled"], true)];
 
@@ -12293,6 +12359,25 @@ exit 0
             storage_dir.join("keep.marker").exists(),
             "restart preparation must not clear existing storage"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn restart_genesis_file_reuses_first_run_genesis_when_available() -> Result<()> {
+        let root = tempdir()?;
+        let env = Environment {
+            dir: root.path().to_path_buf(),
+        };
+        let peer = NetworkPeer::builder().build(&env);
+
+        assert_eq!(peer.restart_genesis_file(false), None);
+
+        let genesis_path = peer.dir.join("run-1-genesis.nrt");
+        fs::write(&genesis_path, b"genesis")?;
+
+        assert_eq!(peer.restart_genesis_file(false), Some(genesis_path));
+        assert_eq!(peer.restart_genesis_file(true), None);
+
         Ok(())
     }
 

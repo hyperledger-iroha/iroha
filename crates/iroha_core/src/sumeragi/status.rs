@@ -531,6 +531,10 @@ static KURA_STORE_LAST_VIEW: AtomicU64 = AtomicU64::new(0);
 static KURA_STORE_LAST_HASH: OnceLock<Mutex<Option<UntypedHash>>> = OnceLock::new();
 static KURA_STORE_LAST_RETRY_ATTEMPT: AtomicU64 = AtomicU64::new(0);
 static KURA_STORE_LAST_RETRY_BACKOFF_MS: AtomicU64 = AtomicU64::new(0);
+static KURA_POST_COMMIT_SIDECAR_FAILURE_TOTAL: AtomicU64 = AtomicU64::new(0);
+static KURA_POST_COMMIT_SIDECAR_LAST_HEIGHT: AtomicU64 = AtomicU64::new(0);
+static KURA_POST_COMMIT_SIDECAR_LAST_VIEW: AtomicU64 = AtomicU64::new(0);
+static KURA_POST_COMMIT_SIDECAR_LAST_HASH: OnceLock<Mutex<Option<UntypedHash>>> = OnceLock::new();
 static PACEMAKER_BACKPRESSURE_DEFERRALS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static COMMIT_PIPELINE_TICK_TOTAL: AtomicU64 = AtomicU64::new(0);
 static COMMIT_INFLIGHT_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -1396,6 +1400,18 @@ pub struct LaneActivitySnapshot {
     pub detached_merged: u64,
     /// Detached transaction deltas that fell back to sequential execution.
     pub detached_fallback: u64,
+    /// Sequential fallbacks caused by fee postprocessing requirements.
+    pub detached_fallback_fee_postprocessing: u64,
+    /// Sequential fallbacks caused by a user-provided executor.
+    pub detached_fallback_user_executor: u64,
+    /// Sequential fallbacks caused by durable smart-contract state changes.
+    pub detached_fallback_durable_state: u64,
+    /// Sequential fallbacks caused by unsupported detached instructions.
+    pub detached_fallback_unsupported_instruction: u64,
+    /// Sequential fallbacks caused by rejected detached evaluation.
+    pub detached_fallback_rejected_eval: u64,
+    /// Sequential fallbacks caused by overlay build errors.
+    pub detached_fallback_overlay_error: u64,
     /// Quarantine transactions executed in the sequential quarantine lane.
     pub quarantine_executed: u64,
 }
@@ -1423,6 +1439,18 @@ pub struct PipelineExecutionSnapshot {
     pub detached_merged_total: u64,
     /// Detached transaction deltas that fell back to sequential execution.
     pub detached_fallback_total: u64,
+    /// Sequential fallbacks caused by fee postprocessing requirements.
+    pub detached_fallback_fee_postprocessing_total: u64,
+    /// Sequential fallbacks caused by a user-provided executor.
+    pub detached_fallback_user_executor_total: u64,
+    /// Sequential fallbacks caused by durable smart-contract state changes.
+    pub detached_fallback_durable_state_total: u64,
+    /// Sequential fallbacks caused by unsupported detached instructions.
+    pub detached_fallback_unsupported_instruction_total: u64,
+    /// Sequential fallbacks caused by rejected detached evaluation.
+    pub detached_fallback_rejected_eval_total: u64,
+    /// Sequential fallbacks caused by overlay build errors.
+    pub detached_fallback_overlay_error_total: u64,
     /// Quarantine transactions executed in the sequential quarantine lane.
     pub quarantine_executed_total: u64,
 }
@@ -2550,6 +2578,14 @@ pub struct KuraStoreSnapshot {
     pub last_retry_attempt: u64,
     /// Last observed retry backoff in milliseconds.
     pub last_retry_backoff_ms: u64,
+    /// Total post-commit sidecar persistence failures after WSV state advanced.
+    pub post_commit_sidecar_failure_total: u64,
+    /// Height of the last post-commit sidecar persistence failure.
+    pub post_commit_sidecar_last_height: u64,
+    /// View of the last post-commit sidecar persistence failure.
+    pub post_commit_sidecar_last_view: u64,
+    /// Hash of the last post-commit sidecar persistence failure.
+    pub post_commit_sidecar_last_hash: Option<HashOf<BlockHeader>>,
     /// Height of the last block that failed to persist (best-effort).
     pub last_height: u64,
     /// View of the last block that failed to persist (best-effort).
@@ -4705,6 +4741,11 @@ pub fn snapshot() -> StatusSnapshot {
         .get_or_init(|| Mutex::new(None))
         .lock()
         .expect("kura lock reset reason mutex poisoned");
+    let kura_post_commit_sidecar_last_hash = (*KURA_POST_COMMIT_SIDECAR_LAST_HASH
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .expect("kura post-commit sidecar hash mutex poisoned"))
+    .map(HashOf::from_untyped_unchecked);
     let (
         consensus_penalties_applied_total,
         consensus_penalties_pending,
@@ -4889,6 +4930,13 @@ pub fn snapshot() -> StatusSnapshot {
             lock_reset_last_reason: kura_lock_reset_last_reason,
             last_retry_attempt: KURA_STORE_LAST_RETRY_ATTEMPT.load(Ordering::Relaxed),
             last_retry_backoff_ms: KURA_STORE_LAST_RETRY_BACKOFF_MS.load(Ordering::Relaxed),
+            post_commit_sidecar_failure_total: KURA_POST_COMMIT_SIDECAR_FAILURE_TOTAL
+                .load(Ordering::Relaxed),
+            post_commit_sidecar_last_height: KURA_POST_COMMIT_SIDECAR_LAST_HEIGHT
+                .load(Ordering::Relaxed),
+            post_commit_sidecar_last_view: KURA_POST_COMMIT_SIDECAR_LAST_VIEW
+                .load(Ordering::Relaxed),
+            post_commit_sidecar_last_hash: kura_post_commit_sidecar_last_hash,
             last_height: KURA_STORE_LAST_HEIGHT.load(Ordering::Relaxed),
             last_view: KURA_STORE_LAST_VIEW.load(Ordering::Relaxed),
             last_hash: kura_last_hash,
@@ -5931,6 +5979,24 @@ pub fn record_kura_store_retry(attempt: u32, backoff_ms: u32) {
     KURA_STORE_LAST_RETRY_BACKOFF_MS.store(u64::from(backoff_ms), Ordering::Relaxed);
 }
 
+/// Record a post-commit sidecar persistence failure after WSV state has advanced.
+pub fn record_kura_post_commit_sidecar_failure(
+    height: u64,
+    view: u64,
+    block_hash: HashOf<BlockHeader>,
+) {
+    #[cfg(test)]
+    let _guard = kura_store_test_guard();
+    KURA_POST_COMMIT_SIDECAR_FAILURE_TOTAL.fetch_add(1, Ordering::Relaxed);
+    KURA_POST_COMMIT_SIDECAR_LAST_HEIGHT.store(height, Ordering::Relaxed);
+    KURA_POST_COMMIT_SIDECAR_LAST_VIEW.store(view, Ordering::Relaxed);
+    let mut guard = KURA_POST_COMMIT_SIDECAR_LAST_HASH
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .expect("kura post-commit sidecar hash mutex poisoned");
+    *guard = Some(UntypedHash::from(block_hash));
+}
+
 /// Record that a block reached the staging phase before kura persistence.
 pub fn record_kura_stage(height: u64, view: u64, block_hash: HashOf<BlockHeader>) {
     #[cfg(test)]
@@ -6267,8 +6333,17 @@ pub(crate) fn reset_kura_store_counters_for_tests() {
     KURA_STORE_LAST_VIEW.store(0, Ordering::Relaxed);
     KURA_STORE_LAST_RETRY_ATTEMPT.store(0, Ordering::Relaxed);
     KURA_STORE_LAST_RETRY_BACKOFF_MS.store(0, Ordering::Relaxed);
+    KURA_POST_COMMIT_SIDECAR_FAILURE_TOTAL.store(0, Ordering::Relaxed);
+    KURA_POST_COMMIT_SIDECAR_LAST_HEIGHT.store(0, Ordering::Relaxed);
+    KURA_POST_COMMIT_SIDECAR_LAST_VIEW.store(0, Ordering::Relaxed);
     if let Some(slot) = KURA_STORE_LAST_HASH.get() {
         let mut guard = slot.lock().expect("kura store hash mutex poisoned");
+        *guard = None;
+    }
+    if let Some(slot) = KURA_POST_COMMIT_SIDECAR_LAST_HASH.get() {
+        let mut guard = slot
+            .lock()
+            .expect("kura post-commit sidecar hash mutex poisoned");
         *guard = None;
     }
     if let Some(slot) = KURA_STAGE_LAST_HASH.get() {
@@ -8452,6 +8527,12 @@ mod tests {
             detached_prepared_total: 5,
             detached_merged_total: 4,
             detached_fallback_total: 1,
+            detached_fallback_fee_postprocessing_total: 1,
+            detached_fallback_user_executor_total: 0,
+            detached_fallback_durable_state_total: 0,
+            detached_fallback_unsupported_instruction_total: 0,
+            detached_fallback_rejected_eval_total: 0,
+            detached_fallback_overlay_error_total: 0,
             quarantine_executed_total: 0,
         };
         super::set_access_set_source_summary(summary);
@@ -9611,6 +9692,7 @@ mod tests {
 
         super::record_kura_store_failure(3, 4, hash);
         super::record_kura_store_retry(2, 15);
+        super::record_kura_post_commit_sidecar_failure(5, 6, hash);
         super::inc_kura_store_abort();
 
         let snapshot = super::snapshot();
@@ -9624,6 +9706,13 @@ mod tests {
         assert_eq!(snapshot.kura_store.last_hash, Some(hash));
         assert_eq!(snapshot.kura_store.last_retry_attempt, 2);
         assert_eq!(snapshot.kura_store.last_retry_backoff_ms, 15);
+        assert_eq!(snapshot.kura_store.post_commit_sidecar_failure_total, 1);
+        assert_eq!(snapshot.kura_store.post_commit_sidecar_last_height, 5);
+        assert_eq!(snapshot.kura_store.post_commit_sidecar_last_view, 6);
+        assert_eq!(
+            snapshot.kura_store.post_commit_sidecar_last_hash,
+            Some(hash)
+        );
     }
 
     #[test]
@@ -10277,6 +10366,7 @@ mod tests {
                 timestamp_ms: 1_700_000_000_000,
             }],
             nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
         }
     }
 

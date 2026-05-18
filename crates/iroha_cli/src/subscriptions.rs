@@ -146,6 +146,7 @@ impl PlanListArgs {
             provider,
             limit: self.limit,
             offset: self.offset,
+            count_mode: None,
         }
     }
 }
@@ -318,6 +319,7 @@ impl SubscriptionListArgs {
             status: self.status.clone(),
             limit: self.limit,
             offset: self.offset,
+            count_mode: None,
         }
     }
 }

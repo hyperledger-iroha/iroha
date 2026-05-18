@@ -45,6 +45,8 @@ pub struct SubscriptionPlanListParams {
     pub limit: Option<u64>,
     /// Offset for pagination (default 0).
     pub offset: u64,
+    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
+    pub count_mode: Option<String>,
 }
 
 /// Subscription plan list item.
@@ -61,8 +63,12 @@ pub struct SubscriptionPlanListItem {
 pub struct SubscriptionPlanListResponse {
     /// Plan items.
     pub items: Vec<SubscriptionPlanListItem>,
-    /// Total number of matching plans.
-    pub total: u64,
+    /// Total number of matching plans when `count_mode` is "exact".
+    pub total: Option<u64>,
+    /// Whether more items are available after this page.
+    pub has_more: bool,
+    /// Count mode used to produce pagination metadata.
+    pub count_mode: String,
 }
 
 /// Request payload for creating a subscription.
@@ -116,6 +122,8 @@ pub struct SubscriptionListParams {
     pub limit: Option<u64>,
     /// Offset for pagination (default 0).
     pub offset: u64,
+    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
+    pub count_mode: Option<String>,
 }
 
 /// Subscription list item payload.
@@ -136,8 +144,12 @@ pub struct SubscriptionListItem {
 pub struct SubscriptionListResponse {
     /// Subscription items.
     pub items: Vec<SubscriptionListItem>,
-    /// Total number of matching subscriptions.
-    pub total: u64,
+    /// Total number of matching subscriptions when `count_mode` is "exact".
+    pub total: Option<u64>,
+    /// Whether more items are available after this page.
+    pub has_more: bool,
+    /// Count mode used to produce pagination metadata.
+    pub count_mode: String,
 }
 
 /// Response payload for fetching a subscription.

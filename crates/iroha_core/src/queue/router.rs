@@ -51,6 +51,9 @@ use crate::{
 };
 use thiserror::Error;
 
+const AMX_POLICY_METADATA_KEY: &str = "amx_policy";
+const AMX_POLICY_REJECT_CROSS_DATASPACE: &str = "reject_cross_dataspace";
+
 /// Routing decision returned by a [`LaneRouter`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RoutingDecision {
@@ -336,6 +339,7 @@ fn dataspace_scoped_permission_routing_decision(
     state_view: Option<&StateView<'_>>,
 ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
     let mut target_dataspace: Option<DataSpaceId> = None;
+    let reject_cross_dataspace = amx_policy_rejects_cross_dataspace(tx);
     let Some(executable) = transaction_executable(tx) else {
         return Ok(None);
     };
@@ -343,51 +347,39 @@ fn dataspace_scoped_permission_routing_decision(
     match executable {
         Executable::Instructions(instructions) => {
             for instruction in instructions {
-                let Some(dataspace_id) = instruction_dataspace_scoped_permission_target(
-                    &**instruction,
-                    dataspace_catalog,
-                    state_view,
-                ) else {
-                    continue;
-                };
-                if let Some(existing) = target_dataspace {
-                    if existing != dataspace_id {
-                        return Err(RoutingResolveError::ConflictingDataspaceScopedPermissions {
-                            first_dataspace_id: existing,
-                            second_dataspace_id: dataspace_id,
-                        });
-                    }
-                } else {
-                    target_dataspace = Some(dataspace_id);
-                }
+                merge_native_target_dataspace(
+                    &mut target_dataspace,
+                    instruction_dataspace_scoped_permission_target(
+                        &**instruction,
+                        dataspace_catalog,
+                        state_view,
+                    ),
+                    reject_cross_dataspace,
+                    NativeDataspaceConflict::Permission,
+                )?;
             }
         }
         Executable::ContractCall(call) => {
-            merge_transaction_target_dataspace(
+            merge_native_target_dataspace(
                 &mut target_dataspace,
                 contract_address_dataspace_target(&call.contract_address),
+                reject_cross_dataspace,
+                NativeDataspaceConflict::Transaction,
             )?;
         }
         Executable::Ivm(_) => {}
         Executable::IvmProved(proved) => {
             for instruction in &proved.overlay {
-                let Some(dataspace_id) = instruction_dataspace_scoped_permission_target(
-                    &**instruction,
-                    dataspace_catalog,
-                    state_view,
-                ) else {
-                    continue;
-                };
-                if let Some(existing) = target_dataspace {
-                    if existing != dataspace_id {
-                        return Err(RoutingResolveError::ConflictingDataspaceScopedPermissions {
-                            first_dataspace_id: existing,
-                            second_dataspace_id: dataspace_id,
-                        });
-                    }
-                } else {
-                    target_dataspace = Some(dataspace_id);
-                }
+                merge_native_target_dataspace(
+                    &mut target_dataspace,
+                    instruction_dataspace_scoped_permission_target(
+                        &**instruction,
+                        dataspace_catalog,
+                        state_view,
+                    ),
+                    reject_cross_dataspace,
+                    NativeDataspaceConflict::Permission,
+                )?;
             }
         }
     }
@@ -411,6 +403,7 @@ fn dataspace_scoped_permission_routing_decision_with_world<W: WorldReadOnly>(
     world: &W,
 ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
     let mut target_dataspace: Option<DataSpaceId> = None;
+    let reject_cross_dataspace = amx_policy_rejects_cross_dataspace(tx);
     let Some(executable) = transaction_executable(tx) else {
         return Ok(None);
     };
@@ -418,51 +411,39 @@ fn dataspace_scoped_permission_routing_decision_with_world<W: WorldReadOnly>(
     match executable {
         Executable::Instructions(instructions) => {
             for instruction in instructions {
-                let Some(dataspace_id) = instruction_dataspace_scoped_permission_target_with_world(
-                    &**instruction,
-                    dataspace_catalog,
-                    world,
-                ) else {
-                    continue;
-                };
-                if let Some(existing) = target_dataspace {
-                    if existing != dataspace_id {
-                        return Err(RoutingResolveError::ConflictingDataspaceScopedPermissions {
-                            first_dataspace_id: existing,
-                            second_dataspace_id: dataspace_id,
-                        });
-                    }
-                } else {
-                    target_dataspace = Some(dataspace_id);
-                }
+                merge_native_target_dataspace(
+                    &mut target_dataspace,
+                    instruction_dataspace_scoped_permission_target_with_world(
+                        &**instruction,
+                        dataspace_catalog,
+                        world,
+                    ),
+                    reject_cross_dataspace,
+                    NativeDataspaceConflict::Permission,
+                )?;
             }
         }
         Executable::ContractCall(call) => {
-            merge_transaction_target_dataspace(
+            merge_native_target_dataspace(
                 &mut target_dataspace,
                 contract_address_dataspace_target(&call.contract_address),
+                reject_cross_dataspace,
+                NativeDataspaceConflict::Transaction,
             )?;
         }
         Executable::Ivm(_) => {}
         Executable::IvmProved(proved) => {
             for instruction in &proved.overlay {
-                let Some(dataspace_id) = instruction_dataspace_scoped_permission_target_with_world(
-                    &**instruction,
-                    dataspace_catalog,
-                    world,
-                ) else {
-                    continue;
-                };
-                if let Some(existing) = target_dataspace {
-                    if existing != dataspace_id {
-                        return Err(RoutingResolveError::ConflictingDataspaceScopedPermissions {
-                            first_dataspace_id: existing,
-                            second_dataspace_id: dataspace_id,
-                        });
-                    }
-                } else {
-                    target_dataspace = Some(dataspace_id);
-                }
+                merge_native_target_dataspace(
+                    &mut target_dataspace,
+                    instruction_dataspace_scoped_permission_target_with_world(
+                        &**instruction,
+                        dataspace_catalog,
+                        world,
+                    ),
+                    reject_cross_dataspace,
+                    NativeDataspaceConflict::Permission,
+                )?;
             }
         }
     }
@@ -544,6 +525,24 @@ fn settlement_pair_dataspace_target(
         (Some(dataspace), None) | (None, Some(dataspace)) => Some(dataspace),
         (None, None) => None,
     }
+}
+
+fn asset_id_explicit_dataspace_target(
+    asset_id: &iroha_data_model::asset::AssetId,
+) -> Option<DataSpaceId> {
+    match asset_id.scope() {
+        iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace) => Some(*dataspace),
+        iroha_data_model::asset::AssetBalanceScope::Global => None,
+    }
+}
+
+fn merge_instruction_dataspace_targets<I>(targets: I) -> Option<DataSpaceId>
+where
+    I: IntoIterator<Item = Option<DataSpaceId>>,
+{
+    targets.into_iter().flatten().fold(None, |acc, target| {
+        settlement_pair_dataspace_target(acc, Some(target))
+    })
 }
 
 fn settlement_transaction_dataspace_target(
@@ -812,28 +811,90 @@ fn transaction_executable<'tx>(tx: &'tx AcceptedTransaction<'tx>) -> Option<&'tx
     }
 }
 
-fn merge_transaction_target_dataspace(
+fn amx_policy_rejects_cross_dataspace(tx: &AcceptedTransaction<'_>) -> bool {
+    tx.metadata()
+        .and_then(|metadata| metadata.get(AMX_POLICY_METADATA_KEY))
+        .and_then(|raw| raw.try_into_any_norito::<String>().ok())
+        .is_some_and(|policy| {
+            policy
+                .trim()
+                .eq_ignore_ascii_case(AMX_POLICY_REJECT_CROSS_DATASPACE)
+        })
+}
+
+#[derive(Clone, Copy)]
+enum NativeDataspaceConflict {
+    Permission,
+    Transaction,
+}
+
+fn native_dataspace_conflict_error(
+    kind: NativeDataspaceConflict,
+    first_dataspace_id: DataSpaceId,
+    second_dataspace_id: DataSpaceId,
+) -> RoutingResolveError {
+    match kind {
+        NativeDataspaceConflict::Permission => {
+            RoutingResolveError::ConflictingDataspaceScopedPermissions {
+                first_dataspace_id,
+                second_dataspace_id,
+            }
+        }
+        NativeDataspaceConflict::Transaction => {
+            RoutingResolveError::ConflictingTransactionDataspaceTargets {
+                first_dataspace_id,
+                second_dataspace_id,
+            }
+        }
+    }
+}
+
+fn merge_native_target_dataspace(
     target_dataspace: &mut Option<DataSpaceId>,
     candidate: Option<DataSpaceId>,
+    reject_cross_dataspace: bool,
+    conflict_kind: NativeDataspaceConflict,
 ) -> Result<(), RoutingResolveError> {
+    // TODO: Materialize native AMX descriptors for coordinator-routed native batches once
+    // per-dataspace prepare/commit records are wired into block receipts. The universal route
+    // currently gives those batches one deterministic StateTransaction commit boundary.
     let Some(candidate) = candidate else {
         return Ok(());
     };
 
-    if let Some(existing) = target_dataspace {
-        if *existing != candidate {
-            return Err(
-                RoutingResolveError::ConflictingTransactionDataspaceTargets {
-                    first_dataspace_id: *existing,
-                    second_dataspace_id: candidate,
-                },
-            );
+    match *target_dataspace {
+        Some(existing) if existing == candidate => {}
+        Some(existing) if existing == DataSpaceId::UNIVERSAL => {}
+        Some(_) if candidate == DataSpaceId::UNIVERSAL => {
+            *target_dataspace = Some(DataSpaceId::UNIVERSAL);
         }
-    } else {
-        *target_dataspace = Some(candidate);
+        Some(existing) => {
+            if reject_cross_dataspace {
+                return Err(native_dataspace_conflict_error(
+                    conflict_kind,
+                    existing,
+                    candidate,
+                ));
+            }
+            *target_dataspace = Some(DataSpaceId::UNIVERSAL);
+        }
+        None => *target_dataspace = Some(candidate),
     }
 
     Ok(())
+}
+
+fn merge_transaction_target_dataspace(
+    target_dataspace: &mut Option<DataSpaceId>,
+    candidate: Option<DataSpaceId>,
+    reject_cross_dataspace: bool,
+) -> Result<(), RoutingResolveError> {
+    merge_native_target_dataspace(
+        target_dataspace,
+        candidate,
+        reject_cross_dataspace,
+        NativeDataspaceConflict::Transaction,
+    )
 }
 
 fn transaction_dataspace_routing_target(
@@ -845,6 +906,7 @@ fn transaction_dataspace_routing_target(
         return Ok(None);
     };
     let mut target_dataspace = None;
+    let reject_cross_dataspace = amx_policy_rejects_cross_dataspace(tx);
 
     match executable {
         Executable::Instructions(instructions) => {
@@ -856,6 +918,7 @@ fn transaction_dataspace_routing_target(
                         dataspace_catalog,
                         state_view,
                     ),
+                    reject_cross_dataspace,
                 )?;
             }
         }
@@ -869,6 +932,7 @@ fn transaction_dataspace_routing_target(
                         dataspace_catalog,
                         state_view,
                     ),
+                    reject_cross_dataspace,
                 )?;
             }
         }
@@ -886,6 +950,7 @@ fn transaction_dataspace_routing_target_with_world<W: WorldReadOnly>(
         return Ok(None);
     };
     let mut target_dataspace = None;
+    let reject_cross_dataspace = amx_policy_rejects_cross_dataspace(tx);
 
     match executable {
         Executable::Instructions(instructions) => {
@@ -897,6 +962,7 @@ fn transaction_dataspace_routing_target_with_world<W: WorldReadOnly>(
                         dataspace_catalog,
                         world,
                     ),
+                    reject_cross_dataspace,
                 )?;
             }
         }
@@ -910,12 +976,173 @@ fn transaction_dataspace_routing_target_with_world<W: WorldReadOnly>(
                         dataspace_catalog,
                         world,
                     ),
+                    reject_cross_dataspace,
                 )?;
             }
         }
     }
 
     Ok(target_dataspace)
+}
+
+/// Return the concrete dataspace participants of a native AMX candidate.
+///
+/// This is intentionally narrower than route resolution: it preserves the
+/// per-dataspace legs that caused a native transaction to collapse onto the
+/// universal coordinator route so block commitments can expose deterministic
+/// prepare/commit evidence.
+pub(crate) fn native_amx_participant_dataspaces_with_world<W: WorldReadOnly>(
+    tx: &AcceptedTransaction<'_>,
+    dataspace_catalog: &DataSpaceCatalog,
+    world: &W,
+) -> Vec<DataSpaceId> {
+    let mut dataspaces = std::collections::BTreeSet::new();
+    let Some(executable) = transaction_executable(tx) else {
+        return Vec::new();
+    };
+
+    match executable {
+        Executable::Instructions(instructions) => {
+            for instruction in instructions {
+                collect_instruction_native_amx_participants(
+                    &**instruction,
+                    dataspace_catalog,
+                    world,
+                    &mut dataspaces,
+                );
+            }
+        }
+        Executable::ContractCall(call) => {
+            insert_native_amx_participant(
+                &mut dataspaces,
+                contract_address_dataspace_target(&call.contract_address),
+            );
+        }
+        Executable::Ivm(_) => {}
+        Executable::IvmProved(proved) => {
+            for instruction in &proved.overlay {
+                collect_instruction_native_amx_participants(
+                    &**instruction,
+                    dataspace_catalog,
+                    world,
+                    &mut dataspaces,
+                );
+            }
+        }
+    }
+
+    dataspaces.into_iter().collect()
+}
+
+fn insert_native_amx_participant(
+    dataspaces: &mut std::collections::BTreeSet<DataSpaceId>,
+    target: Option<DataSpaceId>,
+) {
+    if let Some(dataspace) = target {
+        dataspaces.insert(dataspace);
+    }
+}
+
+fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
+    instruction: &dyn Instruction,
+    dataspace_catalog: &DataSpaceCatalog,
+    world: &W,
+    dataspaces: &mut std::collections::BTreeSet<DataSpaceId>,
+) {
+    insert_native_amx_participant(
+        dataspaces,
+        instruction_dataspace_scoped_permission_target_with_world(
+            instruction,
+            Some(dataspace_catalog),
+            world,
+        ),
+    );
+
+    let any = instruction.as_any();
+    if let Some(transfer) = any.downcast_ref::<TransferBox>() {
+        if let TransferBox::Asset(transfer) = transfer {
+            insert_native_amx_participant(
+                dataspaces,
+                asset_definition_dataspace_target_with_world(
+                    &transfer.source.definition,
+                    None,
+                    None,
+                    Some(dataspace_catalog),
+                    world,
+                ),
+            );
+            insert_native_amx_participant(
+                dataspaces,
+                asset_id_explicit_dataspace_target(&transfer.source),
+            );
+            insert_native_amx_participant(
+                dataspaces,
+                account_dataspace_target(Some(world), &transfer.source.account),
+            );
+            insert_native_amx_participant(
+                dataspaces,
+                account_dataspace_target(Some(world), &transfer.destination),
+            );
+            return;
+        }
+    }
+
+    if let Some(mint) = any.downcast_ref::<MintBox>() {
+        if let MintBox::Asset(mint) = mint {
+            insert_native_amx_participant(
+                dataspaces,
+                asset_definition_dataspace_target_with_world(
+                    &mint.destination.definition,
+                    None,
+                    None,
+                    Some(dataspace_catalog),
+                    world,
+                ),
+            );
+            insert_native_amx_participant(
+                dataspaces,
+                asset_id_explicit_dataspace_target(&mint.destination),
+            );
+            insert_native_amx_participant(
+                dataspaces,
+                account_dataspace_target(Some(world), &mint.destination.account),
+            );
+            return;
+        }
+    }
+
+    if let Some(burn) = any.downcast_ref::<BurnBox>() {
+        if let BurnBox::Asset(burn) = burn {
+            insert_native_amx_participant(
+                dataspaces,
+                asset_definition_dataspace_target_with_world(
+                    &burn.destination.definition,
+                    None,
+                    None,
+                    Some(dataspace_catalog),
+                    world,
+                ),
+            );
+            insert_native_amx_participant(
+                dataspaces,
+                asset_id_explicit_dataspace_target(&burn.destination),
+            );
+            insert_native_amx_participant(
+                dataspaces,
+                account_dataspace_target(Some(world), &burn.destination.account),
+            );
+            return;
+        }
+    }
+
+    insert_native_amx_participant(
+        dataspaces,
+        instruction_transaction_dataspace_target_with_world(
+            instruction,
+            Some(dataspace_catalog),
+            world,
+        ),
+    );
 }
 
 enum AccountPermissionHolderTarget<'account> {
@@ -1109,42 +1336,61 @@ fn instruction_transaction_dataspace_target(
                 dataspace_catalog,
                 state_view,
             ),
-            TransferBox::Asset(transfer) => asset_definition_dataspace_target(
-                &transfer.source.definition,
-                None,
-                None,
-                dataspace_catalog,
-                state_view,
-            )
-            .or_else(|| {
-                account_dataspace_target(state_view.map(StateView::world), &transfer.source.account)
-            }),
+            TransferBox::Asset(transfer) => merge_instruction_dataspace_targets([
+                asset_definition_dataspace_target(
+                    &transfer.source.definition,
+                    None,
+                    None,
+                    dataspace_catalog,
+                    state_view,
+                ),
+                asset_id_explicit_dataspace_target(&transfer.source),
+                account_dataspace_target(
+                    state_view.map(StateView::world),
+                    &transfer.source.account,
+                ),
+                account_dataspace_target(state_view.map(StateView::world), &transfer.destination),
+            ]),
             TransferBox::Nft(_) => None,
         };
     }
 
     if let Some(mint) = any.downcast_ref::<MintBox>() {
         return match mint {
-            MintBox::Asset(mint) => asset_definition_dataspace_target(
-                &mint.destination.definition,
-                None,
-                None,
-                dataspace_catalog,
-                state_view,
-            ),
+            MintBox::Asset(mint) => merge_instruction_dataspace_targets([
+                asset_definition_dataspace_target(
+                    &mint.destination.definition,
+                    None,
+                    None,
+                    dataspace_catalog,
+                    state_view,
+                ),
+                asset_id_explicit_dataspace_target(&mint.destination),
+                account_dataspace_target(
+                    state_view.map(StateView::world),
+                    &mint.destination.account,
+                ),
+            ]),
             MintBox::TriggerRepetitions(_) => None,
         };
     }
 
     if let Some(burn) = any.downcast_ref::<BurnBox>() {
         return match burn {
-            BurnBox::Asset(burn) => asset_definition_dataspace_target(
-                &burn.destination.definition,
-                None,
-                None,
-                dataspace_catalog,
-                state_view,
-            ),
+            BurnBox::Asset(burn) => merge_instruction_dataspace_targets([
+                asset_definition_dataspace_target(
+                    &burn.destination.definition,
+                    None,
+                    None,
+                    dataspace_catalog,
+                    state_view,
+                ),
+                asset_id_explicit_dataspace_target(&burn.destination),
+                account_dataspace_target(
+                    state_view.map(StateView::world),
+                    &burn.destination.account,
+                ),
+            ]),
             BurnBox::TriggerRepetitions(_) => None,
         };
     }
@@ -1302,40 +1548,52 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                 dataspace_catalog,
                 world,
             ),
-            TransferBox::Asset(transfer) => asset_definition_dataspace_target_with_world(
-                &transfer.source.definition,
-                None,
-                None,
-                dataspace_catalog,
-                world,
-            )
-            .or_else(|| account_dataspace_target(Some(world), &transfer.source.account)),
+            TransferBox::Asset(transfer) => merge_instruction_dataspace_targets([
+                asset_definition_dataspace_target_with_world(
+                    &transfer.source.definition,
+                    None,
+                    None,
+                    dataspace_catalog,
+                    world,
+                ),
+                asset_id_explicit_dataspace_target(&transfer.source),
+                account_dataspace_target(Some(world), &transfer.source.account),
+                account_dataspace_target(Some(world), &transfer.destination),
+            ]),
             TransferBox::Nft(_) => None,
         };
     }
 
     if let Some(mint) = any.downcast_ref::<MintBox>() {
         return match mint {
-            MintBox::Asset(mint) => asset_definition_dataspace_target_with_world(
-                &mint.destination.definition,
-                None,
-                None,
-                dataspace_catalog,
-                world,
-            ),
+            MintBox::Asset(mint) => merge_instruction_dataspace_targets([
+                asset_definition_dataspace_target_with_world(
+                    &mint.destination.definition,
+                    None,
+                    None,
+                    dataspace_catalog,
+                    world,
+                ),
+                asset_id_explicit_dataspace_target(&mint.destination),
+                account_dataspace_target(Some(world), &mint.destination.account),
+            ]),
             MintBox::TriggerRepetitions(_) => None,
         };
     }
 
     if let Some(burn) = any.downcast_ref::<BurnBox>() {
         return match burn {
-            BurnBox::Asset(burn) => asset_definition_dataspace_target_with_world(
-                &burn.destination.definition,
-                None,
-                None,
-                dataspace_catalog,
-                world,
-            ),
+            BurnBox::Asset(burn) => merge_instruction_dataspace_targets([
+                asset_definition_dataspace_target_with_world(
+                    &burn.destination.definition,
+                    None,
+                    None,
+                    dataspace_catalog,
+                    world,
+                ),
+                asset_id_explicit_dataspace_target(&burn.destination),
+                account_dataspace_target(Some(world), &burn.destination.account),
+            ]),
             BurnBox::TriggerRepetitions(_) => None,
         };
     }
@@ -1424,8 +1682,8 @@ fn account_dataspace_target<W: WorldReadOnly>(
 ) -> Option<DataSpaceId> {
     let world = world?;
     let hierarchy = world.account_scope_hierarchy(account_id).ok()?;
-    if hierarchy.len() != 1 {
-        return None;
+    if hierarchy.len() > 1 {
+        return Some(DataSpaceId::UNIVERSAL);
     }
     let dataspace_id = *hierarchy.keys().next().expect("single dataspace");
     (dataspace_id != DataSpaceId::UNIVERSAL).then_some(dataspace_id)
@@ -2088,6 +2346,10 @@ fn resolve_policy_routing_decision(
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
 ) -> Result<RoutingDecision, RoutingResolveError> {
+    if target_dataspace == Some(DataSpaceId::UNIVERSAL) {
+        return canonical_dataspace_route(DataSpaceId::UNIVERSAL, lane_catalog, dataspace_catalog);
+    }
+
     if let Some(rule) = matched_rule {
         let decision = RoutingDecision::new(
             rule.lane,
@@ -3089,10 +3351,19 @@ mod tests {
         signer: &iroha_crypto::PrivateKey,
         instructions: Vec<InstructionBox>,
     ) -> AcceptedTransaction<'static> {
+        sample_transaction_with_metadata(authority, signer, instructions, Metadata::default())
+    }
+
+    fn sample_transaction_with_metadata(
+        authority: &AccountId,
+        signer: &iroha_crypto::PrivateKey,
+        instructions: Vec<InstructionBox>,
+        metadata: Metadata,
+    ) -> AcceptedTransaction<'static> {
         let chain_id = ChainId::from("chain");
         let tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
             .with_instructions(instructions)
-            .with_metadata(Metadata::default())
+            .with_metadata(metadata)
             .sign(signer);
         let default_limits = TransactionParameters::default();
         let params = TransactionParameters::with_max_signatures(
@@ -4109,7 +4380,7 @@ mod tests {
     }
 
     #[test]
-    fn asset_home_proved_coverage_overlay_conflicting_domains_are_rejected() {
+    fn asset_home_proved_coverage_overlay_conflicting_domains_route_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let first_dataspace = DataSpaceId::new(10);
         let second_dataspace = DataSpaceId::new(11);
@@ -4140,13 +4411,10 @@ mod tests {
         );
 
         assert_eq!(
-            router.try_route(&tx),
-            Err(
-                RoutingResolveError::ConflictingTransactionDataspaceTargets {
-                    first_dataspace_id: first_dataspace,
-                    second_dataspace_id: second_dataspace,
-                }
-            )
+            router
+                .try_route(&tx)
+                .expect("mixed proved overlay domain targets should route to AMX coordinator"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
 
@@ -4189,7 +4457,7 @@ mod tests {
     }
 
     #[test]
-    fn asset_home_proved_coverage_overlay_conflicting_permissions_are_rejected() {
+    fn asset_home_proved_coverage_overlay_conflicting_permissions_route_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let first_dataspace = DataSpaceId::new(10);
         let second_dataspace = DataSpaceId::new(11);
@@ -4229,15 +4497,12 @@ mod tests {
             ]),
         );
 
-        let err = router
-            .try_route(&tx)
-            .expect_err("mixed proved overlay permissions must be rejected");
-
-        assert!(matches!(
-            err,
-            RoutingResolveError::ConflictingDataspaceScopedPermissions { .. }
-        ));
-        assert_eq!(err.as_label(), "conflicting_dataspace_scoped_permissions");
+        assert_eq!(
+            router
+                .try_route(&tx)
+                .expect("mixed proved overlay permissions should route to AMX coordinator"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
     }
 
     #[test]
@@ -4382,7 +4647,7 @@ mod tests {
     }
 
     #[test]
-    fn asset_home_proved_state_coverage_overlay_state_resolved_conflict_is_rejected() {
+    fn asset_home_proved_state_coverage_overlay_state_resolved_conflict_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let paynet = DataSpaceId::new(10);
         let cbuae = DataSpaceId::new(11);
@@ -4434,11 +4699,8 @@ mod tests {
         assert_eq!(
             router
                 .try_route_with_view(&tx, &state_view)
-                .expect_err("state-resolved proved overlay targets must conflict"),
-            RoutingResolveError::ConflictingTransactionDataspaceTargets {
-                first_dataspace_id: paynet,
-                second_dataspace_id: cbuae,
-            }
+                .expect("state-resolved proved overlay targets should route to AMX coordinator"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
         assert_eq!(
             evaluate_policy_with_catalog_and_world(
@@ -4448,11 +4710,8 @@ mod tests {
                 &tx,
                 state_view.world(),
             )
-            .expect_err("state-resolved world overlay targets must conflict"),
-            RoutingResolveError::ConflictingTransactionDataspaceTargets {
-                first_dataspace_id: paynet,
-                second_dataspace_id: cbuae,
-            }
+            .expect("state-resolved world overlay targets should route to AMX coordinator"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
 
@@ -5611,7 +5870,7 @@ mod tests {
     }
 
     #[test]
-    fn asset_definition_registration_rejects_mixed_declared_alias_dataspaces() {
+    fn asset_definition_registration_routes_mixed_declared_alias_dataspaces_to_universal() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
         let paynet = DataSpaceId::new(10);
         let cbuae = DataSpaceId::new(11);
@@ -5677,16 +5936,13 @@ mod tests {
             ],
         );
 
-        let err = router
+        let route = router
             .try_route(&tx)
-            .expect_err("mixed declared aliases must conflict");
+            .expect("mixed declared aliases should route to AMX coordinator");
 
         assert_eq!(
-            err,
-            RoutingResolveError::ConflictingTransactionDataspaceTargets {
-                first_dataspace_id: paynet,
-                second_dataspace_id: cbuae,
-            }
+            route,
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
 
@@ -6943,7 +7199,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_mixed_domain_write_targets_across_dataspaces() {
+    fn mixed_domain_write_targets_across_dataspaces_route_to_universal() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
         let first_dataspace = DataSpaceId::new(7);
         let second_dataspace = DataSpaceId::new(8);
@@ -6971,6 +7227,98 @@ mod tests {
                     DomainId::try_new("treasury", "bank").expect("domain id"),
                 ))),
             ],
+        );
+
+        assert_eq!(
+            router
+                .try_route(&tx)
+                .expect("mixed domain writes should route to AMX coordinator"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+    }
+
+    #[test]
+    fn mixed_domain_write_targets_ignore_non_universal_rule_dataspace() {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let first_dataspace = DataSpaceId::new(7);
+        let second_dataspace = DataSpaceId::new(8);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![LaneRoutingRule {
+                    lane: LaneId::new(2),
+                    dataspace: Some(first_dataspace),
+                    matcher: LaneRoutingMatcher {
+                        account: None,
+                        instruction: Some("register::domain".to_owned()),
+                        description: None,
+                    },
+                }],
+            },
+            dataspace_catalog(&[(first_dataspace, "acme"), (second_dataspace, "bank")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(2), first_dataspace),
+                (LaneId::new(3), second_dataspace),
+            ]),
+        );
+        let tx = sample_transaction(
+            &authority_id,
+            authority_keypair.private_key(),
+            vec![
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("merchant", "acme").expect("domain id"),
+                ))),
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("treasury", "bank").expect("domain id"),
+                ))),
+            ],
+        );
+
+        assert_eq!(
+            router
+                .try_route(&tx)
+                .expect("mixed domain writes should stay on the universal coordinator route"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+    }
+
+    #[test]
+    fn strict_amx_policy_rejects_mixed_domain_write_targets() {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let first_dataspace = DataSpaceId::new(7);
+        let second_dataspace = DataSpaceId::new(8);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(first_dataspace, "acme"), (second_dataspace, "bank")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(2), first_dataspace),
+                (LaneId::new(3), second_dataspace),
+            ]),
+        );
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
+            iroha_primitives::json::Json::new(AMX_POLICY_REJECT_CROSS_DATASPACE),
+        );
+        let tx = sample_transaction_with_metadata(
+            &authority_id,
+            authority_keypair.private_key(),
+            vec![
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("merchant", "acme").expect("domain id"),
+                ))),
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("treasury", "bank").expect("domain id"),
+                ))),
+            ],
+            metadata,
         );
 
         assert_eq!(
@@ -7735,7 +8083,7 @@ mod tests {
     }
 
     #[test]
-    fn dataspace_scoped_permission_grant_rejects_mixed_dataspaces() {
+    fn dataspace_scoped_permission_grant_routes_mixed_dataspaces_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let first_dataspace = DataSpaceId::new(7);
         let second_dataspace = DataSpaceId::new(8);
@@ -7789,15 +8137,12 @@ mod tests {
             ],
         );
 
-        let err = router
-            .try_route(&tx)
-            .expect_err("mixed dataspace-scoped permissions must be rejected");
-
-        assert!(matches!(
-            err,
-            RoutingResolveError::ConflictingDataspaceScopedPermissions { .. }
-        ));
-        assert_eq!(err.as_label(), "conflicting_dataspace_scoped_permissions");
+        assert_eq!(
+            router
+                .try_route(&tx)
+                .expect("mixed dataspace-scoped permissions should route to AMX coordinator"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
     }
 
     #[test]

@@ -54,6 +54,7 @@ use ivm::ProgramMetadata;
 #[cfg(test)]
 use norito::core as ncore;
 use parking_lot::RwLock;
+pub(crate) use router::native_amx_participant_dataspaces_with_world;
 pub use router::{
     ConfigLaneRouter, LaneRouter, RoutingDecision, RoutingResolveError, SingleLaneRouter,
     evaluate_policy, evaluate_policy_with_catalog, evaluate_policy_with_catalog_and_world,

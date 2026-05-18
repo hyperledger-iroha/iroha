@@ -68,7 +68,7 @@ pub struct OpenVerifyEnvelope {
     pub vk_hash: [u8; 32],
     /// Public-input metadata bytes (opaque; backend-specific canonical encoding).
     ///
-    /// For backends that separate schema from values (e.g., `stark/fri-v1` wrappers),
+    /// For backends that separate schema from values (e.g., `stark/fri` wrappers),
     /// this field carries the stable schema descriptor while concrete values are
     /// stored inside backend-specific payloads.
     pub public_inputs: Vec<u8>,

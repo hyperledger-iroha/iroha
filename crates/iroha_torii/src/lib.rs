@@ -1441,6 +1441,9 @@ struct AppState {
     state: Arc<CoreState>,
     kiso: KisoHandle,
     query_service: LiveQueryStoreHandle,
+    query_inflight: Arc<tokio::sync::Semaphore>,
+    query_heavy_inflight: Arc<tokio::sync::Semaphore>,
+    query_queue_timeout: Duration,
     rate_limiter: limits::RateLimiter,
     pipeline_status_rate_limiter: limits::RateLimiter,
     tx_rate_limiter: limits::RateLimiter,
@@ -3315,6 +3318,55 @@ async fn check_access_enforced_with_cost(
     Ok(())
 }
 
+struct QueryAdmissionPermit {
+    _query: tokio::sync::OwnedSemaphorePermit,
+    _heavy: Option<tokio::sync::OwnedSemaphorePermit>,
+}
+
+async fn acquire_query_admission(
+    app: &AppState,
+    heavy: bool,
+) -> Result<QueryAdmissionPermit, Error> {
+    async fn acquire_one(
+        semaphore: Arc<tokio::sync::Semaphore>,
+        timeout: Duration,
+    ) -> Result<tokio::sync::OwnedSemaphorePermit, Error> {
+        let acquire = semaphore.acquire_owned();
+        let permit = if timeout.is_zero() {
+            acquire.await.map_err(|_| {
+                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+                ))
+            })?
+        } else {
+            tokio::time::timeout(timeout, acquire)
+                .await
+                .map_err(|_| {
+                    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                        iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+                    ))
+                })?
+                .map_err(|_| {
+                    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                        iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+                    ))
+                })?
+        };
+        Ok(permit)
+    }
+
+    let query = acquire_one(app.query_inflight.clone(), app.query_queue_timeout).await?;
+    let heavy = if heavy {
+        Some(acquire_one(app.query_heavy_inflight.clone(), app.query_queue_timeout).await?)
+    } else {
+        None
+    };
+    Ok(QueryAdmissionPermit {
+        _query: query,
+        _heavy: heavy,
+    })
+}
+
 fn rate_limit_key(
     headers: &axum::http::HeaderMap,
     remote: Option<IpAddr>,
@@ -4277,12 +4329,11 @@ async fn handler_account_assets_query(
     env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
     let payload = crate::utils::extractors::NoritoJson(env);
     if !trusted_internal {
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
-        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &key_hint, enforce, cost)
+        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &key_hint, true, cost)
             .await?;
     }
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
     let (_parsed_account_id, canonical_account_id) =
         routing::parse_account_path_segment_with_state(
             app.state.as_ref(),
@@ -4834,17 +4885,9 @@ async fn handler_accounts_query(
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(
-            &app,
-            &headers,
-            Some(remote_ip),
-            "v1/accounts/query",
-            enforce,
-        )
-        .await?;
+        check_access_enforced(&app, &headers, Some(remote_ip), "v1/accounts/query", true).await?;
     }
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
 
     let body = norito::json::to_vec(&env).map_err(|error| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
@@ -5439,6 +5482,7 @@ async fn handler_space_directory_manifests(
         status: query.status.clone(),
         limit: None,
         offset: None,
+        count_mode: None,
     };
     let query_string = encode_torii_proxy_query(&fanout_query)?;
     Ok(execute_torii_fanout_space_directory_manifests_read(
@@ -7323,17 +7367,16 @@ async fn handler_assets_definitions_query(
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(
             &app,
             &headers,
             Some(remote_ip),
             "v1/assets/definitions/query",
-            enforce,
+            true,
         )
         .await?;
     }
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
 
     let body = norito::json::to_vec(&env).map_err(|error| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
@@ -7432,12 +7475,11 @@ async fn handler_asset_holders_query(
     env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
     let payload = crate::utils::extractors::NoritoJson(env);
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
-        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &def_id, enforce, cost)
+        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &def_id, true, cost)
             .await?;
     }
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
     let body = norito::json::to_vec(&payload.0).map_err(|error| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
             "failed to encode routed asset holders query: {error}"
@@ -7550,10 +7592,9 @@ async fn handler_domains_query(
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(&app, &headers, Some(remote_ip), "v1/domains/query", enforce).await?;
+        check_access_enforced(&app, &headers, Some(remote_ip), "v1/domains/query", true).await?;
     }
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
 
     let body = norito::json::to_vec(&env).map_err(|error| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
@@ -7607,10 +7648,9 @@ async fn handler_nfts_query(
 ) -> Result<axum::response::Response, Error> {
     let remote_ip = remote.ip();
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(&app, &headers, Some(remote_ip), "v1/nfts/query", enforce).await?;
+        check_access_enforced(&app, &headers, Some(remote_ip), "v1/nfts/query", true).await?;
     }
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
 
     let body = norito::json::to_vec(&env).map_err(|error| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
@@ -7666,10 +7706,9 @@ async fn handler_rwas_query(
 ) -> Result<axum::response::Response, Error> {
     let remote_ip = remote.ip();
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(&app, &headers, Some(remote_ip), "v1/rwas/query", enforce).await?;
+        check_access_enforced(&app, &headers, Some(remote_ip), "v1/rwas/query", true).await?;
     }
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
 
     let body = norito::json::to_vec(&env).map_err(|error| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
@@ -15669,6 +15708,7 @@ mod torii_routed_read_tests {
             offset: 3,
             asset: Some("xor#sora".to_owned()),
             scope: Some("dataspace:7".to_owned()),
+            count_mode: Some("exact".to_owned()),
         };
 
         let encoded = encode_torii_proxy_query(&params)
@@ -15681,6 +15721,7 @@ mod torii_routed_read_tests {
         assert_eq!(decoded.offset, params.offset);
         assert_eq!(decoded.asset, params.asset);
         assert_eq!(decoded.scope, params.scope);
+        assert_eq!(decoded.count_mode, params.count_mode);
     }
 
     #[test]
@@ -15690,6 +15731,7 @@ mod torii_routed_read_tests {
             limit: Some(8),
             offset: 0,
             sort: Some("id:asc".to_owned()),
+            count_mode: Some("exact".to_owned()),
         };
 
         let encoded = encode_torii_proxy_query(&params)
@@ -15702,6 +15744,7 @@ mod torii_routed_read_tests {
         assert_eq!(decoded.limit, params.limit);
         assert_eq!(decoded.offset, params.offset);
         assert_eq!(decoded.sort, params.sort);
+        assert_eq!(decoded.count_mode, params.count_mode);
     }
 
     #[test]
@@ -18885,7 +18928,7 @@ async fn execute_torii_read_request_locally(
             let Ok(account_id) = torii_proxy_path_arg(&request, 0, "account_id") else {
                 return torii_proxy_path_arg(&request, 0, "account_id").unwrap_err();
             };
-            let params = match decode_torii_proxy_query::<crate::filter::Pagination>(
+            let params = match decode_torii_proxy_query::<routing::PaginationParams>(
                 request.query_string.as_deref(),
             ) {
                 Ok(params) => params,
@@ -19204,7 +19247,7 @@ async fn execute_torii_read_request_locally(
             )
         }
         ToriiReadEndpointV1::DomainsList => {
-            let params = match decode_torii_proxy_query::<crate::filter::Pagination>(
+            let params = match decode_torii_proxy_query::<routing::PaginationParams>(
                 request.query_string.as_deref(),
             ) {
                 Ok(params) => params,
@@ -30702,6 +30745,7 @@ async fn handler_signed_query(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
+    crate::NoritoQuery(query_options): crate::NoritoQuery<QueryOptions>,
     NoritoVersioned(query_request): NoritoVersioned<iroha_data_model::query::SignedQuery>,
 ) -> Result<Response, Error> {
     let tel = app.telemetry.clone();
@@ -30726,9 +30770,7 @@ async fn handler_signed_query(
             }
         }
         let key = token_hdr.unwrap_or_else(|| "query".to_string());
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
+        if !limits::allow_conditionally(&app.rate_limiter, &key, true).await {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
             )));
@@ -30814,12 +30856,21 @@ async fn handler_signed_query(
         );
     }
 
+    let _query_permit = acquire_query_admission(
+        app.as_ref(),
+        matches!(
+            &query_request.payload.request,
+            iroha_data_model::query::QueryRequest::Start(_)
+        ),
+    )
+    .await?;
+
     let mut response = routing::handle_queries_with_opts(
         app.query_service.clone(),
         app.state.clone(),
         query_request,
         tel,
-        crate::NoritoQuery(QueryOptions::default()),
+        crate::NoritoQuery(query_options),
         format,
     )
     .await?;
@@ -33000,6 +33051,9 @@ pub struct Torii {
     query_rate_per_authority_per_sec: Option<std::num::NonZeroU32>,
     #[allow(dead_code)]
     query_burst_per_authority: Option<std::num::NonZeroU32>,
+    query_max_inflight: usize,
+    query_heavy_max_inflight: usize,
+    query_queue_timeout: Duration,
     #[allow(dead_code)]
     tx_rate_per_authority_per_sec: Option<std::num::NonZeroU32>,
     #[allow(dead_code)]
@@ -34523,6 +34577,14 @@ impl Torii {
                     "/v1/soracloud/model/upload/status",
                     get(soracloud::handle_uploaded_model_status),
                 )
+                .route(
+                    "/v1/soracloud/model/upload/private/execute",
+                    post(soracloud::handle_uploaded_model_private_execute),
+                )
+                .route(
+                    "/v1/soracloud/model/upload/private/receipts",
+                    get(soracloud::handle_uploaded_model_private_receipts),
+                )
                 .route("/v1/soracloud/hf/deploy", post(soracloud::handle_hf_deploy))
                 .route("/v1/soracloud/hf/status", get(soracloud::handle_hf_status))
                 .route(
@@ -35842,6 +35904,9 @@ impl Torii {
             local_peer_id: None,
             query_rate_per_authority_per_sec: config.query_rate_per_authority_per_sec,
             query_burst_per_authority: config.query_burst_per_authority,
+            query_max_inflight: config.query_max_inflight.get(),
+            query_heavy_max_inflight: config.query_heavy_max_inflight.get(),
+            query_queue_timeout: config.query_queue_timeout,
             tx_rate_per_authority_per_sec: config.tx_rate_per_authority_per_sec,
             tx_burst_per_authority: config.tx_burst_per_authority,
             deploy_rate_per_origin_per_sec: config.deploy_rate_per_origin_per_sec,
@@ -36232,6 +36297,10 @@ impl Torii {
         let zk_ivm_prove_inflight =
             Arc::new(tokio::sync::Semaphore::new(zk_ivm_prove_max_inflight));
         let zk_ivm_prove_inflight_total = zk_ivm_prove_max_inflight;
+        let query_inflight = Arc::new(tokio::sync::Semaphore::new(self.query_max_inflight.max(1)));
+        let query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(
+            self.query_heavy_max_inflight.max(1),
+        ));
         let mcp_tools = Arc::new(if self.mcp.enabled {
             mcp::build_tool_specs(&self.mcp)
         } else {
@@ -36245,6 +36314,9 @@ impl Torii {
             state: self.state.clone(),
             kiso: self.kiso.clone(),
             query_service: self.query_service.clone(),
+            query_inflight,
+            query_heavy_inflight,
+            query_queue_timeout: self.query_queue_timeout,
             rate_limiter: self.rate_limiter.clone(),
             pipeline_status_rate_limiter: self.pipeline_status_rate_limiter.clone(),
             tx_rate_limiter: self.tx_rate_limiter.clone(),
@@ -40042,6 +40114,13 @@ pub(crate) mod tests_runtime_handlers {
             state: state.clone(),
             kiso,
             query_service: query_handle,
+            query_inflight: Arc::new(tokio::sync::Semaphore::new(
+                defaults::torii::QUERY_MAX_INFLIGHT.get(),
+            )),
+            query_heavy_inflight: Arc::new(tokio::sync::Semaphore::new(
+                defaults::torii::QUERY_HEAVY_MAX_INFLIGHT.get(),
+            )),
+            query_queue_timeout: Duration::from_millis(defaults::torii::QUERY_QUEUE_TIMEOUT_MS),
             rate_limiter: limits::RateLimiter::new(None, None),
             pipeline_status_rate_limiter: limits::RateLimiter::new(None, None),
             tx_rate_limiter: limits::RateLimiter::new(None, None),
@@ -42240,6 +42319,7 @@ pub(crate) mod tests_runtime_handlers {
             HeaderMap::new(),
             crate::loopback_connect_info(),
             None,
+            crate::NoritoQuery(QueryOptions::default()),
             NoritoVersioned(signed_find_triggers_query_for_test(authority, &key_pair)),
         )
         .await
@@ -42274,6 +42354,7 @@ pub(crate) mod tests_runtime_handlers {
             HeaderMap::new(),
             crate::loopback_connect_info(),
             None,
+            crate::NoritoQuery(QueryOptions::default()),
             NoritoVersioned(signed_find_active_trigger_ids_query_for_test(
                 authority, &key_pair,
             )),
@@ -42562,6 +42643,7 @@ pub(crate) mod tests_runtime_handlers {
                 status: Some("Inactive".to_owned()),
                 limit: None,
                 offset: None,
+                count_mode: None,
             }),
             app.telemetry.clone(),
         )
@@ -42636,6 +42718,7 @@ pub(crate) mod tests_runtime_handlers {
                 status: Some("Active".to_owned()),
                 limit: Some(1),
                 offset: Some(0),
+                count_mode: None,
             }),
         )
         .await

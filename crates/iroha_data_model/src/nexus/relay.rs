@@ -897,6 +897,7 @@ mod tests {
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
         }
     }
 

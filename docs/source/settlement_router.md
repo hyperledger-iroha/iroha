@@ -1,11 +1,10 @@
 # Settlement Router
 
-The settlement router enforces a single, deterministic path for translating
-dataspace-specific gas tokens into XOR liabilities. Every lane follows the same
-calculation pipeline so operators can reconcile buffers, swaps, and receipts
-without per-lane heuristics. This document explains the architecture that backs
-roadmap item **NX-3 Unified lane settlement & XOR conversion** and captures the
-runbook expected from operators and integrators.
+The settlement router enforces deterministic XOR settlement for lane receipts.
+Normal Nexus gas is already XOR-denominated in every dataspace; the local-token
+conversion machinery described here is reserved for explicit settlement
+products, buffer management, and legacy lanes that need a governed conversion
+into public XOR liabilities.
 
 NX-3 is shipped; the live operator runbook and telemetry guide live in
 `docs/settlement-router.md`. Keep this note aligned with that reference when
@@ -13,8 +12,11 @@ router behaviour changes.
 
 ## Goals
 
-- Convert local gas fees into XOR using a canonical 60 s TWAP, safety margin,
-  and liquidity haircut so block producers never diverge on the XOR due.
+- Keep Nexus gas XOR-only across all dataspaces, with any local-token
+  conversion handled as explicit settlement rather than as the default fee rail.
+- Convert explicit local settlement amounts into XOR using a canonical 60 s
+  TWAP, safety margin, and liquidity haircut so block producers never diverge
+  on the XOR due.
 - Enforce buffer policies (alert below 75 %, throttle below 25 %, XOR-only at
   10 %, halt at 2 %) before a dataspace is allowed to consume subsidised
   capacity, with explicit soft vs hard breach signals.
@@ -34,10 +36,10 @@ roadmap defaults:
 - `epsilon`: 25 bps safety margin that ensures inclusion always over-collects.
 - `buffer_horizon_hours`: 72 h of spend that the XOR buffer must cover.
 
-Per-dataspace gas assets specify `twap_local_per_xor` and a
-`liquidity_profile`, feeding the router via the lane gas metadata
+Explicit local settlement assets may specify `twap_local_per_xor` and a
+`liquidity_profile`, feeding the router via lane metadata
 (`crates/iroha_config/src/parameters/user.rs`). Liquidity profiles (`tier1`
-deep, `tier2` medium, `tier3` thin) map to default haircuts of 0/25/75 bps with
+deep, `tier2` medium, `tier3` thin) map to default haircuts of 0/25/75 bps with
 optional governance overrides (`crates/settlement_router/src/haircut.rs`).
 
 ### Shadow-price calculation
@@ -147,9 +149,10 @@ or a treasury swapline top-up when buffers fall. When adding those hooks:
 
 ## Operator workflow
 
-1. **Quote validation** - Confirm each dataspace publishes a 60s TWAP and a
-   `liquidity_profile`. The settlement router rejects a zero TWAP to avoid
-   undefined conversion ratios.
+1. **Quote validation** - Confirm each dataspace that uses explicit local
+   settlement publishes a 60s TWAP and a `liquidity_profile`. XOR-only gas lanes
+   do not need a local TWAP. The settlement router rejects a zero TWAP when a
+   conversion is requested.
 2. **Receipt reconciliation** - Pull `lane_settlement_commitments` from
    `/v1/sumeragi/status` or the nightly export, verify that the sums of
    `xor_due_micro` and `xor_after_haircut_micro` match ledger expectations, and

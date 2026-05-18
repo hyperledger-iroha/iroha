@@ -47,6 +47,8 @@ Core benches (`queries.rs`):
 - FindDomains
   - Iterate and count (5k)
   - Sort by ID (10k)
+  - First-batch snapshot query count-mode comparison:
+    `snapshot_find_domains_count_mode_first_batch/{ephemeral,stored}/{exact,bounded}`
 - FindAssetDefinitions
   - Iterate and count (10k)
 
@@ -95,6 +97,7 @@ inspect the report variance.
 
 ## Next Steps
 
-- Add server-path benches for query handlers (hot predicates, sort keys).
+- Add Torii server-path benches for signed and app query handlers under
+  concurrent clients.
 - Add selection (projection) once server-side projections are reintroduced.
 - Expand to triggers and blocks with synthetic state builders.

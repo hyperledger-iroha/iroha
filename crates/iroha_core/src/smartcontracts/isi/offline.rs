@@ -1514,7 +1514,7 @@ pub mod isi {
             let (state, mut proof, _public_inputs_hash) =
                 offline_note_v2_verifier_test_state(ConfidentialStatus::Active);
             proof.verifier_key_id = VerifyingKeyId::new(
-                "stark/fri-v1",
+                "stark/fri",
                 crate::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
             );
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);

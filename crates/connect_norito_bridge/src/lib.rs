@@ -8125,7 +8125,7 @@ mod accel_tests {
         let inputs = [0x11_u8; 32];
         let outputs = [0x22_u8; 32];
         let proof = cstring(
-            r#"{"backend":"halo2/ipa","proof_backend":"stark/fri-v1","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
+            r#"{"backend":"halo2/ipa","proof_backend":"stark/fri","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
         );
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
         let mut out_signed_len: c_ulong = 0;
@@ -8172,7 +8172,7 @@ mod accel_tests {
         let inputs = [0x11_u8; 32];
         let outputs = [0x22_u8; 32];
         let proof = cstring(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"stark/fri-v1","name":"vk1"}}"#,
+            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"stark/fri","name":"vk1"}}"#,
         );
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
         let mut out_signed_len: c_ulong = 0;
@@ -8325,7 +8325,7 @@ mod accel_tests {
     #[test]
     fn proof_attachment_json_rejects_proof_backend_mismatch() {
         let value: JsonValue = norito::json::from_str(
-            r#"{"backend":"halo2/ipa","proof_backend":"stark/fri-v1","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
+            r#"{"backend":"halo2/ipa","proof_backend":"stark/fri","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
         )
         .expect("json");
         let err = parse_proof_attachment_value(&value)
@@ -8347,7 +8347,7 @@ mod accel_tests {
     #[test]
     fn proof_attachment_json_rejects_vk_ref_backend_mismatch() {
         let value: JsonValue = norito::json::from_str(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"stark/fri-v1","name":"vk1"}}"#,
+            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"stark/fri","name":"vk1"}}"#,
         )
         .expect("json");
         let err = parse_proof_attachment_value(&value)
@@ -8386,6 +8386,19 @@ mod accel_tests {
         let err =
             parse_proof_attachment_value(&value).expect_err("blank vk_ref name should be rejected");
         assert!(matches!(err, BridgeError::ProofAttachment));
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_blank_backend_fields() {
+        for json in [
+            r#"{"backend":"   ","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
+            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"   ","name":"vk1"}}"#,
+        ] {
+            let value: JsonValue = norito::json::from_str(json).expect("json");
+            let err = parse_proof_attachment_value(&value)
+                .expect_err("blank backend field should be rejected");
+            assert!(matches!(err, BridgeError::ProofAttachment));
+        }
     }
 
     #[test]

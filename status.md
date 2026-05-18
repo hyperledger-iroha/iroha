@@ -1,6 +1,281 @@
 # Status
 
-Last updated: 2026-05-17
+Last updated: 2026-05-18
+
+## 2026-05-18 Kura optional WSV sidecar recovery
+
+- Kura commit manifests remain Norito sidecars for replay verification of the
+  memory-only WSV surface, but startup recovery now treats the canonical durable
+  block log as the source of truth. Missing manifests no longer imply a shorter
+  recoverable chain.
+- The Sumeragi commit worker persists the canonical block to Kura before WSV
+  state apply/commit. Post-commit WSV checkpoint or commit-manifest write
+  failures now have explicit regression coverage as non-fatal status/telemetry
+  warnings: the block and memory WSV commit remain accepted, and replay can
+  recover from the canonical block log.
+- Startup reconciliation prunes stale, unreadable, or block-mismatched commit
+  manifests and mismatched WSV checkpoints instead of pruning intact durable
+  blocks. Checkpoints above the durable block height are also pruned when no
+  commit manifest directory exists.
+- Focused Kura coverage now exercises mismatched manifest pruning, mismatched
+  checkpoint pruning, checkpoint pruning without manifests, and preserving
+  durable blocks when a manifest is missing.
+- Validation: focused core coverage passes with `CARGO_INCREMENTAL=0 cargo
+  test -p iroha_core --lib commit_manifest -- --nocapture`,
+  `CARGO_INCREMENTAL=0 cargo test -p iroha_core --lib bounded --
+  --nocapture`, and `CARGO_INCREMENTAL=0 cargo test -p iroha_core --lib
+  kura_store_counters_surface_in_snapshot -- --nocapture`; `CARGO_INCREMENTAL=0
+  cargo check -p iroha_core` is green. Integration validation passes with
+  `CARGO_INCREMENTAL=0 cargo test -p integration_tests --lib` and
+  `CARGO_INCREMENTAL=0 cargo test -p integration_tests --test consensus_and_da
+  -- --nocapture` (258 passed, 0 failed, 7 ignored; 3164.03s), covering the
+  mode-cutover and vote-QC regressions exposed by the earlier workspace run.
+  Lint validation passes with `CARGO_INCREMENTAL=0 cargo clippy -p
+  iroha_data_model --all-targets -- -D warnings` and `CARGO_INCREMENTAL=0 cargo
+  clippy --workspace --all-targets -- -D warnings` after splitting the
+  overlong SoraCloud receipt roundtrip test. Targeted `rustfmt --edition 2024
+  --check` and `git diff --check` are green for the Kura/query/status files,
+  integration regressions, schema drift fixes, and docs touched by this work.
+
+## 2026-05-18 FASTPQ Poseidon parity fail-closed gates
+
+- FASTPQ GPU Poseidon column hashing now disables the process-local column
+  accelerator after a dispatch error, startup self-test mismatch, limb-batch
+  count mismatch, or sampled CPU parity mismatch. Future calls fall back to the
+  deterministic CPU Poseidon path instead of retrying a suspect accelerator.
+- Trace Merkle parent-pair hashing now disables its GPU path on sampled
+  CPU-parity mismatch as well as dispatch failure, preserving scalar hashing as
+  the authoritative path for Merkle parents.
+- Validation: `rustfmt --edition 2024 --check
+  crates/fastpq_prover/src/trace.rs crates/fastpq_prover/src/backend.rs` and
+  `git diff --check -- crates/fastpq_prover/src/trace.rs
+  crates/fastpq_prover/src/backend.rs` are green. Focused FASTPQ fallback
+  coverage passes with `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds
+  cargo test -p fastpq_prover poseidon_policy_labels_cpu_fallbacks --
+  --nocapture`. Hardware-backed Metal/CUDA parity tests still need to run on
+  hosts with those accelerators available.
+
+## 2026-05-18 Soracloud private uploaded-model CPU runtime slice
+
+- `SoraUploadedModelRuntimeFormatV1` now has a
+  `DeterministicQuantizedCpuV1` package class for the first private
+  uploaded-model execution runtime. The chain-facing receipt surface is
+  explicit:
+  `SoraPrivateUploadedModelExecutionReceiptV1` stores runtime version, model
+  manifest digest, bundle root, policy id, input/output commitments, and
+  encrypted SoraFS artifact references only.
+- `iroha_core::soracloud_runtime` now includes the v1 CPU reference evaluator
+  for quantized uploaded models. It uses fixed signed-integer linear
+  operations, nearest-away-from-zero rounding, saturating bounds, and rejects
+  bundles whose admitted runtime format or policy id does not match the private
+  execution request.
+- The v1 runtime keeps plaintext input/output inside the runtime call result;
+  the receipt is deliberately hash/artifact-ref only so plaintext does not enter
+  chain state.
+- Torii now exposes `/v1/soracloud/model/upload/private/execute` as the first
+  guarded private execution surface. The route resolves a finalized uploaded
+  model from authoritative state, requires the model format to be
+  `DeterministicQuantizedCpuV1`, verifies the model bundle plus encrypted input
+  and output artifact references against approved SoraFS pin manifests, then
+  returns the deterministic private execution receipt plus a canonical
+  `RecordSoracloudPrivateUploadedModelExecutionReceipt` transaction-instruction
+  skeleton for client signing/submission.
+- Torii also exposes `/v1/soracloud/model/upload/private/receipts` for committed
+  private execution receipts, filtered by receipt id, service, model id, or
+  weight version with bounded pagination metadata and explicit
+  `count_mode=exact` opt-in.
+- `RecordSoracloudPrivateUploadedModelExecutionReceipt` is now a Norito
+  instruction with registry/visitor coverage. Core state stores committed
+  private uploaded-model execution receipts by receipt hash, and the receipt
+  writer rejects receipts whose finalized uploaded-model bundle is not the
+  deterministic quantized CPU format or whose manifest, bundle root, or policy
+  binding diverges from the admitted bundle.
+- Validation: `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds
+  cargo test -p iroha_data_model
+  private_uploaded_model_execution_receipt_round_trips_and_validates --
+  --nocapture` and `CARGO_INCREMENTAL=0
+  CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test -p iroha_core --lib
+  private_uploaded_model_quantized_cpu_runtime -- --nocapture` are green.
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test -p
+  iroha_torii --lib
+  private_uploaded_model_execute_requires_finalized_quantized_bundle_and_active_artifacts
+  -- --nocapture` is also green. `cargo check -p iroha_core` is green with the
+  committed receipt store wired into world views/transactions. OpenAPI
+  snapshots, SDK parser coverage, and multi-peer private execution integration
+  coverage remain open.
+
+## 2026-05-18 Torii space-directory pagination metadata
+
+- The space-directory manifest app endpoint now accepts `count_mode` and
+  returns `has_more` plus `count_mode` with its existing manifest inventory
+  response, closing one of the concrete app-list response gaps without changing
+  route paths or the older `total` field.
+- Validation: `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds
+  cargo test -p iroha_torii handle_v1_space_directory_manifests --
+  --nocapture` is green; the seven focused manifest endpoint tests passed and
+  the remaining filtered Torii test binaries completed without failures.
+
+## 2026-05-17 Transaction pipeline parallelism follow-up
+
+- Static block validation now builds and installs the same config-sized private
+  pipeline Rayon pool used by state-backed execution, so `pipeline.workers`
+  bounds stateless transaction validation and Merkle-root construction instead
+  of falling through to Rayon’s global pool.
+- Parallel apply layer construction now computes component-local indegrees with
+  reusable buffers and merges deterministic component waves, removing the
+  previous full-indegree clone per component.
+- Dynamic IVM access scheduling now derives access sets from the already-built
+  overlay and optional host access log, avoiding a separate access-prepass VM
+  execution before overlay construction.
+- Sumeragi status snapshots now classify detached sequential fallbacks by fee
+  postprocessing, user-provided executor, durable state, unsupported
+  instruction, rejected detached evaluation, and overlay build error; telemetry
+  exports the same aggregate reasons through
+  `pipeline_detached_fallback_reason{reason=...}`. Fee postprocessing remains a
+  sequential fallback path until its side effects can be represented exactly as
+  deterministic detached deltas.
+- Validation: `cargo check -p iroha_telemetry`, targeted
+  `rustfmt --edition 2024 --check`, and `git diff --check` on the touched
+  pipeline/telemetry files are green. After the dirty-worktree query iterator
+  blocker was cleared, focused validation is also green with
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo check -p
+  iroha_core`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
+  scheduler_variant_tests --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
+  ivm_access --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
+  --features telemetry state_telemetry_detached_counters_set --lib --
+  --nocapture`, and
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p
+  iroha_data_model --lib
+  native_amx_receipts_change_lane_block_commitment_hash_inputs --
+  --nocapture`.
+
+## 2026-05-17 ZK audit fix follow-up
+
+- Governance ballot/tally verifying-key role checks now reject arbitrary Halo2
+  circuits, allowing only canonical vote role IDs or the existing shared
+  Halo2 vote circuit family, while STARK remains pinned to explicit
+  `vote-ballot` and `vote-tally` circuit roles.
+- Block preverification results are now keyed by proof hash, verifying-key
+  reference, and verifying-key commitment. `VerifyProof` also validates the
+  registered VK bytes, commitment, and backend before a preverified cache hit
+  can skip backend verification.
+- STARK backend examples, docs, and SDK/test fixtures now use the canonical
+  `stark/fri` family (`stark/fri/...` variants) instead of the unsupported
+  v1-suffixed spelling.
+- Validation:
+  - `cargo fmt --all --check` is green.
+  - `rustfmt --edition 2024 --check` on the Rust files touched by this fix is
+    green, including the adjacent `NativeAmxLegRecord`/`LaneSettlementReceipt`
+    derive fix needed to keep data-model denied lints compiling.
+  - `git diff --check` is green.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-audit-fix-core cargo test -p iroha_core normalize_halo2_circuit_id_and_match_variants --lib -- --nocapture`
+    is green.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-audit-fix-core cargo test -p iroha_core preverified_proof_key_binds_vk_reference_and_commitment --lib -- --nocapture`
+    is green.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-audit-fix-core-zkpre cargo test -p iroha_core verify_proof_preverified_cache_does_not_bypass_missing_verifying_key_bytes --lib --features zk-preverify -- --nocapture`
+    is green.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-audit-fix-dm cargo test -p iroha_data_model backend_mismatches --lib -- --nocapture`
+    is green.
+  - `swift test` from `IrohaSwift/` is green: 828 tests executed, 101 skipped,
+    0 failures.
+  - `node --test test/instructionBuilders.test.js` from `javascript/iroha_js/`
+    is blocked before test execution by a pre-existing native binding checksum
+    mismatch for `native/iroha_js_host.node`; rebuild the JavaScript native
+    binding/checksum manifest before rerunning that SDK fixture.
+  - A later duplicate rerun of the Halo2 role test hit local disk exhaustion
+    while linking; stale generated `target/codex-*` artifacts were partially
+    cleared to restore working space. The earlier focused test result above is
+    the recorded pass for this change set.
+
+## 2026-05-17 Cross-dataspace native routing and XOR gas
+
+- Mixed native transaction targets, including mixed dataspace-scoped
+  permissions and account-bound asset movements, now route to the universal AMX
+  coordinator by default instead of failing developer submissions with
+  conflicting dataspace target errors. A strict transaction metadata opt-out
+  (`amx_policy = "reject_cross_dataspace"`) preserves the previous fail-closed
+  behavior for callers that need it.
+- Universal coordinator routing now has precedence over non-universal policy
+  rules, so a rule matching one instruction in a mixed native transaction cannot
+  accidentally pin the batch to only one participant dataspace.
+- Restricted asset transfers running on the universal route now resolve source
+  and destination balance buckets from each account's unique dataspace binding,
+  while non-universal routes still cannot debit an explicitly scoped source
+  balance from another dataspace.
+- Global asset writes may execute through the universal AMX coordinator even
+  when the asset's authoritative home dataspace is non-universal; direct
+  non-universal execution still has to match the authoritative dataspace.
+- Lane block commitments now include versioned `native_amx_receipts` recording
+  the source transaction, universal coordinator lane/dataspace/height, and
+  successful prepare/commit legs for each non-universal participant dataspace.
+- Nexus fee documentation now states the intended invariant: gas is XOR across
+  all dataspaces, and local-token conversion is reserved for explicit
+  settlement products rather than the default fee rail.
+- The query post-processing helpers no longer require the source WSV iterator
+  itself to be `Send + Sync + 'static`; only owned stored output values keep
+  those bounds. This unblocks focused `iroha_core` validation while preserving
+  the shared live-query store's thread-safe cursor values.
+- Validation for the query-bound fixes is folded into the 2026-05-18 Kura/status
+  corridor above: focused `iroha_core` query tests, `integration_tests --test
+  consensus_and_da`, and workspace clippy are green there.
+
+## 2026-05-17 Torii query API bounded-count fast path
+
+- Signed `/v1/query`, generic query envelopes, and app list/query endpoints now
+  default to bounded count mode, expose `has_more`, keep exact totals optional,
+  and accept `count_mode=exact` when clients need full-count metadata.
+- `QueryOutput` and live query responses now distinguish exact remaining counts
+  from bounded continuation metadata. Stored unsorted bounded cursors avoid
+  reporting fake remaining counts; they still own continuation values before
+  insertion into the shared `Send + Sync` live-query store until the MV/world
+  iterator boundary can safely provide thread-safe lazy continuations.
+- Torii query admission now has config-backed global/heavy concurrency caps and
+  a short queue timeout, and public signed/app query handlers enforce query
+  rate limits without waiting for high-load mode.
+- Bounded metadata and exact-count opt-ins now cover the generic query route,
+  signed queries, accounts/domains, repo agreements, asset definitions, NFTs,
+  RWAs, permissions, account assets, asset holders, transaction/history,
+  contract activity/events, trader activity, and subscription plan/list APIs.
+  SDK DTOs that expose concrete responses now model `total` as optional and
+  include `has_more`/`count_mode`.
+- Account alias projection in asset-holder responses is batched against the
+  request snapshot, avoiding per-row full-state alias scans on that hot path.
+- Added Criterion coverage for first-batch count-mode cost in
+  `snapshot_find_domains_count_mode_first_batch/{ephemeral,stored}/{exact,bounded}`
+  and documented the benchmark entrypoints in `docs/source/query_benchmarks.md`.
+- Validation: `cargo check -p iroha_data_model`,
+  `cargo check -p iroha_config`, `cargo check -p iroha_core`,
+  `cargo check -p iroha_torii`, `cargo check -p iroha_torii --tests`,
+  `cargo check -p iroha_core --bench queries`,
+  `cargo test -p iroha_data_model query_response_roundtrip -- --nocapture`,
+  `cargo test -p iroha_core --lib stored_unsorted_bounded_cursor_materializes_owned_tail_without_exact_count -- --nocapture`,
+  `cargo test -p iroha_torii generic_query -- --nocapture`,
+  `cargo fmt --all`, `cargo fmt --all --check`, `git diff --check`, and
+  `cargo clippy -p iroha_core -p iroha_torii --lib -- -D warnings` are green.
+
+## 2026-05-17 Kura commit manifests for memory-only WSV
+
+- WSV remains the in-memory canonical runtime state. Kura now writes a
+  Norito-encoded commit manifest after a successful WSV commit, tying the
+  durable block hash to the committed WSV checkpoint hash plus available
+  execution roots and commit-QC hash.
+- Kura startup validates existing commit manifests against the recovered
+  durable block hash journal, prunes stale or mismatched manifest/checkpoint
+  sidecars, and never truncates intact blocks to match a sidecar prefix.
+  Missing manifests are absent verification metadata, so they do not truncate an
+  otherwise intact block log.
+- Post-commit WSV checkpoint or commit-manifest persistence failures keep the
+  already-advanced block committed, but now increment structured Sumeragi status
+  counters with the last affected height/view/block hash instead of existing
+  only as log text.
+- Validation: `cargo check -p iroha_core`,
+  `cargo test -p iroha_core --lib bounded -- --nocapture`,
+  `cargo test -p iroha_core --lib commit_manifest -- --nocapture`, and
+  `cargo test -p iroha_core --lib kura_store_counters_surface_in_snapshot -- --nocapture`
+  are green.
 
 ## 2026-05-17 SoraFS paid pin adversarial test coverage
 
@@ -363,8 +638,18 @@ Last updated: 2026-05-17
   rejects bridge-only `proof_backend` shadowing, the Connect C encoder rejects
   nested `vk_ref` shadow fields, and JavaScript rejects envelope-hash alias
   collisions.
+- An eighth adversarial pass rejects blank verifier identities and nested
+  verifier-ID alias smuggling: data-model JSON and Norito decode now fail
+  closed on blank attachment/proof/VK backends or `vk_ref.name`, CLI and
+  Connect bridge builders trim and reject blank verifier reference fields,
+  JavaScript rejects blank string/object verifier IDs plus nested
+  backend/name alias collisions, and Swift native escrow rejects whitespace-only
+  verifier reference dictionaries.
 - Focused validation for the adversarial follow-up:
   - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-dm cargo test -p iroha_data_model proof_attachment_decode_rejects_blank_verifying_key_name --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-dm cargo test -p iroha_data_model proof_attachment_json_rejects_blank_verifying_key_name --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-dm2 cargo test -p iroha_data_model blank_backend_fields --lib -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-dm cargo test -p iroha_data_model proof_attachment_list_json_rejects_single_attachment_wire_payload --lib -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-dm cargo test -p iroha_data_model proof_attachment_decode_rejects --lib -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-dm cargo test -p iroha_data_model proof_attachment_json_rejects_nested_shadow_fields --lib -- --nocapture`
@@ -376,6 +661,8 @@ Last updated: 2026-05-17
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-dm-tests cargo test -p iroha_data_model proof_attachment_decode --lib -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-dm-tests cargo test -p iroha_data_model proof_attachment_json --lib -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-cli cargo test -p iroha_cli build_proof_attachment_from_json --bins -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-cli cargo test -p iroha_cli build_proof_attachment_from_json_rejects_blank_vk_ref_name --bins -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-cli2 cargo test -p iroha_cli build_proof_attachment_from_json_rejects_blank_backend_fields --bins -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-cli cargo test -p iroha_cli build_proof_attachment_from_json_rejects_bridge_only_proof_backend_shadow --bins -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-cli cargo test -p iroha_cli build_proof_attachment_from_json_rejects_nested_vk_ref_shadow_field --bins -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-cli cargo test -p iroha_cli build_proof_attachment_from_json_rejects_vk_reference_shadow_field --bins -- --nocapture`
@@ -383,6 +670,8 @@ Last updated: 2026-05-17
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-cli-tests cargo test -p iroha_cli build_proof_attachment_from_json_rejects_legacy_inline_vk_field --bins -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-gap-cli-tests cargo test -p iroha_cli build_proof_attachment_from_json_rejects --bins -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-bridge cargo test -p connect_norito_bridge vk_reference_shadow_field -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-bridge cargo test -p connect_norito_bridge proof_attachment_json_rejects_blank_vk_ref_name -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-bridge2 cargo test -p connect_norito_bridge proof_attachment_json_rejects_blank_backend_fields -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-bridge cargo test -p connect_norito_bridge proof_attachment_json_rejects_nested_vk_ref_shadow_field -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-bridge cargo test -p connect_norito_bridge zk_transfer_encoder_rejects_nested_vk_ref_shadow_field -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-adversarial-bridge cargo test -p connect_norito_bridge proof_attachment_json -- --nocapture`
@@ -445,6 +734,11 @@ Last updated: 2026-05-17
   production modes are `cpu` and `gpu`; explicit `gpu` lane startup fails closed
   when the backend or Poseidon preflight is unavailable instead of silently
   falling back to CPU.
+- The restart/catch-up path now releases the incoming block-sync update dedup key
+  before deferring or processing recovery payloads, so restarted peers can retry
+  the same recovery update immediately instead of waiting for the ingress dedup
+  TTL. The confidential localnet three-hop, dual-restart, and timeout-pressure
+  cases pass with the current genesis/ZK policy-hash plumbing.
 - FASTPQ proof snapshots remain in the existing Kura pipeline sidecar flow, now
   bounded by `fastpq.proof_sidecar_queue_cap`,
   `fastpq.proof_sidecar_max_bytes`, and
@@ -460,16 +754,20 @@ Last updated: 2026-05-17
   already-bound batches plus proofs as `AxtProofEnvelope`/`ProofBlob` without
   adding binding metadata after proof generation.
 - Validation: `cargo fmt --all`,
-  `CARGO_TARGET_DIR=target/codex-fastpq-release cargo test -p fastpq_prover`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-gpu FASTPQ_GPU=gpu cargo test -p fastpq_prover --features fastpq-gpu --release`,
   `CARGO_TARGET_DIR=target/codex-fastpq-release cargo test -p iroha_config --test fastpq_queue_overrides`,
   `CARGO_TARGET_DIR=target/codex-fastpq-release cargo check -p iroha_core --lib`,
   `CARGO_TARGET_DIR=target/codex-fastpq-release cargo test -p iroha_core fastpq`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-release cargo test -p iroha_core block_sync_update_releases_ingress_dedup_before_deferral -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-fastpq-release cargo check -p iroha_torii --lib`,
-  and
   `CARGO_TARGET_DIR=target/codex-fastpq-release cargo test -p iroha_torii --test pipeline_recovery_endpoint`,
   `CARGO_TARGET_DIR=target/codex-fastpq-release cargo check -p irohad --bin irohad`,
-  and the task-scoped `git diff --check` are green. Full workspace clippy/test
-  were not run in this validation window.
+  the focused confidential localnet three-hop, dual-restart, and
+  timeout-pressure integration tests,
+  `CARGO_TARGET_DIR=target/codex-fastpq-release cargo clippy --workspace --all-targets -- -D warnings`,
+  and the task-scoped `git diff --check` are green. Full
+  `cargo test --workspace` was not run in this validation window because it is
+  a multi-hour corridor.
 
 ## 2026-05-17 Torii first-release API cleanup
 

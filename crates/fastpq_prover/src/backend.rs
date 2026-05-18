@@ -2424,6 +2424,13 @@ fn hash_poseidon_limb_batches_gpu(messages: &[Vec<u64>]) -> Option<Vec<u64>> {
                     actual = hashes.len(),
                     "gpu Poseidon limb batch returned an unexpected count; falling back to CPU"
                 );
+                if let Some(backend) = current_gpu_backend() {
+                    crate::trace::disable_poseidon_column_gpu_after_parity_mismatch(
+                        backend,
+                        "limb batch count mismatch",
+                        group_messages.len(),
+                    );
+                }
                 hash_poseidon_limb_batch_cpu(&group_messages)
             }
             Some(_) => {
@@ -2434,6 +2441,13 @@ fn hash_poseidon_limb_batches_gpu(messages: &[Vec<u64>]) -> Option<Vec<u64>> {
                         .unwrap_or(0),
                     "gpu Poseidon limb batch diverged from CPU parity sample; falling back to CPU"
                 );
+                if let Some(backend) = current_gpu_backend() {
+                    crate::trace::disable_poseidon_column_gpu_after_parity_mismatch(
+                        backend,
+                        "limb batch CPU parity mismatch",
+                        group_messages.len(),
+                    );
+                }
                 hash_poseidon_limb_batch_cpu(&group_messages)
             }
             None => hash_poseidon_limb_batch_cpu(&group_messages),

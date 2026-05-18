@@ -1466,6 +1466,7 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
         swap_metadata: None,
         receipts: Vec::new(),
         nexus_fee_receipts: Vec::new(),
+        native_amx_receipts: Vec::new(),
     };
     let mut header = BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero height"),

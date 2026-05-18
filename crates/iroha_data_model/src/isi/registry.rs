@@ -139,6 +139,9 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<soracloud::ReportSoracloudServiceLeaseUsage>,
     InstructionRegistry::register_slice::<soracloud::RecordSoracloudMailboxMessage>,
     InstructionRegistry::register_slice::<soracloud::RecordSoracloudRuntimeReceipt>,
+    InstructionRegistry::register_slice::<
+        soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt,
+    >,
     InstructionRegistry::register_slice::<ExecuteTrigger>,
     InstructionRegistry::register_slice::<Upgrade>,
     InstructionRegistry::register_slice::<Log>,
@@ -479,6 +482,10 @@ fn with_soracloud_stable_ids(mut registry: InstructionRegistry) -> InstructionRe
     registry = registry.register_with_id_slice::<soracloud::RecordSoracloudRuntimeReceipt>(
         "soracloud::RecordSoracloudRuntimeReceipt",
     );
+    registry = registry
+        .register_with_id_slice::<soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt>(
+            "soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt",
+        );
     registry
 }
 

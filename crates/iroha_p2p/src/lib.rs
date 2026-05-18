@@ -234,7 +234,9 @@ pub struct ConsensusHandshakeCaps {
 /// Nodes that advertise confidential capabilities signal whether they enforce
 /// confidential verification locally (`enabled`), whether they accept blocks
 /// without verifying (`assume_valid`), which verifier backend they expect, and
-/// which confidential feature digest they currently enforce.
+/// which static confidential policy digest they expect. Runtime registry roots
+/// are validated through block headers instead of handshakes so catching-up peers
+/// can reconnect at different committed heights.
 #[derive(Clone, Debug)]
 pub struct ConfidentialHandshakeCaps {
     /// Whether the node enforces confidential verification locally.

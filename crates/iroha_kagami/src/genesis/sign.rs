@@ -418,6 +418,7 @@ impl<T: Write> RunArgs<T> for Args {
             self.algorithm,
         )?;
         let da_proof_policies = resolve_da_proof_policies(self.config.as_deref())?;
+        let confidential_policy_hash = resolve_confidential_policy_hash(self.config.as_deref())?;
         let direct_sign_safe = topology_override.is_none()
             && next_consensus_mode.is_none()
             && self.mode_activation_height.is_none()
@@ -425,7 +426,11 @@ impl<T: Write> RunArgs<T> for Args {
         let genesis_block = if direct_sign_safe {
             genesis
                 .with_consensus_mode(consensus_mode)
-                .build_and_sign_with_da_proof_policies(&genesis_key_pair, da_proof_policies)?
+                .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
+                    &genesis_key_pair,
+                    da_proof_policies,
+                    Some(confidential_policy_hash),
+                )?
         } else {
             let mut builder = genesis.into_builder();
 
@@ -463,7 +468,11 @@ impl<T: Write> RunArgs<T> for Args {
                 .build_raw()
                 .with_consensus_mode(consensus_mode)
                 .with_consensus_meta()
-                .build_and_sign_with_da_proof_policies(&genesis_key_pair, da_proof_policies)?
+                .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
+                    &genesis_key_pair,
+                    da_proof_policies,
+                    Some(confidential_policy_hash),
+                )?
         };
 
         eprintln!("Genesis public key: {}", genesis_key_pair.public_key());
@@ -590,6 +599,19 @@ fn resolve_da_proof_policies(
     Ok(Some(iroha_core::da::proof_policy_bundle(
         &config.nexus.lane_config,
     )))
+}
+
+fn resolve_confidential_policy_hash(
+    config_path: Option<&Path>,
+) -> Result<[u8; 32], color_eyre::eyre::Error> {
+    let Some(config_path) = config_path else {
+        return Ok(iroha_core::state::default_zk_consensus_policy_hash());
+    };
+
+    let config = load_peer_config(config_path)?;
+    Ok(iroha_core::state::compute_zk_consensus_policy_hash(
+        &config.zk,
+    ))
 }
 
 fn decode_hex(s: &str) -> Result<Vec<u8>, color_eyre::eyre::Error> {
@@ -980,7 +1002,10 @@ mod tests {
         let key_pair = KeyPair::from_seed(seed.as_bytes().to_vec(), Algorithm::Ed25519);
         let expected = manifest
             .clone()
-            .build_and_sign(&key_pair)
+            .build_and_sign_with_confidential_policy_hash(
+                &key_pair,
+                Some(iroha_core::state::default_zk_consensus_policy_hash()),
+            )
             .expect("direct manifest signing should succeed");
 
         let args = Args {
@@ -1004,14 +1029,12 @@ mod tests {
         let actual = decode_framed_signed_block(&bytes).expect("decode signed block");
 
         let actual_instructions: Vec<_> = actual
-            .transactions_vec()
-            .iter()
+            .external_transactions()
             .map(|tx| tx.instructions().clone())
             .collect();
         let expected_instructions: Vec<_> = expected
             .0
-            .transactions_vec()
-            .iter()
+            .external_transactions()
             .map(|tx| tx.instructions().clone())
             .collect();
         assert_eq!(
@@ -1022,6 +1045,11 @@ mod tests {
             actual.da_proof_policies(),
             expected.0.da_proof_policies(),
             "signing an unchanged manifest should preserve DA proof policies"
+        );
+        assert_eq!(
+            actual.header().confidential_features(),
+            expected.0.header().confidential_features(),
+            "signing an unchanged manifest should commit the default ZK policy hash"
         );
     }
 

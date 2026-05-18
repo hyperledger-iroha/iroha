@@ -255,6 +255,9 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::soracloud::ReportSoracloudServiceLeaseUsage>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudMailboxMessage>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudRuntimeReceipt>,
+    dispatch_instruction::<
+        iroha_data_model::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt,
+    >,
     dispatch_instruction::<iroha_data_model::isi::oracle::RegisterOracleFeed>,
     dispatch_instruction::<iroha_data_model::isi::oracle::SubmitOracleObservation>,
     dispatch_instruction::<iroha_data_model::isi::oracle::AggregateOracleFeed>,
@@ -1059,6 +1062,7 @@ mod tests {
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
         };
         let envelope = LaneRelayEnvelope::new(block_header, None, None, settlement_commitment, 0)
             .expect("valid lane relay envelope")
@@ -1092,6 +1096,7 @@ mod tests {
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
         };
         let manifest_root = [0x42; 32];
         let envelope = LaneRelayEnvelope::new(block_header, None, None, settlement_commitment, 0)?

@@ -609,6 +609,203 @@ final class OfflineNoteV2Tests: XCTestCase {
 
         XCTAssertThrowsError(try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(offset: 0x1_0000, bytes: Data([0x01])))
         XCTAssertThrowsError(try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(offset: 0, bytes: Data()))
+        let rangePayload = Data([0x01, 0x02])
+        XCTAssertThrowsError(
+            try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(
+                offset: 0,
+                payloadBytes: rangePayload,
+                range: -1..<1
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineNoteV2NfcApduError, .invalidOffset)
+        }
+        XCTAssertThrowsError(
+            try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(
+                offset: 0,
+                payloadBytes: rangePayload,
+                range: 1..<3
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineNoteV2NfcApduError, .invalidOffset)
+        }
+        XCTAssertThrowsError(
+            try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(
+                offset: 0,
+                payloadBytes: rangePayload,
+                range: 3..<4
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineNoteV2NfcApduError, .invalidOffset)
+        }
+        XCTAssertThrowsError(
+            try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(
+                offset: 0,
+                payloadBytes: rangePayload,
+                range: Int.min..<0
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineNoteV2NfcApduError, .invalidOffset)
+        }
+        XCTAssertThrowsError(
+            try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(
+                offset: 0,
+                payloadBytes: rangePayload,
+                range: 0..<Int.max
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineNoteV2NfcApduError, .invalidOffset)
+        }
+        XCTAssertThrowsError(
+            try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(
+                offset: 0,
+                payloadBytes: rangePayload,
+                range: rangePayload.startIndex..<rangePayload.startIndex
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineNoteV2NfcApduError, .invalidChunkLength)
+        }
+        XCTAssertThrowsError(
+            try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(
+                offset: 0,
+                payloadBytes: rangePayload,
+                range: rangePayload.endIndex..<rangePayload.endIndex
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineNoteV2NfcApduError, .invalidChunkLength)
+        }
+        XCTAssertThrowsError(
+            try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(
+                offset: -1,
+                payloadBytes: rangePayload,
+                range: rangePayload.startIndex..<rangePayload.endIndex
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineNoteV2NfcApduError, .invalidOffset)
+        }
+        XCTAssertThrowsError(
+            try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(
+                offset: Int.min,
+                payloadBytes: rangePayload,
+                range: rangePayload.startIndex..<rangePayload.endIndex
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineNoteV2NfcApduError, .invalidOffset)
+        }
+        XCTAssertThrowsError(
+            try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(
+                offset: 0x1_0000,
+                payloadBytes: rangePayload,
+                range: rangePayload.startIndex..<rangePayload.startIndex
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineNoteV2NfcApduError, .invalidOffset)
+        }
+        let oversizedChunkPayload = Data(
+            repeating: 0xA5,
+            count: OfflineNoteV2NfcApduProtocol.maxExtendedWriteChunkBytes + 1
+        )
+        XCTAssertThrowsError(
+            try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(
+                offset: 0,
+                payloadBytes: oversizedChunkPayload,
+                range: oversizedChunkPayload.startIndex..<oversizedChunkPayload.endIndex
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineNoteV2NfcApduError, .invalidChunkLength)
+        }
+        var shiftedOversizedPayload = Data([0x00])
+        shiftedOversizedPayload.append(oversizedChunkPayload)
+        shiftedOversizedPayload.append(0xFF)
+        let shiftedOversizedStart = shiftedOversizedPayload.index(after: shiftedOversizedPayload.startIndex)
+        let shiftedOversizedEnd = shiftedOversizedPayload.index(before: shiftedOversizedPayload.endIndex)
+        let shiftedOversizedRange = shiftedOversizedStart..<shiftedOversizedEnd
+        XCTAssertThrowsError(
+            try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(
+                offset: 0,
+                payloadBytes: shiftedOversizedPayload,
+                range: shiftedOversizedRange
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineNoteV2NfcApduError, .invalidChunkLength)
+        }
+        let shortHeaderPayload = Data(repeating: 0x33, count: Int(UInt8.max))
+        let shortHeaderApdu = try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(
+            offset: 0x1234,
+            payloadBytes: shortHeaderPayload,
+            range: shortHeaderPayload.startIndex..<shortHeaderPayload.endIndex
+        )
+        XCTAssertEqual(
+            Data(shortHeaderApdu.prefix(5)),
+            Data([0x80, 0x21, 0x12, 0x34, 0xFF])
+        )
+        XCTAssertEqual(shortHeaderApdu.count, 5 + Int(UInt8.max))
+
+        var shiftedShortHeaderPayload = Data([0x00])
+        shiftedShortHeaderPayload.append(shortHeaderPayload)
+        shiftedShortHeaderPayload.append(0xFF)
+        let shiftedShortHeaderStart = shiftedShortHeaderPayload.index(after: shiftedShortHeaderPayload.startIndex)
+        let shiftedShortHeaderEnd = shiftedShortHeaderPayload.index(before: shiftedShortHeaderPayload.endIndex)
+        let shiftedShortHeaderRange = shiftedShortHeaderStart..<shiftedShortHeaderEnd
+        let shiftedShortHeaderApdu = try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(
+            offset: 0x1234,
+            payloadBytes: shiftedShortHeaderPayload,
+            range: shiftedShortHeaderRange
+        )
+        XCTAssertEqual(Data(shiftedShortHeaderApdu.prefix(5)), Data([0x80, 0x21, 0x12, 0x34, 0xFF]))
+        XCTAssertEqual(shiftedShortHeaderApdu.count, 5 + Int(UInt8.max))
+
+        let extendedBoundaryPayload = Data(repeating: 0x44, count: Int(UInt8.max) + 1)
+        let extendedBoundaryApdu = try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(
+            offset: 0,
+            payloadBytes: extendedBoundaryPayload,
+            range: extendedBoundaryPayload.startIndex..<extendedBoundaryPayload.endIndex
+        )
+        XCTAssertEqual(
+            Data(extendedBoundaryApdu.prefix(7)),
+            Data([0x80, 0x21, 0x00, 0x00, 0x00, 0x01, 0x00])
+        )
+        XCTAssertEqual(extendedBoundaryApdu.count, 7 + Int(UInt8.max) + 1)
+
+        let maxChunkLength = OfflineNoteV2NfcApduProtocol.maxExtendedWriteChunkBytes
+        let maxChunkPayload = Data(repeating: 0x5C, count: maxChunkLength)
+        let maxChunkApdu = try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(
+            offset: 0xFFFF,
+            payloadBytes: maxChunkPayload,
+            range: maxChunkPayload.startIndex..<maxChunkPayload.endIndex
+        )
+        XCTAssertEqual(
+            Data(maxChunkApdu.prefix(7)),
+            Data([0x80, 0x21, 0xFF, 0xFF, 0x00, 0x40, 0x00])
+        )
+        XCTAssertEqual(maxChunkApdu.count, 7 + maxChunkLength)
+        XCTAssertEqual(maxChunkApdu.suffix(2), Data([0x5C, 0x5C]))
+
+        var shiftedPayload = Data([0x00])
+        shiftedPayload.append(maxChunkPayload)
+        shiftedPayload.append(0xFF)
+        let shiftedMaxChunkApdu = try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(
+            offset: 3,
+            payloadBytes: shiftedPayload,
+            range: shiftedPayload.index(after: shiftedPayload.startIndex)..<shiftedPayload.index(before: shiftedPayload.endIndex)
+        )
+        XCTAssertEqual(shiftedMaxChunkApdu.count, 7 + maxChunkLength)
+        XCTAssertEqual(shiftedMaxChunkApdu.suffix(2), Data([0x5C, 0x5C]))
+        XCTAssertEqual(
+            try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(
+                offset: 7,
+                payloadBytes: rangePayload,
+                range: rangePayload.startIndex..<rangePayload.endIndex
+            ),
+            try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(offset: 7, bytes: rangePayload)
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(
+                offset: 0,
+                payloadBytes: rangePayload,
+                range: rangePayload.index(before: rangePayload.endIndex)..<rangePayload.endIndex
+            ),
+            try OfflineNoteV2NfcApduProtocol.writeChunkAPDUData(offset: 0, bytes: Data([0x02]))
+        )
         XCTAssertThrowsError(try OfflineNoteV2NfcApduProtocol.readChunkAPDUData(offset: 0, length: 0))
         XCTAssertThrowsError(
             try OfflineNoteV2NfcApduProtocol.readChunkAPDUData(

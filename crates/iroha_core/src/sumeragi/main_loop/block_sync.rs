@@ -1955,6 +1955,8 @@ impl Actor {
         update: super::message::BlockSyncUpdate,
         sender: Option<PeerId>,
     ) -> Result<()> {
+        let dedup_key = super::block_sync_update_dedup_key(&update);
+        self.release_block_payload_dedup(&dedup_key);
         if crate::sumeragi::status::local_peer_removed() {
             debug!(
                 ?sender,

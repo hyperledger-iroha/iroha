@@ -1779,7 +1779,7 @@ test("buildZkTransferInstruction rejects proof backend mismatch", () => {
         proof: {
           backend: "halo2/ipa",
           proofBytes: {
-            backend: "stark/fri-v1",
+            backend: "stark/fri",
             bytes: Buffer.from("proof"),
           },
           verifyingKeyRef: "halo2/ipa:vk_transfer",
@@ -1803,7 +1803,7 @@ test("buildZkTransferInstruction rejects verifying key backend mismatch", () => 
         proof: {
           backend: "halo2/ipa",
           proof: Buffer.from("proof"),
-          verifyingKeyRef: "stark/fri-v1:vk_transfer",
+          verifyingKeyRef: "stark/fri:vk_transfer",
         },
       }),
     (error) => {
@@ -1941,7 +1941,7 @@ test("buildZkTransferInstruction rejects nested verifying key id alias collision
           proof: Buffer.from("proof"),
           verifyingKeyRef: {
             backend: "halo2/ipa",
-            backendId: "stark/fri-v1",
+            backendId: "stark/fri",
             name: "vk_transfer",
           },
         },

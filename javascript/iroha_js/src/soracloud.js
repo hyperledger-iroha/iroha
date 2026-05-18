@@ -17,6 +17,9 @@ const HF_DEPLOY_PAYLOAD_FIELDS = new Set([
   "lease_asset_definition_id",
   "base_fee_nanos",
 ]);
+const PRIVATE_UPLOADED_MODEL_RECEIPT_WIRE_ID =
+  "iroha_data_model::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt";
+const PRIVATE_UPLOADED_MODEL_COUNT_MODES = new Set(["bounded", "exact"]);
 
 function rejectSoracloudSigningSecrets(input) {
   if (input == null || (typeof input !== "object" && typeof input !== "function")) {
@@ -66,6 +69,44 @@ function normalizeSafeInteger(input, field) {
   return value;
 }
 
+function normalizeSafePositiveInteger(input, field) {
+  const value = normalizeSafeInteger(input, field);
+  if (value <= 0) {
+    throw new TypeError(`${field} must be greater than zero`);
+  }
+  return value;
+}
+
+function normalizeSignedI32(value, field) {
+  if (!Number.isInteger(value) || value < -2147483648 || value > 2147483647) {
+    throw new TypeError(`${field} must be a signed 32-bit integer`);
+  }
+  return value;
+}
+
+function normalizeSignedI8(value, field) {
+  if (!Number.isInteger(value) || value < -128 || value > 127) {
+    throw new TypeError(`${field} must be a signed 8-bit integer`);
+  }
+  return value;
+}
+
+function normalizeArray(input, field) {
+  const value = input?.[field];
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${field} must be an array`);
+  }
+  return value;
+}
+
+function normalizeHashLike(input, field) {
+  const value = input?.[field];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new TypeError(`${field} must be a non-empty string`);
+  }
+  return value.trim();
+}
+
 function normalizeStorageClass(value) {
   if (value !== "hot" && value !== "warm" && value !== "cold") {
     throw new TypeError("storageClass must be hot, warm, or cold");
@@ -79,6 +120,94 @@ function normalizeLeaseAssetDefinitionId(input) {
     throw new Error("Asset Definition ID must be valid Base58");
   }
   return value;
+}
+
+function normalizePrivateArtifactRef(input, field, expectedRole) {
+  const artifact = input?.[field];
+  if (artifact == null || typeof artifact !== "object" || Array.isArray(artifact)) {
+    throw new TypeError(`${field} must be an object`);
+  }
+  rejectSoracloudSigningSecrets(artifact);
+  const role = artifact.artifactRole ?? artifact.artifact_role;
+  if (role !== expectedRole) {
+    throw new TypeError(`${field}.artifactRole must be ${expectedRole}`);
+  }
+  return {
+    schema_version: normalizeSafePositiveInteger(
+      { value: artifact.schemaVersion ?? artifact.schema_version },
+      "value",
+    ),
+    sorafs_manifest_digest: normalizeHashLike(
+      { value: artifact.sorafsManifestDigest ?? artifact.sorafs_manifest_digest },
+      "value",
+    ),
+    artifact_hash: normalizeHashLike(
+      { value: artifact.artifactHash ?? artifact.artifact_hash },
+      "value",
+    ),
+    ciphertext_bytes: normalizeSafePositiveInteger(
+      { value: artifact.ciphertextBytes ?? artifact.ciphertext_bytes },
+      "value",
+    ),
+    artifact_role: role,
+  };
+}
+
+function normalizeQuantizedCpuModel(input) {
+  const model = input?.model;
+  if (model == null || typeof model !== "object" || Array.isArray(model)) {
+    throw new TypeError("model must be an object");
+  }
+  rejectSoracloudSigningSecrets(model);
+  const inputLen = normalizeSafePositiveInteger(
+    { value: model.inputLen ?? model.input_len },
+    "value",
+  );
+  const outputLen = normalizeSafePositiveInteger(
+    { value: model.outputLen ?? model.output_len },
+    "value",
+  );
+  const weights = normalizeArray(
+    { value: model.weightsI8 ?? model.weights_i8 },
+    "value",
+  ).map((value, index) => normalizeSignedI8(value, `model.weightsI8[${index}]`));
+  const bias = normalizeArray(
+    { value: model.biasI32 ?? model.bias_i32 },
+    "value",
+  ).map((value, index) => normalizeSignedI32(value, `model.biasI32[${index}]`));
+  if (weights.length !== inputLen * outputLen) {
+    throw new TypeError("model.weightsI8 length must equal inputLen * outputLen");
+  }
+  if (bias.length !== outputLen) {
+    throw new TypeError("model.biasI32 length must equal outputLen");
+  }
+  const outputShift = normalizeSafeInteger(
+    { value: model.outputShift ?? model.output_shift },
+    "value",
+  );
+  if (outputShift > 30) {
+    throw new TypeError("model.outputShift must be <= 30");
+  }
+  const outputMin = normalizeSignedI32(
+    model.outputMin ?? model.output_min,
+    "model.outputMin",
+  );
+  const outputMax = normalizeSignedI32(
+    model.outputMax ?? model.output_max,
+    "model.outputMax",
+  );
+  if (outputMin > outputMax) {
+    throw new TypeError("model.outputMin must be <= model.outputMax");
+  }
+  return {
+    input_len: inputLen,
+    output_len: outputLen,
+    weights_i8: weights,
+    bias_i32: bias,
+    output_shift: outputShift,
+    output_min: outputMin,
+    output_max: outputMax,
+  };
 }
 
 function canonicalSigningPayload(label, payload) {
@@ -133,7 +262,34 @@ function deepEqualCanonical(left, right) {
 }
 
 function requireAllowedDraftPayloadFields(payload) {
+  for (const field of REJECTED_SIGNING_SECRET_FIELDS) {
+    if (field in payload) {
+      if (!Object.hasOwn(payload, field)) {
+        throw new TypeError(`draft payload.${field} must be an own property`);
+      }
+      throw new TypeError(`draft payload.${field} is not accepted`);
+    }
+  }
+  for (const field of HF_DEPLOY_PAYLOAD_FIELDS) {
+    if (field in payload && !Object.hasOwn(payload, field)) {
+      throw new TypeError(`draft payload.${field} must be an own property`);
+    }
+  }
+  for (const field of Object.getOwnPropertyNames(payload)) {
+    if (!HF_DEPLOY_PAYLOAD_FIELDS.has(field)) {
+      throw new TypeError(`draft payload.${field} is not accepted`);
+    }
+    if (!Object.getOwnPropertyDescriptor(payload, field)?.enumerable) {
+      throw new TypeError(`draft payload.${field} must be enumerable`);
+    }
+  }
+  if (Object.getOwnPropertySymbols(payload).length > 0) {
+    throw new TypeError("draft payload symbols are not accepted");
+  }
   for (const field in payload) {
+    if (!Object.hasOwn(payload, field)) {
+      throw new TypeError(`draft payload.${field} must be an own property`);
+    }
     if (!HF_DEPLOY_PAYLOAD_FIELDS.has(field)) {
       throw new TypeError(`draft payload.${field} is not accepted`);
     }
@@ -240,14 +396,17 @@ export function buildSoracloudHfDeployDraft(input = {}) {
 }
 
 function requireProvenance(provenances, field) {
+  rejectSoracloudSigningSecrets(provenances);
   if (
     provenances == null ||
     typeof provenances !== "object" ||
+    Array.isArray(provenances) ||
     !Object.hasOwn(provenances, field)
   ) {
     throw new TypeError(`${field} provenance must include signer and signature`);
   }
   const provenance = provenances[field];
+  rejectSoracloudSigningSecrets(provenance);
   if (
     provenance == null ||
     typeof provenance !== "object" ||
@@ -269,8 +428,10 @@ function requireProvenance(provenances, field) {
 
 function requireDraftSigningPayload(draft, field, label, expectedPayload) {
   if (
+    !Object.hasOwn(draft, "provenancePayloads") ||
     draft.provenancePayloads == null ||
     typeof draft.provenancePayloads !== "object" ||
+    Array.isArray(draft.provenancePayloads) ||
     !Object.hasOwn(draft.provenancePayloads, field)
   ) {
     throw new TypeError(`draft provenancePayloads.${field} is required`);
@@ -280,6 +441,9 @@ function requireDraftSigningPayload(draft, field, label, expectedPayload) {
     signingPayload == null ||
     typeof signingPayload !== "object" ||
     Array.isArray(signingPayload) ||
+    !Object.hasOwn(signingPayload, "schema") ||
+    !Object.hasOwn(signingPayload, "label") ||
+    !Object.hasOwn(signingPayload, "payload") ||
     signingPayload.schema !== PROVENANCE_SCHEMA ||
     signingPayload.label !== label ||
     typeof signingPayload.payload !== "object" ||
@@ -288,6 +452,15 @@ function requireDraftSigningPayload(draft, field, label, expectedPayload) {
   ) {
     throw new TypeError(`draft provenancePayloads.${field} is required`);
   }
+  rejectSoracloudSigningSecrets(signingPayload);
+  for (const payloadField in signingPayload.payload) {
+    if (!Object.hasOwn(signingPayload.payload, payloadField)) {
+      throw new TypeError(
+        `draft provenancePayloads.${field} payload.${payloadField} must be an own property`,
+      );
+    }
+  }
+  rejectSoracloudSigningSecrets(signingPayload.payload);
   if (!deepEqualCanonical(signingPayload.payload, expectedPayload)) {
     throw new TypeError(`draft provenancePayloads.${field} payload must match draft payload`);
   }
@@ -301,8 +474,12 @@ function requireDraftSigningPayload(draft, field, label, expectedPayload) {
  * @returns {{ payload: Record<string, unknown>, provenance: { signer: string, signature: string }, generated_service_provenance: { signer: string, signature: string }, generated_apartment_provenance?: { signer: string, signature: string } }}
  */
 export function assembleSoracloudHfDeployRequest(draft, provenances = {}) {
+  rejectSoracloudSigningSecrets(draft);
   if (
     draft == null ||
+    typeof draft !== "object" ||
+    Array.isArray(draft) ||
+    !Object.hasOwn(draft, "payload") ||
     typeof draft.payload !== "object" ||
     draft.payload == null ||
     Array.isArray(draft.payload)
@@ -335,4 +512,120 @@ export function assembleSoracloudHfDeployRequest(draft, provenances = {}) {
     );
   }
   return request;
+}
+
+/**
+ * Build a deterministic private uploaded-model execution request.
+ *
+ * The helper only normalizes client-side request shape. It never accepts raw
+ * signing secrets and does not submit the returned receipt instruction.
+ *
+ * @param {{ serviceName: string, weightVersion: string, modelId?: string, modelName?: string, bundleRoot?: string, policyId: string, model: { inputLen: number, outputLen: number, weightsI8: number[], biasI32: number[], outputShift: number, outputMin: number, outputMax: number }, plaintextInputI32: number[], inputArtifact: Record<string, unknown>, outputArtifact: Record<string, unknown>, emittedSequence: number | bigint | string }} input
+ * @returns {Record<string, unknown>}
+ */
+export function buildSoracloudPrivateUploadedModelExecuteRequest(input = {}) {
+  rejectSoracloudSigningSecrets(input);
+  const modelId = optionalString(input, "modelId");
+  const modelName = optionalString(input, "modelName");
+  if ((modelId === undefined) === (modelName === undefined)) {
+    throw new TypeError("exactly one of modelId or modelName must be provided");
+  }
+  const plaintextInput = normalizeArray(input, "plaintextInputI32").map((value, index) =>
+    normalizeSignedI32(value, `plaintextInputI32[${index}]`),
+  );
+  const request = {
+    service_name: requireString(input, "serviceName"),
+    weight_version: requireString(input, "weightVersion"),
+    policy_id: requireString(input, "policyId"),
+    model: normalizeQuantizedCpuModel(input),
+    plaintext_input_i32: plaintextInput,
+    input_artifact: normalizePrivateArtifactRef(input, "inputArtifact", "input"),
+    output_artifact: normalizePrivateArtifactRef(input, "outputArtifact", "output"),
+    emitted_sequence: normalizeSafePositiveInteger(input, "emittedSequence"),
+  };
+  if (modelId !== undefined) {
+    request.model_id = modelId;
+  }
+  if (modelName !== undefined) {
+    request.model_name = modelName;
+  }
+  const bundleRoot = optionalString(input, "bundleRoot");
+  if (bundleRoot !== undefined) {
+    request.bundle_root = bundleRoot;
+  }
+  return request;
+}
+
+/**
+ * Build query parameters for committed private uploaded-model execution receipts.
+ *
+ * @param {{ receiptId?: string, serviceName?: string, modelId?: string, weightVersion?: string, limit?: number | bigint | string, countMode?: "bounded" | "exact" }} input
+ * @returns {Record<string, string>}
+ */
+export function buildSoracloudPrivateUploadedModelReceiptQuery(input = {}) {
+  rejectSoracloudSigningSecrets(input);
+  const query = {};
+  const receiptId = optionalString(input, "receiptId");
+  if (receiptId !== undefined) {
+    query.receipt_id = receiptId;
+  }
+  const serviceName = optionalString(input, "serviceName");
+  if (serviceName !== undefined) {
+    query.service_name = serviceName;
+  }
+  const modelId = optionalString(input, "modelId");
+  if (modelId !== undefined) {
+    query.model_id = modelId;
+  }
+  const weightVersion = optionalString(input, "weightVersion");
+  if (weightVersion !== undefined) {
+    query.weight_version = weightVersion;
+  }
+  if (input.limit !== undefined && input.limit !== null) {
+    query.limit = String(normalizeSafePositiveInteger(input, "limit"));
+  }
+  const countMode = optionalString(input, "countMode");
+  if (countMode !== undefined) {
+    if (!PRIVATE_UPLOADED_MODEL_COUNT_MODES.has(countMode)) {
+      throw new TypeError("countMode must be bounded or exact");
+    }
+    query.count_mode = countMode;
+  }
+  return query;
+}
+
+/**
+ * Validate and extract the receipt-recording instruction from a private execute response.
+ *
+ * @param {Record<string, unknown>} response
+ * @returns {{ wire_id: string, payload_hex: string }}
+ */
+export function privateUploadedModelReceiptInstruction(response) {
+  if (response == null || typeof response !== "object" || Array.isArray(response)) {
+    throw new TypeError("response must be an object");
+  }
+  const instructions = response.tx_instructions;
+  if (!Array.isArray(instructions) || instructions.length !== 1) {
+    throw new TypeError("response.tx_instructions must contain exactly one instruction");
+  }
+  const instruction = instructions[0];
+  if (instruction == null || typeof instruction !== "object" || Array.isArray(instruction)) {
+    throw new TypeError("response.tx_instructions[0] must be an object");
+  }
+  if (instruction.wire_id !== PRIVATE_UPLOADED_MODEL_RECEIPT_WIRE_ID) {
+    throw new TypeError(
+      `response.tx_instructions[0].wire_id must be ${PRIVATE_UPLOADED_MODEL_RECEIPT_WIRE_ID}`,
+    );
+  }
+  if (
+    typeof instruction.payload_hex !== "string" ||
+    instruction.payload_hex.length === 0 ||
+    !/^[0-9a-fA-F]+$/.test(instruction.payload_hex)
+  ) {
+    throw new TypeError("response.tx_instructions[0].payload_hex must be non-empty hex");
+  }
+  return {
+    wire_id: instruction.wire_id,
+    payload_hex: instruction.payload_hex,
+  };
 }

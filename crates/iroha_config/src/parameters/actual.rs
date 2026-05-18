@@ -5620,6 +5620,12 @@ pub struct Torii {
     pub query_rate_per_authority_per_sec: Option<NonZeroU32>,
     /// Optional per-authority burst capacity (tokens).
     pub query_burst_per_authority: Option<NonZeroU32>,
+    /// Maximum concurrent query executions admitted by Torii.
+    pub query_max_inflight: NonZeroUsize,
+    /// Maximum concurrent heavy query executions admitted by Torii.
+    pub query_heavy_max_inflight: NonZeroUsize,
+    /// Maximum time a query waits for execution capacity before Torii rejects it.
+    pub query_queue_timeout: Duration,
     /// Optional per-authority transaction submission rate (tokens/sec). None disables limiting.
     pub tx_rate_per_authority_per_sec: Option<NonZeroU32>,
     /// Optional per-authority transaction burst capacity (tokens).

@@ -7,7 +7,9 @@ use std::{
 
 use color_eyre::{Report, eyre::eyre};
 use iroha_config::base::toml::WriteExt;
-use iroha_config::parameters::actual::{Crypto as ActualCrypto, Nexus as ActualNexus};
+use iroha_config::parameters::actual::{
+    Crypto as ActualCrypto, Nexus as ActualNexus, Zk as ActualZk,
+};
 use iroha_core::{
     block::ValidBlock,
     kura::Kura,
@@ -205,6 +207,8 @@ pub fn genesis_with_keypair_and_post_topology(
         None,
         None,
         None,
+        None,
+        Some(iroha_core::state::default_zk_consensus_policy_hash()),
     )
 }
 
@@ -218,7 +222,9 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
     genesis_crypto: Option<ManifestCrypto>,
     da_proof_policies: Option<DaProofPolicyBundle>,
     _nexus_config: Option<ActualNexus>,
+    zk_config: Option<ActualZk>,
     consensus_handshake_meta: Option<Parameter>,
+    confidential_policy_hash: Option<[u8; 32]>,
 ) -> GenesisBlock {
     init_instruction_registry();
     build_minimal_genesis_with_post_topology(
@@ -231,7 +237,9 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
         genesis_crypto,
         da_proof_policies,
         _nexus_config,
+        zk_config,
         consensus_handshake_meta,
+        confidential_policy_hash,
     )
 }
 
@@ -269,6 +277,8 @@ fn build_minimal_genesis(
         None,
         None,
         None,
+        None,
+        Some(iroha_core::state::default_zk_consensus_policy_hash()),
     )
 }
 
@@ -282,7 +292,9 @@ fn build_minimal_genesis_with_post_topology(
     genesis_crypto: Option<ManifestCrypto>,
     da_proof_policies: Option<DaProofPolicyBundle>,
     nexus_config: Option<ActualNexus>,
+    zk_config: Option<ActualZk>,
     consensus_handshake_meta: Option<Parameter>,
+    confidential_policy_hash: Option<[u8; 32]>,
 ) -> GenesisBlock {
     let mut extra_transactions = extra_transactions;
     let mut post_topology_transactions = post_topology_transactions;
@@ -301,7 +313,9 @@ fn build_minimal_genesis_with_post_topology(
             genesis_crypto,
             da_proof_policies,
             nexus_config.clone(),
+            zk_config.clone(),
             consensus_handshake_meta,
+            confidential_policy_hash,
         );
     ensure_genesis_results(
         &mut block,
@@ -309,6 +323,7 @@ fn build_minimal_genesis_with_post_topology(
         &topology_vec,
         &genesis_key_pair,
         nexus_config.as_ref(),
+        zk_config.as_ref(),
     );
     block
 }
@@ -331,6 +346,8 @@ fn build_minimal_genesis_unexecuted(
         None,
         None,
         None,
+        None,
+        Some(iroha_core::state::default_zk_consensus_policy_hash()),
     )
 }
 
@@ -344,7 +361,9 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     genesis_crypto: Option<ManifestCrypto>,
     da_proof_policies: Option<DaProofPolicyBundle>,
     _nexus_config: Option<ActualNexus>,
+    _zk_config: Option<ActualZk>,
     consensus_handshake_meta: Option<Parameter>,
+    confidential_policy_hash: Option<[u8; 32]>,
 ) -> (GenesisBlock, AccountId, Vec<PeerId>, KeyPair) {
     fn try_default_executor_path() -> Option<PathBuf> {
         if std::env::var("IROHA_TEST_PREBUILD_DEFAULT_EXECUTOR")
@@ -672,7 +691,7 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     }
 
     let block = builder
-        .build_and_sign(&genesis_key_pair)
+        .build_and_sign_with_confidential_policy_hash(&genesis_key_pair, confidential_policy_hash)
         .expect("build minimal genesis");
     (block, genesis_account, topology_vec, genesis_key_pair)
 }
@@ -694,6 +713,7 @@ pub(crate) fn ensure_genesis_results(
     topology: &[PeerId],
     genesis_key_pair: &KeyPair,
     nexus_config: Option<&ActualNexus>,
+    zk_config: Option<&ActualZk>,
 ) {
     let tx_count = block.0.transactions_vec().len();
     let result_count = block.0.results().count();
@@ -715,6 +735,7 @@ pub(crate) fn ensure_genesis_results(
         topology,
         genesis_key_pair,
         nexus_config,
+        zk_config,
     ) {
         Ok(new_block) => block.0 = new_block,
         Err(err) => {
@@ -750,6 +771,7 @@ fn populate_genesis_results(
     topology: &[PeerId],
     genesis_key_pair: &KeyPair,
     nexus_config: Option<&ActualNexus>,
+    zk_config: Option<&ActualZk>,
 ) -> Result<iroha_data_model::block::SignedBlock, Report> {
     if topology.is_empty() {
         return Err(eyre!("genesis topology is empty"));
@@ -774,6 +796,9 @@ fn populate_genesis_results(
         .unwrap_or(&default_nexus.dataspace_catalog);
     iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &block.0, dataspace_catalog);
     let mut state = State::with_telemetry(world, kura, query_handle, StateTelemetry::default());
+    if let Some(zk_config) = zk_config {
+        state.set_zk(zk_config.clone());
+    }
     apply_preexec_nexus_overrides(
         &mut state,
         genesis_key_pair,
@@ -1208,6 +1233,7 @@ mod tests {
             &topology_vec,
             &genesis_key_pair,
             None,
+            None,
         );
         assert!(
             block.0.has_results(),
@@ -1244,6 +1270,7 @@ mod tests {
             &topology_vec,
             &genesis_key_pair,
             None,
+            None,
         );
         assert!(
             block.0.has_results(),
@@ -1271,6 +1298,7 @@ mod tests {
             &genesis_account,
             &topology_vec,
             &genesis_key_pair,
+            None,
             None,
         );
 
@@ -1317,6 +1345,7 @@ mod tests {
             &genesis_account,
             &topology_vec,
             &genesis_key_pair,
+            None,
             None,
         )
         .expect("genesis pre-execution should succeed");
@@ -1374,12 +1403,15 @@ mod tests {
                 Some(policies),
                 None,
                 None,
+                None,
+                Some(iroha_core::state::default_zk_consensus_policy_hash()),
             );
         let executed = super::populate_genesis_results(
             &block,
             &genesis_account,
             &topology_vec,
             &genesis_key_pair,
+            None,
             None,
         )
         .expect("genesis pre-execution should accept proof-policy-derived catalogs");
@@ -1481,6 +1513,8 @@ mod tests {
                 None,
                 Some(nexus.clone()),
                 None,
+                None,
+                Some(iroha_core::state::default_zk_consensus_policy_hash()),
             );
 
         let err = super::populate_genesis_results(
@@ -1488,6 +1522,7 @@ mod tests {
             &genesis_account,
             &topology_vec,
             &genesis_key_pair,
+            None,
             None,
         )
         .expect_err("custom staking genesis should fail without the supplied nexus config");
@@ -1505,6 +1540,7 @@ mod tests {
             &topology_vec,
             &genesis_key_pair,
             Some(&nexus),
+            None,
         )
         .expect("custom staking genesis should succeed with the resolved nexus config");
         assert!(
@@ -1556,6 +1592,7 @@ mod tests {
             &genesis_account,
             &topology,
             &genesis_key_pair,
+            None,
             None,
         )
         .expect("genesis pre-execution should lease aliases used by labeled genesis accounts");
@@ -1649,7 +1686,14 @@ mod tests {
             0,
             "freshly built genesis block should lack transaction results"
         );
-        super::ensure_genesis_results(&mut block, &genesis_account, &[], &genesis_key_pair, None);
+        super::ensure_genesis_results(
+            &mut block,
+            &genesis_account,
+            &[],
+            &genesis_key_pair,
+            None,
+            None,
+        );
         assert!(
             block.0.has_results(),
             "fallback path must still populate synthetic results"
@@ -1774,6 +1818,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            Some(iroha_core::state::default_zk_consensus_policy_hash()),
         );
 
         assert_eq!(embedded_manifest_crypto(&block), expected);
@@ -1973,6 +2019,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            Some(iroha_core::state::default_zk_consensus_policy_hash()),
         );
 
         let declared_hash = block

@@ -17,7 +17,8 @@ use iroha_data_model::{
     soracloud::{
         AGENT_APARTMENT_MANIFEST_VERSION_V1, AgentApartmentManifestV1, AgentToolCapabilityV1,
         AgentUpgradePolicyV1, SORA_CONTAINER_MANIFEST_VERSION_V1,
-        SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_SERVICE_MANIFEST_VERSION_V1,
+        SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+        SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1, SORA_SERVICE_MANIFEST_VERSION_V1,
         SoraAgentRuntimeStatusV1, SoraArtifactKindV1, SoraCapabilityPolicyV1,
         SoraCertifiedResponsePolicyV1, SoraConfigExportV1, SoraContainerManifestRefV1,
         SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
@@ -25,13 +26,15 @@ use iroha_data_model::{
         SoraHfPlacementRecordV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseStatusV1,
         SoraHfSourceStatusV1, SoraHttpServiceEconomicsV1, SoraInrouGuestIsaV1, SoraInrouGuestOsV1,
         SoraInrouRuntimeBackendV1, SoraLeaseVolumeKindV1, SoraLifecycleHooksV1,
-        SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1, SoraResourceLimitsV1,
-        SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
+        SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1, SoraPrivateModelArtifactRefV1,
+        SoraPrivateUploadedModelExecutionReceiptV1, SoraResourceLimitsV1, SoraRolloutPolicyV1,
+        SoraRouteTargetV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
         SoraServiceDeploymentStateV1, SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1,
         SoraServiceHandlerV1, SoraServiceHealthStatusV1, SoraServiceLeaseStatusV1,
         SoraServiceMailboxMessageV1, SoraServiceManifestV1, SoraServiceRuntimeStateV1,
         SoraStateEncryptionV1, SoraStateMutationOperationV1, SoraTlsModeV1,
-        SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
+        SoraUploadedModelBundleV1, SoraUploadedModelKeyEncapsulationV1,
+        SoraUploadedModelKeyWrapAeadV1, SoraUploadedModelRuntimeFormatV1,
     },
     sorafs::pin_registry::StorageClass,
 };
@@ -1016,6 +1019,267 @@ pub struct SoracloudUploadedModelEncryptionRecipient {
     pub public_key_fingerprint: Hash,
 }
 
+/// Runtime version string for deterministic private uploaded-model execution v1.
+pub const SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1: &str = "soracloud.quantized-cpu.v1";
+
+/// Fixed rounding rule used by the v1 quantized CPU runtime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SoracloudQuantizedRoundingV1 {
+    /// Arithmetic right shift after adding half the scale, with ties rounded away from zero.
+    NearestAwayFromZero,
+}
+
+/// Deterministic quantized linear model accepted by the v1 private CPU runtime.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SoracloudQuantizedCpuModelV1 {
+    /// Number of signed 32-bit integer inputs.
+    pub input_len: usize,
+    /// Number of signed 32-bit integer outputs.
+    pub output_len: usize,
+    /// Row-major signed 8-bit weights, `output_len * input_len` entries.
+    pub weights_i8: Vec<i8>,
+    /// Signed 32-bit output biases.
+    pub bias_i32: Vec<i32>,
+    /// Non-negative right-shift applied after accumulation.
+    pub output_shift: u8,
+    /// Saturating lower bound for each output.
+    pub output_min: i32,
+    /// Saturating upper bound for each output.
+    pub output_max: i32,
+    /// Explicit rounding mode, fixed for v1.
+    pub rounding: SoracloudQuantizedRoundingV1,
+}
+
+impl SoracloudQuantizedCpuModelV1 {
+    /// Validate the deterministic quantized model shape and arithmetic bounds.
+    pub fn validate(&self) -> Result<(), SoracloudRuntimeExecutionError> {
+        if self.input_len == 0 || self.output_len == 0 {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                "quantized model input_len and output_len must be non-zero",
+            ));
+        }
+        if self.weights_i8.len() != self.input_len.saturating_mul(self.output_len) {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                "quantized model weights must be row-major output_len * input_len",
+            ));
+        }
+        if self.bias_i32.len() != self.output_len {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                "quantized model bias length must equal output_len",
+            ));
+        }
+        if self.output_shift > 30 {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                "quantized model output_shift must be <= 30",
+            ));
+        }
+        if self.output_min > self.output_max {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                "quantized model output_min must be <= output_max",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Execute deterministic signed-integer inference on the CPU reference path.
+    pub fn evaluate(&self, input: &[i32]) -> Result<Vec<i32>, SoracloudRuntimeExecutionError> {
+        self.validate()?;
+        if input.len() != self.input_len {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                "quantized model input length does not match input_len",
+            ));
+        }
+
+        let mut outputs = Vec::with_capacity(self.output_len);
+        for output_index in 0..self.output_len {
+            let row_start = output_index
+                .checked_mul(self.input_len)
+                .expect("validated model dimensions fit usize");
+            let mut acc = i64::from(self.bias_i32[output_index]);
+            for (input_index, input_value) in input.iter().enumerate() {
+                let weight = self.weights_i8[row_start + input_index];
+                acc = acc.saturating_add(i64::from(*input_value).saturating_mul(i64::from(weight)));
+            }
+            let rounded = round_quantized_accumulator(acc, self.output_shift, self.rounding);
+            let saturated = rounded.clamp(i64::from(self.output_min), i64::from(self.output_max));
+            outputs.push(i32::try_from(saturated).expect("clamped to i32 range"));
+        }
+        Ok(outputs)
+    }
+}
+
+fn round_quantized_accumulator(
+    value: i64,
+    shift: u8,
+    rounding: SoracloudQuantizedRoundingV1,
+) -> i64 {
+    if shift == 0 {
+        return value;
+    }
+    match rounding {
+        SoracloudQuantizedRoundingV1::NearestAwayFromZero => {
+            let half = 1_i64 << (shift - 1);
+            if value >= 0 {
+                value.saturating_add(half) >> shift
+            } else {
+                -((-value).saturating_add(half) >> shift)
+            }
+        }
+    }
+}
+
+fn append_private_model_commitment_part<T: Encode>(transcript: &mut Vec<u8>, value: &T) {
+    transcript.extend(value.encode());
+}
+
+fn private_model_request_commitment(
+    bundle: &SoraUploadedModelBundleV1,
+    policy_id: &str,
+    input_artifact: &SoraPrivateModelArtifactRefV1,
+    input_commitment: Hash,
+) -> Hash {
+    let mut transcript = Vec::new();
+    append_private_model_commitment_part(&mut transcript, &bundle.service_name);
+    append_private_model_commitment_part(&mut transcript, &bundle.model_id);
+    append_private_model_commitment_part(&mut transcript, &bundle.weight_version);
+    append_private_model_commitment_part(
+        &mut transcript,
+        &SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1.to_owned(),
+    );
+    append_private_model_commitment_part(&mut transcript, &policy_id.to_owned());
+    append_private_model_commitment_part(&mut transcript, input_artifact);
+    append_private_model_commitment_part(&mut transcript, &input_commitment);
+    Hash::new(transcript)
+}
+
+fn private_model_result_commitment(
+    output_artifact: &SoraPrivateModelArtifactRefV1,
+    output_commitment: Hash,
+) -> Hash {
+    let mut transcript = Vec::new();
+    append_private_model_commitment_part(
+        &mut transcript,
+        &SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1.to_owned(),
+    );
+    append_private_model_commitment_part(&mut transcript, output_artifact);
+    append_private_model_commitment_part(&mut transcript, &output_commitment);
+    Hash::new(transcript)
+}
+
+/// Input envelope for deterministic private uploaded-model execution.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SoracloudPrivateUploadedModelExecutionRequestV1 {
+    /// Admitted uploaded model package metadata.
+    pub bundle: SoraUploadedModelBundleV1,
+    /// Decryption policy approved for this execution.
+    pub policy_id: String,
+    /// Plaintext input visible only inside the private runtime boundary.
+    pub plaintext_input_i32: Vec<i32>,
+    /// Persisted encrypted input artifact reference.
+    pub input_artifact: SoraPrivateModelArtifactRefV1,
+    /// Persisted encrypted output artifact reference.
+    pub output_artifact: SoraPrivateModelArtifactRefV1,
+    /// Monotonic Soracloud sequence emitted by the execution path.
+    pub emitted_sequence: u64,
+}
+
+/// Result emitted by the deterministic private uploaded-model CPU runtime.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SoracloudPrivateUploadedModelExecutionResultV1 {
+    /// Plaintext output visible only inside the private runtime boundary.
+    pub plaintext_output_i32: Vec<i32>,
+    /// Chain-facing receipt containing only commitments and encrypted artifact references.
+    pub receipt: SoraPrivateUploadedModelExecutionReceiptV1,
+}
+
+/// Execute the deterministic quantized CPU runtime for a private uploaded model.
+pub fn execute_private_uploaded_model_quantized_cpu_v1(
+    model: &SoracloudQuantizedCpuModelV1,
+    request: SoracloudPrivateUploadedModelExecutionRequestV1,
+) -> Result<SoracloudPrivateUploadedModelExecutionResultV1, SoracloudRuntimeExecutionError> {
+    request.bundle.validate().map_err(|err| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            format!("invalid uploaded model bundle: {err}"),
+        )
+    })?;
+    if request.bundle.runtime_format
+        != SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1
+    {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            "uploaded model bundle is not admitted for deterministic quantized CPU execution",
+        ));
+    }
+    if request.policy_id != request.bundle.decryption_policy_ref {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            "execution policy_id must match the uploaded model decryption policy",
+        ));
+    }
+    request.input_artifact.validate().map_err(|err| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            format!("invalid encrypted input artifact: {err}"),
+        )
+    })?;
+    request.output_artifact.validate().map_err(|err| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            format!("invalid encrypted output artifact: {err}"),
+        )
+    })?;
+
+    let output = model.evaluate(&request.plaintext_input_i32)?;
+    let input_commitment = Hash::new(request.plaintext_input_i32.encode());
+    let output_commitment = Hash::new(output.encode());
+    let request_commitment = private_model_request_commitment(
+        &request.bundle,
+        &request.policy_id,
+        &request.input_artifact,
+        input_commitment,
+    );
+    let result_commitment =
+        private_model_result_commitment(&request.output_artifact, output_commitment);
+
+    let mut receipt = SoraPrivateUploadedModelExecutionReceiptV1 {
+        schema_version: SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
+        receipt_id: Hash::prehashed([0; 32]),
+        service_name: request.bundle.service_name,
+        model_id: request.bundle.model_id,
+        weight_version: request.bundle.weight_version,
+        runtime_version: SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1.to_owned(),
+        model_manifest_digest: request.bundle.sorafs_manifest_digest,
+        model_bundle_root: request.bundle.bundle_root,
+        policy_id: request.policy_id,
+        input_artifact: request.input_artifact,
+        output_artifact: request.output_artifact,
+        input_commitment,
+        output_commitment,
+        request_commitment,
+        result_commitment,
+        emitted_sequence: request.emitted_sequence,
+    };
+    receipt.receipt_id = Hash::new(receipt.encode());
+    receipt.validate().map_err(|err| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!("invalid private uploaded model execution receipt: {err}"),
+        )
+    })?;
+
+    Ok(SoracloudPrivateUploadedModelExecutionResultV1 {
+        plaintext_output_i32: output,
+        receipt,
+    })
+}
+
 /// Shared Soracloud runtime handle type used across crate boundaries.
 pub type SharedSoracloudRuntimeHandle = Arc<dyn SoracloudRuntimeReadHandle>;
 
@@ -1348,8 +1612,66 @@ mod tests {
             SoraHfPlacementHostAssignmentV1, SoraHfPlacementStatusV1, SoraHfResourceProfileV1,
             SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1,
         },
-        sorafs::pin_registry::StorageClass,
+        sorafs::pin_registry::{ManifestDigest, StorageClass},
     };
+
+    fn sample_private_model_artifact_ref(role: &str, seed: u8) -> SoraPrivateModelArtifactRefV1 {
+        SoraPrivateModelArtifactRefV1 {
+            schema_version: iroha_data_model::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
+            sorafs_manifest_digest: ManifestDigest::new([seed; 32]),
+            artifact_hash: Hash::new([seed; 16]),
+            ciphertext_bytes: 128,
+            artifact_role: role.to_owned(),
+        }
+    }
+
+    fn sample_quantized_uploaded_model_bundle() -> SoraUploadedModelBundleV1 {
+        let public_key_bytes = vec![7u8; 32];
+        let wrapped_key_ciphertext = vec![9u8; 48];
+        SoraUploadedModelBundleV1 {
+            schema_version: iroha_data_model::soracloud::SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
+            service_name: "private_model_host".parse().expect("valid service name"),
+            model_id: "upload-quant-v1".to_owned(),
+            weight_version: "v1".to_owned(),
+            family: "linear-demo".to_owned(),
+            modalities: vec!["tabular".to_owned()],
+            plaintext_root: Hash::new(b"plaintext model root"),
+            runtime_format: SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1,
+            bundle_root: Hash::new(b"quantized bundle root"),
+            sorafs_manifest_digest: ManifestDigest::new([0xA5; 32]),
+            chunk_count: 1,
+            plaintext_bytes: 256,
+            ciphertext_bytes: 512,
+            chunk_manifest_root: Hash::new(b"chunk manifest root"),
+            upload_recipient: iroha_data_model::soracloud::SoraUploadedModelEncryptionRecipientV1 {
+                schema_version:
+                    iroha_data_model::soracloud::SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
+                key_id: "recipient".to_owned(),
+                key_version: std::num::NonZeroU32::new(1).expect("non-zero key version"),
+                kem: SoraUploadedModelKeyEncapsulationV1::X25519HkdfSha256,
+                aead: SoraUploadedModelKeyWrapAeadV1::Aes256Gcm,
+                public_key_bytes: public_key_bytes.clone(),
+                public_key_fingerprint: Hash::new(public_key_bytes.as_slice()),
+            },
+            wrapped_bundle_key: iroha_data_model::soracloud::SoraUploadedModelWrappedKeyV1 {
+                schema_version:
+                    iroha_data_model::soracloud::SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1,
+                recipient_key_id: "recipient".to_owned(),
+                recipient_key_version: std::num::NonZeroU32::new(1).expect("non-zero key version"),
+                kem: SoraUploadedModelKeyEncapsulationV1::X25519HkdfSha256,
+                aead: SoraUploadedModelKeyWrapAeadV1::Aes256Gcm,
+                ephemeral_public_key: vec![8u8; 32],
+                nonce: vec![5u8; 12],
+                wrapped_key_ciphertext: wrapped_key_ciphertext.clone(),
+                ciphertext_hash: Hash::new(wrapped_key_ciphertext.as_slice()),
+                aad_digest: Hash::new(b"aad"),
+            },
+            pricing_policy: iroha_data_model::soracloud::SoraUploadedModelPricingPolicyV1 {
+                storage_xor_nanos: 1,
+            },
+            decryption_policy_ref: "policy/v1".to_owned(),
+        }
+    }
 
     fn seed_generated_hf_world_with_primary(
         primary_peer_id: &str,
@@ -1592,5 +1914,75 @@ mod tests {
         assert_eq!(primary.peer_id, primary_peer_id);
         assert_eq!(primary.role, SoraHfPlacementHostRoleV1::Primary);
         assert_eq!(primary.status, SoraHfPlacementHostStatusV1::Warm);
+    }
+
+    #[test]
+    fn private_uploaded_model_quantized_cpu_runtime_is_deterministic_and_receipted() {
+        let model = SoracloudQuantizedCpuModelV1 {
+            input_len: 3,
+            output_len: 2,
+            weights_i8: vec![2, -1, 4, -3, 1, 2],
+            bias_i32: vec![3, -4],
+            output_shift: 1,
+            output_min: -32,
+            output_max: 32,
+            rounding: SoracloudQuantizedRoundingV1::NearestAwayFromZero,
+        };
+        let request = SoracloudPrivateUploadedModelExecutionRequestV1 {
+            bundle: sample_quantized_uploaded_model_bundle(),
+            policy_id: "policy/v1".to_owned(),
+            plaintext_input_i32: vec![7, -2, 5],
+            input_artifact: sample_private_model_artifact_ref("input", 0x11),
+            output_artifact: sample_private_model_artifact_ref("output", 0x22),
+            emitted_sequence: 9,
+        };
+
+        let first =
+            execute_private_uploaded_model_quantized_cpu_v1(&model, request.clone()).expect("run");
+        let second =
+            execute_private_uploaded_model_quantized_cpu_v1(&model, request).expect("rerun");
+
+        assert_eq!(first.plaintext_output_i32, vec![20, -9]);
+        assert_eq!(first, second);
+        assert_eq!(
+            first.receipt.runtime_version,
+            SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1
+        );
+        assert_eq!(first.receipt.input_artifact.artifact_role, "input");
+        assert_eq!(first.receipt.output_artifact.artifact_role, "output");
+        assert_ne!(
+            first.receipt.input_commitment,
+            first.receipt.output_commitment
+        );
+        first.receipt.validate().expect("receipt validates");
+    }
+
+    #[test]
+    fn private_uploaded_model_quantized_cpu_runtime_rejects_wrong_format() {
+        let model = SoracloudQuantizedCpuModelV1 {
+            input_len: 1,
+            output_len: 1,
+            weights_i8: vec![1],
+            bias_i32: vec![0],
+            output_shift: 0,
+            output_min: i32::MIN,
+            output_max: i32::MAX,
+            rounding: SoracloudQuantizedRoundingV1::NearestAwayFromZero,
+        };
+        let mut bundle = sample_quantized_uploaded_model_bundle();
+        bundle.runtime_format = SoraUploadedModelRuntimeFormatV1::HuggingFaceSafetensors;
+        let err = execute_private_uploaded_model_quantized_cpu_v1(
+            &model,
+            SoracloudPrivateUploadedModelExecutionRequestV1 {
+                bundle,
+                policy_id: "policy/v1".to_owned(),
+                plaintext_input_i32: vec![1],
+                input_artifact: sample_private_model_artifact_ref("input", 0x11),
+                output_artifact: sample_private_model_artifact_ref("output", 0x22),
+                emitted_sequence: 1,
+            },
+        )
+        .expect_err("wrong runtime format must fail closed");
+        assert_eq!(err.kind, SoracloudRuntimeExecutionErrorKind::InvalidRequest);
     }
 }

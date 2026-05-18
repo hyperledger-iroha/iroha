@@ -928,6 +928,7 @@ fn sample_lane_relay_envelope_with_bitmap(
             timestamp_ms: 1_700_000_000_000,
         }],
         nexus_fee_receipts: Vec::new(),
+        native_amx_receipts: Vec::new(),
     };
     let envelope =
         LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0).expect("valid envelope");
@@ -12609,6 +12610,59 @@ async fn block_sync_update_defers_while_pending_processing() {
             .deferred_block_sync_updates
             .contains_key(&(height, view_idx, block_hash)),
         "deferred block sync update should be replayed"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_releases_ingress_dedup_before_deferral() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let committed_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let height = committed_height.saturating_add(1).max(1);
+    let view_idx = 0_u64;
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view_idx, parent);
+    let block_hash = block.hash();
+
+    actor.pending.pending_processing.set(Some(block_hash));
+
+    let update = super::message::BlockSyncUpdate::from(&block);
+    let dedup_key = crate::sumeragi::block_sync_update_dedup_key(&update);
+    {
+        let mut guard = actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        guard.insert(dedup_key, Instant::now());
+        assert!(
+            guard.contains(&dedup_key),
+            "test setup should seed the ingress dedup entry"
+        );
+    }
+
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("block sync update");
+
+    assert!(
+        !actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned")
+            .contains(&dedup_key),
+        "processing must release BlockSyncUpdate ingress dedup so deferred recovery can retry"
+    );
+    assert!(
+        actor
+            .deferred_block_sync_updates
+            .contains_key(&(height, view_idx, block_hash)),
+        "block sync update should still be deferred while pending processing is active"
     );
 
     harness.shutdown.send();
@@ -24945,6 +24999,7 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc_impl() {
         pipeline_events,
         state_events,
         post_apply_snapshot,
+        post_commit_persistence_error,
     ) = match outcome {
         commit::CommitOutcome::Success {
             committed_block,
@@ -24953,6 +25008,7 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc_impl() {
             pipeline_events,
             state_events,
             post_apply_snapshot,
+            post_commit_persistence_error,
         } => (
             committed_block,
             exec_witness,
@@ -24960,6 +25016,7 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc_impl() {
             pipeline_events,
             state_events,
             post_apply_snapshot,
+            post_commit_persistence_error,
         ),
         commit::CommitOutcome::Rejected { error, .. } => {
             panic!("commit work should succeed: rejected with {error:?}");
@@ -24981,6 +25038,7 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc_impl() {
                 pipeline_events,
                 state_events,
                 post_apply_snapshot,
+                post_commit_persistence_error,
             },
             timings,
         })
@@ -25343,6 +25401,7 @@ async fn commit_outcome_seeds_genesis_commit_roster_after_commit() {
         pipeline_events,
         state_events,
         post_apply_snapshot,
+        post_commit_persistence_error,
     ) = match outcome {
         commit::CommitOutcome::Success {
             committed_block,
@@ -25351,6 +25410,7 @@ async fn commit_outcome_seeds_genesis_commit_roster_after_commit() {
             pipeline_events,
             state_events,
             post_apply_snapshot,
+            post_commit_persistence_error,
         } => (
             committed_block,
             exec_witness,
@@ -25358,6 +25418,7 @@ async fn commit_outcome_seeds_genesis_commit_roster_after_commit() {
             pipeline_events,
             state_events,
             post_apply_snapshot,
+            post_commit_persistence_error,
         ),
         commit::CommitOutcome::Rejected { error, .. } => {
             panic!("commit work should succeed: rejected with {error:?}");
@@ -25380,6 +25441,7 @@ async fn commit_outcome_seeds_genesis_commit_roster_after_commit() {
                 pipeline_events,
                 state_events,
                 post_apply_snapshot,
+                post_commit_persistence_error,
             },
             timings,
         })
@@ -82609,6 +82671,7 @@ async fn apply_commit_outcome_updates_view_change_install() {
                 pipeline_events: Vec::new(),
                 state_events: Vec::new(),
                 post_apply_snapshot: commit::CommitPostApplySnapshot::default(),
+                post_commit_persistence_error: None,
             },
             timings: commit::CommitStageTimings::default(),
         })

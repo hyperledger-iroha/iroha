@@ -3406,6 +3406,42 @@ mod tests2 {
     }
 
     #[test]
+    fn build_and_sign_sets_explicit_confidential_policy_hash() {
+        init_instruction_registry();
+
+        let chain = ChainId::from("iroha:test:confpolicy");
+        let manifest = RawGenesisTransaction {
+            chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
+            executor: None,
+            ivm_dir: IvmPath::default(),
+            transactions: vec![RawGenesisTx::default()],
+            consensus_mode: None,
+            bls_domain: None,
+            wire_proto_versions: vec![],
+            consensus_fingerprint: None,
+            crypto: ManifestCrypto::default(),
+        };
+
+        let keypair = KeyPair::random();
+        let policy_hash = [0x42; 32];
+        let genesis = manifest
+            .build_and_sign_with_confidential_policy_hash(&keypair, Some(policy_hash))
+            .expect("sign genesis with policy hash");
+
+        assert_eq!(
+            genesis.0.header().confidential_features(),
+            Some(ConfidentialFeatureDigest::new(
+                None,
+                None,
+                None,
+                Some(RULES_VERSION),
+                Some(policy_hash),
+            ))
+        );
+    }
+
+    #[test]
     fn genesis_canonical_wire_roundtrip_preserves_digest() {
         init_instruction_registry();
 
@@ -4551,6 +4587,27 @@ impl RawGenesisTransaction {
         self.build_and_sign_with_da_proof_policies(genesis_key_pair, None)
     }
 
+    /// Build and sign genesis block with an explicit confidential ZK policy hash.
+    ///
+    /// This does not derive the hash from the manifest. Callers that know the
+    /// runtime ZK policy must compute it before signing, so the signed genesis
+    /// header commits to the same policy that validators will enforce.
+    ///
+    /// # Errors
+    ///
+    /// Fails if `RawGenesisTransaction::parse` fails.
+    pub fn build_and_sign_with_confidential_policy_hash(
+        self,
+        genesis_key_pair: &KeyPair,
+        zk_policy_hash: Option<[u8; 32]>,
+    ) -> Result<GenesisBlock> {
+        self.build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
+            genesis_key_pair,
+            None,
+            zk_policy_hash,
+        )
+    }
+
     /// Build and sign genesis block, overriding the embedded DA proof policies.
     ///
     /// # Errors
@@ -4560,6 +4617,24 @@ impl RawGenesisTransaction {
         self,
         genesis_key_pair: &KeyPair,
         da_proof_policies: Option<DaProofPolicyBundle>,
+    ) -> Result<GenesisBlock> {
+        self.build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
+            genesis_key_pair,
+            da_proof_policies,
+            None,
+        )
+    }
+
+    /// Build and sign genesis block, overriding DA proof policies and the confidential ZK policy hash.
+    ///
+    /// # Errors
+    ///
+    /// Fails if `RawGenesisTransaction::parse` fails.
+    pub fn build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
+        self,
+        genesis_key_pair: &KeyPair,
+        da_proof_policies: Option<DaProofPolicyBundle>,
+        zk_policy_hash: Option<[u8; 32]>,
     ) -> Result<GenesisBlock> {
         let chain = self.chain.clone();
         let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
@@ -4593,7 +4668,7 @@ impl RawGenesisTransaction {
             transactions.push(transaction);
         }
         let confidential_digest =
-            ConfidentialFeatureDigest::new(None, None, None, Some(RULES_VERSION), None);
+            ConfidentialFeatureDigest::new(None, None, None, Some(RULES_VERSION), zk_policy_hash);
         let block = SignedBlock::genesis_with_da_proof_policies(
             transactions,
             genesis_key_pair.private_key(),
@@ -5210,6 +5285,25 @@ impl GenesisBuilder {
         let da_proof_policies = self.da_proof_policies.clone();
         self.build_raw()
             .build_and_sign_with_da_proof_policies(genesis_key_pair, da_proof_policies)
+    }
+
+    /// Finish building, sign, and produce a [`GenesisBlock`] with a confidential ZK policy hash.
+    ///
+    /// # Errors
+    ///
+    /// Fails if internal [`RawGenesisTransaction::build_and_sign_with_confidential_policy_hash`] fails.
+    pub fn build_and_sign_with_confidential_policy_hash(
+        self,
+        genesis_key_pair: &KeyPair,
+        zk_policy_hash: Option<[u8; 32]>,
+    ) -> Result<GenesisBlock> {
+        let da_proof_policies = self.da_proof_policies.clone();
+        self.build_raw()
+            .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
+                genesis_key_pair,
+                da_proof_policies,
+                zk_policy_hash,
+            )
     }
 
     /// Finish building and produce a [`RawGenesisTransaction`].

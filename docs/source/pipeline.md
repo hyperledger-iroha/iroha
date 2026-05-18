@@ -123,6 +123,7 @@ Determinism:
 
 - `kura` persists committed blocks. Each block contains all transactions, signatures, and metadata required to reconstruct state.
 - `state` maintains the in‑memory canonical view and provides `StateBlock` overlays for simulation/validation. Commit applies the overlay atomically.
+- After a successful WSV commit, `kura` writes a Norito commit manifest for the height. The manifest ties the durable block hash to the committed in‑memory WSV checkpoint hash and, when available, the execution witness roots and commit QC hash. When a checkpoint sidecar is present, it must match the manifest checkpoint hash. On startup, Kura validates any manifest sidecars it finds, rejects manifest/block or manifest/checkpoint mismatches, and prunes only sidecars above the durable block tip. Missing manifests are treated as absent verification metadata; they do not truncate an otherwise intact block log.
 - Indexes for queries (e.g., assets by account) are updated during application to serve consistent results.
 
 ## Error Paths & Retries
@@ -209,6 +210,15 @@ Operator access (Torii)
   deferral counters it reports the number of transactions (`tx_vertices`),
   intra-lane conflict edges (`tx_edges`), and overlay statistics (count,
   instruction total, byte total) for the most recently validated block.
+- Detached apply status now separates prepared, merged, and sequential fallback
+  counts. Fallbacks also carry reason counters for fee postprocessing,
+  user-provided executors, durable contract state, unsupported detached
+  instructions, rejected detached evaluation, and overlay build errors. The
+  same aggregate reasons are exported through
+  `pipeline_detached_fallback_reason{reason=...}` telemetry.
+- IVM dynamic access scheduling uses the overlay prepass output when available:
+  the VM run that builds the overlay can also capture the host state access log,
+  avoiding a separate dynamic access VM run before DAG construction.
 - Each lane snapshot carries `dataspace_id`/`dataspace_alias` and the lane’s
   `storage_profile` (`full_replica`, `commitment_only`, `split_replica`) so dashboards
   can correlate scheduler data with storage/backlog metrics.

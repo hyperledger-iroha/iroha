@@ -2777,6 +2777,7 @@ mod tests {
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
         };
         let envelope =
             LaneRelayEnvelope::new(header, None, None, commitment, 0).expect("relay envelope");
@@ -9273,6 +9274,7 @@ mod tests {
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
         };
         let envelope =
             LaneRelayEnvelope::new(header, None, None, commitment, 0).expect("relay envelope");
@@ -10958,6 +10960,16 @@ fn block_sync_update_evidence_hash(update: &message::BlockSyncUpdate) -> CryptoH
     CryptoHash::new(&buf)
 }
 
+fn block_sync_update_dedup_key(update: &message::BlockSyncUpdate) -> BlockPayloadDedupKey {
+    let header = update.block.header();
+    BlockPayloadDedupKey::BlockSyncUpdate {
+        height: header.height().get(),
+        view: header.view_change_index(),
+        block_hash: update.block.hash(),
+        evidence_hash: block_sync_update_evidence_hash(update),
+    }
+}
+
 fn block_body_response_evidence_hash(response: &message::BlockBodyResponse) -> CryptoHash {
     let mut buf = Vec::new();
     match &response.body {
@@ -12010,17 +12022,17 @@ impl SumeragiHandle {
                 )
             }
             BlockMessage::BlockSyncUpdate(update) => {
-                let header = update.block.header();
-                let height = header.height().get();
-                let view = header.view_change_index();
-                let block_hash = update.block.hash();
-                let evidence_hash = block_sync_update_evidence_hash(&update);
-                let duplicate = !self.dedup_block_payload(BlockPayloadDedupKey::BlockSyncUpdate {
+                let dedup_key = block_sync_update_dedup_key(&update);
+                let BlockPayloadDedupKey::BlockSyncUpdate {
                     height,
                     view,
                     block_hash,
-                    evidence_hash,
-                });
+                    ..
+                } = dedup_key
+                else {
+                    unreachable!("block sync dedup helper must return block sync update key");
+                };
+                let duplicate = !self.dedup_block_payload(dedup_key);
                 if duplicate {
                     iroha_logger::debug!(
                         height,

@@ -368,26 +368,24 @@ fn order_snapshot(order: &ReplicationOrderRecord) -> json::Map {
 fn make_state() -> State {
     let kura = Kura::blank_kura_for_testing();
     let live = LiveQueryStore::start_test();
-    State::new_for_testing(public_pin_fee_world(), kura, live)
+    let gov = iroha_config::parameters::actual::Governance::default();
+    let world = public_pin_fee_world(&gov);
+    State::new_for_testing(world, kura, live)
 }
 
-fn public_pin_fee_world() -> World {
-    let gov = iroha_config::parameters::actual::Governance::default();
+fn public_pin_fee_world(gov: &iroha_config::parameters::actual::Governance) -> World {
     let fee_asset_id = gov.sorafs_pin_fee_asset_id.clone();
     let authority = alice();
     let domains = fee_asset_id
         .try_domain()
         .cloned()
         .map(|domain_id| Domain::new(domain_id).build(&authority))
-        .into_iter()
-        .collect::<Vec<_>>();
-
-    let treasury = gov.sorafs_pin_fee_treasury_account;
+        .into_iter();
     let mut accounts = vec![Account::new(authority.clone()).build(&authority)];
+    let treasury = gov.sorafs_pin_fee_treasury_account.clone();
     if treasury != authority {
         accounts.push(Account::new(treasury).build(&authority));
     }
-
     let definition = AssetDefinition::numeric(fee_asset_id.clone())
         .with_name(
             fee_asset_id
@@ -397,7 +395,7 @@ fn public_pin_fee_world() -> World {
         .build(&authority);
     let asset = Asset::new(
         AssetId::new(fee_asset_id, authority),
-        Numeric::new(10_000_000_000_000_i128, 0),
+        Numeric::new(10_000_000_000_000_u128, 0),
     );
 
     World::with_assets(domains, accounts, [definition], [asset], [])

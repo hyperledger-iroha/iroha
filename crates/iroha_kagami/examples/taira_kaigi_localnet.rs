@@ -371,6 +371,17 @@ fn resolve_da_proof_policies(
     )))
 }
 
+fn resolve_confidential_policy_hash(config_path: Option<&std::path::Path>) -> Result<[u8; 32]> {
+    let Some(config_path) = config_path else {
+        return Ok(iroha_core::state::default_zk_consensus_policy_hash());
+    };
+
+    let config = load_peer_config(config_path)?;
+    Ok(iroha_core::state::compute_zk_consensus_policy_hash(
+        &config.zk,
+    ))
+}
+
 fn ensure_expected_genesis_public_key(
     key_pair: &KeyPair,
     expected_public_key: Option<&str>,
@@ -433,8 +444,13 @@ fn run(args: &Args) -> Result<()> {
         args.expected_genesis_public_key.as_deref(),
     )?;
     let da_proof_policies = resolve_da_proof_policies(args.config.as_deref())?;
+    let confidential_policy_hash = resolve_confidential_policy_hash(args.config.as_deref())?;
     let signed = manifest
-        .build_and_sign_with_da_proof_policies(&genesis_key_pair, da_proof_policies)
+        .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
+            &genesis_key_pair,
+            da_proof_policies,
+            Some(confidential_policy_hash),
+        )
         .wrap_err("failed to sign Kaigi overlay genesis")?;
 
     let framed = signed
@@ -493,6 +509,14 @@ mod tests {
         assert_eq!(
             feedback_key(&public_key).expect("feedback key").to_string(),
             "kaigi_relay_feedback__ea0130B4A704CBEADF686CAECDAF705102C9902CFED8B71016906F6D724D0BB7F04DE540F29585B7FB8B46962FB70D0AD97249"
+        );
+    }
+
+    #[test]
+    fn confidential_policy_hash_defaults_to_runtime_default_without_config() {
+        assert_eq!(
+            resolve_confidential_policy_hash(None).expect("resolve default policy hash"),
+            iroha_core::state::default_zk_consensus_policy_hash(),
         );
     }
 

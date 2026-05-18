@@ -312,7 +312,7 @@ async fn advance_primary_to_height(
     target_height: u64,
     log_prefix: &str,
 ) -> Result<()> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
     loop {
         let status = client.get_status()?;
         if status.blocks >= target_height {

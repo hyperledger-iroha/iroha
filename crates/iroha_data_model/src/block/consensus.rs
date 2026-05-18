@@ -655,6 +655,42 @@ pub struct NexusFeeReceipt {
     pub schedule: NexusFeeScheduleInputs,
 }
 
+/// Per-dataspace native AMX leg committed by the universal coordinator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct NativeAmxLegRecord {
+    /// Dataspace participating in the native AMX group.
+    pub dataspace_id: DataSpaceId,
+    /// Whether the coordinator accepted the prepare phase for this dataspace.
+    pub prepared: bool,
+    /// Whether the coordinator applied the commit phase for this dataspace.
+    pub committed: bool,
+}
+
+/// Versioned native AMX receipt committed by a finalized universal coordinator block.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct NativeAmxReceipt {
+    /// Receipt format version.
+    pub version: u16,
+    /// Source transaction hash/id.
+    pub source_id: [u8; 32],
+    /// Coordinator lane that finalized the transaction.
+    pub lane_id: LaneId,
+    /// Coordinator dataspace that finalized the transaction.
+    pub dataspace_id: DataSpaceId,
+    /// Coordinator block height that finalized the transaction.
+    pub block_height: u64,
+    /// Prepared and committed dataspace legs.
+    pub legs: Vec<NativeAmxLegRecord>,
+}
+
 /// Liquidity profile applied when computing XOR conversions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -740,6 +776,9 @@ pub struct LaneBlockCommitment {
     /// Versioned Nexus fee receipts committed for asynchronous public XOR settlement.
     #[norito(default)]
     pub nexus_fee_receipts: Vec<NexusFeeReceipt>,
+    /// Versioned native AMX receipts committed by universal coordinator execution.
+    #[norito(default)]
+    pub native_amx_receipts: Vec<NativeAmxReceipt>,
 }
 
 impl<'a> norito::core::DecodeFromSlice<'a> for LaneSwapMetadata {
@@ -2706,6 +2745,7 @@ mod tests {
             norito::decode_from_bytes(&bytes).expect("new commitment decodes legacy bytes");
 
         assert!(decoded.nexus_fee_receipts.is_empty());
+        assert!(decoded.native_amx_receipts.is_empty());
     }
 
     #[test]
@@ -2722,9 +2762,50 @@ mod tests {
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: vec![sample_nexus_fee_receipt([0x11; 32])],
+            native_amx_receipts: Vec::new(),
         };
         let mut changed = base.clone();
         changed.nexus_fee_receipts[0].fee_amount = Numeric::new(2, 3);
+
+        assert_ne!(Hash::new(base.encode()), Hash::new(changed.encode()));
+    }
+
+    #[test]
+    fn native_amx_receipts_change_lane_block_commitment_hash_inputs() {
+        let base = LaneBlockCommitment {
+            block_height: 42,
+            lane_id: LaneId::new(0),
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            tx_count: 1,
+            total_local_micro: 0,
+            total_xor_due_micro: 0,
+            total_xor_after_haircut_micro: 0,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: vec![NativeAmxReceipt {
+                version: 1,
+                source_id: [0xAB; 32],
+                lane_id: LaneId::new(0),
+                dataspace_id: DataSpaceId::UNIVERSAL,
+                block_height: 42,
+                legs: vec![
+                    NativeAmxLegRecord {
+                        dataspace_id: DataSpaceId::new(7),
+                        prepared: true,
+                        committed: true,
+                    },
+                    NativeAmxLegRecord {
+                        dataspace_id: DataSpaceId::new(8),
+                        prepared: true,
+                        committed: true,
+                    },
+                ],
+            }],
+        };
+        let mut changed = base.clone();
+        changed.native_amx_receipts[0].legs[1].committed = false;
 
         assert_ne!(Hash::new(base.encode()), Hash::new(changed.encode()));
     }

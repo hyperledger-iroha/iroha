@@ -20,6 +20,35 @@ use crate::{
     },
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CountMode {
+    Bounded,
+    Exact,
+}
+
+impl CountMode {
+    fn from_raw(raw: Option<&str>) -> Self {
+        match raw {
+            Some("exact") => Self::Exact,
+            Some("bounded") | None => Self::Bounded,
+            Some(other) => {
+                iroha_logger::warn!(
+                    count_mode = other,
+                    "unknown generic query count_mode; using bounded"
+                );
+                Self::Bounded
+            }
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Bounded => "bounded",
+            Self::Exact => "exact",
+        }
+    }
+}
+
 /// Stable resource identifier for account inventory rows.
 pub(crate) const RESOURCE_ACCOUNTS: &str = "accounts";
 /// Stable resource identifier for account transaction rows.
@@ -323,6 +352,8 @@ where
             .map_or(true, |expr| evaluate_filter(expr, row))
     });
 
+    let count_mode = CountMode::from_raw(envelope.count_mode.as_deref());
+
     if let Some(aggregate) = envelope.aggregate.as_ref() {
         return execute_aggregate_mode(
             resource,
@@ -333,6 +364,7 @@ where
             envelope.pagination.offset,
             limit_cap,
             snapshot,
+            count_mode,
         );
     }
 
@@ -340,19 +372,21 @@ where
         .select
         .as_ref()
         .ok_or_else(|| validation_error("select or aggregate is required for generic mode"))?;
-    let (page, total) = collect_sorted_page(
+    let page = collect_sorted_page(
         filtered,
         resource,
         &envelope.sort,
         envelope.pagination.limit,
         envelope.pagination.offset,
         limit_cap,
+        count_mode,
     );
     let items = page
+        .items
         .into_iter()
         .map(|row| project_row(&row, select))
         .collect::<Vec<_>>();
-    build_common_response(items, total, snapshot)
+    build_common_response(items, page.total, page.has_more, count_mode, snapshot)
 }
 
 fn execute_aggregate_mode<I>(
@@ -364,6 +398,7 @@ fn execute_aggregate_mode<I>(
     offset: u64,
     limit_cap: u64,
     snapshot: QuerySnapshot,
+    count_mode: CountMode,
 ) -> Result<Response>
 where
     I: IntoIterator<Item = Map>,
@@ -373,13 +408,15 @@ where
     if let Some(having) = aggregate.having.as_ref() {
         rows.retain(|row| evaluate_filter(having, row));
     }
-    let (items, total) = collect_sorted_page(rows, resource, sort, limit, offset, limit_cap);
-    build_common_response(items, total, snapshot)
+    let page = collect_sorted_page(rows, resource, sort, limit, offset, limit_cap, count_mode);
+    build_common_response(page.items, page.total, page.has_more, count_mode, snapshot)
 }
 
 fn build_common_response(
     items: Vec<Map>,
-    total: usize,
+    total: Option<usize>,
+    has_more: bool,
+    count_mode: CountMode,
     snapshot: QuerySnapshot,
 ) -> Result<Response> {
     let mut top = Map::new();
@@ -387,7 +424,11 @@ fn build_common_response(
         "items".into(),
         Value::Array(items.into_iter().map(Value::Object).collect()),
     );
-    top.insert("total".into(), Value::from(total as u64));
+    if let Some(total) = total {
+        top.insert("total".into(), Value::from(total as u64));
+    }
+    top.insert("has_more".into(), Value::from(has_more));
+    top.insert("count_mode".into(), Value::from(count_mode.label()));
     top.insert(
         "indexed_height".into(),
         Value::from(snapshot.indexed_height),
@@ -985,6 +1026,12 @@ impl Ord for SortedPageEntry {
     }
 }
 
+struct PageResult {
+    items: Vec<Map>,
+    total: Option<usize>,
+    has_more: bool,
+}
+
 fn collect_sorted_page<I>(
     rows: I,
     resource: &QueryResourceSpec,
@@ -992,7 +1039,8 @@ fn collect_sorted_page<I>(
     limit: Option<u64>,
     offset: u64,
     cap: u64,
-) -> (Vec<Map>, usize)
+    count_mode: CountMode,
+) -> PageResult
 where
     I: IntoIterator<Item = Map>,
 {
@@ -1000,14 +1048,19 @@ where
     let effective_limit = limit.unwrap_or(cap).min(cap);
     let skip = usize::try_from(offset).unwrap_or(usize::MAX);
     let take = usize::try_from(effective_limit).unwrap_or(usize::MAX);
-    let page_cap = skip.saturating_add(take);
+    let page_cap = skip.saturating_add(take).saturating_add(1);
 
-    let mut total = 0usize;
     if take == 0 {
-        for _ in rows {
-            total = total.saturating_add(1);
-        }
-        return (Vec::new(), total);
+        let total = match count_mode {
+            CountMode::Exact => rows.into_iter().count(),
+            CountMode::Bounded => usize::from(rows.into_iter().next().is_some()),
+        };
+        let has_more = total > skip;
+        return PageResult {
+            items: Vec::new(),
+            total: (count_mode == CountMode::Exact).then_some(total),
+            has_more,
+        };
     }
 
     let mut seq = 0usize;
@@ -1022,7 +1075,6 @@ where
             row,
         };
         seq = seq.wrapping_add(1);
-        total = total.saturating_add(1);
         if bounded {
             heap.push(entry);
             if heap.len() > page_cap {
@@ -1042,13 +1094,19 @@ where
             ordering
         }
     });
+    let total = seq;
+    let has_more = total.saturating_sub(skip) > take;
     let page = entries
         .into_iter()
         .skip(skip)
         .take(take)
         .map(|entry| entry.row)
         .collect();
-    (page, total)
+    PageResult {
+        items: page,
+        total: (count_mode == CountMode::Exact).then_some(total),
+        has_more,
+    }
 }
 
 fn project_row(row: &Map, select: &crate::filter::Selector) -> Map {
@@ -1411,7 +1469,9 @@ mod tests {
         )
         .expect("sorted query response");
         let payload = response_json(response).await;
-        assert_eq!(payload["total"].as_u64(), Some(4));
+        assert!(payload.get("total").is_none());
+        assert_eq!(payload["has_more"].as_bool(), Some(true));
+        assert_eq!(payload["count_mode"].as_str(), Some("bounded"));
         assert_eq!(payload["items"][0]["id"].as_str(), Some("charlie"));
         assert_eq!(payload["items"][1]["id"].as_str(), Some("bravo"));
     }
@@ -1507,7 +1567,9 @@ mod tests {
         )
         .expect("aggregate response");
         let payload = response_json(response).await;
-        assert_eq!(payload["total"].as_u64(), Some(1));
+        assert!(payload.get("total").is_none());
+        assert_eq!(payload["has_more"].as_bool(), Some(false));
+        assert_eq!(payload["count_mode"].as_str(), Some("bounded"));
         assert_eq!(
             payload["items"][0]["primary_alias_domain"].as_str(),
             Some("hbl.paynet")

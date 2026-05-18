@@ -59,6 +59,11 @@ Per-lane summary stored with every block:
 - Totals: `total_local_micro`, `total_xor_due_micro`, `total_xor_after_haircut_micro`, `total_xor_variance_micro`.
 - Optional `swap_metadata`.
 - Ordered `receipts` vector.
+- Ordered `nexus_fee_receipts` vector for lane-relay-burn XOR gas settlement.
+- Ordered `native_amx_receipts` vector. Each entry records the source
+  transaction id, universal coordinator lane/dataspace/height, and the
+  per-dataspace legs that prepared and committed for a native cross-dataspace
+  transaction.
 
 These structs already derive `NoritoSerialize`/`NoritoDeserialize`, so they can be streamed on-chain, through Torii, or via fixtures without schema drift.
 
@@ -99,7 +104,7 @@ applied (`applied`) or missing/expired/insufficient/disabled during validation.
    The settlement façade (`SettlementEngine`, `SettlementAccumulator`) records a `PendingSettlement` per transaction. Each record stores the TWAP inputs, liquidity profile, timestamps, and XOR amounts so it can later become a `LaneSettlementReceipt`.
 
 2. **Seal receipts into the block.**  
-   During `BlockBuilder::finalize`, each `(lane_id, dataspace_id)` pair drains its accumulator. The builder instantiates a `LaneBlockCommitment`, copies the receipt list, accumulates totals, and stores optional swap metadata (via `SwapEvidence`). The resulting vector is pushed to the Sumeragi status slot (`crates/iroha_core/src/sumeragi/status.rs`) so Torii and telemetry can expose it immediately.
+   During `BlockBuilder::finalize`, each `(lane_id, dataspace_id)` pair drains its accumulator. The builder instantiates a `LaneBlockCommitment`, copies the receipt list, accumulates totals, stores optional swap metadata (via `SwapEvidence`), and appends native AMX prepare/commit receipts for universal-coordinator transactions that touch multiple non-universal dataspaces. The resulting vector is pushed to the Sumeragi status slot (`crates/iroha_core/src/sumeragi/status.rs`) so Torii and telemetry can expose it immediately.
 
 3. **Relay packaging & DA attestations.**  
    `LaneRelayBroadcaster` now consumes the `LaneRelayEnvelope`s emitted during block sealing and gossips them as high-priority `NetworkMessage::LaneRelay` frames. Envelopes are verified, de-duplicated by `(lane_id,dataspace_id,height,settlement_hash)`, and persisted in the Sumeragi status snapshot (`/v1/sumeragi/status`) for operators and auditors. The broadcaster will continue to evolve to attach DA artefacts (RBC chunk proofs, Norito headers, SoraFS/Object manifests) and feed the merge ring without head-of-line blocking.

@@ -268,6 +268,7 @@ pub(super) enum CommitOutcome {
         pipeline_events: Vec<PipelineEventBox>,
         state_events: Vec<EventBox>,
         post_apply_snapshot: CommitPostApplySnapshot,
+        post_commit_persistence_error: Option<String>,
     },
 }
 
@@ -679,7 +680,7 @@ pub(super) fn execute_commit_work(
         Ok((committed_block, mut state_block, exec_witness, fastpq_witness_context)) => {
             let persist_start = Instant::now();
             let pipeline_events = pipeline_events;
-            let _validated_commit_artifact = validated_commit_artifact.or_else(|| {
+            let validated_commit_artifact_for_manifest = validated_commit_artifact.or_else(|| {
                 exec_witness
                     .as_ref()
                     .map(|witness| ValidatedCommitArtifact {
@@ -750,6 +751,7 @@ pub(super) fn execute_commit_work(
             }
             timings.state_commit_ms = Some(to_ms(state_commit_start.elapsed()));
             log_stage_end("state_commit", state_commit_start);
+            let mut post_commit_persistence_error = None;
             let wsv_checkpoint_hash = crate::snapshot::canonical_state_snapshot_hash(state);
             if std::env::var_os("IROHA_DEBUG_WSV_COMPONENTS").is_some() {
                 let components = crate::snapshot::canonical_state_snapshot_component_hashes(state);
@@ -766,12 +768,45 @@ pub(super) fn execute_commit_work(
             if let Err(err) =
                 kura.store_wsv_checkpoint(block_height, block_hash, wsv_checkpoint_hash)
             {
+                post_commit_persistence_error = Some(format!("WSV checkpoint: {err}"));
                 error!(
                     ?err,
                     height = block_height,
                     block = %block_hash,
                     checkpoint = %wsv_checkpoint_hash,
                     "failed to persist Kura WSV checkpoint after state commit"
+                );
+            }
+            let (parent_state_root, post_state_root) = validated_commit_artifact_for_manifest
+                .map(|artifact| {
+                    (
+                        Some(artifact.parent_state_root),
+                        Some(artifact.post_state_root),
+                    )
+                })
+                .unwrap_or((None, None));
+            let commit_qc_hash = commit_qc
+                .as_ref()
+                .map(|qc| iroha_crypto::Hash::new(qc.encode()));
+            let commit_manifest = crate::kura::CommitManifest::new(
+                block_height,
+                block_hash,
+                parent_state_root,
+                post_state_root,
+                wsv_checkpoint_hash,
+                commit_qc_hash,
+            );
+            if let Err(err) = kura.store_commit_manifest(commit_manifest) {
+                post_commit_persistence_error = Some(match post_commit_persistence_error.take() {
+                    Some(previous) => format!("{previous}; commit manifest: {err}"),
+                    None => format!("commit manifest: {err}"),
+                });
+                error!(
+                    ?err,
+                    height = block_height,
+                    block = %block_hash,
+                    checkpoint = %wsv_checkpoint_hash,
+                    "failed to persist Kura commit manifest after state commit"
                 );
             }
             crate::sumeragi::status::record_round_gap_state_commit(
@@ -788,6 +823,7 @@ pub(super) fn execute_commit_work(
                     pipeline_events,
                     state_events,
                     post_apply_snapshot,
+                    post_commit_persistence_error,
                 },
                 timings,
             )
@@ -1733,6 +1769,7 @@ impl Actor {
                 pipeline_events,
                 state_events,
                 post_apply_snapshot,
+                post_commit_persistence_error,
             } => {
                 let pending = pending_opt.take().expect("pending present");
                 self.note_view_change_from_block(pending_height, pending_view);
@@ -1747,6 +1784,20 @@ impl Actor {
                     pending_view,
                     block_hash,
                 );
+                if let Some(error) = post_commit_persistence_error {
+                    crate::sumeragi::status::record_kura_post_commit_sidecar_failure(
+                        pending_height,
+                        pending_view,
+                        block_hash,
+                    );
+                    error!(
+                        height = pending_height,
+                        view = pending_view,
+                        block = %block_hash,
+                        error,
+                        "post-commit Kura durability sidecar persistence failed after state advanced"
+                    );
+                }
                 pending_previously_marked_kura_persisted = pending.kura_persisted;
                 let (chain_order_hash, rechain_seq) =
                     self.vnext_chain_order_binding_for(pending_height, pending_view);
@@ -8560,6 +8611,32 @@ mod tests {
         SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None)
     }
 
+    fn genesis_log_block_for_state(
+        state: &State,
+        chain_id: &ChainId,
+        genesis_account_id: &AccountId,
+        genesis_key: &KeyPair,
+        message: &str,
+    ) -> SignedBlock {
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_secs(0));
+        let tx = TransactionBuilder::new_with_time_source(
+            chain_id.clone(),
+            genesis_account_id.clone(),
+            &time_source,
+        )
+        .with_instructions([Log::new(Level::DEBUG, message.to_owned())])
+        .sign(genesis_key.private_key());
+        let view = state.view();
+        let digest = crate::state::compute_confidential_feature_digest(view.world(), &view.zk, 1);
+        let confidential_features = (!digest.is_empty()).then_some(digest);
+        SignedBlock::genesis(
+            vec![tx],
+            genesis_key.private_key(),
+            confidential_features,
+            None,
+        )
+    }
+
     fn single_peer_topology() -> Vec<PeerId> {
         let peer_key = KeyPair::random();
         vec![PeerId::new(peer_key.public_key().clone())]
@@ -9033,6 +9110,12 @@ mod tests {
         assert!(timings.state_commit_ms.is_some());
         assert_eq!(state.view().height(), 1);
         assert_eq!(kura.blocks_count(), 1);
+        assert!(
+            kura.commit_manifest(1)
+                .expect("read commit manifest")
+                .is_some(),
+            "successful commit should persist a Kura commit manifest"
+        );
         let latest = state.view().latest_block().expect("latest committed block");
         assert_eq!(latest.hash(), committed_block.as_ref().hash());
     }
@@ -9078,6 +9161,76 @@ mod tests {
         assert_eq!(
             lengths_after, lengths_before,
             "retrying an already durable block must not append duplicate bytes"
+        );
+    }
+
+    #[test]
+    fn execute_commit_work_treats_post_commit_sidecar_failures_as_nonfatal() {
+        let fixture = commit_fixture_with_kura(Kura::blank_kura_for_testing());
+        let block = genesis_log_block_for_state(
+            &fixture.state,
+            &fixture.chain_id,
+            &fixture.genesis_account_id,
+            &fixture.genesis_key,
+            "post-commit sidecar failure",
+        );
+        let block_hash = block.hash();
+        fixture.kura.fail_next_wsv_checkpoint_write_for_tests();
+        fixture.kura.fail_next_commit_manifest_write_for_tests();
+
+        let (outcome, timings) = execute_commit_work_on_sumeragi_thread(
+            &fixture.state,
+            fixture.kura.as_ref(),
+            &fixture.chain_id,
+            &fixture.genesis_account_id,
+            commit_work(6, block, single_peer_topology()),
+        );
+
+        let CommitOutcome::Success {
+            post_commit_persistence_error,
+            ..
+        } = &outcome
+        else {
+            panic!(
+                "post-commit sidecar failures must not roll back the committed block: {outcome:?}"
+            );
+        };
+        let error = post_commit_persistence_error
+            .as_deref()
+            .expect("sidecar failure should be reported");
+        assert!(
+            error.contains("WSV checkpoint"),
+            "checkpoint sidecar failure must be surfaced: {error}"
+        );
+        assert!(
+            error.contains("commit manifest"),
+            "commit-manifest sidecar failure must be surfaced: {error}"
+        );
+        assert!(timings.kura_store_ms.is_some());
+        assert!(timings.state_commit_ms.is_some());
+        assert_eq!(fixture.state.view().height(), 1);
+        assert_eq!(fixture.kura.blocks_count(), 1);
+        assert_eq!(
+            fixture
+                .kura
+                .get_durable_block_hash(std::num::NonZeroUsize::new(1).expect("non-zero height")),
+            Some(block_hash)
+        );
+        assert!(
+            fixture
+                .kura
+                .wsv_checkpoint(1)
+                .expect("read checkpoint")
+                .is_none(),
+            "injected checkpoint failure should leave only the canonical block durable"
+        );
+        assert!(
+            fixture
+                .kura
+                .commit_manifest(1)
+                .expect("read manifest")
+                .is_none(),
+            "injected manifest failure should leave only the canonical block durable"
         );
     }
 

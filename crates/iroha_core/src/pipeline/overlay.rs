@@ -54,6 +54,7 @@ use iroha_data_model::{
     },
 };
 use iroha_primitives::json::Json;
+use ivm::host::IVMHost;
 use ivm::{VMError as IvmError, analysis::ProgramAnalysisError};
 use mv::storage::StorageReadOnly;
 use norito::{codec::Encode as NoritoEncode, streaming::CapabilityFlags};
@@ -315,6 +316,36 @@ fn apply_contract_call_execution_context(
         })?;
     }
     Ok(())
+}
+
+fn begin_overlay_access_log<QS>(
+    host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<QS>,
+    capture_access_log: bool,
+) -> Result<(), OverlayBuildError>
+where
+    QS: crate::smartcontracts::ivm::host::QueryStateAccess + Default,
+{
+    if capture_access_log {
+        host.begin_tx(&ivm::parallel::StateAccessSet::default())
+            .map_err(OverlayBuildError::IvmRun)?;
+    }
+    Ok(())
+}
+
+fn finish_overlay_access_log<QS>(
+    host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<QS>,
+    capture_access_log: bool,
+) -> Result<Option<ivm::host::AccessLog>, OverlayBuildError>
+where
+    QS: crate::smartcontracts::ivm::host::QueryStateAccess + Default,
+{
+    if capture_access_log && host.access_logging_supported() {
+        host.finish_tx()
+            .map(Some)
+            .map_err(OverlayBuildError::IvmRun)
+    } else {
+        Ok(None)
+    }
 }
 
 fn default_pipeline_config() -> iroha_config::parameters::actual::Pipeline {
@@ -822,6 +853,24 @@ pub struct TxOverlay {
     ivm_gas_used: Option<u64>,
     durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
     byte_size: OnceLock<usize>,
+}
+
+/// Overlay plus optional host access log captured during the same VM run.
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedTxOverlay {
+    /// Built transaction overlay.
+    pub(crate) overlay: TxOverlay,
+    /// Dynamic state access log captured while building the overlay.
+    pub(crate) access_log: Option<ivm::host::AccessLog>,
+}
+
+impl PreparedTxOverlay {
+    fn new(overlay: TxOverlay, access_log: Option<ivm::host::AccessLog>) -> Self {
+        Self {
+            overlay,
+            access_log,
+        }
+    }
 }
 
 impl TxOverlay {
@@ -1488,14 +1537,12 @@ pub fn build_overlay_for_transaction_with_accounts(
     }
 }
 
-/// Build an overlay for a transaction using a pre-captured accounts snapshot, and
-/// optionally emit a ZK-lane verification task with the given block header.
-/// Build an overlay for a signed transaction, with ZK mode hint and block header context.
+/// Build an overlay and optionally capture dynamic state access in the same VM run.
 ///
 /// # Errors
 /// Returns an error if the IVM header fails policy checks or running the VM fails.
 #[allow(clippy::too_many_lines)]
-pub(crate) fn build_overlay_for_transaction_with_accounts_zk<R>(
+pub(crate) fn build_prepared_overlay_for_transaction_with_accounts_zk<R>(
     tx: &SignedTransaction,
     accounts: Arc<Vec<AccountId>>,
     state_ro: &R,
@@ -1503,14 +1550,18 @@ pub(crate) fn build_overlay_for_transaction_with_accounts_zk<R>(
     header: &BlockHeader,
     streaming_meta: StreamingOverlayMetadata,
     ivm_cache: &mut IvmCache,
-) -> Result<TxOverlay, OverlayBuildError>
+    capture_access_log: bool,
+) -> Result<PreparedTxOverlay, OverlayBuildError>
 where
     R: StateReadOnly + QueryStateSource,
 {
     match tx.instructions() {
         Executable::Instructions(batch) => {
             let instrs: Vec<InstructionBox> = batch.iter().cloned().collect();
-            Ok(TxOverlay::from_instructions(instrs))
+            Ok(PreparedTxOverlay::new(
+                TxOverlay::from_instructions(instrs),
+                None,
+            ))
         }
         Executable::ContractCall(call) => {
             #[cfg(feature = "telemetry")]
@@ -1592,6 +1643,10 @@ where
             host.set_chain_id(state_ro.chain_id());
             host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
                 .map_err(OverlayBuildError::IvmRun)?;
+            if capture_access_log {
+                host = host.with_access_logging();
+            }
+            begin_overlay_access_log(&mut host, capture_access_log)?;
             vm.set_gas_limit(tx_gas_limit);
             apply_contract_call_execution_context(&mut vm, Some(&contract_call_context))?;
             vm.set_zk_trace_enabled(false);
@@ -1603,6 +1658,7 @@ where
             #[cfg(feature = "telemetry")]
             observe_overlay_stage_ms(state_ro, "overlay_vm_run", vm_run_start);
             let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
+            let access_log = finish_overlay_access_log(&mut host, capture_access_log)?;
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
             let negotiated_caps_snapshot = host.negotiated_caps_snapshot().copied();
             let queued = host.drain_queued_instructions_with_contract_runtime_context(
@@ -1634,11 +1690,9 @@ where
                     let _ = crate::pipeline::zk_lane::try_submit(job);
                 }
             }
-            Ok(tx_overlay_from_host_queued(
-                state_ro,
-                queued,
-                ivm_gas_used,
-                durable_state_overlay,
+            Ok(PreparedTxOverlay::new(
+                tx_overlay_from_host_queued(state_ro, queued, ivm_gas_used, durable_state_overlay),
+                access_log,
             ))
         }
         Executable::Ivm(bytecode) => {
@@ -1706,6 +1760,10 @@ where
             host.set_chain_id(state_ro.chain_id());
             host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
                 .map_err(OverlayBuildError::IvmRun)?;
+            if capture_access_log {
+                host = host.with_access_logging();
+            }
+            begin_overlay_access_log(&mut host, capture_access_log)?;
             vm.set_gas_limit(tx_gas_limit);
             apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
             vm.set_zk_trace_enabled(false);
@@ -1717,6 +1775,7 @@ where
             #[cfg(feature = "telemetry")]
             observe_overlay_stage_ms(state_ro, "overlay_vm_run", vm_run_start);
             let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
+            let access_log = finish_overlay_access_log(&mut host, capture_access_log)?;
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
             let negotiated_caps_snapshot = host.negotiated_caps_snapshot().copied();
             let mut queued = host.drain_instructions();
@@ -1754,10 +1813,9 @@ where
                 &mut queued,
             )?;
             prune_redundant_contract_ops(state_ro, &mut queued);
-            Ok(TxOverlay::from_ivm_execution(
-                queued,
-                ivm_gas_used,
-                durable_state_overlay,
+            Ok(PreparedTxOverlay::new(
+                TxOverlay::from_ivm_execution(queued, ivm_gas_used, durable_state_overlay),
+                access_log,
             ))
         }
         Executable::IvmProved(proved) => {
@@ -1802,7 +1860,10 @@ where
 
             let mut instrs: Vec<InstructionBox> = proved.overlay.iter().cloned().collect();
             prune_redundant_contract_ops(state_ro, &mut instrs);
-            Ok(TxOverlay::from_instructions(instrs))
+            Ok(PreparedTxOverlay::new(
+                TxOverlay::from_instructions(instrs),
+                None,
+            ))
         }
     }
 }

@@ -81,9 +81,9 @@ Endpoints:
 - `DELETE /v1/zk/ivm/prove/{job_id}` — remove a job from the in-memory job cache.
 
 Backend support:
-- `/v1/zk/ivm/derive` accepts `vk_ref.backend` `halo2/ipa` and `stark/fri-v1` (including `stark/fri-v1/...` variants) (both require an `ivm-execution-v1` circuit/schema).
-- `/v1/zk/ivm/prove` accepts `vk_ref.backend` `halo2/ipa` and `stark/fri-v1` (including `stark/fri-v1/...` variants) when the node is built with `zk-stark`.
-- For verification flows that use `stark/fri-v1` wrappers, `OpenVerifyEnvelope.public_inputs` carries schema-descriptor bytes, while concrete public input values are carried in `StarkFriOpenProofV1.public_inputs`.
+- `/v1/zk/ivm/derive` accepts `vk_ref.backend` `halo2/ipa` and `stark/fri` (including `stark/fri/...` variants) (both require an `ivm-execution-v1` circuit/schema).
+- `/v1/zk/ivm/prove` accepts `vk_ref.backend` `halo2/ipa` and `stark/fri` (including `stark/fri/...` variants) when the node is built with `zk-stark`.
+- For verification flows that use `stark/fri` wrappers, `OpenVerifyEnvelope.public_inputs` carries schema-descriptor bytes, while concrete public input values are carried in `StarkFriOpenProofV1.public_inputs`.
 
 Job status values:
 - `pending` — queued (may still be waiting for an inflight slot).
@@ -103,7 +103,7 @@ Key resolution:
 - For `halo2/ipa`, the proving key is loaded from the same directory using `<backend>__<name>.pk`
   naming. The `.pk` file must contain the Halo2 `ProvingKey` serialization in
   `SerdeFormat::Processed`, and it must match the resolved verifying key.
-- The STARK path (`stark/fri-v1`) does not require a separate `.pk` artifact.
+- The STARK path (`stark/fri`) does not require a separate `.pk` artifact.
 
 Resource controls:
 - Job processing is bounded by `torii.zk_ivm_prove_max_inflight` (concurrent jobs) and
@@ -120,7 +120,7 @@ Privacy:
 Execution semantics:
 - `/v1/zk/ivm/prove` executes bytecode from the request (`authority`, `metadata`, `bytecode`) and
   derives the authoritative `IvmProved` payload before generating `ivm-execution-v1` proofs for the
-  selected backend (`halo2/ipa` or `stark/fri-v1`).
+  selected backend (`halo2/ipa` or `stark/fri`).
 - Request body: `{ vk_ref: { backend, name }, authority, metadata, bytecode, proved? }`.
   The optional `proved` field is validated against the node-derived execution payload and rejected on mismatch.
 - Nodes may still deterministically replay bytecode during admission as an extra safety check.
@@ -142,7 +142,7 @@ Verification rules:
 - `vk_ref` is resolved via the WSV verifying‑key registry. When a registry entry omits inline key bytes, Torii loads the key bytes from `torii.zk_prover_keys_dir` (see storage layout below).
 - `vk_commitment` is validated against the computed VK hash when present.
 - Backends and circuits are allowlisted via `torii.zk_prover_allowed_backends` and `torii.zk_prover_allowed_circuits` (prefix match).
-- Supported backends currently include `halo2/ipa` and other `halo2/…` variants built into the node. The `stark/fri-v1` family is supported when built with feature `zk-stark` and enabled via config (`zk.stark.enabled=true`). `groth16/…` remains unsupported.
+- Supported backends currently include `halo2/ipa` and other `halo2/…` variants built into the node. The `stark/fri` family is supported when built with feature `zk-stark` and enabled via config (`zk.stark.enabled=true`). `groth16/…` remains unsupported.
 
 Endpoints:
 - `GET /v1/zk/prover/reports` — list reports as a JSON array.

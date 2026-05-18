@@ -7878,6 +7878,7 @@ fn lane_relay_envelope_fixture_py() -> PyResult<(Vec<u8>, Vec<u8>)> {
         swap_metadata: None,
         receipts: Vec::new(),
         nexus_fee_receipts: Vec::new(),
+        native_amx_receipts: Vec::new(),
     };
     let mut header = BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero height"),

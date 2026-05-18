@@ -1,6 +1,6 @@
 //! Module for cursor-based pagination functionality.
 
-use std::{fmt::Debug, num::NonZeroU64};
+use std::{fmt::Debug, iter::Peekable, num::NonZeroU64};
 
 use iroha_data_model::{
     prelude::SelectorTuple,
@@ -50,7 +50,7 @@ trait BatchedTrait {
         &mut self,
         cursor: u64,
     ) -> Result<(QueryOutputBatchBoxTuple, Option<NonZeroU64>), QueryExecutionFail>;
-    fn remaining(&self) -> u64;
+    fn remaining(&self) -> Option<u64>;
 }
 
 struct BatchedInner<I>
@@ -120,8 +120,72 @@ where
         ))
     }
 
-    fn remaining(&self) -> u64 {
-        self.iter.len() as u64
+    fn remaining(&self) -> Option<u64> {
+        Some(self.iter.len() as u64)
+    }
+}
+
+struct StreamingBatchedInner<I>
+where
+    I: Iterator + Send + Sync,
+    I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync,
+{
+    iter: Peekable<I>,
+    selector: SelectorTuple<I::Item>,
+    batch_size: NonZeroU64,
+    cursor: Option<u64>,
+}
+
+impl<I> BatchedTrait for StreamingBatchedInner<I>
+where
+    I: Iterator + Send + Sync,
+    I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
+    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
+    QueryOutputBatchBox: From<Vec<I::Item>>,
+{
+    fn next_batch(
+        &mut self,
+        cursor: u64,
+    ) -> Result<(QueryOutputBatchBoxTuple, Option<NonZeroU64>), QueryExecutionFail> {
+        let Some(server_cursor) = self.cursor else {
+            return Err(QueryExecutionFail::CursorDone);
+        };
+
+        if cursor != server_cursor {
+            return Err(QueryExecutionFail::CursorMismatch);
+        }
+
+        let mut current_batch_size: usize = 0;
+        let batch: Vec<I::Item> = self
+            .iter
+            .by_ref()
+            .inspect(|_| current_batch_size += 1)
+            .take(
+                self.batch_size
+                    .get()
+                    .try_into()
+                    .expect("`u32` should always fit into `usize`"),
+            )
+            .collect();
+        let batch = evaluate_selector_tuple(batch, &self.selector)?;
+
+        if self.iter.peek().is_some() {
+            let batch_len =
+                u64::try_from(current_batch_size).expect("batch size must fit into u64");
+            self.cursor = Some(cursor.strict_add(batch_len));
+        } else {
+            self.cursor = None;
+        }
+
+        Ok((
+            batch,
+            self.cursor
+                .map(|cursor| NonZeroU64::new(cursor).expect("Cursor is never 0")),
+        ))
+    }
+
+    fn remaining(&self) -> Option<u64> {
+        None
     }
 }
 
@@ -173,6 +237,31 @@ impl ErasedQueryIterator {
         }
     }
 
+    /// Creates an erased query iterator for an iterator that cannot cheaply
+    /// report an exact remaining length.
+    pub(crate) fn new_streaming_with_cursor<I>(
+        iter: I,
+        selector: SelectorTuple<I::Item>,
+        batch_size: NonZeroU64,
+        initial_cursor: u64,
+    ) -> Self
+    where
+        I: Iterator + Send + Sync + 'static,
+        I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
+        <I::Item as HasProjection<SelectorMarker>>::Projection:
+            EvaluateSelector<I::Item> + Send + Sync,
+        QueryOutputBatchBox: From<Vec<I::Item>>,
+    {
+        Self {
+            inner: Box::new(StreamingBatchedInner {
+                iter: iter.peekable(),
+                selector,
+                batch_size,
+                cursor: Some(initial_cursor),
+            }),
+        }
+    }
+
     /// Gets the next batch of results.
     ///
     /// Checks if the cursor matches the server's cursor.
@@ -193,7 +282,7 @@ impl ErasedQueryIterator {
     /// Returns the number of remaining elements in the iterator.
     ///
     /// You should not rely on the reported amount being correct for safety, same as [`ExactSizeIterator::len`].
-    pub fn remaining(&self) -> u64 {
+    pub fn remaining(&self) -> Option<u64> {
         self.inner.remaining()
     }
 }
@@ -247,7 +336,7 @@ mod tests {
             nonzero!(2_u64),
         );
 
-        assert_eq!(it.remaining(), 3);
+        assert_eq!(it.remaining(), Some(3));
 
         // First batch with correct cursor
         let (b1, next) = it.next_batch(0).expect("first batch");
@@ -262,7 +351,7 @@ mod tests {
         let (b2, next2) = it.next_batch(cur).expect("second batch");
         assert_eq!(b2.len(), 1);
         assert!(next2.is_none(), "drained");
-        assert_eq!(it.remaining(), 0);
+        assert_eq!(it.remaining(), Some(0));
 
         // Done path
         let err = it.next_batch(cur).unwrap_err();

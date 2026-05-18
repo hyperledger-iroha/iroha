@@ -694,6 +694,14 @@ impl From<crate::isi::soracloud::RecordSoracloudRuntimeReceipt> for InstructionB
     }
 }
 
+impl From<crate::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt>
+    for InstructionBox
+{
+    fn from(i: crate::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 // Allow direct boxing of runtime upgrade instructions
 impl From<crate::isi::runtime_upgrade::ProposeRuntimeUpgrade> for InstructionBox {
     fn from(i: crate::isi::runtime_upgrade::ProposeRuntimeUpgrade) -> Self {
@@ -3732,9 +3740,10 @@ pub mod prelude {
         soracloud::{
             AdvanceSoracloudRollout, DeploySoracloudService, MutateSoracloudState,
             RecordSoracloudAgentAutonomyExecution, RecordSoracloudDecryptionRequest,
-            RecordSoracloudMailboxMessage, RecordSoracloudRuntimeReceipt,
-            ReportSoracloudServiceLeaseUsage, RollbackSoracloudService, RunSoracloudFheJob,
-            SetSoracloudRuntimeState, UpgradeSoracloudService,
+            RecordSoracloudMailboxMessage, RecordSoracloudPrivateUploadedModelExecutionReceipt,
+            RecordSoracloudRuntimeReceipt, ReportSoracloudServiceLeaseUsage,
+            RollbackSoracloudService, RunSoracloudFheJob, SetSoracloudRuntimeState,
+            UpgradeSoracloudService,
         },
         soradns::{
             AddReleaseSigner, PublishDirectory, RemoveReleaseSigner, RevokeResolver,

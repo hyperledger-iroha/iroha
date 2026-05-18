@@ -1399,6 +1399,12 @@ pub mod torii {
     pub const QUERY_STORE_CAPACITY: NonZeroUsize = nonzero!(128usize);
     /// Per-authority allocation within the query result cache.
     pub const QUERY_STORE_CAPACITY_PER_USER: NonZeroUsize = nonzero!(128usize);
+    /// Maximum concurrent query executions admitted by Torii.
+    pub const QUERY_MAX_INFLIGHT: NonZeroUsize = nonzero!(128usize);
+    /// Maximum concurrent heavy query executions admitted by Torii.
+    pub const QUERY_HEAVY_MAX_INFLIGHT: NonZeroUsize = nonzero!(32usize);
+    /// Maximum time a query waits for execution capacity before Torii rejects it.
+    pub const QUERY_QUEUE_TIMEOUT_MS: u64 = 25;
     // Default per-authority query rate (tokens/sec). Set low but permissive.
     // None disables limiting; Some enables it.
     // Chosen to be friendly under normal usage while protecting from bursty abuse.
@@ -2784,7 +2790,7 @@ pub mod zk {
         pub const MAX_ENVELOPE_BYTES: usize = 1024 * 1024; // 1 MiB
         /// Maximum accepted proof payload length (bytes).
         ///
-        /// The native `stark/fri-v1/*` verifier enforces additional structural caps
+        /// The native `stark/fri/*` verifier enforces additional structural caps
         /// during decoding; this limit is an early, coarse safeguard.
         pub const MAX_PROOF_BYTES: usize = 1024 * 1024; // 1 MiB
     }

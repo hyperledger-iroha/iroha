@@ -1,17 +1,19 @@
 # Nexus Fee Model Updates
 
-The unified settlement router now captures deterministic per-lane receipts so
-operators can reconcile gas debits against the Nexus fee model.
+Nexus gas is denominated in XOR across every dataspace. The unified settlement
+path captures deterministic per-lane receipts so operators can reconcile XOR
+gas debits against the Nexus fee model without introducing per-dataspace gas
+assets.
 
 - For the full router architecture, buffer policy, telemetry matrix, and rollout
   sequencing see `docs/settlement-router.md`. That guide explains how the
   parameters documented here tie into the NX-3 roadmap deliverable and how SREs
   should monitor the router in production.
-- Gas asset configuration (`pipeline.gas.units_per_gas`) includes a
-  `twap_local_per_xor` decimal, a `liquidity_profile` (`tier1`, `tier2`,
-  or `tier3`), and a `volatility_class` (`stable`, `elevated`, `dislocated`).
-  These flags feed the settlement router so the resulting XOR
-  quote matches the canonical TWAP and haircut tier for the lane.
+- Nexus fee configuration accepts only the canonical XOR fee asset
+  (`xor#universal` or its canonical asset definition selector). Local gas-token
+  conversion metadata (`twap_local_per_xor`, `liquidity_profile`, and
+  `volatility_class`) is reserved for explicit settlement products and is not
+  the default gas path.
 - IVM transactions must include `gas_limit` metadata (`u64`, > 0) to cap fee
   exposure. The `/v1/contracts/call` endpoint requires `gas_limit`
   explicitly, and invalid values are rejected.
@@ -24,15 +26,13 @@ operators can reconcile gas debits against the Nexus fee model.
   transaction does not set explicit `fee_sponsor` metadata, Nexus charges the
   dataspace default sponsor automatically. This keeps onboarding from requiring
   per-account sponsorship grants.
-- Every transaction that pays gas records a `LaneSettlementReceipt`.  Each
-  receipt stores the caller-provided source identifier, the local micro-amount,
-  the XOR due immediately, the XOR expected after the haircut, the realised
-  safety margin (`xor_variance_micro`), and the block timestamp in milliseconds.
+- Every transaction that pays gas records the XOR fee payer/sponsor and the
+  fee schedule inputs needed to recompute the amount. Lane-relay-burn mode
+  embeds versioned Nexus fee receipts in lane commitments; direct mode mutates
+  public XOR in the universal fee context.
 - Block execution aggregates receipts per lane/dataspace and publishes them
   via `lane_settlement_commitments` in `/v1/sumeragi/status`.  The totals
-  expose `total_local_micro`, `total_xor_due_micro`, and
-  `total_xor_after_haircut_micro` summed over the block for nightly
-  reconciliation exports.
+  expose XOR fee receipt totals for nightly reconciliation exports.
 - A new `total_xor_variance_micro` counter tracks how much safety margin was
   consumed (difference between the due XOR and the post-haircut expectation),
   and `swap_metadata` documents the deterministic conversion parameters

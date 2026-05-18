@@ -68,7 +68,9 @@ use iroha_data_model::{
     account::{AccountController, AccountId, rekey::AccountAlias},
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     block::{
-        consensus::{LaneBlockCommitment, LaneSettlementReceipt},
+        consensus::{
+            LaneBlockCommitment, LaneSettlementReceipt, NativeAmxLegRecord, NativeAmxReceipt,
+        },
         *,
     },
     confidential::ConfidentialFeatureDigest,
@@ -277,6 +279,67 @@ use crate::telemetry::{
     SchedulerLayerWidthBuckets,
 };
 use crate::{da::DaShardCursorError, fees::SwapEvidence};
+
+#[derive(Default, Clone, Copy)]
+struct DetachedFallbackReasons {
+    fee_postprocessing: u64,
+    user_executor: u64,
+    durable_state: u64,
+    unsupported_instruction: u64,
+    rejected_eval: u64,
+    overlay_error: u64,
+}
+
+impl DetachedFallbackReasons {
+    fn add(&mut self, reason: DetachedFallbackReason) {
+        match reason {
+            DetachedFallbackReason::FeePostprocessing => {
+                self.fee_postprocessing = self.fee_postprocessing.saturating_add(1);
+            }
+            DetachedFallbackReason::UserExecutor => {
+                self.user_executor = self.user_executor.saturating_add(1);
+            }
+            DetachedFallbackReason::DurableState => {
+                self.durable_state = self.durable_state.saturating_add(1);
+            }
+            DetachedFallbackReason::UnsupportedInstruction => {
+                self.unsupported_instruction = self.unsupported_instruction.saturating_add(1);
+            }
+            DetachedFallbackReason::RejectedEval => {
+                self.rejected_eval = self.rejected_eval.saturating_add(1);
+            }
+            DetachedFallbackReason::OverlayError => {
+                self.overlay_error = self.overlay_error.saturating_add(1);
+            }
+        }
+    }
+
+    fn merge(self, other: Self) -> Self {
+        Self {
+            fee_postprocessing: self
+                .fee_postprocessing
+                .saturating_add(other.fee_postprocessing),
+            user_executor: self.user_executor.saturating_add(other.user_executor),
+            durable_state: self.durable_state.saturating_add(other.durable_state),
+            unsupported_instruction: self
+                .unsupported_instruction
+                .saturating_add(other.unsupported_instruction),
+            rejected_eval: self.rejected_eval.saturating_add(other.rejected_eval),
+            overlay_error: self.overlay_error.saturating_add(other.overlay_error),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DetachedFallbackReason {
+    FeePostprocessing,
+    UserExecutor,
+    DurableState,
+    UnsupportedInstruction,
+    RejectedEval,
+    OverlayError,
+}
+
 #[derive(Default)]
 struct LaneSummary {
     tx_vertices: u64,
@@ -291,6 +354,7 @@ struct LaneSummary {
     detached_prepared: u64,
     detached_merged: u64,
     detached_fallback: u64,
+    detached_fallback_reasons: DetachedFallbackReasons,
     quarantine_executed: u64,
 }
 
@@ -310,10 +374,25 @@ fn set_pipeline_status_snapshots(lane_summaries: &BTreeMap<LaneId, LaneSummary>)
                 detached_prepared: summary.detached_prepared,
                 detached_merged: summary.detached_merged,
                 detached_fallback: summary.detached_fallback,
+                detached_fallback_fee_postprocessing: summary
+                    .detached_fallback_reasons
+                    .fee_postprocessing,
+                detached_fallback_user_executor: summary.detached_fallback_reasons.user_executor,
+                detached_fallback_durable_state: summary.detached_fallback_reasons.durable_state,
+                detached_fallback_unsupported_instruction: summary
+                    .detached_fallback_reasons
+                    .unsupported_instruction,
+                detached_fallback_rejected_eval: summary.detached_fallback_reasons.rejected_eval,
+                detached_fallback_overlay_error: summary.detached_fallback_reasons.overlay_error,
                 quarantine_executed: summary.quarantine_executed,
             },
         )
         .collect();
+    let detached_fallback_reasons_total = lane_summaries
+        .values()
+        .fold(DetachedFallbackReasons::default(), |acc, summary| {
+            acc.merge(summary.detached_fallback_reasons)
+        });
     let pipeline_execution_snapshot = crate::sumeragi::status::PipelineExecutionSnapshot {
         tx_vertices_total: lane_summaries.values().map(|s| s.tx_vertices).sum(),
         tx_edges_total: lane_summaries.values().map(|s| s.tx_edges).sum(),
@@ -325,6 +404,14 @@ fn set_pipeline_status_snapshots(lane_summaries: &BTreeMap<LaneId, LaneSummary>)
         detached_prepared_total: lane_summaries.values().map(|s| s.detached_prepared).sum(),
         detached_merged_total: lane_summaries.values().map(|s| s.detached_merged).sum(),
         detached_fallback_total: lane_summaries.values().map(|s| s.detached_fallback).sum(),
+        detached_fallback_fee_postprocessing_total: detached_fallback_reasons_total
+            .fee_postprocessing,
+        detached_fallback_user_executor_total: detached_fallback_reasons_total.user_executor,
+        detached_fallback_durable_state_total: detached_fallback_reasons_total.durable_state,
+        detached_fallback_unsupported_instruction_total: detached_fallback_reasons_total
+            .unsupported_instruction,
+        detached_fallback_rejected_eval_total: detached_fallback_reasons_total.rejected_eval,
+        detached_fallback_overlay_error_total: detached_fallback_reasons_total.overlay_error,
         quarantine_executed_total: lane_summaries.values().map(|s| s.quarantine_executed).sum(),
     };
     crate::sumeragi::status::set_lane_activity_snapshot(lane_activity_snapshot);
@@ -341,8 +428,53 @@ struct LaneSettlementBuilder {
     swap_evidence: Option<SwapEvidence>,
     receipts: Vec<LaneSettlementReceipt>,
     nexus_fee_receipts: Vec<iroha_data_model::block::consensus::NexusFeeReceipt>,
+    native_amx_receipts: Vec<NativeAmxReceipt>,
     buffer_snapshot: Option<SettlementBufferSnapshot>,
     source_counts: BTreeMap<AssetDefinitionId, u64>,
+}
+
+fn native_amx_receipt_for_transaction(
+    tx: &SignedTransaction,
+    tx_hash: HashOf<SignedTransaction>,
+    block_height: u64,
+    decision: crate::queue::RoutingDecision,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    world: &impl WorldReadOnly,
+) -> Option<NativeAmxReceipt> {
+    if decision.dataspace_id != iroha_data_model::nexus::DataSpaceId::UNIVERSAL {
+        return None;
+    }
+
+    let accepted = crate::tx::AcceptedTransaction::new_unchecked(Cow::Borrowed(tx));
+    let participants =
+        native_amx_participant_dataspaces_with_world(&accepted, dataspace_catalog, world);
+    let participant_legs: Vec<_> = participants
+        .into_iter()
+        .filter(|dataspace| *dataspace != iroha_data_model::nexus::DataSpaceId::UNIVERSAL)
+        .collect();
+    if participant_legs.len() < 2 {
+        return None;
+    }
+
+    let mut source_id = [0u8; iroha_crypto::Hash::LENGTH];
+    source_id.copy_from_slice(tx_hash.as_ref());
+    let legs = participant_legs
+        .into_iter()
+        .map(|dataspace_id| NativeAmxLegRecord {
+            dataspace_id,
+            prepared: true,
+            committed: true,
+        })
+        .collect();
+
+    Some(NativeAmxReceipt {
+        version: 1,
+        source_id,
+        lane_id: decision.lane_id,
+        dataspace_id: decision.dataspace_id,
+        block_height,
+        legs,
+    })
 }
 
 fn lane_relay_envelopes_for_block(
@@ -574,7 +706,10 @@ use crate::{
         smallset::sort_dedup_u32_in_place,
     },
     prelude::*,
-    queue::{evaluate_policy_with_catalog_and_world, resolve_routing_decision, routing_ledger},
+    queue::{
+        evaluate_policy_with_catalog_and_world, native_amx_participant_dataspaces_with_world,
+        resolve_routing_decision, routing_ledger,
+    },
     state::{
         State, StateBlock, StatelessValidationContext, WorldReadOnly,
         compute_confidential_feature_digest,
@@ -1639,6 +1774,125 @@ fn schedule_components_wave(
     }
 
     Some(order)
+}
+
+fn conflict_free_component_layers(
+    components: &[Vec<usize>],
+    row_offsets: &[usize],
+    cols: &[usize],
+    call_hashes: &[iroha_crypto::HashOf<
+        iroha_data_model::transaction::signed::TransactionEntrypoint,
+    >],
+) -> Option<Vec<Vec<usize>>> {
+    let n = call_hashes.len();
+    debug_assert_eq!(
+        row_offsets.len(),
+        n.saturating_add(1),
+        "CSR row offsets must track all vertices"
+    );
+
+    if n == 0 {
+        return Some(Vec::new());
+    }
+
+    let mut in_component = vec![false; n];
+    let mut local_indeg = vec![0usize; n];
+    let mut ready_frontier: Vec<usize> = Vec::new();
+    let mut current_layer: Vec<usize> = Vec::new();
+    let mut per_comp_layers: Vec<Vec<Vec<usize>>> = Vec::with_capacity(components.len());
+    let mut max_depth = 0usize;
+
+    let ordered_components = component_iteration_order(components, call_hashes);
+    for &component_idx in &ordered_components {
+        let component = &components[component_idx];
+        if component.is_empty() {
+            per_comp_layers.push(Vec::new());
+            continue;
+        }
+
+        for &idx in component {
+            debug_assert!(idx < n, "component vertex index out of bounds");
+            in_component[idx] = true;
+            local_indeg[idx] = 0;
+        }
+
+        for &idx in component {
+            let start = row_offsets[idx];
+            let end = row_offsets[idx + 1];
+            for &child in &cols[start..end] {
+                debug_assert!(child < n, "CSR edge index out of bounds");
+                if !in_component[child] {
+                    return None;
+                }
+                local_indeg[child] = local_indeg[child].saturating_add(1);
+            }
+        }
+
+        ready_frontier.clear();
+        for &idx in component {
+            if local_indeg[idx] == 0 {
+                ready_frontier.push(idx);
+            }
+        }
+
+        let mut seen = 0usize;
+        let mut comp_layers: Vec<Vec<usize>> = Vec::new();
+        while !ready_frontier.is_empty() {
+            ready_frontier.sort_unstable_by(|&a, &b| {
+                call_hashes[a].cmp(&call_hashes[b]).then_with(|| a.cmp(&b))
+            });
+            current_layer.clear();
+            current_layer.extend(ready_frontier.iter().copied());
+            ready_frontier.clear();
+            let mut wave = Vec::with_capacity(current_layer.len());
+            for &node in &current_layer {
+                seen = seen.saturating_add(1);
+                wave.push(node);
+                let start = row_offsets[node];
+                let end = row_offsets[node + 1];
+                for &child in &cols[start..end] {
+                    if !in_component[child] {
+                        return None;
+                    }
+                    let deg = local_indeg[child].saturating_sub(1);
+                    local_indeg[child] = deg;
+                    if deg == 0 {
+                        ready_frontier.push(child);
+                    }
+                }
+            }
+            comp_layers.push(wave);
+        }
+
+        if seen != component.len() {
+            return None;
+        }
+
+        max_depth = max_depth.max(comp_layers.len());
+        per_comp_layers.push(comp_layers);
+        for &idx in component {
+            in_component[idx] = false;
+            local_indeg[idx] = 0;
+        }
+    }
+
+    let mut layers: Vec<Vec<usize>> = Vec::with_capacity(max_depth);
+    for depth in 0..max_depth {
+        let mut wave: Vec<usize> = Vec::new();
+        for comp_layers in &per_comp_layers {
+            if let Some(layer) = comp_layers.get(depth) {
+                wave.extend_from_slice(layer);
+            }
+        }
+        if !wave.is_empty() {
+            wave.sort_unstable_by(|&a, &b| {
+                call_hashes[a].cmp(&call_hashes[b]).then_with(|| a.cmp(&b))
+            });
+            layers.push(wave);
+        }
+    }
+
+    Some(layers)
 }
 
 fn schedule_ready_heap_global(
@@ -3167,6 +3421,7 @@ pub(crate) mod valid {
         tx_params: iroha_data_model::parameter::TransactionParameters,
         crypto_cfg: Arc<iroha_config::parameters::actual::Crypto>,
         pipeline_cfg: iroha_config::parameters::actual::Pipeline,
+        pipeline_parallelism: crate::state::PipelineParallelism,
         aggregate_lane: LaneId,
     }
 
@@ -5162,6 +5417,7 @@ pub(crate) mod valid {
 
             let crypto_cfg = state.crypto();
             let pipeline_cfg = state.pipeline().clone();
+            let pipeline_parallelism = crate::state::PipelineParallelism::new(&pipeline_cfg);
             let aggregate_lane = nexus.routing_policy.default_lane;
 
             Ok(StaticValidationData {
@@ -5170,6 +5426,7 @@ pub(crate) mod valid {
                 tx_params,
                 crypto_cfg,
                 pipeline_cfg,
+                pipeline_parallelism,
                 aggregate_lane,
             })
         }
@@ -6305,15 +6562,21 @@ pub(crate) mod valid {
                 stateless.err().map(BlockValidationError::TransactionAccept)
             };
 
-            let use_parallel = pipeline_cfg.workers != 1 && prepared_txs.len() > 1;
+            let static_pool = static_data.pipeline_parallelism.pool();
+            let use_parallel = static_pool.is_some() && prepared_txs.len() > 1;
             let tx_errors: Vec<Option<BlockValidationError>> = if use_parallel {
-                signed_txs
-                    .par_iter()
-                    .copied()
-                    .zip(prepared_txs.par_iter())
-                    .enumerate()
-                    .map(validate_tx)
-                    .collect()
+                static_pool
+                    .as_ref()
+                    .expect("parallel validation requires a configured pipeline pool")
+                    .install(|| {
+                        signed_txs
+                            .par_iter()
+                            .copied()
+                            .zip(prepared_txs.par_iter())
+                            .enumerate()
+                            .map(validate_tx)
+                            .collect()
+                    })
             } else {
                 signed_txs
                     .iter()
@@ -6329,9 +6592,17 @@ pub(crate) mod valid {
                 }
             }
 
-            let merkle_tree: MerkleTree<TransactionEntrypoint> =
-                MerkleTree::from_typed_leaves_parallel(entrypoint_hashes);
-            let expected_merkle_root = merkle_tree.root();
+            let expected_merkle_root = if let Some(pool) = static_pool.as_ref() {
+                pool.install(|| {
+                    let merkle_tree: MerkleTree<TransactionEntrypoint> =
+                        MerkleTree::from_typed_leaves_parallel(entrypoint_hashes);
+                    merkle_tree.root()
+                })
+            } else {
+                let merkle_tree: MerkleTree<TransactionEntrypoint> =
+                    entrypoint_hashes.into_iter().collect();
+                merkle_tree.root()
+            };
             let actual_merkle_root = block.header().merkle_root();
 
             if expected_merkle_root != actual_merkle_root {
@@ -6653,8 +6924,11 @@ pub(crate) mod valid {
             use rayon::prelude::*;
 
             use crate::pipeline::{
-                access::{AccessSetSource, IvmStrategy, derive_for_transaction_with_source},
-                overlay::{TxOverlay, build_overlay_for_transaction_with_accounts_zk},
+                access::{
+                    AccessSetSource, derive_for_prepared_overlay_with_source,
+                    derive_for_transaction_with_source,
+                },
+                overlay::{TxOverlay, build_prepared_overlay_for_transaction_with_accounts_zk},
             };
 
             let to_ms = |duration: Duration| -> u64 {
@@ -6718,11 +6992,6 @@ pub(crate) mod valid {
                 .insert_block(tx_hashes, block_height);
             // Strategy controlled by configuration (no env reliance)
             let dynamic_prepass = state_block.pipeline.dynamic_prepass;
-            let strategy = if dynamic_prepass {
-                IvmStrategy::DynamicThenConservative
-            } else {
-                IvmStrategy::Conservative
-            };
             // Load worker bound from config once to reuse across stages
             let workers = state_block.pipeline_worker_threads();
             let pool = state_block.pipeline_thread_pool();
@@ -6793,7 +7062,7 @@ pub(crate) mod valid {
                 Some(state_block.telemetry);
             #[cfg(not(feature = "telemetry"))]
             let fraud_telemetry: Option<&()> = None;
-            let dataspace_catalog = &state_block.nexus.dataspace_catalog;
+            let dataspace_catalog = state_block.nexus.dataspace_catalog.clone();
             let lane_catalog = &state_block.nexus.lane_catalog;
             let routing_policy = &state_block.nexus.routing_policy;
             let fraud_cfg = &state_block.fraud_monitoring;
@@ -6831,7 +7100,7 @@ pub(crate) mod valid {
                                     evaluate_policy_with_catalog_and_world(
                                         routing_policy,
                                         lane_catalog,
-                                        dataspace_catalog,
+                                        &dataspace_catalog,
                                         &accepted,
                                         &state_block.world,
                                     )
@@ -6847,7 +7116,7 @@ pub(crate) mod valid {
                                 evaluate_policy_with_catalog_and_world(
                                     routing_policy,
                                     lane_catalog,
-                                    dataspace_catalog,
+                                    &dataspace_catalog,
                                     &accepted,
                                     &state_block.world,
                                 )
@@ -6862,7 +7131,7 @@ pub(crate) mod valid {
                             evaluate_policy_with_catalog_and_world(
                                 routing_policy,
                                 lane_catalog,
-                                dataspace_catalog,
+                                &dataspace_catalog,
                                 &accepted,
                                 &state_block.world,
                             )
@@ -7396,7 +7665,7 @@ pub(crate) mod valid {
                         let lane_assignment = LaneAssignment {
                             lane_id: routing_decision.lane_id,
                             dataspace_id: routing_decision.dataspace_id,
-                            dataspace_catalog,
+                            dataspace_catalog: &dataspace_catalog,
                         };
                         if let Err(reason) = enforce_fraud_policy(
                             fraud_cfg,
@@ -7486,134 +7755,6 @@ pub(crate) mod valid {
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), stateless_start) {
                 timings.execution_tx_stateless_ms = to_ms(start.elapsed());
             }
-            #[cfg(feature = "telemetry")]
-            let t_access_start = Instant::now();
-            let access_start = timings.as_ref().map(|_| Instant::now());
-            let derived: Vec<_> = if dynamic_prepass {
-                if workers > 1 {
-                    if let Some(pool) = pool.as_ref() {
-                        pool.install(|| {
-                            txs.par_iter()
-                                .enumerate()
-                                .map(|(idx, tx)| {
-                                    if stateless_rejections[idx].is_some() {
-                                        (crate::pipeline::access::AccessSet::new(), None)
-                                    } else {
-                                        derive_for_transaction_with_source(
-                                            tx,
-                                            Some(&*state_block),
-                                            strategy,
-                                        )
-                                    }
-                                })
-                                .collect()
-                        })
-                    } else {
-                        txs.par_iter()
-                            .enumerate()
-                            .map(|(idx, tx)| {
-                                if stateless_rejections[idx].is_some() {
-                                    (crate::pipeline::access::AccessSet::new(), None)
-                                } else {
-                                    derive_for_transaction_with_source(
-                                        tx,
-                                        Some(&*state_block),
-                                        strategy,
-                                    )
-                                }
-                            })
-                            .collect()
-                    }
-                } else {
-                    txs.iter()
-                        .enumerate()
-                        .map(|(idx, tx)| {
-                            if stateless_rejections[idx].is_some() {
-                                (crate::pipeline::access::AccessSet::new(), None)
-                            } else {
-                                derive_for_transaction_with_source(
-                                    tx,
-                                    Some(&*state_block),
-                                    strategy,
-                                )
-                            }
-                        })
-                        .collect()
-                }
-            } else {
-                txs.iter()
-                    .enumerate()
-                    .map(|(idx, tx)| {
-                        if stateless_rejections[idx].is_some() {
-                            (crate::pipeline::access::AccessSet::new(), None)
-                        } else {
-                            derive_for_transaction_with_source(tx, Some(&*state_block), strategy)
-                        }
-                    })
-                    .collect()
-            };
-            let mut access_sources: Vec<Option<AccessSetSource>> =
-                Vec::with_capacity(derived.len());
-            let mut access: Vec<crate::pipeline::access::AccessSet> =
-                Vec::with_capacity(derived.len());
-            for (set, source) in derived {
-                access.push(set);
-                access_sources.push(source);
-            }
-            let mut access_set_sources = status::AccessSetSourceSummary::default();
-            for source in access_sources.into_iter().flatten() {
-                match source {
-                    AccessSetSource::ManifestHints => {
-                        access_set_sources.manifest_hints =
-                            access_set_sources.manifest_hints.saturating_add(1);
-                    }
-                    AccessSetSource::EntrypointHints => {
-                        access_set_sources.entrypoint_hints =
-                            access_set_sources.entrypoint_hints.saturating_add(1);
-                    }
-                    AccessSetSource::PrepassMerge => {
-                        access_set_sources.prepass_merge =
-                            access_set_sources.prepass_merge.saturating_add(1);
-                    }
-                    AccessSetSource::ConservativeFallback => {
-                        access_set_sources.conservative_fallback =
-                            access_set_sources.conservative_fallback.saturating_add(1);
-                    }
-                }
-            }
-            status::set_access_set_source_summary(access_set_sources);
-            #[cfg(feature = "telemetry")]
-            {
-                let telemetry = state_block.metrics();
-                telemetry.inc_pipeline_access_set_source(
-                    AccessSetSource::ManifestHints,
-                    access_set_sources.manifest_hints,
-                );
-                telemetry.inc_pipeline_access_set_source(
-                    AccessSetSource::EntrypointHints,
-                    access_set_sources.entrypoint_hints,
-                );
-                telemetry.inc_pipeline_access_set_source(
-                    AccessSetSource::PrepassMerge,
-                    access_set_sources.prepass_merge,
-                );
-                telemetry.inc_pipeline_access_set_source(
-                    AccessSetSource::ConservativeFallback,
-                    access_set_sources.conservative_fallback,
-                );
-            }
-            #[cfg(feature = "telemetry")]
-            {
-                let aggregate_lane = state_block.nexus.routing_policy.default_lane;
-                state_block.metrics().observe_pipeline_stage_ms(
-                    aggregate_lane,
-                    "access",
-                    t_access_start.elapsed().as_secs_f64() * 1_000.0,
-                );
-            }
-            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), access_start) {
-                timings.execution_tx_access_ms = to_ms(start.elapsed());
-            }
             let call_hashes: Vec<_> = prepared_txs
                 .iter()
                 .map(|prepared| prepared.metadata.entrypoint_hash)
@@ -7693,14 +7834,67 @@ pub(crate) mod valid {
             // sequentially with per-tx caps below. Normal lane follows configured parallelism.
             #[cfg(feature = "telemetry")]
             let t_overlay_start = Instant::now();
-            let mut overlays: Vec<
-                Result<Arc<TxOverlay>, crate::pipeline::overlay::OverlayBuildError>,
+            #[derive(Clone)]
+            struct PreparedBlockOverlay {
+                overlay: Arc<TxOverlay>,
+                access_log: Option<ivm::host::AccessLog>,
+            }
+
+            let mut prepared_overlays: Vec<
+                Result<PreparedBlockOverlay, crate::pipeline::overlay::OverlayBuildError>,
             > = vec![Err(crate::pipeline::overlay::OverlayBuildError::IvmHeaderParse); txs.len()];
             // Normal lane overlays
             if build_parallel && workers > 1 {
                 if let Some(pool) = pool.as_ref() {
                     pool.install(|| {
-                        overlays.par_iter_mut().enumerate().for_each(|(i, slot)| {
+                        prepared_overlays
+                            .par_iter_mut()
+                            .enumerate()
+                            .for_each(|(i, slot)| {
+                                if !is_quarantine[i] && stateless_rejections[i].is_none() {
+                                    let tx = &txs[i];
+                                    let metadata =
+                                        crate::pipeline::overlay::resolve_streaming_metadata(
+                                            state_block,
+                                            tx.authority(),
+                                        );
+                                    let cache_idx = rayon::current_thread_index().unwrap_or(i)
+                                        % overlay_caches.len();
+                                    #[cfg(feature = "telemetry")]
+                                    let cache_wait_start = Instant::now();
+                                    let mut ivm_cache = overlay_caches[cache_idx].lock();
+                                    #[cfg(feature = "telemetry")]
+                                    state_block.metrics().observe_pipeline_stage_ms(
+                                        overlay_aggregate_lane,
+                                        "overlay_cache_wait",
+                                        cache_wait_start.elapsed().as_secs_f64() * 1_000.0,
+                                    );
+                                    *slot =
+                                        build_prepared_overlay_for_transaction_with_accounts_zk(
+                                            tx,
+                                            Arc::clone(&accounts_snapshot),
+                                            state_block,
+                                            state_block.zk().halo2.enabled
+                                                || state_block.zk().stark.enabled,
+                                            &block.header(),
+                                            metadata,
+                                            &mut ivm_cache,
+                                            dynamic_prepass,
+                                        )
+                                        .map(|prepared| {
+                                            PreparedBlockOverlay {
+                                                overlay: Arc::new(prepared.overlay),
+                                                access_log: prepared.access_log,
+                                            }
+                                        });
+                                }
+                            })
+                    });
+                } else {
+                    prepared_overlays
+                        .par_iter_mut()
+                        .enumerate()
+                        .for_each(|(i, slot)| {
                             if !is_quarantine[i] && stateless_rejections[i].is_none() {
                                 let tx = &txs[i];
                                 let metadata = crate::pipeline::overlay::resolve_streaming_metadata(
@@ -7718,7 +7912,7 @@ pub(crate) mod valid {
                                     "overlay_cache_wait",
                                     cache_wait_start.elapsed().as_secs_f64() * 1_000.0,
                                 );
-                                *slot = build_overlay_for_transaction_with_accounts_zk(
+                                *slot = build_prepared_overlay_for_transaction_with_accounts_zk(
                                     tx,
                                     Arc::clone(&accounts_snapshot),
                                     state_block,
@@ -7727,42 +7921,16 @@ pub(crate) mod valid {
                                     &block.header(),
                                     metadata,
                                     &mut ivm_cache,
+                                    dynamic_prepass,
                                 )
-                                .map(Arc::new);
+                                .map(|prepared| {
+                                    PreparedBlockOverlay {
+                                        overlay: Arc::new(prepared.overlay),
+                                        access_log: prepared.access_log,
+                                    }
+                                });
                             }
-                        })
-                    });
-                } else {
-                    overlays.par_iter_mut().enumerate().for_each(|(i, slot)| {
-                        if !is_quarantine[i] && stateless_rejections[i].is_none() {
-                            let tx = &txs[i];
-                            let metadata = crate::pipeline::overlay::resolve_streaming_metadata(
-                                state_block,
-                                tx.authority(),
-                            );
-                            let cache_idx =
-                                rayon::current_thread_index().unwrap_or(i) % overlay_caches.len();
-                            #[cfg(feature = "telemetry")]
-                            let cache_wait_start = Instant::now();
-                            let mut ivm_cache = overlay_caches[cache_idx].lock();
-                            #[cfg(feature = "telemetry")]
-                            state_block.metrics().observe_pipeline_stage_ms(
-                                overlay_aggregate_lane,
-                                "overlay_cache_wait",
-                                cache_wait_start.elapsed().as_secs_f64() * 1_000.0,
-                            );
-                            *slot = build_overlay_for_transaction_with_accounts_zk(
-                                tx,
-                                Arc::clone(&accounts_snapshot),
-                                state_block,
-                                state_block.zk().halo2.enabled || state_block.zk().stark.enabled,
-                                &block.header(),
-                                metadata,
-                                &mut ivm_cache,
-                            )
-                            .map(Arc::new);
-                        }
-                    });
+                        });
                 }
             } else {
                 for (i, tx) in txs.iter().enumerate() {
@@ -7780,16 +7948,21 @@ pub(crate) mod valid {
                             "overlay_cache_wait",
                             cache_wait_start.elapsed().as_secs_f64() * 1_000.0,
                         );
-                        overlays[i] = build_overlay_for_transaction_with_accounts_zk(
-                            tx,
-                            Arc::clone(&accounts_snapshot),
-                            state_block,
-                            state_block.zk().halo2.enabled || state_block.zk().stark.enabled,
-                            &block.header(),
-                            metadata,
-                            &mut ivm_cache,
-                        )
-                        .map(Arc::new);
+                        prepared_overlays[i] =
+                            build_prepared_overlay_for_transaction_with_accounts_zk(
+                                tx,
+                                Arc::clone(&accounts_snapshot),
+                                state_block,
+                                state_block.zk().halo2.enabled || state_block.zk().stark.enabled,
+                                &block.header(),
+                                metadata,
+                                &mut ivm_cache,
+                                dynamic_prepass,
+                            )
+                            .map(|prepared| PreparedBlockOverlay {
+                                overlay: Arc::new(prepared.overlay),
+                                access_log: prepared.access_log,
+                            });
                     }
                 }
             }
@@ -7797,7 +7970,7 @@ pub(crate) mod valid {
             for (i, tx) in txs.iter().enumerate() {
                 if is_quarantine[i] {
                     if quarantine_overflow.contains(&i) {
-                        overlays[i] =
+                        prepared_overlays[i] =
                             Err(crate::pipeline::overlay::OverlayBuildError::QuarantineOverflow);
                     } else if quarantine_allowed.contains(&i) && stateless_rejections[i].is_none() {
                         let metadata = crate::pipeline::overlay::resolve_streaming_metadata(
@@ -7813,7 +7986,7 @@ pub(crate) mod valid {
                             "overlay_cache_wait",
                             cache_wait_start.elapsed().as_secs_f64() * 1_000.0,
                         );
-                        overlays[i] =
+                        prepared_overlays[i] =
                             crate::pipeline::overlay::build_overlay_for_transaction_quarantine(
                                 tx,
                                 Arc::clone(&accounts_snapshot),
@@ -7824,7 +7997,10 @@ pub(crate) mod valid {
                                 metadata,
                                 &mut ivm_cache,
                             )
-                            .map(Arc::new);
+                            .map(|overlay| PreparedBlockOverlay {
+                                overlay: Arc::new(overlay),
+                                access_log: None,
+                            });
                     }
                 }
             }
@@ -7840,6 +8016,111 @@ pub(crate) mod valid {
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), overlay_start) {
                 timings.execution_tx_overlay_ms = to_ms(start.elapsed());
             }
+
+            #[cfg(feature = "telemetry")]
+            let t_access_start = Instant::now();
+            let access_start = timings.as_ref().map(|_| Instant::now());
+            let derive_access = |(idx, tx): (usize, &&SignedTransaction)| {
+                if stateless_rejections[idx].is_some() {
+                    return (crate::pipeline::access::AccessSet::new(), None);
+                }
+                match &prepared_overlays[idx] {
+                    Ok(prepared) => derive_for_prepared_overlay_with_source(
+                        tx,
+                        &*state_block,
+                        prepared.overlay.as_ref(),
+                        prepared.access_log.as_ref(),
+                        dynamic_prepass,
+                    ),
+                    Err(_) => derive_for_transaction_with_source(
+                        tx,
+                        Some(&*state_block),
+                        crate::pipeline::access::IvmStrategy::Conservative,
+                    ),
+                }
+            };
+            let derived: Vec<_> = if workers > 1 {
+                if let Some(pool) = pool.as_ref() {
+                    pool.install(|| txs.par_iter().enumerate().map(derive_access).collect())
+                } else {
+                    txs.par_iter().enumerate().map(derive_access).collect()
+                }
+            } else {
+                txs.iter().enumerate().map(derive_access).collect()
+            };
+            let mut access_sources: Vec<Option<AccessSetSource>> =
+                Vec::with_capacity(derived.len());
+            let mut access: Vec<crate::pipeline::access::AccessSet> =
+                Vec::with_capacity(derived.len());
+            for (set, source) in derived {
+                access.push(set);
+                access_sources.push(source);
+            }
+            let mut access_set_sources = status::AccessSetSourceSummary::default();
+            for source in access_sources.into_iter().flatten() {
+                match source {
+                    AccessSetSource::ManifestHints => {
+                        access_set_sources.manifest_hints =
+                            access_set_sources.manifest_hints.saturating_add(1);
+                    }
+                    AccessSetSource::EntrypointHints => {
+                        access_set_sources.entrypoint_hints =
+                            access_set_sources.entrypoint_hints.saturating_add(1);
+                    }
+                    AccessSetSource::PrepassMerge => {
+                        access_set_sources.prepass_merge =
+                            access_set_sources.prepass_merge.saturating_add(1);
+                    }
+                    AccessSetSource::ConservativeFallback => {
+                        access_set_sources.conservative_fallback =
+                            access_set_sources.conservative_fallback.saturating_add(1);
+                    }
+                }
+            }
+            status::set_access_set_source_summary(access_set_sources);
+            #[cfg(feature = "telemetry")]
+            {
+                let telemetry = state_block.metrics();
+                telemetry.inc_pipeline_access_set_source(
+                    AccessSetSource::ManifestHints,
+                    access_set_sources.manifest_hints,
+                );
+                telemetry.inc_pipeline_access_set_source(
+                    AccessSetSource::EntrypointHints,
+                    access_set_sources.entrypoint_hints,
+                );
+                telemetry.inc_pipeline_access_set_source(
+                    AccessSetSource::PrepassMerge,
+                    access_set_sources.prepass_merge,
+                );
+                telemetry.inc_pipeline_access_set_source(
+                    AccessSetSource::ConservativeFallback,
+                    access_set_sources.conservative_fallback,
+                );
+            }
+            #[cfg(feature = "telemetry")]
+            {
+                let aggregate_lane = state_block.nexus.routing_policy.default_lane;
+                state_block.metrics().observe_pipeline_stage_ms(
+                    aggregate_lane,
+                    "access",
+                    t_access_start.elapsed().as_secs_f64() * 1_000.0,
+                );
+            }
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), access_start) {
+                timings.execution_tx_access_ms = to_ms(start.elapsed());
+            }
+
+            let overlays: Vec<Result<Arc<TxOverlay>, crate::pipeline::overlay::OverlayBuildError>> =
+                prepared_overlays
+                    .iter()
+                    .map(|result| {
+                        result
+                            .as_ref()
+                            .map(|prepared| Arc::clone(&prepared.overlay))
+                            .map_err(Clone::clone)
+                    })
+                    .collect();
 
             // Build conflict graph using key interning (strings -> compact IDs),
             // and partition transactions into independent components via DSF.
@@ -8210,6 +8491,22 @@ pub(crate) mod valid {
                             decision.dataspace_id,
                         ));
                     }
+                    if let Some(receipt) = native_amx_receipt_for_transaction(
+                        txs[idx],
+                        prepared_txs[idx].metadata.signed_hash,
+                        block.header().height().get(),
+                        *decision,
+                        &dataspace_catalog,
+                        &state_block.world,
+                    ) {
+                        let builder = lane_settlement_builders
+                            .entry((decision.lane_id, decision.dataspace_id))
+                            .or_default();
+                        if !counted_settlement_tx {
+                            builder.tx_count = builder.tx_count.saturating_add(1);
+                        }
+                        builder.native_amx_receipts.push(receipt);
+                    }
                 }
 
                 for (src, decision) in routing_decisions.iter().enumerate() {
@@ -8479,6 +8776,7 @@ pub(crate) mod valid {
                                 .map(SwapEvidence::into_lane_metadata),
                             receipts: builder.receipts,
                             nexus_fee_receipts: builder.nexus_fee_receipts,
+                            native_amx_receipts: builder.native_amx_receipts,
                         }
                     })
                     .collect()
@@ -8554,55 +8852,15 @@ pub(crate) mod valid {
                     _log_only: bool,
                 }
 
-                // Compute conflict-free layers
-                // Compute conflict-free layers per DSF component and merge deterministically
+                // Compute conflict-free layers per DSF component and merge deterministically.
                 let layer_build_start = timings.as_ref().map(|_| Instant::now());
-                let mut per_comp_layers: Vec<Vec<Vec<usize>>> =
-                    Vec::with_capacity(components.len());
-                let mut max_depth = 0usize;
-                for comp in components.iter() {
-                    let mut indeg_c = indeg.clone();
-                    let mut ready_c: Vec<usize> = Vec::new();
-                    for &i in comp.iter() {
-                        if indeg_c[i] == 0 {
-                            ready_c.push(i);
-                        }
-                    }
-                    let mut comp_layers: Vec<Vec<usize>> = Vec::new();
-                    while !ready_c.is_empty() {
-                        ready_c.sort_unstable_by(|&a, &b| {
-                            call_hashes[a].cmp(&call_hashes[b]).then_with(|| a.cmp(&b))
+                let layers =
+                    conflict_free_component_layers(&components, &row_offsets, &cols, &call_hashes)
+                        .unwrap_or_else(|| {
+                            let global_order =
+                                schedule_wave_global(&row_offsets, &cols, &indeg, &call_hashes);
+                            global_order.into_iter().map(|idx| vec![idx]).collect()
                         });
-                        let layer_c: Vec<usize> = ready_c.split_off(0);
-                        let mut wave: Vec<usize> = Vec::with_capacity(layer_c.len());
-                        for &i in &layer_c {
-                            let (start, end) = (row_offsets[i], row_offsets[i + 1]);
-                            for &v in &cols[start..end] {
-                                indeg_c[v] = indeg_c[v].saturating_sub(1);
-                                if indeg_c[v] == 0 && comp.binary_search(&v).is_ok() {
-                                    ready_c.push(v);
-                                }
-                            }
-                            wave.push(i);
-                        }
-                        comp_layers.push(wave);
-                    }
-                    max_depth = max_depth.max(comp_layers.len());
-                    per_comp_layers.push(comp_layers);
-                }
-                let mut layers: Vec<Vec<usize>> = Vec::with_capacity(max_depth);
-                for d in 0..max_depth {
-                    let mut wave: Vec<usize> = Vec::new();
-                    for comp_layers in per_comp_layers.iter() {
-                        if d < comp_layers.len() {
-                            wave.extend_from_slice(&comp_layers[d]);
-                        }
-                    }
-                    if !wave.is_empty() {
-                        wave.sort_by_key(|&i| (call_hashes[i], i));
-                        layers.push(wave);
-                    }
-                }
                 if let Some(start) = layer_build_start {
                     apply_layer_build_ms = to_ms(start.elapsed());
                 }
@@ -9029,13 +9287,17 @@ pub(crate) mod valid {
                                 &*state_block.world.executor,
                                 crate::executor::Executor::UserProvided(_)
                             ) {
-                                return (p.idx, None);
+                                return (p.idx, None, Some(DetachedFallbackReason::UserExecutor));
                             }
                             if requires_fee_postprocessing(tx) {
-                                return (p.idx, None);
+                                return (
+                                    p.idx,
+                                    None,
+                                    Some(DetachedFallbackReason::FeePostprocessing),
+                                );
                             }
                             if ovl.has_durable_state_changes() {
-                                return (p.idx, None);
+                                return (p.idx, None, Some(DetachedFallbackReason::DurableState));
                             }
                             let mut delta = DetachedStateTransactionDelta::default();
                             let mut unsupported = false;
@@ -9202,20 +9464,31 @@ pub(crate) mod valid {
                             reject.map_or_else(
                                 || {
                                     if unsupported {
-                                        (p.idx, None)
+                                        (
+                                            p.idx,
+                                            None,
+                                            Some(DetachedFallbackReason::UnsupportedInstruction),
+                                        )
                                     } else {
-                                        (p.idx, Some(Ok(delta)))
+                                        (p.idx, Some(Ok(delta)), None)
                                     }
                                 },
-                                |r| (p.idx, Some(Err(r))),
+                                |r| {
+                                    (
+                                        p.idx,
+                                        Some(Err(r)),
+                                        Some(DetachedFallbackReason::RejectedEval),
+                                    )
+                                },
                             )
                         } else {
-                            (p.idx, None)
+                            (p.idx, None, Some(DetachedFallbackReason::OverlayError))
                         }
                     };
                     let deltas_vec: Vec<(
                         usize,
                         Option<Result<DetachedStateTransactionDelta, TransactionRejectionReason>>,
+                        Option<DetachedFallbackReason>,
                     )> = if workers > 1 {
                         if let Some(pool) = pool.as_ref() {
                             pool.install(|| prepared.par_iter().map(eval_detached).collect())
@@ -9229,9 +9502,12 @@ pub(crate) mod valid {
                     let mut deltas: Vec<
                         Option<Result<DetachedStateTransactionDelta, TransactionRejectionReason>>,
                     > = vec![None; n];
-                    for (idx, maybe) in deltas_vec {
+                    let mut detached_fallback_reasons: Vec<Option<DetachedFallbackReason>> =
+                        vec![None; n];
+                    for (idx, maybe, reason) in deltas_vec {
                         if idx < n {
                             deltas[idx] = maybe;
+                            detached_fallback_reasons[idx] = reason;
                         }
                     }
                     #[cfg(feature = "telemetry")]
@@ -9268,6 +9544,9 @@ pub(crate) mod valid {
                                 let summary = lane_summaries_mut.entry(lane_id).or_default();
                                 summary.detached_fallback =
                                     summary.detached_fallback.saturating_add(1);
+                                if let Some(reason) = detached_fallback_reasons[idx] {
+                                    summary.detached_fallback_reasons.add(reason);
+                                }
                             }
                             let tx = txs[idx];
                             let hash = prepared_txs[idx].metadata.entrypoint_hash;
@@ -10364,12 +10643,47 @@ pub(crate) mod valid {
                     lane_summaries.values().map(|s| s.detached_merged).sum();
                 let det_fallback_total: u64 =
                     lane_summaries.values().map(|s| s.detached_fallback).sum();
+                let det_fallback_reasons_total = lane_summaries
+                    .values()
+                    .fold(DetachedFallbackReasons::default(), |acc, summary| {
+                        acc.merge(summary.detached_fallback_reasons)
+                    });
                 let quarantine_total: u64 =
                     lane_summaries.values().map(|s| s.quarantine_executed).sum();
 
                 telemetry.set_pipeline_detached_prepared(aggregate_lane, det_prepared_total);
                 telemetry.set_pipeline_detached_merged(aggregate_lane, det_merged_total);
                 telemetry.set_pipeline_detached_fallback(aggregate_lane, det_fallback_total);
+                telemetry.set_pipeline_detached_fallback_reason(
+                    aggregate_lane,
+                    "fee_postprocessing",
+                    det_fallback_reasons_total.fee_postprocessing,
+                );
+                telemetry.set_pipeline_detached_fallback_reason(
+                    aggregate_lane,
+                    "user_executor",
+                    det_fallback_reasons_total.user_executor,
+                );
+                telemetry.set_pipeline_detached_fallback_reason(
+                    aggregate_lane,
+                    "durable_state",
+                    det_fallback_reasons_total.durable_state,
+                );
+                telemetry.set_pipeline_detached_fallback_reason(
+                    aggregate_lane,
+                    "unsupported_instruction",
+                    det_fallback_reasons_total.unsupported_instruction,
+                );
+                telemetry.set_pipeline_detached_fallback_reason(
+                    aggregate_lane,
+                    "rejected_eval",
+                    det_fallback_reasons_total.rejected_eval,
+                );
+                telemetry.set_pipeline_detached_fallback_reason(
+                    aggregate_lane,
+                    "overlay_error",
+                    det_fallback_reasons_total.overlay_error,
+                );
                 telemetry.set_pipeline_quarantine_executed(aggregate_lane, quarantine_total);
 
                 if layer_widths_global.is_empty() {
@@ -17245,6 +17559,40 @@ mod scheduler_variant_tests {
             super::schedule_ready_heap_global(&row_offsets, &cols, &indeg, &call_hashes);
         assert_eq!(global_heap, vec![2, 0, 1, 3, 4]);
     }
+
+    #[test]
+    fn conflict_free_layers_merge_singletons_into_one_wave() {
+        let components = vec![vec![3], vec![1], vec![0], vec![2]];
+        let row_offsets = vec![0, 0, 0, 0, 0];
+        let cols = Vec::new();
+        let call_hashes = vec![make_hash(40), make_hash(10), make_hash(30), make_hash(20)];
+
+        let layers =
+            super::conflict_free_component_layers(&components, &row_offsets, &cols, &call_hashes)
+                .expect("singleton components must schedule");
+
+        assert_eq!(layers, vec![vec![1, 3, 2, 0]]);
+    }
+
+    #[test]
+    fn conflict_free_layers_preserve_component_depths() {
+        let components = vec![vec![2, 0, 1], vec![4, 3]];
+        let row_offsets = vec![0, 1, 2, 2, 3, 3];
+        let cols = vec![1, 2, 4];
+        let call_hashes = vec![
+            make_hash(20),
+            make_hash(10),
+            make_hash(30),
+            make_hash(15),
+            make_hash(5),
+        ];
+
+        let layers =
+            super::conflict_free_component_layers(&components, &row_offsets, &cols, &call_hashes)
+                .expect("component-local chains must schedule");
+
+        assert_eq!(layers, vec![vec![3, 0], vec![4, 1], vec![2]]);
+    }
 }
 
 #[cfg(test)]
@@ -17539,6 +17887,7 @@ mod tests {
             swap_metadata: None,
             receipts: vec![receipt],
             nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
         };
 
         let mut lane_summaries = BTreeMap::new();
@@ -17644,6 +17993,7 @@ mod tests {
             swap_metadata: None,
             receipts: vec![receipt],
             nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
         };
 
         let mut lane_summaries = BTreeMap::new();

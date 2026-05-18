@@ -22,7 +22,7 @@ translator: manual
 - IPA (Pallas, native): `halo2/ipa-v1/poly-open`
 - IPA (BN254): `halo2/ipa/ipa-v1/poly-open`
 - IPA (Goldilocks): `halo2/goldilocks-ipa-v1/poly-open`
-- STARK (native): `stark/fri-v1/<profile>`（例: `stark/fri-v1/sha256-goldilocks-v1`）
+- STARK (native): `stark/fri/<profile>`（例: `stark/fri/sha256-goldilocks-v1`）
 
 一般的な注意事項
 - エンベロープおよびネストされたペイロードのエンコードには Norito を用います。特に記載のない限り、スカラーは構造体型に従ったリトルエンディアンです。

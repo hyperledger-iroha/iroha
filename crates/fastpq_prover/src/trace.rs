@@ -56,6 +56,8 @@ static POSEIDON_PIPELINE_STATS: OnceLock<Mutex<PoseidonPipelineStats>> = OnceLoc
 #[cfg(feature = "fastpq-gpu")]
 static POSEIDON_MERKLE_GPU_DISABLED: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "fastpq-gpu")]
+static POSEIDON_COLUMN_GPU_DISABLED: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "fastpq-gpu")]
 static POSEIDON_MERKLE_GPU_SELF_TEST: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "fastpq-gpu")]
 static POSEIDON_COLUMN_GPU_SELF_TEST: OnceLock<bool> = OnceLock::new();
@@ -1336,7 +1338,12 @@ impl PoseidonColumnBatch {
 /// an execution error, allowing callers to fall back to the CPU sponge.
 pub fn hash_columns_gpu_batch(batch: &PoseidonColumnBatch) -> Option<Vec<u64>> {
     let backend = backend::current_gpu_backend()?;
+    if POSEIDON_COLUMN_GPU_DISABLED.load(Ordering::Acquire) {
+        record_poseidon_pipeline_fallback();
+        return None;
+    }
     if !poseidon_column_gpu_self_test(backend) {
+        POSEIDON_COLUMN_GPU_DISABLED.store(true, Ordering::Release);
         record_poseidon_pipeline_fallback();
         return None;
     }
@@ -1351,15 +1358,56 @@ pub fn hash_columns_gpu_batch(batch: &PoseidonColumnBatch) -> Option<Vec<u64>> {
             Some(result)
         }
         Err(error) => {
-            record_poseidon_pipeline_fallback();
-            tracing::warn!(
-                target: "fastpq::poseidon",
-                backend = ?backend,
-                %error,
-                "gpu poseidon batch failed; falling back to cpu hashing"
+            disable_poseidon_column_gpu_with_warning(
+                backend,
+                "dispatch error",
+                batch.columns(),
+                Some(&error),
             );
+            record_poseidon_pipeline_fallback();
             None
         }
+    }
+}
+
+#[cfg(feature = "fastpq-gpu")]
+pub(crate) fn disable_poseidon_column_gpu_after_parity_mismatch(
+    backend: backend::GpuBackend,
+    operation: &'static str,
+    item_count: usize,
+) {
+    disable_poseidon_column_gpu_with_warning(backend, operation, item_count, None);
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn disable_poseidon_column_gpu_with_warning(
+    backend: backend::GpuBackend,
+    operation: &'static str,
+    item_count: usize,
+    error: Option<&gpu::GpuError>,
+) {
+    if POSEIDON_COLUMN_GPU_DISABLED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+    match error {
+        Some(error) => tracing::warn!(
+            target: "fastpq::poseidon",
+            backend = ?backend,
+            operation,
+            item_count,
+            %error,
+            "gpu Poseidon column accelerator disabled; falling back to deterministic CPU hashing"
+        ),
+        None => tracing::warn!(
+            target: "fastpq::poseidon",
+            backend = ?backend,
+            operation,
+            item_count,
+            "gpu Poseidon column accelerator disabled after CPU parity mismatch"
+        ),
     }
 }
 
@@ -1383,6 +1431,7 @@ fn poseidon_column_gpu_self_test(backend: backend::GpuBackend) -> bool {
         match gpu::poseidon_hash_columns(&batch, backend) {
             Ok(actual) if actual == expected => true,
             Ok(actual) => {
+                POSEIDON_COLUMN_GPU_DISABLED.store(true, Ordering::Release);
                 tracing::warn!(
                     target: "fastpq::poseidon",
                     backend = ?backend,
@@ -1393,6 +1442,7 @@ fn poseidon_column_gpu_self_test(backend: backend::GpuBackend) -> bool {
                 false
             }
             Err(error) => {
+                POSEIDON_COLUMN_GPU_DISABLED.store(true, Ordering::Release);
                 tracing::warn!(
                     target: "fastpq::poseidon",
                     backend = ?backend,
@@ -1816,6 +1866,12 @@ fn hash_trace_merkle_pairs_gpu(pairs: &[[u64; 2]]) -> Option<Vec<u64>> {
                 record_poseidon_merkle_pair_gpu_batch(pairs.len());
                 Some(result)
             } else {
+                disable_poseidon_merkle_gpu_with_warning(
+                    backend,
+                    pairs.len(),
+                    "runtime CPU parity mismatch",
+                    None,
+                );
                 tracing::warn!(
                     target: "fastpq::poseidon",
                     backend = ?backend,
@@ -1828,7 +1884,12 @@ fn hash_trace_merkle_pairs_gpu(pairs: &[[u64; 2]]) -> Option<Vec<u64>> {
             }
         }
         Err(error) => {
-            disable_poseidon_merkle_gpu_with_warning(backend, pairs.len(), &error);
+            disable_poseidon_merkle_gpu_with_warning(
+                backend,
+                pairs.len(),
+                "dispatch error",
+                Some(&error),
+            );
             record_poseidon_merkle_pair_fallback();
             None
         }
@@ -1953,20 +2014,32 @@ fn poseidon_merkle_pair_gpu_preflight(backend: backend::GpuBackend) -> bool {
 fn disable_poseidon_merkle_gpu_with_warning(
     backend: backend::GpuBackend,
     pair_count: usize,
-    error: &gpu::GpuError,
+    reason: &'static str,
+    error: Option<&gpu::GpuError>,
 ) {
     if POSEIDON_MERKLE_GPU_DISABLED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
         .is_ok()
     {
-        tracing::warn!(
-            target: "fastpq::poseidon",
-            backend = ?backend,
-            pair_count,
-            min_pairs = POSEIDON_MERKLE_GPU_MIN_PAIRS,
-            %error,
-            "gpu trace Merkle Poseidon pair batch failed; falling back to scalar hashing"
-        );
+        match error {
+            Some(error) => tracing::warn!(
+                target: "fastpq::poseidon",
+                backend = ?backend,
+                pair_count,
+                min_pairs = POSEIDON_MERKLE_GPU_MIN_PAIRS,
+                reason,
+                %error,
+                "gpu trace Merkle Poseidon pair accelerator disabled; falling back to scalar hashing"
+            ),
+            None => tracing::warn!(
+                target: "fastpq::poseidon",
+                backend = ?backend,
+                pair_count,
+                min_pairs = POSEIDON_MERKLE_GPU_MIN_PAIRS,
+                reason,
+                "gpu trace Merkle Poseidon pair accelerator disabled; falling back to scalar hashing"
+            ),
+        }
     }
 }
 

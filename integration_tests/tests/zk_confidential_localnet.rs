@@ -19,8 +19,8 @@ use iroha::{
         confidential::ConfidentialEncryptedPayload,
         domain::DomainId,
         prelude::{
-            AssetDefinition, AssetDefinitionId, AssetId, FindAssetById, InstructionBox, Level, Log,
-            Mint, Numeric, Register, Transfer,
+            AssetDefinition, AssetDefinitionId, AssetId, FindAssetById, Grant, InstructionBox,
+            Json, Level, Log, Mint, Numeric, Permission, Register, Transfer,
         },
         transaction::SignedTransaction,
     },
@@ -30,11 +30,19 @@ use iroha_core::{
         consensus::{NPOS_TAG, PERMISSIONED_TAG},
         network_topology::Topology,
     },
-    zk::test_utils::halo2_ivm_execution_envelope,
+    zk::{
+        IVM_EXECUTION_V1_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA, hash_vk,
+        test_utils::{FixtureEnvelope, halo2_ivm_execution_envelope},
+    },
 };
-use iroha_data_model::proof::{ProofAttachment, VerifyingKeyId};
+use iroha_data_model::{
+    confidential::ConfidentialStatus,
+    isi::verifying_keys,
+    proof::{ProofAttachment, VerifyingKeyId, VerifyingKeyRecord},
+    zk::BackendTag,
+};
 use iroha_test_network::{NetworkBuilder, NetworkPeer};
-use iroha_test_samples::{BOB_ID, BOB_KEYPAIR};
+use iroha_test_samples::{BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID};
 use sorafs_manifest::alias_cache::AliasCachePolicy;
 
 const PROOF_VERIFY_TIMEOUT_MS: i64 = 600_000;
@@ -91,18 +99,54 @@ fn hash_for_live_proof(domain: &[u8], seed: [u8; 32]) -> iroha_crypto::Hash {
     iroha_crypto::Hash::new(preimage)
 }
 
-fn live_halo2_attachment(seed: [u8; 32]) -> ProofAttachment {
-    let fixture = halo2_ivm_execution_envelope(
+fn live_halo2_fixture(seed: [u8; 32]) -> FixtureEnvelope {
+    halo2_ivm_execution_envelope(
         hash_for_live_proof(b"zk-confidential-localnet/code", seed),
         hash_for_live_proof(b"zk-confidential-localnet/overlay", seed),
         hash_for_live_proof(b"zk-confidential-localnet/events", seed),
         hash_for_live_proof(b"zk-confidential-localnet/gas-policy", seed),
+    )
+}
+
+fn live_halo2_verifying_key_id() -> VerifyingKeyId {
+    VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "ivm_execution_halo2")
+}
+
+fn live_halo2_verifying_key_registration() -> verifying_keys::RegisterVerifyingKey {
+    let fixture = live_halo2_fixture(marker(0));
+    let vk_box = fixture
+        .vk_box(ZK_BACKEND_HALO2_IPA)
+        .expect("live Halo2 fixture embeds verifier key bytes");
+    let proof_box = fixture.proof_box(ZK_BACKEND_HALO2_IPA);
+    let mut record = VerifyingKeyRecord::new(
+        1,
+        format!("{ZK_BACKEND_HALO2_IPA}:{IVM_EXECUTION_V1_CIRCUIT_ID}"),
+        BackendTag::Halo2IpaPasta,
+        "pallas",
+        fixture.schema_hash,
+        hash_vk(&vk_box),
     );
-    let proof_box = fixture.proof_box("halo2/ipa");
+    record.vk_len =
+        u32::try_from(vk_box.bytes.len()).expect("live Halo2 fixture verifier key length fits u32");
+    record.max_proof_bytes =
+        u32::try_from(proof_box.bytes.len()).expect("live Halo2 fixture proof length fits u32");
+    record.gas_schedule_id = Some("halo2_default".to_owned());
+    record.key = Some(vk_box);
+    record.status = ConfidentialStatus::Active;
+
+    verifying_keys::RegisterVerifyingKey {
+        id: live_halo2_verifying_key_id(),
+        record,
+    }
+}
+
+fn live_halo2_attachment(seed: [u8; 32]) -> ProofAttachment {
+    let fixture = live_halo2_fixture(seed);
+    let proof_box = fixture.proof_box(ZK_BACKEND_HALO2_IPA);
     ProofAttachment::new_ref(
-        "halo2/ipa".into(),
+        ZK_BACKEND_HALO2_IPA.into(),
         proof_box,
-        VerifyingKeyId::new("halo2/ipa", "ivm_execution_halo2"),
+        live_halo2_verifying_key_id(),
     )
 }
 
@@ -902,6 +946,11 @@ async fn start_confidential_localnet(test_name: &str) -> Result<Option<Confident
         let builder = NetworkBuilder::new()
             .with_peers(4)
             .with_auto_populated_trusted_peers()
+            .with_genesis_instruction(Grant::account_permission(
+                Permission::new("CanManageVerifyingKeys".into(), Json::new(())),
+                SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+            ))
+            .with_genesis_instruction(live_halo2_verifying_key_registration())
             .with_config_layer(|layer| {
                 layer
                     .write(["confidential", "enabled"], true)

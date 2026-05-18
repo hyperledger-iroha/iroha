@@ -49,15 +49,15 @@ use iroha_data_model::{
         SoraModelHostViolationEvidenceRecordV1, SoraModelHostViolationKindV1,
         SoraModelProvenanceKindV1, SoraModelProvenanceRefV1, SoraModelRegistryV1,
         SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
-        SoraRolloutStageV1, SoraRuntimeReceiptV1, SoraServiceAuditEventV1,
-        SoraServiceConfigEntryV1, SoraServiceDeploymentStateV1, SoraServiceExecutionPlaneV1,
-        SoraServiceLeaseStateV1, SoraServiceLeaseStatusV1, SoraServiceLeaseVolumeStateV1,
-        SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1, SoraServiceRolloutStateV1,
-        SoraServiceRuntimeStateV1, SoraServiceSecretEntryV1, SoraServiceStateEntryV1,
-        SoraStateEncryptionV1, SoraStateMutationOperationV1, SoraTrainingJobActionV1,
-        SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1, SoraTrainingJobStatusV1,
-        SoraUploadedModelBundleV1, derive_agent_autonomy_request_commitment,
-        encode_agent_artifact_allow_provenance_payload,
+        SoraPrivateUploadedModelExecutionReceiptV1, SoraRolloutStageV1, SoraRuntimeReceiptV1,
+        SoraServiceAuditEventV1, SoraServiceConfigEntryV1, SoraServiceDeploymentStateV1,
+        SoraServiceExecutionPlaneV1, SoraServiceLeaseStateV1, SoraServiceLeaseStatusV1,
+        SoraServiceLeaseVolumeStateV1, SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
+        SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1, SoraServiceSecretEntryV1,
+        SoraServiceStateEntryV1, SoraStateEncryptionV1, SoraStateMutationOperationV1,
+        SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
+        SoraTrainingJobStatusV1, SoraUploadedModelBundleV1,
+        derive_agent_autonomy_request_commitment, encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
         encode_agent_message_send_provenance_payload,
@@ -1856,6 +1856,60 @@ pub(crate) fn write_soracloud_runtime_receipt(
     state_transaction
         .world
         .soracloud_runtime_receipts
+        .insert(receipt.receipt_id, receipt);
+    Ok(())
+}
+
+pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    receipt: SoraPrivateUploadedModelExecutionReceiptV1,
+) -> Result<(), InstructionExecutionError> {
+    receipt
+        .validate()
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+    let Some(bundle) = state_transaction
+        .world
+        .soracloud_uploaded_model_bundles
+        .get(&(
+            receipt.service_name.as_ref().to_owned(),
+            receipt.model_id.clone(),
+            receipt.weight_version.clone(),
+        ))
+    else {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "uploaded model `{}` version `{}` for service `{}` has not been finalized",
+                receipt.model_id, receipt.weight_version, receipt.service_name
+            )
+            .into(),
+        ));
+    };
+    if bundle.runtime_format
+        != iroha_data_model::soracloud::SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "private receipt `{}` targets uploaded model `{}` version `{}` with a non-deterministic private runtime format",
+                receipt.receipt_id, receipt.model_id, receipt.weight_version
+            )
+            .into(),
+        ));
+    }
+    if bundle.sorafs_manifest_digest != receipt.model_manifest_digest
+        || bundle.bundle_root != receipt.model_bundle_root
+        || bundle.decryption_policy_ref != receipt.policy_id
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "private receipt `{}` does not match finalized uploaded model `{}` version `{}`",
+                receipt.receipt_id, receipt.model_id, receipt.weight_version
+            )
+            .into(),
+        ));
+    }
+    state_transaction
+        .world
+        .soracloud_private_uploaded_model_execution_receipts
         .insert(receipt.receipt_id, receipt);
     Ok(())
 }
@@ -9984,6 +10038,17 @@ impl Execute for isi::RecordSoracloudRuntimeReceipt {
     }
 }
 
+impl Execute for isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), InstructionExecutionError> {
+        require_soracloud_runtime_authority(authority, state_transaction)?;
+        write_soracloud_private_uploaded_model_execution_receipt(state_transaction, self.receipt)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -10020,6 +10085,7 @@ mod tests {
             SoraHttpServiceEconomicsV1, SoraInrouGuestOsV1, SoraInrouManifestV1,
             SoraLeaseVolumeBindingV1, SoraLeaseVolumeKindV1, SoraLifecycleHooksV1,
             SoraModelHostCapabilityRecordV1, SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1,
+            SoraPrivateModelArtifactRefV1, SoraPrivateUploadedModelExecutionReceiptV1,
             SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
             SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceManifestV1,
             SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
@@ -15007,6 +15073,91 @@ mod tests {
     }
 
     #[test]
+    fn private_uploaded_model_execution_receipt_persists_only_for_deterministic_runtime()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        let model_digest = ManifestDigest::new([0xD1; 32]);
+        let mut bundle = sample_uploaded_model_bundle("portal", model_digest);
+        bundle.runtime_format =
+            iroha_data_model::soracloud::SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1;
+        stx.world.soracloud_uploaded_model_bundles.insert(
+            (
+                bundle.service_name.as_ref().to_owned(),
+                bundle.model_id.clone(),
+                bundle.weight_version.clone(),
+            ),
+            bundle.clone(),
+        );
+
+        let artifact = |role: &str, byte: u8| SoraPrivateModelArtifactRefV1 {
+            schema_version: iroha_data_model::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
+            sorafs_manifest_digest: ManifestDigest::new([byte; 32]),
+            artifact_hash: Hash::new([byte; 32]),
+            ciphertext_bytes: 64,
+            artifact_role: role.to_string(),
+        };
+        let receipt = SoraPrivateUploadedModelExecutionReceiptV1 {
+            schema_version:
+                iroha_data_model::soracloud::SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
+            receipt_id: Hash::new(b"private-receipt-ok"),
+            service_name: bundle.service_name.clone(),
+            model_id: bundle.model_id.clone(),
+            weight_version: bundle.weight_version.clone(),
+            runtime_version:
+                crate::soracloud_runtime::SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1.to_string(),
+            model_manifest_digest: bundle.sorafs_manifest_digest,
+            model_bundle_root: bundle.bundle_root,
+            policy_id: bundle.decryption_policy_ref.clone(),
+            input_artifact: artifact("input", 0xD2),
+            output_artifact: artifact("output", 0xD3),
+            input_commitment: Hash::new(b"input-commitment"),
+            output_commitment: Hash::new(b"output-commitment"),
+            request_commitment: Hash::new(b"request-commitment"),
+            result_commitment: Hash::new(b"result-commitment"),
+            emitted_sequence: 1,
+        };
+
+        write_soracloud_private_uploaded_model_execution_receipt(&mut stx, receipt.clone())?;
+        assert!(
+            stx.world
+                .soracloud_private_uploaded_model_execution_receipts
+                .get(&receipt.receipt_id)
+                .is_some()
+        );
+
+        let mut nondeterministic_bundle = bundle.clone();
+        nondeterministic_bundle.model_id = "vision_model_hf".to_string();
+        nondeterministic_bundle.runtime_format =
+            iroha_data_model::soracloud::SoraUploadedModelRuntimeFormatV1::HuggingFaceSafetensors;
+        stx.world.soracloud_uploaded_model_bundles.insert(
+            (
+                nondeterministic_bundle.service_name.as_ref().to_owned(),
+                nondeterministic_bundle.model_id.clone(),
+                nondeterministic_bundle.weight_version.clone(),
+            ),
+            nondeterministic_bundle.clone(),
+        );
+        let mut rejected = receipt;
+        rejected.receipt_id = Hash::new(b"private-receipt-rejected");
+        rejected.model_id = nondeterministic_bundle.model_id;
+        let err = write_soracloud_private_uploaded_model_execution_receipt(&mut stx, rejected)
+            .expect_err("non-deterministic private runtime bundle must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvariantViolation(_)
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn soracloud_uploaded_model_register_rejects_adversarial_sorafs_pin_metadata()
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
@@ -15106,6 +15257,265 @@ mod tests {
                 .filter(|((service, _model, _version), _)| service == "portal")
                 .count(),
             0
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_uploaded_model_register_rejects_zero_storage_metadata() -> Result<(), eyre::Report>
+    {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        deploy_uploaded_model_service(&mut stx)?;
+
+        let adversarial_mutations: [(u8, fn(&mut SoraUploadedModelBundleV1)); 3] = [
+            (0xE3, |bundle: &mut SoraUploadedModelBundleV1| {
+                bundle.chunk_count = 0;
+            }),
+            (0xE4, |bundle: &mut SoraUploadedModelBundleV1| {
+                bundle.plaintext_bytes = 0;
+            }),
+            (0xE5, |bundle: &mut SoraUploadedModelBundleV1| {
+                bundle.ciphertext_bytes = 0;
+            }),
+        ];
+        for (digest_byte, mutate) in adversarial_mutations {
+            let digest = ManifestDigest::new([digest_byte; 32]);
+            let mut bundle = sample_uploaded_model_bundle("portal", digest);
+            mutate(&mut bundle);
+            insert_uploaded_model_pin_with_content_length(
+                &mut stx,
+                digest,
+                bundle.ciphertext_bytes,
+                PinStatus::Approved(1),
+            );
+            let result = isi::RegisterSoracloudUploadedModelBundle {
+                bundle: bundle.clone(),
+                provenance: uploaded_model_bundle_provenance(&bundle),
+            }
+            .execute(&ALICE_ID, &mut stx);
+            assert!(result.is_err());
+        }
+
+        assert!(
+            stx.world
+                .soracloud_uploaded_model_bundles
+                .get(&(
+                    "portal".to_string(),
+                    "vision_model".to_string(),
+                    "v1".to_string(),
+                ))
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_uploaded_model_register_rejects_malformed_bundle_manifest_fields()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        deploy_uploaded_model_service(&mut stx)?;
+
+        let adversarial_mutations: [fn(&mut SoraUploadedModelBundleV1); 8] = [
+            |bundle| {
+                bundle.schema_version = SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1 + 1;
+            },
+            |bundle| {
+                bundle.family.clear();
+            },
+            |bundle| {
+                bundle.modalities.clear();
+            },
+            |bundle| {
+                bundle.modalities = vec![" ".to_string()];
+            },
+            |bundle| {
+                bundle.modalities = vec!["text\nimage".to_string()];
+            },
+            |bundle| {
+                bundle.modalities = vec!["text".to_string(), "text".to_string()];
+            },
+            |bundle| {
+                bundle.decryption_policy_ref.clear();
+            },
+            |bundle| {
+                bundle.wrapped_bundle_key.recipient_key_id = "other-recipient".to_string();
+            },
+        ];
+        for (index, mutate) in adversarial_mutations.into_iter().enumerate() {
+            let digest = ManifestDigest::new([(0xE6 + index) as u8; 32]);
+            let mut bundle = sample_uploaded_model_bundle("portal", digest);
+            mutate(&mut bundle);
+            insert_uploaded_model_pin_with_content_length(
+                &mut stx,
+                digest,
+                bundle.ciphertext_bytes,
+                PinStatus::Approved(1),
+            );
+            let result = isi::RegisterSoracloudUploadedModelBundle {
+                bundle: bundle.clone(),
+                provenance: uploaded_model_bundle_provenance(&bundle),
+            }
+            .execute(&ALICE_ID, &mut stx);
+            assert!(result.is_err());
+        }
+
+        assert!(
+            stx.world
+                .soracloud_uploaded_model_bundles
+                .get(&(
+                    "portal".to_string(),
+                    "vision_model".to_string(),
+                    "v1".to_string(),
+                ))
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_uploaded_model_register_rejects_malformed_key_material() -> Result<(), eyre::Report>
+    {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        deploy_uploaded_model_service(&mut stx)?;
+
+        let adversarial_mutations: [fn(&mut SoraUploadedModelBundleV1); 10] = [
+            |bundle| {
+                bundle.upload_recipient.schema_version =
+                    iroha_data_model::soracloud::SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1
+                        + 1;
+            },
+            |bundle| {
+                bundle.upload_recipient.key_id.clear();
+            },
+            |bundle| {
+                bundle.upload_recipient.public_key_bytes.clear();
+            },
+            |bundle| {
+                bundle.upload_recipient.public_key_fingerprint = Hash::new(b"wrong-recipient-key");
+            },
+            |bundle| {
+                bundle.wrapped_bundle_key.schema_version =
+                    iroha_data_model::soracloud::SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1 + 1;
+            },
+            |bundle| {
+                bundle.wrapped_bundle_key.ephemeral_public_key.clear();
+            },
+            |bundle| {
+                bundle.wrapped_bundle_key.nonce.clear();
+            },
+            |bundle| {
+                bundle.wrapped_bundle_key.wrapped_key_ciphertext.clear();
+            },
+            |bundle| {
+                bundle.wrapped_bundle_key.ciphertext_hash = Hash::new(b"wrong-wrapped-key");
+            },
+            |bundle| {
+                bundle.wrapped_bundle_key.recipient_key_version =
+                    NonZeroU32::new(2).expect("non-zero key version");
+            },
+        ];
+        for (index, mutate) in adversarial_mutations.into_iter().enumerate() {
+            let digest = ManifestDigest::new([(0xEC + index) as u8; 32]);
+            let mut bundle = sample_uploaded_model_bundle("portal", digest);
+            mutate(&mut bundle);
+            insert_uploaded_model_pin_with_content_length(
+                &mut stx,
+                digest,
+                bundle.ciphertext_bytes,
+                PinStatus::Approved(1),
+            );
+            let result = isi::RegisterSoracloudUploadedModelBundle {
+                bundle: bundle.clone(),
+                provenance: uploaded_model_bundle_provenance(&bundle),
+            }
+            .execute(&ALICE_ID, &mut stx);
+            assert!(result.is_err());
+        }
+
+        assert!(
+            stx.world
+                .soracloud_uploaded_model_bundles
+                .get(&(
+                    "portal".to_string(),
+                    "vision_model".to_string(),
+                    "v1".to_string(),
+                ))
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_uploaded_model_register_rejects_oversized_key_material() -> Result<(), eyre::Report>
+    {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        deploy_uploaded_model_service(&mut stx)?;
+
+        let adversarial_mutations: [fn(&mut SoraUploadedModelBundleV1); 3] = [
+            |bundle| {
+                bundle.upload_recipient.public_key_bytes = vec![7u8; 257];
+                bundle.upload_recipient.public_key_fingerprint =
+                    Hash::new(bundle.upload_recipient.public_key_bytes.as_slice());
+            },
+            |bundle| {
+                bundle.wrapped_bundle_key.ephemeral_public_key = vec![8u8; 257];
+            },
+            |bundle| {
+                bundle.wrapped_bundle_key.wrapped_key_ciphertext = vec![9u8; 4_097];
+                bundle.wrapped_bundle_key.ciphertext_hash =
+                    Hash::new(bundle.wrapped_bundle_key.wrapped_key_ciphertext.as_slice());
+            },
+        ];
+        for (index, mutate) in adversarial_mutations.into_iter().enumerate() {
+            let digest = ManifestDigest::new([(0xF5 + index) as u8; 32]);
+            let mut bundle = sample_uploaded_model_bundle("portal", digest);
+            mutate(&mut bundle);
+            insert_uploaded_model_pin(&mut stx, digest, PinStatus::Approved(1));
+            let result = isi::RegisterSoracloudUploadedModelBundle {
+                bundle: bundle.clone(),
+                provenance: uploaded_model_bundle_provenance(&bundle),
+            }
+            .execute(&ALICE_ID, &mut stx);
+            assert!(result.is_err());
+        }
+
+        assert!(
+            stx.world
+                .soracloud_uploaded_model_bundles
+                .get(&(
+                    "portal".to_string(),
+                    "vision_model".to_string(),
+                    "v1".to_string(),
+                ))
+                .is_none()
         );
         Ok(())
     }
@@ -15231,6 +15641,42 @@ mod tests {
                 .get(&(
                     "portal".to_string(),
                     "vision_model_replayed".to_string(),
+                    "v1".to_string(),
+                ))
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_uploaded_model_register_rejects_tampered_signed_storage_reference()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        deploy_uploaded_model_service(&mut stx)?;
+        let signed_digest = ManifestDigest::new([0xF8; 32]);
+        let replay_digest = ManifestDigest::new([0xF9; 32]);
+        insert_uploaded_model_pin(&mut stx, signed_digest, PinStatus::Approved(1));
+        insert_uploaded_model_pin(&mut stx, replay_digest, PinStatus::Approved(1));
+        let mut bundle = sample_uploaded_model_bundle("portal", signed_digest);
+        let provenance = uploaded_model_bundle_provenance(&bundle);
+        bundle.sorafs_manifest_digest = replay_digest;
+
+        let result = isi::RegisterSoracloudUploadedModelBundle { bundle, provenance }
+            .execute(&ALICE_ID, &mut stx);
+        assert!(result.is_err());
+        assert!(
+            stx.world
+                .soracloud_uploaded_model_bundles
+                .get(&(
+                    "portal".to_string(),
+                    "vision_model".to_string(),
                     "v1".to_string(),
                 ))
                 .is_none()
@@ -15396,6 +15842,46 @@ mod tests {
     }
 
     #[test]
+    fn soracloud_uploaded_model_finalize_rejects_unregistered_bundle() -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        deploy_uploaded_model_service(&mut stx)?;
+        let digest = ManifestDigest::new([0xFA; 32]);
+        insert_uploaded_model_pin(&mut stx, digest, PinStatus::Approved(1));
+        let bundle = sample_uploaded_model_bundle("portal", digest);
+
+        let result = sample_uploaded_model_finalize_instruction(
+            &bundle,
+            "uploaded-artifact-unregistered",
+            bundle.bundle_root,
+        )
+        .execute(&ALICE_ID, &mut stx);
+        assert!(result.is_err());
+        assert!(
+            stx.world
+                .soracloud_model_registries
+                .get(&("portal".to_string(), "vision_model".to_string()))
+                .is_none()
+        );
+        assert!(
+            stx.world
+                .soracloud_model_artifacts
+                .get(&(
+                    "portal".to_string(),
+                    "uploaded-artifact-unregistered".to_string(),
+                ))
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn soracloud_uploaded_model_finalize_rejects_tampered_bundle_root() -> Result<(), eyre::Report>
     {
         let kura = Kura::blank_kura_for_testing();
@@ -15529,6 +16015,24 @@ mod tests {
         let invalid_version_result = invalid_version_instruction.execute(&ALICE_ID, &mut stx);
         assert!(invalid_version_result.is_err());
 
+        let mut invalid_model_name_instruction = sample_uploaded_model_finalize_instruction(
+            &bundle,
+            "uploaded-artifact-invalid-model-name",
+            bundle.bundle_root,
+        );
+        invalid_model_name_instruction.model_name = "vision model".to_string();
+        let invalid_model_name_result = invalid_model_name_instruction.execute(&ALICE_ID, &mut stx);
+        assert!(invalid_model_name_result.is_err());
+
+        let mut invalid_dataset_instruction = sample_uploaded_model_finalize_instruction(
+            &bundle,
+            "uploaded-artifact-invalid-dataset",
+            bundle.bundle_root,
+        );
+        invalid_dataset_instruction.dataset_ref = "dataset://upload\nshadow".to_string();
+        let invalid_dataset_result = invalid_dataset_instruction.execute(&ALICE_ID, &mut stx);
+        assert!(invalid_dataset_result.is_err());
+
         assert_eq!(
             stx.world
                 .soracloud_model_artifacts
@@ -15634,6 +16138,53 @@ mod tests {
                 .get(&(
                     "portal".to_string(),
                     "uploaded-artifact-mutated-pin".to_string(),
+                ))
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_uploaded_model_finalize_rejects_pin_digest_changed_after_register()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        deploy_uploaded_model_service(&mut stx)?;
+        let digest = ManifestDigest::new([0xF1; 32]);
+        insert_uploaded_model_pin(&mut stx, digest, PinStatus::Approved(1));
+        let bundle = sample_uploaded_model_bundle("portal", digest);
+        isi::RegisterSoracloudUploadedModelBundle {
+            bundle: bundle.clone(),
+            provenance: uploaded_model_bundle_provenance(&bundle),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+        insert_uploaded_model_pin_record(
+            &mut stx,
+            digest,
+            ManifestDigest::new([0xF2; 32]),
+            bundle.ciphertext_bytes,
+            PinStatus::Approved(2),
+        );
+
+        let result = sample_uploaded_model_finalize_instruction(
+            &bundle,
+            "uploaded-artifact-mutated-pin-digest",
+            bundle.bundle_root,
+        )
+        .execute(&ALICE_ID, &mut stx);
+        assert!(result.is_err());
+        assert!(
+            stx.world
+                .soracloud_model_artifacts
+                .get(&(
+                    "portal".to_string(),
+                    "uploaded-artifact-mutated-pin-digest".to_string(),
                 ))
                 .is_none()
         );

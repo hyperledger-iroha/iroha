@@ -797,6 +797,12 @@ mod tests {
                 receipt_signer: None,
                 query_rate_per_authority_per_sec: None,
                 query_burst_per_authority: None,
+                query_max_inflight: iroha_config::parameters::defaults::torii::QUERY_MAX_INFLIGHT,
+                query_heavy_max_inflight:
+                    iroha_config::parameters::defaults::torii::QUERY_HEAVY_MAX_INFLIGHT,
+                query_queue_timeout: Duration::from_millis(
+                    iroha_config::parameters::defaults::torii::QUERY_QUEUE_TIMEOUT_MS,
+                ),
                 tx_rate_per_authority_per_sec: None,
                 tx_burst_per_authority: None,
                 deploy_rate_per_origin_per_sec: None,

@@ -21,9 +21,9 @@ use crate::{
         FheExecutionPolicyV1, FheJobSpecV1, FheParamSetV1, SecretEnvelopeV1,
         SoraDeploymentBundleV1, SoraHfResourceProfileV1, SoraInrouHostCapabilityRecordV1,
         SoraInrouReplicaRuntimeStateV1, SoraModelHostCapabilityRecordV1,
-        SoraModelHostViolationKindV1, SoraRuntimeReceiptV1, SoraServiceMailboxMessageV1,
-        SoraServiceRuntimeStateV1, SoraStateEncryptionV1, SoraStateMutationOperationV1,
-        SoraUploadedModelBundleV1,
+        SoraModelHostViolationKindV1, SoraPrivateUploadedModelExecutionReceiptV1,
+        SoraRuntimeReceiptV1, SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
+        SoraStateEncryptionV1, SoraStateMutationOperationV1, SoraUploadedModelBundleV1,
     },
     sorafs::pin_registry::StorageClass,
 };
@@ -1317,6 +1317,25 @@ impl PartialOrd for RecordSoracloudRuntimeReceipt {
     }
 }
 
+/// Persist an authoritative private uploaded-model execution receipt.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RecordSoracloudPrivateUploadedModelExecutionReceipt {
+    /// Private uploaded-model execution receipt to persist.
+    pub receipt: SoraPrivateUploadedModelExecutionReceiptV1,
+}
+
+impl crate::seal::Instruction for RecordSoracloudPrivateUploadedModelExecutionReceipt {}
+
+impl PartialOrd for RecordSoracloudPrivateUploadedModelExecutionReceipt {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
 fn soracloud_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
@@ -1729,6 +1748,10 @@ impl_soracloud_decode_from_slice!(RecordSoracloudRuntimeReceipt {
     receipt: SoraRuntimeReceiptV1,
 });
 
+impl_soracloud_decode_from_slice!(RecordSoracloudPrivateUploadedModelExecutionReceipt {
+    receipt: SoraPrivateUploadedModelExecutionReceiptV1,
+});
+
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair, Signature};
@@ -1787,6 +1810,47 @@ mod tests {
             .expect("registered")
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
+    }
+
+    fn private_uploaded_model_execution_receipt()
+    -> RecordSoracloudPrivateUploadedModelExecutionReceipt {
+        RecordSoracloudPrivateUploadedModelExecutionReceipt {
+            receipt: SoraPrivateUploadedModelExecutionReceiptV1 {
+                schema_version:
+                    crate::soracloud::SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
+                receipt_id: hash("private-receipt"),
+                service_name: name("portal"),
+                model_id: "upload-1".to_owned(),
+                weight_version: "v1".to_owned(),
+                runtime_version: "soracloud.quantized-cpu.v1".to_owned(),
+                model_manifest_digest: crate::sorafs::pin_registry::ManifestDigest::new([0xA5; 32]),
+                model_bundle_root: hash("bundle"),
+                policy_id: "policy/v1".to_owned(),
+                input_artifact: crate::soracloud::SoraPrivateModelArtifactRefV1 {
+                    schema_version: crate::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
+                    sorafs_manifest_digest: crate::sorafs::pin_registry::ManifestDigest::new(
+                        [0xB1; 32],
+                    ),
+                    artifact_hash: hash("input-artifact"),
+                    ciphertext_bytes: 32,
+                    artifact_role: "input".to_owned(),
+                },
+                output_artifact: crate::soracloud::SoraPrivateModelArtifactRefV1 {
+                    schema_version: crate::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
+                    sorafs_manifest_digest: crate::sorafs::pin_registry::ManifestDigest::new(
+                        [0xB2; 32],
+                    ),
+                    artifact_hash: hash("output-artifact"),
+                    ciphertext_bytes: 32,
+                    artifact_role: "output".to_owned(),
+                },
+                input_commitment: hash("input"),
+                output_commitment: hash("output"),
+                request_commitment: hash("request"),
+                result_commitment: hash("result"),
+                emitted_sequence: 1,
+            },
+        }
     }
 
     #[test]
@@ -1867,6 +1931,7 @@ mod tests {
             active_service_version: "2026.5".to_owned(),
             accounted_egress_bytes: 4096,
         });
+        assert_slice_roundtrip(private_uploaded_model_execution_receipt());
     }
 
     #[test]

@@ -119,7 +119,8 @@ fn iterable_query_response_roundtrips_header_and_json() {
     };
     let output = QueryOutput {
         batch: batch.clone(),
-        remaining_items: 3,
+        remaining_items: Some(3),
+        has_more: true,
         continue_cursor: Some(cursor),
     };
     let resp = QueryResponse::Iterable(output.clone());
@@ -168,7 +169,8 @@ fn rwa_iterable_query_response_roundtrips_header_and_json() {
     };
     let output = QueryOutput {
         batch: batch.clone(),
-        remaining_items: 0,
+        remaining_items: Some(0),
+        has_more: false,
         continue_cursor: None,
     };
     let resp = QueryResponse::Iterable(output.clone());

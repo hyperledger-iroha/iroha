@@ -35,8 +35,8 @@ type DeferredMaterializer = Box<dyn FnOnce() -> ErasedQueryIterator + Send + Syn
 pub(crate) struct PreparedQueryStart {
     /// Precomputed first response batch.
     pub first_batch: QueryOutputBatchBoxTuple,
-    /// Remaining item count after the first batch.
-    pub remaining_items: u64,
+    /// Remaining item count after the first batch, when exact counts were computed.
+    pub remaining_items: Option<u64>,
     /// Deferred continuation state. `None` means query is already drained.
     pub deferred_continuation: Option<DeferredQueryContinuation>,
 }
@@ -44,13 +44,17 @@ pub(crate) struct PreparedQueryStart {
 /// Deferred continuation for stored iterable queries.
 pub(crate) struct DeferredQueryContinuation {
     expected_cursor: NonZeroU64,
-    remaining_items: u64,
+    remaining_items: Option<u64>,
     materialize: Option<DeferredMaterializer>,
 }
 
 impl DeferredQueryContinuation {
     /// Construct deferred continuation state.
-    pub(crate) fn new<F>(expected_cursor: NonZeroU64, remaining_items: u64, materialize: F) -> Self
+    pub(crate) fn new<F>(
+        expected_cursor: NonZeroU64,
+        remaining_items: Option<u64>,
+        materialize: F,
+    ) -> Self
     where
         F: FnOnce() -> ErasedQueryIterator + Send + Sync + 'static,
     {
@@ -114,7 +118,7 @@ impl LiveQuery {
         }
     }
 
-    fn remaining(&self) -> u64 {
+    fn remaining(&self) -> Option<u64> {
         match self {
             Self::Ready(live_query) => live_query.remaining(),
             Self::Deferred(continuation) => continuation.remaining_items,
@@ -296,7 +300,8 @@ impl LiveQueryStore {
         &self,
         query_id: &QueryId,
         cursor: NonZeroU64,
-    ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<NonZeroU64>), QueryExecutionFail> {
+    ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<NonZeroU64>), QueryExecutionFail>
+    {
         trace!(%query_id, "Advancing existing query");
         let (next_batch, remaining, next_cursor) = {
             let mut entry = self
@@ -418,7 +423,7 @@ impl LiveQueryStoreHandle {
     ) -> Result<QueryOutput, QueryExecutionFail> {
         let curr_cursor = 0;
         let (batch, _next_cursor) = live_query.next_batch(curr_cursor)?;
-        let remaining_items = live_query.remaining();
+        let remaining_items = live_query.remaining().unwrap_or(0);
         Ok(QueryOutput::new(batch, remaining_items, None))
     }
 
@@ -454,20 +459,20 @@ impl LiveQueryStoreHandle {
 
     fn construct_query_response(
         batch: QueryOutputBatchBoxTuple,
-        remaining_items: u64,
+        remaining_items: Option<u64>,
         query_id: QueryId,
         cursor: Option<NonZeroU64>,
         gas_budget: Option<u64>,
     ) -> QueryOutput {
-        QueryOutput::new(
-            batch,
-            remaining_items,
-            cursor.map(|cursor| ForwardCursor {
-                query: query_id,
-                cursor,
-                gas_budget,
-            }),
-        )
+        let cursor = cursor.map(|cursor| ForwardCursor {
+            query: query_id,
+            cursor,
+            gas_budget,
+        });
+        match remaining_items {
+            Some(remaining_items) => QueryOutput::new(batch, remaining_items, cursor),
+            None => QueryOutput::new_bounded(batch, cursor.is_some(), cursor),
+        }
     }
 }
 
@@ -790,10 +795,10 @@ mod tests {
                     vec![Permission::new("p0".to_owned(), Json::from(false))],
                 )],
             },
-            remaining_items: 1,
+            remaining_items: Some(1),
             deferred_continuation: Some(DeferredQueryContinuation::new(
                 nonzero!(1_u64),
-                1,
+                Some(1),
                 move || {
                     flag.store(true, Ordering::SeqCst);
                     ErasedQueryIterator::new_with_cursor(

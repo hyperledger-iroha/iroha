@@ -11,7 +11,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{State, WorldReadOnly},
-    zk::{hash_proof, hash_vk},
+    zk::{PreverifiedProofKey, hash_vk},
 };
 use iroha_crypto::Hash as CryptoHash;
 use iroha_data_model::{
@@ -36,7 +36,7 @@ use nonzero_ext::nonzero;
 mod test_world;
 
 #[allow(clippy::disallowed_types)]
-type PreverifiedMap = std::collections::BTreeMap<[u8; 32], bool>;
+type PreverifiedMap = iroha_core::zk::PreverifiedProofMap;
 
 fn grant_manage_vk(block: &mut iroha_core::state::StateBlock<'_>) {
     let mut stx = block.transaction();
@@ -181,11 +181,15 @@ fn register_halo2_vk(
 
 fn execute_verify_proof(
     block: &mut iroha_core::state::StateBlock<'_>,
-    attachment: iroha_data_model::proof::ProofAttachment,
+    mut attachment: iroha_data_model::proof::ProofAttachment,
+    vk_commitment: [u8; 32],
 ) -> Result<(), ValidationFail> {
-    let proof_hash = hash_proof(&attachment.proof);
+    attachment.vk_commitment = Some(vk_commitment);
     let mut preverified = PreverifiedMap::new();
-    preverified.insert(proof_hash, true);
+    preverified.insert(
+        PreverifiedProofKey::new(&attachment.proof, &attachment.vk_ref, vk_commitment),
+        true,
+    );
     block.set_preverified_batch(Arc::new(preverified));
     let mut stx = block.transaction();
     let isi: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
@@ -222,10 +226,11 @@ fn verify_proof_rejects_circuit_mismatch() {
         expected_hash,
     );
 
+    let vk_commitment = hash_vk(&VerifyingKeyBox::new("halo2/ipa".into(), vec![7, 7, 7]));
     let envelope = OpenVerifyEnvelope {
         backend: BackendTag::Halo2IpaPasta,
         circuit_id: "circuit_beta".into(),
-        vk_hash: hash_vk(&VerifyingKeyBox::new("halo2/ipa".into(), vec![7, 7, 7])),
+        vk_hash: vk_commitment,
         public_inputs: public_inputs.clone(),
         proof_bytes: vec![9, 9, 9],
         aux: Vec::new(),
@@ -235,7 +240,7 @@ fn verify_proof_rejects_circuit_mismatch() {
     let attachment =
         iroha_data_model::proof::ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
 
-    let err = execute_verify_proof(&mut block, attachment).expect_err("must fail");
+    let err = execute_verify_proof(&mut block, attachment, vk_commitment).expect_err("must fail");
     match err {
         ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(msg)) => {
             assert!(msg.contains("circuit mismatch"));
@@ -267,10 +272,11 @@ fn verify_proof_rejects_schema_hash_mismatch() {
         [0xFF; 32],
     );
 
+    let vk_commitment = hash_vk(&VerifyingKeyBox::new("halo2/ipa".into(), vec![8, 8, 8]));
     let envelope = OpenVerifyEnvelope {
         backend: BackendTag::Halo2IpaPasta,
         circuit_id: "circuit_alpha".into(),
-        vk_hash: hash_vk(&VerifyingKeyBox::new("halo2/ipa".into(), vec![8, 8, 8])),
+        vk_hash: vk_commitment,
         public_inputs: public_inputs.clone(),
         proof_bytes: vec![10, 10, 10],
         aux: Vec::new(),
@@ -280,7 +286,7 @@ fn verify_proof_rejects_schema_hash_mismatch() {
     let attachment =
         iroha_data_model::proof::ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
 
-    let err = execute_verify_proof(&mut block, attachment).expect_err("must fail");
+    let err = execute_verify_proof(&mut block, attachment, vk_commitment).expect_err("must fail");
     match err {
         ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(msg)) => {
             assert!(msg.contains("schema hash"));
@@ -328,7 +334,7 @@ fn verify_proof_accepts_matching_metadata() {
     let attachment =
         iroha_data_model::proof::ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
 
-    execute_verify_proof(&mut block, attachment).expect("verify succeeds");
+    execute_verify_proof(&mut block, attachment, commitment).expect("verify succeeds");
 }
 
 #[test]

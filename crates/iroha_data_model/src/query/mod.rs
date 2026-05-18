@@ -999,8 +999,11 @@ mod model {
     pub struct QueryOutput {
         /// A single batch of results
         pub batch: QueryOutputBatchBoxTuple,
-        /// The number of items in the query remaining to be fetched after this batch
-        pub remaining_items: u64,
+        /// The exact number of items remaining after this batch, when it was requested and cheap
+        /// enough to compute.
+        pub remaining_items: Option<u64>,
+        /// Whether more items are available after this batch.
+        pub has_more: bool,
         /// If not `None`, contains a cursor that can be used to fetch the next batch of results. Otherwise the current batch is the last one.
         pub continue_cursor: Option<ForwardCursor>,
     }
@@ -2126,16 +2129,55 @@ impl QueryOutput {
         remaining_items: u64,
         continue_cursor: Option<ForwardCursor>,
     ) -> Self {
+        let has_more = remaining_items > 0 || continue_cursor.is_some();
         Self {
             batch,
-            remaining_items,
+            remaining_items: Some(remaining_items),
+            has_more,
             continue_cursor,
         }
     }
 
+    /// Create a new [`QueryOutput`] when the exact remaining count is intentionally not computed.
+    pub fn new_bounded(
+        batch: QueryOutputBatchBoxTuple,
+        has_more: bool,
+        continue_cursor: Option<ForwardCursor>,
+    ) -> Self {
+        Self {
+            batch,
+            remaining_items: None,
+            has_more: has_more || continue_cursor.is_some(),
+            continue_cursor,
+        }
+    }
+
+    /// Return an exact remaining count when available, or `0` when the exact count was omitted.
+    pub fn remaining_items_hint(&self) -> u64 {
+        self.remaining_items.unwrap_or(0)
+    }
+
     /// Split this [`QueryOutput`] into its constituent parts.
     pub fn into_parts(self) -> (QueryOutputBatchBoxTuple, u64, Option<ForwardCursor>) {
-        (self.batch, self.remaining_items, self.continue_cursor)
+        let remaining_items = self.remaining_items.unwrap_or(0);
+        (self.batch, remaining_items, self.continue_cursor)
+    }
+
+    /// Split this [`QueryOutput`] into its parts without forcing an exact count.
+    pub fn into_parts_with_count_mode(
+        self,
+    ) -> (
+        QueryOutputBatchBoxTuple,
+        Option<u64>,
+        bool,
+        Option<ForwardCursor>,
+    ) {
+        (
+            self.batch,
+            self.remaining_items,
+            self.has_more,
+            self.continue_cursor,
+        )
     }
 }
 
@@ -4693,7 +4735,8 @@ mod tests {
             batch: QueryOutputBatchBoxTuple {
                 tuple: vec![QueryOutputBatchBox::Numeric(vec![Numeric::from(42_u32)])],
             },
-            remaining_items: 0,
+            remaining_items: Some(0),
+            has_more: true,
             continue_cursor: Some(cursor),
         };
         let response = QueryResponse::Iterable(output.clone());

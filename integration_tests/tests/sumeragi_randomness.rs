@@ -900,7 +900,7 @@ fn epoch_and_position_from_height(height: u64) -> (u64, u64) {
 }
 
 fn submit_progress_log(client: &Client, message: impl Into<String>) -> Result<()> {
-    client.submit(Log::new(Level::INFO, message.into()))?;
+    client.submit_blocking(Log::new(Level::INFO, message.into()))?;
     Ok(())
 }
 

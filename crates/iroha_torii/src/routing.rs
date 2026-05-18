@@ -860,6 +860,136 @@ where
 }
 
 #[cfg(feature = "app_api")]
+struct PageResult<T> {
+    items: Vec<T>,
+    total: Option<usize>,
+    has_more: bool,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AppCountMode {
+    Bounded,
+    Exact,
+}
+
+#[cfg(feature = "app_api")]
+impl AppCountMode {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Bounded => "bounded",
+            Self::Exact => "exact",
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn app_count_mode(raw: Option<&str>, endpoint: &'static str) -> AppCountMode {
+    match raw {
+        Some("exact") => AppCountMode::Exact,
+        Some("bounded") | None => AppCountMode::Bounded,
+        Some(other) => {
+            iroha_logger::warn!(
+                endpoint,
+                count_mode = other,
+                "unknown app query count_mode; using bounded"
+            );
+            AppCountMode::Bounded
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn collect_page_streaming_bounded<K, T, I>(
+    iter: I,
+    offset: u64,
+    limit: Option<u64>,
+    cap: Option<u64>,
+) -> PageResult<T>
+where
+    I: IntoIterator<Item = (K, T)>,
+    K: Ord,
+{
+    let offset_usize = if offset > usize::MAX as u64 {
+        usize::MAX
+    } else {
+        offset as usize
+    };
+    let limit_usize = limit
+        .filter(|&lim| lim > 0)
+        .map(|lim| cap.map_or(lim, |c| lim.min(c)))
+        .or(cap)
+        .map(|lim| lim.min(usize::MAX as u64) as usize);
+    let take = limit_usize.unwrap_or(usize::MAX);
+    let probe_cap = offset_usize.saturating_add(take).saturating_add(1);
+
+    let mut seq: usize = 0;
+    let mut heap: BinaryHeap<PageEntry<K, T>> = BinaryHeap::new();
+    let mut collected: Vec<PageEntry<K, T>> = Vec::new();
+    let bounded = probe_cap != usize::MAX;
+
+    for (key, item) in iter.into_iter() {
+        let entry = PageEntry { key, seq, item };
+        seq = seq.wrapping_add(1);
+        if bounded {
+            heap.push(entry);
+            if heap.len() > probe_cap {
+                heap.pop();
+            }
+        } else {
+            collected.push(entry);
+        }
+    }
+
+    let mut entries = if bounded { heap.into_vec() } else { collected };
+    entries.sort_by(|a, b| match a.key.cmp(&b.key) {
+        Ordering::Equal => a.seq.cmp(&b.seq),
+        ord => ord,
+    });
+
+    let skip = offset_usize.min(entries.len());
+    let has_more = entries.len().saturating_sub(skip) > take;
+    let items = entries
+        .into_iter()
+        .skip(skip)
+        .take(take)
+        .map(|entry| entry.item)
+        .collect();
+    PageResult {
+        items,
+        total: None,
+        has_more,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn collect_page_streaming_for_mode<K, T, I>(
+    iter: I,
+    offset: u64,
+    limit: Option<u64>,
+    cap: Option<u64>,
+    count_mode: AppCountMode,
+) -> PageResult<T>
+where
+    I: IntoIterator<Item = (K, T)>,
+    K: Ord,
+{
+    match count_mode {
+        AppCountMode::Bounded => collect_page_streaming_bounded(iter, offset, limit, cap),
+        AppCountMode::Exact => {
+            let (items, total) = collect_page_streaming(iter, offset, limit, cap);
+            let returned_until =
+                offset.saturating_add(u64::try_from(items.len()).unwrap_or(u64::MAX));
+            PageResult {
+                items,
+                total: Some(total),
+                has_more: u64::try_from(total).unwrap_or(u64::MAX) > returned_until,
+            }
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 #[derive(Copy, Clone)]
 struct EffectivePagination {
     limit: Option<u64>,
@@ -1110,6 +1240,112 @@ where
     }
 
     (items, matched)
+}
+
+#[cfg(feature = "app_api")]
+fn collect_page_linear_bounded<T, I>(
+    iter: I,
+    offset: u64,
+    limit: Option<u64>,
+    fetch_size: Option<u64>,
+) -> PageResult<T>
+where
+    I: IntoIterator<Item = T>,
+{
+    let offset_usize = if offset > usize::MAX as u64 {
+        usize::MAX
+    } else {
+        offset as usize
+    };
+    let take = limit
+        .filter(|&lim| lim > 0)
+        .or(fetch_size)
+        .unwrap_or(u64::from(defaults::torii::APP_API_DEFAULT_LIST_LIMIT))
+        .min(usize::MAX as u64) as usize;
+    let probe = offset_usize.saturating_add(take).saturating_add(1);
+    let mut items = Vec::new();
+    let mut seen = 0usize;
+    let mut has_more = false;
+    for item in iter.into_iter().take(probe) {
+        if seen < offset_usize {
+            seen = seen.saturating_add(1);
+            continue;
+        }
+        if items.len() < take {
+            items.push(item);
+        } else {
+            has_more = true;
+            break;
+        }
+        seen = seen.saturating_add(1);
+    }
+    PageResult {
+        items,
+        total: None,
+        has_more,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn collect_page_linear_for_mode<T, I>(
+    iter: I,
+    offset: u64,
+    limit: Option<u64>,
+    fetch_size: Option<u64>,
+    count_mode: AppCountMode,
+) -> PageResult<T>
+where
+    I: IntoIterator<Item = T>,
+{
+    match count_mode {
+        AppCountMode::Bounded => collect_page_linear_bounded(iter, offset, limit, fetch_size),
+        AppCountMode::Exact => {
+            let (items, total) = collect_page_linear(iter, offset, limit, fetch_size);
+            let returned_until =
+                offset.saturating_add(u64::try_from(items.len()).unwrap_or(u64::MAX));
+            PageResult {
+                items,
+                total: Some(total),
+                has_more: u64::try_from(total).unwrap_or(u64::MAX) > returned_until,
+            }
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn page_result_from_counted_items<T>(
+    items: Vec<T>,
+    matched: usize,
+    offset: u64,
+    count_mode: AppCountMode,
+) -> PageResult<T> {
+    let returned_until = offset.saturating_add(u64::try_from(items.len()).unwrap_or(u64::MAX));
+    PageResult {
+        items,
+        total: (count_mode == AppCountMode::Exact).then_some(matched),
+        has_more: u64::try_from(matched).unwrap_or(u64::MAX) > returned_until,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn insert_page_metadata<T>(
+    top: &mut norito::json::Map,
+    page: &PageResult<T>,
+    count_mode: AppCountMode,
+) {
+    if let Some(total) = page.total {
+        top.insert("total".into(), norito::json::Value::from(total as u64));
+    }
+    top.insert("has_more".into(), norito::json::Value::from(page.has_more));
+    top.insert(
+        "count_mode".into(),
+        norito::json::Value::from(count_mode.label()),
+    );
+}
+
+#[cfg(feature = "app_api")]
+fn insert_bounded_page_metadata<T>(top: &mut norito::json::Map, page: &PageResult<T>) {
+    insert_page_metadata(top, page, AppCountMode::Bounded);
 }
 
 #[cfg(all(test, feature = "app_api"))]
@@ -3937,6 +4173,8 @@ pub async fn handle_list_vk(
 pub struct QueryOptions {
     /// Override cursor mode: "ephemeral" or "stored".
     pub cursor_mode: Option<String>,
+    /// Count mode: "bounded" avoids full count scans; "exact" preserves exact remaining counts.
+    pub count_mode: Option<String>,
     /// Gas units provided for stored cursor mode (integer). When config minimum > 0,
     /// stored cursors require at least this many units.
     #[allow(dead_code)]
@@ -4015,7 +4253,7 @@ pub(crate) async fn execute_verified_query_with_opts(
         query::snapshot::{
             CursorMode as LaneCursorMode, SnapshotQueryError, run_on_snapshot_with_mode,
         },
-        smartcontracts::isi::query::QueryLimits,
+        smartcontracts::isi::query::{QueryCountMode, QueryLimits},
     };
     #[cfg(feature = "telemetry")]
     let start = std::time::Instant::now();
@@ -4089,7 +4327,15 @@ pub(crate) async fn execute_verified_query_with_opts(
         iroha_data_model::query::QueryRequest::Continue(cursor) => cursor.gas_budget,
         _ => None,
     };
-    let limits = QueryLimits::new(app_query_limits().max_fetch_size);
+    let count_mode = match opts.count_mode.as_deref() {
+        Some("exact") => QueryCountMode::Exact,
+        Some("bounded") | None => QueryCountMode::Bounded,
+        Some(other) => {
+            iroha_logger::warn!(other, "unknown count_mode override; using bounded");
+            QueryCountMode::Bounded
+        }
+    };
+    let limits = QueryLimits::new(app_query_limits().max_fetch_size).with_count_mode(count_mode);
     let resp = tokio::task::spawn_blocking(move || {
         run_on_snapshot_with_mode(
             &state_cloned,
@@ -9340,26 +9586,23 @@ fn evidence_to_json(rec: &EvidenceRecord) -> Value {
     Value::Object(map)
 }
 
+fn invalid_consensus_evidence_error(message: impl Into<String>) -> Error {
+    Error::AppQueryValidation {
+        code: "invalid_consensus_evidence",
+        message: message.into(),
+    }
+}
+
 fn decode_evidence_hex(value: &str) -> Result<ConsensusEvidence, Error> {
     let cleaned: String = value.chars().filter(|ch| !ch.is_whitespace()).collect();
     let body = cleaned
         .strip_prefix("0x")
         .or_else(|| cleaned.strip_prefix("0X"))
         .unwrap_or(cleaned.as_str());
-    let bytes = hex::decode(body).map_err(|err| {
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                "evidence_hex: {err}"
-            )),
-        ))
-    })?;
-    norito::decode_from_bytes::<ConsensusEvidence>(&bytes).map_err(|err| {
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                "evidence_hex decode: {err}"
-            )),
-        ))
-    })
+    let bytes = hex::decode(body)
+        .map_err(|err| invalid_consensus_evidence_error(format!("evidence_hex: {err}")))?;
+    norito::decode_from_bytes::<ConsensusEvidence>(&bytes)
+        .map_err(|err| invalid_consensus_evidence_error(format!("evidence_hex decode: {err}")))
 }
 
 /// JSON payload accepted by `/v1/sumeragi/evidence/submit`.
@@ -9422,11 +9665,9 @@ fn decode_and_validate_evidence(
         _ => None,
     };
     if topology_peers.is_empty() {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "invalid consensus evidence: commit topology unavailable".to_owned(),
-            ),
-        )));
+        return Err(invalid_consensus_evidence_error(
+            "invalid consensus evidence: commit topology unavailable",
+        ));
     }
     let topology = iroha_core::sumeragi::network_topology::Topology::new(topology_peers);
     if let Some(fallback) = fallback_mode {
@@ -9454,10 +9695,8 @@ fn decode_and_validate_evidence(
         };
         return match iroha_core::sumeragi::validate_evidence(&evidence, &context) {
             Ok(()) => Ok(evidence),
-            Err(err) => Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                    "invalid consensus evidence: {mode_tag}: {err}"
-                )),
+            Err(err) => Err(invalid_consensus_evidence_error(format!(
+                "invalid consensus evidence: {mode_tag}: {err}"
             ))),
         };
     }
@@ -9484,10 +9723,8 @@ fn decode_and_validate_evidence(
         }
     }
     let detail = errors.join("; ");
-    Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-        iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-            "invalid consensus evidence: {detail}"
-        )),
+    Err(invalid_consensus_evidence_error(format!(
+        "invalid consensus evidence: {detail}"
     )))
 }
 
@@ -9600,9 +9837,10 @@ mod evidence_submit_tests {
         let err = decode_evidence_hex("not-a-hex").expect_err("expect error");
         assert!(matches!(
             err,
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(_)
-            ))
+            Error::AppQueryValidation {
+                code: "invalid_consensus_evidence",
+                ..
+            }
         ));
     }
 
@@ -9617,9 +9855,10 @@ mod evidence_submit_tests {
         let err = decode_evidence_hex(&truncated).expect_err("expect decode failure");
         assert!(matches!(
             err,
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(_)
-            ))
+            Error::AppQueryValidation {
+                code: "invalid_consensus_evidence",
+                ..
+            }
         ));
     }
 
@@ -9674,9 +9913,10 @@ mod evidence_submit_tests {
             .expect_err("invalid evidence must fail");
         assert!(matches!(
             err,
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(msg)
-            )) if msg.contains("invalid consensus evidence")
+            Error::AppQueryValidation {
+                code: "invalid_consensus_evidence",
+                message,
+            } if message.contains("invalid consensus evidence")
         ));
     }
 
@@ -9731,9 +9971,10 @@ mod evidence_submit_tests {
             .expect_err("mismatched mode evidence must fail");
         assert!(matches!(
             err,
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(msg)
-            )) if msg.contains("invalid consensus evidence")
+            Error::AppQueryValidation {
+                code: "invalid_consensus_evidence",
+                message,
+            } if message.contains("invalid consensus evidence")
         ));
 
         iroha_core::sumeragi::status::set_mode_tags(
@@ -23465,6 +23706,9 @@ pub struct SubscriptionPlanListParams {
     /// Offset for pagination (default 0).
     #[norito(default)]
     pub offset: u64,
+    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
+    #[norito(default)]
+    pub count_mode: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -23484,7 +23728,12 @@ pub struct SubscriptionPlanListResponseDto {
     /// Plan items.
     pub items: Vec<SubscriptionPlanListItem>,
     /// Total number of matching plans.
-    pub total: u64,
+    #[norito(default)]
+    pub total: Option<u64>,
+    /// Whether more items are available after this page.
+    pub has_more: bool,
+    /// Count mode used to produce pagination metadata.
+    pub count_mode: String,
 }
 
 #[cfg(feature = "app_api")]
@@ -23556,6 +23805,9 @@ pub struct SubscriptionListParams {
     /// Offset for pagination (default 0).
     #[norito(default)]
     pub offset: u64,
+    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
+    #[norito(default)]
+    pub count_mode: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -23581,7 +23833,12 @@ pub struct SubscriptionListResponseDto {
     /// Subscription items.
     pub items: Vec<SubscriptionListItem>,
     /// Total number of matching subscriptions.
-    pub total: u64,
+    #[norito(default)]
+    pub total: Option<u64>,
+    /// Whether more items are available after this page.
+    pub has_more: bool,
+    /// Count mode used to produce pagination metadata.
+    pub count_mode: String,
 }
 
 #[cfg(feature = "app_api")]
@@ -33897,7 +34154,11 @@ pub async fn handle_v1_account_transactions_with_policy(
         );
     }
 
-    let (items, total) = {
+    let count_mode = app_count_mode(
+        envelope.count_mode.as_deref(),
+        ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
+    );
+    let page = {
         // Validate JSON filter (structural + endpoint-specific) and execute typed predicate (PASS for now)
         let predicate = if let Some(ref expr_wrap) = envelope.filter {
             let expr = expr_wrap;
@@ -33963,11 +34224,12 @@ pub async fn handle_v1_account_transactions_with_policy(
                     None
                 }
             });
-            collect_page_linear(
+            collect_page_linear_for_mode(
                 filtered_iter,
                 pagination.offset,
                 pagination.limit,
                 fetch_size,
+                count_mode,
             )
         } else {
             // NOTE: Materialize+sort for correctness and stable tie-breaking.
@@ -34121,11 +34383,12 @@ pub async fn handle_v1_account_transactions_with_policy(
             };
 
             let iter = projections.into_iter().map(|p| (sort_key(&p), p));
-            collect_page_streaming(
+            collect_page_streaming_for_mode(
                 iter,
                 pagination.offset,
                 pagination.limit,
                 Some(pagination.cap),
+                count_mode,
             )
         }
     };
@@ -34142,7 +34405,7 @@ pub async fn handle_v1_account_transactions_with_policy(
         metrics
             .torii_filter_match_count
             .with_label_values(&[endpoint])
-            .observe(total as f64);
+            .observe(page.total.unwrap_or(page.items.len()) as f64);
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
         metrics
             .torii_scan_ms
@@ -34151,13 +34414,13 @@ pub async fn handle_v1_account_transactions_with_policy(
         metrics
             .torii_stream_rows
             .with_label_values(&[endpoint])
-            .observe(items.len() as f64);
+            .observe(page.items.len() as f64);
     }
     // Build Norito JSON response: { items: [...], total: N }
-    let items_json = tx_projections_to_json(&items);
+    let items_json = tx_projections_to_json(&page.items);
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(items_json));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(|e| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -34214,7 +34477,8 @@ pub async fn handle_v1_account_transactions_get_with_policy(
     )?;
     let cap = app_query_page_cap(&state);
     let query_subject = account_id;
-    let (items, total) = {
+    let count_mode = app_count_mode(params.count_mode.as_deref(), ENDPOINT_ACCOUNTS_TRANSACTIONS);
+    let page = {
         let limits = app_query_limits();
         let committed_txs = committed_transactions_snapshot(state.as_ref());
         let world = state.world_view();
@@ -34249,15 +34513,16 @@ pub async fn handle_v1_account_transactions_get_with_policy(
                 Some(project_tx(tx, &None))
             }
         });
-        collect_page_streaming(
+        collect_page_streaming_for_mode(
             filtered.map(|proj| ((), proj)),
             pagination.offset,
             pagination.limit,
             fetch_cap,
+            count_mode,
         )
     };
     #[cfg(feature = "telemetry")]
-    let item_count = items.len();
+    let item_count = page.items.len();
     // Telemetry: observe metrics for the GET endpoint
     #[cfg(feature = "telemetry")]
     if telemetry.is_enabled() {
@@ -34270,7 +34535,7 @@ pub async fn handle_v1_account_transactions_get_with_policy(
         metrics
             .torii_filter_match_count
             .with_label_values(&[endpoint])
-            .observe(total as f64);
+            .observe(page.total.unwrap_or(page.items.len()) as f64);
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
         metrics
             .torii_scan_ms
@@ -34282,10 +34547,10 @@ pub async fn handle_v1_account_transactions_get_with_policy(
             .observe(item_count as f64);
     }
     // Norito JSON response
-    let items_json = tx_projections_to_json(&items);
+    let items_json = tx_projections_to_json(&page.items);
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(items_json));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(|e| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -34325,7 +34590,8 @@ pub async fn handle_v1_transactions_history_get(
         .then(|| DomainId::parse_fully_qualified(&visibility.viewer_dataspace_id).ok())
         .flatten();
 
-    let (items, total) = {
+    let count_mode = app_count_mode(params.count_mode.as_deref(), "/v1/transactions/history");
+    let page = {
         let limits = app_query_limits();
         let committed_txs = committed_transactions_snapshot(state.as_ref());
         let world = state.world_view();
@@ -34364,15 +34630,16 @@ pub async fn handle_v1_transactions_history_get(
                 Some(project_tx(tx, &None))
             }
         });
-        collect_page_streaming(
+        collect_page_streaming_for_mode(
             filtered.map(|proj| ((), proj)),
             pagination.offset,
             pagination.limit,
             fetch_cap,
+            count_mode,
         )
     };
     #[cfg(feature = "telemetry")]
-    let item_count = items.len();
+    let item_count = page.items.len();
 
     #[cfg(feature = "telemetry")]
     if telemetry.is_enabled() {
@@ -34385,7 +34652,7 @@ pub async fn handle_v1_transactions_history_get(
         metrics
             .torii_filter_match_count
             .with_label_values(&[endpoint])
-            .observe(total as f64);
+            .observe(page.total.unwrap_or(page.items.len()) as f64);
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
         metrics
             .torii_scan_ms
@@ -34397,10 +34664,10 @@ pub async fn handle_v1_transactions_history_get(
             .observe(item_count as f64);
     }
 
-    let items_json = tx_projections_to_json(&items);
+    let items_json = tx_projections_to_json(&page.items);
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(items_json));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(|e| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -34430,7 +34697,8 @@ pub async fn handle_v1_contracts_activity_get(
     #[cfg(feature = "telemetry")]
     let start = Instant::now();
     let cap = app_query_page_cap(&state);
-    let (items, total) = {
+    let count_mode = app_count_mode(params.count_mode.as_deref(), ENDPOINT_CONTRACTS_ACTIVITY);
+    let page = {
         let limits = app_query_limits();
         let index = contract_activity_index_snapshot(state.as_ref());
         let pagination = enforce_app_pagination(
@@ -34439,13 +34707,20 @@ pub async fn handle_v1_contracts_activity_get(
             cap,
             ENDPOINT_CONTRACTS_ACTIVITY,
         )?;
-        let fetch_cap = limits
-            .clamp_fetch_size(None)?
-            .map(|value| value.min(pagination.cap));
-        collect_contract_activity_page(index.as_ref(), &params, pagination, fetch_cap)
+        let fetch_cap = if count_mode == AppCountMode::Exact {
+            None
+        } else {
+            limits
+                .clamp_fetch_size(None)?
+                .map(|value| value.min(pagination.cap))
+        };
+        let offset = pagination.offset;
+        let (items, matched) =
+            collect_contract_activity_page(index.as_ref(), &params, pagination, fetch_cap);
+        page_result_from_counted_items(items, matched, offset, count_mode)
     };
     #[cfg(feature = "telemetry")]
-    let item_count = items.len();
+    let item_count = page.items.len();
 
     #[cfg(feature = "telemetry")]
     if telemetry.is_enabled() {
@@ -34457,7 +34732,7 @@ pub async fn handle_v1_contracts_activity_get(
         metrics
             .torii_filter_match_count
             .with_label_values(&[ENDPOINT_CONTRACTS_ACTIVITY])
-            .observe(total as f64);
+            .observe(page.total.unwrap_or(page.items.len()) as f64);
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
         metrics
             .torii_scan_ms
@@ -34469,10 +34744,10 @@ pub async fn handle_v1_contracts_activity_get(
             .observe(item_count as f64);
     }
 
-    let items_json = contract_activity_projections_to_json(&items);
+    let items_json = contract_activity_projections_to_json(&page.items);
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(items_json));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(|e| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -34502,18 +34777,26 @@ pub async fn handle_v1_contracts_events_get(
     #[cfg(feature = "telemetry")]
     let start = Instant::now();
     let cap = app_query_page_cap(&state);
-    let (items, total) = {
+    let count_mode = app_count_mode(params.count_mode.as_deref(), ENDPOINT_CONTRACTS_EVENTS);
+    let page = {
         let limits = app_query_limits();
         let index = contract_event_index_snapshot(state.as_ref());
         let pagination =
             enforce_app_pagination(params.limit, params.offset, cap, ENDPOINT_CONTRACTS_EVENTS)?;
-        let fetch_cap = limits
-            .clamp_fetch_size(None)?
-            .map(|value| value.min(pagination.cap));
-        collect_contract_event_page(index.as_ref(), &params, pagination, fetch_cap)
+        let fetch_cap = if count_mode == AppCountMode::Exact {
+            None
+        } else {
+            limits
+                .clamp_fetch_size(None)?
+                .map(|value| value.min(pagination.cap))
+        };
+        let offset = pagination.offset;
+        let (items, matched) =
+            collect_contract_event_page(index.as_ref(), &params, pagination, fetch_cap);
+        page_result_from_counted_items(items, matched, offset, count_mode)
     };
     #[cfg(feature = "telemetry")]
-    let item_count = items.len();
+    let item_count = page.items.len();
 
     #[cfg(feature = "telemetry")]
     if telemetry.is_enabled() {
@@ -34525,7 +34808,7 @@ pub async fn handle_v1_contracts_events_get(
         metrics
             .torii_filter_match_count
             .with_label_values(&[ENDPOINT_CONTRACTS_EVENTS])
-            .observe(total as f64);
+            .observe(page.total.unwrap_or(page.items.len()) as f64);
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
         metrics
             .torii_scan_ms
@@ -34537,10 +34820,10 @@ pub async fn handle_v1_contracts_events_get(
             .observe(item_count as f64);
     }
 
-    let items_json = contract_event_projections_to_json(&items);
+    let items_json = contract_event_projections_to_json(&page.items);
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(items_json));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(|e| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -36588,6 +36871,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: Some("exact".to_owned()),
         };
 
         let resp = handle_v1_account_transactions(
@@ -36642,6 +36926,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
 
         let err = handle_v1_account_transactions(
@@ -36678,6 +36963,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
 
         let err = handle_v1_account_transactions(
@@ -36705,6 +36991,7 @@ mod tx_query_integration_smoke {
             limit: Some(cap + 1),
             offset: 0,
             asset_id: None,
+            count_mode: None,
         };
 
         let err = handle_v1_account_transactions_get(
@@ -36800,6 +37087,7 @@ mod tx_query_integration_smoke {
             limit: Some(10),
             offset: 0,
             asset_id: Some(asset_id.to_string()),
+            count_mode: Some("exact".to_owned()),
         };
         let actor_literal = actor_id
             .account()
@@ -36933,6 +37221,7 @@ mod tx_query_integration_smoke {
                 limit: Some(10),
                 offset: 0,
                 asset_id: Some(def_id.to_string()),
+                count_mode: Some("exact".to_owned()),
             }),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -36953,6 +37242,7 @@ mod tx_query_integration_smoke {
                 limit: Some(10),
                 offset: 0,
                 asset_id: Some(def_id.to_string()),
+                count_mode: Some("exact".to_owned()),
             }),
             crate::routing::MaybeTelemetry::for_tests(),
             TxHistoryVisibilityScope {
@@ -37220,6 +37510,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
@@ -37262,6 +37553,7 @@ mod tx_query_integration_smoke {
                 offset: 1,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp2 = handle_v1_account_transactions(
             state.clone(),
@@ -37366,6 +37658,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: Some(2),
+            count_mode: Some("exact".to_owned()),
         };
         let resp = handle_v1_account_transactions(
             state,
@@ -37507,6 +37800,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
@@ -37586,6 +37880,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
@@ -37699,6 +37994,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
@@ -37796,6 +38092,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
@@ -37898,6 +38195,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
@@ -38043,6 +38341,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
@@ -38152,6 +38451,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp_eq = handle_v1_account_transactions(
             state.clone(),
@@ -38183,6 +38483,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp_ne = handle_v1_account_transactions(
             state.clone(),
@@ -38217,6 +38518,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp_in = handle_v1_account_transactions(
             state.clone(),
@@ -38248,6 +38550,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp_nin = handle_v1_account_transactions(
             state.clone(),
@@ -38337,6 +38640,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp_eq = handle_v1_account_transactions(
             state.clone(),
@@ -38367,6 +38671,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp_ne = handle_v1_account_transactions(
             state.clone(),
@@ -38397,6 +38702,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp_in_one = handle_v1_account_transactions(
             state.clone(),
@@ -38430,6 +38736,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp_in_two = handle_v1_account_transactions(
             state.clone(),
@@ -38460,6 +38767,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp_nin = handle_v1_account_transactions(
             state.clone(),
@@ -38551,6 +38859,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp_exists_entry = handle_v1_account_transactions(
             state.clone(),
@@ -38586,6 +38895,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp_null_entry = handle_v1_account_transactions(
             state.clone(),
@@ -38621,6 +38931,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp_exists_result = handle_v1_account_transactions(
             state.clone(),
@@ -38656,6 +38967,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp_null_result = handle_v1_account_transactions(
             state.clone(),
@@ -38818,6 +39130,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
 
         let resp = handle_v1_account_transactions(
@@ -38984,6 +39297,7 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
@@ -39354,6 +39668,7 @@ mod app_api_integration_tests {
                 offset: 1,
             },
             fetch_size: None,
+            count_mode: Some("exact".to_owned()),
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
@@ -40317,6 +40632,7 @@ mod app_api_integration_tests {
         let query_body = json_string(obj(vec![
             ("filter", Value::Null),
             ("pagination", obj(vec![("limit", val(&10u64))])),
+            ("count_mode", val("exact")),
         ]));
         let query_req = http::Request::builder()
             .method("POST")
@@ -40361,6 +40677,7 @@ mod app_api_integration_tests {
             offset: 0,
             asset: None,
             scope: None,
+            count_mode: None,
         };
 
         let err = handle_v1_account_assets(
@@ -40409,7 +40726,7 @@ mod app_api_integration_tests {
 
         let req = http::Request::builder()
             .method("GET")
-            .uri("/v1/assets/rose%23centralbank/holders?limit=1")
+            .uri("/v1/assets/rose%23centralbank/holders?limit=1&count_mode=exact")
             .body(axum::body::Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -40454,7 +40771,7 @@ mod app_api_integration_tests {
         let req = http::Request::builder()
             .method("GET")
             .uri(format!(
-                "/v1/assets/rose%23centralbank/holders?account_id={}",
+                "/v1/assets/rose%23centralbank/holders?account_id={}&count_mode=exact",
                 urlencoding::encode(&expected_account)
             ))
             .body(axum::body::Body::empty())
@@ -40509,7 +40826,7 @@ mod app_api_integration_tests {
 
         let req = http::Request::builder()
             .method("GET")
-            .uri("/v1/assets/rose%23centralbank/holders?account_id=treasury%40universal")
+            .uri("/v1/assets/rose%23centralbank/holders?account_id=treasury%40universal&count_mode=exact")
             .body(axum::body::Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -40542,6 +40859,7 @@ mod app_api_integration_tests {
             offset: 0,
             account_id: None,
             scope: None,
+            count_mode: None,
         };
 
         let err = handle_v1_asset_holders(
@@ -40568,6 +40886,7 @@ mod app_api_integration_tests {
             offset: 0,
             account_id: None,
             scope: None,
+            count_mode: None,
         };
 
         let result = handle_v1_asset_holders(
@@ -41409,6 +41728,7 @@ mod app_api_integration_tests {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         }
     }
 
@@ -42190,6 +42510,7 @@ fn contract_event_query_from_sse_params(
         since_timestamp_ms: params.since_timestamp_ms,
         until_timestamp_ms: params.until_timestamp_ms,
         result_ok: params.result_ok,
+        count_mode: None,
     }
 }
 
@@ -46098,6 +46419,7 @@ mod status_tests {
                 swap_metadata: None,
                 receipts: Vec::new(),
                 nexus_fee_receipts: Vec::new(),
+                native_amx_receipts: Vec::new(),
             }],
             lane_relay_envelopes: {
                 let settlement = LaneBlockCommitment {
@@ -46112,6 +46434,7 @@ mod status_tests {
                     swap_metadata: None,
                     receipts: Vec::new(),
                     nexus_fee_receipts: Vec::new(),
+                    native_amx_receipts: Vec::new(),
                 };
                 let header =
                     BlockHeader::new(NonZeroU64::new(1).expect("nonzero"), None, None, None, 0, 0);
@@ -46417,6 +46740,7 @@ mod status_tests {
             }),
             receipts: vec![receipt.clone()],
             nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
         };
         let snap = sumeragi::StatusSnapshot {
             lane_settlement_commitments: vec![commitment.clone()],
@@ -46612,6 +46936,7 @@ mod status_tests {
                 timestamp_ms: 1_700_000_000_456,
             }],
             nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
         };
         let validator_set: Vec<PeerId> = Vec::new();
         let commit_qc = iroha_data_model::consensus::Qc {
@@ -49665,6 +49990,7 @@ mod cursor_mode_tests {
 
         let opts = QueryOptions {
             cursor_mode: Some("stored".to_string()),
+            count_mode: None,
             gas_units: Some(100),
         };
         #[cfg(feature = "telemetry")]
@@ -49701,6 +50027,7 @@ mod cursor_mode_tests {
 
         let opts = QueryOptions {
             cursor_mode: Some("stored".to_string()),
+            count_mode: None,
             gas_units: Some(250),
         };
         #[cfg(feature = "telemetry")]
@@ -49737,6 +50064,7 @@ mod cursor_mode_tests {
 
         let opts = QueryOptions {
             cursor_mode: Some("stored".to_string()),
+            count_mode: None,
             gas_units: None,
         };
         #[cfg(feature = "telemetry")]
@@ -50326,6 +50654,30 @@ pub struct ListFilterParams {
     pub offset: u64,
     /// Optional compact sort string: e.g., "metadata.display_name:asc,id:desc".
     pub sort: Option<String>,
+    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
+    #[norito(default)]
+    pub count_mode: Option<String>,
+}
+
+/// Common GET pagination params with count mode.
+#[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    Default,
+    Debug,
+    Clone,
+)]
+pub struct PaginationParams {
+    /// Optional limit for pagination.
+    pub limit: Option<u64>,
+    /// Offset for pagination (default 0).
+    #[norito(default)]
+    pub offset: u64,
+    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
+    #[norito(default)]
+    pub count_mode: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -50347,6 +50699,9 @@ pub struct AccountAssetsGetParams {
     pub asset: Option<String>,
     /// Filter assets by balance scope (`global` or `dataspace:<id>`).
     pub scope: Option<String>,
+    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
+    #[norito(default)]
+    pub count_mode: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -50366,6 +50721,9 @@ pub struct AccountTransactionsGetParams {
     pub offset: u64,
     /// Filter transactions by asset definition selector.
     pub asset_id: Option<String>,
+    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
+    #[norito(default)]
+    pub count_mode: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -50397,6 +50755,9 @@ pub struct ContractActivityGetParams {
     pub until_timestamp_ms: Option<u64>,
     /// Filter items by execution outcome.
     pub result_ok: Option<bool>,
+    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
+    #[norito(default)]
+    pub count_mode: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -50431,6 +50792,9 @@ pub struct ContractEventGetParams {
     pub until_timestamp_ms: Option<u64>,
     /// Filter items by execution outcome.
     pub result_ok: Option<bool>,
+    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
+    #[norito(default)]
+    pub count_mode: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -50454,6 +50818,9 @@ pub struct ContractRollupSwapsFillsParams {
     /// Optional scan limit for walking the router mirror history.
     #[norito(default)]
     pub scan_limit: Option<u64>,
+    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
+    #[norito(default)]
+    pub count_mode: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -50480,6 +50847,9 @@ pub struct ContractRollupSwapsCandlesParams {
     /// Candle bucket width in milliseconds.
     #[norito(default)]
     pub bucket_ms: Option<u64>,
+    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
+    #[norito(default)]
+    pub count_mode: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -50513,6 +50883,9 @@ pub struct AssetHolderGetParams {
     pub account_id: Option<String>,
     /// Filter holders by balance scope (`global` or `dataspace:<id>`).
     pub scope: Option<String>,
+    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
+    #[norito(default)]
+    pub count_mode: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -52458,6 +52831,7 @@ pub async fn handle_v1_contracts_rollups_swaps_candles_get(
             contract_address: params.contract_address.clone(),
             contract_alias: params.contract_alias.clone(),
             scan_limit: params.scan_limit,
+            count_mode: None,
         },
     )?;
     let bucket_ms = params
@@ -52563,9 +52937,15 @@ pub async fn handle_v1_contracts_rollups_trader_activity_get(
         cap,
         ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACTIVITY,
     )?;
+    let count_mode = app_count_mode(
+        params.count_mode.as_deref(),
+        ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACTIVITY,
+    );
     let index = contract_event_index_snapshot(state.as_ref());
     let (items, total) = collect_trader_activity_page(index.as_ref(), &params, pagination);
-    let activity_items = items
+    let page = page_result_from_counted_items(items, total, params.offset, count_mode);
+    let activity_items = page
+        .items
         .iter()
         .map(trader_activity_item_from_projection)
         .collect::<Vec<_>>();
@@ -52575,7 +52955,7 @@ pub async fn handle_v1_contracts_rollups_trader_activity_get(
         "items".into(),
         Value::Array(trader_activity_items_to_json(&activity_items)),
     );
-    top.insert("total".into(), Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&Value::Object(top)).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
@@ -52600,6 +52980,7 @@ pub async fn handle_v1_contracts_rollups_trader_account_get(
             contract_address: None,
             contract_alias: None,
             scan_limit: params.scan_limit,
+            count_mode: None,
         },
     )?;
     let analytics = compute_swap_analytics(&fills.items);
@@ -52617,6 +52998,7 @@ pub async fn handle_v1_contracts_rollups_trader_account_get(
         since_timestamp_ms: None,
         until_timestamp_ms: None,
         result_ok: Some(true),
+        count_mode: None,
     };
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(
@@ -53282,24 +53664,17 @@ pub(crate) fn primary_alias_projection_for_account_id(
     state: &CoreState,
     account_id: &AccountId,
 ) -> PrimaryAliasProjection {
-    let view = state.view();
-    let query = iroha_data_model::query::account::prelude::FindAliasesByAccountId::new(
-        account_id.clone(),
-        None,
-        None,
-    );
-    if let Ok(bindings) = query.execute(&view) {
-        if let Some(binding) = bindings
-            .iter()
-            .find(|binding| binding.is_primary)
-            .or_else(|| bindings.first())
-        {
-            return primary_alias_projection_from_binding_record(binding);
-        }
-    }
-
     let catalog = state.nexus_snapshot().dataspace_catalog;
-    let world = view.world();
+    let world = state.world_view();
+    primary_alias_projection_for_account_id_in_world(&world, &catalog, account_id)
+}
+
+#[cfg(feature = "app_api")]
+fn primary_alias_projection_for_account_id_in_world(
+    world: &impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    account_id: &AccountId,
+) -> PrimaryAliasProjection {
     if let Some(account) = world.accounts().get(account_id) {
         let labels = world
             .account_aliases_by_account()
@@ -53317,6 +53692,23 @@ pub(crate) fn primary_alias_projection_for_account_id(
     }
 
     PrimaryAliasProjection::default()
+}
+
+#[cfg(feature = "app_api")]
+fn primary_alias_projection_batch_for_account_ids(
+    world: &impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    account_ids: impl IntoIterator<Item = AccountId>,
+) -> BTreeMap<AccountId, PrimaryAliasProjection> {
+    account_ids
+        .into_iter()
+        .map(|account_id| {
+            (
+                account_id.clone(),
+                primary_alias_projection_for_account_id_in_world(world, catalog, &account_id),
+            )
+        })
+        .collect()
 }
 
 #[cfg(feature = "app_api")]
@@ -53657,7 +54049,7 @@ struct AccountPermissionListItem {
 pub async fn handle_v1_account_permissions(
     state: Arc<CoreState>,
     axum::extract::Path(account_id): axum::extract::Path<String>,
-    crate::NoritoQuery(p): crate::NoritoQuery<crate::filter::Pagination>,
+    crate::NoritoQuery(p): crate::NoritoQuery<PaginationParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     handle_v1_account_permissions_with_policy(
@@ -53675,7 +54067,7 @@ pub async fn handle_v1_account_permissions(
 pub async fn handle_v1_account_permissions_with_policy(
     state: Arc<CoreState>,
     axum::extract::Path(account_id): axum::extract::Path<String>,
-    crate::NoritoQuery(p): crate::NoritoQuery<crate::filter::Pagination>,
+    crate::NoritoQuery(p): crate::NoritoQuery<PaginationParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     use iroha_data_model::query::error::FindError;
@@ -53688,6 +54080,7 @@ pub async fn handle_v1_account_permissions_with_policy(
     )?;
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ACCOUNTS_PERMISSIONS)?;
+    let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_ACCOUNTS_PERMISSIONS);
 
     let world = state.world_view();
     let scoped_accounts = scoped_accounts_for_subject_sorted(&world, &account);
@@ -53722,15 +54115,16 @@ pub async fn handle_v1_account_permissions_with_policy(
         ));
     }
 
-    let (items, total) = collect_page_streaming(
+    let page = collect_page_streaming_for_mode(
         canonical_permissions.into_iter(),
         pagination.offset,
         pagination.limit,
         None,
+        count_mode,
     );
 
-    let mut arr = Vec::with_capacity(items.len());
-    for item in &items {
+    let mut arr = Vec::with_capacity(page.items.len());
+    for item in &page.items {
         let mut m = norito::json::Map::new();
         m.insert("name".into(), norito::json::Value::from(item.name.clone()));
         m.insert("payload".into(), item.payload.clone());
@@ -53738,7 +54132,7 @@ pub async fn handle_v1_account_permissions_with_policy(
     }
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(arr));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(|e| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -53782,6 +54176,7 @@ pub async fn handle_v1_account_assets_with_policy(
     let world = state.world_view();
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ACCOUNTS_ASSETS)?;
+    let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_ACCOUNTS_ASSETS);
     let now_ms = asset_alias_observation_time_ms(&state);
     let (acct, _) = parse_account_path_segment_with_state(
         state.as_ref(),
@@ -53818,17 +54213,18 @@ pub async fn handle_v1_account_assets_with_policy(
         scope_filter.as_ref(),
     );
 
-    let (items, total) = collect_page_streaming(
+    let page = collect_page_streaming_for_mode(
         projected_assets
             .into_iter()
             .map(|projected| ((), projected)),
         p.offset,
         Some(page_limit),
         fetch_cap,
+        count_mode,
     );
     // Norito JSON response
-    let mut arr = Vec::with_capacity(items.len());
-    for it in &items {
+    let mut arr = Vec::with_capacity(page.items.len());
+    for it in &page.items {
         let mut m = norito::json::Map::new();
         m.insert("asset".into(), norito::json::Value::from(it.asset.clone()));
         m.insert(
@@ -53857,7 +54253,7 @@ pub async fn handle_v1_account_assets_with_policy(
     }
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(arr));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(|e| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -53899,6 +54295,7 @@ pub async fn handle_v1_repo_agreements(
     record_account_literal_selection(&telemetry, ENDPOINT_REPO_AGREEMENTS_LIST);
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_REPO_AGREEMENTS_LIST)?;
+    let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_REPO_AGREEMENTS_LIST);
 
     let mapped_iter = repo_agreements_for_filter(&world, filter_ref).filter_map({
         let selectors = selectors.clone();
@@ -53914,16 +54311,21 @@ pub async fn handle_v1_repo_agreements(
         }
     });
 
-    let (items, total) =
-        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, None);
-    let mut arr = Vec::with_capacity(items.len());
-    for entry in &items {
+    let page = collect_page_streaming_for_mode(
+        mapped_iter,
+        pagination.offset,
+        pagination.limit,
+        None,
+        count_mode,
+    );
+    let mut arr = Vec::with_capacity(page.items.len());
+    for entry in &page.items {
         let value = norito::json::to_value(&entry.dto).map_err(norito_internal_error)?;
         arr.push(value);
     }
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(arr));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(norito_internal_error)?;
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
@@ -53967,6 +54369,10 @@ pub async fn handle_v1_repo_agreements_query(
     let fetch_size = limits
         .clamp_fetch_size(envelope.fetch_size)
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
+    let count_mode = app_count_mode(
+        envelope.count_mode.as_deref(),
+        ENDPOINT_REPO_AGREEMENTS_QUERY,
+    );
 
     if generic_mode {
         let rows = repo_agreements_for_filter(&world, filter_ref).map(|agreement| {
@@ -53996,16 +54402,21 @@ pub async fn handle_v1_repo_agreements_query(
         }
     });
 
-    let (items, total) =
-        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, fetch_size);
-    let mut arr = Vec::with_capacity(items.len());
-    for entry in &items {
+    let page = collect_page_streaming_for_mode(
+        mapped_iter,
+        pagination.offset,
+        pagination.limit,
+        fetch_size,
+        count_mode,
+    );
+    let mut arr = Vec::with_capacity(page.items.len());
+    for entry in &page.items {
         let value = norito::json::to_value(&entry.dto).map_err(norito_internal_error)?;
         arr.push(value);
     }
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(arr));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(norito_internal_error)?;
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
@@ -54396,18 +54807,19 @@ fn repo_filter_candidate_ids_extracts_safe_indexed_constraints() {
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_domains(
     state: Arc<CoreState>,
-    crate::NoritoQuery(p): crate::NoritoQuery<crate::filter::Pagination>,
+    crate::NoritoQuery(p): crate::NoritoQuery<PaginationParams>,
 ) -> Result<impl IntoResponse> {
     let world = state.world_view();
     let domains: Vec<_> = world.domains_iter().cloned().collect();
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_DOMAINS_LIST)?;
+    let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_DOMAINS_LIST);
 
     #[derive(Clone)]
     struct DomainProj {
         id: String,
     }
-    let (items, total) = collect_page_streaming(
+    let page = collect_page_streaming_for_mode(
         domains.into_iter().map(|dom| {
             (
                 dom.id().to_string(),
@@ -54419,18 +54831,19 @@ pub async fn handle_v1_domains(
         pagination.offset,
         pagination.limit,
         None,
+        count_mode,
     );
 
     // Norito JSON response
-    let mut arr = Vec::with_capacity(items.len());
-    for it in &items {
+    let mut arr = Vec::with_capacity(page.items.len());
+    for it in &page.items {
         let mut m = norito::json::Map::new();
         m.insert("id".into(), norito::json::Value::from(it.id.clone()));
         arr.push(norito::json::Value::Object(m));
     }
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(arr));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(|e| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -54527,6 +54940,7 @@ pub async fn handle_v1_domains_query(
     let fetch_size = limits
         .clamp_fetch_size(fetch_size_requested)
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
+    let count_mode = app_count_mode(envelope.count_mode.as_deref(), ENDPOINT_DOMAINS_QUERY);
 
     if generic_mode {
         let rows = domains.into_iter().map(|dom| {
@@ -54554,19 +54968,24 @@ pub async fn handle_v1_domains_query(
         }
     });
 
-    let (items, total) =
-        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, fetch_size);
+    let page = collect_page_streaming_for_mode(
+        mapped_iter,
+        pagination.offset,
+        pagination.limit,
+        fetch_size,
+        count_mode,
+    );
 
     // Norito JSON
-    let mut arr = Vec::with_capacity(items.len());
-    for it in &items {
+    let mut arr = Vec::with_capacity(page.items.len());
+    for it in &page.items {
         let mut m = norito::json::Map::new();
         m.insert("id".into(), norito::json::Value::from(it.id.clone()));
         arr.push(norito::json::Value::Object(m));
     }
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(arr));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(|e| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -54606,9 +55025,10 @@ mod pagination_enforcement_tests {
     #[tokio::test]
     async fn account_permissions_rejects_limit_zero() {
         let state = test_state();
-        let params = crate::filter::Pagination {
+        let params = PaginationParams {
             limit: Some(0),
             offset: 0,
+            count_mode: None,
         };
 
         let err = handle_v1_account_permissions_with_policy(
@@ -54629,9 +55049,10 @@ mod pagination_enforcement_tests {
     #[tokio::test]
     async fn domains_list_rejects_limit_zero() {
         let state = test_state();
-        let params = crate::filter::Pagination {
+        let params = PaginationParams {
             limit: Some(0),
             offset: 0,
+            count_mode: None,
         };
 
         let err = handle_v1_domains(state, crate::NoritoQuery(params)).await;
@@ -54657,6 +55078,7 @@ mod pagination_enforcement_tests {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
 
         let err = handle_v1_domains_query(state, NoritoJson(envelope)).await;
@@ -54676,6 +55098,7 @@ mod pagination_enforcement_tests {
             limit: Some(0),
             offset: 0,
             sort: None,
+            count_mode: None,
         };
 
         let err = handle_v1_assets_definitions(state, crate::NoritoQuery(params)).await;
@@ -54701,6 +55124,7 @@ mod pagination_enforcement_tests {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
 
         let err = handle_v1_assets_definitions_query(state, NoritoJson(envelope)).await;
@@ -54720,6 +55144,7 @@ mod pagination_enforcement_tests {
             limit: Some(0),
             offset: 0,
             sort: None,
+            count_mode: None,
         };
 
         let err = handle_v1_repo_agreements(
@@ -54750,6 +55175,7 @@ mod pagination_enforcement_tests {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
 
         let err = handle_v1_repo_agreements_query(
@@ -54774,6 +55200,7 @@ mod pagination_enforcement_tests {
             limit: Some(0),
             offset: 0,
             sort: None,
+            count_mode: None,
         };
 
         let err = handle_v1_nfts(state, crate::NoritoQuery(params)).await;
@@ -54799,6 +55226,7 @@ mod pagination_enforcement_tests {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
 
         let err = handle_v1_nfts_query(state, NoritoJson(envelope)).await;
@@ -54818,6 +55246,7 @@ mod pagination_enforcement_tests {
             limit: Some(0),
             offset: 0,
             sort: None,
+            count_mode: None,
         };
 
         let err = handle_v1_accounts(
@@ -54848,6 +55277,7 @@ mod pagination_enforcement_tests {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
 
         let err =
@@ -55328,9 +55758,10 @@ mod account_permissions_json_tests {
         let response = handle_v1_account_permissions_with_policy(
             state,
             axum::extract::Path(authority_literal.clone()),
-            crate::NoritoQuery(crate::filter::Pagination {
+            crate::NoritoQuery(PaginationParams {
                 limit: Some(8),
                 offset: 0,
+                count_mode: None,
             }),
             MaybeTelemetry::disabled(),
         )
@@ -57679,6 +58110,7 @@ pub async fn handle_v1_accounts(
     record_account_literal_selection(&telemetry, ENDPOINT_ACCOUNTS_LIST);
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ACCOUNTS_LIST)?;
+    let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_ACCOUNTS_LIST);
 
     let mut filter_expr = p
         .filter
@@ -57698,10 +58130,16 @@ pub async fn handle_v1_accounts(
 
     let filter_ref = filter_expr.as_ref();
     let accounts = collect_subject_accounts_for_filter(&world, filter_ref);
+    let catalog = state.nexus_snapshot().dataspace_catalog;
+    let alias_cache = primary_alias_projection_batch_for_account_ids(
+        &world,
+        &catalog,
+        accounts.iter().map(|a| a.id().clone()),
+    );
     drop(world);
     let mapped_iter = accounts.into_iter().filter_map({
         let selectors = selectors;
-        let state = state.clone();
+        let alias_cache = alias_cache;
         move |account| {
             let key = account_sort_key(&account, &selectors);
             let canonical_id = account.id().to_string();
@@ -57709,10 +58147,7 @@ pub async fn handle_v1_accounts(
             let projected = AccountListItem {
                 canonical_id,
                 display_id,
-                primary_alias: primary_alias_projection_for_account_id(
-                    state.as_ref(),
-                    account.id(),
-                ),
+                primary_alias: alias_cache.get(account.id()).cloned().unwrap_or_default(),
             };
             if let Some(expr) = filter_ref {
                 if !account_filter_projection(expr, &projected) {
@@ -57722,11 +58157,16 @@ pub async fn handle_v1_accounts(
             Some((key, projected))
         }
     });
-    let (items, total) =
-        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, None);
+    let page = collect_page_streaming_for_mode(
+        mapped_iter,
+        pagination.offset,
+        pagination.limit,
+        None,
+        count_mode,
+    );
 
-    let mut arr = Vec::with_capacity(items.len());
-    for it in &items {
+    let mut arr = Vec::with_capacity(page.items.len());
+    for it in &page.items {
         let mut m = norito::json::Map::new();
         m.insert(
             "id".into(),
@@ -57737,7 +58177,7 @@ pub async fn handle_v1_accounts(
     }
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(arr));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(|e| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -57794,20 +58234,24 @@ pub async fn handle_v1_accounts_query(
         cap,
         ENDPOINT_ACCOUNTS_QUERY,
     )?;
+    let count_mode = app_count_mode(envelope.count_mode.as_deref(), ENDPOINT_ACCOUNTS_QUERY);
     let fetch_size = envelope.fetch_size;
     let world = state.world_view();
     let accounts = collect_subject_accounts_for_filter(&world, filter_projection_ref);
+    let catalog = state.nexus_snapshot().dataspace_catalog;
+    let alias_cache = primary_alias_projection_batch_for_account_ids(
+        &world,
+        &catalog,
+        accounts.iter().map(|a| a.id().clone()),
+    );
     drop(world);
     if envelope.select.is_some() || envelope.aggregate.is_some() {
-        let state_for_alias = state.clone();
+        let alias_cache = alias_cache.clone();
         let rows = accounts.into_iter().map(move |account| {
             let projected = AccountListItem {
                 canonical_id: account.id().to_string(),
                 display_id: crate::account_literal::display_literal(account.id()),
-                primary_alias: primary_alias_projection_for_account_id(
-                    state_for_alias.as_ref(),
-                    account.id(),
-                ),
+                primary_alias: alias_cache.get(account.id()).cloned().unwrap_or_default(),
             };
             account_list_item_to_query_row(&projected)
         });
@@ -57820,16 +58264,13 @@ pub async fn handle_v1_accounts_query(
         );
     }
 
-    let (items, total) = if sort_spec.is_empty() {
-        let state = state.clone();
+    let page = if sort_spec.is_empty() {
+        let alias_cache = alias_cache.clone();
         let filtered_iter = accounts.into_iter().filter_map(move |account| {
             let projected = AccountListItem {
                 canonical_id: account.id().to_string(),
                 display_id: crate::account_literal::display_literal(account.id()),
-                primary_alias: primary_alias_projection_for_account_id(
-                    state.as_ref(),
-                    account.id(),
-                ),
+                primary_alias: alias_cache.get(account.id()).cloned().unwrap_or_default(),
             };
             if let Some(expr) = filter_projection_ref {
                 if !account_filter_projection(expr, &projected) {
@@ -57838,23 +58279,21 @@ pub async fn handle_v1_accounts_query(
             }
             Some(projected)
         });
-        collect_page_linear(
+        collect_page_linear_for_mode(
             filtered_iter,
             pagination.offset,
             pagination.limit,
             fetch_size,
+            count_mode,
         )
     } else {
         let selectors = compile_account_sort_spec(&sort_spec);
-        let state = state.clone();
+        let alias_cache = alias_cache;
         let mapped_iter = accounts.into_iter().filter_map(move |account| {
             let projected = AccountListItem {
                 canonical_id: account.id().to_string(),
                 display_id: crate::account_literal::display_literal(account.id()),
-                primary_alias: primary_alias_projection_for_account_id(
-                    state.as_ref(),
-                    account.id(),
-                ),
+                primary_alias: alias_cache.get(account.id()).cloned().unwrap_or_default(),
             };
             if let Some(expr) = filter_projection_ref {
                 if !account_filter_projection(expr, &projected) {
@@ -57864,11 +58303,17 @@ pub async fn handle_v1_accounts_query(
             let key = account_sort_key(&account, &selectors);
             Some((key, projected))
         });
-        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, fetch_size)
+        collect_page_streaming_for_mode(
+            mapped_iter,
+            pagination.offset,
+            pagination.limit,
+            fetch_size,
+            count_mode,
+        )
     };
 
-    let mut arr = Vec::with_capacity(items.len());
-    for it in &items {
+    let mut arr = Vec::with_capacity(page.items.len());
+    for it in &page.items {
         let mut m = norito::json::Map::new();
         m.insert(
             "id".into(),
@@ -57879,7 +58324,7 @@ pub async fn handle_v1_accounts_query(
     }
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(arr));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(|e| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -58539,6 +58984,8 @@ pub struct SpaceDirectoryManifestQuery {
     pub limit: Option<u64>,
     #[norito(default)]
     pub offset: Option<u64>,
+    #[norito(default)]
+    pub count_mode: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -58682,39 +59129,44 @@ pub async fn handle_v1_space_directory_manifests(
 
     let offset = query.offset.unwrap_or(0);
     let limit = query.limit.filter(|&lim| lim > 0);
-    let (projections, total) = if let Some(set) = world.space_directory_manifests().get(&uaid) {
-        let dataspace_filter = filter;
-        let total = set
-            .iter()
-            .filter(|&(dataspace_id, _)| match dataspace_filter {
-                Some(target) => *dataspace_id == target,
-                None => true,
-            })
-            .count();
-        let status_filter = status_filter;
-        let iter_filter = dataspace_filter;
-        let iter = set.iter().filter_map(move |(dataspace_id, record)| {
-            if let Some(target) = iter_filter {
-                if *dataspace_id != target {
+    let count_mode = app_count_mode(
+        query.count_mode.as_deref(),
+        ENDPOINT_SPACE_DIRECTORY_MANIFESTS,
+    );
+    let (projections, total, filtered_total) =
+        if let Some(set) = world.space_directory_manifests().get(&uaid) {
+            let dataspace_filter = filter;
+            let total = set
+                .iter()
+                .filter(|&(dataspace_id, _)| match dataspace_filter {
+                    Some(target) => *dataspace_id == target,
+                    None => true,
+                })
+                .count();
+            let status_filter = status_filter;
+            let iter_filter = dataspace_filter;
+            let iter = set.iter().filter_map(move |(dataspace_id, record)| {
+                if let Some(target) = iter_filter {
+                    if *dataspace_id != target {
+                        return None;
+                    }
+                }
+                if !manifest_status_matches(record, status_filter) {
                     return None;
                 }
-            }
-            if !manifest_status_matches(record, status_filter) {
-                return None;
-            }
-            Some((
-                dataspace_id.as_u64(),
-                ManifestProjection {
-                    dataspace_id: *dataspace_id,
-                    record,
-                },
-            ))
-        });
-        let (items, _) = collect_page_streaming(iter, offset, limit, None);
-        (items, total)
-    } else {
-        (Vec::new(), 0)
-    };
+                Some((
+                    dataspace_id.as_u64(),
+                    ManifestProjection {
+                        dataspace_id: *dataspace_id,
+                        record,
+                    },
+                ))
+            });
+            let (items, filtered_total) = collect_page_streaming(iter, offset, limit, None);
+            (items, total, filtered_total)
+        } else {
+            (Vec::new(), 0, 0)
+        };
 
     for projection in projections {
         let entry = manifest_entry_to_json(
@@ -58729,6 +59181,14 @@ pub async fn handle_v1_space_directory_manifests(
     let mut root = Map::new();
     root.insert("uaid".into(), Value::from(uaid.to_string()));
     root.insert("total".into(), Value::from(total as u64));
+    root.insert(
+        "has_more".into(),
+        Value::from(
+            u64::try_from(filtered_total).unwrap_or(u64::MAX)
+                > offset.saturating_add(u64::try_from(manifests.len()).unwrap_or(u64::MAX)),
+        ),
+    );
+    root.insert("count_mode".into(), Value::from(count_mode.label()));
     root.insert("manifests".into(), Value::Array(manifests));
     let body = norito::json::to_json_pretty(&Value::Object(root)).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
@@ -59846,6 +60306,7 @@ mod accounts_query_tests {
                 offset: 0,
             },
             fetch_size: Some(2),
+            count_mode: Some("exact".to_owned()),
         };
         let resp = handle_v1_accounts_query(
             state,
@@ -59925,6 +60386,7 @@ mod accounts_query_tests {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let alias_result = handle_v1_accounts_query(
             state.clone(),
@@ -59981,6 +60443,7 @@ mod accounts_query_tests {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let resp = handle_v1_accounts_query(
             state.clone(),
@@ -60037,6 +60500,7 @@ mod accounts_query_tests {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let i105_result = handle_v1_accounts_query(
             state.clone(),
@@ -60110,6 +60574,7 @@ mod accounts_query_tests {
             limit: Some(8),
             offset: 0,
             sort: None,
+            count_mode: None,
         };
 
         let response = handle_v1_accounts(
@@ -60231,6 +60696,7 @@ mod accounts_query_tests {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: Some("exact".to_owned()),
         };
 
         let response = handle_v1_accounts_query(
@@ -60338,6 +60804,7 @@ mod asset_definitions_query_tests {
             limit: Some(8),
             offset: 0,
             sort: Some("name:asc".to_owned()),
+            count_mode: Some("exact".to_owned()),
         };
 
         let doc = response_json(
@@ -60375,6 +60842,7 @@ mod asset_definitions_query_tests {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let doc = response_json(
             handle_v1_assets_definitions_query(
@@ -60404,6 +60872,7 @@ mod asset_definitions_query_tests {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let doc = response_json(
             handle_v1_assets_definitions_query(
@@ -60432,6 +60901,7 @@ mod asset_definitions_query_tests {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let doc = response_json(
             handle_v1_assets_definitions_query(
@@ -60466,6 +60936,7 @@ mod asset_definitions_query_tests {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let doc = response_json(
             handle_v1_assets_definitions_query(
@@ -60494,6 +60965,7 @@ mod asset_definitions_query_tests {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let doc = response_json(
             handle_v1_assets_definitions_query(
@@ -60525,6 +60997,7 @@ mod asset_definitions_query_tests {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let doc = response_json(
             handle_v1_assets_definitions_query(
@@ -64061,6 +64534,7 @@ pub async fn handle_v1_assets_definitions(
     let cap = app_query_page_cap(&state);
     let pagination =
         enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ASSET_DEFINITIONS_LIST)?;
+    let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_ASSET_DEFINITIONS_LIST);
 
     let filter_expr = p
         .filter
@@ -64093,11 +64567,16 @@ pub async fn handle_v1_assets_definitions(
             Some((key, projected))
         }
     });
-    let (items, total) =
-        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, None);
+    let page = collect_page_streaming_for_mode(
+        mapped_iter,
+        pagination.offset,
+        pagination.limit,
+        None,
+        count_mode,
+    );
 
-    let mut arr = Vec::with_capacity(items.len());
-    for it in &items {
+    let mut arr = Vec::with_capacity(page.items.len());
+    for it in &page.items {
         arr.push(asset_definition_to_json_value(
             &it.definition,
             it.alias_binding.as_ref(),
@@ -64105,7 +64584,7 @@ pub async fn handle_v1_assets_definitions(
     }
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(arr));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(|e| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -64179,6 +64658,10 @@ pub async fn handle_v1_assets_definitions_query(
     let fetch_size = limits
         .clamp_fetch_size(envelope.fetch_size)
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
+    let count_mode = app_count_mode(
+        envelope.count_mode.as_deref(),
+        ENDPOINT_ASSET_DEFINITIONS_QUERY,
+    );
 
     if let Some(ref expr) = envelope.filter {
         fn depth(e: &crate::filter::FilterExpr) -> usize {
@@ -64238,11 +64721,16 @@ pub async fn handle_v1_assets_definitions_query(
             Some((key, projected))
         }
     });
-    let (items, total) =
-        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, fetch_size);
+    let page = collect_page_streaming_for_mode(
+        mapped_iter,
+        pagination.offset,
+        pagination.limit,
+        fetch_size,
+        count_mode,
+    );
 
-    let mut arr = Vec::with_capacity(items.len());
-    for it in &items {
+    let mut arr = Vec::with_capacity(page.items.len());
+    for it in &page.items {
         arr.push(asset_definition_to_json_value(
             &it.definition,
             it.alias_binding.as_ref(),
@@ -64250,7 +64738,7 @@ pub async fn handle_v1_assets_definitions_query(
     }
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(arr));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(|e| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -65177,6 +65665,7 @@ pub async fn handle_v1_nfts(
     let selectors = compile_nft_sort_spec(&sort_spec);
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_NFTS_LIST)?;
+    let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_NFTS_LIST);
 
     let filter_expr = p
         .filter
@@ -65209,18 +65698,23 @@ pub async fn handle_v1_nfts(
             Some((key, projected))
         }
     });
-    let (items, total) =
-        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, None);
+    let page = collect_page_streaming_for_mode(
+        mapped_iter,
+        pagination.offset,
+        pagination.limit,
+        None,
+        count_mode,
+    );
 
-    let mut arr = Vec::with_capacity(items.len());
-    for it in &items {
+    let mut arr = Vec::with_capacity(page.items.len());
+    for it in &page.items {
         let mut m = norito::json::Map::new();
         m.insert("id".into(), norito::json::Value::from(it.id.clone()));
         arr.push(norito::json::Value::Object(m));
     }
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(arr));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(|e| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -65256,6 +65750,7 @@ pub async fn handle_v1_nfts_query(
     let fetch_size = limits
         .clamp_fetch_size(envelope.fetch_size)
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
+    let count_mode = app_count_mode(envelope.count_mode.as_deref(), ENDPOINT_NFTS_QUERY);
 
     if let Some(ref expr) = envelope.filter {
         fn depth(e: &crate::filter::FilterExpr) -> usize {
@@ -65309,18 +65804,23 @@ pub async fn handle_v1_nfts_query(
             Some((key, projected))
         }
     });
-    let (items, total) =
-        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, fetch_size);
+    let page = collect_page_streaming_for_mode(
+        mapped_iter,
+        pagination.offset,
+        pagination.limit,
+        fetch_size,
+        count_mode,
+    );
 
-    let mut arr = Vec::with_capacity(items.len());
-    for it in &items {
+    let mut arr = Vec::with_capacity(page.items.len());
+    for it in &page.items {
         let mut m = norito::json::Map::new();
         m.insert("id".into(), norito::json::Value::from(it.id.clone()));
         arr.push(norito::json::Value::Object(m));
     }
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(arr));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(|e| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -65524,6 +66024,7 @@ pub async fn handle_v1_rwas(
     let selectors = compile_rwa_sort_spec(&sort_spec);
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_RWAS_LIST)?;
+    let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_RWAS_LIST);
 
     let filter_expr = p
         .filter
@@ -65548,18 +66049,23 @@ pub async fn handle_v1_rwas(
             Some((key, item))
         }
     });
-    let (items, total) =
-        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, None);
+    let page = collect_page_streaming_for_mode(
+        mapped_iter,
+        pagination.offset,
+        pagination.limit,
+        None,
+        count_mode,
+    );
 
-    let mut arr = Vec::with_capacity(items.len());
-    for it in &items {
+    let mut arr = Vec::with_capacity(page.items.len());
+    for it in &page.items {
         let mut m = norito::json::Map::new();
         m.insert("id".into(), norito::json::Value::from(it.id.clone()));
         arr.push(norito::json::Value::Object(m));
     }
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(arr));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(|e| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -65595,6 +66101,7 @@ pub async fn handle_v1_rwas_query(
     let fetch_size = limits
         .clamp_fetch_size(envelope.fetch_size)
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
+    let count_mode = app_count_mode(envelope.count_mode.as_deref(), ENDPOINT_RWAS_QUERY);
 
     if let Some(ref expr) = envelope.filter {
         fn depth(e: &crate::filter::FilterExpr) -> usize {
@@ -65641,18 +66148,23 @@ pub async fn handle_v1_rwas_query(
             Some((key, item))
         }
     });
-    let (items, total) =
-        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, fetch_size);
+    let page = collect_page_streaming_for_mode(
+        mapped_iter,
+        pagination.offset,
+        pagination.limit,
+        fetch_size,
+        count_mode,
+    );
 
-    let mut arr = Vec::with_capacity(items.len());
-    for it in &items {
+    let mut arr = Vec::with_capacity(page.items.len());
+    for it in &page.items {
         let mut m = norito::json::Map::new();
         m.insert("id".into(), norito::json::Value::from(it.id.clone()));
         arr.push(norito::json::Value::Object(m));
     }
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(arr));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(|e| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -66285,6 +66797,10 @@ pub async fn handle_v1_subscription_plans(
         cap,
         ENDPOINT_SUBSCRIPTION_PLANS_LIST,
     )?;
+    let count_mode = app_count_mode(
+        params.count_mode.as_deref(),
+        ENDPOINT_SUBSCRIPTION_PLANS_LIST,
+    );
 
     let mut items_with_keys = Vec::new();
     for def in world.asset_definitions_iter() {
@@ -66305,11 +66821,18 @@ pub async fn handle_v1_subscription_plans(
         ));
     }
 
-    let (items, total) =
-        collect_page_streaming(items_with_keys, pagination.offset, pagination.limit, None);
+    let page = collect_page_streaming_for_mode(
+        items_with_keys,
+        pagination.offset,
+        pagination.limit,
+        None,
+        count_mode,
+    );
     let payload = SubscriptionPlanListResponseDto {
-        items,
-        total: total as u64,
+        items: page.items,
+        total: page.total.map(|total| total as u64),
+        has_more: page.has_more,
+        count_mode: count_mode.label().to_owned(),
     };
     let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
@@ -66510,6 +67033,7 @@ pub async fn handle_v1_subscriptions(
         cap,
         ENDPOINT_SUBSCRIPTIONS_LIST,
     )?;
+    let count_mode = app_count_mode(params.count_mode.as_deref(), ENDPOINT_SUBSCRIPTIONS_LIST);
 
     let mut plan_cache: std::collections::BTreeMap<AssetDefinitionId, SubscriptionPlan> =
         std::collections::BTreeMap::new();
@@ -66563,11 +67087,18 @@ pub async fn handle_v1_subscriptions(
         ));
     }
 
-    let (items, total) =
-        collect_page_streaming(items_with_keys, pagination.offset, pagination.limit, None);
+    let page = collect_page_streaming_for_mode(
+        items_with_keys,
+        pagination.offset,
+        pagination.limit,
+        None,
+        count_mode,
+    );
     let payload = SubscriptionListResponseDto {
-        items,
-        total: total as u64,
+        items: page.items,
+        total: page.total.map(|total| total as u64),
+        has_more: page.has_more,
+        count_mode: count_mode.label().to_owned(),
     };
     let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
@@ -67670,6 +68201,7 @@ mod subscription_api_tests {
             provider: Some(provider.to_string()),
             limit: None,
             offset: 0,
+            count_mode: Some("exact".to_owned()),
         };
         let resp = handle_v1_subscription_plans(state, crate::NoritoQuery(params))
             .await
@@ -67729,6 +68261,7 @@ mod subscription_api_tests {
             provider: Some("billing@universal".to_string()),
             limit: None,
             offset: 0,
+            count_mode: Some("exact".to_owned()),
         };
         let resp = handle_v1_subscription_plans(state, crate::NoritoQuery(params))
             .await
@@ -67803,6 +68336,7 @@ mod subscription_api_tests {
             status: Some("paused".to_string()),
             limit: None,
             offset: 0,
+            count_mode: None,
         };
         let resp = handle_v1_subscriptions(state, crate::NoritoQuery(params))
             .await
@@ -67885,6 +68419,7 @@ mod subscription_api_tests {
             status: Some("paused".to_string()),
             limit: None,
             offset: 0,
+            count_mode: None,
         };
         let resp = handle_v1_subscriptions(state, crate::NoritoQuery(params))
             .await
@@ -68811,6 +69346,7 @@ pub async fn handle_v1_account_assets_query_with_policy(
         sort,
         pagination,
         fetch_size,
+        count_mode,
         ..
     } = envelope;
     let cap = app_query_page_cap(&state);
@@ -68824,6 +69360,7 @@ pub async fn handle_v1_account_assets_query_with_policy(
     let fetch_size = limits
         .clamp_fetch_size(fetch_size)
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
+    let count_mode = app_count_mode(count_mode.as_deref(), ENDPOINT_ACCOUNTS_ASSETS_QUERY);
 
     if let Some(ref expr) = filter {
         // Extra guard: reject overly deep filters early with 422
@@ -68877,11 +69414,16 @@ pub async fn handle_v1_account_assets_query_with_policy(
             Some((key, projected))
         }
     });
-    let (items, total) =
-        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, fetch_size);
+    let page = collect_page_streaming_for_mode(
+        mapped_iter,
+        pagination.offset,
+        pagination.limit,
+        fetch_size,
+        count_mode,
+    );
     // Norito JSON response
-    let mut arr = Vec::with_capacity(items.len());
-    for it in &items {
+    let mut arr = Vec::with_capacity(page.items.len());
+    for it in &page.items {
         let mut m = norito::json::Map::new();
         m.insert("asset".into(), norito::json::Value::from(it.asset.clone()));
         m.insert(
@@ -68910,7 +69452,7 @@ pub async fn handle_v1_account_assets_query_with_policy(
     }
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(arr));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(|e| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -69346,25 +69888,23 @@ pub async fn handle_v1_asset_holders(
             );
         }
     }
-    let alias_cache: BTreeMap<_, _> = map
-        .keys()
-        .map(|(account_id, _)| {
-            (
-                account_id.clone(),
-                primary_alias_projection_for_account_id(state.as_ref(), account_id),
-            )
-        })
-        .collect();
+    let catalog = state.nexus_snapshot().dataspace_catalog;
+    let alias_cache = primary_alias_projection_batch_for_account_ids(
+        &world,
+        &catalog,
+        map.keys().map(|(account_id, _)| account_id.clone()),
+    );
     drop(world);
     record_account_literal_selection(&telemetry, ENDPOINT_ASSET_HOLDERS);
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ASSET_HOLDERS)?;
+    let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_ASSET_HOLDERS);
     let limits = app_query_limits();
     let fetch_cap = limits
         .clamp_fetch_size(None)?
         .map(|cap| cap.min(pagination.cap));
 
-    let (items_vec, total) = collect_page_streaming(
+    let page = collect_page_streaming_for_mode(
         map.into_iter().map(|((account_id, scope), quantity)| {
             let canonical_id = account_id.to_string();
             let asset = def_id.to_string();
@@ -69386,10 +69926,11 @@ pub async fn handle_v1_asset_holders(
         pagination.offset,
         pagination.limit,
         fetch_cap,
+        count_mode,
     );
     // Norito JSON response
-    let mut arr = Vec::with_capacity(items_vec.len());
-    for it in &items_vec {
+    let mut arr = Vec::with_capacity(page.items.len());
+    for it in &page.items {
         let mut m = norito::json::Map::new();
         let display = crate::account_literal::display_literal(&it.account_id);
         m.insert("asset".into(), norito::json::Value::from(it.asset.clone()));
@@ -69412,7 +69953,7 @@ pub async fn handle_v1_asset_holders(
     }
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(arr));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(|e| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -69475,6 +70016,7 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
         sort,
         pagination,
         fetch_size,
+        count_mode,
         ..
     } = envelope;
     let cap = app_query_page_cap(&state);
@@ -69488,6 +70030,7 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
     let fetch_size = limits
         .clamp_fetch_size(fetch_size)
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
+    let count_mode = app_count_mode(count_mode.as_deref(), ENDPOINT_ASSET_HOLDERS_QUERY);
     let mut filter = filter;
     // Optional filtering via JSON DSL over projected fields
     if let Some(ref mut expr) = filter {
@@ -69579,15 +70122,12 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
             accumulate_asset_holder_quantity(&mut map, asset.id(), asset.value(), None);
         }
     }
-    let alias_cache: BTreeMap<_, _> = map
-        .keys()
-        .map(|(account_id, _)| {
-            (
-                account_id.clone(),
-                primary_alias_projection_for_account_id(state.as_ref(), account_id),
-            )
-        })
-        .collect();
+    let catalog = state.nexus_snapshot().dataspace_catalog;
+    let alias_cache = primary_alias_projection_batch_for_account_ids(
+        &world,
+        &catalog,
+        map.keys().map(|(account_id, _)| account_id.clone()),
+    );
     drop(world);
 
     if generic_mode {
@@ -69643,11 +70183,16 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
             Some((key, projected))
         }
     });
-    let (items, total) =
-        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, fetch_size);
+    let page = collect_page_streaming_for_mode(
+        mapped_iter,
+        pagination.offset,
+        pagination.limit,
+        fetch_size,
+        count_mode,
+    );
     // Norito JSON response
-    let mut arr = Vec::with_capacity(items.len());
-    for it in &items {
+    let mut arr = Vec::with_capacity(page.items.len());
+    for it in &page.items {
         let display = crate::account_literal::display_literal(&it.account_id);
         let mut m = norito::json::Map::new();
         m.insert("asset".into(), norito::json::Value::from(it.asset.clone()));
@@ -69670,7 +70215,7 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
     }
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(arr));
-    top.insert("total".into(), norito::json::Value::from(total as u64));
+    insert_page_metadata(&mut top, &page, count_mode);
     let body = norito::json::to_json_pretty(&top).map_err(|e| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),

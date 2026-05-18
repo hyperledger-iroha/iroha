@@ -680,6 +680,7 @@ mod tests {
                 offset: 0,
             },
             fetch_size: None,
+            count_mode: None,
         };
         let bytes = norito::json::to_vec(&envelope).expect("serialize envelope");
         let decoded: QueryEnvelope = norito::json::from_slice(&bytes).expect("decode envelope");
@@ -725,7 +726,11 @@ pub struct QueryEnvelope {
     #[norito(default)]
     pub pagination: Pagination,
     /// Optional batch fetch size for iterable queries.
+    #[norito(default)]
     pub fetch_size: Option<u64>,
+    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
+    #[norito(default)]
+    pub count_mode: Option<String>,
 }
 
 const _: () = {

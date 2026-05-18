@@ -5589,6 +5589,7 @@ mod tests {
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: vec![receipt],
+            native_amx_receipts: Vec::new(),
         };
         let envelope =
             iroha_data_model::nexus::LaneRelayEnvelope::new(header, None, None, settlement, 0)

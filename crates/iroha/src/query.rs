@@ -622,7 +622,8 @@ mod query_errors_handling {
     fn norito_body_with_json_content_type_errors_cleanly() -> Result<()> {
         let expected = QueryResponse::Iterable(QueryOutput {
             batch: QueryOutputBatchBoxTuple { tuple: Vec::new() },
-            remaining_items: 0,
+            remaining_items: Some(0),
+            has_more: false,
             continue_cursor: None,
         });
         let response = Response::builder()
@@ -640,7 +641,8 @@ mod query_errors_handling {
     fn json_body_decodes_iterable_response() -> Result<()> {
         let expected = QueryResponse::Iterable(QueryOutput {
             batch: QueryOutputBatchBoxTuple { tuple: Vec::new() },
-            remaining_items: 0,
+            remaining_items: Some(0),
+            has_more: false,
             continue_cursor: None,
         });
         let response = Response::builder()
@@ -681,7 +683,8 @@ mod query_errors_handling {
     fn missing_content_type_defaults_to_norito_decode() -> Result<()> {
         let expected = QueryResponse::Iterable(QueryOutput {
             batch: QueryOutputBatchBoxTuple { tuple: Vec::new() },
-            remaining_items: 0,
+            remaining_items: Some(0),
+            has_more: false,
             continue_cursor: None,
         });
         let response = Response::builder()
@@ -817,7 +820,8 @@ mod query_errors_handling {
 
         let encoded_response = norito::to_bytes(&QueryResponse::Iterable(QueryOutput {
             batch: QueryOutputBatchBoxTuple { tuple: Vec::new() },
-            remaining_items: 0,
+            remaining_items: Some(0),
+            has_more: false,
             continue_cursor: None,
         }))
         .expect("encode query response");

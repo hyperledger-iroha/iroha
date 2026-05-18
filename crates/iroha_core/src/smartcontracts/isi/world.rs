@@ -539,7 +539,7 @@ pub mod isi {
     }
 
     fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
-        if backend == crate::zk::ZK_BACKEND_HALO2_IPA {
+        if backend.starts_with("halo2/") {
             match (
                 normalize_halo2_circuit_id(record_id),
                 normalize_halo2_circuit_id(env_id),
@@ -563,13 +563,36 @@ pub mod isi {
     const VOTING_BALLOT_CIRCUIT_ID: &str = "vote-ballot";
     const VOTING_TALLY_CIRCUIT_ID: &str = "vote-tally";
 
+    fn halo2_voting_circuit_matches(record_circuit_id: &str, expected_id: &str) -> bool {
+        if circuit_id_matches(
+            crate::zk::ZK_BACKEND_HALO2_IPA,
+            record_circuit_id,
+            expected_id,
+        ) {
+            return true;
+        }
+        let Some(normalized) = normalize_halo2_circuit_id(record_circuit_id) else {
+            return false;
+        };
+        let Some(suffix) = normalized.strip_prefix("halo2/pasta/ipa/") else {
+            return false;
+        };
+        let is_legacy_vote_circuit = suffix == "vote-bool-commit"
+            || suffix.starts_with("vote-bool-commit-merkle2")
+            || suffix.starts_with("vote-bool-commit-merkle8")
+            || suffix.starts_with("vote-bool-commit-merkle16");
+        is_legacy_vote_circuit
+            && (expected_id == VOTING_BALLOT_CIRCUIT_ID || expected_id == VOTING_TALLY_CIRCUIT_ID)
+    }
+
     fn voting_circuit_matches(backend: &str, record_circuit_id: &str, expected_id: &str) -> bool {
-        if crate::zk::is_stark_fri_v1_backend(backend) {
-            // Enforce canonical STARK vote circuit roles to avoid swapping ballot/tally VKs.
+        if backend.starts_with("halo2/") {
+            halo2_voting_circuit_matches(record_circuit_id, expected_id)
+        } else if crate::zk::is_stark_fri_v1_backend(backend) {
+            // Enforce canonical vote circuit roles to avoid swapping ballot/tally VKs.
             circuit_id_matches(backend, record_circuit_id, expected_id)
         } else {
-            // Preserve existing Halo2 and historical backend behavior for backwards compatibility.
-            true
+            record_circuit_id == expected_id
         }
     }
 
@@ -7086,9 +7109,6 @@ pub mod isi {
         proof: &iroha_data_model::proof::ProofBox,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(bool, Duration), Error> {
-        if let Some(preverified) = state_transaction.lookup_preverified_proof(proof) {
-            return Ok((preverified, Duration::ZERO));
-        }
         if crate::zk::is_stark_fri_v1_backend(attachment.backend.as_str())
             && !state_transaction.zk.stark.enabled
         {
@@ -7118,6 +7138,11 @@ pub mod isi {
             return Err(InstructionExecutionError::InvariantViolation(
                 "verifying key backend mismatch".into(),
             ));
+        }
+        if let Some(preverified) =
+            state_transaction.lookup_preverified_proof(proof, &attachment.vk_ref, commitment)
+        {
+            return Ok((preverified, Duration::ZERO));
         }
 
         let report = crate::zk::verify_backend_with_timing_checked(
@@ -12132,7 +12157,7 @@ pub mod isi {
                 State, StateTransaction, SumeragiPolicyConfig, SumeragiPolicyFlags, World,
                 storage_transactions::TransactionsBlockError,
             },
-            zk::{hash_proof, hash_vk},
+            zk::hash_vk,
         };
 
         fn new_dummy_block_at_height(height: NonZeroU64) -> crate::block::CommittedBlock {
@@ -12211,6 +12236,7 @@ pub mod isi {
                 swap_metadata: None,
                 receipts: Vec::new(),
                 nexus_fee_receipts: Vec::new(),
+                native_amx_receipts: Vec::new(),
             };
             let base_envelope = iroha_data_model::nexus::LaneRelayEnvelope::new(
                 block_header,
@@ -12461,6 +12487,26 @@ pub mod isi {
             assert!(circuit_id_matches("groth16", "plain", "plain"));
             assert!(!circuit_id_matches("groth16", "plain", "plain "));
             assert!(voting_circuit_matches(
+                "halo2/ipa",
+                "halo2/pasta/ipa/vote-ballot",
+                "vote-ballot"
+            ));
+            assert!(!voting_circuit_matches(
+                "halo2/ipa",
+                "halo2/pasta/ipa/vote-tally",
+                "vote-ballot"
+            ));
+            assert!(voting_circuit_matches(
+                "halo2/ipa",
+                "halo2/pasta/ipa/vote-bool-commit-merkle8",
+                "vote-ballot"
+            ));
+            assert!(voting_circuit_matches(
+                "halo2/pasta/ipa/vote-bool-commit-merkle8",
+                "halo2/pasta/vote-bool-commit-merkle8",
+                "vote-tally"
+            ));
+            assert!(!voting_circuit_matches(
                 "halo2/ipa",
                 "halo2/pasta/ipa/any-circuit",
                 "vote-ballot"
@@ -18112,9 +18158,15 @@ pub mod isi {
             let proof_bytes = norito::to_bytes(&envelope).expect("encode envelope");
             let proof_box = ProofBox::new("halo2/ipa".into(), proof_bytes);
             let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box.clone(), vk_id);
-            let proof_hash = hash_proof(&attachment.proof);
             let mut map = BTreeMap::new();
-            map.insert(proof_hash, true);
+            map.insert(
+                crate::zk::PreverifiedProofKey::new(
+                    &attachment.proof,
+                    &attachment.vk_ref,
+                    hash_vk(&vk_box),
+                ),
+                true,
+            );
             block.set_preverified_batch(Arc::new(map));
 
             let mut stx_verify = block.transaction();
@@ -18162,6 +18214,7 @@ pub mod isi {
             let mut stx = block.transaction();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_env");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![5, 4, 3]);
+            let vk_commitment = hash_vk(&vk_box);
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
                 "circuit_env".to_string(),
@@ -18170,7 +18223,7 @@ pub mod isi {
                 BackendTag::Halo2IpaPasta,
                 "pallas",
                 [0x63; 32],
-                hash_vk(&vk_box),
+                vk_commitment,
             );
             rec.vk_len = 3;
             rec.status = ConfidentialStatus::Active;
@@ -18187,9 +18240,15 @@ pub mod isi {
 
             let proof_box = ProofBox::new("halo2/ipa".into(), vec![0xAA]);
             let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box.clone(), vk_id);
-            let proof_hash = hash_proof(&attachment.proof);
             let mut map = BTreeMap::new();
-            map.insert(proof_hash, true);
+            map.insert(
+                crate::zk::PreverifiedProofKey::new(
+                    &attachment.proof,
+                    &attachment.vk_ref,
+                    vk_commitment,
+                ),
+                true,
+            );
             block.set_preverified_batch(Arc::new(map));
 
             let mut stx_verify = block.transaction();
@@ -18251,6 +18310,106 @@ pub mod isi {
             let msg = smart_contract_error_message(err);
             assert!(
                 msg.contains("registered verifying key reference"),
+                "unexpected msg: {msg}"
+            );
+        }
+
+        #[test]
+        fn verify_proof_preverified_cache_does_not_bypass_missing_verifying_key_bytes() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let exec = Executor::default();
+
+            let mut stx = block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let mut stx = block.transaction();
+            let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_missing_bytes");
+            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![6, 6, 6]);
+            let vk_commitment = hash_vk(&vk_box);
+            let public_inputs = vec![1, 2, 3];
+            let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
+            let mut rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                "circuit_missing_bytes".to_string(),
+                None,
+                "test",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                public_inputs_schema_hash,
+                vk_commitment,
+            );
+            rec.vk_len = 3;
+            rec.status = ConfidentialStatus::Active;
+            rec.key = Some(vk_box);
+            rec.gas_schedule_id = Some("halo2_default".into());
+            let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                id: vk_id.clone(),
+                record: rec,
+            }
+            .into();
+            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+                .expect("register vk");
+            stx.apply();
+
+            {
+                let mut stx_mut = block.transaction();
+                if let Some(stored) = stx_mut.world.verifying_keys.get_mut(&vk_id) {
+                    stored.key = None;
+                }
+                stx_mut.apply();
+            }
+
+            let envelope = OpenVerifyEnvelope {
+                backend: BackendTag::Halo2IpaPasta,
+                circuit_id: "circuit_missing_bytes".to_string(),
+                vk_hash: vk_commitment,
+                public_inputs,
+                proof_bytes: vec![4, 5, 6],
+                aux: Vec::new(),
+            };
+            let proof_bytes = norito::to_bytes(&envelope).expect("encode envelope");
+            let proof_box = ProofBox::new("halo2/ipa".into(), proof_bytes);
+            let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
+            let mut map = BTreeMap::new();
+            map.insert(
+                crate::zk::PreverifiedProofKey::new(
+                    &attachment.proof,
+                    &attachment.vk_ref,
+                    vk_commitment,
+                ),
+                true,
+            );
+            block.set_preverified_batch(Arc::new(map));
+
+            let mut stx_verify = block.transaction();
+            let verify: InstructionBox =
+                iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
+            let err = exec
+                .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+                .expect_err("missing verifying key bytes should reject proof");
+            let msg = smart_contract_error_message(err);
+            assert!(
+                msg.contains("verifying key bytes missing"),
                 "unexpected msg: {msg}"
             );
         }
@@ -18330,9 +18489,15 @@ pub mod isi {
             let proof_bytes = norito::to_bytes(&envelope).expect("encode envelope");
             let proof_box = ProofBox::new("halo2/ipa".into(), proof_bytes);
             let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box.clone(), vk_id);
-            let proof_hash = hash_proof(&attachment.proof);
             let mut map = BTreeMap::new();
-            map.insert(proof_hash, true);
+            map.insert(
+                crate::zk::PreverifiedProofKey::new(
+                    &attachment.proof,
+                    &attachment.vk_ref,
+                    hash_vk(&vk_box),
+                ),
+                true,
+            );
             block.set_preverified_batch(Arc::new(map));
 
             let mut stx_verify = block.transaction();
