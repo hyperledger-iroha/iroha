@@ -3,7 +3,7 @@
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use eyre::{Result, bail, ensure};
@@ -38,6 +38,7 @@ use norito::{json::Value, to_bytes};
 use tokio::runtime::Runtime;
 
 static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
+const CLIENT_HEIGHT_TIMEOUT: Duration = Duration::from_secs(120);
 
 fn evidence_count(value: &norito::json::Value) -> u64 {
     value
@@ -303,6 +304,33 @@ fn advance_to_height(
     }
     runtime.block_on(network.ensure_blocks_with(|height| height.total >= target))?;
     Ok(())
+}
+
+fn advance_client_to_height(
+    network: &Network,
+    client: &Client,
+    target: u64,
+    label: &str,
+) -> Result<()> {
+    let deadline = Instant::now() + CLIENT_HEIGHT_TIMEOUT;
+    loop {
+        let status = client.get_status()?;
+        if status.blocks >= target {
+            return Ok(());
+        }
+
+        let submit_client = submit_client_for_network(network, client);
+        submit_client.submit_blocking(Log::new(
+            Level::INFO,
+            format!("{label} tick {}", status.blocks),
+        ))?;
+
+        ensure!(
+            Instant::now() < deadline,
+            "client did not reach target height {target} within {CLIENT_HEIGHT_TIMEOUT:?}"
+        );
+        thread::sleep(Duration::from_millis(200));
+    }
 }
 
 #[test]
@@ -618,7 +646,7 @@ fn mode_activation_height_requires_next_mode_and_future_height() -> Result<()> {
 fn joint_consensus_switches_mode_at_activation_height() -> Result<()> {
     init_instruction_registry();
 
-    let Some((network, runtime)) = start_network(stringify!(
+    let Some((network, _runtime)) = start_network(stringify!(
         joint_consensus_switches_mode_at_activation_height
     ))?
     else {
@@ -647,8 +675,7 @@ fn joint_consensus_switches_mode_at_activation_height() -> Result<()> {
         .sign(ALICE_KEYPAIR.private_key());
     submit_client_for_network(&network, &client).submit_transaction_blocking(&switch_tx)?;
 
-    advance_to_height(
-        &runtime,
+    advance_client_to_height(
         &network,
         &client,
         activation_height.saturating_add(1),

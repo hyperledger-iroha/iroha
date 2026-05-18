@@ -2,6 +2,53 @@
 
 Last updated: 2026-05-18
 
+## 2026-05-18 Soracloud private route hardening and FASTPQ telemetry
+
+- Torii OpenAPI now documents the Soracloud private uploaded-model execute and
+  committed receipt query routes, including the deterministic quantized CPU
+  request, encrypted artifact references, receipt payload, transaction
+  instruction skeleton, and bounded receipt pagination metadata.
+- Private uploaded-model execution now fail-closes when the requested policy id
+  diverges from the admitted uploaded-model bundle. When a
+  `decryption_request_id` is supplied, Torii also requires a committed
+  decryption request record for the same service, policy, input ciphertext
+  commitment, and no-newer sequence before releasing the runtime execution
+  path. Receipts remain commitment/artifact-reference only; plaintext is not
+  stored on-chain.
+- FASTPQ exposes process-local GPU accelerator event observers and Prometheus
+  counters for accelerator disable events and sampled parity failures. The
+  daemon wires those events into telemetry labels for the configured device
+  class, chip family, and GPU kind, while scalar CPU hashing remains the
+  authoritative fallback.
+- Sumeragi VRF staging now merges compatible committed and pending NPoS VRF
+  observations instead of letting stale committed seals drop newer compatible
+  pending evidence, and conflicting pending VRF records are pruned against the
+  committed state.
+- The NPoS 30 TPS two-hour soak is green with
+  `artifacts/30tps-2h-npos-vrfstage-20260518T065858`: 719 monitor samples,
+  maximum no-progress gap `10.118s` against the `60s` stall threshold, final
+  height `1098`, final approved transactions `214572`, zero rejected
+  transactions, and no `VRF epoch seal conflicts`, pending-block validation
+  reject, `NposEffectsInvalid`, or panic signatures in peer logs.
+- Validation: `cargo fmt --all`,
+  `CARGO_TARGET_DIR=target/codex-struct-hardening-check cargo test -p
+  iroha_torii openapi --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-struct-hardening-check cargo test -p
+  iroha_torii private_uploaded_model_execute --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-struct-hardening-check cargo test -p
+  iroha_telemetry records_fastpq_gpu_disable_and_parity_metrics --lib --
+  --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-struct-hardening-check cargo test -p
+  fastpq_prover poseidon_policy_labels_cpu_fallbacks -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-struct-hardening-check cargo check -p
+  iroha_core -p iroha_torii -p irohad -p iroha_data_model`,
+  `CARGO_TARGET_DIR=target/codex-struct-hardening-check cargo test -p
+  iroha_core stage_vrf_snapshot --lib -- --nocapture`, and
+  `CARGO_TARGET_DIR=target/codex-struct-hardening-check cargo test -p
+  integration_tests --test consensus_and_da
+  joint_consensus_switches_mode_at_activation_height -- --nocapture` are green.
+  Real Metal/CUDA hardware parity remains pending on suitable hosts.
+
 ## 2026-05-18 Torii bounded stored query continuations
 
 - Torii's Arc-owned snapshot query path now registers unsorted bounded stored
@@ -56,14 +103,20 @@ Last updated: 2026-05-18
   kura_store_counters_surface_in_snapshot -- --nocapture`; `CARGO_INCREMENTAL=0
   cargo check -p iroha_core` is green. Integration validation passes with
   `CARGO_INCREMENTAL=0 cargo test -p integration_tests --lib` and
-  `CARGO_INCREMENTAL=0 cargo test -p integration_tests --test consensus_and_da
-  -- --nocapture` (258 passed, 0 failed, 7 ignored; 3164.03s), covering the
-  mode-cutover and vote-QC regressions exposed by the earlier workspace run.
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-wsv-store-sync cargo
+  test -p integration_tests --test consensus_and_da -- --nocapture` (258
+  passed, 0 failed, 7 ignored; 4239.30s), covering the mode-cutover,
+  vote-QC, NPoS timing, and restart/rehydration regressions exposed by the
+  earlier workspace run.
   Lint validation passes with `CARGO_INCREMENTAL=0 cargo clippy -p
   iroha_data_model --all-targets -- -D warnings` and `CARGO_INCREMENTAL=0 cargo
   clippy --workspace --all-targets -- -D warnings` after splitting the
   overlong SoraCloud receipt roundtrip test. Targeted `rustfmt --edition 2024
-  --check` and `git diff --check` are green for the Kura/query/status files,
+  --check`, `CARGO_INCREMENTAL=0
+  CARGO_TARGET_DIR=/tmp/iroha-codex-wsv-store-sync cargo clippy -p
+  integration_tests --test consensus_and_da -- -D warnings`,
+  `cargo fmt --all -- --check`, and `git diff --check` are green for the
+  Kura/query/status files,
   integration regressions, schema drift fixes, and docs touched by this work.
 
 ## 2026-05-18 FASTPQ Poseidon parity fail-closed gates

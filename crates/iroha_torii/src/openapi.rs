@@ -309,6 +309,16 @@ fn tags_section() -> Value {
         Value::String("SoraFS storage, capacity, and audit endpoints.".to_owned()),
     );
 
+    let mut soracloud = Map::new();
+    soracloud.insert("name".into(), Value::String("Soracloud".to_owned()));
+    soracloud.insert(
+        "description".into(),
+        Value::String(
+            "Soracloud service, model, private uploaded-model runtime, and receipt endpoints."
+                .to_owned(),
+        ),
+    );
+
     let mut sns = Map::new();
     sns.insert("name".into(), Value::String("SNS".to_owned()));
     sns.insert(
@@ -388,6 +398,7 @@ fn tags_section() -> Value {
         Value::Object(push),
         Value::Object(webhooks),
         Value::Object(sorafs),
+        Value::Object(soracloud),
         Value::Object(sns),
         Value::Object(soradns),
         Value::Object(content),
@@ -4281,6 +4292,42 @@ fn sorafs_paths() -> Map {
     paths
 }
 
+fn soracloud_paths() -> Map {
+    let mut paths = Map::new();
+    paths.insert(
+        "/v1/soracloud/model/upload/private/execute".to_owned(),
+        Value::Object(json_post_operation(
+            "Soracloud",
+            "Execute a private uploaded model.",
+            "Run the deterministic quantized CPU V1 private uploaded-model evaluator against an approved finalized SoraFS-backed bundle. The response contains only commitments, encrypted artifact references, and an unsigned `RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction skeleton for external signing.",
+            "#/components/schemas/PrivateUploadedModelExecuteRequest",
+            "#/components/schemas/PrivateUploadedModelExecuteResponse",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/soracloud/model/upload/private/receipts".to_owned(),
+        Value::Object(json_get_operation(
+            "Soracloud",
+            "List private uploaded-model receipts.",
+            "List committed private uploaded-model execution receipts. `count_mode=bounded` is the default; `count_mode=exact` opts into an exact total.",
+            "#/components/schemas/PrivateUploadedModelReceiptListResponse",
+            vec![
+                string_query_param("receipt_id", "Optional receipt hash filter."),
+                string_query_param("service_name", "Optional Soracloud service name filter."),
+                string_query_param("model_id", "Optional uploaded model id filter."),
+                string_query_param("weight_version", "Optional model weight version filter."),
+                integer_query_param("limit", "Optional page size limit.", Some("uint32")),
+                string_query_param(
+                    "count_mode",
+                    "Count mode: `bounded` by default, or `exact` for exact totals.",
+                ),
+            ],
+        )),
+    );
+    paths
+}
+
 fn soradns_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
@@ -6266,6 +6313,7 @@ fn paths_section() -> Map {
     paths.extend(space_directory_paths());
     paths.extend(explorer_paths());
     paths.extend(sorafs_paths());
+    paths.extend(soracloud_paths());
     paths.extend(soradns_paths());
     paths.extend(content_paths());
     paths.extend(sns_paths());
@@ -7560,6 +7608,171 @@ fn openapi_schemas() -> Map {
         norito::json!({
             "type": "array",
             "items": { "$ref": "#/components/schemas/JsonValue" }
+        }),
+    );
+    schemas.insert(
+        "Hash".to_owned(),
+        norito::json!({
+            "type": "string",
+            "pattern": "^hash:[0-9a-fA-F]{64}#[0-9a-fA-F]{4}$",
+            "description": "Norito JSON hash string with checksum."
+        }),
+    );
+    schemas.insert(
+        "ManifestDigest".to_owned(),
+        norito::json!({
+            "type": "array",
+            "minItems": 32,
+            "maxItems": 32,
+            "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+            "description": "Canonical 32-byte SoraFS manifest digest."
+        }),
+    );
+    schemas.insert(
+        "PrivateUploadedModelQuantizedCpuModel".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["input_len", "output_len", "weights_i8", "bias_i32", "output_shift", "output_min", "output_max"],
+            "additionalProperties": false,
+            "properties": {
+                "input_len": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "output_len": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "weights_i8": {
+                    "type": "array",
+                    "items": { "type": "integer", "format": "int8" }
+                },
+                "bias_i32": {
+                    "type": "array",
+                    "items": { "type": "integer", "format": "int32" }
+                },
+                "output_shift": { "type": "integer", "minimum": 0, "maximum": 255 },
+                "output_min": { "type": "integer", "format": "int32" },
+                "output_max": { "type": "integer", "format": "int32" }
+            }
+        }),
+    );
+    schemas.insert(
+        "PrivateUploadedModelArtifactRef".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["schema_version", "sorafs_manifest_digest", "artifact_hash", "ciphertext_bytes", "artifact_role"],
+            "additionalProperties": false,
+            "properties": {
+                "schema_version": { "type": "integer", "minimum": 1 },
+                "sorafs_manifest_digest": { "$ref": "#/components/schemas/ManifestDigest" },
+                "artifact_hash": { "$ref": "#/components/schemas/Hash" },
+                "ciphertext_bytes": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "artifact_role": { "type": "string", "enum": ["input", "output"] }
+            }
+        }),
+    );
+    schemas.insert(
+        "PrivateUploadedModelExecuteRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["service_name", "weight_version", "policy_id", "model", "plaintext_input_i32", "input_artifact", "output_artifact", "emitted_sequence"],
+            "additionalProperties": false,
+            "properties": {
+                "service_name": { "type": "string" },
+                "weight_version": { "type": "string" },
+                "model_id": { "type": ["string", "null"] },
+                "model_name": { "type": ["string", "null"] },
+                "bundle_root": { "anyOf": [{ "$ref": "#/components/schemas/Hash" }, { "type": "null" }] },
+                "policy_id": { "type": "string" },
+                "decryption_request_id": {
+                    "type": ["string", "null"],
+                    "description": "Optional committed decryption request record id that authorizes release of the encrypted input artifact."
+                },
+                "model": { "$ref": "#/components/schemas/PrivateUploadedModelQuantizedCpuModel" },
+                "plaintext_input_i32": {
+                    "type": "array",
+                    "items": { "type": "integer", "format": "int32" }
+                },
+                "input_artifact": { "$ref": "#/components/schemas/PrivateUploadedModelArtifactRef" },
+                "output_artifact": { "$ref": "#/components/schemas/PrivateUploadedModelArtifactRef" },
+                "emitted_sequence": { "type": "integer", "format": "uint64", "minimum": 0 }
+            }
+        }),
+    );
+    schemas.insert(
+        "PrivateUploadedModelReceipt".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["schema_version", "receipt_id", "service_name", "model_id", "weight_version", "runtime_version", "model_manifest_digest", "model_bundle_root", "policy_id", "input_commitment", "output_commitment", "input_artifact", "output_artifact", "emitted_sequence"],
+            "additionalProperties": true,
+            "properties": {
+                "schema_version": { "type": "integer", "minimum": 1 },
+                "receipt_id": { "$ref": "#/components/schemas/Hash" },
+                "service_name": { "type": "string" },
+                "model_id": { "type": "string" },
+                "weight_version": { "type": "string" },
+                "runtime_version": { "type": "string" },
+                "model_manifest_digest": { "$ref": "#/components/schemas/ManifestDigest" },
+                "model_bundle_root": { "$ref": "#/components/schemas/Hash" },
+                "policy_id": { "type": "string" },
+                "input_commitment": { "$ref": "#/components/schemas/Hash" },
+                "output_commitment": { "$ref": "#/components/schemas/Hash" },
+                "input_artifact": { "$ref": "#/components/schemas/PrivateUploadedModelArtifactRef" },
+                "output_artifact": { "$ref": "#/components/schemas/PrivateUploadedModelArtifactRef" },
+                "emitted_sequence": { "type": "integer", "format": "uint64", "minimum": 0 }
+            }
+        }),
+    );
+    schemas.insert(
+        "SoracloudTxInstruction".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["kind", "payload_hex"],
+            "additionalProperties": false,
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "description": "Fully-qualified instruction type name."
+                },
+                "payload_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]*$",
+                    "description": "Norito-encoded instruction payload for external transaction signing."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "PrivateUploadedModelExecuteResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["schema_version", "status", "receipt", "tx_instructions"],
+            "additionalProperties": false,
+            "properties": {
+                "schema_version": { "type": "integer", "minimum": 1 },
+                "status": { "$ref": "#/components/schemas/JsonValue" },
+                "receipt": { "$ref": "#/components/schemas/PrivateUploadedModelReceipt" },
+                "tx_instructions": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/SoracloudTxInstruction" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "PrivateUploadedModelReceiptListResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["schema_version", "receipts", "returned_items", "remaining_items", "has_more", "count_mode"],
+            "additionalProperties": false,
+            "properties": {
+                "schema_version": { "type": "integer", "minimum": 1 },
+                "receipts": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/PrivateUploadedModelReceipt" }
+                },
+                "total": { "type": ["integer", "null"], "format": "uint32", "minimum": 0 },
+                "returned_items": { "type": "integer", "format": "uint32", "minimum": 0 },
+                "remaining_items": { "type": "integer", "format": "uint32", "minimum": 0 },
+                "has_more": { "type": "boolean" },
+                "count_mode": { "type": "string", "enum": ["bounded", "exact"] },
+                "continue_cursor": { "type": ["string", "null"] }
+            }
         }),
     );
     schemas.insert(
@@ -11846,6 +12059,11 @@ mod tests {
                 expected: "/v1/sorafs/providers",
             },
             PathCase {
+                label: "soracloud",
+                builder: soracloud_paths,
+                expected: "/v1/soracloud/model/upload/private/execute",
+            },
+            PathCase {
                 label: "soradns",
                 builder: soradns_paths,
                 expected: "/v1/soradns/directory/latest",
@@ -11916,9 +12134,47 @@ mod tests {
             "JsonList",
             "ApiVersionInfo",
             "PeerIdList",
+            "PrivateUploadedModelExecuteRequest",
+            "PrivateUploadedModelExecuteResponse",
+            "PrivateUploadedModelReceiptListResponse",
             "PushRegisterDeviceRequest",
         ] {
             assert!(schemas.contains_key(key), "schema missing {key}");
+        }
+    }
+
+    #[test]
+    fn generated_spec_documents_soracloud_private_uploaded_model_routes() {
+        let doc = generate_spec();
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        assert!(paths.contains_key("/v1/soracloud/model/upload/private/execute"));
+        assert!(paths.contains_key("/v1/soracloud/model/upload/private/receipts"));
+
+        let schemas = doc
+            .get("components")
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("schema section");
+        let response = schemas
+            .get("PrivateUploadedModelReceiptListResponse")
+            .and_then(Value::as_object)
+            .expect("receipt-list schema");
+        let properties = response
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("receipt-list properties");
+        for key in [
+            "total",
+            "returned_items",
+            "remaining_items",
+            "has_more",
+            "count_mode",
+            "continue_cursor",
+        ] {
+            assert!(properties.contains_key(key), "metadata field missing {key}");
         }
     }
 
@@ -11929,17 +12185,22 @@ mod tests {
             _ => panic!("tags section should be an array"),
         };
         let mut has_push = false;
+        let mut has_soracloud = false;
         let mut has_vpn = false;
         for tag in tags {
             let Some(obj) = tag.as_object() else { continue };
             if obj.get("name").and_then(Value::as_str) == Some("Push") {
                 has_push = true;
             }
+            if obj.get("name").and_then(Value::as_str) == Some("Soracloud") {
+                has_soracloud = true;
+            }
             if obj.get("name").and_then(Value::as_str) == Some("VPN") {
                 has_vpn = true;
             }
         }
         assert!(has_push, "tags should include Push");
+        assert!(has_soracloud, "tags should include Soracloud");
         assert!(has_vpn, "tags should include VPN");
     }
 }

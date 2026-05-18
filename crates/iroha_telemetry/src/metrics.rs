@@ -2657,6 +2657,51 @@ mod tests {
     }
 
     #[test]
+    fn records_fastpq_gpu_disable_and_parity_metrics() {
+        let metrics = Metrics::default();
+        metrics.inc_fastpq_gpu_disable(
+            "poseidon_merkle_pairs",
+            "cpu_parity_mismatch",
+            "apple-m4",
+            "m4",
+            "integrated",
+        );
+        metrics.inc_fastpq_gpu_parity_failure(
+            "poseidon_merkle_pairs",
+            "cpu_parity_mismatch",
+            "apple-m4",
+            "m4",
+            "integrated",
+        );
+        assert_eq!(
+            metrics
+                .fastpq_gpu_disable_total
+                .with_label_values(&[
+                    "poseidon_merkle_pairs",
+                    "cpu_parity_mismatch",
+                    "apple-m4",
+                    "m4",
+                    "integrated",
+                ])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .fastpq_gpu_parity_failure_total
+                .with_label_values(&[
+                    "poseidon_merkle_pairs",
+                    "cpu_parity_mismatch",
+                    "apple-m4",
+                    "m4",
+                    "integrated",
+                ])
+                .get(),
+            1
+        );
+    }
+
+    #[test]
     fn records_fastpq_proof_sidecar_metrics() {
         let metrics = Metrics::default();
         metrics.set_fastpq_proof_sidecar_queue_depth(7);
@@ -6251,6 +6296,10 @@ pub struct Metrics {
     pub fastpq_execution_mode_total: IntCounterVec,
     /// FASTPQ Poseidon pipeline resolutions grouped by requested/resolved/path/device labels.
     pub fastpq_poseidon_pipeline_total: IntCounterVec,
+    /// FASTPQ GPU accelerator disable events grouped by accelerator/reason/device labels.
+    pub fastpq_gpu_disable_total: IntCounterVec,
+    /// FASTPQ sampled GPU parity failures grouped by accelerator/reason/device labels.
+    pub fastpq_gpu_parity_failure_total: IntCounterVec,
     /// FASTPQ proof sidecar queue depth.
     pub fastpq_proof_sidecar_queue_depth: GenericGauge<AtomicU64>,
     /// FASTPQ proof sidecar persistence events grouped by event.
@@ -8131,6 +8180,34 @@ impl Default for Metrics {
                 "requested",
                 "resolved",
                 "path",
+                "device_class",
+                "chip_family",
+                "gpu_kind",
+            ],
+        )
+        .expect("Infallible");
+        let fastpq_gpu_disable_total = IntCounterVec::new(
+            Opts::new(
+                "fastpq_gpu_disable_total",
+                "FASTPQ GPU accelerator disable events grouped by accelerator/reason and per-device labels.",
+            ),
+            &[
+                "accelerator",
+                "reason",
+                "device_class",
+                "chip_family",
+                "gpu_kind",
+            ],
+        )
+        .expect("Infallible");
+        let fastpq_gpu_parity_failure_total = IntCounterVec::new(
+            Opts::new(
+                "fastpq_gpu_parity_failure_total",
+                "FASTPQ sampled GPU parity failures grouped by accelerator/reason and per-device labels.",
+            ),
+            &[
+                "accelerator",
+                "reason",
                 "device_class",
                 "chip_family",
                 "gpu_kind",
@@ -13731,6 +13808,8 @@ impl Default for Metrics {
             oracle_evidence_hashes_total,
             fastpq_execution_mode_total,
             fastpq_poseidon_pipeline_total,
+            fastpq_gpu_disable_total,
+            fastpq_gpu_parity_failure_total,
             fastpq_proof_sidecar_queue_depth,
             fastpq_proof_sidecar_events_total,
             fastpq_metal_queue_ratio,
@@ -14283,6 +14362,8 @@ impl Default for Metrics {
             oracle_evidence_hashes_total,
             fastpq_execution_mode_total,
             fastpq_poseidon_pipeline_total,
+            fastpq_gpu_disable_total,
+            fastpq_gpu_parity_failure_total,
             fastpq_proof_sidecar_queue_depth,
             fastpq_proof_sidecar_events_total,
             fastpq_metal_queue_ratio,
@@ -15682,6 +15763,34 @@ impl Metrics {
                 gpu_kind,
             );
         }
+    }
+
+    /// Increment a FASTPQ GPU accelerator disable event counter.
+    pub fn inc_fastpq_gpu_disable(
+        &self,
+        accelerator: &str,
+        reason: &str,
+        device_class: &str,
+        chip_family: &str,
+        gpu_kind: &str,
+    ) {
+        self.fastpq_gpu_disable_total
+            .with_label_values(&[accelerator, reason, device_class, chip_family, gpu_kind])
+            .inc();
+    }
+
+    /// Increment a FASTPQ sampled GPU parity failure counter.
+    pub fn inc_fastpq_gpu_parity_failure(
+        &self,
+        accelerator: &str,
+        reason: &str,
+        device_class: &str,
+        chip_family: &str,
+        gpu_kind: &str,
+    ) {
+        self.fastpq_gpu_parity_failure_total
+            .with_label_values(&[accelerator, reason, device_class, chip_family, gpu_kind])
+            .inc();
     }
 
     /// Set FASTPQ proof sidecar queue depth.

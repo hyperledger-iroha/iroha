@@ -70,6 +70,12 @@ type PoseidonPipelineObserver = dyn Fn(PoseidonPipelinePolicy, &'static str, Opt
     + 'static;
 static POSEIDON_PIPELINE_OBSERVER: OnceLock<RwLock<Option<Arc<PoseidonPipelineObserver>>>> =
     OnceLock::new();
+type PoseidonGpuEventObserver = dyn Fn(&'static str, &'static str, &'static str, Option<backend::GpuBackend>)
+    + Send
+    + Sync
+    + 'static;
+static POSEIDON_GPU_EVENT_OBSERVER: OnceLock<RwLock<Option<Arc<PoseidonGpuEventObserver>>>> =
+    OnceLock::new();
 
 /// Poseidon pipeline execution policy derived from configuration and runtime detection.
 #[derive(Clone, Copy, Debug)]
@@ -135,6 +141,10 @@ fn poseidon_observer_slot() -> &'static RwLock<Option<Arc<PoseidonPipelineObserv
     POSEIDON_PIPELINE_OBSERVER.get_or_init(|| RwLock::new(None))
 }
 
+fn poseidon_gpu_event_observer_slot() -> &'static RwLock<Option<Arc<PoseidonGpuEventObserver>>> {
+    POSEIDON_GPU_EVENT_OBSERVER.get_or_init(|| RwLock::new(None))
+}
+
 fn notify_poseidon_pipeline_observer(
     policy: PoseidonPipelinePolicy,
     path: &'static str,
@@ -144,6 +154,20 @@ fn notify_poseidon_pipeline_observer(
         && let Some(callback) = guard.clone()
     {
         callback(policy, path, backend);
+    }
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn notify_poseidon_gpu_event_observer(
+    accelerator: &'static str,
+    event: &'static str,
+    reason: &'static str,
+    backend: Option<backend::GpuBackend>,
+) {
+    if let Ok(guard) = poseidon_gpu_event_observer_slot().read()
+        && let Some(callback) = guard.clone()
+    {
+        callback(accelerator, event, reason, backend);
     }
 }
 
@@ -160,9 +184,29 @@ where
     }
 }
 
+/// Install a callback invoked when a FASTPQ GPU accelerator is disabled or a sampled parity check fails.
+pub fn set_poseidon_gpu_event_observer<F>(observer: F)
+where
+    F: Fn(&'static str, &'static str, &'static str, Option<backend::GpuBackend>)
+        + Send
+        + Sync
+        + 'static,
+{
+    if let Ok(mut guard) = poseidon_gpu_event_observer_slot().write() {
+        *guard = Some(Arc::new(observer));
+    }
+}
+
 /// Remove the previously registered Poseidon pipeline observer, if any.
 pub fn clear_poseidon_pipeline_observer() {
     if let Ok(mut guard) = poseidon_observer_slot().write() {
+        guard.take();
+    }
+}
+
+/// Remove the previously registered FASTPQ GPU accelerator event observer, if any.
+pub fn clear_poseidon_gpu_event_observer() {
+    if let Ok(mut guard) = poseidon_gpu_event_observer_slot().write() {
         guard.take();
     }
 }
@@ -1380,6 +1424,25 @@ pub(crate) fn disable_poseidon_column_gpu_after_parity_mismatch(
 }
 
 #[cfg(feature = "fastpq-gpu")]
+fn poseidon_column_disable_reason(
+    operation: &'static str,
+    error: Option<&gpu::GpuError>,
+) -> &'static str {
+    if error.is_some() {
+        return match operation {
+            "self-test error" => "self_test_error",
+            _ => "dispatch_error",
+        };
+    }
+    match operation {
+        "self-test mismatch" => "self_test_mismatch",
+        "limb batch count mismatch" => "count_mismatch",
+        "limb batch CPU parity mismatch" | "runtime CPU parity mismatch" => "cpu_parity_mismatch",
+        _ => operation,
+    }
+}
+
+#[cfg(feature = "fastpq-gpu")]
 fn disable_poseidon_column_gpu_with_warning(
     backend: backend::GpuBackend,
     operation: &'static str,
@@ -1392,6 +1455,16 @@ fn disable_poseidon_column_gpu_with_warning(
     {
         return;
     }
+    let reason = poseidon_column_disable_reason(operation, error);
+    if error.is_none() {
+        notify_poseidon_gpu_event_observer(
+            "poseidon_columns",
+            "sampled_parity_failure",
+            reason,
+            Some(backend),
+        );
+    }
+    notify_poseidon_gpu_event_observer("poseidon_columns", "disabled", reason, Some(backend));
     match error {
         Some(error) => tracing::warn!(
             target: "fastpq::poseidon",
@@ -1431,7 +1504,12 @@ fn poseidon_column_gpu_self_test(backend: backend::GpuBackend) -> bool {
         match gpu::poseidon_hash_columns(&batch, backend) {
             Ok(actual) if actual == expected => true,
             Ok(actual) => {
-                POSEIDON_COLUMN_GPU_DISABLED.store(true, Ordering::Release);
+                disable_poseidon_column_gpu_with_warning(
+                    backend,
+                    "self-test mismatch",
+                    columns.iter().map(Vec::len).sum(),
+                    None,
+                );
                 tracing::warn!(
                     target: "fastpq::poseidon",
                     backend = ?backend,
@@ -1442,7 +1520,12 @@ fn poseidon_column_gpu_self_test(backend: backend::GpuBackend) -> bool {
                 false
             }
             Err(error) => {
-                POSEIDON_COLUMN_GPU_DISABLED.store(true, Ordering::Release);
+                disable_poseidon_column_gpu_with_warning(
+                    backend,
+                    "self-test error",
+                    columns.iter().map(Vec::len).sum(),
+                    Some(&error),
+                );
                 tracing::warn!(
                     target: "fastpq::poseidon",
                     backend = ?backend,
@@ -1851,7 +1934,7 @@ fn hash_trace_merkle_pairs_gpu(pairs: &[[u64; 2]]) -> Option<Vec<u64>> {
     }
     let backend = backend::current_gpu_backend()?;
     if !poseidon_merkle_pair_gpu_preflight(backend) {
-        POSEIDON_MERKLE_GPU_DISABLED.store(true, Ordering::Release);
+        disable_poseidon_merkle_gpu_with_warning(backend, pairs.len(), "preflight_failure", None);
         return None;
     }
     let Some(batch) = PoseidonColumnBatch::from_domain_and_pairs(TRACE_NODE_DOMAIN, pairs) else {
@@ -2011,6 +2094,21 @@ fn poseidon_merkle_pair_gpu_preflight(backend: backend::GpuBackend) -> bool {
 }
 
 #[cfg(feature = "fastpq-gpu")]
+fn poseidon_merkle_disable_reason(
+    reason: &'static str,
+    error: Option<&gpu::GpuError>,
+) -> &'static str {
+    if error.is_some() {
+        return "dispatch_error";
+    }
+    match reason {
+        "runtime CPU parity mismatch" => "cpu_parity_mismatch",
+        "preflight_failure" => "preflight_failure",
+        _ => reason,
+    }
+}
+
+#[cfg(feature = "fastpq-gpu")]
 fn disable_poseidon_merkle_gpu_with_warning(
     backend: backend::GpuBackend,
     pair_count: usize,
@@ -2021,6 +2119,21 @@ fn disable_poseidon_merkle_gpu_with_warning(
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
         .is_ok()
     {
+        let reason_label = poseidon_merkle_disable_reason(reason, error);
+        if error.is_none() && reason != "preflight_failure" {
+            notify_poseidon_gpu_event_observer(
+                "poseidon_merkle_pairs",
+                "sampled_parity_failure",
+                reason_label,
+                Some(backend),
+            );
+        }
+        notify_poseidon_gpu_event_observer(
+            "poseidon_merkle_pairs",
+            "disabled",
+            reason_label,
+            Some(backend),
+        );
         match error {
             Some(error) => tracing::warn!(
                 target: "fastpq::poseidon",
@@ -2508,6 +2621,33 @@ mod tests {
                 "merkle level diverged for {leaves:?}"
             );
         }
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn poseidon_gpu_event_observer_records_disable_events() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let observed = Arc::new(AtomicUsize::new(0));
+        let observed_for_callback = Arc::clone(&observed);
+        set_poseidon_gpu_event_observer(move |accelerator, event, reason, backend| {
+            assert_eq!(accelerator, "poseidon_merkle_pairs");
+            assert_eq!(event, "disabled");
+            assert_eq!(reason, "cpu_parity_mismatch");
+            assert_eq!(backend, Some(backend::GpuBackend::Metal));
+            observed_for_callback.fetch_add(1, Ordering::SeqCst);
+        });
+        notify_poseidon_gpu_event_observer(
+            "poseidon_merkle_pairs",
+            "disabled",
+            "cpu_parity_mismatch",
+            Some(backend::GpuBackend::Metal),
+        );
+        clear_poseidon_gpu_event_observer();
+        assert_eq!(observed.load(Ordering::SeqCst), 1);
     }
 
     #[cfg(feature = "fastpq-gpu")]

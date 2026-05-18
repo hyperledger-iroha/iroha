@@ -1,6 +1,9 @@
 //! VRF message handlers and local emission state.
 
-use std::sync::Arc;
+use std::{
+    collections::{BTreeMap, BTreeSet, btree_map::Entry},
+    sync::Arc,
+};
 
 use iroha_logger::prelude::*;
 
@@ -469,9 +472,16 @@ impl Actor {
         commit: crate::sumeragi::consensus::VrfCommit,
         local_signer: Option<ValidatorIndex>,
     ) -> Result<VrfNoteResult> {
+        let persisted_record = {
+            let world = self.state.world_view();
+            world.vrf_epochs().get(&commit.epoch).cloned()
+        };
         let Some(manager) = self.epoch_manager.as_mut() else {
             return Err(eyre!("epoch manager unavailable"));
         };
+        if let Some(record) = persisted_record.as_ref() {
+            manager.merge_record_observations(record);
+        }
 
         let note_result = match manager.try_note_commit_at_height(height, commit.clone()) {
             VrfNoteResult::Accepted => {
@@ -641,8 +651,352 @@ impl Actor {
         election: Option<ValidatorElectionOutcome>,
     ) -> Result<()> {
         let record = self.snapshot_to_vrf_record(snapshot, finalized, election);
-        self.pending_npos_vrf_records.insert(record.epoch, record);
+        self.stage_vrf_epoch_record(record);
         Ok(())
+    }
+
+    pub(super) fn stage_vrf_epoch_record(&mut self, mut record: VrfEpochRecord) {
+        let committed_record = {
+            let world = self.state.world_view();
+            world.vrf_epochs().get(&record.epoch).cloned()
+        };
+
+        if let Some(committed) = committed_record.as_ref() {
+            let Some(merged) = Self::merge_vrf_epoch_records(committed, &record) else {
+                warn!(
+                    epoch = record.epoch,
+                    height = record.updated_at_height,
+                    "dropping staged VRF epoch record that conflicts with committed state"
+                );
+                self.reconcile_pending_vrf_record_with_committed(record.epoch, committed);
+                return;
+            };
+            record = merged;
+        }
+
+        match self.pending_npos_vrf_records.entry(record.epoch) {
+            Entry::Vacant(entry) => {
+                if committed_record
+                    .as_ref()
+                    .is_some_and(|committed| &record == committed)
+                {
+                    return;
+                }
+                entry.insert(record);
+            }
+            Entry::Occupied(mut entry) => {
+                let pending = entry.get().clone();
+                if let Some(merged) = Self::merge_vrf_epoch_records(&pending, &record) {
+                    if committed_record
+                        .as_ref()
+                        .is_some_and(|committed| &merged == committed)
+                    {
+                        entry.remove();
+                    } else {
+                        entry.insert(merged);
+                    }
+                    return;
+                }
+
+                if let Some(committed) = committed_record.as_ref() {
+                    if let Some(repaired_pending) =
+                        Self::merge_vrf_epoch_records(committed, &pending)
+                    {
+                        debug!(
+                            epoch = record.epoch,
+                            pending_height = pending.updated_at_height,
+                            staged_height = record.updated_at_height,
+                            "keeping committed-compatible pending VRF epoch record over conflicting staged snapshot"
+                        );
+                        if &repaired_pending == committed {
+                            entry.remove();
+                        } else {
+                            entry.insert(repaired_pending);
+                        }
+                    } else {
+                        warn!(
+                            epoch = record.epoch,
+                            pending_height = pending.updated_at_height,
+                            staged_height = record.updated_at_height,
+                            "replacing conflicting pending VRF epoch record with committed-compatible snapshot"
+                        );
+                        if &record == committed {
+                            entry.remove();
+                        } else {
+                            entry.insert(record);
+                        }
+                    }
+                } else {
+                    warn!(
+                        epoch = record.epoch,
+                        pending_height = pending.updated_at_height,
+                        staged_height = record.updated_at_height,
+                        "dropping conflicting staged VRF epoch record without committed state"
+                    );
+                }
+            }
+        }
+    }
+
+    pub(super) fn reconcile_pending_vrf_record_with_committed(
+        &mut self,
+        epoch: u64,
+        committed: &VrfEpochRecord,
+    ) {
+        let Some(pending) = self.pending_npos_vrf_records.get(&epoch).cloned() else {
+            return;
+        };
+        if let Some(merged) = Self::merge_vrf_epoch_records(committed, &pending) {
+            if &merged == committed {
+                self.pending_npos_vrf_records.remove(&epoch);
+            } else {
+                self.pending_npos_vrf_records.insert(epoch, merged);
+            }
+        } else {
+            warn!(
+                epoch,
+                pending_height = pending.updated_at_height,
+                committed_height = committed.updated_at_height,
+                "dropping pending VRF epoch record that conflicts with committed seal"
+            );
+            self.pending_npos_vrf_records.remove(&epoch);
+        }
+    }
+
+    pub(super) fn merge_vrf_epoch_records(
+        base: &VrfEpochRecord,
+        incoming: &VrfEpochRecord,
+    ) -> Option<VrfEpochRecord> {
+        if base.epoch != incoming.epoch
+            || base.seed != incoming.seed
+            || base.epoch_length != incoming.epoch_length
+            || base.commit_deadline_offset != incoming.commit_deadline_offset
+            || base.reveal_deadline_offset != incoming.reveal_deadline_offset
+            || base.roster_len != incoming.roster_len
+        {
+            return None;
+        }
+
+        let participants =
+            Self::merge_vrf_participants(&base.participants, &incoming.participants)?;
+        let late_reveals =
+            Self::merge_vrf_late_reveals(&base.late_reveals, &incoming.late_reveals)?;
+        let (penalties_applied, penalties_applied_at_height) =
+            Self::merge_vrf_penalty_marker(base, incoming)?;
+        let validator_election = Self::merge_vrf_validator_election(base, incoming)?;
+        let finalized = base.finalized || incoming.finalized;
+        let (committed_no_reveal, no_participation) = if finalized {
+            Self::merge_vrf_offenders(base, incoming)?
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
+        let merged = VrfEpochRecord {
+            epoch: base.epoch,
+            seed: base.seed,
+            epoch_length: base.epoch_length,
+            commit_deadline_offset: base.commit_deadline_offset,
+            reveal_deadline_offset: base.reveal_deadline_offset,
+            roster_len: base.roster_len,
+            finalized,
+            updated_at_height: base.updated_at_height.max(incoming.updated_at_height),
+            participants,
+            late_reveals,
+            committed_no_reveal,
+            no_participation,
+            penalties_applied,
+            penalties_applied_at_height,
+            validator_election,
+        };
+
+        Self::vrf_epoch_record_extends_existing(base, &merged).then_some(merged)
+    }
+
+    fn merge_vrf_participants(
+        base: &[VrfParticipantRecord],
+        incoming: &[VrfParticipantRecord],
+    ) -> Option<Vec<VrfParticipantRecord>> {
+        let mut by_signer: BTreeMap<ValidatorIndex, VrfParticipantRecord> = BTreeMap::new();
+        for participant in base.iter().chain(incoming.iter()) {
+            match by_signer.entry(participant.signer) {
+                Entry::Vacant(entry) => {
+                    entry.insert(participant.clone());
+                }
+                Entry::Occupied(mut entry) => {
+                    let existing = entry.get_mut();
+                    existing.commitment =
+                        Self::merge_vrf_observation(existing.commitment, participant.commitment)?;
+                    existing.reveal =
+                        Self::merge_vrf_observation(existing.reveal, participant.reveal)?;
+                    existing.last_updated_height = existing
+                        .last_updated_height
+                        .max(participant.last_updated_height);
+                }
+            }
+        }
+        Some(by_signer.into_values().collect())
+    }
+
+    fn merge_vrf_observation(
+        base: Option<[u8; 32]>,
+        incoming: Option<[u8; 32]>,
+    ) -> Option<Option<[u8; 32]>> {
+        match (base, incoming) {
+            (Some(lhs), Some(rhs)) if lhs != rhs => None,
+            (Some(value), _) | (_, Some(value)) => Some(Some(value)),
+            (None, None) => Some(None),
+        }
+    }
+
+    fn merge_vrf_late_reveals(
+        base: &[VrfLateRevealRecord],
+        incoming: &[VrfLateRevealRecord],
+    ) -> Option<Vec<VrfLateRevealRecord>> {
+        let mut by_signer: BTreeMap<ValidatorIndex, VrfLateRevealRecord> = BTreeMap::new();
+        for reveal in base.iter().chain(incoming.iter()) {
+            match by_signer.entry(reveal.signer) {
+                Entry::Vacant(entry) => {
+                    entry.insert(reveal.clone());
+                }
+                Entry::Occupied(entry) => {
+                    if entry.get().reveal != reveal.reveal {
+                        return None;
+                    }
+                }
+            }
+        }
+        Some(by_signer.into_values().collect())
+    }
+
+    fn merge_vrf_penalty_marker(
+        base: &VrfEpochRecord,
+        incoming: &VrfEpochRecord,
+    ) -> Option<(bool, Option<u64>)> {
+        let height = match (
+            base.penalties_applied_at_height,
+            incoming.penalties_applied_at_height,
+        ) {
+            (Some(lhs), Some(rhs)) if lhs != rhs => return None,
+            (Some(height), _) | (_, Some(height)) => Some(height),
+            (None, None) => None,
+        };
+        let applied = base.penalties_applied || incoming.penalties_applied || height.is_some();
+        Some((applied, height))
+    }
+
+    fn merge_vrf_validator_election(
+        base: &VrfEpochRecord,
+        incoming: &VrfEpochRecord,
+    ) -> Option<Option<ValidatorElectionOutcome>> {
+        match (&base.validator_election, &incoming.validator_election) {
+            (Some(lhs), Some(rhs)) if lhs != rhs => None,
+            (Some(election), _) | (_, Some(election)) => Some(Some(election.clone())),
+            (None, None) => Some(None),
+        }
+    }
+
+    fn merge_vrf_offenders(
+        base: &VrfEpochRecord,
+        incoming: &VrfEpochRecord,
+    ) -> Option<(Vec<ValidatorIndex>, Vec<ValidatorIndex>)> {
+        let committed_no_reveal =
+            Self::sorted_unique_signers(&base.committed_no_reveal, &incoming.committed_no_reveal);
+        let no_participation =
+            Self::sorted_unique_signers(&base.no_participation, &incoming.no_participation);
+        let committed: BTreeSet<_> = committed_no_reveal.iter().copied().collect();
+        if no_participation
+            .iter()
+            .any(|signer| committed.contains(signer))
+        {
+            return None;
+        }
+        Some((committed_no_reveal, no_participation))
+    }
+
+    fn sorted_unique_signers(
+        base: &[ValidatorIndex],
+        incoming: &[ValidatorIndex],
+    ) -> Vec<ValidatorIndex> {
+        base.iter()
+            .chain(incoming.iter())
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    fn vrf_epoch_record_extends_existing(
+        existing: &VrfEpochRecord,
+        proposed: &VrfEpochRecord,
+    ) -> bool {
+        if existing == proposed {
+            return true;
+        }
+
+        existing.epoch == proposed.epoch
+            && existing.seed == proposed.seed
+            && existing.epoch_length == proposed.epoch_length
+            && existing.commit_deadline_offset == proposed.commit_deadline_offset
+            && existing.reveal_deadline_offset == proposed.reveal_deadline_offset
+            && existing.roster_len == proposed.roster_len
+            && (!existing.finalized || proposed.finalized)
+            && proposed.updated_at_height >= existing.updated_at_height
+            && (!existing.penalties_applied || proposed.penalties_applied)
+            && existing
+                .penalties_applied_at_height
+                .is_none_or(|height| proposed.penalties_applied_at_height == Some(height))
+            && Self::vrf_participants_extend_existing(
+                &existing.participants,
+                &proposed.participants,
+            )
+            && Self::vrf_late_reveals_extend_existing(existing, proposed)
+            && existing
+                .committed_no_reveal
+                .iter()
+                .all(|signer| proposed.committed_no_reveal.contains(signer))
+            && existing
+                .no_participation
+                .iter()
+                .all(|signer| proposed.no_participation.contains(signer))
+            && existing
+                .validator_election
+                .as_ref()
+                .is_none_or(|election| proposed.validator_election.as_ref() == Some(election))
+    }
+
+    fn vrf_participants_extend_existing(
+        existing: &[VrfParticipantRecord],
+        proposed: &[VrfParticipantRecord],
+    ) -> bool {
+        let proposed_by_signer: BTreeMap<_, _> = proposed
+            .iter()
+            .map(|participant| (participant.signer, participant))
+            .collect();
+        proposed_by_signer.len() == proposed.len()
+            && existing.iter().all(|old| {
+                proposed_by_signer.get(&old.signer).is_some_and(|new| {
+                    old.commitment
+                        .is_none_or(|commitment| new.commitment == Some(commitment))
+                        && old.reveal.is_none_or(|reveal| new.reveal == Some(reveal))
+                        && new.last_updated_height >= old.last_updated_height
+                })
+            })
+    }
+
+    fn vrf_late_reveals_extend_existing(
+        existing: &VrfEpochRecord,
+        proposed: &VrfEpochRecord,
+    ) -> bool {
+        let proposed_by_signer: BTreeMap<_, _> = proposed
+            .late_reveals
+            .iter()
+            .map(|reveal| (reveal.signer, reveal))
+            .collect();
+        proposed_by_signer.len() == proposed.late_reveals.len()
+            && existing
+                .late_reveals
+                .iter()
+                .all(|reveal| proposed_by_signer.get(&reveal.signer) == Some(&reveal))
     }
 
     pub(super) fn snapshot_to_vrf_record(

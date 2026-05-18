@@ -1432,6 +1432,8 @@ pub(crate) struct PrivateUploadedModelExecuteRequest {
     #[norito(default)]
     pub bundle_root: Option<Hash>,
     pub policy_id: String,
+    #[norito(default)]
+    pub decryption_request_id: Option<String>,
     pub model: PrivateUploadedModelQuantizedCpuModelDto,
     pub plaintext_input_i32: Vec<i32>,
     pub input_artifact: SoraPrivateModelArtifactRefV1,
@@ -6258,6 +6260,77 @@ fn map_private_runtime_error(
     }
 }
 
+fn require_private_uploaded_model_release_policy(
+    app: &SharedAppState,
+    bundle: &SoraUploadedModelBundleV1,
+    request: &PrivateUploadedModelExecuteRequest,
+) -> Result<(), SoracloudError> {
+    if request.policy_id != bundle.decryption_policy_ref {
+        return Err(SoracloudError::conflict(format!(
+            "private execution policy `{}` does not match uploaded model policy `{}`",
+            request.policy_id, bundle.decryption_policy_ref
+        )));
+    }
+
+    let Some(decryption_request_id) = request.decryption_request_id.as_deref() else {
+        return Ok(());
+    };
+    let decryption_request_id = decryption_request_id.trim();
+    if decryption_request_id.is_empty() {
+        return Err(SoracloudError::bad_request(
+            "decryption_request_id must not be empty when supplied",
+        ));
+    }
+
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let record = world
+        .soracloud_decryption_request_records()
+        .get(&(request.service_name.clone(), decryption_request_id.to_owned()))
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "decryption request `{decryption_request_id}` for private execution service `{}` is not committed in authoritative state",
+                request.service_name
+            ))
+        })?;
+    record.validate().map_err(|err| {
+        SoracloudError::conflict(format!(
+            "decryption request `{decryption_request_id}` for private execution is invalid: {err}"
+        ))
+    })?;
+    if record.service_name.as_ref() != request.service_name.as_str() {
+        return Err(SoracloudError::conflict(format!(
+            "decryption request `{decryption_request_id}` service `{}` does not match private execution service `{}`",
+            record.service_name, request.service_name
+        )));
+    }
+    if record.request.request_id.as_str() != decryption_request_id {
+        return Err(SoracloudError::conflict(format!(
+            "decryption request record id `{}` does not match lookup id `{decryption_request_id}`",
+            record.request.request_id
+        )));
+    }
+    if record.request.policy_name.as_ref() != request.policy_id.as_str() {
+        return Err(SoracloudError::conflict(format!(
+            "decryption request `{decryption_request_id}` policy `{}` does not match private execution policy `{}`",
+            record.request.policy_name, request.policy_id
+        )));
+    }
+    if record.request.ciphertext_commitment != request.input_artifact.artifact_hash {
+        return Err(SoracloudError::conflict(format!(
+            "decryption request `{decryption_request_id}` ciphertext commitment does not match private input artifact hash"
+        )));
+    }
+    if record.sequence > request.emitted_sequence {
+        return Err(SoracloudError::conflict(format!(
+            "decryption request `{decryption_request_id}` sequence {} is newer than private execution sequence {}",
+            record.sequence, request.emitted_sequence
+        )));
+    }
+    Ok(())
+}
+
 fn authoritative_private_uploaded_model_execute_response(
     app: &SharedAppState,
     request: PrivateUploadedModelExecuteRequest,
@@ -6280,6 +6353,7 @@ fn authoritative_private_uploaded_model_execute_response(
     require_active_sorafs_uploaded_model_pin(app, &status.bundle)?;
     require_active_private_model_artifact_pin(app, &request.input_artifact)?;
     require_active_private_model_artifact_pin(app, &request.output_artifact)?;
+    require_private_uploaded_model_release_policy(app, &status.bundle, &request)?;
     let model = private_quantized_model_from_dto(request.model)?;
     let execution = execute_private_uploaded_model_quantized_cpu_v1(
         &model,
@@ -15784,6 +15858,7 @@ mod tests {
                 model_name: None,
                 bundle_root: Some(payload.bundle.bundle_root),
                 policy_id: "policy-1".to_string(),
+                decryption_request_id: None,
                 model: PrivateUploadedModelQuantizedCpuModelDto {
                     input_len: 2,
                     output_len: 1,
@@ -15870,6 +15945,141 @@ mod tests {
         .expect("unknown count mode should fall back to bounded");
         assert_eq!(unknown_mode_receipts.count_mode, "bounded");
         assert_eq!(unknown_mode_receipts.total, None);
+    }
+
+    #[test]
+    fn private_uploaded_model_execute_binds_committed_decryption_request() {
+        use iroha_core::state::World;
+
+        let mut payload = sample_uploaded_model_register_payload();
+        payload.bundle.runtime_format =
+            SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1;
+        let policy = fixture_decryption_authority_policy();
+        payload.bundle.decryption_policy_ref = policy.policy_name.to_string();
+        let service_name = payload.bundle.service_name.clone();
+        let input_artifact = SoraPrivateModelArtifactRefV1 {
+            schema_version: iroha_data_model::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
+            sorafs_manifest_digest: ManifestDigest::new([0xD1; 32]),
+            artifact_hash: Hash::new(b"encrypted-input-release"),
+            ciphertext_bytes: 64,
+            artifact_role: "input".to_string(),
+        };
+        let output_artifact = SoraPrivateModelArtifactRefV1 {
+            schema_version: iroha_data_model::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
+            sorafs_manifest_digest: ManifestDigest::new([0xD2; 32]),
+            artifact_hash: Hash::new(b"encrypted-output-release"),
+            ciphertext_bytes: 96,
+            artifact_role: "output".to_string(),
+        };
+
+        let mut decryption_request = fixture_decryption_request();
+        decryption_request.request_id = "decrypt-upload-input".to_string();
+        decryption_request.ciphertext_commitment = input_artifact.artifact_hash;
+        let signer = KeyPair::random();
+        let record = SoraDecryptionRequestRecordV1 {
+            schema_version: iroha_data_model::soracloud::SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
+            service_name: service_name.clone(),
+            service_version: payload.bundle.weight_version.clone(),
+            policy: policy.clone(),
+            request: decryption_request.clone(),
+            sequence: 11,
+            signer: signer.public_key().clone(),
+        };
+        record
+            .validate()
+            .expect("fixture decryption record should validate");
+
+        let mut world = World::default();
+        world
+            .soracloud_uploaded_model_bundles_mut_for_testing()
+            .insert(
+                (
+                    service_name.as_ref().to_owned(),
+                    payload.bundle.model_id.clone(),
+                    payload.bundle.weight_version.clone(),
+                ),
+                payload.bundle.clone(),
+            );
+        world.pin_manifests_mut_for_testing().insert(
+            payload.bundle.sorafs_manifest_digest,
+            sample_uploaded_model_pin_record(
+                payload.bundle.sorafs_manifest_digest,
+                payload.bundle.ciphertext_bytes,
+                PinStatus::Approved(1),
+            ),
+        );
+        world.pin_manifests_mut_for_testing().insert(
+            input_artifact.sorafs_manifest_digest,
+            sample_uploaded_model_pin_record(
+                input_artifact.sorafs_manifest_digest,
+                input_artifact.ciphertext_bytes,
+                PinStatus::Approved(1),
+            ),
+        );
+        world.pin_manifests_mut_for_testing().insert(
+            output_artifact.sorafs_manifest_digest,
+            sample_uploaded_model_pin_record(
+                output_artifact.sorafs_manifest_digest,
+                output_artifact.ciphertext_bytes,
+                PinStatus::Approved(1),
+            ),
+        );
+        world
+            .soracloud_decryption_request_records_mut_for_testing()
+            .insert(
+                (
+                    service_name.as_ref().to_owned(),
+                    decryption_request.request_id.clone(),
+                ),
+                record,
+            );
+        let app = mk_app_state_for_tests_with_world(world);
+
+        let make_request =
+            |input_artifact: SoraPrivateModelArtifactRefV1| PrivateUploadedModelExecuteRequest {
+                service_name: service_name.to_string(),
+                weight_version: payload.bundle.weight_version.clone(),
+                model_id: Some(payload.bundle.model_id.clone()),
+                model_name: None,
+                bundle_root: Some(payload.bundle.bundle_root),
+                policy_id: policy.policy_name.to_string(),
+                decryption_request_id: Some(decryption_request.request_id.clone()),
+                model: PrivateUploadedModelQuantizedCpuModelDto {
+                    input_len: 2,
+                    output_len: 1,
+                    weights_i8: vec![3, -2],
+                    bias_i32: vec![1],
+                    output_shift: 1,
+                    output_min: -16,
+                    output_max: 16,
+                },
+                plaintext_input_i32: vec![5, -3],
+                input_artifact,
+                output_artifact: output_artifact.clone(),
+                emitted_sequence: 17,
+            };
+
+        let response = authoritative_private_uploaded_model_execute_response(
+            &app,
+            make_request(input_artifact.clone()),
+        )
+        .expect("committed matching decryption request should release private execution");
+        assert_eq!(response.receipt.policy_id, policy.policy_name.to_string());
+        assert_eq!(response.receipt.input_artifact, input_artifact);
+
+        let mut mismatched_input = input_artifact.clone();
+        mismatched_input.artifact_hash = Hash::new(b"different-encrypted-input");
+        let mismatch = authoritative_private_uploaded_model_execute_response(
+            &app,
+            make_request(mismatched_input),
+        )
+        .expect_err("ciphertext commitment mismatch must fail closed");
+        assert_eq!(mismatch.status(), StatusCode::CONFLICT);
+        assert!(
+            mismatch.message.contains("ciphertext commitment"),
+            "unexpected error: {}",
+            mismatch.message
+        );
     }
 
     #[test]

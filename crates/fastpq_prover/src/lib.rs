@@ -93,7 +93,8 @@ pub use poseidon::{FIELD_MODULUS, PoseidonSponge, hash_field_elements};
 pub use proof::{Proof, Prover, VerifyLimits, verify, verify_with_limits};
 pub use trace::{
     ColumnDigests, PoseidonPipelinePolicy, RowUsage, Trace, TraceColumn, build_trace,
-    clear_poseidon_pipeline_observer, column_hashes, merkle_root, merkle_root_with_first_level,
+    clear_poseidon_gpu_event_observer, clear_poseidon_pipeline_observer, column_hashes,
+    merkle_root, merkle_root_with_first_level, set_poseidon_gpu_event_observer,
     set_poseidon_pipeline_observer,
 };
 #[cfg(feature = "fastpq-gpu")]
