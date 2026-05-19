@@ -362,6 +362,12 @@ Completed history lives in `status.md`. This file should only track unfinished w
     Confirm the canonical Norito schema-hash test, transaction-builder goldens,
     faucet PoW vectors, and URL escaping expectations pass unchanged; record the
     Windows result in `status.md`.
+    Also cover the new multisig propose helper work on Windows: the focused
+    tests should include
+    `ToriiClientTests.ProposeMultisigAsyncPostsNativeNoritoInstructionFrames`
+    and `NoritoCodecTests.EncodeWithSchemaHashUsesProvidedSchemaHash`, and the
+    review should confirm `TransactionInstruction.EncodeInstructionBoxBase64`
+    emits `InstructionBox` frames suitable for `/v1/multisig/propose`.
   - Focused Kotlin/JVM and Java Android RAM-LFE parser/transport tests are
     green as of 2026-05-02 with Homebrew OpenJDK 21 pinned via `JAVA_HOME`; the
     same harnesses also cover the canonical BFV identifier schema-hash vector.
