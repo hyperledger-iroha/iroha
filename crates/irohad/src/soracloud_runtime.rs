@@ -12522,6 +12522,9 @@ fn build_inrou_user_data(
     );
     prepare_script
         .push_str("mkdir -p /var/lib/soracloud/service /var/lib/soracloud/materialization\n");
+    prepare_script.push_str(
+        "chown -R inrou:inrou /var/lib/soracloud/service /var/lib/soracloud/materialization 2>/dev/null || true\n",
+    );
     if let Some(bundle_hash) = portable_bundle_hash {
         let guest_entrypoint = format!(
             "{}/{}",
@@ -12588,12 +12591,22 @@ fn build_inrou_user_data(
     }
     if !shared_filesystem_mounts.is_empty() {
         for mount in shared_filesystem_mounts {
-            prepare_script.push_str("mkdir -p ");
+            prepare_script.push_str("mount_path=");
             prepare_script.push_str(&shell_single_quote(&mount.mount_path));
             prepare_script.push('\n');
-            prepare_script.push_str("if ! mountpoint -q ");
-            prepare_script.push_str(&shell_single_quote(&mount.mount_path));
-            prepare_script.push_str("; then\n");
+            prepare_script.push_str("if ! mkdir -p \"$mount_path\"; then\n");
+            prepare_script.push_str("  umount \"$mount_path\" >/dev/null 2>&1 || true\n");
+            prepare_script.push_str("  mkdir -p \"$mount_path\"\n");
+            prepare_script.push_str("fi\n");
+            prepare_script.push_str(
+                "if mountpoint -q \"$mount_path\" && ! mkdir -p \"$mount_path/.inrou-volume-check\"; then\n",
+            );
+            prepare_script.push_str(
+                "  echo \"Inrou PortableVm volume mount path is unhealthy; unmounting $mount_path\" >&2\n",
+            );
+            prepare_script.push_str("  umount \"$mount_path\" >/dev/null 2>&1 || true\n");
+            prepare_script.push_str("fi\n");
+            prepare_script.push_str("if ! mountpoint -q \"$mount_path\"; then\n");
             match &mount.kind {
                 InrouSharedFilesystemMountKind::Nfs {
                     guest_mount_source,
@@ -12618,6 +12631,9 @@ fn build_inrou_user_data(
                     filesystem_type,
                     mount_options,
                 } => {
+                    prepare_script.push_str("  mount_path=");
+                    prepare_script.push_str(&shell_single_quote(&mount.mount_path));
+                    prepare_script.push('\n');
                     prepare_script.push_str("  device_path=");
                     prepare_script.push_str(&shell_single_quote(&format!(
                         "/dev/disk/by-id/virtio-{device_serial}"
@@ -12643,25 +12659,49 @@ fn build_inrou_user_data(
                     prepare_script.push_str("    exit 1\n");
                     prepare_script.push_str("  fi\n");
                     prepare_script
-                        .push_str("  if ! blkid \"$device_path\" >/dev/null 2>&1; then\n");
-                    prepare_script
-                        .push_str("    if ! command -v mkfs.ext4 >/dev/null 2>&1; then\n");
+                        .push_str("  if ! command -v mkfs.ext4 >/dev/null 2>&1; then\n");
                     prepare_script.push_str(
-                        "      echo 'Inrou PortableVm block volumes require mkfs.ext4 in the guest image' >&2\n",
+                        "    echo 'Inrou PortableVm block volumes require mkfs.ext4 in the guest image' >&2\n",
                     );
-                    prepare_script.push_str("      exit 1\n");
-                    prepare_script.push_str("    fi\n");
+                    prepare_script.push_str("    exit 1\n");
+                    prepare_script.push_str("  fi\n");
+                    prepare_script
+                        .push_str("  if ! blkid \"$device_path\" >/dev/null 2>&1; then\n");
                     prepare_script.push_str("    mkfs.ext4 -F \"$device_path\"\n");
                     prepare_script.push_str("  fi\n");
-                    prepare_script.push_str("  mount -t ");
+                    prepare_script.push_str("  if ! mount -t ");
                     prepare_script.push_str(&shell_single_quote(filesystem_type));
                     prepare_script.push_str(" -o ");
                     prepare_script.push_str(&shell_single_quote(mount_options));
                     prepare_script.push(' ');
                     prepare_script.push_str("\"$device_path\"");
                     prepare_script.push(' ');
-                    prepare_script.push_str(&shell_single_quote(&mount.mount_path));
-                    prepare_script.push('\n');
+                    prepare_script.push_str("\"$mount_path\"");
+                    prepare_script.push_str("; then\n");
+                    prepare_script.push_str(
+                        "    echo \"Inrou PortableVm volume mount failed; reformatting $device_path\" >&2\n",
+                    );
+                    prepare_script.push_str("    mkfs.ext4 -F \"$device_path\"\n");
+                    prepare_script.push_str("    mount -t ");
+                    prepare_script.push_str(&shell_single_quote(filesystem_type));
+                    prepare_script.push_str(" -o ");
+                    prepare_script.push_str(&shell_single_quote(mount_options));
+                    prepare_script.push_str(" \"$device_path\" \"$mount_path\"\n");
+                    prepare_script.push_str("  fi\n");
+                    prepare_script
+                        .push_str("  if ! mkdir -p \"$mount_path/.inrou-volume-check\"; then\n");
+                    prepare_script.push_str(
+                        "    echo \"Inrou PortableVm volume filesystem check failed; reformatting $device_path\" >&2\n",
+                    );
+                    prepare_script.push_str("    umount \"$mount_path\" >/dev/null 2>&1 || true\n");
+                    prepare_script.push_str("    mkfs.ext4 -F \"$device_path\"\n");
+                    prepare_script.push_str("    mount -t ");
+                    prepare_script.push_str(&shell_single_quote(filesystem_type));
+                    prepare_script.push_str(" -o ");
+                    prepare_script.push_str(&shell_single_quote(mount_options));
+                    prepare_script.push_str(" \"$device_path\" \"$mount_path\"\n");
+                    prepare_script.push_str("    mkdir -p \"$mount_path/.inrou-volume-check\"\n");
+                    prepare_script.push_str("  fi\n");
                 }
             }
             prepare_script.push_str("fi\n");
@@ -12845,6 +12885,9 @@ fn build_inrou_user_data(
     user_data.push_str("runcmd:\n");
     user_data
         .push_str("  - mkdir -p /var/lib/soracloud/service /var/lib/soracloud/materialization\n");
+    user_data.push_str(
+        "  - chown -R inrou:inrou /var/lib/soracloud/service /var/lib/soracloud/materialization\n",
+    );
     user_data.push_str("  - systemctl daemon-reload\n");
     user_data.push_str("  - systemctl enable --now inrou-app.service\n");
     if let Some(overlay) = bootstrap_user_data_overlay {
@@ -21791,12 +21834,18 @@ mod tests {
 
         assert!(user_data.contains("/soracloud/bundle.tgz"));
         assert!(user_data.contains("/var/lib/soracloud/materialization/bundle"));
+        assert!(user_data.contains(
+            "chown -R inrou:inrou /var/lib/soracloud/service /var/lib/soracloud/materialization"
+        ));
         assert!(user_data.contains("/etc/soracloud/allowlist-hosts"));
         assert!(user_data.contains("if [ -f /etc/soracloud/allowlist-hosts ]; then"));
         assert!(user_data.contains(
             "grep -qxF \"$line\" /tmp/soracloud-hosts || echo \"$line\" >> /tmp/soracloud-hosts"
         ));
         assert!(user_data.contains("/dev/disk/by-id/virtio-sora-index_state"));
+        assert!(user_data.contains(
+            "Inrou PortableVm volume mount path is unhealthy; unmounting $mount_path"
+        ));
         assert!(user_data.contains("mkfs.ext4 -F \"$device_path\""));
         assert!(user_data.contains("mount -t 'ext4' -o 'rw,nofail' \"$device_path\""));
         assert!(user_data.contains("chown inrou:inrou '/var/lib/ton-indexer'"));
