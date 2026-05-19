@@ -806,13 +806,21 @@ impl<'a> Parser<'a> {
     fn parse_trigger_pipeline_filter(&mut self) -> ParseResult<TriggerPipelineFilter> {
         let kind = self.expect_ident()?;
         match kind.as_str() {
-            "transaction" => Ok(TriggerPipelineFilter::Transaction),
-            "block" => Ok(TriggerPipelineFilter::Block),
-            "merge" => Ok(TriggerPipelineFilter::Merge),
-            "witness" => Ok(TriggerPipelineFilter::Witness),
+            "transaction" => {
+                if self.peek_ident_n(0, "approved") {
+                    self.bump();
+                }
+                Ok(TriggerPipelineFilter::TransactionApproved)
+            }
+            "block" => {
+                if self.peek_ident_n(0, "approved") {
+                    self.bump();
+                }
+                Ok(TriggerPipelineFilter::BlockApproved)
+            }
             _ => Err(self.error(
                 self.tokens[self.pos.saturating_sub(1)].clone(),
-                "pipeline filter (`transaction`, `block`, `merge`, or `witness`)",
+                "pipeline filter (`transaction [approved]` or `block [approved]`)",
             )),
         }
     }
@@ -3161,25 +3169,52 @@ mod tests {
 
     #[test]
     fn parse_trigger_decl_with_pipeline_filter() {
+        for (source_filter, expected_filter) in [
+            ("transaction", TriggerPipelineFilter::TransactionApproved),
+            (
+                "transaction approved",
+                TriggerPipelineFilter::TransactionApproved,
+            ),
+            ("block", TriggerPipelineFilter::BlockApproved),
+            ("block approved", TriggerPipelineFilter::BlockApproved),
+        ] {
+            let src = format!(
+                r#"
+            seiyaku C {{
+                kotoage fn run() {{}}
+                register_trigger wake {{
+                    call run;
+                    on pipeline {source_filter};
+                }}
+            }}
+            "#
+            );
+            let prog = parse(&src).expect("parse trigger decl");
+            let trigger = prog
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Item::Trigger(t) => Some(t),
+                    _ => None,
+                })
+                .expect("trigger present");
+            assert_eq!(trigger.filter, TriggerFilter::Pipeline(expected_filter));
+        }
+    }
+
+    #[test]
+    fn parse_trigger_decl_rejects_nondeterministic_pipeline_filter() {
         let src = r#"
         seiyaku C {
             kotoage fn run() {}
             register_trigger wake {
                 call run;
-                on pipeline transaction;
+                on pipeline merge;
             }
         }
         "#;
-        let prog = parse(src).expect("parse trigger decl");
-        let trigger = prog
-            .items
-            .iter()
-            .find_map(|item| match item {
-                Item::Trigger(t) => Some(t),
-                _ => None,
-            })
-            .expect("trigger present");
-        assert!(matches!(trigger.filter, TriggerFilter::Pipeline(_)));
+        let err = parse(src).expect_err("parse should reject unsupported pipeline filter");
+        assert!(err.contains("transaction [approved]"));
     }
 
     #[test]
