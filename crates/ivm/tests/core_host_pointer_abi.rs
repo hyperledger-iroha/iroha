@@ -233,12 +233,19 @@ fn nft_set_metadata_validates_tlvs() {
     vm.set_host(CoreHost::new());
     let nft = make_tlv(PointerType::NftId as u16, 1, SAMPLE_NFT_ID);
     vm.memory.preload_input(0, &nft).expect("preload input");
-    let json = make_tlv(PointerType::Json as u16, 1, br#"{"k":"v"}"#);
+    let key = make_tlv(PointerType::Name as u16, 1, b"dpn_metadata");
+    let key_offset = nft.len() as u64 + 8;
     vm.memory
-        .preload_input(nft.len() as u64 + 8, &json)
+        .preload_input(key_offset, &key)
+        .expect("preload input");
+    let json = make_tlv(PointerType::Json as u16, 1, br#"{"k":"v"}"#);
+    let json_offset = key_offset + key.len() as u64 + 8;
+    vm.memory
+        .preload_input(json_offset, &json)
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    vm.set_register(11, Memory::INPUT_START + nft.len() as u64 + 8);
+    vm.set_register(11, Memory::INPUT_START + key_offset);
+    vm.set_register(12, Memory::INPUT_START + json_offset);
     let prog = encode_prog_syscall(syscalls::SYSCALL_NFT_SET_METADATA);
     vm.load_program(&prog).unwrap();
     vm.run().expect("nft_set_metadata tlvs should validate");
@@ -250,13 +257,20 @@ fn nft_set_metadata_rejects_wrong_type() {
     vm.set_host(CoreHost::new());
     let nft = make_tlv(PointerType::NftId as u16, 1, SAMPLE_NFT_ID);
     vm.memory.preload_input(0, &nft).expect("preload input");
-    // Put Name instead of Json in r11
-    let wrong = make_tlv(PointerType::Name as u16, 1, b"not-json");
+    // Put Json instead of Name in r11.
+    let wrong = make_tlv(PointerType::Json as u16, 1, br#"{"not":"name"}"#);
+    let wrong_offset = nft.len() as u64 + 8;
     vm.memory
-        .preload_input(nft.len() as u64 + 8, &wrong)
+        .preload_input(wrong_offset, &wrong)
+        .expect("preload input");
+    let json = make_tlv(PointerType::Json as u16, 1, br#"{"k":"v"}"#);
+    let json_offset = wrong_offset + wrong.len() as u64 + 8;
+    vm.memory
+        .preload_input(json_offset, &json)
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    vm.set_register(11, Memory::INPUT_START + nft.len() as u64 + 8);
+    vm.set_register(11, Memory::INPUT_START + wrong_offset);
+    vm.set_register(12, Memory::INPUT_START + json_offset);
     let prog = encode_prog_syscall(syscalls::SYSCALL_NFT_SET_METADATA);
     vm.load_program(&prog).unwrap();
     let err = vm.run().unwrap_err();

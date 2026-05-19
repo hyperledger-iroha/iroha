@@ -230,7 +230,8 @@ mod ecdsa_secp256k1 {
                 .sign_prehash_recoverable(prehash)
                 .map_err(|err| Error::Signing(format!("{err:?}")))?;
             let mut out = [0u8; 65];
-            out[..64].copy_from_slice(signature.to_bytes().as_slice());
+            let signature_bytes = signature.to_bytes();
+            out[..64].copy_from_slice(&signature_bytes);
             out[64] = recovery_id.to_byte().saturating_add(27);
             Ok(out)
         }

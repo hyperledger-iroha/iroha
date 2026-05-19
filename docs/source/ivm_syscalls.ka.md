@@ -44,7 +44,7 @@ Pointer-ABI გამოძახების კონვენცია (ჭ�
 | 0x2B | TRANSFER_V1_BATCH_APPLY | `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` | გამოიყენეთ Norito-ში კოდირებული პარტია ერთ syscall-ში |
 | 0x25 | NFT_MINT_ASSET | `&NftId`, `&AccountId(owner)` | `u64=0` | `G_nft_mint_asset` | რეგისტრირებს ახალ NFT |
 | 0x26 | NFT_TRANSFER_ASSET | `&AccountId(from)`, `&NftId`, `&AccountId(to)` | `u64=0` | `G_nft_transfer_asset` | გადასცემს NFT |
-| 0x27 | NFT_SET_METADATA | `&NftId`, `&Json` | `u64=0` | `G_nft_set_metadata` | განაახლებს NFT მეტამონაცემებს |
+| 0x27 | NFT_SET_METADATA | `&NftId`, `&Name`, `&Json` | `u64=0` | `G_nft_set_metadata` | განაახლებს NFT მეტამონაცემებს |
 | 0x28 | NFT_BURN_ASSET | `&NftId` | `u64=0` | `G_nft_burn_asset` | წვავს (ანადგურებს) NFT-ს |
 | 0xA1 | SMARTCONTRACT_EXECUTE_QUERY| `r10=&NoritoBytes(QueryRequest)` | `r10=ptr (&NoritoBytes(QueryResponse))` | `G_scq + per_item*items + per_byte*bytes(resp)` | iterable queries გადის ეფემერულად; `QueryRequest::Continue` უარყოფილია |
 | 0xA2 | CREATE_NFTS_FOR_ALL_USERS | – | `u64=count` | `G_create_nfts_for_all` | დამხმარე; მხატვრული კარიბჭე || 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | `depth:u64` | `u64=prev` | `G_set_depth` | ადმინი; მხატვრული კარიბჭე |

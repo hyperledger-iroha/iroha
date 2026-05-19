@@ -256,7 +256,7 @@ Host/syscall qurğuları (SCALL üçün xəritə; ivm.md-də dəqiq nömrələr)
 - `subscription_record_usage()`
 - `nft_mint_asset(NftId*, AccountId*)`
 - `nft_transfer_asset(AccountId*, NftId*, AccountId*)`
-- `nft_set_metadata(NftId*, Json*)`
+- `nft_set_metadata(NftId*, Name*, Json*)`
 - `nft_burn_asset(NftId*)`
 - `authority() -> AccountId*`
 - `register_domain(DomainId*)`

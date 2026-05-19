@@ -5644,11 +5644,13 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "nft_set_metadata" => {
-                    if arg_typed.len() != 2
-                        || !(arg_typed[0].ty == Type::NftId && arg_typed[1].ty == Type::Json)
+                    if arg_typed.len() != 3
+                        || !(arg_typed[0].ty == Type::NftId
+                            && arg_typed[1].ty == Type::Name
+                            && arg_typed[2].ty == Type::Json)
                     {
                         return Err(SemanticError {
-                            message: "nft_set_metadata expects (NftId, Json)".into(),
+                            message: "nft_set_metadata expects (NftId, Name, Json)".into(),
                         });
                     }
                     Ok(TypedExpr {

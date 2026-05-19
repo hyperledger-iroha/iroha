@@ -126,7 +126,7 @@ gas = "G_nft_transfer_asset"
 
 [[syscall]]
 number = "0x27"
-args = "r10=&NftId, r11=&Json"
+args = "r10=&NftId, r11=&Name, r12=&Json"
 ret = "u64=0"
 gas = "G_nft_set_metadata"
 

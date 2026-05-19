@@ -570,8 +570,9 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*nft);
             f(*owner);
         }
-        SetNftData { nft, json } => {
+        SetNftData { nft, key, json } => {
             f(*nft);
+            f(*key);
             f(*json);
         }
         BurnNft { nft } => f(*nft),

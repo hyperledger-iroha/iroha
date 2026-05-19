@@ -135,7 +135,7 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
     },
     crate::syscalls::SyscallDoc {
         number: 39,
-        args: "r10=&NftId, r11=&Json",
+        args: "r10=&NftId, r11=&Name, r12=&Json",
         ret: "u64=0",
         gas: "asset:gas/G_nft_set_metadata@ivm.core/v2",
     },

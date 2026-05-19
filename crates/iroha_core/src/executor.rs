@@ -17,7 +17,7 @@ use iroha_data_model::{
     Identifiable as _, Registrable as _, ValidationFail,
     account::{AccountId, address::AccountAddress},
     asset::{
-        AssetDefinition,
+        AssetBalancePolicy, AssetDefinition,
         id::{AssetDefinitionId, AssetId},
         value::Asset,
     },
@@ -456,6 +456,38 @@ fn parse_fee_sponsor(
                 "invalid fee_sponsor metadata: expected canonical I105 account id or on-chain alias ({err})"
             )))
         }
+    }
+}
+
+fn execute_system_fee_instruction(
+    instr: DMInstructionBox,
+    authority: &AccountId,
+    state_transaction: &mut StateTransaction<'_, '_>,
+) -> Result<(), InstructionExecutionError> {
+    let previous_tx_dataspace_id = state_transaction.current_dataspace_id;
+    let previous_world_dataspace_id = state_transaction.world.current_dataspace_id;
+    state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    let result = instr.execute(authority, state_transaction);
+    state_transaction.current_dataspace_id = previous_tx_dataspace_id;
+    state_transaction.world.current_dataspace_id = previous_world_dataspace_id;
+    result
+}
+
+fn execute_gas_fee_transfer_instruction(
+    asset_definition_id: &AssetDefinitionId,
+    instr: DMInstructionBox,
+    authority: &AccountId,
+    state_transaction: &mut StateTransaction<'_, '_>,
+) -> Result<(), InstructionExecutionError> {
+    let definition = state_transaction
+        .world
+        .asset_definition(asset_definition_id)
+        .map_err(InstructionExecutionError::from)?;
+    if definition.balance_scope_policy() == AssetBalancePolicy::Global {
+        execute_system_fee_instruction(instr, authority, state_transaction)
+    } else {
+        instr.execute(authority, state_transaction)
     }
 }
 
@@ -1503,7 +1535,13 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
                     iroha_data_model::account::Account,
                 >::asset_numeric(payer_asset, qty, tech_account);
                 let instr: DMInstructionBox = transfer.into();
-                instr.execute(authority, state_transaction).map_err(|err| {
+                execute_gas_fee_transfer_instruction(
+                    &asset_def,
+                    instr,
+                    authority,
+                    state_transaction,
+                )
+                .map_err(|err| {
                     iroha_logger::debug!(
                         ?err,
                         authority = %authority,
@@ -2125,7 +2163,13 @@ impl Executor {
                             iroha_data_model::account::Account,
                         >::asset_numeric(payer_asset, qty, tech_account);
                     let instr: DMInstructionBox = transfer.into();
-                    instr.execute(authority, state_transaction).map_err(|err| {
+                    execute_gas_fee_transfer_instruction(
+                        &asset_def,
+                        instr,
+                        authority,
+                        state_transaction,
+                    )
+                    .map_err(|err| {
                         iroha_logger::debug!(
                             ?err,
                             authority = %authority,
@@ -2737,7 +2781,13 @@ impl Executor {
                                 payer_asset, qty, tech_account
                             );
                             let instr: DMInstructionBox = transfer.into();
-                            instr.execute(authority, state_transaction).map_err(|err| {
+                            execute_gas_fee_transfer_instruction(
+                                &asset_def,
+                                instr,
+                                authority,
+                                state_transaction,
+                            )
+                            .map_err(|err| {
                                 iroha_logger::debug!(
                                     ?err,
                                     authority = %authority,
@@ -2975,7 +3025,13 @@ impl Executor {
                                 payer_asset, qty, tech_account
                             );
                             let instr: DMInstructionBox = transfer.into();
-                            instr.execute(authority, state_transaction).map_err(|err| {
+                            execute_gas_fee_transfer_instruction(
+                                &asset_def,
+                                instr,
+                                authority,
+                                state_transaction,
+                            )
+                            .map_err(|err| {
                                 iroha_logger::debug!(
                                     ?err,
                                     authority = %authority,

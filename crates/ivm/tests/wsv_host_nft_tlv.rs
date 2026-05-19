@@ -74,13 +74,20 @@ fn create_transfer_set_nft_with_tlv() {
 
     // Set NFT data as owner
     let tlv_nft = make_tlv(PointerType::NftId as u16, nft0.as_bytes());
+    let tlv_key = make_tlv(PointerType::Name as u16, b"dpn_metadata");
     let tlv_json = make_tlv(PointerType::Json as u16, br#"{"k":"v"}"#);
     vm.memory.preload_input(0, &tlv_nft).expect("preload input");
+    let key_offset = tlv_nft.len() as u64 + 8;
     vm.memory
-        .preload_input(tlv_nft.len() as u64 + 8, &tlv_json)
+        .preload_input(key_offset, &tlv_key)
+        .expect("preload input");
+    let json_offset = key_offset + tlv_key.len() as u64 + 8;
+    vm.memory
+        .preload_input(json_offset, &tlv_json)
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    vm.set_register(11, Memory::INPUT_START + tlv_nft.len() as u64 + 8);
+    vm.set_register(11, Memory::INPUT_START + key_offset);
+    vm.set_register(12, Memory::INPUT_START + json_offset);
     let prog_set = assemble_syscalls(&[syscalls::SYSCALL_NFT_SET_METADATA as u8]);
     vm.load_program(&prog_set).unwrap();
     vm.run().expect("set nft data via tlv failed");
