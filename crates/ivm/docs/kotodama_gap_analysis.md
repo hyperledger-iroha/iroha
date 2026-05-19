@@ -16,7 +16,7 @@ Paths for reference:
 - Contract-level localization (`kotoba { ... }`) is parsed, validated for duplicates/empties, and emitted into manifest translation tables for tooling. ✔
 - Metadata and manifest wiring now surface `meta { features: ["zk","simd"] }` toggles plus compiler-generated per-entrypoint permission/read/write hints. Static ISI keys, literal map keys, dynamic map paths, and bounded dynamic state-map iteration are represented without production wildcard hints. Manual `#[access(...)]` annotations are rejected, and production compilation fails when opaque host access would require a wildcard fallback. ✔
 - The compiler scans emitted bytecode for ZK/vector opcodes, auto-enables header bits, and rejects `meta` feature requests that do not match actual opcode usage. ✔
-- Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct `Numeric`-backed scalar types (mantissa+scale) restricted to unsigned, scale‑0 values. Decimal literals are rejected in v1; arithmetic preserves the alias and mixing aliases is rejected unless routed through an `int` binding. Conversions to/from `int` are checked at runtime (range‑limited, non‑negative). Trigger declarations (`register_trigger`) now parse time/execute/data/pipeline filters, lower structured data-trigger blocks into manifest `EventFilterBox` values, support explicit trigger authority overrides, attach metadata to entrypoint manifests, and are auto-registered when a contract instance is activated (removed on deactivation); cross-contract callbacks are rejected. ✔
+- Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct `Numeric`-backed scalar types (mantissa+scale) restricted to unsigned, scale‑0 values. Decimal literals are rejected in v1; arithmetic preserves the alias and mixing aliases is rejected unless routed through an `int` binding. Conversions to/from `int` are checked at runtime (range‑limited, non‑negative). Trigger declarations (`register_trigger`) now parse time/execute/data filters plus deterministic approved block/transaction pipeline filters, lower structured data-trigger blocks into manifest `EventFilterBox` values, support explicit trigger authority overrides, attach metadata to entrypoint manifests, and are auto-registered when a contract instance is activated (removed on deactivation); cross-contract callbacks are rejected. ✔
 
 Note: Kotodama compiles to Iroha Virtual Machine (IVM) bytecode (`.to`). It does not target “risc5”/RISC‑V as a standalone ISA. Any RISC‑V–like encodings mentioned in the compiler are IVM’s mixed instruction format and an implementation detail.
 
@@ -65,7 +65,7 @@ Short-to-mid term steps to align implementation with the designed grammar and sa
 - Done: production compilation rejects incomplete access derivation instead of emitting wildcard manifests.
 
 2) Permission and trigger plumbing
-- Done: extend trigger DSL support to data/pipeline filters and explicit authority overrides.
+- Done: extend trigger DSL support to data filters, deterministic approved block/transaction pipeline filters, and explicit authority overrides.
 - Done: wire manifest trigger descriptors into runtime registration on activation/deactivation (local callbacks only).
 
 3) Type system extensions
@@ -90,6 +90,6 @@ Short-to-mid term steps to align implementation with the designed grammar and sa
 - Meta feature flags (`zk`, `vector`, `features`) are validated against emitted opcodes; requesting features that are unused now fails compilation.
 - Numeric aliases (e.g., `fixed_u128`) are distinct `Numeric` types; v1 restricts them to unsigned integers (scale = 0), rejecting fractional values and decimal literals.
 - `permission(...)` annotations are enforced by compiler diagnostics and written into manifests; runtime enforcement depends on consuming the metadata.
-- Trigger declarations support time/execute/data/pipeline filters plus explicit authority overrides; cross-contract callbacks are still rejected (local only).
+- Trigger declarations support time/execute/data filters plus deterministic approved block/transaction pipeline filters and explicit authority overrides; cross-contract callbacks are still rejected (local only).
 
 Keeping these limitations explicit helps set expectations and aids contributors in targeting the most valuable next steps.

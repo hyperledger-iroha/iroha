@@ -244,7 +244,7 @@ Host/syscall builtins (SCALL میں map ہوتے ہیں؛ درست نمبرز iv
 - `set_account_detail(AccountId*, Name*, Json*)`
 - `nft_mint_asset(NftId*, AccountId*)`
 - `nft_transfer_asset(AccountId*, NftId*, AccountId*)`
-- `nft_set_metadata(NftId*, Json*)`
+- `nft_set_metadata(NftId*, Name*, Json*)`
 - `nft_burn_asset(NftId*)`
 - `authority() -> AccountId*`
 - `register_domain(DomainId*)`

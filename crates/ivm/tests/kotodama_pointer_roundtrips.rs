@@ -29,7 +29,11 @@ fn roundtrip_nft_mint_asset() {
 fn roundtrip_nft_set_metadata() {
     let src = r#"
         fn main() {
-          nft_set_metadata(nft_id("rose:uuid:ffff$wonderland.universal"), json("{\"meta\":1}"));
+          nft_set_metadata(
+            nft_id("rose:uuid:ffff$wonderland.universal"),
+            name("dpn_metadata"),
+            json("{\"meta\":1}")
+          );
         }
     "#;
     run_prog(src);

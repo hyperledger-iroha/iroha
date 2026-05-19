@@ -44,7 +44,7 @@ translator: machine-google-reviewed
 | 0x2B | ТРАНСФЕР_В1_БАТЧ_СУЛ | `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` | Ҡулланыу Norito-кодланған партия бер syscall |
 | 0х25 | NFT_MINT_ASSET | `&NftId`, `&AccountId(owner)` | `u64=0` | `G_nft_mint_asset` | Яңы НФТ теркәү |
 | 0х26 | NFT_TRANSFER_ASSET | `&AccountId(from)`, `&NftId`, `&AccountId(to)` | `u64=0` | `G_nft_transfer_asset` | НФТ-ға милек хоҡуғын күсерә |
-| 0х27 | NFT_SET_METADATA | `&NftId`, `&Json` | `u64=0` | `G_nft_set_metadata` | Яңыртыу НФТ метамағлүмәттәр |
+| 0х27 | NFT_SET_METADATA | `&NftId`, `&Name`, `&Json` | `u64=0` | `G_nft_set_metadata` | Яңыртыу НФТ метамағлүмәттәр |
 | 0х28 | NFT_BURN_ASSET | `&NftId` | `u64=0` | `G_nft_burn_asset` | Янғандар (юралар) НФТ |
 | 0xA1 | СМОРТКОНТСЕСКЕСЕКСЕКСЕКСЕСКА| `r10=&NoritoBytes(QueryRequest)` | `r10=ptr (&NoritoBytes(QueryResponse))` | `G_scq + per_item*items + per_byte*bytes(resp)` | Итерабый эҙләүҙәр эфемер яҡтан йүгерә; `QueryRequest::Continue` кире ҡаҡты |
 | 0xA2 | КРЕЙТ_НФТС_АЛЫСАМАҠСАБИКТАР | – | `u64=count` | `G_create_nfts_for_all` | Ярҙам; функцияһы || 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | `depth:u64` | `u64=prev` | `G_set_depth` | Админ; функцияһы |

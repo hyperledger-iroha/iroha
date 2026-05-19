@@ -44,7 +44,7 @@ translator: machine-google-reviewed
 | 0x2B | TRANSFER_V1_BATCH_APPLY | `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` | syscall གཅིག་ནང་ Norito-encoded batch ཅིག་འཇུག་སྤྱོད་འབད། |
 | ༠x༢༥ | NFT_MINT_ASSET | `&NftId`, `&AccountId(owner)` | `u64=0` | `G_nft_mint_asset` | NFT གསརཔ་ཅིག་ཐོ་བཀོད་འབད། |
 | ༠x༢༦ | NFT_TRANSFER_ASSET | `&AccountId(from)`, `&NftId`, `&AccountId(to)`, `u64=0` | `G_nft_transfer_asset` | NFT གི་བདག་དབང་སྤོ་བཤུད་འབདཝ་ཨིན། |
-| ༠x༢༧ | NFT_SET_METATA | `&NftId`, `&Json` | Iroha | `G_nft_set_metadata` | ཨེན་ཨེཕ་ཊི་ མེ་ཊ་ཌེ་ཊ་ |
+| ༠x༢༧ | NFT_SET_METATA | `&NftId`, `&Name`, `&Json` | Iroha | `G_nft_set_metadata` | ཨེན་ཨེཕ་ཊི་ མེ་ཊ་ཌེ་ཊ་ |
 | ༠x༢༨ | NFT_BURN_ASSET | `&NftId` | `u64=0` | `G_nft_burn_asset` | Burns (dendroys) an NFT |
 | 0xA1 | SMARTCONTRACT_EXECUTE_QUERY| `r10=&NoritoBytes(QueryRequest)` | `r10=ptr (&NoritoBytes(QueryResponse))` | `G_scq + per_item*items + per_byte*bytes(resp)` | བསྐྱར་བརྗོད་འབད་བཏུབ་པའི་འདྲི་དཔྱད་ཚུ་ སྤྱིར་བཏང་སྦེ་འགྱོཝ་ཨིན། `QueryRequest::Continue` ངོས་ལེན་མ་འབད་ |
 | 0xA2 | གསར་བསྐྲུན་འབད་ནི།_FOR_ALL_USERS | – | `u64=count` | `G_create_nfts_for_all` | རོགས་སྐྱོར།; ཁྱད་ཆོས་‑གཡུག་ || 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | Iroha | `u64=prev` | `G_set_depth` | བདག་སྐྱོང་པ།; ཁྱད་ཆོས་‑གཡུག་ |

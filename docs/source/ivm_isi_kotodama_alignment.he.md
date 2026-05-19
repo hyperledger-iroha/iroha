@@ -131,7 +131,7 @@ translator: manual
 - `SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes<TransferAssetBatch>)` → מאפשר להגיש אצווה מקודדת מראש בקריאה אחת
 - `SYSCALL_NFT_MINT_ASSET(id: ptr NftId, owner: ptr AccountId)` → ISI ‏`Register<Nft>`
 - `SYSCALL_NFT_TRANSFER_ASSET(from: ptr AccountId, to: ptr AccountId, id: ptr NftId)` → ISI ‏`Transfer<Nft>`
-- `SYSCALL_NFT_SET_METADATA(id: ptr NftId, content: ptr Metadata)` → ISI ‏`SetKeyValue<Nft>`
+- `SYSCALL_NFT_SET_METADATA(id: ptr NftId, key: ptr Name, value: ptr Json)` → ISI ‏`SetKeyValue<Nft>`
 - `SYSCALL_NFT_BURN_ASSET(id: ptr NftId)` → ISI ‏`Unregister<Nft>`
 - `SYSCALL_CREATE_ROLE(id: ptr RoleId, role: ptr Role)` → ISI ‏`Register<Role>`
 - `SYSCALL_GRANT_ROLE(account: ptr AccountId, role: ptr RoleId)` → ISI ‏`Grant<Role>`

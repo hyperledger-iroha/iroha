@@ -44,7 +44,7 @@ translator: machine-google-reviewed
 | 0x2B | TRANSFER_V1_BATCH_APPLY | `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` | Norito кодталған буманы жалғыз жүйе қоңырауында қолдану |
 | 0x25 | NFT_MINT_ASSET | `&NftId`, `&AccountId(owner)` | `u64=0` | `G_nft_mint_asset` | Жаңа NFT | тіркейді
 | 0x26 | NFT_TRANSFER_ASSET | `&AccountId(from)`, `&NftId`, `&AccountId(to)` | `u64=0` | `G_nft_transfer_asset` | NFT | меншік құқығын береді
-| 0x27 | NFT_SET_METADATA | `&NftId`, `&Json` | `u64=0` | `G_nft_set_metadata` | NFT метадеректерін жаңартады |
+| 0x27 | NFT_SET_METADATA | `&NftId`, `&Name`, `&Json` | `u64=0` | `G_nft_set_metadata` | NFT метадеректерін жаңартады |
 | 0x28 | NFT_BURN_ASSET | `&NftId` | `u64=0` | `G_nft_burn_asset` | NFT | күйдіреді (жойады).
 | 0xA1 | SMARTCONTRACT_EXECUTE_QUERY| `r10=&NoritoBytes(QueryRequest)` | `r10=ptr (&NoritoBytes(QueryResponse))` | `G_scq + per_item*items + per_byte*bytes(resp)` | Қайталанатын сұраулар уақытша орындалады; `QueryRequest::Continue` қабылданбады |
 | 0xA2 | БАРЛЫҚ_ПАЙДАЛАНУШЫЛАР ҮШІН_NFTS_жасау | – | `u64=count` | `G_create_nfts_for_all` | Көмекші; мүмкіндігі бар || 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | `depth:u64` | `u64=prev` | `G_set_depth` | Әкімші; мүмкіндігі бар |

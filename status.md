@@ -64,6 +64,21 @@ Last updated: 2026-05-19
   and
   `env -u LOG_FORMAT cargo test -p iroha_config --test fixtures minimal_config_snapshot -- --nocapture`.
 
+## 2026-05-19 Contract manifest pipeline trigger filter fix
+
+- Contract manifest trigger fixtures now register deterministic approved-block
+  pipeline filters, matching the runtime policy that only approved/rejected
+  transaction facts and approved block facts are replayed for contract pipeline
+  triggers.
+- Kotodama trigger declarations now lower `on pipeline block [approved]` and
+  `on pipeline transaction [approved]` to approved-status manifest filters and
+  reject nondeterministic pipeline families at parse time; the grammar and gap
+  analysis docs now describe that deterministic surface.
+- Focused validation is green with `cargo fmt --all`,
+  `cargo test -p kotodama_lang pipeline_filter --lib -- --nocapture`,
+  `cargo test -p kotodama_lang pipeline_transaction --lib -- --nocapture`, and
+  `cargo test -p iroha_core --test contract_manifest_triggers -- --nocapture`.
+
 ## 2026-05-19 WSV/Kura and query pipeline refactor closeout
 
 - WSV remains memory-only: durable block state stays in Kura, while query,

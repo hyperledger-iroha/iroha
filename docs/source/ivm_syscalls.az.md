@@ -44,7 +44,7 @@ Kanonik sistem çağırışı cədvəli (alt dəst)| Hex | Adı | Arqumentlər (
 | 0x2B | TRANSFER_V1_BATCH_MÜRACİƏT | `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` | Norito kodlu toplusunu tək sistem zəngində tətbiq edin |
 | 0x25 | NFT_MINT_ASSET | `&NftId`, `&AccountId(owner)` | `u64=0` | `G_nft_mint_asset` | Yeni NFT | qeyd edir
 | 0x26 | NFT_TRANSFER_ASSET | `&AccountId(from)`, `&NftId`, `&AccountId(to)` | `u64=0` | `G_nft_transfer_asset` | NFT sahibliyini köçürür |
-| 0x27 | NFT_SET_METADATA | `&NftId`, `&Json` | `u64=0` | `G_nft_set_metadata` | NFT metadatasını yeniləyir |
+| 0x27 | NFT_SET_METADATA | `&NftId`, `&Name`, `&Json` | `u64=0` | `G_nft_set_metadata` | NFT metadatasını yeniləyir |
 | 0x28 | NFT_BURN_ASSET | `&NftId` | `u64=0` | `G_nft_burn_asset` | NFT | yandırır (məhv edir).
 | 0xA1 | SMARTCONTRACT_EXECUTE_QUERY| `r10=&NoritoBytes(QueryRequest)` | `r10=ptr (&NoritoBytes(QueryResponse))` | `G_scq + per_item*items + per_byte*bytes(resp)` | Təkrarlanan sorğular efemer olaraq işləyir; `QueryRequest::Continue` rədd edildi |
 | 0xA2 | BÜTÜN_İSTİFADƏÇİLƏR ÜÇÜN_NFTS_YARAT | – | `u64=count` | `G_create_nfts_for_all` | Köməkçi; xüsusiyyətli || 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | `depth:u64` | `u64=prev` | `G_set_depth` | Admin; xüsusiyyətli |

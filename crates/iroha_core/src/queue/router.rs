@@ -326,7 +326,7 @@ pub fn evaluate_policy_with_catalog_and_world<W: WorldReadOnly>(
     let matched_rule = policy
         .rules
         .iter()
-        .find(|rule| rule_matches(rule, tx, None));
+        .find(|rule| rule_matches_with_world(rule, tx, dataspace_catalog, world));
     resolve_policy_routing_decision(
         policy,
         matched_rule,
@@ -2567,6 +2567,31 @@ fn rule_matches(
     true
 }
 
+fn rule_matches_with_world<W: WorldReadOnly>(
+    rule: &LaneRoutingRule,
+    tx: &AcceptedTransaction<'_>,
+    dataspace_catalog: &DataSpaceCatalog,
+    world: &W,
+) -> bool {
+    let matcher = &rule.matcher;
+
+    if let Some(account) = matcher.account.as_deref()
+        && !tx.authority_opt().is_some_and(|authority| {
+            account_matches_with_world(account, authority, dataspace_catalog, world)
+        })
+    {
+        return false;
+    }
+
+    if let Some(instruction) = matcher.instruction.as_deref()
+        && !instructions_match_with_world(instruction, tx, dataspace_catalog, world)
+    {
+        return false;
+    }
+
+    true
+}
+
 fn query_rule_matches(
     rule: &LaneRoutingRule,
     authority: &AccountId,
@@ -2764,6 +2789,72 @@ fn instructions_match(
     }
 }
 
+fn instructions_match_with_world<W: WorldReadOnly>(
+    matcher: &str,
+    tx: &AcceptedTransaction<'_>,
+    dataspace_catalog: &DataSpaceCatalog,
+    world: &W,
+) -> bool {
+    let matcher_norm = matcher.trim().to_ascii_lowercase();
+    if matcher_norm.is_empty() {
+        return false;
+    }
+    let (matcher_label, destination_scope) = split_instruction_matcher(&matcher_norm);
+    if matcher_label.is_empty() {
+        return false;
+    }
+
+    match tx.entrypoint() {
+        iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
+            let executable = signed.instructions();
+            let Executable::Instructions(batch) = executable else {
+                return false;
+            };
+
+            batch.iter().any(|instruction| {
+                instruction_matches_with_world(
+                    matcher_label,
+                    destination_scope,
+                    &**instruction,
+                    dataspace_catalog,
+                    world,
+                )
+            })
+        }
+        iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_) => false,
+        iroha_data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
+            let executable = reveal.signed_transaction().instructions();
+            let Executable::Instructions(batch) = executable else {
+                return false;
+            };
+
+            batch.iter().any(|instruction| {
+                instruction_matches_with_world(
+                    matcher_label,
+                    destination_scope,
+                    &**instruction,
+                    dataspace_catalog,
+                    world,
+                )
+            })
+        }
+        iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(private) => {
+            crate::smartcontracts::isi::kaigi::private_instruction_box(private)
+                .map(|instruction| {
+                    instruction_matches_with_world(
+                        matcher_label,
+                        destination_scope,
+                        &*instruction,
+                        dataspace_catalog,
+                        world,
+                    )
+                })
+                .unwrap_or(false)
+        }
+        iroha_data_model::transaction::TransactionEntrypoint::Time(_) => false,
+    }
+}
+
 fn split_instruction_matcher(matcher: &str) -> (&str, Option<&str>) {
     if let Some((label, domain)) = matcher.rsplit_once('@')
         && label.starts_with("transfer")
@@ -2786,6 +2877,41 @@ fn instruction_matches(
 ) -> bool {
     if destination_scope.is_some_and(|scope| {
         !transfer_destination_matches_alias_scope(instruction, scope, state_view)
+    }) {
+        return false;
+    }
+
+    if instruction_label_matches(matcher, instruction) {
+        return true;
+    }
+
+    let id = Instruction::id(instruction).to_ascii_lowercase();
+    if matches_label(matcher, &id) {
+        return true;
+    }
+
+    id.split("::").any(|segment| {
+        matches_label(matcher, segment)
+            || segment
+                .strip_suffix("box")
+                .is_some_and(|trimmed| !trimmed.is_empty() && matches_label(matcher, trimmed))
+    })
+}
+
+fn instruction_matches_with_world<W: WorldReadOnly>(
+    matcher: &str,
+    destination_scope: Option<&str>,
+    instruction: &dyn Instruction,
+    dataspace_catalog: &DataSpaceCatalog,
+    world: &W,
+) -> bool {
+    if destination_scope.is_some_and(|scope| {
+        !transfer_destination_matches_alias_scope_with_world(
+            instruction,
+            scope,
+            dataspace_catalog,
+            world,
+        )
     }) {
         return false;
     }
@@ -2838,6 +2964,35 @@ fn transfer_destination_matches_alias_scope(
     account_matches_alias_scope(scope, destination, state_view)
 }
 
+fn transfer_destination_matches_alias_scope_with_world<W: WorldReadOnly>(
+    instruction: &dyn Instruction,
+    scope: &str,
+    dataspace_catalog: &DataSpaceCatalog,
+    world: &W,
+) -> bool {
+    let scope = scope.trim();
+    if scope.is_empty() {
+        return false;
+    }
+
+    let any = instruction.as_any();
+    let Some(transfer) = any.downcast_ref::<TransferBox>() else {
+        return false;
+    };
+
+    let destination = match transfer {
+        TransferBox::Domain(transfer) => {
+            return domain_scope_matches(scope, &transfer.object);
+        }
+        TransferBox::AssetDefinition(transfer) => {
+            return asset_definition_scope_matches_with_world(scope, &transfer.object, world);
+        }
+        TransferBox::Asset(transfer) => &transfer.destination,
+        TransferBox::Nft(transfer) => &transfer.destination,
+    };
+    account_matches_alias_scope_with_world(scope, destination, dataspace_catalog, world)
+}
+
 fn domain_scope_matches(scope: &str, domain_id: &DomainId) -> bool {
     scope.eq_ignore_ascii_case(domain_id.to_string().as_str())
         || scope.eq_ignore_ascii_case(domain_id.dataspace().as_ref())
@@ -2858,6 +3013,23 @@ fn asset_definition_scope_matches(
                     .ok()
                     .and_then(|definition| definition.id.try_domain().cloned())
             })
+        })
+        .is_some_and(|domain_id| domain_scope_matches(scope, &domain_id))
+}
+
+fn asset_definition_scope_matches_with_world<W: WorldReadOnly>(
+    scope: &str,
+    asset_definition_id: &AssetDefinitionId,
+    world: &W,
+) -> bool {
+    asset_definition_id
+        .try_domain()
+        .cloned()
+        .or_else(|| {
+            world
+                .asset_definition(asset_definition_id)
+                .ok()
+                .and_then(|definition| definition.id.try_domain().cloned())
         })
         .is_some_and(|domain_id| domain_scope_matches(scope, &domain_id))
 }

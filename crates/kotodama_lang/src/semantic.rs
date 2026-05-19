@@ -20,8 +20,8 @@ use iroha_data_model::{
         data::DataEventFilter,
         execute_trigger::ExecuteTriggerEventFilter,
         pipeline::{
-            BlockEventFilter, MergeLedgerEventFilter, PipelineEventFilterBox,
-            TransactionEventFilter, WitnessEventFilter,
+            BlockEventFilter, BlockStatus, PipelineEventFilterBox, TransactionEventFilter,
+            TransactionStatus,
         },
         time::{ExecutionTime, Schedule, TimeEventFilter},
     },
@@ -1226,18 +1226,12 @@ fn analyze_trigger(
         }
         TriggerFilter::Pipeline(pipeline) => {
             let filter = match pipeline {
-                TriggerPipelineFilter::Transaction => {
-                    PipelineEventFilterBox::Transaction(TransactionEventFilter::default())
-                }
-                TriggerPipelineFilter::Block => {
-                    PipelineEventFilterBox::Block(BlockEventFilter::default())
-                }
-                TriggerPipelineFilter::Merge => {
-                    PipelineEventFilterBox::Merge(MergeLedgerEventFilter::default())
-                }
-                TriggerPipelineFilter::Witness => {
-                    PipelineEventFilterBox::Witness(WitnessEventFilter::default())
-                }
+                TriggerPipelineFilter::TransactionApproved => PipelineEventFilterBox::Transaction(
+                    TransactionEventFilter::new().for_status(TransactionStatus::Approved),
+                ),
+                TriggerPipelineFilter::BlockApproved => PipelineEventFilterBox::Block(
+                    BlockEventFilter::new().for_status(BlockStatus::Approved),
+                ),
             };
             EventFilterBox::Pipeline(filter)
         }
@@ -5644,11 +5638,13 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "nft_set_metadata" => {
-                    if arg_typed.len() != 2
-                        || !(arg_typed[0].ty == Type::NftId && arg_typed[1].ty == Type::Json)
+                    if arg_typed.len() != 3
+                        || !(arg_typed[0].ty == Type::NftId
+                            && arg_typed[1].ty == Type::Name
+                            && arg_typed[2].ty == Type::Json)
                     {
                         return Err(SemanticError {
-                            message: "nft_set_metadata expects (NftId, Json)".into(),
+                            message: "nft_set_metadata expects (NftId, Name, Json)".into(),
                         });
                     }
                     Ok(TypedExpr {
@@ -8760,13 +8756,15 @@ mod tests {
 
     #[test]
     fn trigger_decl_supports_pipeline_filter() {
+        use iroha_data_model::events::pipeline::{BlockEventFilter, BlockStatus};
+
         let program = parse(
             r#"
             seiyaku C {
                 kotoage fn run() {}
                 register_trigger wake {
                     call run;
-                    on pipeline block;
+                    on pipeline block approved;
                 }
             }
             "#,
@@ -8774,10 +8772,38 @@ mod tests {
         .expect("parse trigger decl");
         let typed = analyze(&program).expect("analyze trigger decl");
         let trigger = &typed.triggers[0];
-        assert!(matches!(
+        assert_eq!(
             trigger.filter,
-            EventFilterBox::Pipeline(PipelineEventFilterBox::Block(_))
-        ));
+            EventFilterBox::Pipeline(PipelineEventFilterBox::Block(
+                BlockEventFilter::new().for_status(BlockStatus::Approved),
+            ))
+        );
+    }
+
+    #[test]
+    fn trigger_decl_supports_pipeline_transaction_approved_filter() {
+        use iroha_data_model::events::pipeline::{TransactionEventFilter, TransactionStatus};
+
+        let program = parse(
+            r#"
+            seiyaku C {
+                kotoage fn run() {}
+                register_trigger wake {
+                    call run;
+                    on pipeline transaction approved;
+                }
+            }
+            "#,
+        )
+        .expect("parse trigger decl");
+        let typed = analyze(&program).expect("analyze trigger decl");
+        let trigger = &typed.triggers[0];
+        assert_eq!(
+            trigger.filter,
+            EventFilterBox::Pipeline(PipelineEventFilterBox::Transaction(
+                TransactionEventFilter::new().for_status(TransactionStatus::Approved),
+            ))
+        );
     }
 
     #[test]

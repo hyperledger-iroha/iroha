@@ -118,7 +118,7 @@ TriggerFilter = "time" ("pre_commit" | "schedule" "(" Number [ "," Number ] ")")
               | "execute" "trigger" (Ident | String)
               | "data" "any"
               | "data" DataFamily DataEventKind DataMatcherBlock
-              | "pipeline" ("transaction" | "block" | "merge" | "witness") ;
+              | "pipeline" ("transaction" [ "approved" ] | "block" [ "approved" ]) ;
 DataFamily = "peer"
            | "domain"
            | "account"
@@ -160,6 +160,7 @@ register_trigger cbuae_aed_to_pkr_asset_added {
 Notes:
 - `asset` data filters may combine both `asset` and `asset_definition` matchers; both apply with logical AND semantics.
 - `configuration` and `executor` filters currently expose event-kind selection only and do not accept matcher fields.
+- Pipeline trigger declarations are limited to the deterministic replay surface used by contract activation: approved block events and approved transaction events. `on pipeline block;` and `on pipeline transaction;` are accepted as shorthand for the corresponding `approved` filters.
 - The DSL covers the core ledger data families above. Specialized product-specific event families still use the lower-level filter APIs when needed.
 
 Accepted data event kinds by family:
@@ -258,7 +259,7 @@ ArgList = Expr { "," Expr } ;
 Built-in calls recognized by the semantic layer (arity and types enforced):
 - ZK/crypto: `poseidon2(a, b)`, `poseidon6(a,b,c,d,e,f)`, `pubkgen(s)`, `valcom(v, r)`, `assert_eq(x, y)`.
 - Vector helpers: `setvl(n)` (compile-time int `0..=255`).
-- Iroha syscalls: `mint_asset(acc, asset, amount)`, `burn_asset(acc, asset, amount)`, `transfer_asset(from, to, asset, amount)`, `register_asset(asset, symbol, quantity, mintable)`, `create_new_asset(asset, symbol, quantity, account, mintable)`, `nft_mint_asset(id, owner)`, `nft_transfer_asset(from, id, to)`, `nft_set_metadata(id, json)`, `nft_burn_asset(id)`.
+- Iroha syscalls: `mint_asset(acc, asset, amount)`, `burn_asset(acc, asset, amount)`, `transfer_asset(from, to, asset, amount)`, `register_asset(asset, symbol, quantity, mintable)`, `create_new_asset(asset, symbol, quantity, account, mintable)`, `nft_mint_asset(id, owner)`, `nft_transfer_asset(from, id, to)`, `nft_set_metadata(id, key, json)`, `nft_burn_asset(id)`.
 - Trigger syscalls: `create_trigger(json)`, `register_trigger(json)` (alias), `remove_trigger(name)`/`unregister_trigger(name)`, `set_trigger_enabled(name, enabled)`.
  - Iroha helpers (samples/dev): `create_nfts_for_all_users()`, `set_execution_depth(value)`, `set_account_detail(account, key, value)`.
  - Durable state helpers (host): `host::state_get(name_path) -> Blob`, `host::state_set(name_path, norito_bytes_value)`, `host::state_del(name_path)`.

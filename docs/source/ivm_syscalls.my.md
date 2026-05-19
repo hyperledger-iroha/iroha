@@ -44,7 +44,7 @@ Canonical syscall table (subset)| Hex | အမည် | အကြောင်း�
 | 0x2B | TRANSFER_V1_BATCH_APPLY | `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` | syscall တစ်ခုတည်းတွင် Norito-encoded batch တစ်ခုကို အသုံးပြုပါ |
 | 0x25 | NFT_MINT_ASSET | `&NftId`, `&AccountId(owner)` | `u64=0` | `G_nft_mint_asset` | NFT | အသစ်တစ်ခုကို မှတ်ပုံတင်ပါ။
 | 0x26 | NFT_TRANSFER_ASSET | `&AccountId(from)`, `&NftId`, `&AccountId(to)` | `u64=0` | `G_nft_transfer_asset` | NFT | ပိုင်ဆိုင်မှုကို လွှဲပြောင်းပေးသည်။
-| 0x27 | NFT_SET_METADATA | `&NftId`, `&Json` | `u64=0` | `G_nft_set_metadata` | NFT မက်တာဒေတာကို အပ်ဒိတ်များ |
+| 0x27 | NFT_SET_METADATA | `&NftId`, `&Name`, `&Json` | `u64=0` | `G_nft_set_metadata` | NFT မက်တာဒေတာကို အပ်ဒိတ်များ |
 | 0x28 | NFT_BURN_ASSET | `&NftId` | `u64=0` | `G_nft_burn_asset` | NFT | မီးလောင်သည် (ဖျက်ဆီးသည်)
 | 0xA1 | SMARTCONTRACT_EXECUTE_QUERY| `r10=&NoritoBytes(QueryRequest)` | `r10=ptr (&NoritoBytes(QueryResponse))` | `G_scq + per_item*items + per_byte*bytes(resp)` | ထပ်ခါတလဲလဲ မေးမြန်းမှုများသည် တဒင်္ဂဖြင့် လုပ်ဆောင်သည်။ `QueryRequest::Continue` ပယ်ချ |
 | 0xA2 | CREATE_NFTS_FOR_ALL_USERS | – | `u64=count` | `G_create_nfts_for_all` | ဥပဇ္ဈာယ်ဆရာ၊ ထူးခြားချက် || 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | `depth:u64` | `u64=prev` | `G_set_depth` | စီမံခန့်ခွဲသူ; အင်္ဂါရပ်များ |

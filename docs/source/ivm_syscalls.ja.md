@@ -44,7 +44,7 @@ translator: manual
 | 0x2B | TRANSFER_V1_BATCH_APPLY           | `r10=&NoritoBytes(TransferAssetBatch)`                                   | `u64=0`      | `G_transfer`                      | Norito エンコード済みのバッチを 1 回の呼び出しで適用 |
 | 0x25 | NFT_MINT_ASSET                    | `&NftId`, `&AccountId(owner)`                                           | `u64=0`      | `G_nft_mint_asset`                | 新しい NFT を登録する                  |
 | 0x26 | NFT_TRANSFER_ASSET                | `&AccountId(from)`, `&NftId`, `&AccountId(to)`                           | `u64=0`      | `G_nft_transfer_asset`            | NFT の所有権を移転する                |
-| 0x27 | NFT_SET_METADATA                  | `&NftId`, `&Json`                                                       | `u64=0`      | `G_nft_set_metadata`              | NFT メタデータを更新する              |
+| 0x27 | NFT_SET_METADATA                  | `&NftId`, `&Name`, `&Json`                                                       | `u64=0`      | `G_nft_set_metadata`              | NFT メタデータを更新する              |
 | 0x28 | NFT_BURN_ASSET                    | `&NftId`                                                                | `u64=0`      | `G_nft_burn_asset`                | NFT を焼却（削除）する               |
 | 0xA2 | CREATE_NFTS_FOR_ALL_USERS         | –                                                                        | `u64=count`  | `G_create_nfts_for_all`           | ヘルパー。機能フラグでゲート          |
 | 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | `depth:u64`                                                              | `u64=prev`   | `G_set_depth`                     | 管理者向け。機能フラグでゲート        |

@@ -59,7 +59,7 @@ impl AssetDefinition {
 #[derive(Clone, Debug)]
 struct NftRecord {
     owner: AccountId,
-    data: Vec<u8>,
+    metadata: HashMap<Name, Vec<u8>>,
     issuer: AccountId,
 }
 
@@ -1588,7 +1588,7 @@ impl MockWorldStateView {
                 id,
                 NftRecord {
                     owner: owner_subject,
-                    data: Vec::new(),
+                    metadata: HashMap::new(),
                     issuer: issuer_subject,
                 },
             )
@@ -1622,8 +1622,14 @@ impl MockWorldStateView {
         true
     }
 
-    /// Set data for an NFT. Caller must be owner or issuer.
-    pub fn set_nft_data(&mut self, caller: &AccountId, id: &NftId, json: Vec<u8>) -> bool {
+    /// Set keyed metadata for an NFT. Caller must be owner or issuer.
+    pub fn set_nft_metadata(
+        &mut self,
+        caller: &AccountId,
+        id: &NftId,
+        key: Name,
+        json: Vec<u8>,
+    ) -> bool {
         let caller_subject = Self::account_subject(caller);
         let Some(rec) = self.nfts.get_mut(id) else {
             return false;
@@ -1631,8 +1637,16 @@ impl MockWorldStateView {
         if rec.owner != caller_subject && rec.issuer != caller_subject {
             return false;
         }
-        rec.data = json;
+        rec.metadata.insert(key, json);
         true
+    }
+
+    /// Legacy mock alias used by older instruction-box payload tests.
+    pub fn set_nft_data(&mut self, caller: &AccountId, id: &NftId, json: Vec<u8>) -> bool {
+        let key = "data"
+            .parse::<Name>()
+            .expect("static metadata key is valid");
+        self.set_nft_metadata(caller, id, key, json)
     }
 
     /// Burn (remove) an NFT. Caller must be owner or issuer.
@@ -6193,14 +6207,15 @@ impl IVMHost for WsvHost {
             }
             syscalls::SYSCALL_NFT_SET_METADATA => {
                 let nft = self.decode_nft_reg(vm, 10)?;
-                let v = vm.register(11);
+                let key = self.decode_name_reg(vm, 11)?;
+                let v = vm.register(12);
                 let tlv = vm.memory.validate_tlv(v)?;
                 if tlv.type_id != PointerType::Json {
                     return Err(VMError::NoritoInvalid);
                 }
                 if self
                     .wsv
-                    .set_nft_data(&self.caller, &nft, tlv.payload.to_vec())
+                    .set_nft_metadata(&self.caller, &nft, key, tlv.payload.to_vec())
                 {
                     Ok(Self::mutation_gas(tlv.payload.len()))
                 } else {
