@@ -24679,12 +24679,38 @@ fn autoscale_scale_in_triggered(
     can_scale_in: bool,
     sample_count: usize,
     required_window: usize,
+    latency_ratio_p95_permille: Option<u64>,
+    latency_threshold_permille: u64,
     utilization_p95_permille: Option<u64>,
     utilization_threshold_permille: u64,
 ) -> bool {
     can_scale_in
         && sample_count >= required_window
+        && latency_ratio_p95_permille.unwrap_or(u64::MAX) <= latency_threshold_permille
         && utilization_p95_permille.unwrap_or(u64::MAX) <= utilization_threshold_permille
+}
+
+fn autoscale_cooldown_active(
+    last_transition_height: u64,
+    cooldown_blocks: u16,
+    block_height: u64,
+) -> bool {
+    last_transition_height != 0
+        && block_height <= last_transition_height.saturating_add(u64::from(cooldown_blocks))
+}
+
+fn autoscale_managed_lane_for_retire(
+    lanes: &[iroha_data_model::nexus::LaneConfig],
+) -> Option<LaneId> {
+    lanes
+        .iter()
+        .filter(|lane| {
+            lane.metadata
+                .get(AUTOSCALE_META_MANAGED)
+                .is_some_and(|value| value == "true")
+        })
+        .map(|lane| lane.id)
+        .max_by_key(|lane| lane.as_u32())
 }
 
 fn autoscale_sample_latency_ms(prev_ts_ms: u64, curr_ts_ms: u64) -> Option<u64> {
@@ -25756,10 +25782,11 @@ impl<'state> StateBlock<'state> {
         }
 
         let block_height = block.as_ref().header().height().get();
-        let cooldown_until = autoscale
-            .last_transition_height
-            .saturating_add(u64::from(autoscale.cooldown_blocks.get()));
-        if autoscale.last_transition_height != 0 && block_height <= cooldown_until {
+        if autoscale_cooldown_active(
+            autoscale.last_transition_height,
+            autoscale.cooldown_blocks.get(),
+            block_height,
+        ) {
             return;
         }
 
@@ -25814,6 +25841,8 @@ impl<'state> StateBlock<'state> {
         let in_latency_ratio_permille = in_latency_p95_ms
             .map(|latency| latency.saturating_mul(1_000) / target_block_ms)
             .unwrap_or(0);
+        let in_latency_ratio_p95_permille =
+            in_latency_p95_ms.map(|latency| latency.saturating_mul(1_000) / target_block_ms);
 
         let can_scale_out = active_lanes < u64::from(autoscale.max_lanes.get());
         let can_scale_in = active_lanes > u64::from(autoscale.min_lanes.get());
@@ -25827,6 +25856,8 @@ impl<'state> StateBlock<'state> {
             can_scale_in,
             scale_in_samples.len(),
             usize::from(autoscale.scale_in_window_blocks.get()),
+            in_latency_ratio_p95_permille,
+            autoscale_ratio_permille(autoscale.scale_in_latency_ratio),
             in_utilization_p95_permille,
             utilization_in_permille,
         );
@@ -25932,17 +25963,7 @@ impl<'state> StateBlock<'state> {
     }
 
     fn select_autoscale_lane_for_retire(&self) -> Option<LaneId> {
-        self.nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .filter(|lane| {
-                lane.metadata
-                    .get(AUTOSCALE_META_MANAGED)
-                    .is_some_and(|value| value == "true")
-            })
-            .map(|lane| lane.id)
-            .max_by_key(|lane| lane.as_u32())
+        autoscale_managed_lane_for_retire(self.nexus.lane_catalog.lanes())
     }
 
     fn collect_autoscale_samples(

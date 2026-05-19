@@ -1743,6 +1743,40 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(try mutatedReceipt.verifyAttestation(using: policy), false)
     }
 
+    func testIdentifierReceiptRejectsReceiptHashMutationAfterSigning() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let originalPayload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let mutatedPayload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "24",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: originalPayload)
+        let policy = identifierPolicy(
+            owner: accountId,
+            resolverPublicKey: signed.resolverPublicKey
+        )
+        let originalReceipt = try identifierReceipt(
+            payload: originalPayload,
+            signatureHex: signed.signatureHex
+        )
+        let mutatedReceipt = try identifierReceipt(
+            payload: mutatedPayload,
+            signatureHex: signed.signatureHex
+        )
+
+        XCTAssertEqual(try originalReceipt.verifyAttestation(using: policy), true)
+        XCTAssertEqual(try mutatedReceipt.verifyAttestation(using: policy), false)
+    }
+
     func testIdentifierReceiptRejectsMismatchedPolicySummaryBeforeSignatureVerification() throws {
         let accountId = try canonicalOwnerLiteral()
         let payload = makeSignedIdentifierReceiptPayload(
@@ -1822,6 +1856,37 @@ final class ToriiClientTests: XCTestCase {
                 return
             }
             XCTAssertTrue(reason.contains("resolverPublicKey"))
+        }
+    }
+
+    func testIdentifierReceiptRejectsResolverPublicKeyPrefixMismatch() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: payload)
+        let multihash = try XCTUnwrap(signed.resolverPublicKey.split(separator: ":").last)
+        let receipt = try identifierReceipt(payload: payload, signatureHex: signed.signatureHex)
+        let validPolicy = identifierPolicy(
+            owner: accountId,
+            resolverPublicKey: signed.resolverPublicKey
+        )
+        let mismatchedPrefixPolicy = identifierPolicy(
+            owner: accountId,
+            resolverPublicKey: "secp256k1:\(multihash)"
+        )
+
+        XCTAssertEqual(try receipt.verifyAttestation(using: validPolicy), true)
+        XCTAssertThrowsError(try receipt.verifyAttestation(using: mismatchedPrefixPolicy)) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                XCTFail("expected invalid payload error, got \(error)")
+                return
+            }
+            XCTAssertTrue(reason.contains("prefix does not match"))
         }
     }
 

@@ -14576,6 +14576,120 @@ mod tests {
     }
 
     #[test]
+    fn fhe_param_set_validate_rejects_adversarial_structural_fields() {
+        let mut ascending_chain = sample_fhe_param_set();
+        ascending_chain.ciphertext_modulus_bits = vec![
+            NonZeroU16::new(40).expect("nonzero"),
+            NonZeroU16::new(50).expect("nonzero"),
+        ];
+        let error = ascending_chain
+            .validate()
+            .expect_err("ascending modulus chains must be rejected");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "ciphertext_modulus_bits",
+                ..
+            }
+        ));
+
+        let mut plaintext_not_smaller = sample_fhe_param_set();
+        plaintext_not_smaller.plaintext_modulus_bits = NonZeroU16::new(60).expect("nonzero");
+        let error = plaintext_not_smaller
+            .validate()
+            .expect_err("plaintext modulus must be below ciphertext modulus");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "plaintext_modulus_bits",
+                ..
+            }
+        ));
+
+        let mut slot_overflow = sample_fhe_param_set();
+        slot_overflow.slot_count = NonZeroU32::new(8_193).expect("nonzero");
+        let error = slot_overflow
+            .validate()
+            .expect_err("slot count above polynomial degree must be rejected");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "slot_count",
+                ..
+            }
+        ));
+
+        let mut exhausted_depth = sample_fhe_param_set();
+        exhausted_depth.max_multiplicative_depth = NonZeroU16::new(3).expect("nonzero");
+        let error = exhausted_depth
+            .validate()
+            .expect_err("depth consuming the whole modulus chain must be rejected");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "max_multiplicative_depth",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fhe_param_set_validate_rejects_adversarial_lifecycle_claims() {
+        let mut proposed_with_withdraw = sample_fhe_param_set();
+        proposed_with_withdraw.lifecycle = FheParamLifecycleV1::Proposed;
+        let error = proposed_with_withdraw
+            .validate()
+            .expect_err("proposed parameter sets cannot carry withdrawal metadata");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "lifecycle",
+                ..
+            }
+        ));
+
+        let mut active_without_activation = sample_fhe_param_set();
+        active_without_activation.activation_height = None;
+        let error = active_without_activation
+            .validate()
+            .expect_err("active parameter sets must declare activation height");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "lifecycle",
+                ..
+            }
+        ));
+
+        let mut withdrawn_without_withdraw_height = sample_fhe_param_set();
+        withdrawn_without_withdraw_height.lifecycle = FheParamLifecycleV1::Withdrawn;
+        withdrawn_without_withdraw_height.withdraw_height = None;
+        let error = withdrawn_without_withdraw_height
+            .validate()
+            .expect_err("withdrawn parameter sets must carry withdraw height");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "lifecycle",
+                ..
+            }
+        ));
+
+        let mut withdraw_before_deprecation = sample_fhe_param_set();
+        withdraw_before_deprecation.withdraw_height = Some(20_000);
+        let error = withdraw_before_deprecation
+            .validate()
+            .expect_err("withdraw height must be after deprecation height");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "withdraw_height",
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn fhe_execution_policy_validate_rejects_output_overflow() {
         let mut policy = sample_fhe_execution_policy();
         policy.max_output_ciphertexts = NonZeroU16::new(16).expect("nonzero");
@@ -14599,6 +14713,65 @@ mod tests {
         let error = policy
             .validate_for_param_set(&param_set)
             .expect_err("withdrawn parameter sets must reject new execution policy admission");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "param_set.lifecycle",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fhe_execution_policy_validate_for_param_set_rejects_adversarial_linkage() {
+        let policy = sample_fhe_execution_policy();
+
+        let mut wrong_param_name = sample_fhe_param_set();
+        wrong_param_name.param_set = "fhe_bfv_other".parse().expect("valid name");
+        let error = policy
+            .validate_for_param_set(&wrong_param_name)
+            .expect_err("policy must not bind to a different parameter set name");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "param_set",
+                ..
+            }
+        ));
+
+        let mut wrong_version = sample_fhe_param_set();
+        wrong_version.version = NonZeroU32::new(3).expect("nonzero");
+        let error = policy
+            .validate_for_param_set(&wrong_version)
+            .expect_err("policy must not bind to a different parameter set version");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "param_set_version",
+                ..
+            }
+        ));
+
+        let mut shallow_param_set = sample_fhe_param_set();
+        shallow_param_set.max_multiplicative_depth = NonZeroU16::new(1).expect("nonzero");
+        let error = policy
+            .validate_for_param_set(&shallow_param_set)
+            .expect_err("policy depth cannot exceed the parameter-set budget");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "max_multiplication_depth",
+                ..
+            }
+        ));
+
+        let mut proposed_param_set = sample_fhe_param_set();
+        proposed_param_set.lifecycle = FheParamLifecycleV1::Proposed;
+        proposed_param_set.deprecation_height = None;
+        proposed_param_set.withdraw_height = None;
+        let error = policy
+            .validate_for_param_set(&proposed_param_set)
+            .expect_err("proposed parameter sets are not executable");
         assert!(matches!(
             error,
             SoracloudManifestError::InvalidField {
@@ -14642,6 +14815,161 @@ mod tests {
     }
 
     #[test]
+    fn fhe_job_spec_validate_rejects_adversarial_operation_shapes() {
+        let mut add_single_input = sample_fhe_job_spec();
+        add_single_input.inputs.pop();
+        let error = add_single_input
+            .validate()
+            .expect_err("add jobs require at least two inputs");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "inputs",
+                ..
+            }
+        ));
+
+        let mut add_with_depth = sample_fhe_job_spec();
+        add_with_depth.requested_multiplication_depth = 1;
+        let error = add_with_depth
+            .validate()
+            .expect_err("add jobs cannot smuggle multiplication depth");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "requested_multiplication_depth",
+                ..
+            }
+        ));
+
+        let mut multiply_zero_depth = sample_fhe_job_spec();
+        multiply_zero_depth.operation = FheJobOperationV1::Multiply;
+        let error = multiply_zero_depth
+            .validate()
+            .expect_err("multiply jobs require non-zero depth");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "requested_multiplication_depth",
+                ..
+            }
+        ));
+
+        let mut multiply_with_rotation = sample_fhe_job_spec();
+        multiply_with_rotation.operation = FheJobOperationV1::Multiply;
+        multiply_with_rotation.requested_multiplication_depth = 1;
+        multiply_with_rotation.rotation_steps = 1;
+        let error = multiply_with_rotation
+            .validate()
+            .expect_err("multiply jobs cannot request rotations");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "operation",
+                ..
+            }
+        ));
+
+        let mut rotate_multiple_inputs = sample_fhe_job_spec();
+        rotate_multiple_inputs.operation = FheJobOperationV1::RotateLeft;
+        rotate_multiple_inputs.rotation_steps = 1;
+        let error = rotate_multiple_inputs
+            .validate()
+            .expect_err("rotate jobs require exactly one input");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "inputs",
+                ..
+            }
+        ));
+
+        let mut rotate_zero_steps = sample_fhe_job_spec();
+        rotate_zero_steps.operation = FheJobOperationV1::RotateLeft;
+        rotate_zero_steps.inputs.truncate(1);
+        let error = rotate_zero_steps
+            .validate()
+            .expect_err("rotate jobs require non-zero rotation steps");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "rotation_steps",
+                ..
+            }
+        ));
+
+        let mut bootstrap_multiple_inputs = sample_fhe_job_spec();
+        bootstrap_multiple_inputs.operation = FheJobOperationV1::Bootstrap;
+        bootstrap_multiple_inputs.bootstrap_count = 1;
+        let error = bootstrap_multiple_inputs
+            .validate()
+            .expect_err("bootstrap jobs require exactly one input");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "inputs",
+                ..
+            }
+        ));
+
+        let mut bootstrap_zero_count = sample_fhe_job_spec();
+        bootstrap_zero_count.operation = FheJobOperationV1::Bootstrap;
+        bootstrap_zero_count.inputs.truncate(1);
+        let error = bootstrap_zero_count
+            .validate()
+            .expect_err("bootstrap jobs require non-zero bootstrap count");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "bootstrap_count",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fhe_job_spec_validate_rejects_adversarial_state_keys() {
+        let mut relative_input = sample_fhe_job_spec();
+        relative_input.inputs[0].state_key = "state/health/patient-1".to_string();
+        let error = relative_input
+            .validate()
+            .expect_err("input state keys must be absolute");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "inputs.state_key",
+                ..
+            }
+        ));
+
+        let mut empty_input = sample_fhe_job_spec();
+        empty_input.inputs[0].state_key = "   ".to_string();
+        let error = empty_input
+            .validate()
+            .expect_err("blank input state keys must be rejected");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::EmptyField {
+                field: "inputs.state_key",
+                ..
+            }
+        ));
+
+        let mut relative_output = sample_fhe_job_spec();
+        relative_output.output_state_key = "state/health/result-1".to_string();
+        let error = relative_output
+            .validate()
+            .expect_err("output state keys must be absolute");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "output_state_key",
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn fhe_job_spec_validate_for_execution_rejects_policy_mismatch() {
         let mut job = sample_fhe_job_spec();
         job.policy_name = "fhe_policy_other".parse().expect("valid name");
@@ -14652,6 +14980,134 @@ mod tests {
             error,
             SoracloudManifestError::InvalidField {
                 field: "policy_name",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fhe_job_spec_validate_for_execution_rejects_adversarial_budget_abuse() {
+        let policy = sample_fhe_execution_policy();
+        let param_set = sample_fhe_param_set();
+
+        let mut too_many_inputs = sample_fhe_job_spec();
+        for input_index in 3..=9 {
+            too_many_inputs.inputs.push(FheJobInputRefV1 {
+                state_key: format!("/state/health/patient-{input_index}"),
+                payload_bytes: NonZeroU64::new(2_048).expect("nonzero"),
+                commitment: sample_hash(u8::try_from(120 + input_index).expect("fits")),
+            });
+        }
+        let error = too_many_inputs
+            .validate_for_execution(&policy, &param_set)
+            .expect_err("jobs above policy input count must fail admission");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "inputs",
+                ..
+            }
+        ));
+
+        let mut depth_overflow = sample_fhe_job_spec();
+        depth_overflow.operation = FheJobOperationV1::Multiply;
+        depth_overflow.requested_multiplication_depth = 3;
+        let error = depth_overflow
+            .validate_for_execution(&policy, &param_set)
+            .expect_err("jobs above policy multiplication depth must fail admission");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "requested_multiplication_depth",
+                ..
+            }
+        ));
+
+        let mut rotation_overflow = sample_fhe_job_spec();
+        rotation_overflow.operation = FheJobOperationV1::RotateLeft;
+        rotation_overflow.inputs.truncate(1);
+        rotation_overflow.rotation_steps = 129;
+        let error = rotation_overflow
+            .validate_for_execution(&policy, &param_set)
+            .expect_err("jobs above policy rotation budget must fail admission");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "rotation_steps",
+                ..
+            }
+        ));
+
+        let mut bootstrap_overflow = sample_fhe_job_spec();
+        bootstrap_overflow.operation = FheJobOperationV1::Bootstrap;
+        bootstrap_overflow.inputs.truncate(1);
+        bootstrap_overflow.bootstrap_count = 2;
+        let error = bootstrap_overflow
+            .validate_for_execution(&policy, &param_set)
+            .expect_err("jobs above policy bootstrap budget must fail admission");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "bootstrap_count",
+                ..
+            }
+        ));
+
+        let mut input_payload_overflow = sample_fhe_job_spec();
+        input_payload_overflow.inputs[0].payload_bytes = NonZeroU64::new(131_073).expect("nonzero");
+        let error = input_payload_overflow
+            .validate_for_execution(&policy, &param_set)
+            .expect_err("inputs above ciphertext size policy must fail admission");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "inputs.payload_bytes",
+                ..
+            }
+        ));
+
+        let mut tight_policy = sample_fhe_execution_policy();
+        tight_policy.max_ciphertext_bytes = NonZeroU64::new(2_048).expect("nonzero");
+        tight_policy.max_plaintext_bytes = NonZeroU64::new(1_024).expect("nonzero");
+        let output_error = sample_fhe_job_spec()
+            .validate_for_execution(&tight_policy, &param_set)
+            .expect_err("deterministic output above ciphertext size policy must fail admission");
+        assert!(matches!(
+            output_error,
+            SoracloudManifestError::InvalidField {
+                field: "output_state_key",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fhe_job_spec_validate_for_execution_rejects_adversarial_parameter_claims() {
+        let policy = sample_fhe_execution_policy();
+        let param_set = sample_fhe_param_set();
+
+        let mut wrong_param_name = sample_fhe_job_spec();
+        wrong_param_name.param_set = "fhe_bfv_other".parse().expect("valid name");
+        let error = wrong_param_name
+            .validate_for_execution(&policy, &param_set)
+            .expect_err("job parameter name must match the execution policy");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "param_set",
+                ..
+            }
+        ));
+
+        let mut wrong_param_version = sample_fhe_job_spec();
+        wrong_param_version.param_set_version = NonZeroU32::new(3).expect("nonzero");
+        let error = wrong_param_version
+            .validate_for_execution(&policy, &param_set)
+            .expect_err("job parameter version must match the execution policy");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "param_set_version",
                 ..
             }
         ));

@@ -18724,6 +18724,9 @@ mod tests {
         let mut world = World::with([domain], [account], []);
         let block_key =
             Name::from_str("sequential_rejected_block_pipeline_trigger").expect("metadata key");
+        let wrong_block_status_key =
+            Name::from_str("sequential_wrong_committed_block_pipeline_trigger")
+                .expect("metadata key");
         let rejected_key =
             Name::from_str("sequential_rejected_tx_pipeline_trigger").expect("metadata key");
         let approved_key =
@@ -18784,6 +18787,15 @@ mod tests {
             "sequential_rejected_block_approved",
             block_key.clone(),
             PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
+        );
+        add_pipeline_metadata_trigger(
+            &mut world,
+            &authority,
+            "sequential_rejected_block_wrong_committed",
+            wrong_block_status_key.clone(),
+            PipelineEventFilterBox::from(
+                BlockEventFilter::new().for_status(BlockStatus::Committed),
+            ),
         );
         add_pipeline_metadata_trigger(
             &mut world,
@@ -18894,6 +18906,7 @@ mod tests {
         );
         let (
             block_value,
+            wrong_block_status_value,
             rejected_value,
             approved_value,
             wrong_rejected_value,
@@ -18906,6 +18919,11 @@ mod tests {
             .map_account(&authority, |account| {
                 (
                     account.value().metadata().get(&block_key).cloned(),
+                    account
+                        .value()
+                        .metadata()
+                        .get(&wrong_block_status_key)
+                        .cloned(),
                     account.value().metadata().get(&rejected_key).cloned(),
                     account.value().metadata().get(&approved_key).cloned(),
                     account.value().metadata().get(&wrong_rejected_key).cloned(),
@@ -18921,6 +18939,10 @@ mod tests {
             })
             .expect("authority account exists");
         assert_eq!(block_value, Some(Json::new("ok")));
+        assert_eq!(
+            wrong_block_status_value, None,
+            "approved sequential block must not match a committed block filter"
+        );
         assert_eq!(rejected_value, Some(Json::new("ok")));
         assert_eq!(
             approved_value, None,

@@ -3063,6 +3063,76 @@ pub struct IdentifierResolveResponseDto {
     pub attestation: RamLfeReceiptAttestationDto,
 }
 
+#[cfg(all(test, feature = "app_api"))]
+mod ram_lfe_encrypted_only_request_dto_tests {
+    use super::*;
+
+    #[test]
+    fn ram_lfe_execute_request_rejects_legacy_plaintext_fields() {
+        let error = norito::json::from_str::<RamLfeExecuteRequestDto>(
+            r#"{"encrypted_input":"ciphertext","input_hex":"74657374"}"#,
+        )
+        .expect_err("RAM-LFE execute requests must reject plaintext input_hex");
+        assert!(error.to_string().contains("input_hex"));
+
+        let error = norito::json::from_str::<RamLfeExecuteRequestDto>(
+            r#"{"encrypted_input":"ciphertext","plaintext":"test"}"#,
+        )
+        .expect_err("RAM-LFE execute requests must reject plaintext aliases");
+        assert!(error.to_string().contains("plaintext"));
+    }
+
+    #[test]
+    fn ram_lfe_execute_request_rejects_missing_or_non_string_ciphertext() {
+        let error = norito::json::from_str::<RamLfeExecuteRequestDto>(r#"{}"#)
+            .expect_err("encrypted input is mandatory");
+        assert!(error.to_string().contains("encrypted_input"));
+
+        let error = norito::json::from_str::<RamLfeExecuteRequestDto>(r#"{"encrypted_input":123}"#)
+            .expect_err("encrypted input must be a string envelope");
+        assert!(error.to_string().contains("string"));
+
+        let error = norito::json::from_str::<RamLfeExecuteRequestDto>(r#"["ciphertext"]"#)
+            .expect_err("RAM-LFE execute request must be a JSON object");
+        assert!(error.to_string().contains("object"));
+    }
+
+    #[test]
+    fn identifier_resolve_request_rejects_legacy_plaintext_fields() {
+        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
+            r#"{"policy_id":"policy","encrypted_input":"ciphertext","input_hex":"74657374"}"#,
+        )
+        .expect_err("identifier resolution must reject plaintext input_hex");
+        assert!(error.to_string().contains("input_hex"));
+
+        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
+            r#"{"policy_id":"policy","encrypted_input":"ciphertext","identifier":"alice"}"#,
+        )
+        .expect_err("identifier resolution must reject plaintext identifier aliases");
+        assert!(error.to_string().contains("identifier"));
+    }
+
+    #[test]
+    fn identifier_resolve_request_requires_opening_and_encrypted_input() {
+        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
+            r#"{"policy_id":"policy","encrypted_input":"ciphertext"}"#,
+        )
+        .expect_err("identifier resolution requires an external output opening");
+        assert!(error.to_string().contains("output_opening"));
+
+        let error =
+            norito::json::from_str::<IdentifierResolveRequestDto>(r#"{"policy_id":"policy"}"#)
+                .expect_err("encrypted input is mandatory");
+        assert!(error.to_string().contains("encrypted_input"));
+
+        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
+            r#"{"encrypted_input":"ciphertext"}"#,
+        )
+        .expect_err("policy id is mandatory");
+        assert!(error.to_string().contains("policy_id"));
+    }
+}
+
 #[cfg(feature = "app_api")]
 #[derive(
     Clone,

@@ -270,6 +270,24 @@ test("resolveIdentifier requires encrypted input and output opening", async () =
       }),
     (error) => error instanceof ValidationError,
   );
+  await assert.rejects(
+    () =>
+      client.resolveIdentifier({
+        policyId: POLICY_ID,
+        encryptedInput: "ABC",
+        outputOpening: sampleOutputOpening(),
+      }),
+    (error) => error instanceof ValidationError,
+  );
+  await assert.rejects(
+    () =>
+      client.resolveIdentifier({
+        policyId: POLICY_ID,
+        encryptedInput: "ABCD",
+        outputOpening: null,
+      }),
+    (error) => error instanceof ValidationError,
+  );
 });
 
 test("encryptIdentifierInputForPolicy builds deterministic BFV Norito envelopes", () => {
@@ -513,22 +531,51 @@ test("issueIdentifierClaimReceipt accepts account aliases on account-id paths", 
 });
 
 test("buildIdentifierRequestForPolicy rejects plaintext request bodies", () => {
-  assert.throws(
-    () =>
-      buildIdentifierRequestForPolicy(
-        {
-          policy_id: POLICY_ID,
-          owner: ACCOUNT_ID,
-          active: true,
-          normalization: "phone_e164",
-          resolver_public_key: "ed25519:ed0120" + "11".repeat(32),
-          backend: "bfv-programmed-sha3-256-v1",
-          input_encryption: "bfv-v1",
-        },
-        { input: " +1 (555) 123-4567 ", outputOpening: sampleOutputOpening() },
-      ),
-    ValidationError,
-  );
+  const policy = {
+    policy_id: POLICY_ID,
+    owner: ACCOUNT_ID,
+    active: true,
+    normalization: "phone_e164",
+    resolver_public_key: "ed25519:ed0120" + "11".repeat(32),
+    backend: "bfv-programmed-sha3-256-v1",
+    input_encryption: "bfv-v1",
+  };
+  const opening = sampleOutputOpening();
+  const cases = [
+    {
+      name: "plaintext input without client-side encryption",
+      options: { input: " +1 (555) 123-4567 ", outputOpening: opening },
+    },
+    {
+      name: "both plaintext and encrypted inputs",
+      options: {
+        input: " +1 (555) 123-4567 ",
+        encryptedInput: "ABCD",
+        encrypt: true,
+        outputOpening: opening,
+      },
+    },
+    {
+      name: "seed with pre-encrypted input",
+      options: { encryptedInput: "ABCD", seedHex: BFV_SEED_HEX, outputOpening: opening },
+    },
+    {
+      name: "missing output opening",
+      options: { encryptedInput: "ABCD" },
+    },
+    {
+      name: "legacy plaintext hex alias",
+      options: { encryptedInput: "ABCD", inputHex: "313233", outputOpening: opening },
+    },
+  ];
+
+  for (const { name, options } of cases) {
+    assert.throws(
+      () => buildIdentifierRequestForPolicy(policy, options),
+      ValidationError,
+      name,
+    );
+  }
 });
 
 test("getIdentifierClaimByReceiptHash returns null on 404", async () => {
