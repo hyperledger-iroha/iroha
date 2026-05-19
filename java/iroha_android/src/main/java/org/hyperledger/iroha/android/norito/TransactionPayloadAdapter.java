@@ -14,6 +14,7 @@ import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.norito.NoritoAdapters;
+import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
 import org.hyperledger.iroha.norito.NoritoHeader;
@@ -52,6 +53,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       NoritoAdapters.option(NoritoAdapters.uint(32));
   private static final TypeAdapter<Executable> EXECUTABLE_ADAPTER = new ExecutableAdapter();
   private static final TypeAdapter<Map<String, String>> METADATA_ADAPTER = new MetadataAdapter();
+  private static final String INSTRUCTION_BOX_SCHEMA = "iroha.data_model.isi.InstructionBox.v1";
 
   @Override
   public void encode(final NoritoEncoder encoder, final TransactionPayload value) {
@@ -85,6 +87,10 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     ttl.ifPresent(builder::setTimeToLiveMs);
     nonceRaw.ifPresent(value -> builder.setNonce(Math.toIntExact(value)));
     return builder.build();
+  }
+
+  static byte[] encodeInstructionBox(final InstructionBox instruction) {
+    return NoritoCodec.encode(instruction, INSTRUCTION_BOX_SCHEMA, new InstructionAdapter());
   }
 
   private static void encodeExecutable(final NoritoEncoder encoder, final Executable executable) {

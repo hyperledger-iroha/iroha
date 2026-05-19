@@ -266,6 +266,11 @@ class HttpClientTransport(
         return fetchJson(buildJsonPostRequest("/v1/contracts/call", body), ContractJsonParser::parseCallResponse, "contract call")
     }
 
+    override fun proposeMultisig(request: MultisigProposeRequest): CompletableFuture<MultisigResponse> {
+        val body = encodeJsonBody(buildMultisigProposePayload(request))
+        return fetchJson(buildJsonPostRequest("/v1/multisig/propose", body), ContractJsonParser::parseMultisigResponse, "multisig propose")
+    }
+
     fun getGovernanceContract(contractAddress: String): CompletableFuture<GovernanceContractResponse> {
         val normalizedAddress = normalizeNonBlank(contractAddress, "contractAddress")
         return fetchJson(
@@ -751,6 +756,35 @@ class HttpClientTransport(
             if (gasAssetId != null) normalized["gas_asset_id"] = normalizeNonBlank(gasAssetId, "gasAssetId")
             normalized["gas_limit"] = gasLimit
             return normalized
+        }
+
+        @JvmStatic internal fun buildMultisigProposePayload(request: MultisigProposeRequest): Map<String, Any> {
+            val hasAccountId = request.multisigAccountId != null
+            val hasAlias = request.multisigAccountAlias != null
+            require(hasAccountId != hasAlias) { "Exactly one of multisigAccountId or multisigAccountAlias must be provided" }
+            require(request.instructions.isNotEmpty()) { "instructions must not be empty" }
+
+            val payload = LinkedHashMap<String, Any>()
+            val accountId = request.multisigAccountId
+            val accountAlias = request.multisigAccountAlias
+            if (accountId != null) {
+                payload["multisig_account_id"] = normalizeNonBlank(accountId, "multisigAccountId")
+            } else {
+                payload["multisig_account_alias"] = normalizeNonBlank(accountAlias!!, "multisigAccountAlias")
+            }
+            payload["signer_account_id"] = normalizeNonBlank(request.signerAccountId, "signerAccountId")
+            if (request.publicKeyHex != null) payload["public_key_hex"] = normalizeHex32(request.publicKeyHex, "publicKeyHex")
+            if (request.signatureB64 != null) payload["signature_b64"] = normalizeRequiredBase64Payload(request.signatureB64, "signatureB64")
+            if (request.creationTimeMs != null) {
+                require(request.creationTimeMs >= 0) { "creationTimeMs must be non-negative" }
+                payload["creation_time_ms"] = request.creationTimeMs
+            }
+            if (request.feeSponsor != null) payload["fee_sponsor"] = normalizeNonBlank(request.feeSponsor, "feeSponsor")
+            payload["instructions"] = request.instructions.mapIndexed { index, instruction ->
+                require(instruction.isNotEmpty()) { "instructions[$index] must not be empty" }
+                Base64.getEncoder().encodeToString(instruction)
+            }
+            return payload
         }
 
         @JvmStatic internal fun buildContractTargetSelector(contractAddress: String?, contractAlias: String?): Map<String, String> {

@@ -101,6 +101,28 @@ object ContractJsonParser {
     }
 
     @JvmStatic
+    fun parseMultisigResponse(payload: ByteArray): MultisigResponse {
+        val root = expectObject(parse(payload, "multisig response"), "multisig response")
+        return MultisigResponse(
+            ok = root["ok"] == true,
+            resolvedMultisigAccountId = requiredString(root["resolved_multisig_account_id"], "multisig response.resolved_multisig_account_id"),
+            submitted = optionalBoolean(root["submitted"], "multisig response.submitted"),
+            proposalId = optionalString(root["proposal_id"]),
+            instructionsHash = if (root.containsKey("instructions_hash") && root["instructions_hash"] != null)
+                HttpClientTransport.normalizeHex32(requiredString(root["instructions_hash"], "multisig response.instructions_hash"), "instructionsHash")
+            else null,
+            txHashHex = if (root.containsKey("tx_hash_hex") && root["tx_hash_hex"] != null)
+                HttpClientTransport.normalizeHex32(requiredString(root["tx_hash_hex"], "multisig response.tx_hash_hex"), "txHashHex")
+            else null,
+            executedTxHashHex = if (root.containsKey("executed_tx_hash_hex") && root["executed_tx_hash_hex"] != null)
+                HttpClientTransport.normalizeHex32(requiredString(root["executed_tx_hash_hex"], "multisig response.executed_tx_hash_hex"), "executedTxHashHex")
+            else null,
+            creationTimeMs = asOptionalLong(root["creation_time_ms"], "multisig response.creation_time_ms"),
+            signingMessageB64 = optionalBase64(root["signing_message_b64"], "multisig response.signing_message_b64"),
+        )
+    }
+
+    @JvmStatic
     fun parseGovernanceContractResponse(payload: ByteArray): GovernanceContractResponse {
         val root = expectObject(parse(payload, "governance contract response"), "governance contract response")
         return GovernanceContractResponse(
@@ -135,6 +157,12 @@ object ContractJsonParser {
     private fun optionalString(value: Any?): String? {
         if (value == null) return null
         return if (value is String) value.trim().ifEmpty { null } else value.toString()
+    }
+
+    private fun optionalBoolean(value: Any?, path: String): Boolean? {
+        if (value == null) return null
+        check(value is Boolean) { "$path must be a boolean" }
+        return value
     }
 
     private fun asLong(value: Any?, path: String): Long {

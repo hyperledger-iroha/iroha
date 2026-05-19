@@ -43,6 +43,7 @@ import {
   getCurveEntryByPublicKeyMulticodec,
   publicKeyMulticodecForCurveId,
 } from "./curveRegistry.js";
+import { noritoEncodeMultisigProposeRequest } from "./norito.js";
 
 const DEFAULT_PAGE_SIZE = 100;
 
@@ -6932,6 +6933,32 @@ export class ToriiClient {
       throw new Error("contract call endpoint returned no payload");
     }
     return normalizeContractCallResponse(body);
+  }
+
+  /**
+   * Propose a generic multisig instruction batch (`POST /v1/multisig/propose`).
+   * Sends the whole request DTO as native Norito (`application/x-norito`).
+   * @param {object} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async proposeMultisig(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "proposeMultisig");
+    const payload = normalizeMultisigProposeRequest(request);
+    const response = await this._request("POST", "/v1/multisig/propose", {
+      headers: {
+        "Content-Type": "application/x-norito",
+        Accept: "application/json",
+      },
+      body: noritoEncodeMultisigProposeRequest(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200, 202]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("multisig propose endpoint returned no payload");
+    }
+    return normalizeMultisigContractCallResponse(body, "multisig propose response");
   }
 
   /**
@@ -19359,6 +19386,89 @@ function normalizeMultisigSelectorOnlyRequest(input, context) {
   return normalizeMultisigAccountSelector(input, context);
 }
 
+function normalizeMultisigProposeInstructionInput(value, context) {
+  if (
+    typeof value === "string" ||
+    Buffer.isBuffer(value) ||
+    ArrayBuffer.isView(value) ||
+    value instanceof ArrayBuffer ||
+    Array.isArray(value)
+  ) {
+    return value;
+  }
+  if (value && typeof value === "object") {
+    return value;
+  }
+  throw createValidationError(
+    ValidationErrorCode.INVALID_OBJECT,
+    `${context} must be a JSON instruction object or native Norito instruction payload input`,
+    normalizeErrorPath(context),
+  );
+}
+
+function normalizeMultisigProposeRequest(input) {
+  const record = ensureRecord(input, "proposeMultisig request");
+  const selector = normalizeMultisigAccountSelector(record, "proposeMultisig request");
+  const instructionsValue = pickOverride(record, "instructions", "instructions");
+  if (!Array.isArray(instructionsValue) || instructionsValue.length === 0) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      "proposeMultisig request.instructions must be a non-empty array",
+      "proposeMultisig.request.instructions",
+    );
+  }
+  const payload = {
+    ...selector,
+    signer_account_id: ToriiClient._normalizeAccountId(
+      record.signer_account_id ?? record.signerAccountId,
+      "proposeMultisig request.signer_account_id",
+    ),
+    instructions: instructionsValue.map((instruction, index) =>
+      normalizeMultisigProposeInstructionInput(
+        instruction,
+        `proposeMultisig request.instructions[${index}]`,
+      ),
+    ),
+  };
+  const privateKey = normalizeOptionalDetachedPrivateKey(
+    record,
+    "proposeMultisig request",
+  );
+  if (privateKey !== null) {
+    payload.private_key = privateKey;
+  }
+  const publicKeyHex = pickOverride(record, "public_key_hex", "publicKeyHex");
+  if (publicKeyHex !== undefined && publicKeyHex !== null) {
+    payload.public_key_hex = normalizeHex32String(
+      publicKeyHex,
+      "proposeMultisig request.public_key_hex",
+    );
+  }
+  const signatureB64 = pickOverride(record, "signature_b64", "signatureB64");
+  if (signatureB64 !== undefined && signatureB64 !== null) {
+    payload.signature_b64 = normalizeRequiredBase64Payload(
+      signatureB64,
+      "proposeMultisig request.signature_b64",
+    );
+  }
+  const creationTimeMs = pickOverride(record, "creation_time_ms", "creationTimeMs");
+  if (creationTimeMs !== undefined && creationTimeMs !== null) {
+    payload.creation_time_ms = ToriiClient._normalizeUnsignedInteger(
+      creationTimeMs,
+      "proposeMultisig request.creation_time_ms",
+      { allowZero: true },
+    );
+  }
+  const feeSponsor = pickOverride(record, "fee_sponsor", "feeSponsor");
+  if (feeSponsor !== undefined && feeSponsor !== null) {
+    payload.fee_sponsor = ToriiClient._normalizeAccountId(
+      feeSponsor,
+      "proposeMultisig request.fee_sponsor",
+    );
+  }
+  return payload;
+}
+
 function normalizeMultisigContractCallProposeRequest(input) {
   const record = ensureRecord(input, "proposeMultisigContractCall request");
   const selector = normalizeMultisigAccountSelector(
@@ -19524,6 +19634,10 @@ function normalizeMultisigContractCallResponse(
       record.instructions_hash === undefined || record.instructions_hash === null
         ? null
         : normalizeHex32String(record.instructions_hash, `${context}.instructions_hash`),
+    tx_hash_hex:
+      record.tx_hash_hex === undefined || record.tx_hash_hex === null
+        ? null
+        : normalizeHex32String(record.tx_hash_hex, `${context}.tx_hash_hex`),
     executed_tx_hash_hex:
       record.executed_tx_hash_hex === undefined || record.executed_tx_hash_hex === null
         ? null

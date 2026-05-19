@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.tx.norito
 
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
+import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 
@@ -35,6 +36,16 @@ class NoritoJavaCodecAdapter @JvmOverloads constructor(
 
     companion object {
         private const val DEFAULT_SCHEMA = "iroha.android.transaction.Payload.v1"
+
+        @JvmStatic
+        @Throws(NoritoException::class)
+        fun encodeInstructionBox(instruction: InstructionBox): ByteArray {
+            try {
+                return TransactionPayloadAdapter.encodeInstructionBox(instruction)
+            } catch (ex: Exception) {
+                throw NoritoException("Failed to encode Norito instruction box", ex)
+            }
+        }
 
         private fun hasHeader(encoded: ByteArray): Boolean {
             if (encoded.size < NoritoHeader.HEADER_LENGTH) return false

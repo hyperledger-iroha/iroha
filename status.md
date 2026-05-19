@@ -11605,3 +11605,38 @@ Last updated: 2026-05-19
   `21.4 us`). The final current-code batch rerun kept the precomputed path
   fast at `557.5 us`, while the missing-digest case was noisy under workspace
   load (`45.5 ms`).
+
+## 2026-05-19 - Multisig Propose Norito SDK Devex
+
+- Documented and tested the existing Torii `/v1/multisig/propose` JSON path
+  that accepts base64 native Norito `InstructionBox` frames in the
+  `instructions` array, alongside structured JSON instruction objects. The
+  OpenAPI schema now advertises the instruction `oneOf` shape and the multisig
+  POST operations document `application/x-norito` request bodies.
+- Added SDK helpers for native instruction bytes:
+  - Rust `Client::post_multisig_propose`
+  - Swift `ToriiMultisigProposeRequest` / `proposeMultisig`
+  - Kotlin and Java Android `MultisigProposeRequest` / `proposeMultisig`
+  - C# `ToriiMultisigProposeRequest` / `ProposeMultisigAsync` plus
+    `TransactionInstruction.EncodeInstructionBoxBase64`
+  - Python `iroha_torii_client.ToriiClient.propose_multisig`, with
+    `iroha_python` re-exporting the shared `MultisigResponse` type for its
+    inherited Torii helper surface
+  - JavaScript `ToriiClient.proposeMultisig` and
+    `buildMultisigProposeRequest`
+- Focused validation passed:
+  - `cargo test -p iroha_torii --lib multisig_propose_documents_native_norito_request_body -- --nocapture`
+  - `cargo test -p iroha_torii --lib multisig_generic_propose_json --features app_api -- --nocapture`
+  - `cargo test -p iroha --lib post_multisig_propose_encodes_instruction_boxes_as_native_norito_json -- --nocapture`
+  - `swift test --filter ToriiClientTests/testProposeMultisig`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+  - `npm run build:native`
+  - `npm run build:dist`
+  - `node --test --test-name-pattern "proposeMultisig" test/toriiClient.test.js`
+  - `python3 -m compileall python/iroha_torii_client`
+  - `python3 -m compileall python/iroha_python/src/iroha_python python/iroha_python/tests/test_address_format.py`
+- Python focused validation could not run because the local Python 3.14
+  environment does not have `pytest` installed (`No module named pytest`).
+- C# focused validation could not run because this environment does not have
+  the `dotnet` CLI installed.

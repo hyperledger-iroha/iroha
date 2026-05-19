@@ -90,7 +90,11 @@ export {
   buildHandleRefreshRequest,
   computeAxtBinding,
 } from "./axt.js";
-export { noritoEncodeInstruction, noritoDecodeInstruction } from "./norito.js";
+export {
+  noritoEncodeInstruction,
+  noritoDecodeInstruction,
+  noritoEncodeMultisigProposeRequest,
+} from "./norito.js";
 export {
   buildGatewayRequest,
   computePayloadHashLiteral,
@@ -216,6 +220,7 @@ export {
   buildProposeMultisigInstruction,
   buildProposeMultisigExecuteTriggerInstruction,
   buildProposeMultisigExecuteTriggerNorito,
+  buildMultisigProposeRequest,
   buildMultisigContractCallProposeRequest,
   buildMultisigContractCallApproveRequest,
   buildTransferAssetInstruction,

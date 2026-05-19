@@ -2,11 +2,28 @@ namespace Hyperledger.Iroha.Transactions;
 
 public abstract record class TransactionInstruction
 {
+    private static readonly byte[] InstructionBoxSchemaHash = Convert.FromHexString("862a7d77075d4d23ff6c1261db027811");
+
     internal abstract string WireId { get; }
 
     internal abstract string TypeName { get; }
 
     internal abstract byte[] EncodePayload(TransactionEncodingContext context);
+
+    public byte[] EncodeInstructionBox(string authorityAccountId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(authorityAccountId);
+
+        var context = new TransactionEncodingContext(authorityAccountId);
+        return Hyperledger.Iroha.Norito.NoritoCodec.EncodeWithSchemaHash(
+            InstructionBoxSchemaHash,
+            context.EncodeInstruction(this));
+    }
+
+    public string EncodeInstructionBoxBase64(string authorityAccountId)
+    {
+        return Convert.ToBase64String(EncodeInstructionBox(authorityAccountId));
+    }
 
     public static TransferAssetInstruction TransferAsset(string assetDefinitionId, string quantity, string destinationAccountId)
     {

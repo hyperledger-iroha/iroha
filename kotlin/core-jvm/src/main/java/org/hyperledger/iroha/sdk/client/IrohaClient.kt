@@ -46,6 +46,20 @@ interface IrohaClient {
     }
 
     /**
+     * Proposes a generic multisig instruction batch through Torii's `/v1/multisig/propose`.
+     *
+     * Implementations should encode request instructions as base64 native Norito `InstructionBox`
+     * frames in the JSON body.
+     */
+    fun proposeMultisig(request: MultisigProposeRequest): CompletableFuture<MultisigResponse> {
+        val future = CompletableFuture<MultisigResponse>()
+        future.completeExceptionally(
+            UnsupportedOperationException("proposeMultisig not supported by this client")
+        )
+        return future
+    }
+
+    /**
      * Resolves an account alias to its underlying Iroha account id via Torii's
      * `/v1/aliases/resolve` endpoint.
      *

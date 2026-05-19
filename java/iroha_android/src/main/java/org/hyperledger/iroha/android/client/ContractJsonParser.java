@@ -133,6 +133,33 @@ public final class ContractJsonParser {
         optionalBase64(root.get("signing_message_b64"), "contract call response.signing_message_b64"));
   }
 
+  public static MultisigResponse parseMultisigResponse(final byte[] payload) {
+    final Map<String, Object> root =
+        expectObject(parse(payload, "multisig response"), "multisig response");
+    return new MultisigResponse(
+        Boolean.TRUE.equals(root.get("ok")),
+        requiredString(root.get("resolved_multisig_account_id"), "multisig response.resolved_multisig_account_id"),
+        optionalBoolean(root.get("submitted"), "multisig response.submitted"),
+        optionalString(root.get("proposal_id")),
+        root.containsKey("instructions_hash") && root.get("instructions_hash") != null
+            ? HttpClientTransport.normalizeHex32(
+                requiredString(root.get("instructions_hash"), "multisig response.instructions_hash"),
+                "instructionsHash")
+            : null,
+        root.containsKey("tx_hash_hex") && root.get("tx_hash_hex") != null
+            ? HttpClientTransport.normalizeHex32(
+                requiredString(root.get("tx_hash_hex"), "multisig response.tx_hash_hex"),
+                "txHashHex")
+            : null,
+        root.containsKey("executed_tx_hash_hex") && root.get("executed_tx_hash_hex") != null
+            ? HttpClientTransport.normalizeHex32(
+                requiredString(root.get("executed_tx_hash_hex"), "multisig response.executed_tx_hash_hex"),
+                "executedTxHashHex")
+            : null,
+        asOptionalLong(root.get("creation_time_ms"), "multisig response.creation_time_ms"),
+        optionalBase64(root.get("signing_message_b64"), "multisig response.signing_message_b64"));
+  }
+
   public static GovernanceContractResponse parseGovernanceContractResponse(final byte[] payload) {
     final Map<String, Object> root =
         expectObject(parse(payload, "governance contract response"), "governance contract response");
@@ -181,6 +208,16 @@ public final class ContractJsonParser {
     final String string = value instanceof String ? (String) value : String.valueOf(value);
     final String trimmed = string.trim();
     return trimmed.isEmpty() ? null : trimmed;
+  }
+
+  private static Boolean optionalBoolean(final Object value, final String path) {
+    if (value == null) {
+      return null;
+    }
+    if (!(value instanceof Boolean)) {
+      throw new IllegalStateException(path + " must be a boolean");
+    }
+    return (Boolean) value;
   }
 
   private static long asLong(final Object value, final String path) {

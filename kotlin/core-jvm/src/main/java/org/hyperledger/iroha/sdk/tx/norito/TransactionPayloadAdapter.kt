@@ -16,6 +16,7 @@ import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
+import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
@@ -388,8 +389,12 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
         private val NONCE_ADAPTER: TypeAdapter<Optional<Long>> = NoritoAdapters.option(NoritoAdapters.uint(32))
         private val EXECUTABLE_ADAPTER: TypeAdapter<Executable> = ExecutableAdapter()
         private val METADATA_ADAPTER: TypeAdapter<Map<String, String>> = MetadataAdapter()
+        private const val INSTRUCTION_BOX_SCHEMA = "iroha.data_model.isi.InstructionBox.v1"
 
         private val HEX_DIGITS = "0123456789ABCDEF".toCharArray()
+
+        internal fun encodeInstructionBox(value: InstructionBox): ByteArray =
+            NoritoCodec.encode(value, INSTRUCTION_BOX_SCHEMA, InstructionAdapter())
 
         private fun <T> encodeSizedField(encoder: NoritoEncoder, adapter: TypeAdapter<T>, value: T) {
             val child = encoder.childEncoder()

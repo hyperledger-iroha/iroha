@@ -325,6 +325,75 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun proposeMultisigPostsNativeNoritoInstructionPayloadsAndParsesResponse() {
+        val instructionBytes = byteArrayOf(1, 2, 3, 4)
+        val proposalId = "aa".repeat(32)
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = """
+                {
+                  "ok": true,
+                  "resolved_multisig_account_id": "multisig",
+                  "submitted": false,
+                  "proposal_id": "$proposalId",
+                  "instructions_hash": "$proposalId",
+                  "tx_hash_hex": null,
+                  "executed_tx_hash_hex": null,
+                  "creation_time_ms": 123,
+                  "signing_message_b64": "AQID"
+                }
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+
+        val response = transport.proposeMultisig(
+            MultisigProposeRequest(
+                multisigAccountAlias = "cbdc@banka",
+                signerAccountId = "alice",
+                instructions = listOf(instructionBytes),
+                creationTimeMs = 123,
+                feeSponsor = "fee-sponsor",
+            )
+        ).join()
+
+        assertTrue(response.ok)
+        assertEquals("multisig", response.resolvedMultisigAccountId)
+        assertEquals(false, response.submitted)
+        assertEquals(proposalId, response.instructionsHash)
+        assertEquals("AQID", response.signingMessageB64)
+
+        val request = executor.lastRequest
+        assertEquals("POST", request.method)
+        assertEquals("https://torii.example/api/v1/multisig/propose", request.uri.toString())
+        assertEquals("application/json", request.headers["Content-Type"]?.first())
+        @Suppress("UNCHECKED_CAST")
+        val payload = JsonParser.parse(readBody(request)) as Map<String, Any?>
+        assertEquals("cbdc@banka", payload["multisig_account_alias"])
+        assertEquals("alice", payload["signer_account_id"])
+        assertEquals("fee-sponsor", payload["fee_sponsor"])
+        assertEquals(123L, (payload["creation_time_ms"] as Number).toLong())
+        @Suppress("UNCHECKED_CAST")
+        val instructions = payload["instructions"] as List<String>
+        assertEquals(listOf(Base64.getEncoder().encodeToString(instructionBytes)), instructions)
+    }
+
+    @Test
+    fun proposeMultisigRejectsEmptyInstructionPayloads() {
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest(
+                    multisigAccountAlias = "cbdc@banka",
+                    signerAccountId = "alice",
+                    instructions = listOf(byteArrayOf()),
+                )
+            )
+        }
+    }
+
+    @Test
     fun callContractRejectsAmbiguousSelector() {
         val transport = HttpClientTransport.withExecutor(
             executor = CapturingExecutor(),

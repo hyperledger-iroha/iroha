@@ -317,6 +317,81 @@ pub struct MultisigProposalsListResponse {
 #[derive(
     Clone,
     Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Request payload for proposing a generic multisig instruction batch.
+pub struct MultisigProposeRequest {
+    /// Active concrete multisig account id.
+    #[norito(default)]
+    pub multisig_account_id: Option<iroha_data_model::account::AccountId>,
+    /// Stable multisig alias in canonical `name@domain.dataspace` or `name@dataspace` format.
+    #[norito(default)]
+    pub multisig_account_alias: Option<String>,
+    /// Signer account submitting this proposal participation.
+    pub signer_account_id: iroha_data_model::account::AccountId,
+    /// Optional Ed25519 public key (hex) used for detached submit.
+    #[norito(default)]
+    pub public_key_hex: Option<String>,
+    /// Optional detached Ed25519 signature (base64) over `signing_message_b64`.
+    #[norito(default)]
+    pub signature_b64: Option<String>,
+    /// Optional fixed creation timestamp for deterministic detached flows.
+    #[norito(default)]
+    pub creation_time_ms: Option<u64>,
+    /// Optional fee sponsor account literal forwarded to transaction metadata.
+    #[norito(default)]
+    pub fee_sponsor: Option<String>,
+    /// Instruction batch to wrap inside the multisig proposal.
+    pub instructions: Vec<iroha_data_model::isi::InstructionBox>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Response payload returned by multisig participation endpoints.
+pub struct MultisigResponse {
+    /// Whether processing succeeded.
+    pub ok: bool,
+    /// Active concrete multisig account id used after selector resolution.
+    pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
+    /// Whether a transaction was submitted.
+    #[norito(default)]
+    pub submitted: Option<bool>,
+    /// Stable proposal id when available.
+    #[norito(default)]
+    pub proposal_id: Option<String>,
+    /// Deterministic instructions hash when available.
+    #[norito(default)]
+    pub instructions_hash: Option<String>,
+    /// Submitted participation transaction hash when available.
+    #[norito(default)]
+    pub tx_hash_hex: Option<String>,
+    /// Executed transaction hash once quorum has executed.
+    #[norito(default)]
+    pub executed_tx_hash_hex: Option<String>,
+    /// Creation timestamp for detached signing workflows.
+    #[norito(default)]
+    pub creation_time_ms: Option<u64>,
+    /// Optional detached signing message bytes.
+    #[norito(default)]
+    pub signing_message_b64: Option<String>,
+}
+
+#[derive(
+    Clone,
+    Debug,
     Default,
     PartialEq,
     Eq,
@@ -4255,6 +4330,81 @@ mod evidence_http_tests {
             name.eq_ignore_ascii_case("content-type") && value == APPLICATION_JSON
         });
         assert!(has_content_type, "Content-Type header missing");
+    }
+
+    #[test]
+    fn post_multisig_propose_encodes_instruction_boxes_as_native_norito_json() {
+        use base64::Engine as _;
+        use iroha_data_model::prelude as dm;
+
+        let client = client_with_base_url(base_url());
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let multisig_account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let signer_account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let instruction: dm::InstructionBox =
+            dm::Log::new(dm::Level::INFO, "hello multisig".to_owned()).into();
+        let response = json_response(
+            StatusCode::OK,
+            &format!(
+                "{{\"ok\":true,\"resolved_multisig_account_id\":\"{multisig_account_id}\",\"submitted\":false,\"proposal_id\":\"proposal\",\"instructions_hash\":\"proposal\",\"tx_hash_hex\":null,\"executed_tx_hash_hex\":null,\"creation_time_ms\":123,\"signing_message_b64\":\"AQ==\"}}"
+            ),
+        );
+        let request = MultisigProposeRequest {
+            multisig_account_id: Some(multisig_account_id.clone()),
+            multisig_account_alias: None,
+            signer_account_id,
+            public_key_hex: None,
+            signature_b64: None,
+            creation_time_ms: Some(123),
+            fee_sponsor: None,
+            instructions: vec![instruction.clone()],
+        };
+
+        with_mock_http(respond_with(&snapshots, response), || {
+            let resp = client
+                .post_multisig_propose(&request)
+                .expect("post multisig propose");
+            assert!(resp.ok);
+            assert_eq!(resp.resolved_multisig_account_id, multisig_account_id);
+            assert_eq!(resp.submitted, Some(false));
+            assert_eq!(resp.signing_message_b64.as_deref(), Some("AQ=="));
+        });
+
+        let store = snapshots.lock().expect("lock snapshot store");
+        assert_eq!(store.len(), 1);
+        let snapshot = &store[0];
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot.url.as_str(),
+            "http://mock.local/v1/multisig/propose"
+        );
+        let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
+        let encoded_instruction = body["instructions"][0]
+            .as_str()
+            .expect("native instruction base64");
+        let instruction_bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded_instruction)
+            .expect("base64 instruction bytes");
+        let decoded_instruction: dm::InstructionBox =
+            norito::decode_from_bytes(&instruction_bytes).expect("native instruction box");
+        assert_eq!(
+            norito::to_bytes(&decoded_instruction).expect("encode decoded instruction"),
+            norito::to_bytes(&instruction).expect("encode original instruction")
+        );
+        assert!(
+            snapshot.headers.iter().any(|(name, value)| {
+                name.eq_ignore_ascii_case("content-type") && value == APPLICATION_JSON
+            }),
+            "Content-Type header missing"
+        );
+        assert!(
+            snapshot
+                .headers
+                .iter()
+                .any(|(name, value)| name.eq_ignore_ascii_case("accept")
+                    && value == APPLICATION_JSON),
+            "Accept header missing"
+        );
     }
 
     #[test]
@@ -8461,6 +8611,40 @@ impl Client {
         }
         norito::json::from_slice(resp.body())
             .map_err(|err| eyre!("failed to decode multisig proposals list response: {err}"))
+    }
+
+    /// Convenience: POST `/v1/multisig/propose` with a typed instruction batch.
+    ///
+    /// `InstructionBox` values are encoded in JSON as base64 native Norito frames,
+    /// which lets callers avoid manually shaping JSON instruction objects.
+    ///
+    /// # Errors
+    /// Returns an error if request construction, JSON serialization, the HTTP call,
+    /// or response decoding fails.
+    pub fn post_multisig_propose(
+        &self,
+        request: &MultisigProposeRequest,
+    ) -> Result<MultisigResponse> {
+        let body =
+            norito::json::to_vec(request).wrap_err("failed to encode multisig propose request")?;
+        let url = join_torii_url(&self.torii_url, "v1/multisig/propose");
+        let response = self
+            .default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_JSON)
+            .header("Accept", APPLICATION_JSON)
+            .body(body)
+            .build()?
+            .send()?;
+        if response.status() != StatusCode::OK {
+            return Err(ResponseReport::with_msg(
+                "failed to propose multisig instruction batch",
+                &response,
+            )
+            .unwrap_or_else(core::convert::identity)
+            .into());
+        }
+        norito::json::from_slice(response.body())
+            .map_err(|err| eyre!("failed to decode multisig propose response: {err}"))
     }
 
     /// Convenience: signed POST `/v1/multisig/approvals/list_for_authority` for the caller authority.
