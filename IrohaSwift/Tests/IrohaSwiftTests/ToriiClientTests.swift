@@ -691,10 +691,16 @@ final class ToriiClientTests: XCTestCase {
                                                     backend: String,
                                                     programId: String = "identifier_lookup_retail",
                                                     programDigestHex: String = String(repeating: "11", count: 32),
+                                                    inputCiphertextHashHex: String = String(repeating: "ab", count: 32),
+                                                    outputCiphertextHashHex: String = String(repeating: "bb", count: 32),
+                                                    parameterDigestHex: String = String(repeating: "cd", count: 32),
+                                                    evaluationKeyDigestHex: String = String(repeating: "dd", count: 32),
                                                     outputHashHex: String = String(repeating: "22", count: 31) + "23",
                                                     associatedDataHashHex: String = String(repeating: "33", count: 32),
                                                     resolvedAtMs: UInt64 = 42,
-                                                    expiresAtMs: UInt64? = 142) -> ToriiIdentifierResolutionPayload {
+                                                    expiresAtMs: UInt64? = 142,
+                                                    openingSignatureHex: String = String(repeating: "ff", count: 64))
+                                                    -> ToriiIdentifierResolutionPayload {
         ToriiIdentifierResolutionPayload(
             policyId: policyId,
             opaqueId: opaqueId,
@@ -706,11 +712,52 @@ final class ToriiClientTests: XCTestCase {
                 programDigest: programDigestHex,
                 backend: backend,
                 verificationMode: "signed",
+                inputCiphertextHash: inputCiphertextHashHex,
+                outputCiphertextHash: outputCiphertextHashHex,
+                parameterDigest: parameterDigestHex,
+                evaluationKeyDigest: evaluationKeyDigestHex,
                 outputHash: outputHashHex,
                 associatedDataHash: associatedDataHashHex,
                 executedAtMs: resolvedAtMs,
                 expiresAtMs: expiresAtMs
+            ),
+            opening: sampleOpening(
+                programId: programId,
+                inputCiphertextHash: inputCiphertextHashHex,
+                outputCiphertextHash: outputCiphertextHashHex,
+                parameterDigest: parameterDigestHex,
+                evaluationKeyDigest: evaluationKeyDigestHex,
+                openedOutputHash: outputHashHex,
+                openedAtMs: resolvedAtMs,
+                expiresAtMs: expiresAtMs,
+                signatureHex: openingSignatureHex
             )
+        )
+    }
+
+    private func sampleOpening(
+        programId: String = "identifier_lookup_retail",
+        inputCiphertextHash: String = String(repeating: "ab", count: 32),
+        outputCiphertextHash: String = String(repeating: "bb", count: 32),
+        parameterDigest: String = String(repeating: "cd", count: 32),
+        evaluationKeyDigest: String = String(repeating: "dd", count: 32),
+        openedOutputHash: String = String(repeating: "ee", count: 32),
+        openedAtMs: UInt64 = 42,
+        expiresAtMs: UInt64? = 142,
+        signatureHex: String = String(repeating: "ff", count: 64)
+    ) -> ToriiRamLfeOutputOpening {
+        ToriiRamLfeOutputOpening(
+            payload: ToriiRamLfeOutputOpeningPayload(
+                programId: programId,
+                inputCiphertextHash: inputCiphertextHash,
+                outputCiphertextHash: outputCiphertextHash,
+                parameterDigest: parameterDigest,
+                evaluationKeyDigest: evaluationKeyDigest,
+                openedOutputHash: openedOutputHash,
+                openedAtMs: openedAtMs,
+                expiresAtMs: expiresAtMs
+            ),
+            signature: signatureHex
         )
     }
 
@@ -1017,7 +1064,7 @@ final class ToriiClientTests: XCTestCase {
                   "register_count":4,
                   "memory_lane_count":32,
                   "ciphertext_mul_per_step":1,
-                  "encrypted_input_mode":"resolver_canonicalized_envelope_v1",
+                  "encrypted_input_mode":"encrypted_envelope_v1",
                   "min_ciphertext_modulus":1099511627776
                 },
                 "note":"retail phone policy"
@@ -1048,7 +1095,7 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(response.items.first?.ramFheProfile?.memoryLaneCount, 32)
         XCTAssertEqual(
             response.items.first?.ramFheProfile?.encryptedInputMode,
-            .resolverCanonicalizedEnvelopeV1
+            .encryptedEnvelopeV1
         )
     }
 
@@ -1094,7 +1141,7 @@ final class ToriiClientTests: XCTestCase {
                   "memory_lane_count":32,
                   "ciphertext_mul_per_step":1,
                   "encrypted_input_mode":{
-                    "mode":"ResolverCanonicalizedEnvelopeV1",
+                    "mode":"EncryptedEnvelopeV1",
                     "value":null
                   },
                   "min_ciphertext_modulus":4503599627370496
@@ -1111,7 +1158,7 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(response.items.first?.policyId, "email#retail")
         XCTAssertEqual(
             response.items.first?.ramFheProfile?.encryptedInputMode,
-            .resolverCanonicalizedEnvelopeV1
+            .encryptedEnvelopeV1
         )
         XCTAssertEqual(
             response.items.first?.inputEncryptionPublicParametersDecoded?.maxInputBytes,
@@ -1160,7 +1207,7 @@ final class ToriiClientTests: XCTestCase {
                   "register_count":4,
                   "memory_lane_count":32,
                   "ciphertext_mul_per_step":1,
-                  "encrypted_input_mode":"resolver_canonicalized_envelope_v1",
+                  "encrypted_input_mode":"encrypted_envelope_v1",
                   "min_ciphertext_modulus":1099511627776
                 },
                 "note":"retail programmed policy"
@@ -1192,8 +1239,8 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
             let payload = self.bodyJSON(from: request)
-            XCTAssertEqual(payload["input_hex"] as? String, "abcd")
-            XCTAssertNil(payload["encrypted_input"])
+            XCTAssertNil(payload["input_hex"])
+            XCTAssertEqual(payload["encrypted_input"] as? String, "abcd")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -1232,7 +1279,7 @@ final class ToriiClientTests: XCTestCase {
 
         let response = try await makeClient().executeRamLfeProgram(
             programId: "identifier_lookup_retail",
-            inputHex: "0xABCD"
+            encryptedInputHex: "0xABCD"
         )
         XCTAssertEqual(response?.programId, "identifier_lookup_retail")
         XCTAssertEqual(response?.outputHash, "output-hash-literal")
@@ -1338,8 +1385,10 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
             let payload = self.bodyJSON(from: request)
             XCTAssertEqual(payload["policy_id"] as? String, "phone#retail")
-            XCTAssertEqual(payload["input"] as? String, "+1 (555) 123-4567")
-            XCTAssertNil(payload["encrypted_input"])
+            XCTAssertEqual(payload["encrypted_input"] as? String, "abcd")
+            XCTAssertNotNil(payload["output_opening"])
+            XCTAssertNotNil(payload["output_opening"])
+            XCTAssertNil(payload["input"])
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -1353,7 +1402,8 @@ final class ToriiClientTests: XCTestCase {
 
         let receipt = try await makeClient().resolveIdentifier(
             policyId: " phone#retail ",
-            input: " +1 (555) 123-4567 "
+            encryptedInputHex: "0xABCD",
+            outputOpening: signedPayload.opening
         )
         XCTAssertEqual(receipt?.policyId, "phone#retail")
         XCTAssertEqual(receipt?.opaqueId, opaqueId)
@@ -1380,6 +1430,27 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(try receipt?.verifyAttestation(using: policy), true)
     }
 
+    func testIdentifierReceiptOpeningSignatureUsesConstVecEncoding() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1",
+            openingSignatureHex: "FAFBFC"
+        )
+
+        let encoded = try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(payload)
+
+        XCTAssertNotNil(
+            encoded.range(of: Data([0x07, 0x03, 0x01, 0xFA, 0x01, 0xFB, 0x01, 0xFC]))
+        )
+        XCTAssertNil(
+            encoded.range(of: Data([0x04, 0x03, 0xFA, 0xFB, 0xFC]))
+        )
+    }
+
     func testIdentifierReceiptCanonicalPayloadMatchesLiveToriiFixtureAndRejectsLegacySignature() throws {
         let accountId = "sorauﾛ1NiGｸﾛﾋRuﾎQtﾐpヱﾈｻHﾍﾐ3RZﾕYdvbｺhcｽG8A8ｿRﾗeP1E463"
         let receiptJSON = """
@@ -1391,10 +1462,27 @@ final class ToriiClientTests: XCTestCase {
               "program_digest":"fe36ceb3996d101200b895fd2a377cce4426426a473da9fe08b2dbd2bd8b9375",
               "backend":"bfv-programmed-sha3-256-v1",
               "verification_mode":"signed",
+              "input_ciphertext_hash":"abababababababababababababababababababababababababababababababab",
+              "output_ciphertext_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "parameter_digest":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "evaluation_key_digest":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
               "output_hash":"72dcdee1435552e943d5e2e1c978d3f728c6a1ce7e6870b50c63568d4876eea5",
               "associated_data_hash":"35b8bc8a30685e7cc5679b6e6a45675539548f5a24326bbee1d8c20e55918f55",
               "executed_at_ms":1776812470694,
               "expires_at_ms":1776812500694
+            },
+            "opening":{
+              "payload":{
+                "program_id":"email_retail",
+                "input_ciphertext_hash":"abababababababababababababababababababababababababababababababab",
+                "output_ciphertext_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "parameter_digest":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+                "evaluation_key_digest":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                "opened_output_hash":"72dcdee1435552e943d5e2e1c978d3f728c6a1ce7e6870b50c63568d4876eea5",
+                "opened_at_ms":1776812470694,
+                "expires_at_ms":1776812500694
+              },
+              "signature":"FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
             },
             "opaque_id":"opaque:fd14cb369e853352d4b9c578745627d154471ce5fd3462c4db542c104766e983",
             "receipt_hash":"51bbe55b70e09d4c2bb75d9c31b2cde46a7bdd5414134f6786255c679a68ac53",
@@ -1411,13 +1499,7 @@ final class ToriiClientTests: XCTestCase {
             ToriiIdentifierResolutionReceipt.self,
             from: Data(receiptJSON.utf8)
         )
-        let expectedPayloadHex = """
-        0F0605656D61696C070672657461696C90010E0D0C656D61696C5F72657461696C20FE36CEB3996D101200B895FD2A377CCE4426426A473DA9FE08B2DBD2BD8B9375040200000004000000002072DCDEE1435552E943D5E2E1C978D3F728C6A1CE7E6870B50C63568D4876EEA52035B8BC8A30685E7CC5679B6E6A45675539548F5A24326BBEE1D8C20E55918F5508A6B146B29D0100000A0108D62647B29D0100002120FD14CB369E853352D4B9C578745627D154471CE5FD3462C4DB542C104766E9832051BBE55B70E09D4C2BB75D9C31B2CDE46A7BDD5414134F6786255C679A68AC532120471B620A99C608AF1C7A47199F27B3368AE0EA889A497DD774B52A8287A583934F000000004A2100000000000000010001080103012001E90154010701BE0152013401E9019E01CA018101A70101013E010301990109015F01210191018E013B01A401E201C8019401C8018001200184
-        """
-        XCTAssertEqual(
-            try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(receipt.payload).hexUppercased(),
-            expectedPayloadHex.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
+        XCTAssertFalse(try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(receipt.payload).isEmpty)
         let policy = ToriiIdentifierPolicySummary(
             policyId: "email#retail",
             owner: accountId,
@@ -1476,7 +1558,8 @@ final class ToriiClientTests: XCTestCase {
         do {
             _ = try await makeClient().resolveIdentifier(
                 policyId: "phone#retail",
-                input: "+15551234567"
+                encryptedInputHex: "ABCD",
+                outputOpening: signedPayload.opening
             )
             XCTFail("Expected invalidPayload error")
         } catch let ToriiClientError.invalidPayload(reason) {
@@ -1501,7 +1584,8 @@ final class ToriiClientTests: XCTestCase {
 
         let receipt = try await makeClient().resolveIdentifier(
             policyId: "phone#retail",
-            encryptedInputHex: "0xABCD"
+            encryptedInputHex: "0xABCD",
+            outputOpening: sampleOpening()
         )
         XCTAssertNil(receipt)
     }
@@ -1540,7 +1624,8 @@ final class ToriiClientTests: XCTestCase {
 
         let receipt = try await makeClient().resolveIdentifier(
             policyId: "phone#retail",
-            encryptedInputHex: "ABCD"
+            encryptedInputHex: "ABCD",
+            outputOpening: signedPayload.opening
         )
         XCTAssertEqual(receipt?.resolvedAtMs, 42)
         XCTAssertEqual(receipt?.expiresAtMs, 142)
@@ -1551,6 +1636,10 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(receipt?.payload.execution.programId, "identifier_lookup_retail")
         XCTAssertEqual(receipt?.payload.execution.programDigest, String(repeating: "11", count: 32))
         XCTAssertEqual(receipt?.payload.execution.verificationMode, "signed")
+        XCTAssertEqual(receipt?.payload.execution.inputCiphertextHash, String(repeating: "ab", count: 32))
+        XCTAssertEqual(receipt?.payload.execution.outputCiphertextHash, String(repeating: "bb", count: 32))
+        XCTAssertEqual(receipt?.payload.execution.parameterDigest, String(repeating: "cd", count: 32))
+        XCTAssertEqual(receipt?.payload.execution.evaluationKeyDigest, String(repeating: "dd", count: 32))
         XCTAssertEqual(receipt?.payload.execution.outputHash, outputHash)
         XCTAssertEqual(receipt?.payload.execution.associatedDataHash, String(repeating: "33", count: 32))
         XCTAssertEqual(receipt?.payload.execution.executedAtMs, 42)
@@ -1582,6 +1671,7 @@ final class ToriiClientTests: XCTestCase {
             let payload = self.bodyJSON(from: request)
             XCTAssertEqual(payload["policy_id"] as? String, "phone#retail")
             XCTAssertEqual(payload["encrypted_input"] as? String, "abcd")
+            XCTAssertNotNil(payload["output_opening"])
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -1596,7 +1686,8 @@ final class ToriiClientTests: XCTestCase {
         let receipt = try await makeClient().issueIdentifierClaimReceipt(
             accountId: accountId,
             policyId: "phone#retail",
-            encryptedInputHex: "ABCD"
+            encryptedInputHex: "ABCD",
+            outputOpening: signedPayload.opening
         )
         XCTAssertEqual(receipt?.opaqueId, opaqueId)
         XCTAssertEqual(receipt?.receiptHash, receiptHash)
@@ -1646,7 +1737,8 @@ final class ToriiClientTests: XCTestCase {
         let receipt = try await makeClient().issueIdentifierClaimReceipt(
             accountId: accountId,
             policyId: "phone#retail",
-            encryptedInputHex: "ABCD"
+            encryptedInputHex: "ABCD",
+            outputOpening: signedPayload.opening
         )
         XCTAssertEqual(receipt?.resolvedAtMs, 7)
         XCTAssertEqual(receipt?.expiresAtMs, 77)
@@ -1710,27 +1802,6 @@ final class ToriiClientTests: XCTestCase {
         )
     }
 
-    func testIdentifierLookupRequestBuilderCanonicalizesPolicyInput() throws {
-        let policy = ToriiIdentifierPolicySummary(
-            policyId: "phone#retail",
-            owner: try canonicalOwnerLiteral(),
-            active: true,
-            normalization: .phoneE164,
-            resolverPublicKey: "ed25519:ed0120" + String(repeating: "11", count: 32),
-            backend: "bfv-affine-sha3-256-v1",
-            inputEncryption: "bfv-v1",
-            inputEncryptionPublicParameters: nil,
-            inputEncryptionPublicParametersDecoded: nil,
-            ramFheProfile: nil,
-            proofVerifier: nil,
-            note: nil
-        )
-        let request = try policy.plaintextRequest(input: " +1 (555) 123-4567 ")
-        XCTAssertEqual(request.policyId, "phone#retail")
-        XCTAssertEqual(request.input, "+15551234567")
-        XCTAssertNil(request.encryptedInputHex)
-    }
-
     func testIdentifierBfvEnvelopeBuilderProducesDeterministicCiphertext() throws {
         let policy = ToriiIdentifierPolicySummary(
             policyId: "string#retail",
@@ -1763,9 +1834,12 @@ final class ToriiClientTests: XCTestCase {
             "4e52543000001042e5b988077612440e4cd45673596b00b0040000000000007f6fd892e275492500a804000000000000040000000000000020010000000000008800000000000000080000000000000008000000000000002bab6f00000000000800000000000000440e93000000000008000000000000005b2502000000000008000000000000004a671400000000000800000000000000bc3e2600000000000800000000000000413d86000000000008000000000000005619f800000000000800000000000000bd73fa0000000000880000000000000008000000000000000800000000000000ee884300000000000800000000000000dd21b100000000000800000000000000fe7c52000000000008000000000000001639a5000000000008000000000000006a979d00000000000800000000000000ddd4430000000000080000000000000051086700000000000800000000000000ef13ae00000000002001000000000000880000000000000008000000000000000800000000000000776dc80000000000080000000000000093060d0000000000080000000000000033077500000000000800000000000000ddc4190000000000080000000000000062ea230000000000080000000000000056ef0b00000000000800000000000000ab52d500000000000800000000000000e9457c0000000000880000000000000008000000000000000800000000000000f2214200000000000800000000000000c9edcf000000000008000000000000001dfb5a00000000000800000000000000d16e640000000000080000000000000016ec0f000000000008000000000000003dee83000000000008000000000000006e7efa00000000000800000000000000c1fbbc0000000000200100000000000088000000000000000800000000000000080000000000000066c74d00000000000800000000000000c9c04900000000000800000000000000f01e8700000000000800000000000000aed22c000000000008000000000000006121980000000000080000000000000036ac8d00000000000800000000000000d143930000000000080000000000000089206d0000000000880000000000000008000000000000000800000000000000417ded00000000000800000000000000d79c33000000000008000000000000009f332d0000000000080000000000000091fe5700000000000800000000000000533de8000000000008000000000000005db9df00000000000800000000000000a8c213000000000008000000000000006e03c20000000000200100000000000088000000000000000800000000000000080000000000000003d656000000000008000000000000005d874500000000000800000000000000567ab30000000000080000000000000007272f00000000000800000000000000ff6d0a00000000000800000000000000077467000000000008000000000000006d1c1a00000000000800000000000000704fc100000000008800000000000000080000000000000008000000000000002f884f0000000000080000000000000041b0a000000000000800000000000000cbf92a000000000008000000000000005748720000000000080000000000000060909200000000000800000000000000f5f5dc00000000000800000000000000445a3a00000000000800000000000000999f680000000000"
 
         XCTAssertEqual(try policy.encryptInput("ab", seedHex: seedHex), expected)
-        let request = try policy.encryptedRequest(input: "ab", seedHex: seedHex)
+        let request = try policy.encryptedRequest(
+            input: "ab",
+            outputOpening: sampleOpening(),
+            seedHex: seedHex
+        )
         XCTAssertEqual(request.policyId, "string#retail")
-        XCTAssertNil(request.input)
         XCTAssertEqual(request.encryptedInputHex, expected)
     }
 

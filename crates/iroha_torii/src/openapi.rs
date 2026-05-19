@@ -3120,7 +3120,7 @@ fn identifier_paths() -> Map {
         Value::Object(json_post_operation(
             "Identifiers",
             "Resolve an identifier.",
-            "Resolve a normalized identifier input under a hidden-function policy and return the bound canonical account target when a live claim exists.",
+            "Resolve an encrypted identifier input under a hidden-function policy using a verified RAM-LFE output opening, then return the bound canonical account target when a live claim exists.",
             "#/components/schemas/IdentifierResolveRequest",
             "#/components/schemas/IdentifierResolveResponse",
             Vec::new(),
@@ -3152,7 +3152,7 @@ fn identifier_paths() -> Map {
             json_post_operation(
                 "Identifiers",
                 "Issue an identifier claim receipt.",
-                "Normalize a raw identifier input under a hidden-function policy and return an attested receipt that can be embedded into `ClaimIdentifier`.",
+                "Issue an attested identifier claim receipt from encrypted input and a verified RAM-LFE output opening that can be embedded into `ClaimIdentifier`.",
                 "#/components/schemas/IdentifierResolveRequest",
                 "#/components/schemas/IdentifierResolveResponse",
                 params,
@@ -3184,7 +3184,7 @@ fn ram_lfe_paths() -> Map {
             json_post_operation(
                 "RamLfe",
                 "Execute a RAM-LFE program.",
-                "Execute a RAM-LFE program from plaintext or BFV-encrypted input and return the stateless execution receipt.",
+                "Execute a RAM-LFE program from a BFV ciphertext envelope and return the encrypted output ciphertext plus stateless execution receipt.",
                 "#/components/schemas/RamLfeExecuteRequest",
                 "#/components/schemas/RamLfeExecuteResponse",
                 params,
@@ -8209,8 +8209,8 @@ fn openapi_schemas() -> Map {
         "BfvRamEncryptedInputMode".to_owned(),
         norito::json!({
             "type": "string",
-            "enum": ["resolver_canonicalized_envelope_v1"],
-            "description": "Canonicalization mode applied before the programmed RAM-FHE backend executes."
+            "enum": ["encrypted_envelope_v1"],
+            "description": "Encrypted-only RAM-FHE input envelope mode."
         }),
     );
     schemas.insert(
@@ -8265,6 +8265,7 @@ fn openapi_schemas() -> Map {
             "required": [
                 "policy_id",
                 "execution",
+                "opening",
                 "opaque_id",
                 "receipt_hash",
                 "uaid",
@@ -8278,6 +8279,9 @@ fn openapi_schemas() -> Map {
                 },
                 "execution": {
                     "$ref": "#/components/schemas/RamLfeExecutionReceiptPayload"
+                },
+                "opening": {
+                    "$ref": "#/components/schemas/RamLfeOutputOpening"
                 },
                 "opaque_id": {
                     "type": "string",
@@ -8299,6 +8303,75 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "RamLfeOutputOpeningPayload".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "program_id",
+                "input_ciphertext_hash",
+                "output_ciphertext_hash",
+                "parameter_digest",
+                "evaluation_key_digest",
+                "opened_output_hash",
+                "opened_at_ms"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "program_id": {
+                    "type": "string",
+                    "description": "RAM-LFE program identifier whose encrypted output was opened."
+                },
+                "input_ciphertext_hash": {
+                    "type": "string",
+                    "description": "Hash of the encrypted input envelope from the execution receipt."
+                },
+                "output_ciphertext_hash": {
+                    "type": "string",
+                    "description": "Hash of the encrypted output envelope from the execution receipt."
+                },
+                "parameter_digest": {
+                    "type": "string",
+                    "description": "Digest of the registered BFV parameter set used for execution."
+                },
+                "evaluation_key_digest": {
+                    "type": "string",
+                    "description": "Digest of the BFV evaluation-key bundle used for execution."
+                },
+                "opened_output_hash": {
+                    "type": "string",
+                    "description": "Hash of the plaintext output bytes opened by the external authority."
+                },
+                "opened_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Opening timestamp in milliseconds since Unix epoch."
+                },
+                "expires_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Optional opening expiry timestamp in milliseconds since Unix epoch."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeOutputOpening".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["payload", "signature"],
+            "additionalProperties": false,
+            "properties": {
+                "payload": {
+                    "$ref": "#/components/schemas/RamLfeOutputOpeningPayload"
+                },
+                "signature": {
+                    "type": "string",
+                    "description": "Hex-encoded signature from the configured output-opening authority."
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "RamLfeExecutionReceiptPayload".to_owned(),
         norito::json!({
             "type": "object",
@@ -8307,6 +8380,10 @@ fn openapi_schemas() -> Map {
                 "program_digest",
                 "backend",
                 "verification_mode",
+                "input_ciphertext_hash",
+                "output_ciphertext_hash",
+                "parameter_digest",
+                "evaluation_key_digest",
                 "output_hash",
                 "associated_data_hash",
                 "executed_at_ms"
@@ -8329,9 +8406,25 @@ fn openapi_schemas() -> Map {
                     "type": "string",
                     "description": "Receipt attestation mode (`signed` or `proof`)."
                 },
+                "input_ciphertext_hash": {
+                    "type": "string",
+                    "description": "Hash of the encrypted input envelope evaluated by the program."
+                },
+                "output_ciphertext_hash": {
+                    "type": "string",
+                    "description": "Hash of the encrypted output envelope produced by the program."
+                },
+                "parameter_digest": {
+                    "type": "string",
+                    "description": "Digest of the registered BFV parameter set used for execution."
+                },
+                "evaluation_key_digest": {
+                    "type": "string",
+                    "description": "Digest of the BFV evaluation-key bundle used for execution."
+                },
                 "output_hash": {
                     "type": "string",
-                    "description": "Hash of the plaintext output bytes."
+                    "description": "Hash of the encrypted output bytes; Torii execution never returns plaintext output."
                 },
                 "associated_data_hash": {
                     "type": "string",
@@ -8455,6 +8548,7 @@ fn openapi_schemas() -> Map {
                 "owner",
                 "active",
                 "resolver_public_key",
+                "output_opening_public_key",
                 "backend",
                 "verification_mode"
             ],
@@ -8475,6 +8569,10 @@ fn openapi_schemas() -> Map {
                 "resolver_public_key": {
                     "type": "string",
                     "description": "Public key used to verify RAM-LFE execution receipts."
+                },
+                "output_opening_public_key": {
+                    "type": "string",
+                    "description": "Public key used to verify externally signed RAM-LFE output openings."
                 },
                 "backend": {
                     "type": "string",
@@ -8534,15 +8632,12 @@ fn openapi_schemas() -> Map {
         "RamLfeExecuteRequest".to_owned(),
         norito::json!({
             "type": "object",
+            "required": ["encrypted_input"],
             "additionalProperties": false,
             "properties": {
-                "input_hex": {
-                    "type": "string",
-                    "description": "Hex-encoded plaintext input bytes. Supply exactly one of `input_hex` or `encrypted_input`."
-                },
                 "encrypted_input": {
                     "type": "string",
-                    "description": "Hex-encoded Norito BFV ciphertext envelope. Supply exactly one of `input_hex` or `encrypted_input`."
+                    "description": "Hex-encoded Norito BFV ciphertext envelope. Plaintext RAM-LFE inputs are rejected."
                 }
             }
         }),
@@ -8555,6 +8650,7 @@ fn openapi_schemas() -> Map {
                 "program_id",
                 "opaque_hash",
                 "receipt_hash",
+                "output_ciphertext",
                 "output_hash",
                 "associated_data_hash",
                 "executed_at_ms",
@@ -8576,9 +8672,13 @@ fn openapi_schemas() -> Map {
                     "type": "string",
                     "description": "Deterministic receipt hash returned by the RAM-LFE backend."
                 },
+                "output_ciphertext": {
+                    "type": "string",
+                    "description": "Hex-encoded Norito BFV ciphertext envelope produced by the RAM-LFE evaluator."
+                },
                 "output_hash": {
                     "type": "string",
-                    "description": "Hash of the plaintext output bytes."
+                    "description": "Hash of the encrypted output ciphertext bytes."
                 },
                 "associated_data_hash": {
                     "type": "string",
@@ -8620,7 +8720,7 @@ fn openapi_schemas() -> Map {
                 },
                 "output_hex": {
                     "type": "string",
-                    "description": "Optional hex-encoded plaintext output bytes to compare against `receipt.payload.output_hash`."
+                    "description": "Optional hex-encoded encrypted output ciphertext bytes to compare against `receipt.payload.output_hash`."
                 }
             }
         }),
@@ -8678,7 +8778,7 @@ fn openapi_schemas() -> Map {
         "IdentifierPolicySummary".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["policy_id", "owner", "active", "normalization", "resolver_public_key", "backend"],
+            "required": ["policy_id", "owner", "active", "normalization", "resolver_public_key", "output_opening_public_key", "backend"],
             "additionalProperties": false,
             "properties": {
                 "policy_id": {
@@ -8700,6 +8800,10 @@ fn openapi_schemas() -> Map {
                 "resolver_public_key": {
                     "type": "string",
                     "description": "Public key used to verify resolution receipts."
+                },
+                "output_opening_public_key": {
+                    "type": "string",
+                    "description": "Public key used to verify externally signed RAM-LFE output openings."
                 },
                 "backend": {
                     "type": "string",
@@ -8755,20 +8859,19 @@ fn openapi_schemas() -> Map {
         "IdentifierResolveRequest".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["policy_id"],
+            "required": ["policy_id", "encrypted_input", "output_opening"],
             "additionalProperties": false,
             "properties": {
                 "policy_id": {
                     "type": "string",
                     "description": "Identifier policy namespace literal (`<kind>#<business_rule>`)."
                 },
-                "input": {
-                    "type": "string",
-                    "description": "Plaintext identifier input. Supply exactly one of `input` or `encrypted_input`."
-                },
                 "encrypted_input": {
                     "type": "string",
-                    "description": "Hex-encoded Norito BFV ciphertext envelope. Supply exactly one of `input` or `encrypted_input`."
+                    "description": "Hex-encoded Norito BFV ciphertext envelope. Plaintext hidden-function inputs are rejected."
+                },
+                "output_opening": {
+                    "$ref": "#/components/schemas/RamLfeOutputOpening"
                 }
             }
         }),

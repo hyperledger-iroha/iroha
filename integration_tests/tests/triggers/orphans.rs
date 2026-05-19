@@ -1,6 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Orphaned trigger cleanup scenarios.
 
+use std::time::{Duration, Instant};
+
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
@@ -10,6 +12,9 @@ use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use tokio::task::spawn_blocking;
+
+const TRIGGER_STATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const TRIGGER_STATE_TIMEOUT: Duration = Duration::from_secs(30);
 
 async fn start_network(context: &'static str) -> eyre::Result<Option<sandbox::SerializedNetwork>> {
     sandbox::start_network_async_or_skip(NetworkBuilder::new(), context).await
@@ -30,6 +35,34 @@ async fn find_trigger(iroha: &Client, trigger_id: &TriggerId) -> eyre::Result<Op
             }))
     })
     .await?
+}
+
+async fn wait_for_trigger_state(
+    iroha: &Client,
+    trigger_id: &TriggerId,
+    expected_present: bool,
+    context: &str,
+) -> eyre::Result<Option<Trigger>> {
+    let deadline = Instant::now() + TRIGGER_STATE_TIMEOUT;
+    let mut last_observed = "trigger was not queried".to_owned();
+
+    while Instant::now() < deadline {
+        let observed = find_trigger(iroha, trigger_id).await?;
+        last_observed = if observed.is_some() {
+            "present".to_owned()
+        } else {
+            "absent".to_owned()
+        };
+        if observed.is_some() == expected_present {
+            return Ok(observed);
+        }
+
+        tokio::time::sleep(TRIGGER_STATE_POLL_INTERVAL).await;
+    }
+
+    Err(eyre::eyre!(
+        "timed out waiting for trigger {trigger_id} present={expected_present} after {context}; last_observed={last_observed}"
+    ))
 }
 
 async fn set_up_trigger(
@@ -102,7 +135,13 @@ async fn trigger_must_be_removed_on_action_authority_account_removal() -> eyre::
     };
     let iroha = network.client();
     let (_, the_one_who_fails, fail_on_account_events) = set_up_trigger(&network).await?;
-    let trigger = find_trigger(&iroha, &fail_on_account_events).await?;
+    let trigger = wait_for_trigger_state(
+        &iroha,
+        &fail_on_account_events,
+        true,
+        "trigger registration",
+    )
+    .await?;
     assert_eq!(
         trigger.as_ref().map(Identifiable::id),
         Some(&fail_on_account_events.clone())
@@ -113,7 +152,16 @@ async fn trigger_must_be_removed_on_action_authority_account_removal() -> eyre::
         move || client.submit_blocking(Unregister::account(the_one_who_fails))
     })
     .await??;
-    assert_eq!(find_trigger(&iroha, &fail_on_account_events).await?, None);
+    assert_eq!(
+        wait_for_trigger_state(
+            &iroha,
+            &fail_on_account_events,
+            false,
+            "authority account removal",
+        )
+        .await?,
+        None
+    );
     Ok(())
 }
 
@@ -128,7 +176,13 @@ async fn trigger_must_survive_action_authority_domain_removal() -> eyre::Result<
     };
     let iroha = network.client();
     let (failand, _, fail_on_account_events) = set_up_trigger(&network).await?;
-    let trigger = find_trigger(&iroha, &fail_on_account_events).await?;
+    let trigger = wait_for_trigger_state(
+        &iroha,
+        &fail_on_account_events,
+        true,
+        "trigger registration",
+    )
+    .await?;
     assert_eq!(
         trigger.as_ref().map(Identifiable::id),
         Some(&fail_on_account_events.clone())
@@ -140,10 +194,15 @@ async fn trigger_must_survive_action_authority_domain_removal() -> eyre::Result<
     })
     .await??;
     assert_eq!(
-        find_trigger(&iroha, &fail_on_account_events)
-            .await?
-            .as_ref()
-            .map(Identifiable::id),
+        wait_for_trigger_state(
+            &iroha,
+            &fail_on_account_events,
+            true,
+            "authority domain removal",
+        )
+        .await?
+        .as_ref()
+        .map(Identifiable::id),
         Some(&fail_on_account_events)
     );
     Ok(())

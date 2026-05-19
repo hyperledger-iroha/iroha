@@ -179,6 +179,13 @@ public final class IdentifierJsonParser {
     if (trimmed.isEmpty()) {
       throw new IllegalArgumentException(context + " must not be blank");
     }
+    if (trimmed.toLowerCase(Locale.ROOT).startsWith("hash:")) {
+      trimmed = trimmed.substring("hash:".length());
+    }
+    final int suffixIndex = trimmed.indexOf('#');
+    if (suffixIndex >= 0) {
+      trimmed = trimmed.substring(0, suffixIndex);
+    }
     if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
       trimmed = trimmed.substring(2);
     }
@@ -244,6 +251,9 @@ public final class IdentifierJsonParser {
         parseResolutionExecutionPayload(
             expectObject(root.get("execution"), context + ".execution"),
             context + ".execution"),
+        parseOutputOpening(
+            expectObject(root.get("opening"), context + ".opening"),
+            context + ".opening"),
         canonicalizeOpaque(
             requiredString(root.get("opaque_id"), context + ".opaque_id"),
             context + ".opaque_id"),
@@ -266,6 +276,18 @@ public final class IdentifierJsonParser {
         requiredString(root.get("verification_mode"), context + ".verification_mode")
             .toLowerCase(Locale.ROOT),
         canonicalizeHex32(
+            requiredString(root.get("input_ciphertext_hash"), context + ".input_ciphertext_hash"),
+            context + ".input_ciphertext_hash"),
+        canonicalizeHex32(
+            requiredString(root.get("output_ciphertext_hash"), context + ".output_ciphertext_hash"),
+            context + ".output_ciphertext_hash"),
+        canonicalizeHex32(
+            requiredString(root.get("parameter_digest"), context + ".parameter_digest"),
+            context + ".parameter_digest"),
+        canonicalizeHex32(
+            requiredString(root.get("evaluation_key_digest"), context + ".evaluation_key_digest"),
+            context + ".evaluation_key_digest"),
+        canonicalizeHex32(
             requiredString(root.get("output_hash"), context + ".output_hash"),
             context + ".output_hash"),
         canonicalizeHex32(
@@ -275,6 +297,44 @@ public final class IdentifierJsonParser {
         root.containsKey("expires_at_ms")
             ? asOptionalLong(root.get("expires_at_ms"), context + ".expires_at_ms")
             : null);
+  }
+
+  private static RamLfeOutputOpening parseOutputOpening(
+      final Map<String, Object> root, final String context) {
+    final Map<String, Object> payload = expectObject(root.get("payload"), context + ".payload");
+    return new RamLfeOutputOpening(
+        new RamLfeOutputOpeningPayload(
+            requiredString(payload.get("program_id"), context + ".payload.program_id"),
+            canonicalizeHex32(
+                requiredString(
+                    payload.get("input_ciphertext_hash"),
+                    context + ".payload.input_ciphertext_hash"),
+                context + ".payload.input_ciphertext_hash"),
+            canonicalizeHex32(
+                requiredString(
+                    payload.get("output_ciphertext_hash"),
+                    context + ".payload.output_ciphertext_hash"),
+                context + ".payload.output_ciphertext_hash"),
+            canonicalizeHex32(
+                requiredString(payload.get("parameter_digest"), context + ".payload.parameter_digest"),
+                context + ".payload.parameter_digest"),
+            canonicalizeHex32(
+                requiredString(
+                    payload.get("evaluation_key_digest"),
+                    context + ".payload.evaluation_key_digest"),
+                context + ".payload.evaluation_key_digest"),
+            canonicalizeHex32(
+                requiredString(
+                    payload.get("opened_output_hash"),
+                    context + ".payload.opened_output_hash"),
+                context + ".payload.opened_output_hash"),
+            asLong(payload.get("opened_at_ms"), context + ".payload.opened_at_ms"),
+            payload.containsKey("expires_at_ms")
+                ? asOptionalLong(payload.get("expires_at_ms"), context + ".payload.expires_at_ms")
+                : null),
+        canonicalizeHex(
+            requiredString(root.get("signature"), context + ".signature"),
+            context + ".signature"));
   }
 
   private static IdentifierReceiptAttestation parseReceiptAttestation(

@@ -65,6 +65,87 @@ fn poll_detached_metrics(rt: &Runtime, metrics_url: &reqwest::Url) -> Result<(f6
     Ok((prepared_seen, merged_seen, fallback_seen))
 }
 
+fn wait_for_role_permission_state(
+    client: &Client,
+    role_id: &RoleId,
+    permission: &Permission,
+    expected_present: bool,
+    context: &str,
+) {
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    const TIMEOUT: Duration = Duration::from_secs(30);
+
+    let deadline = Instant::now() + TIMEOUT;
+    let mut last_observed = "role was not queried".to_owned();
+
+    while Instant::now() < deadline {
+        match client.query(FindRoles::new()).execute_all() {
+            Ok(roles) => {
+                if let Some(role) = roles.into_iter().find(|role| role.id() == role_id) {
+                    let present = role
+                        .permissions()
+                        .any(|role_permission| role_permission == permission);
+                    last_observed = format!("role exists; permission_present={present}");
+                    if present == expected_present {
+                        return;
+                    }
+                } else {
+                    last_observed = "role not found".to_owned();
+                }
+            }
+            Err(err) => {
+                last_observed = format!("query failed: {err}");
+            }
+        }
+
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    panic!(
+        "timed out waiting for role permission state after {context}; expected_present={expected_present}; last_observed={last_observed}"
+    );
+}
+
+fn wait_for_account_permission_state(
+    client: &Client,
+    account_id: &AccountId,
+    permission: &Permission,
+    expected_present: bool,
+    context: &str,
+) {
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    const TIMEOUT: Duration = Duration::from_secs(30);
+
+    let deadline = Instant::now() + TIMEOUT;
+    let mut last_observed = "account permissions were not queried".to_owned();
+
+    while Instant::now() < deadline {
+        match client
+            .query(FindPermissionsByAccountId::new(account_id.clone()))
+            .execute_all()
+        {
+            Ok(permissions) => {
+                let present = permissions
+                    .into_iter()
+                    .any(|account_permission| &account_permission == permission);
+                last_observed = format!("permission_present={present}");
+                if present == expected_present {
+                    return;
+                }
+            }
+            Err(err) => {
+                last_observed = format!("query failed: {err}");
+            }
+        }
+
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    panic!(
+        "timed out waiting for account permission state after {context}; expected_present={expected_present}; last_observed={last_observed}"
+    );
+}
+
 async fn read_peer_log_with_retry(
     peer: &NetworkPeer,
     getter: impl Fn(&NetworkPeer) -> Option<PathBuf>,
@@ -686,7 +767,7 @@ fn permissions_are_unified() {
 #[test]
 fn associated_permissions_removed_on_unregister() {
     let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal").expect("Valid");
-    let Some((network, _rt)) = start_network_with_builder(
+    let Some((network, rt)) = start_network_with_builder(
         NetworkBuilder::new()
             .with_genesis_instruction(Register::domain(Domain::new(kingdom_id.clone()))),
         stringify!(associated_permissions_removed_on_unregister),
@@ -694,54 +775,66 @@ fn associated_permissions_removed_on_unregister() {
         return;
     };
     let iroha = network.client();
+    let mut status = iroha.get_status().expect("failed to read initial status");
+    let mut last_non_empty_height = status.blocks_non_empty;
 
     let bob_id = BOB_ID.clone();
     let bob_to_set_kv_in_domain = CanModifyDomainMetadata {
         domain: kingdom_id.clone(),
     };
+    let bob_to_set_kv_permission: Permission = bob_to_set_kv_in_domain.clone().into();
     let allow_bob_to_set_kv_in_domain =
         Grant::account_permission(bob_to_set_kv_in_domain.clone(), bob_id.clone());
 
     iroha
         .submit_all_blocking::<InstructionBox>([allow_bob_to_set_kv_in_domain.into()])
         .expect("failed to grant permission");
+    status = sync_after_submission(
+        &network,
+        &rt,
+        &iroha,
+        last_non_empty_height,
+        "grant account-associated permission",
+    )
+    .expect("failed to synchronize after account permission grant");
+    last_non_empty_height = status.blocks_non_empty;
 
     // check that bob indeed have granted permission
-    assert!(
-        iroha
-            .query(FindPermissionsByAccountId::new(bob_id.clone()))
-            .execute_all()
-            .expect("failed to get permissions for bob")
-            .into_iter()
-            .any(|permission| {
-                CanModifyDomainMetadata::try_from(&permission)
-                    .is_ok_and(|permission| permission == bob_to_set_kv_in_domain)
-            })
+    wait_for_account_permission_state(
+        &iroha,
+        &bob_id,
+        &bob_to_set_kv_permission,
+        true,
+        "account permission grant",
     );
 
     // unregister kingdom
     iroha
         .submit_blocking(Unregister::domain(kingdom_id))
         .expect("failed to unregister domain");
+    let _status = sync_after_submission(
+        &network,
+        &rt,
+        &iroha,
+        last_non_empty_height,
+        "unregister domain with account-associated permission",
+    )
+    .expect("failed to synchronize after domain unregister");
 
     // check that permission is removed from bob
-    assert!(
-        !iroha
-            .query(FindPermissionsByAccountId::new(bob_id))
-            .execute_all()
-            .expect("failed to get permissions for bob")
-            .into_iter()
-            .any(|permission| {
-                CanModifyDomainMetadata::try_from(&permission)
-                    .is_ok_and(|permission| permission == bob_to_set_kv_in_domain)
-            })
+    wait_for_account_permission_state(
+        &iroha,
+        &bob_id,
+        &bob_to_set_kv_permission,
+        false,
+        "domain unregister",
     );
 }
 
 #[test]
 fn associated_permissions_removed_from_role_on_unregister() {
     let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal").expect("Valid");
-    let Some((network, _rt)) = start_network_with_builder(
+    let Some((network, rt)) = start_network_with_builder(
         NetworkBuilder::new()
             .with_genesis_instruction(Register::domain(Domain::new(kingdom_id.clone()))),
         stringify!(associated_permissions_removed_from_role_on_unregister),
@@ -749,11 +842,14 @@ fn associated_permissions_removed_from_role_on_unregister() {
         return;
     };
     let iroha = network.client();
+    let mut status = iroha.get_status().expect("failed to read initial status");
+    let mut last_non_empty_height = status.blocks_non_empty;
 
     let role_id: RoleId = "role".parse().expect("Valid");
     let set_kv_in_domain = CanModifyDomainMetadata {
         domain: kingdom_id.clone(),
     };
+    let set_kv_permission: Permission = set_kv_in_domain.clone().into();
     let register_role = Register::role(
         Role::new(role_id.clone(), ALICE_ID.clone()).add_permission(set_kv_in_domain.clone()),
     );
@@ -761,41 +857,42 @@ fn associated_permissions_removed_from_role_on_unregister() {
     iroha
         .submit_all_blocking::<InstructionBox>([register_role.into()])
         .expect("failed to register role");
+    status = sync_after_submission(
+        &network,
+        &rt,
+        &iroha,
+        last_non_empty_height,
+        "register role with associated permission",
+    )
+    .expect("failed to synchronize after role registration");
+    last_non_empty_height = status.blocks_non_empty;
 
-    // check that role indeed have permission
-    assert!(
-        iroha
-            .query(FindRoles::new())
-            .execute_all()
-            .unwrap()
-            .into_iter()
-            .find(|role| role.id() == &role_id)
-            .expect("failed to get role")
-            .permissions()
-            .any(|permission| {
-                CanModifyDomainMetadata::try_from(permission)
-                    .is_ok_and(|permission| permission == set_kv_in_domain)
-            })
+    wait_for_role_permission_state(
+        &iroha,
+        &role_id,
+        &set_kv_permission,
+        true,
+        "role registration",
     );
 
     // unregister kingdom
     iroha
         .submit_blocking(Unregister::domain(kingdom_id))
         .expect("failed to unregister domain");
+    let _status = sync_after_submission(
+        &network,
+        &rt,
+        &iroha,
+        last_non_empty_height,
+        "unregister domain with role-associated permission",
+    )
+    .expect("failed to synchronize after domain unregister");
 
-    // check that permission is removed from role
-    assert!(
-        !iroha
-            .query(FindRoles::new())
-            .execute_all()
-            .unwrap()
-            .into_iter()
-            .find(|role| role.id() == &role_id)
-            .expect("failed to get role")
-            .permissions()
-            .any(|permission| {
-                CanModifyDomainMetadata::try_from(permission)
-                    .is_ok_and(|permission| permission == set_kv_in_domain)
-            })
+    wait_for_role_permission_state(
+        &iroha,
+        &role_id,
+        &set_kv_permission,
+        false,
+        "domain unregister",
     );
 }

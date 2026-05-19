@@ -2499,9 +2499,9 @@ mod measured_bytes_impls {
         rwa::{RwaControlPolicy, RwaData, RwaId, RwaParentRef},
         smart_contract::ContractAddress,
         smart_contract::manifest::{
-            AccessSetHints, ContractManifest, EntryPointKind, EntrypointDescriptor,
-            KotobaTranslation, KotobaTranslationEntry, ManifestProvenance, TriggerCallback,
-            TriggerDescriptor,
+            AccessSetHints, ContractManifest, DynamicAccessHint, EntryPointKind,
+            EntrypointDescriptor, KotobaTranslation, KotobaTranslationEntry, ManifestProvenance,
+            TriggerCallback, TriggerDescriptor,
         },
         sorafs_uri::SorafsUri,
         trigger::{TriggerId, action::Repeats},
@@ -3274,6 +3274,18 @@ mod measured_bytes_impls {
             let mut total = size_of::<AccessSetHints>();
             total = total.saturating_add(self.read_keys.measured_bytes_extra());
             total = total.saturating_add(self.write_keys.measured_bytes_extra());
+            total = total.saturating_add(self.dynamic_reads.measured_bytes_extra());
+            total = total.saturating_add(self.dynamic_writes.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for DynamicAccessHint {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<DynamicAccessHint>();
+            total = total.saturating_add(self.base_key.measured_bytes_extra());
+            total = total.saturating_add(self.key_type.measured_bytes_extra());
+            total = total.saturating_add(self.bound_kind.measured_bytes_extra());
             total
         }
     }

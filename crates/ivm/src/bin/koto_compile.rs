@@ -7,7 +7,7 @@
 //!
 //! Usage:
 //!   koto_compile <input.ko> [--out <output.to>] [--manifest-out <manifest.json>] [--abi <u8>] [--vl <u8>]
-//!                 [--max-cycles <u64>] [--iter-cap <u8>] [--force-zk] [--force-vector]
+//!                 [--max-cycles <u64>] [--force-zk] [--force-vector]
 
 use std::{
     env, fs,
@@ -212,18 +212,6 @@ fn print_access_hint_diagnostics(diag: &AccessHintDiagnostics, format: Diagnosti
     }
 }
 
-fn manifest_entrypoints_are_globally_wildcarded(
-    manifest: &iroha_data_model::smart_contract::manifest::ContractManifest,
-) -> bool {
-    manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
-        !entrypoints.is_empty()
-            && entrypoints.iter().all(|entrypoint| {
-                entrypoint.read_keys.iter().any(|key| key == "*")
-                    && entrypoint.write_keys.iter().any(|key| key == "*")
-            })
-    })
-}
-
 /// Serialize a manifest to pretty JSON using Norito’s JSON helpers.
 /// The JSON is inspection-only; deploy flows derive manifests directly from the artifact.
 fn manifest_to_json(
@@ -236,7 +224,7 @@ fn print_usage() {
     eprintln!("Usage:");
     eprintln!("  koto_compile <input.ko> [--out <output.to>] [--manifest-out <manifest.json>] \\");
     eprintln!(
-        "               [--abi <u8>] [--vl <u8>] [--max-cycles <u64>] [--iter-cap <u8>] [--force-zk] [--force-vector] [--emit-source-map <path>] [--emit-budget-report <path>] [--diagnostic-format <text|json>] [--embed-debug] [--strip-debug] [--mode <production|test>] [--no-lint] [--deny-lint-warnings]"
+        "               [--abi <u8>] [--vl <u8>] [--max-cycles <u64>] [--force-zk] [--force-vector] [--emit-source-map <path>] [--emit-budget-report <path>] [--diagnostic-format <text|json>] [--embed-debug] [--strip-debug] [--mode <production|test>] [--no-lint] [--deny-lint-warnings]"
     );
     eprintln!("  koto_compile --explain <code>");
     eprintln!("\nNotes:");
@@ -474,7 +462,11 @@ fn main() {
         opts.max_cycles = mc;
     }
     if let Some(ic) = iter_cap {
-        opts.dynamic_iter_cap = ic;
+        let fixed = ivm::kotodama::semantic::DYNAMIC_ITERATION_LIMIT as u8;
+        if ic != fixed {
+            eprintln!("--iter-cap is fixed to {fixed} in first-release Kotodama; received {ic}");
+            std::process::exit(2);
+        }
     }
     opts.force_zk = force_zk;
     opts.force_vector = force_vector;
@@ -519,9 +511,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    if !manifest_entrypoints_are_globally_wildcarded(&manifest) {
-        print_access_hint_diagnostics(&report.access_hint_diagnostics, diagnostic_format);
-    }
+    print_access_hint_diagnostics(&report.access_hint_diagnostics, diagnostic_format);
     let manifest_opt = manifest_out.is_some().then_some(manifest);
 
     // Pick output path
@@ -628,33 +618,5 @@ mod tests {
             !warnings.is_empty(),
             "expected unused-state lint to be emitted"
         );
-    }
-
-    #[test]
-    fn wildcarded_entrypoints_suppress_access_hint_output() {
-        let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
-            code_hash: None,
-            abi_hash: None,
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: Some(vec![
-                iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
-                    name: "run".to_string(),
-                    kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
-                    params: Vec::new(),
-                    return_type: None,
-                    permission: None,
-                    read_keys: vec!["*".to_string()],
-                    write_keys: vec!["*".to_string()],
-                    access_hints_complete: Some(true),
-                    access_hints_skipped: Vec::new(),
-                    triggers: Vec::new(),
-                },
-            ]),
-            kotoba: None,
-            provenance: None,
-        };
-        assert!(manifest_entrypoints_are_globally_wildcarded(&manifest));
     }
 }

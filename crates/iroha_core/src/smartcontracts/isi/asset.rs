@@ -795,10 +795,22 @@ pub mod isi {
                         .into(),
                 )
             })?;
-        let mut dataspaces = hierarchy
+        let mut linked_dataspaces: BTreeSet<_> = hierarchy
             .keys()
             .copied()
-            .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL);
+            .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL)
+            .collect();
+        if let Ok(account) = state_transaction.world.account(account_id)
+            && let Some(uaid) = account.as_ref().uaid().copied()
+            && let Some(bindings) = state_transaction.world.uaid_dataspaces.get(&uaid)
+        {
+            linked_dataspaces.extend(bindings.iter().filter_map(|(dataspace, accounts)| {
+                (*dataspace != DataSpaceId::UNIVERSAL && accounts.contains(account_id))
+                    .then_some(*dataspace)
+            }));
+        }
+
+        let mut dataspaces = linked_dataspaces.into_iter();
         let first = dataspaces.next();
         if let (Some(first), Some(second)) = (first, dataspaces.next()) {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -843,15 +855,33 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
         destination_id: &AssetId,
     ) -> Result<Option<DataSpaceId>, Error> {
+        let route_dataspace = state_transaction
+            .current_dataspace_id
+            .or(state_transaction.world.current_dataspace_id);
         if let iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace) =
             destination_id.scope()
         {
+            if let Some(route_dataspace) = route_dataspace
+                && route_dataspace != DataSpaceId::UNIVERSAL
+                && route_dataspace != *dataspace
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "destination asset scope must match the non-universal execution dataspace"
+                        .into(),
+                ));
+            }
             return Ok(Some(*dataspace));
         }
-        unique_account_dataspace_hint(state_transaction, destination_id.account()).map(|hint| {
-            hint.or(state_transaction.current_dataspace_id)
-                .or(state_transaction.world.current_dataspace_id)
-        })
+        let hint = unique_account_dataspace_hint(state_transaction, destination_id.account())?;
+        if let (Some(route_dataspace), Some(destination_dataspace)) = (route_dataspace, hint)
+            && route_dataspace != DataSpaceId::UNIVERSAL
+            && route_dataspace != destination_dataspace
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "destination account scope must match the non-universal execution dataspace".into(),
+            ));
+        }
+        Ok(hint.or(route_dataspace))
     }
 
     fn dataspace_id_for_alias_segment(
@@ -2816,6 +2846,7 @@ pub mod query {
             AssetTransferControlWindow, AssetTransferLimit, DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY,
             DomainAssetUsagePolicyV1,
         };
+        use iroha_data_model::isi::transfer::{TransferAssetBatch, TransferAssetBatchEntry};
         use iroha_data_model::nexus::{
             Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceId,
             ManifestEffect, ManifestEntry,
@@ -4261,6 +4292,212 @@ pub mod query {
         }
 
         #[test]
+        fn transfer_restricted_asset_rejects_destination_binding_outside_non_universal_route() {
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let source_dataspace = DataSpaceId::new(7);
+            let destination_dataspace = DataSpaceId::new(8);
+            let uaid_bob = iroha_data_model::nexus::UniversalAccountId::from_hash(
+                iroha_crypto::Hash::new(b"uaid::bob-non-universal-cross-credit"),
+            );
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
+            let bob_account = NewAccount::new(BOB_ID.clone())
+                .with_uaid(Some(uaid_bob))
+                .build(&BOB_ID);
+            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
+            let asset_def = {
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .with_balance_scope_policy(
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            )
+            .build(&ALICE_ID);
+            let source_asset_id = AssetId::with_scope(
+                asset_def_id.clone(),
+                ALICE_ID.clone(),
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
+            );
+            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+
+            let mut world = World::with_assets(
+                [domain],
+                [alice_account, bob_account],
+                [asset_def],
+                [source_asset],
+                [],
+            );
+            world.uaid_accounts.insert(uaid_bob, BOB_ID.clone());
+
+            let mut bob_bindings = crate::nexus::space_directory::UaidDataspaceBindings::default();
+            bob_bindings.bind_account(destination_dataspace, BOB_ID.clone());
+
+            let kura = Kura::blank_kura_for_testing();
+            let query_store = LiveQueryStore::start_test();
+            let mut state = State::new(world, kura, query_store);
+            state.world.uaid_dataspaces.insert(uaid_bob, bob_bindings);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.current_dataspace_id = Some(source_dataspace);
+            stx.world.current_dataspace_id = Some(source_dataspace);
+            seed_test_call_hash(&mut stx, 0xB6);
+
+            let err = Transfer::asset_numeric(source_asset_id.clone(), 1_u32, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("non-universal route must not credit another dataspace binding");
+            match err {
+                InstructionExecutionError::InvariantViolation(message) => assert!(
+                    message.contains("destination account scope must match"),
+                    "{message}"
+                ),
+                other => panic!("unexpected error: {other:?}"),
+            }
+
+            assert_eq!(
+                stx.world
+                    .asset(&source_asset_id)
+                    .expect("source balance must remain untouched")
+                    .value()
+                    .clone()
+                    .into_inner(),
+                Numeric::new(10, 0)
+            );
+            let destination_asset_id = AssetId::with_scope(
+                asset_def_id,
+                BOB_ID.clone(),
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(destination_dataspace),
+            );
+            assert!(
+                stx.world.asset(&destination_asset_id).is_err(),
+                "non-universal rejection must not materialize the cross-dataspace destination"
+            );
+        }
+
+        #[test]
+        fn transfer_batch_rejects_destination_binding_outside_non_universal_route() {
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let source_dataspace = DataSpaceId::new(7);
+            let destination_dataspace = DataSpaceId::new(8);
+            let uaid_bob = iroha_data_model::nexus::UniversalAccountId::from_hash(
+                iroha_crypto::Hash::new(b"uaid::bob-batch-non-universal-cross-credit"),
+            );
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
+            let bob_account = NewAccount::new(BOB_ID.clone())
+                .with_uaid(Some(uaid_bob))
+                .build(&BOB_ID);
+            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
+            let asset_def = {
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .with_balance_scope_policy(
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            )
+            .build(&ALICE_ID);
+            let source_asset_id = AssetId::with_scope(
+                asset_def_id.clone(),
+                ALICE_ID.clone(),
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
+            );
+            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+
+            let mut world = World::with_assets(
+                [domain],
+                [alice_account, bob_account],
+                [asset_def],
+                [source_asset],
+                [],
+            );
+            world.uaid_accounts.insert(uaid_bob, BOB_ID.clone());
+
+            let mut bob_bindings = crate::nexus::space_directory::UaidDataspaceBindings::default();
+            bob_bindings.bind_account(destination_dataspace, BOB_ID.clone());
+
+            let kura = Kura::blank_kura_for_testing();
+            let query_store = LiveQueryStore::start_test();
+            let mut state = State::new(world, kura, query_store);
+            state.world.uaid_dataspaces.insert(uaid_bob, bob_bindings);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.current_dataspace_id = Some(source_dataspace);
+            stx.world.current_dataspace_id = Some(source_dataspace);
+            seed_test_call_hash(&mut stx, 0xB7);
+
+            let batch = TransferAssetBatch::new(vec![TransferAssetBatchEntry::new(
+                ALICE_ID.clone(),
+                BOB_ID.clone(),
+                asset_def_id.clone(),
+                1_u32,
+            )]);
+            let err = batch
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("batch route must not credit another dataspace binding");
+            match err {
+                InstructionExecutionError::InvariantViolation(message) => assert!(
+                    message.contains("destination account scope must match"),
+                    "{message}"
+                ),
+                other => panic!("unexpected error: {other:?}"),
+            }
+
+            assert_eq!(
+                stx.world
+                    .asset(&source_asset_id)
+                    .expect("source balance must remain untouched")
+                    .value()
+                    .clone()
+                    .into_inner(),
+                Numeric::new(10, 0)
+            );
+            let destination_asset_id = AssetId::with_scope(
+                asset_def_id,
+                BOB_ID.clone(),
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(destination_dataspace),
+            );
+            assert!(
+                stx.world.asset(&destination_asset_id).is_err(),
+                "batch rejection must not materialize the cross-dataspace destination"
+            );
+        }
+
+        #[test]
+        fn transfer_batch_rejects_empty_entries() {
+            let state = State::new(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+
+            let err = TransferAssetBatch::new(Vec::new())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("empty transfer batches must be rejected");
+            match err {
+                InstructionExecutionError::InvariantViolation(message) => {
+                    assert!(message.contains("requires at least one entry"), "{message}")
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
+
+        #[test]
         fn transfer_restricted_asset_uses_destination_dataspace_binding_and_policy() {
             let domain_id: DomainId =
                 DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -4458,6 +4695,234 @@ pub mod query {
                     .clone()
                     .into_inner(),
                 Numeric::new(9, 0)
+            );
+        }
+
+        #[test]
+        fn transfer_restricted_asset_rejects_ambiguous_destination_dataspace_binding() {
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let source_dataspace = DataSpaceId::new(7);
+            let first_destination_dataspace = DataSpaceId::new(11);
+            let second_destination_dataspace = DataSpaceId::new(12);
+            let uaid_alice = iroha_data_model::nexus::UniversalAccountId::from_hash(
+                iroha_crypto::Hash::new(b"uaid::alice-ambiguous-destination"),
+            );
+            let uaid_bob = iroha_data_model::nexus::UniversalAccountId::from_hash(
+                iroha_crypto::Hash::new(b"uaid::bob-ambiguous-destination"),
+            );
+
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let alice_account = NewAccount::new(ALICE_ID.clone())
+                .with_uaid(Some(uaid_alice))
+                .build(&ALICE_ID);
+            let bob_account = NewAccount::new(BOB_ID.clone())
+                .with_uaid(Some(uaid_bob))
+                .build(&BOB_ID);
+
+            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
+            let asset_def = {
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .with_balance_scope_policy(
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            )
+            .build(&ALICE_ID);
+            let source_asset_id = AssetId::with_scope(
+                asset_def_id.clone(),
+                ALICE_ID.clone(),
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
+            );
+            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+
+            let mut world = World::with_assets(
+                [domain],
+                [alice_account, bob_account],
+                [asset_def],
+                [source_asset],
+                [],
+            );
+            world.uaid_accounts.insert(uaid_alice, ALICE_ID.clone());
+            world.uaid_accounts.insert(uaid_bob, BOB_ID.clone());
+
+            let mut alice_bindings =
+                crate::nexus::space_directory::UaidDataspaceBindings::default();
+            alice_bindings.bind_account(source_dataspace, ALICE_ID.clone());
+            let mut bob_bindings = crate::nexus::space_directory::UaidDataspaceBindings::default();
+            bob_bindings.bind_account(first_destination_dataspace, BOB_ID.clone());
+            bob_bindings.bind_account(second_destination_dataspace, BOB_ID.clone());
+
+            let kura = Kura::blank_kura_for_testing();
+            let query_store = LiveQueryStore::start_test();
+            let mut state = State::new(world, kura, query_store);
+            state
+                .world
+                .uaid_dataspaces
+                .insert(uaid_alice, alice_bindings);
+            state.world.uaid_dataspaces.insert(uaid_bob, bob_bindings);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            seed_test_call_hash(&mut stx, 0xB4);
+            assert_eq!(
+                stx.world
+                    .account(&BOB_ID)
+                    .expect("bob exists")
+                    .as_ref()
+                    .uaid(),
+                Some(&uaid_bob),
+                "fixture must preserve Bob's UAID"
+            );
+            assert!(
+                stx.world.uaid_dataspaces.get(&uaid_bob).is_some(),
+                "fixture must preserve Bob's UAID dataspace bindings"
+            );
+
+            let err = Transfer::asset_numeric(
+                AssetId::with_scope(
+                    asset_def_id,
+                    ALICE_ID.clone(),
+                    iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
+                ),
+                1_u32,
+                BOB_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("ambiguous destination binding must not pick a dataspace");
+            match err {
+                InstructionExecutionError::InvariantViolation(message) => assert!(
+                    message.contains("bound to multiple dataspaces"),
+                    "{message}"
+                ),
+                other => panic!("unexpected error: {other:?}"),
+            }
+
+            assert_eq!(
+                stx.world
+                    .asset(&source_asset_id)
+                    .expect("source balance must remain untouched")
+                    .value()
+                    .clone()
+                    .into_inner(),
+                Numeric::new(10, 0)
+            );
+        }
+
+        #[test]
+        fn transfer_restricted_asset_rejects_ambiguous_source_dataspace_binding() {
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let first_source_dataspace = DataSpaceId::new(7);
+            let second_source_dataspace = DataSpaceId::new(8);
+            let destination_dataspace = DataSpaceId::new(11);
+            let uaid_alice = iroha_data_model::nexus::UniversalAccountId::from_hash(
+                iroha_crypto::Hash::new(b"uaid::alice-ambiguous-source"),
+            );
+            let uaid_bob = iroha_data_model::nexus::UniversalAccountId::from_hash(
+                iroha_crypto::Hash::new(b"uaid::bob-ambiguous-source"),
+            );
+
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let alice_account = NewAccount::new(ALICE_ID.clone())
+                .with_uaid(Some(uaid_alice))
+                .build(&ALICE_ID);
+            let bob_account = NewAccount::new(BOB_ID.clone())
+                .with_uaid(Some(uaid_bob))
+                .build(&BOB_ID);
+
+            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
+            let asset_def = {
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .with_balance_scope_policy(
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            )
+            .build(&ALICE_ID);
+            let source_asset_id = AssetId::with_scope(
+                asset_def_id.clone(),
+                ALICE_ID.clone(),
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(first_source_dataspace),
+            );
+            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+
+            let mut world = World::with_assets(
+                [domain],
+                [alice_account, bob_account],
+                [asset_def],
+                [source_asset],
+                [],
+            );
+            world.uaid_accounts.insert(uaid_alice, ALICE_ID.clone());
+            world.uaid_accounts.insert(uaid_bob, BOB_ID.clone());
+
+            let mut alice_bindings =
+                crate::nexus::space_directory::UaidDataspaceBindings::default();
+            alice_bindings.bind_account(first_source_dataspace, ALICE_ID.clone());
+            alice_bindings.bind_account(second_source_dataspace, ALICE_ID.clone());
+            let mut bob_bindings = crate::nexus::space_directory::UaidDataspaceBindings::default();
+            bob_bindings.bind_account(destination_dataspace, BOB_ID.clone());
+
+            let kura = Kura::blank_kura_for_testing();
+            let query_store = LiveQueryStore::start_test();
+            let mut state = State::new(world, kura, query_store);
+            state
+                .world
+                .uaid_dataspaces
+                .insert(uaid_alice, alice_bindings);
+            state.world.uaid_dataspaces.insert(uaid_bob, bob_bindings);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            seed_test_call_hash(&mut stx, 0xB5);
+
+            let err = Transfer::asset_numeric(
+                AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
+                1_u32,
+                BOB_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("ambiguous source binding must not pick a dataspace");
+            match err {
+                InstructionExecutionError::InvariantViolation(message) => assert!(
+                    message.contains("bound to multiple dataspaces"),
+                    "{message}"
+                ),
+                other => panic!("unexpected error: {other:?}"),
+            }
+
+            assert_eq!(
+                stx.world
+                    .asset(&source_asset_id)
+                    .expect("source balance must remain untouched")
+                    .value()
+                    .clone()
+                    .into_inner(),
+                Numeric::new(10, 0)
+            );
+            let destination_asset_id = AssetId::with_scope(
+                asset_def_id,
+                BOB_ID.clone(),
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(destination_dataspace),
+            );
+            assert!(
+                stx.world.asset(&destination_asset_id).is_err(),
+                "ambiguous source transfer must not materialize a destination balance"
             );
         }
 

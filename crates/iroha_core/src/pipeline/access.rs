@@ -26,7 +26,9 @@ use iroha_data_model::{
     prelude::*,
     role::RoleId,
     rwa::RwaId,
-    smart_contract::manifest::{ContractManifest, EntrypointDescriptor, MANIFEST_METADATA_KEY},
+    smart_contract::manifest::{
+        ContractManifest, DynamicAccessHint, EntrypointDescriptor, MANIFEST_METADATA_KEY,
+    },
     state::{
         AccountMetadataKey, AccountRoleKey, AssetDefinitionMetadataKey, AssetMetadataKey,
         CanonicalStateKey, DomainMetadataKey, NftMetadataKey, RwaMetadataKey,
@@ -51,6 +53,8 @@ use crate::{
 /// Keys are generated deterministically from data model identifiers such as
 /// `AccountId`, `DomainId`, `AssetDefinitionId`, `AssetId`, `NftId`, and `RwaId`.
 pub type AccessKey = String;
+
+const AUTHORITY_ACCOUNT_KEY: &str = "account:$authority";
 
 /// Access set with separate read and write collections.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -309,7 +313,7 @@ fn manifest_access_set(
                 return Some((set, AccessSetSource::ManifestHints));
             }
         }
-        if let Some(set) = hint_access_set_if_safe(bytecode, &hints.read_keys, &hints.write_keys) {
+        if let Some(set) = manifest_hint_access_set_if_safe(bytecode, hints) {
             if let Some(hash) = manifest_hash.as_ref() {
                 access_set_cache_put(key, hash.clone(), set.clone());
             }
@@ -591,9 +595,72 @@ fn with_stateful_admission_keys(
     mut set: AccessSet,
     source: Option<AccessSetSource>,
 ) -> (AccessSet, Option<AccessSetSource>) {
+    expand_authority_placeholders(&mut set, tx.authority());
     set.add_read(key_account(tx.authority()));
     set.add_write(key_tx_sequence(tx.authority()));
     (set, source)
+}
+
+fn expand_authority_placeholders(set: &mut AccessSet, authority: &AccountId) {
+    set.read_keys = set
+        .read_keys
+        .iter()
+        .map(|key| expand_authority_placeholder_key(key, authority))
+        .collect();
+    set.write_keys = set
+        .write_keys
+        .iter()
+        .map(|key| expand_authority_placeholder_key(key, authority))
+        .collect();
+}
+
+fn expand_authority_placeholder_key(key: &str, authority: &AccountId) -> String {
+    if key == AUTHORITY_ACCOUNT_KEY {
+        return key_account(authority);
+    }
+    if let Some(rest) = key.strip_prefix("asset:")
+        && let Some(definition_raw) = rest.strip_suffix(":$authority")
+        && let Ok(definition) = AssetDefinitionId::parse_address_literal(definition_raw)
+    {
+        return key_asset(&AssetId::of(definition, authority.clone()));
+    }
+    if let Some(key_raw) = key.strip_prefix("account.detail:$authority:")
+        && let Ok(name) = key_raw.parse::<Name>()
+    {
+        return key_account_detail(authority, &name);
+    }
+    if let Some(role_raw) = key.strip_prefix("role.binding:$authority:")
+        && let Ok(role) = role_raw.parse::<RoleId>()
+    {
+        return key_role_binding(authority, &role);
+    }
+    if let Some(permission) = key.strip_prefix("perm.account:$authority:")
+        && !permission.is_empty()
+    {
+        return format!("perm.account:{authority}:{permission}");
+    }
+    key.to_owned()
+}
+
+fn is_authority_placeholder_key(key: &str) -> bool {
+    if key == AUTHORITY_ACCOUNT_KEY {
+        return true;
+    }
+    if let Some(rest) = key.strip_prefix("asset:")
+        && let Some(definition_raw) = rest.strip_suffix(":$authority")
+    {
+        return AssetDefinitionId::parse_address_literal(definition_raw).is_ok();
+    }
+    if let Some(key_raw) = key.strip_prefix("account.detail:$authority:") {
+        return key_raw.parse::<Name>().is_ok();
+    }
+    if let Some(role_raw) = key.strip_prefix("role.binding:$authority:") {
+        return role_raw.parse::<RoleId>().is_ok();
+    }
+    if let Some(permission) = key.strip_prefix("perm.account:$authority:") {
+        return !permission.is_empty();
+    }
+    false
 }
 
 fn entrypoint_access_set_if_safe(
@@ -608,10 +675,35 @@ fn hint_access_set_if_safe(
     read_keys: &[String],
     write_keys: &[String],
 ) -> Option<AccessSet> {
+    hint_access_set_with_dynamic_if_safe(bytecode, read_keys, write_keys, &[], &[])
+}
+
+fn manifest_hint_access_set_if_safe(
+    bytecode: &[u8],
+    hints: &iroha_data_model::smart_contract::manifest::AccessSetHints,
+) -> Option<AccessSet> {
+    hint_access_set_with_dynamic_if_safe(
+        bytecode,
+        &hints.read_keys,
+        &hints.write_keys,
+        &hints.dynamic_reads,
+        &hints.dynamic_writes,
+    )
+}
+
+fn hint_access_set_with_dynamic_if_safe(
+    bytecode: &[u8],
+    read_keys: &[String],
+    write_keys: &[String],
+    dynamic_reads: &[DynamicAccessHint],
+    dynamic_writes: &[DynamicAccessHint],
+) -> Option<AccessSet> {
     if read_keys.is_empty() && write_keys.is_empty() {
-        return None;
+        if dynamic_reads.is_empty() && dynamic_writes.is_empty() {
+            return None;
+        }
     }
-    let set = access_set_from_hint_keys(read_keys, write_keys)?;
+    let set = access_set_from_hint_keys(read_keys, write_keys, dynamic_reads, dynamic_writes)?;
     if read_keys.iter().any(|key| key == "*") || write_keys.iter().any(|key| key == "*") {
         return Some(set);
     }
@@ -630,7 +722,9 @@ fn hint_access_set_if_safe(
         .syscalls
         .iter()
         .any(|entry| !is_state_only_syscall(entry.number));
-    if has_non_state_syscall && hint_keys_state_only(read_keys, write_keys) {
+    if has_non_state_syscall
+        && hint_keys_state_only(read_keys, write_keys, dynamic_reads, dynamic_writes)
+    {
         return None;
     }
     Some(set)
@@ -660,10 +754,12 @@ fn select_entrypoint<'a>(
 
 /// Normalize manifest/entrypoint hint keys into canonical WSV keys plus state keys.
 #[allow(clippy::too_many_lines)]
-fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Option<AccessSet> {
-    if read_keys.iter().any(|key| key == "*") || write_keys.iter().any(|key| key == "*") {
-        return Some(AccessSet::global());
-    }
+fn access_set_from_hint_keys(
+    read_keys: &[String],
+    write_keys: &[String],
+    dynamic_reads: &[DynamicAccessHint],
+    dynamic_writes: &[DynamicAccessHint],
+) -> Option<AccessSet> {
     let mut advisory = StateAccessSetAdvisory::default();
     let mut state_reads: BTreeSet<String> = BTreeSet::new();
     let mut state_writes: BTreeSet<String> = BTreeSet::new();
@@ -672,9 +768,25 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
                   state_keys: &mut BTreeSet<String>|
      -> Option<()> {
         if let Some(rest) = raw.strip_prefix("state:") {
-            if rest.is_empty() {
+            if rest.is_empty() || rest == "*" {
                 return None;
             }
+            state_keys.insert(raw.to_owned());
+            return Some(());
+        }
+        if let Some(rest) = raw.strip_prefix("zk:election:") {
+            if rest.is_empty() || rest.contains('*') {
+                return None;
+            }
+            state_keys.insert(raw.to_owned());
+            return Some(());
+        }
+        if let Some(rest) = raw.strip_prefix("zk_asset:") {
+            AssetDefinitionId::parse_address_literal(rest).ok()?;
+            state_keys.insert(raw.to_owned());
+            return Some(());
+        }
+        if is_authority_placeholder_key(raw) {
             state_keys.insert(raw.to_owned());
             return Some(());
         }
@@ -863,6 +975,13 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
     for key in write_keys {
         ingest(key, &mut advisory.writes, &mut state_writes)?;
     }
+    for hint in dynamic_reads {
+        ingest_dynamic_hint(hint, &mut state_reads)?;
+    }
+    for hint in dynamic_writes {
+        ingest_dynamic_hint(hint, &mut state_writes)?;
+        ingest_dynamic_hint(hint, &mut state_reads)?;
+    }
 
     advisory.canonicalize();
 
@@ -915,9 +1034,33 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
     Some(set)
 }
 
-fn hint_keys_state_only(read_keys: &[String], write_keys: &[String]) -> bool {
+fn ingest_dynamic_hint(hint: &DynamicAccessHint, state_keys: &mut BTreeSet<String>) -> Option<()> {
+    if hint.max_keys == 0 {
+        return None;
+    }
+    let rest = hint.base_key.strip_prefix("state:")?;
+    if rest.is_empty() || rest.contains('/') || rest == "*" {
+        return None;
+    }
+    state_keys.insert(hint.base_key.clone());
+    Some(())
+}
+
+fn hint_keys_state_only(
+    read_keys: &[String],
+    write_keys: &[String],
+    dynamic_reads: &[DynamicAccessHint],
+    dynamic_writes: &[DynamicAccessHint],
+) -> bool {
     let is_state_key = |key: &str| key.starts_with("state:");
-    read_keys.iter().all(|key| is_state_key(key)) && write_keys.iter().all(|key| is_state_key(key))
+    read_keys.iter().all(|key| is_state_key(key))
+        && write_keys.iter().all(|key| is_state_key(key))
+        && dynamic_reads
+            .iter()
+            .all(|hint| hint.base_key.starts_with("state:"))
+        && dynamic_writes
+            .iter()
+            .all(|hint| hint.base_key.starts_with("state:"))
 }
 
 fn is_entrypoint_hint_safe_syscall(number: u32) -> bool {
@@ -1313,6 +1456,16 @@ where
         set.add_write(format!("zk:election:{}:tally", instr.election_id()));
         return set;
     }
+    if let Some(instr) = any.downcast_ref::<zk::Unshield>() {
+        let asset_id = AssetId::of(instr.asset().clone(), instr.to().clone());
+        add_asset_rw(&mut set, &asset_id);
+        add_zk_asset_rw(&mut set, instr.asset());
+        let Ok(key) = "zk.unshield.last".parse::<Name>() else {
+            return AccessSet::global();
+        };
+        add_asset_def_detail_rw(&mut set, instr.asset(), &key);
+        return set;
+    }
     if let Some(ub) = any.downcast_ref::<UnregisterBox>() {
         match ub {
             UnregisterBox::Domain(u) => add_domain_rw(&mut set, &u.object),
@@ -1503,6 +1656,9 @@ fn key_asset_def_detail(id: &AssetDefinitionId, key: &Name) -> AccessKey {
 fn key_asset(id: &AssetId) -> AccessKey {
     format!("asset:{id}")
 }
+fn key_zk_asset(id: &AssetDefinitionId) -> AccessKey {
+    format!("zk_asset:{id}")
+}
 fn key_nft(id: &NftId) -> AccessKey {
     format!("nft:{id}")
 }
@@ -1577,6 +1733,11 @@ fn add_asset_rw(set: &mut AccessSet, id: &AssetId) {
         add_domain_r(set, domain);
     }
     add_asset_def_r(set, id.definition());
+}
+fn add_zk_asset_rw(set: &mut AccessSet, id: &AssetDefinitionId) {
+    let k = key_zk_asset(id);
+    set.add_read(k.clone());
+    set.add_write(k);
 }
 fn add_nft_rw(set: &mut AccessSet, id: &NftId) {
     let k = key_nft(id);
@@ -2223,8 +2384,8 @@ mod tests {
             "state:beta".to_owned(),
             "asset_def:62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_owned(),
         ];
-        let set =
-            access_set_from_hint_keys(&reads, &writes).expect("expected valid access set hints");
+        let set = access_set_from_hint_keys(&reads, &writes, &[], &[])
+            .expect("expected valid access set hints");
         assert!(set.read_keys.contains("state:alpha"));
         assert!(set.read_keys.contains(&format!("account:{alice}")));
         assert!(
@@ -2239,17 +2400,130 @@ mod tests {
     }
 
     #[test]
-    fn access_set_hints_reject_unknown_keys() {
-        let reads = vec!["perm.account:historical-scoped-literal:can_transfer".to_owned()];
-        assert!(access_set_from_hint_keys(&reads, &[]).is_none());
+    fn access_set_hints_accept_zk_state_keys() {
+        let asset_def = AssetDefinitionId::parse_address_literal("6pEP9RjNoZ7beWkT3pLfKoM1dyfi")
+            .expect("asset definition");
+        let reads = vec![format!("zk_asset:{asset_def}")];
+        let writes = vec![
+            "zk:election:election-1:ciphertexts".to_owned(),
+            "zk:election:election-1:nullifiers".to_owned(),
+        ];
+        let set = access_set_from_hint_keys(&reads, &writes, &[], &[])
+            .expect("expected zk access set hints to normalize");
+        assert!(set.read_keys.contains(&format!("zk_asset:{asset_def}")));
+        assert!(
+            set.write_keys
+                .contains("zk:election:election-1:ciphertexts")
+        );
+        assert!(set.write_keys.contains("zk:election:election-1:nullifiers"));
     }
 
     #[test]
-    fn access_set_hints_accept_global_wildcard() {
+    fn access_set_hints_accept_and_expand_authority_placeholders() {
+        let authority = iroha_test_samples::ALICE_ID.clone();
+        let mut set = AccessSet {
+            read_keys: [
+                AUTHORITY_ACCOUNT_KEY.to_owned(),
+                "asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM:$authority".to_owned(),
+                "account.detail:$authority:cursor".to_owned(),
+            ]
+            .into(),
+            write_keys: [
+                "role.binding:$authority:minter".to_owned(),
+                "perm.account:$authority:BenefitSpend".to_owned(),
+            ]
+            .into(),
+        };
+        expand_authority_placeholders(&mut set, &authority);
+        let asset_def =
+            AssetDefinitionId::parse_address_literal("62Fk4FPcMuLvW5QjDGNF2a4jAmjM").unwrap();
+        let asset = AssetId::of(asset_def, authority.clone());
+        assert!(set.read_keys.contains(&format!("account:{authority}")));
+        assert!(set.read_keys.contains(&format!("asset:{asset}")));
+        assert!(
+            set.read_keys
+                .contains(&format!("account.detail:{authority}:cursor"))
+        );
+        assert!(
+            set.write_keys
+                .contains(&format!("role.binding:{authority}:minter"))
+        );
+        assert!(
+            set.write_keys
+                .contains(&format!("perm.account:{authority}:BenefitSpend"))
+        );
+
+        let reads = vec![AUTHORITY_ACCOUNT_KEY.to_owned()];
+        let writes = vec!["role.binding:$authority:minter".to_owned()];
+        assert!(access_set_from_hint_keys(&reads, &writes, &[], &[]).is_some());
+    }
+
+    #[test]
+    fn access_set_hints_accept_dynamic_state_hints() {
+        let dynamic_reads = vec![
+            iroha_data_model::smart_contract::manifest::DynamicAccessHint {
+                base_key: "state:Orders".to_owned(),
+                key_type: "int".to_owned(),
+                bound_kind: "range".to_owned(),
+                max_keys: 64,
+            },
+        ];
+        let set = access_set_from_hint_keys(&[], &[], &dynamic_reads, &[])
+            .expect("expected dynamic read hint to normalize");
+        assert!(set.read_keys.contains("state:Orders"));
+        assert!(!set.write_keys.contains("state:Orders"));
+
+        let dynamic_writes = vec![
+            iroha_data_model::smart_contract::manifest::DynamicAccessHint {
+                base_key: "state:Balances".to_owned(),
+                key_type: "int".to_owned(),
+                bound_kind: "take".to_owned(),
+                max_keys: 64,
+            },
+        ];
+        let set = access_set_from_hint_keys(&[], &[], &[], &dynamic_writes)
+            .expect("expected dynamic write hint to normalize");
+        assert!(set.read_keys.contains("state:Balances"));
+        assert!(set.write_keys.contains("state:Balances"));
+    }
+
+    #[test]
+    fn access_set_hints_reject_invalid_dynamic_state_hints() {
+        let zero_bound = vec![
+            iroha_data_model::smart_contract::manifest::DynamicAccessHint {
+                base_key: "state:Orders".to_owned(),
+                key_type: "int".to_owned(),
+                bound_kind: "range".to_owned(),
+                max_keys: 0,
+            },
+        ];
+        assert!(access_set_from_hint_keys(&[], &[], &zero_bound, &[]).is_none());
+
+        let wildcard = vec![
+            iroha_data_model::smart_contract::manifest::DynamicAccessHint {
+                base_key: "state:*".to_owned(),
+                key_type: "int".to_owned(),
+                bound_kind: "take".to_owned(),
+                max_keys: 64,
+            },
+        ];
+        assert!(access_set_from_hint_keys(&[], &[], &wildcard, &[]).is_none());
+    }
+
+    #[test]
+    fn access_set_hints_reject_unknown_keys() {
+        let reads = vec!["perm.account:historical-scoped-literal:can_transfer".to_owned()];
+        assert!(access_set_from_hint_keys(&reads, &[], &[], &[]).is_none());
+        let reads = vec!["state:*".to_owned()];
+        assert!(access_set_from_hint_keys(&reads, &[], &[], &[]).is_none());
         let reads = vec!["*".to_owned()];
-        let set = access_set_from_hint_keys(&reads, &[]).expect("expected global access set");
-        assert!(set.read_keys.is_empty());
-        assert!(set.write_keys.contains("*"));
+        assert!(access_set_from_hint_keys(&reads, &[], &[], &[]).is_none());
+    }
+
+    #[test]
+    fn access_set_hints_reject_global_wildcard() {
+        let reads = vec!["*".to_owned()];
+        assert!(access_set_from_hint_keys(&reads, &[], &[], &[]).is_none());
     }
 
     #[test]
@@ -2280,6 +2554,8 @@ mod tests {
         let hints = AccessSetHints {
             read_keys: vec![format!("account:{alice}")],
             write_keys: vec![format!("asset:{asset_id}")],
+            dynamic_reads: Vec::new(),
+            dynamic_writes: Vec::new(),
         };
         let code = vec![ivm::encoding::wide::encode_halt().to_le_bytes()]
             .into_iter()
@@ -2344,6 +2620,8 @@ mod tests {
         let hints = AccessSetHints {
             read_keys: vec![format!("account:{alice}")],
             write_keys: vec![format!("asset:{asset_id}")],
+            dynamic_reads: Vec::new(),
+            dynamic_writes: Vec::new(),
         };
         let code = vec![ivm::encoding::wide::encode_halt().to_le_bytes()]
             .into_iter()
@@ -2394,6 +2672,8 @@ mod tests {
         let hints_a = AccessSetHints {
             read_keys: vec!["state:alpha".to_owned()],
             write_keys: Vec::new(),
+            dynamic_reads: Vec::new(),
+            dynamic_writes: Vec::new(),
         };
         let manifest_a = ContractManifest {
             code_hash: Some(code_hash),
@@ -2425,6 +2705,8 @@ mod tests {
         let hints_b = AccessSetHints {
             read_keys: vec!["state:beta".to_owned()],
             write_keys: Vec::new(),
+            dynamic_reads: Vec::new(),
+            dynamic_writes: Vec::new(),
         };
         let manifest_b = ContractManifest {
             code_hash: Some(code_hash),
@@ -2472,6 +2754,8 @@ mod tests {
         let hints = AccessSetHints {
             read_keys: vec!["perm.account:historical-scoped-literal:can_transfer".to_owned()],
             write_keys: Vec::new(),
+            dynamic_reads: Vec::new(),
+            dynamic_writes: Vec::new(),
         };
         let manifest = ContractManifest {
             code_hash: Some(code_hash),
@@ -2567,6 +2851,8 @@ mod tests {
             access_set_hints: Some(AccessSetHints {
                 read_keys: vec!["state:manifest-read".to_owned()],
                 write_keys: vec!["state:manifest-write".to_owned()],
+                dynamic_reads: Vec::new(),
+                dynamic_writes: Vec::new(),
             }),
             entrypoints: Some(entrypoints),
             kotoba: None,
@@ -2989,6 +3275,8 @@ mod tests {
             let hints = AccessSetHints {
                 read_keys: vec![format!("account:{alice}")],
                 write_keys: vec![format!("state:trigger_hint")],
+                dynamic_reads: Vec::new(),
+                dynamic_writes: Vec::new(),
             };
             let code = vec![ivm::encoding::wide::encode_halt().to_le_bytes()]
                 .into_iter()

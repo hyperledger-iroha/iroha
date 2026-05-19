@@ -15,7 +15,7 @@ use std::{
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
 };
 
-use iroha_crypto::{Hash, PublicKey, Signature};
+use iroha_crypto::{Hash, PublicKey, Signature, fhe_bfv::BfvEvaluationKeyBundle};
 use iroha_primitives::json::Json;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -3560,8 +3560,8 @@ pub struct FheJobSpecV1 {
     pub output_state_key: String,
     /// Requested multiplicative depth consumed by this job.
     pub requested_multiplication_depth: u16,
-    /// Number of deterministic ciphertext rotations requested.
-    pub rotation_count: u32,
+    /// Left-rotation steps requested for slot-rotation jobs.
+    pub rotation_steps: u32,
     /// Number of bootstrap/refresh operations requested.
     pub bootstrap_count: u16,
 }
@@ -3638,7 +3638,7 @@ impl FheJobSpecV1 {
                         reason: "add operation must use depth 0".to_string(),
                     });
                 }
-                if self.rotation_count != 0 || self.bootstrap_count != 0 {
+                if self.rotation_steps != 0 || self.bootstrap_count != 0 {
                     return Err(SoracloudManifestError::InvalidField {
                         manifest: "fhe job spec",
                         field: "operation",
@@ -3661,7 +3661,7 @@ impl FheJobSpecV1 {
                         reason: "multiply operation requires non-zero depth".to_string(),
                     });
                 }
-                if self.rotation_count != 0 || self.bootstrap_count != 0 {
+                if self.rotation_steps != 0 || self.bootstrap_count != 0 {
                     return Err(SoracloudManifestError::InvalidField {
                         manifest: "fhe job spec",
                         field: "operation",
@@ -3677,11 +3677,11 @@ impl FheJobSpecV1 {
                         reason: "rotate operation requires exactly one input".to_string(),
                     });
                 }
-                if self.rotation_count == 0 {
+                if self.rotation_steps == 0 {
                     return Err(SoracloudManifestError::InvalidField {
                         manifest: "fhe job spec",
-                        field: "rotation_count",
-                        reason: "rotate operation requires non-zero rotation_count".to_string(),
+                        field: "rotation_steps",
+                        reason: "rotate operation requires non-zero rotation_steps".to_string(),
                     });
                 }
                 if self.requested_multiplication_depth != 0 || self.bootstrap_count != 0 {
@@ -3707,7 +3707,7 @@ impl FheJobSpecV1 {
                         reason: "bootstrap operation requires non-zero bootstrap_count".to_string(),
                     });
                 }
-                if self.requested_multiplication_depth != 0 || self.rotation_count != 0 {
+                if self.requested_multiplication_depth != 0 || self.rotation_steps != 0 {
                     return Err(SoracloudManifestError::InvalidField {
                         manifest: "fhe job spec",
                         field: "operation",
@@ -3792,13 +3792,13 @@ impl FheJobSpecV1 {
                 ),
             });
         }
-        if self.rotation_count > policy.max_rotation_count.get() {
+        if self.rotation_steps > policy.max_rotation_count.get() {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "fhe job spec",
-                field: "rotation_count",
+                field: "rotation_steps",
                 reason: format!(
-                    "rotation_count {} exceeds policy max_rotation_count {}",
-                    self.rotation_count, policy.max_rotation_count
+                    "rotation_steps {} exceeds policy max_rotation_count {}",
+                    self.rotation_steps, policy.max_rotation_count
                 ),
             });
         }
@@ -3855,7 +3855,7 @@ impl FheJobSpecV1 {
             FheJobOperationV1::Multiply => {
                 u64::from(self.requested_multiplication_depth).saturating_mul(64)
             }
-            FheJobOperationV1::RotateLeft => u64::from(self.rotation_count).min(1_024),
+            FheJobOperationV1::RotateLeft => u64::from(self.rotation_steps).min(1_024),
             FheJobOperationV1::Bootstrap => u64::from(self.bootstrap_count).saturating_mul(128),
         };
         max_input.saturating_add(op_overhead).max(1)
@@ -3876,7 +3876,7 @@ impl FheJobSpecV1 {
             self.param_set_version,
             self.operation,
             self.requested_multiplication_depth,
-            self.rotation_count,
+            self.rotation_steps,
             self.bootstrap_count,
             input_commitments,
         )))
@@ -5648,6 +5648,8 @@ pub struct SoraServiceStateEntryV1 {
     pub state_key: String,
     /// Encryption mode for the stored payload.
     pub encryption: SoraStateEncryptionV1,
+    /// Full authoritative payload bytes. FHE rows store the encoded ciphertext envelope.
+    pub payload: Vec<u8>,
     /// Stored payload size in bytes.
     pub payload_bytes: NonZeroU64,
     /// Deterministic payload commitment.
@@ -5699,6 +5701,30 @@ impl SoraServiceStateEntryV1 {
                 manifest: "sora service state entry",
                 field: "last_update_sequence",
                 reason: "must be greater than zero".to_string(),
+            });
+        }
+        let payload_len = u64::try_from(self.payload.len()).map_err(|_| {
+            SoracloudManifestError::InvalidField {
+                manifest: "sora service state entry",
+                field: "payload",
+                reason: "payload length exceeds supported u64 range".to_string(),
+            }
+        })?;
+        if self.payload_bytes.get() != payload_len {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "sora service state entry",
+                field: "payload_bytes",
+                reason: format!(
+                    "declares {} bytes but payload has {} bytes",
+                    self.payload_bytes, payload_len
+                ),
+            });
+        }
+        if self.payload_commitment != Hash::new(&self.payload) {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "sora service state entry",
+                field: "payload_commitment",
+                reason: "must equal the hash of payload bytes".to_string(),
             });
         }
         if !matches!(
@@ -10124,6 +10150,9 @@ pub struct SoracloudEmitStateMutationRequestV1 {
     /// Declared payload size when the mutation upserts content.
     #[norito(default)]
     pub payload_bytes: Option<u64>,
+    /// Full payload bytes when the mutation upserts content.
+    #[norito(default)]
+    pub payload: Option<Vec<u8>>,
     /// Deterministic commitment over the opaque payload.
     #[norito(default)]
     pub payload_commitment: Option<Hash>,
@@ -10464,19 +10493,21 @@ pub fn encode_delete_service_secret_provenance_payload(
 /// Encode the canonical provenance signature payload for state mutations.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
-/// `(service_name, binding_name, key, operation, value_size_bytes, encryption, governance_tx_hash)`.
+/// `(service_name, binding_name, key, operation, value_size_bytes, payload_commitment, encryption, governance_tx_hash)`.
 ///
 /// `operation` is expected to be a deterministic symbolic label such as
 /// `"upsert"` or `"delete"`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
+#[allow(clippy::too_many_arguments)]
 pub fn encode_state_mutation_provenance_payload(
     service_name: &str,
     binding_name: &str,
     key: &str,
     operation: &str,
     value_size_bytes: Option<u64>,
+    payload_commitment: Option<Hash>,
     encryption: SoraStateEncryptionV1,
     governance_tx_hash: Hash,
 ) -> Result<Vec<u8>, norito::Error> {
@@ -10486,6 +10517,7 @@ pub fn encode_state_mutation_provenance_payload(
         key,
         operation,
         value_size_bytes,
+        payload_commitment,
         encryption,
         governance_tx_hash,
     ))
@@ -11096,7 +11128,7 @@ pub fn encode_inrou_host_withdraw_provenance_payload(
 /// Encode the canonical provenance signature payload for FHE job execution.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
-/// `(service_name, binding_name, job, policy, param_set, governance_tx_hash)`.
+/// `(service_name, binding_name, job, policy, param_set, evaluation_keys, governance_tx_hash)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -11106,6 +11138,7 @@ pub fn encode_fhe_job_run_provenance_payload(
     job: FheJobSpecV1,
     policy: FheExecutionPolicyV1,
     param_set: FheParamSetV1,
+    evaluation_keys: BfvEvaluationKeyBundle,
     governance_tx_hash: Hash,
 ) -> Result<Vec<u8>, norito::Error> {
     norito::to_bytes(&(
@@ -11114,6 +11147,7 @@ pub fn encode_fhe_job_run_provenance_payload(
         job,
         policy,
         param_set,
+        evaluation_keys,
         governance_tx_hash,
     ))
 }
@@ -11724,6 +11758,7 @@ mod tests {
             "/state/private/records/1",
             "upsert",
             Some(512),
+            Some(governance_tx_hash),
             SoraStateEncryptionV1::ClientCiphertext,
             governance_tx_hash,
         )
@@ -11734,6 +11769,7 @@ mod tests {
             "/state/private/records/1",
             "upsert",
             Some(512u64),
+            Some(governance_tx_hash),
             SoraStateEncryptionV1::ClientCiphertext,
             governance_tx_hash,
         ))
@@ -12272,6 +12308,7 @@ mod tests {
         let job = sample_fhe_job_spec();
         let policy = sample_fhe_execution_policy();
         let param_set = sample_fhe_param_set();
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
         let governance_tx_hash = sample_hash(21);
         let encoded = encode_fhe_job_run_provenance_payload(
             "health_portal",
@@ -12279,6 +12316,7 @@ mod tests {
             job.clone(),
             policy.clone(),
             param_set.clone(),
+            evaluation_keys.clone(),
             governance_tx_hash,
         )
         .expect("encode payload");
@@ -12288,6 +12326,7 @@ mod tests {
             job,
             policy,
             param_set,
+            evaluation_keys,
             governance_tx_hash,
         ))
         .expect("encode tuple");
@@ -12723,6 +12762,16 @@ mod tests {
         }
     }
 
+    fn sample_bfv_evaluation_key_bundle() -> BfvEvaluationKeyBundle {
+        BfvEvaluationKeyBundle {
+            relinearization_key: iroha_crypto::fhe_bfv::BfvRelinearizationKey {
+                entries: Vec::new(),
+            },
+            rotation_keys: Vec::new(),
+            bootstrap_key: None,
+        }
+    }
+
     fn sample_fhe_execution_policy() -> FheExecutionPolicyV1 {
         FheExecutionPolicyV1 {
             schema_version: FHE_EXECUTION_POLICY_VERSION_V1,
@@ -12762,7 +12811,7 @@ mod tests {
             ],
             output_state_key: "/state/health/result-1".to_string(),
             requested_multiplication_depth: 0,
-            rotation_count: 0,
+            rotation_steps: 0,
             bootstrap_count: 0,
         }
     }
@@ -12879,6 +12928,8 @@ mod tests {
     }
 
     fn sample_state_entry() -> SoraServiceStateEntryV1 {
+        let payload = vec![0xC1; 2_048];
+        let payload_commitment = Hash::new(&payload);
         SoraServiceStateEntryV1 {
             schema_version: SORA_SERVICE_STATE_ENTRY_VERSION_V1,
             service_name: "portal".parse().expect("valid name"),
@@ -12887,7 +12938,8 @@ mod tests {
             state_key: "/state/private/patient-1".to_string(),
             encryption: SoraStateEncryptionV1::FheCiphertext,
             payload_bytes: NonZeroU64::new(2_048).expect("nonzero"),
-            payload_commitment: sample_hash(148),
+            payload,
+            payload_commitment,
             last_update_sequence: 12,
             governance_tx_hash: sample_hash(149),
             source_action: SoraServiceLifecycleActionV1::StateMutation,

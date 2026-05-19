@@ -27,6 +27,7 @@ export {
   decodePdpCommitmentHeader,
   buildConnectWebSocketUrl,
   encryptIdentifierInputForPolicy,
+  encodeIdentifierResolutionReceiptPayload,
   buildIdentifierRequestForPolicy,
   buildRbcSampleRequest,
   getIdentifierBfvPublicParameters,

@@ -1549,15 +1549,27 @@ impl SoracloudIvmHost {
         let current_size = self.current_entry_size(&request.binding_name, &request.state_key);
         match request.operation {
             SoraStateMutationOperationV1::Upsert => {
-                let Some(payload_bytes) = request.payload_bytes else {
+                let Some(payload) = request.payload.as_ref() else {
                     return Err(VMError::NoritoInvalid);
                 };
+                let payload_bytes =
+                    u64::try_from(payload.len()).map_err(|_| VMError::NoritoInvalid)?;
                 if payload_bytes == 0 {
                     return Err(VMError::NoritoInvalid);
                 }
-                let Some(payload_commitment) = request.payload_commitment else {
+                if request
+                    .payload_bytes
+                    .is_some_and(|declared| declared != payload_bytes)
+                {
                     return Err(VMError::NoritoInvalid);
-                };
+                }
+                let payload_commitment = Hash::new(payload);
+                if request
+                    .payload_commitment
+                    .is_some_and(|declared| declared != payload_commitment)
+                {
+                    return Err(VMError::NoritoInvalid);
+                }
                 if payload_bytes > binding.max_item_bytes.get() {
                     return Err(VMError::PermissionDenied);
                 }
@@ -1592,6 +1604,7 @@ impl SoracloudIvmHost {
                         binding_name: request.binding_name.clone(),
                         state_key: request.state_key.clone(),
                         encryption: request.encryption,
+                        payload: payload.clone(),
                         payload_bytes: std::num::NonZeroU64::new(payload_bytes)
                             .ok_or(VMError::NoritoInvalid)?,
                         payload_commitment,
@@ -1602,7 +1615,10 @@ impl SoracloudIvmHost {
                 );
             }
             SoraStateMutationOperationV1::Delete => {
-                if request.payload_bytes.is_some() || request.payload_commitment.is_some() {
+                if request.payload_bytes.is_some()
+                    || request.payload.is_some()
+                    || request.payload_commitment.is_some()
+                {
                     return Err(VMError::NoritoInvalid);
                 }
                 if binding.mutability
@@ -1622,13 +1638,19 @@ impl SoracloudIvmHost {
             }
         }
 
+        let mutation_payload_bytes = request
+            .payload
+            .as_ref()
+            .and_then(|payload| u64::try_from(payload.len()).ok());
+        let mutation_payload_commitment = request.payload.as_ref().map(Hash::new);
         let mutation = iroha_core::soracloud_runtime::SoracloudDeterministicStateMutation {
             binding_name,
             state_key: request.state_key.clone(),
             operation: request.operation,
             encryption: request.encryption,
-            payload_bytes: request.payload_bytes,
-            payload_commitment: request.payload_commitment,
+            payload_bytes: mutation_payload_bytes,
+            payload: request.payload.clone(),
+            payload_commitment: mutation_payload_commitment,
         };
         let mutation_commitment = Hash::new(Encode::encode(&(
             "soracloud.host.state-mutation.v1",
@@ -20929,7 +20951,8 @@ mod tests {
                         state_key: "/state/session/alice".to_owned(),
                         encryption:
                             iroha_data_model::soracloud::SoraStateEncryptionV1::ClientCiphertext,
-                        payload_bytes: std::num::NonZeroU64::new(64).expect("nonzero"),
+                        payload: b"alice-session".to_vec(),
+                        payload_bytes: std::num::NonZeroU64::new(13).expect("nonzero"),
                         payload_commitment: Hash::new(b"alice-session"),
                         last_update_sequence: 4,
                         governance_tx_hash: Hash::new(b"gov-session"),
@@ -21448,7 +21471,8 @@ mod tests {
             binding_name: "session_store".parse().expect("valid binding"),
             state_key: "/state/session/alice".to_owned(),
             encryption: iroha_data_model::soracloud::SoraStateEncryptionV1::ClientCiphertext,
-            payload_bytes: std::num::NonZeroU64::new(64).expect("non-zero"),
+            payload: b"alice-session".to_vec(),
+            payload_bytes: std::num::NonZeroU64::new(13).expect("non-zero"),
             payload_commitment: Hash::new(b"alice-session"),
             last_update_sequence: 4,
             governance_tx_hash: Hash::new(b"gov-session"),

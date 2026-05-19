@@ -106,7 +106,20 @@ fn genesis_asset_minted_across_peers() -> Result<()> {
         .into_builder()
         .next_transaction()
         .set_topology(network.topology_entries().to_vec());
-    let genesis_block = builder.build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)?;
+    let da_proof_policies = network.genesis().0.da_proof_policies().cloned();
+    let zk_policy_hash = network
+        .genesis()
+        .0
+        .header()
+        .confidential_features()
+        .and_then(|digest| digest.zk_policy_hash);
+    let genesis_block = builder
+        .build_raw()
+        .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
+            &SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
+            da_proof_policies,
+            zk_policy_hash,
+        )?;
 
     let sync_timeout = network.sync_timeout();
     let block_result: Result<()> = rt.block_on(async {

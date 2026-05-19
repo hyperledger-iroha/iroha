@@ -101,6 +101,8 @@ use tracing::{Instrument, debug, error, info, info_span, warn};
 
 use crate::config::ensure_genesis_results;
 const TEST_SNS_LEASE_PAYMENT_NANOS: u64 = 500_000_000;
+const TEST_SNS_LEASE_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(30);
+const TEST_SNS_LEASE_VISIBILITY_POLL: Duration = Duration::from_millis(250);
 
 pub use crate::config::genesis as genesis_factory;
 /// Build the default minimal genesis with additional post-topology transactions.
@@ -153,6 +155,43 @@ fn test_domain_register_request(
     })
 }
 
+fn is_duplicate_sns_selector_error(err: &Report) -> bool {
+    err.chain().any(|cause| {
+        let message = cause.to_string();
+        message.contains("selector `") && message.contains(" is already registered")
+    })
+}
+
+fn domain_registration_lease_visible_to_client(client: &Client, domain: &DomainId) -> Result<bool> {
+    let domain_label = domain.to_string();
+    match client
+        .sns()
+        .get_name(iroha::sns::SnsNamespacePath::Domain, &domain_label)
+    {
+        Ok(record) if record.owner == client.account && record.status == NameStatus::Active => {
+            Ok(true)
+        }
+        Ok(record) => Err(eyre!(
+            "domain `{domain}` requires an active SNS lease owned by `{}`; found owner `{}` with status {:?}",
+            client.account,
+            record.owner,
+            record.status
+        )),
+        Err(_) => Ok(false),
+    }
+}
+
+fn wait_for_domain_registration_lease(client: &Client, domain: &DomainId) -> Result<bool> {
+    let deadline = Instant::now() + TEST_SNS_LEASE_VISIBILITY_TIMEOUT;
+    while Instant::now() < deadline {
+        if domain_registration_lease_visible_to_client(client, domain)? {
+            return Ok(true);
+        }
+        std::thread::sleep(TEST_SNS_LEASE_VISIBILITY_POLL);
+    }
+    domain_registration_lease_visible_to_client(client, domain)
+}
+
 /// Ensure a runtime domain registration has the SNS lease required by the executor.
 pub fn ensure_domain_registration_lease(client: &Client, domain: &DomainId) -> Result<()> {
     let domain_exists = client
@@ -164,25 +203,21 @@ pub fn ensure_domain_registration_lease(client: &Client, domain: &DomainId) -> R
         return Ok(());
     }
 
-    let domain_label = domain.to_string();
-    match client
-        .sns()
-        .get_name(iroha::sns::SnsNamespacePath::Domain, &domain_label)
-    {
-        Ok(record) if record.owner == client.account && record.status == NameStatus::Active => {
-            Ok(())
+    if domain_registration_lease_visible_to_client(client, domain)? {
+        return Ok(());
+    }
+
+    let request = test_domain_register_request(domain, &client.account)?;
+    match client.sns().register(&request) {
+        Ok(_) => Ok(()),
+        Err(err) if is_duplicate_sns_selector_error(&err) => {
+            if wait_for_domain_registration_lease(client, domain)? {
+                Ok(())
+            } else {
+                Err(err)
+            }
         }
-        Ok(record) => Err(eyre!(
-            "domain `{domain}` requires an active SNS lease owned by `{}`; found owner `{}` with status {:?}",
-            client.account,
-            record.owner,
-            record.status
-        )),
-        Err(_) => {
-            let request = test_domain_register_request(domain, &client.account)?;
-            client.sns().register(&request)?;
-            Ok(())
-        }
+        Err(err) => Err(err),
     }
 }
 

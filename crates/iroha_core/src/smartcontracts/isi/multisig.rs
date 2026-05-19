@@ -5080,7 +5080,10 @@ mod tests {
                 action::{Action, Repeats},
             },
         };
-        use ivm::KotodamaCompiler;
+        use ivm::{
+            KotodamaCompiler,
+            kotodama::compiler::{CompilerMode, CompilerOptions},
+        };
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -5138,23 +5141,24 @@ mod tests {
             .map(|account| account.id().clone())
             .expect("registered multisig account");
 
-        let program = KotodamaCompiler::new()
-            .compile_source(
-                r#"
+        let program = KotodamaCompiler::new_with_options(CompilerOptions {
+            mode: CompilerMode::Test,
+            ..CompilerOptions::default()
+        })
+        .compile_source(
+            r#"
 seiyaku TriggerDispatch {
-  #[access(read="*", write="*")]
   kotoage fn main() permission(Admin) {
     set_account_detail(authority(), name("entrypoint"), json("1"));
   }
 
-  #[access(read="*", write="*")]
   kotoage fn alternate() permission(Admin) {
     set_account_detail(authority(), name("entrypoint"), json("2"));
   }
 }
 "#,
-            )
-            .expect("compile trigger dispatch contract");
+        )
+        .expect("compile trigger dispatch contract");
         let bytecode = IvmBytecode::from_compiled(program);
 
         let trigger_id: iroha_data_model::trigger::TriggerId = "contract_dispatch".parse().unwrap();

@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, error::Error as StdError, fmt};
 
 use iroha_crypto::Hash;
 use iroha_data_model::smart_contract::manifest::{
-    AccessSetHints, ContractManifest, EntryPointKind, KotobaTranslationEntry,
+    AccessSetHints, ContractManifest, DynamicAccessHint, EntryPointKind, KotobaTranslationEntry,
 };
 
 use crate::{
@@ -268,6 +268,16 @@ fn validate_access_set_hints(
         "access_set_hints.write_keys",
         &access_set_hints.write_keys,
     )?;
+    validate_dynamic_access_hints(
+        "contract",
+        "access_set_hints.dynamic_reads",
+        &access_set_hints.dynamic_reads,
+    )?;
+    validate_dynamic_access_hints(
+        "contract",
+        "access_set_hints.dynamic_writes",
+        &access_set_hints.dynamic_writes,
+    )?;
     Ok(())
 }
 
@@ -280,6 +290,38 @@ fn validate_access_keys(
         if key.trim().is_empty() {
             return Err(ContractArtifactError::invalid(format!(
                 "{owner} contains an empty {field} entry"
+            )));
+        }
+        if key == "*" || key == "state:*" {
+            return Err(ContractArtifactError::invalid(format!(
+                "{owner} contains unsupported wildcard {field} entry `{key}`"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_dynamic_access_hints(
+    owner: &str,
+    field: &str,
+    hints: &[DynamicAccessHint],
+) -> Result<(), ContractArtifactError> {
+    for hint in hints {
+        if hint.base_key.trim().is_empty() {
+            return Err(ContractArtifactError::invalid(format!(
+                "{owner} contains an empty {field}.base_key entry"
+            )));
+        }
+        if !hint.base_key.starts_with("state:") || hint.base_key == "state:*" {
+            return Err(ContractArtifactError::invalid(format!(
+                "{owner} contains unsupported dynamic access base `{}`",
+                hint.base_key
+            )));
+        }
+        if hint.max_keys == 0 {
+            return Err(ContractArtifactError::invalid(format!(
+                "{owner} contains zero-bound dynamic access hint `{}`",
+                hint.base_key
             )));
         }
     }

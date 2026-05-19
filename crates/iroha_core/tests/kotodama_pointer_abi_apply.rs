@@ -462,7 +462,6 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
           state SeededBase: Map<int, int>;
           state SeededQuote: Map<int, int>;
 
-          #[access(read="*", write="*")]
           kotoage fn init_pool(base_asset: AssetDefinitionId,
                                quote_asset: AssetDefinitionId,
                                vault_account: AccountId,
@@ -478,7 +477,6 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
             ActiveBin[pool] = active_bin;
           }
 
-          #[access(read="*", write="*")]
           kotoage fn seed_bin(provider: AccountId,
                               bin_id: int,
                               base_amount: int,

@@ -31,13 +31,26 @@ class HttpClientTransportTest {
 
         transport.issueIdentifierClaimReceipt(
             "alice@wonderland.dataspace",
-            IdentifierResolveRequest.encrypted("phone#retail", "abcd"),
+            IdentifierResolveRequest.encrypted("phone#retail", "abcd", sampleOpening()),
         ).join()
 
         assertEquals(
             "https://torii.example/api/v1/accounts/alice%40wonderland.dataspace/identifiers/claim-receipt",
             executor.lastRequest.uri.toString(),
         )
+        @Suppress("UNCHECKED_CAST")
+        val body = JsonParser.parse(readBody(executor.lastRequest)) as Map<String, Any?>
+        assertEquals("phone#retail", body["policy_id"])
+        assertEquals("abcd", body["encrypted_input"])
+        assertTrue(body["output_opening"] is Map<*, *>)
+    }
+
+    @Test
+    fun identifierHiddenFunctionRequestsCarryOutputOpening() {
+        val opening = sampleOpening()
+        val request = IdentifierResolveRequest.encrypted("phone#retail", "abcd", opening)
+
+        assertEquals(opening, request.outputOpening)
     }
 
     @Test
@@ -296,7 +309,7 @@ class HttpClientTransportTest {
     }
 
     @Test
-    fun executeRamLfeProgramParsesResponseAndPostsPlaintextHex() {
+    fun executeRamLfeProgramParsesResponseAndPostsEncryptedHex() {
         val executor = StubResponseExecutor(
             statusCode = 200,
             body = """
@@ -331,7 +344,9 @@ class HttpClientTransportTest {
             config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
         )
 
-        val response = transport.executeRamLfeProgram("identifier_lookup_retail", "0xABCD", null).join()
+        val response = transport
+            .executeRamLfeProgram("identifier_lookup_retail", RamLfeExecuteRequest.encrypted("0xABCD"))
+            .join()
 
         assertTrue(response.isPresent)
         val execute = response.get()
@@ -347,7 +362,7 @@ class HttpClientTransportTest {
             "https://torii.example/v1/ram-lfe/programs/identifier_lookup_retail/execute",
             request.uri.toString(),
         )
-        assertEquals("""{"input_hex":"abcd"}""", readBody(request))
+        assertEquals("""{"encrypted_input":"abcd"}""", readBody(request))
     }
 
     @Test
@@ -361,7 +376,9 @@ class HttpClientTransportTest {
             config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
         )
 
-        val response = transport.executeRamLfeProgram("identifier_lookup_retail", null, "ABCD").join()
+        val response = transport
+            .executeRamLfeProgram("identifier_lookup_retail", RamLfeExecuteRequest.encrypted("ABCD"))
+            .join()
 
         assertFalse(response.isPresent)
         val request = executor.lastRequest
@@ -934,6 +951,21 @@ class HttpClientTransportTest {
             codec.schemaName(),
         )
     }
+
+    private fun sampleOpening(): RamLfeOutputOpening =
+        RamLfeOutputOpening(
+            RamLfeOutputOpeningPayload(
+                programId = "identifier_lookup_retail",
+                inputCiphertextHash = "11".repeat(32),
+                outputCiphertextHash = "22".repeat(32),
+                parameterDigest = "33".repeat(32),
+                evaluationKeyDigest = "44".repeat(32),
+                openedOutputHash = "55".repeat(32),
+                openedAtMs = 42L,
+                expiresAtMs = 142L,
+            ),
+            signature = "aa".repeat(64),
+        )
 
     private open class CapturingExecutor : HttpTransportExecutor {
         lateinit var lastRequest: TransportRequest

@@ -71,7 +71,6 @@ seiyaku ThresholdEscrow {
   // NOTE:
   // This sample uses permission(Admin) because it releases and refunds funds
   // from the configured escrow account.
-  #[access(read="*", write="*")]
   kotoage fn open_escrow(recipient: AccountId,
                          escrow_account: AccountId,
                          asset_definition: AssetDefinitionId,
@@ -90,7 +89,6 @@ seiyaku ThresholdEscrow {
     is_refunded = false;
   }
 
-  #[access(read="*", write="*")]
   kotoage fn deposit(amount: int) permission(Admin) {
     assert_open();
     assert_payer();
@@ -103,7 +101,6 @@ seiyaku ThresholdEscrow {
     funded_amount_value = next_funded;
   }
 
-  #[access(read="*", write="*")]
   kotoage fn release_if_ready() permission(Admin) {
     assert_open();
     assert(funded_amount_value == target_amount_value, "escrow is not fully funded");
@@ -118,7 +115,6 @@ seiyaku ThresholdEscrow {
     is_released = true;
   }
 
-  #[access(read="*", write="*")]
   kotoage fn refund() permission(Admin) {
     assert_open();
     assert_payer();

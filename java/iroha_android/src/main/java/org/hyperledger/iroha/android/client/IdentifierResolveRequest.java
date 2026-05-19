@@ -5,67 +5,67 @@ import java.util.Objects;
 /** Typed request wrapper for identifier resolve and claim-receipt flows. */
 public final class IdentifierResolveRequest {
   private final String policyId;
-  private final String input;
   private final String encryptedInputHex;
+  private final RamLfeOutputOpening outputOpening;
 
   private IdentifierResolveRequest(
-      final String policyId, final String input, final String encryptedInputHex) {
+      final String policyId,
+      final String encryptedInputHex,
+      final RamLfeOutputOpening outputOpening) {
     this.policyId = Objects.requireNonNull(policyId, "policyId");
-    this.input = input;
     this.encryptedInputHex = encryptedInputHex;
-  }
-
-  public static IdentifierResolveRequest plaintext(final String policyId, final String input) {
-    final String normalizedPolicyId = HttpClientTransport.normalizeNonBlank(policyId, "policyId");
-    final String normalizedInput = HttpClientTransport.normalizeNonBlank(input, "input");
-    return new IdentifierResolveRequest(normalizedPolicyId, normalizedInput, null);
+    this.outputOpening = outputOpening;
   }
 
   public static IdentifierResolveRequest encrypted(
-      final String policyId, final String encryptedInputHex) {
+      final String policyId,
+      final String encryptedInputHex,
+      final RamLfeOutputOpening outputOpening) {
     final String normalizedPolicyId = HttpClientTransport.normalizeNonBlank(policyId, "policyId");
     final String normalizedEncryptedInput =
         HttpClientTransport.normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex");
-    return new IdentifierResolveRequest(normalizedPolicyId, null, normalizedEncryptedInput);
-  }
-
-  public static IdentifierResolveRequest plaintext(
-      final IdentifierPolicySummary policy, final String input) {
-    Objects.requireNonNull(policy, "policy");
-    final String normalized = policy.normalization().normalize(input, "input");
-    return plaintext(policy.policyId(), normalized);
+    return new IdentifierResolveRequest(
+        normalizedPolicyId,
+        normalizedEncryptedInput,
+        Objects.requireNonNull(outputOpening, "outputOpening"));
   }
 
   public static IdentifierResolveRequest encrypted(
-      final IdentifierPolicySummary policy, final String encryptedInputHex) {
+      final IdentifierPolicySummary policy,
+      final String encryptedInputHex,
+      final RamLfeOutputOpening outputOpening) {
     Objects.requireNonNull(policy, "policy");
     if (!"bfv-v1".equalsIgnoreCase(policy.inputEncryption())) {
       throw new IllegalArgumentException(
           "Policy " + policy.policyId() + " does not publish BFV encrypted-input support");
     }
-    return encrypted(policy.policyId(), encryptedInputHex);
+    return encrypted(policy.policyId(), encryptedInputHex, outputOpening);
   }
 
   public static IdentifierResolveRequest encryptedFromInput(
-      final IdentifierPolicySummary policy, final String input) {
-    return encryptedFromInput(policy, input, null);
+      final IdentifierPolicySummary policy, final String input, final RamLfeOutputOpening outputOpening) {
+    return encryptedFromInput(policy, input, outputOpening, null);
   }
 
   public static IdentifierResolveRequest encryptedFromInput(
-      final IdentifierPolicySummary policy, final String input, final byte[] seed) {
+      final IdentifierPolicySummary policy,
+      final String input,
+      final RamLfeOutputOpening outputOpening,
+      final byte[] seed) {
     Objects.requireNonNull(policy, "policy");
-    return encrypted(policy.policyId(), IdentifierBfvEnvelopeBuilder.encrypt(policy, input, seed));
+    return encrypted(
+        policy.policyId(), IdentifierBfvEnvelopeBuilder.encrypt(policy, input, seed), outputOpening);
   }
 
   public String policyId() {
     return policyId;
   }
 
-  public String input() {
-    return input;
-  }
-
   public String encryptedInputHex() {
     return encryptedInputHex;
+  }
+
+  public RamLfeOutputOpening outputOpening() {
+    return outputOpening;
   }
 }

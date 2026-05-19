@@ -7730,6 +7730,317 @@ mod tests {
         assert_eq!(roundtrip.zk_policy_hash, Some([0xA5; 32]));
     }
 
+    fn confidential_feature_digest(
+        policy_hash_byte: Option<u8>,
+    ) -> crate::ConfidentialFeatureDigest {
+        confidential_feature_digest_with_rules(
+            Some(iroha_data_model::confidential::CONFIDENTIAL_RULES_VERSION),
+            policy_hash_byte,
+        )
+    }
+
+    fn confidential_feature_digest_with_rules(
+        rules_version: Option<u32>,
+        policy_hash_byte: Option<u8>,
+    ) -> crate::ConfidentialFeatureDigest {
+        confidential_feature_digest_full(None, None, None, rules_version, policy_hash_byte)
+    }
+
+    fn confidential_feature_digest_full(
+        vk_set_hash_byte: Option<u8>,
+        poseidon_params_id: Option<u32>,
+        pedersen_params_id: Option<u32>,
+        rules_version: Option<u32>,
+        policy_hash_byte: Option<u8>,
+    ) -> crate::ConfidentialFeatureDigest {
+        crate::ConfidentialFeatureDigest::new(
+            vk_set_hash_byte.map(|byte| [byte; 32]),
+            poseidon_params_id,
+            pedersen_params_id,
+            rules_version,
+            policy_hash_byte.map(|byte| [byte; 32]),
+        )
+    }
+
+    fn confidential_zk_caps(
+        features: Option<crate::ConfidentialFeatureDigest>,
+    ) -> ConfidentialHandshakeCaps {
+        ConfidentialHandshakeCaps {
+            enabled: true,
+            assume_valid: false,
+            verifier_backend: "halo2-ipa-pallas".to_string(),
+            features,
+        }
+    }
+
+    fn confidential_zk_caps_with_flags(
+        assume_valid: bool,
+        verifier_backend: &str,
+        features: Option<crate::ConfidentialFeatureDigest>,
+    ) -> ConfidentialHandshakeCaps {
+        confidential_zk_caps_full(true, assume_valid, verifier_backend, features)
+    }
+
+    fn confidential_zk_caps_full(
+        enabled: bool,
+        assume_valid: bool,
+        verifier_backend: &str,
+        features: Option<crate::ConfidentialFeatureDigest>,
+    ) -> ConfidentialHandshakeCaps {
+        ConfidentialHandshakeCaps {
+            enabled,
+            assume_valid,
+            verifier_backend: verifier_backend.to_string(),
+            features,
+        }
+    }
+
+    async fn confidential_handshake_error(
+        sender_caps: ConfidentialHandshakeCaps,
+        receiver_caps: ConfidentialHandshakeCaps,
+    ) -> crate::Error {
+        confidential_handshake_error_with_caps(Some(sender_caps), Some(receiver_caps)).await
+    }
+
+    async fn confidential_handshake_error_with_caps(
+        sender_caps: Option<ConfidentialHandshakeCaps>,
+        receiver_caps: Option<ConfidentialHandshakeCaps>,
+    ) -> crate::Error {
+        let kx = KexAlgo::new();
+        let (sender_kx, _sender_sk) = kx.keypair(KeyGenOption::Random);
+        let (receiver_kx, _receiver_sk) = kx.keypair(KeyGenOption::Random);
+        let addr: SocketAddr = "127.0.0.1:1338".parse().unwrap();
+        let key_pair = KeyPair::random();
+        let cryptographer =
+            Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[12u8; 32]).unwrap();
+
+        let (stream_a, stream_b) = tokio::io::duplex(1024);
+        let (sender_read, sender_write) = tokio::io::split(stream_a);
+        let (receiver_read, receiver_write) = tokio::io::split(stream_b);
+
+        let send_key = SendKey::<KexAlgo, ChaCha20Poly1305>::new(SendKeyInit {
+            our_public_address: addr.clone(),
+            expected_peer_id: None,
+            key_pair,
+            kx_local_pk: sender_kx.clone(),
+            kx_remote_pk: receiver_kx.clone(),
+            connection: Connection::from_split(21, sender_read, sender_write),
+            cryptographer: cryptographer.clone(),
+            chain_id: None,
+            consensus_caps: None,
+            confidential_caps: sender_caps,
+            crypto_caps: None,
+            relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
+            trust_gossip: true,
+        });
+
+        let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
+            connection: Connection::from_split(22, receiver_read, receiver_write),
+            expected_peer_id: None,
+            kx_local_pk: receiver_kx,
+            kx_remote_pk: sender_kx,
+            cryptographer,
+            chain_id: None,
+            consensus_caps: None,
+            confidential_caps: receiver_caps,
+            crypto_caps: None,
+            relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
+            trust_gossip: true,
+        };
+
+        let sender = tokio::spawn(async move {
+            let _ = SendKey::send_our_public_key(send_key).await?;
+            Result::<(), crate::Error>::Ok(())
+        });
+
+        let err = match GetKey::read_their_public_key(get_key).await {
+            Ok(_) => panic!("confidential capability mismatch must reject handshake"),
+            Err(err) => err,
+        };
+        sender
+            .await
+            .expect("sender task panicked")
+            .expect("sending handshake should succeed");
+
+        err
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_rejects_confidential_zk_policy_hash_mismatch() {
+        let err = confidential_handshake_error(
+            confidential_zk_caps(Some(confidential_feature_digest(Some(0xAA)))),
+            confidential_zk_caps(Some(confidential_feature_digest(Some(0xBB)))),
+        )
+        .await;
+
+        assert!(
+            matches!(err, crate::Error::HandshakeConfidentialMismatch),
+            "expected confidential mismatch, got {err:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_rejects_missing_confidential_feature_digest_when_expected() {
+        let err = confidential_handshake_error(
+            confidential_zk_caps(None),
+            confidential_zk_caps(Some(confidential_feature_digest(Some(0xAA)))),
+        )
+        .await;
+
+        assert!(
+            matches!(err, crate::Error::HandshakeConfidentialMismatch),
+            "expected confidential mismatch, got {err:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_rejects_missing_confidential_meta_when_expected() {
+        let err = confidential_handshake_error_with_caps(
+            None,
+            Some(confidential_zk_caps(Some(confidential_feature_digest(
+                Some(0xAA),
+            )))),
+        )
+        .await;
+
+        assert!(
+            matches!(err, crate::Error::HandshakeConfidentialMismatch),
+            "expected confidential mismatch, got {err:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_rejects_missing_zk_policy_hash_when_expected() {
+        let err = confidential_handshake_error(
+            confidential_zk_caps(Some(confidential_feature_digest(None))),
+            confidential_zk_caps(Some(confidential_feature_digest(Some(0xAA)))),
+        )
+        .await;
+
+        assert!(
+            matches!(err, crate::Error::HandshakeConfidentialMismatch),
+            "expected confidential mismatch, got {err:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_rejects_missing_confidential_rules_version_when_expected() {
+        let err = confidential_handshake_error(
+            confidential_zk_caps(Some(confidential_feature_digest_with_rules(
+                None,
+                Some(0xAA),
+            ))),
+            confidential_zk_caps(Some(confidential_feature_digest(Some(0xAA)))),
+        )
+        .await;
+
+        assert!(
+            matches!(err, crate::Error::HandshakeConfidentialMismatch),
+            "expected confidential mismatch, got {err:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_rejects_confidential_rules_version_mismatch() {
+        let err = confidential_handshake_error(
+            confidential_zk_caps(Some(confidential_feature_digest_with_rules(
+                Some(iroha_data_model::confidential::CONFIDENTIAL_RULES_VERSION + 1),
+                Some(0xAA),
+            ))),
+            confidential_zk_caps(Some(confidential_feature_digest(Some(0xAA)))),
+        )
+        .await;
+
+        assert!(
+            matches!(err, crate::Error::HandshakeConfidentialMismatch),
+            "expected confidential mismatch, got {err:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_rejects_confidential_feature_material_mismatches() {
+        for (label, sender_features, receiver_features) in [
+            (
+                "vk_set_hash",
+                confidential_feature_digest_full(Some(0x10), None, None, Some(1), Some(0xAA)),
+                confidential_feature_digest_full(Some(0x20), None, None, Some(1), Some(0xAA)),
+            ),
+            (
+                "poseidon_params_id",
+                confidential_feature_digest_full(None, Some(1), None, Some(1), Some(0xAA)),
+                confidential_feature_digest_full(None, Some(2), None, Some(1), Some(0xAA)),
+            ),
+            (
+                "pedersen_params_id",
+                confidential_feature_digest_full(None, None, Some(1), Some(1), Some(0xAA)),
+                confidential_feature_digest_full(None, None, Some(2), Some(1), Some(0xAA)),
+            ),
+            (
+                "missing_poseidon_params_id",
+                confidential_feature_digest_full(None, None, None, Some(1), Some(0xAA)),
+                confidential_feature_digest_full(None, Some(1), None, Some(1), Some(0xAA)),
+            ),
+        ] {
+            let err = confidential_handshake_error(
+                confidential_zk_caps(Some(sender_features)),
+                confidential_zk_caps(Some(receiver_features)),
+            )
+            .await;
+
+            assert!(
+                matches!(err, crate::Error::HandshakeConfidentialMismatch),
+                "{label} should produce confidential mismatch, got {err:?}"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_rejects_confidential_assume_valid_mismatch() {
+        let features = Some(confidential_feature_digest(Some(0xAA)));
+        let err = confidential_handshake_error(
+            confidential_zk_caps_with_flags(true, "halo2-ipa-pallas", features.clone()),
+            confidential_zk_caps_with_flags(false, "halo2-ipa-pallas", features),
+        )
+        .await;
+
+        assert!(
+            matches!(err, crate::Error::HandshakeConfidentialMismatch),
+            "expected confidential mismatch, got {err:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_rejects_confidential_enabled_mismatch() {
+        let features = Some(confidential_feature_digest(Some(0xAA)));
+        let err = confidential_handshake_error(
+            confidential_zk_caps_full(false, false, "halo2-ipa-pallas", features.clone()),
+            confidential_zk_caps_full(true, false, "halo2-ipa-pallas", features),
+        )
+        .await;
+
+        assert!(
+            matches!(err, crate::Error::HandshakeConfidentialMismatch),
+            "expected confidential mismatch, got {err:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_rejects_confidential_verifier_backend_mismatch() {
+        let features = Some(confidential_feature_digest(Some(0xAA)));
+        let err = confidential_handshake_error(
+            confidential_zk_caps_with_flags(false, "halo2-ipa-pallas-alt", features.clone()),
+            confidential_zk_caps_with_flags(false, "halo2-ipa-pallas", features),
+        )
+        .await;
+
+        assert!(
+            matches!(err, crate::Error::HandshakeConfidentialMismatch),
+            "expected confidential mismatch, got {err:?}"
+        );
+    }
+
     #[test]
     fn untagged_handshake_is_rejected() {
         let cryptographer =

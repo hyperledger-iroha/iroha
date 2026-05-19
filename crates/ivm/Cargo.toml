@@ -72,7 +72,7 @@ hex-literal = "1.1.0"
 # selected at runtime based on hardware capabilities.
 # - `metal`: enables Apple Metal GPU kernels on macOS. Ignored on other OSes.
 # - `cuda`: enables CUDA PTX kernels when available. Falls back to CPU otherwise.
-default = ["halo2"]
+default = ["halo2", "kotodama_dynamic_bounds"]
 bench = []
 ## Hardware transactional memory experiments on x86_64 (requires nightly RTM intrinsics).
 htm = []

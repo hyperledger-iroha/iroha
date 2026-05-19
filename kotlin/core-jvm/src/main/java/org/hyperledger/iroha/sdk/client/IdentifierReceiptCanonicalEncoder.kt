@@ -19,6 +19,7 @@ object IdentifierReceiptCanonicalEncoder {
         val writer = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS)
         encodeSizedField(writer, PassthroughBytesAdapter, encodePolicyId(payload.policyId))
         encodeSizedField(writer, PassthroughBytesAdapter, encodeExecution(payload.execution))
+        encodeSizedField(writer, PassthroughBytesAdapter, encodeOutputOpening(payload.opening))
         encodeSizedField(writer, PassthroughBytesAdapter, encodeOpaqueHash(payload.opaqueId, "opaque:", "payload.opaque_id"))
         encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(payload.receiptHash, "payload.receipt_hash"))
         encodeSizedField(writer, PassthroughBytesAdapter, encodeOpaqueHash(payload.uaid, "uaid:", "payload.uaid"))
@@ -71,10 +72,34 @@ object IdentifierReceiptCanonicalEncoder {
         encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(execution.programDigest, "payload.execution.program_digest"))
         encodeSizedField(writer, U32Adapter, backendTag(execution.backend).toLong())
         encodeSizedField(writer, U32Adapter, verificationModeTag(execution.verificationMode).toLong())
+        encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(execution.inputCiphertextHash, "payload.execution.input_ciphertext_hash"))
+        encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(execution.outputCiphertextHash, "payload.execution.output_ciphertext_hash"))
+        encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(execution.parameterDigest, "payload.execution.parameter_digest"))
+        encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(execution.evaluationKeyDigest, "payload.execution.evaluation_key_digest"))
         encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(execution.outputHash, "payload.execution.output_hash"))
         encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(execution.associatedDataHash, "payload.execution.associated_data_hash"))
         encodeSizedField(writer, U64_ADAPTER, execution.executedAtMs)
         encodeSizedField(writer, OptionalU64Adapter, execution.expiresAtMs)
+        return writer.toByteArray()
+    }
+
+    private fun encodeOutputOpening(opening: RamLfeOutputOpening): ByteArray {
+        val writer = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS)
+        encodeSizedField(writer, PassthroughBytesAdapter, encodeOutputOpeningPayload(opening.payload))
+        encodeSizedField(writer, SIGNATURE_ADAPTER, decodeHex(opening.signature, "payload.opening.signature"))
+        return writer.toByteArray()
+    }
+
+    private fun encodeOutputOpeningPayload(payload: RamLfeOutputOpeningPayload): ByteArray {
+        val writer = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS)
+        encodeSizedField(writer, PassthroughBytesAdapter, encodeProgramId(payload.programId))
+        encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(payload.inputCiphertextHash, "payload.opening.payload.input_ciphertext_hash"))
+        encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(payload.outputCiphertextHash, "payload.opening.payload.output_ciphertext_hash"))
+        encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(payload.parameterDigest, "payload.opening.payload.parameter_digest"))
+        encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(payload.evaluationKeyDigest, "payload.opening.payload.evaluation_key_digest"))
+        encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(payload.openedOutputHash, "payload.opening.payload.opened_output_hash"))
+        encodeSizedField(writer, U64_ADAPTER, payload.openedAtMs)
+        encodeSizedField(writer, OptionalU64Adapter, payload.expiresAtMs)
         return writer.toByteArray()
     }
 
@@ -113,7 +138,15 @@ object IdentifierReceiptCanonicalEncoder {
     }
 
     private fun decodeHash(raw: String, field: String): ByteArray {
-        val bytes = decodeHex(raw.removePrefix("hash:"), field)
+        var body = requireNonBlank(raw, field)
+        if (body.lowercase().startsWith("hash:")) {
+            body = body.substring("hash:".length)
+        }
+        val suffixIndex = body.indexOf('#')
+        if (suffixIndex >= 0) {
+            body = body.substring(0, suffixIndex)
+        }
+        val bytes = decodeHex(body, field)
         require(bytes.size == 32) { "$field must contain 32 bytes" }
         return bytes
     }

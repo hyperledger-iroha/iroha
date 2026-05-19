@@ -25,7 +25,6 @@ seiyaku IrohaSwap {
   }
 
   // Create a new pool with caller-chosen LP asset and pool account.
-  #[access(read="*", write="*")]
 	  kotoage fn init_pool(pool: Name,
 	                       asset_a: AssetDefinitionId,
 	                       asset_b: AssetDefinitionId,
@@ -45,7 +44,6 @@ seiyaku IrohaSwap {
   }
 
   // Provide liquidity; mints LP proportional to contribution.
-  #[access(read="*", write="*")]
 	  kotoage fn deposit_liquidity(provider: AccountId,
 	                               pool: Name,
 	                               amount_a: int,
@@ -80,7 +78,6 @@ seiyaku IrohaSwap {
   }
 
   // Withdraw liquidity; burns LP and returns proportional reserves.
-  #[access(read="*", write="*")]
 	  kotoage fn withdraw_liquidity(provider: AccountId,
 	                                pool: Name,
 	                                lp_amount: int) permission(Admin) {
@@ -112,7 +109,6 @@ seiyaku IrohaSwap {
   }
 
   // Swap with 0.3% fee (997/1000).
-  #[access(read="*", write="*")]
 	  kotoage fn swap(trader: AccountId,
 	                  pool: Name,
 	                  input_asset: AssetDefinitionId,

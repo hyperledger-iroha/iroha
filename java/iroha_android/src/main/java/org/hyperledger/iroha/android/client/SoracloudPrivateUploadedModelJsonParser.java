@@ -47,10 +47,10 @@ public final class SoracloudPrivateUploadedModelJsonParser {
         asLong(root.get("schema_version"), "soracloud private receipt list.schema_version"),
         receipts,
         root.containsKey("total")
-            ? asOptionalLong(root.get("total"), "soracloud private receipt list.total")
+            ? asOptionalNonNegativeLong(root.get("total"), "soracloud private receipt list.total")
             : null,
-        asLong(root.get("returned_items"), "soracloud private receipt list.returned_items"),
-        asLong(root.get("remaining_items"), "soracloud private receipt list.remaining_items"),
+        asNonNegativeLong(root.get("returned_items"), "soracloud private receipt list.returned_items"),
+        asNonNegativeLong(root.get("remaining_items"), "soracloud private receipt list.remaining_items"),
         asBoolean(root.get("has_more"), "soracloud private receipt list.has_more"),
         requiredString(root.get("count_mode"), "soracloud private receipt list.count_mode")
             .toLowerCase(Locale.ROOT),
@@ -88,7 +88,7 @@ public final class SoracloudPrivateUploadedModelJsonParser {
         requiredString(root.get("output_commitment"), context + ".output_commitment"),
         requiredString(root.get("request_commitment"), context + ".request_commitment"),
         requiredString(root.get("result_commitment"), context + ".result_commitment"),
-        asLong(root.get("emitted_sequence"), context + ".emitted_sequence"));
+        asNonNegativeLong(root.get("emitted_sequence"), context + ".emitted_sequence"));
   }
 
   private static SoracloudPrivateModelArtifactRef parseArtifact(
@@ -97,7 +97,7 @@ public final class SoracloudPrivateUploadedModelJsonParser {
         asLong(root.get("schema_version"), context + ".schema_version"),
         requiredString(root.get("sorafs_manifest_digest"), context + ".sorafs_manifest_digest"),
         requiredString(root.get("artifact_hash"), context + ".artifact_hash"),
-        asLong(root.get("ciphertext_bytes"), context + ".ciphertext_bytes"),
+        asNonNegativeLong(root.get("ciphertext_bytes"), context + ".ciphertext_bytes"),
         requiredString(root.get("artifact_role"), context + ".artifact_role"));
   }
 
@@ -178,8 +178,16 @@ public final class SoracloudPrivateUploadedModelJsonParser {
     return number.longValue();
   }
 
-  private static Long asOptionalLong(final Object value, final String path) {
-    return value == null ? null : asLong(value, path);
+  private static long asNonNegativeLong(final Object value, final String path) {
+    final long parsed = asLong(value, path);
+    if (parsed < 0L) {
+      throw new IllegalStateException(path + " must be non-negative");
+    }
+    return parsed;
+  }
+
+  private static Long asOptionalNonNegativeLong(final Object value, final String path) {
+    return value == null ? null : asNonNegativeLong(value, path);
   }
 
   private static boolean asBoolean(final Object value, final String path) {
@@ -201,4 +209,3 @@ public final class SoracloudPrivateUploadedModelJsonParser {
     return trimmed.toLowerCase(Locale.ROOT);
   }
 }
-

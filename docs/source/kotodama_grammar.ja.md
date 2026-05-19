@@ -264,7 +264,7 @@ register_trigger wake {
 
 ### 動的境界に関する注意
 - リテラル境界: `n`、`start`、`end` が整数リテラルの場合、固定回数の反復としてコンパイルされます。
-- 非リテラル境界: `ivm` クレートで `kotodama_dynamic_bounds` フィーチャを有効にすると、動的な `n`、`start`、`end` 式を許可し安全性のためのランタイムアサーション（非負かつ `end >= start`）を挿入します。ローアリングでは最大 K 回のガード付き反復を生成し、`if (i < n)` チェックで余分な本体実行を防ぎます（既定 K=2）。K は `CompilerOptions { dynamic_iter_cap, .. }` で調整可能です。
+- Non-literal bounds are first-release behavior. The compiler accepts dynamic `n`, `start`, and `end` expressions for durable `state Map<int, V>` iteration, inserts runtime assertions for safety (non-negative, `end >= start`, bounded by the fixed release limit), and emits structured dynamic access metadata. The first-release limit is 64 guarded iterations and is not runtime-configurable.
 - コンパイル前に `koto_lint` を実行すると Kotodama の警告を確認できます。本体のコンパイラは構文解析と型検査の後で必ずローアリングまで進みます。
 - エラーコードは [Kotodama Compiler Error Codes](./kotodama_error_codes.md) に記載されており、`koto_compile --explain <code>` で解説を確認できます。
 

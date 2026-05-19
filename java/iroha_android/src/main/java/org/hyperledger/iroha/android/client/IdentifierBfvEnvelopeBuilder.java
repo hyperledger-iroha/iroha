@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.Objects;
 import org.hyperledger.iroha.norito.SchemaHash;
 
-/** Builds framed Norito BFV identifier ciphertext envelopes from plaintext input. */
+/** Builds framed Norito BFV identifier ciphertext envelopes from client-side input. */
 final class IdentifierBfvEnvelopeBuilder {
   private static final String SCHEMA_NAME =
       "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext";
@@ -81,7 +81,7 @@ final class IdentifierBfvEnvelopeBuilder {
     }
     final BigInteger plaintextModulus = toUnsignedBigInteger(params.plaintextModulus());
     final BigInteger ciphertextModulus = toUnsignedBigInteger(params.ciphertextModulus());
-    if (plaintextModulus.compareTo(BigInteger.TWO) < 0) {
+    if (plaintextModulus.compareTo(BigInteger.valueOf(2L)) < 0) {
       throw new IllegalArgumentException("BFV plaintextModulus must be at least 2");
     }
     if (ciphertextModulus.compareTo(plaintextModulus) <= 0) {

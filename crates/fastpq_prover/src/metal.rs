@@ -3570,7 +3570,11 @@ pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64
     let limits = pipeline_limits(&context.poseidon_trace_fused);
     let tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
     let selection = select_poseidon_batch(column_count, tuning);
-    let batches = column_batch_ranges(column_count, selection.columns());
+    // TODO: Re-enable vectorized multi-state Metal Poseidon dispatch only after
+    // parity evidence covers multi-block column and Merkle-pair batches. The
+    // scalar sponge remains authoritative, so keep one state per dispatch for now.
+    let columns_per_batch = 1;
+    let batches = column_batch_ranges(column_count, columns_per_batch);
     let mut result = vec![0u64; batch.columns()];
     let payloads = batch.payloads();
     // TODO: Restore deeper Poseidon staging once command permits are released by

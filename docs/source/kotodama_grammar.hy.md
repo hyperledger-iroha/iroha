@@ -92,7 +92,7 @@ Scalar տեսակները
 
 Տեսանելիություն
 - `kotoage fn`-ը նշանակում է հանրային մուտքի կետ; տեսանելիությունը ազդում է դիսպետչերի թույլտվությունների վրա, ոչ թե կոդերի վրա:
-- Ընտրովի մուտքի ակնարկներ. `#[access(read=..., write=...)]`-ը կարող է նախորդել `fn`/`kotoage fn`-ին` մանիֆեստի կարդալու/գրելու ստեղները տրամադրելու համար: Կազմողը նաև ինքնաբերաբար արձակում է խորհրդատվական հուշումներ. Անթափանց հյուրընկալող զանգերը վերադառնում են պահպանողական նիշերի ստեղներին (`*`) և հայտնվում են դիագնոստիկ, եթե մուտքի հստակ ակնարկներ չտրամադրվեն, այնպես որ ժամանակացույցները կարող են ընտրել դինամիկ նախնական անցումը՝ ավելի նուրբ ստեղների համար:
+- Access metadata is compiler-owned. Manual `#[access(...)]` attributes are rejected; deployable compilation succeeds only when the compiler can emit complete read/write metadata without wildcard keys.
 
 ## Պայմանագրի կոնտեյներ և մետատվյալներ
 
@@ -308,7 +308,7 @@ Host/sycall ներկառուցված (քարտեզ դեպի SCALL; ճշգրիտ 
 - `.take(n)`. կրկնել առաջին `n` գրառումները սկզբից:
 - `.range(start, end)`. կրկնել գրառումները `[start, end)` կիսաբաց միջակայքում: Իմաստաբանությունը համարժեք է `start` և `n = end - start`:Նշումներ դինամիկ սահմանների վերաբերյալ
 - Բառացի սահմաններ. `n`, `start` և `end`, քանի որ ամբողջ թվով բառացիները լիովին աջակցվում են և կազմվում են ֆիքսված թվով կրկնություններ:
-- Ոչ բառացի սահմաններ. երբ `kotodama_dynamic_bounds` գործառույթը միացված է `ivm` տուփում, կոմպիլյատորն ընդունում է դինամիկ `n`, `start` և `ivm`-ի համար դինամիկ արտահայտություններ և Kotodama (ոչ բացասական, `end >= start`): Իջեցումն արտանետում է մինչև K պաշտպանված կրկնություններ՝ `if (i < n)` ստուգումներով, որպեսզի խուսափի մարմնի լրացուցիչ կատարումներից (կանխադրված K=2): Դուք կարող եք կարգավորել K-ը ծրագրային կերպով `CompilerOptions { dynamic_iter_cap, .. }`-ի միջոցով:
+- Non-literal bounds are first-release behavior. The compiler accepts dynamic `n`, `start`, and `end` expressions for durable `state Map<int, V>` iteration, inserts runtime assertions for safety (non-negative, `end >= start`, bounded by the fixed release limit), and emits structured dynamic access metadata. The first-release limit is 64 guarded iterations and is not runtime-configurable.
 - Գործարկեք `koto_lint`՝ ստուգելու համար Kotodama ծածկույթի նախազգուշացումները մինչև կոմպիլյացիան; Հիմնական կոմպիլյատորը վերլուծելուց և տիպի ստուգումից հետո միշտ անցնում է իջեցման:
 - Սխալների կոդերը փաստաթղթավորված են [Kotodama Կազմողի սխալի կոդերում] (./kotodama_error_codes.md); արագ բացատրությունների համար օգտագործեք `koto_compile --explain <code>`:
 

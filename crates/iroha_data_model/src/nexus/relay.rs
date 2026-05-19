@@ -67,6 +67,20 @@ pub struct LaneRelayEnvelope {
     pub fastpq_proof: Option<LaneFastpqProofMaterial>,
 }
 
+/// `FastPQ` admission state for a relay envelope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(tag = "status", content = "state")]
+pub enum LaneRelayProofStatus {
+    /// The relay is structurally valid but has not yet been upgraded with verified `FastPQ` material.
+    Pending,
+    /// The relay carries structurally valid `FastPQ` material and can be considered for merge.
+    Verified,
+}
+
 impl PartialOrd for LaneRelayEnvelope {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
@@ -192,6 +206,20 @@ struct LaneRelayFastpqClaim {
     manifest_root: [u8; 32],
     settlement_commitment: LaneBlockCommitment,
     settlement_hash: HashOf<LaneBlockCommitment>,
+}
+
+#[derive(Clone, Debug, Encode)]
+struct LaneRelayMergeHint {
+    version: u8,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    block_height: u64,
+    tip_hash: HashOf<BlockHeader>,
+    parent_state_root: Hash,
+    post_state_root: Hash,
+    da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
+    settlement_hash: HashOf<LaneBlockCommitment>,
+    rbc_bytes_total: u64,
 }
 
 /// Compute the canonical claim digest that a FASTPQ lane-relay proof must bind.
@@ -321,6 +349,26 @@ impl LaneRelayQuorumContext {
 }
 
 impl LaneRelayEnvelope {
+    /// Domain-separated mode tag used for lane relay QC signatures.
+    #[must_use]
+    pub fn lane_qc_mode_tag_for(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        base_mode_tag: &str,
+    ) -> String {
+        format!(
+            "{base_mode_tag}::lane-relay:v1:{}:{}",
+            dataspace_id.as_u64(),
+            lane_id.as_u32()
+        )
+    }
+
+    /// Domain-separated mode tag expected for this relay's lane QC.
+    #[must_use]
+    pub fn lane_qc_mode_tag(&self, base_mode_tag: &str) -> String {
+        Self::lane_qc_mode_tag_for(self.lane_id, self.dataspace_id, base_mode_tag)
+    }
+
     /// Create an envelope and derive the settlement hash from the payload.
     ///
     /// # Errors
@@ -421,7 +469,48 @@ impl LaneRelayEnvelope {
         if self.block_header.da_commitments_hash() != self.da_commitment_hash {
             return Err(LaneRelayError::DaCommitmentHashMismatch);
         }
+        self.verify_settlement_integrity()?;
         self.verify_settlement_hash()
+    }
+
+    /// Return the current `FastPQ` admission state for this envelope.
+    #[must_use]
+    pub fn proof_status(&self) -> LaneRelayProofStatus {
+        if self.has_fastpq_proof_material() {
+            LaneRelayProofStatus::Verified
+        } else {
+            LaneRelayProofStatus::Pending
+        }
+    }
+
+    /// Whether this relay satisfies merge-admission prerequisites.
+    #[must_use]
+    pub fn is_merge_admissible(&self) -> bool {
+        self.qc.is_some() && self.has_fastpq_proof_material()
+    }
+
+    /// Compute the canonical lane merge-hint root.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaneRelayError::MissingQc`] when the relay has not yet reached lane finality,
+    /// and [`LaneRelayError::Encode`] if the canonical hint payload cannot be encoded.
+    pub fn merge_hint_root(&self) -> Result<Hash, LaneRelayError> {
+        let qc = self.qc.as_ref().ok_or(LaneRelayError::MissingQc)?;
+        let hint = LaneRelayMergeHint {
+            version: 1,
+            lane_id: self.lane_id,
+            dataspace_id: self.dataspace_id,
+            block_height: self.block_height,
+            tip_hash: self.block_header.hash(),
+            parent_state_root: qc.parent_state_root,
+            post_state_root: qc.post_state_root,
+            da_commitment_hash: self.da_commitment_hash,
+            settlement_hash: self.settlement_hash,
+            rbc_bytes_total: self.rbc_bytes_total,
+        };
+        let bytes = norito::to_bytes(&hint)?;
+        Ok(Hash::new(bytes))
     }
 
     /// Validate the relay envelope against a validator roster and quorum expectation.
@@ -549,6 +638,76 @@ impl LaneRelayEnvelope {
             Err(LaneRelayError::SettlementHashMismatch)
         }
     }
+
+    fn verify_settlement_integrity(&self) -> Result<(), LaneRelayError> {
+        let settlement = &self.settlement_commitment;
+        let mut total_local_micro = 0u128;
+        let mut total_xor_due_micro = 0u128;
+        let mut total_xor_after_haircut_micro = 0u128;
+        let mut total_xor_variance_micro = 0u128;
+        let mut settlement_sources = std::collections::BTreeSet::new();
+        for receipt in &settlement.receipts {
+            if !settlement_sources.insert(receipt.source_id) {
+                return Err(LaneRelayError::DuplicateSettlementSource);
+            }
+            total_local_micro = total_local_micro
+                .checked_add(receipt.local_amount_micro)
+                .ok_or(LaneRelayError::SettlementTotalsMismatch)?;
+            total_xor_due_micro = total_xor_due_micro
+                .checked_add(receipt.xor_due_micro)
+                .ok_or(LaneRelayError::SettlementTotalsMismatch)?;
+            total_xor_after_haircut_micro = total_xor_after_haircut_micro
+                .checked_add(receipt.xor_after_haircut_micro)
+                .ok_or(LaneRelayError::SettlementTotalsMismatch)?;
+            total_xor_variance_micro = total_xor_variance_micro
+                .checked_add(receipt.xor_variance_micro)
+                .ok_or(LaneRelayError::SettlementTotalsMismatch)?;
+        }
+        if !settlement.receipts.is_empty()
+            && (total_local_micro != settlement.total_local_micro
+                || total_xor_due_micro != settlement.total_xor_due_micro
+                || total_xor_after_haircut_micro != settlement.total_xor_after_haircut_micro
+                || total_xor_variance_micro != settlement.total_xor_variance_micro)
+        {
+            return Err(LaneRelayError::SettlementTotalsMismatch);
+        }
+
+        let mut nexus_fee_sources = std::collections::BTreeSet::new();
+        for receipt in &settlement.nexus_fee_receipts {
+            if receipt.lane_id != settlement.lane_id
+                || receipt.dataspace_id != settlement.dataspace_id
+                || receipt.block_height != settlement.block_height
+            {
+                return Err(LaneRelayError::SettlementReceiptCoordinateMismatch);
+            }
+            if !nexus_fee_sources.insert(receipt.source_id) {
+                return Err(LaneRelayError::DuplicateSettlementSource);
+            }
+        }
+
+        let mut native_amx_sources = std::collections::BTreeSet::new();
+        for receipt in &settlement.native_amx_receipts {
+            if receipt.lane_id != settlement.lane_id
+                || receipt.dataspace_id != settlement.dataspace_id
+                || receipt.block_height != settlement.block_height
+            {
+                return Err(LaneRelayError::SettlementReceiptCoordinateMismatch);
+            }
+            if !native_amx_sources.insert(receipt.source_id) {
+                return Err(LaneRelayError::DuplicateSettlementSource);
+            }
+        }
+
+        let receipt_count = settlement
+            .receipts
+            .len()
+            .max(settlement.nexus_fee_receipts.len())
+            .max(settlement.native_amx_receipts.len());
+        if settlement.tx_count < u64::try_from(receipt_count).unwrap_or(u64::MAX) {
+            return Err(LaneRelayError::SettlementTxCountMismatch);
+        }
+        Ok(())
+    }
 }
 
 impl VerifiedLaneRelayRecord {
@@ -669,6 +828,18 @@ pub enum LaneRelayError {
     /// Settlement payload hash does not match the envelope.
     #[error("relay settlement hash does not match payload")]
     SettlementHashMismatch,
+    /// Settlement commitment aggregate totals do not match its receipts.
+    #[error("settlement commitment totals do not match receipts")]
+    SettlementTotalsMismatch,
+    /// Settlement commitment has fewer transactions than committed receipt sources.
+    #[error("settlement commitment transaction count is lower than receipt count")]
+    SettlementTxCountMismatch,
+    /// Settlement commitment contains duplicate receipt source identifiers.
+    #[error("settlement commitment contains duplicate receipt source identifiers")]
+    DuplicateSettlementSource,
+    /// Settlement receipt coordinates do not match the enclosing commitment.
+    #[error("settlement receipt coordinates do not match commitment coordinates")]
+    SettlementReceiptCoordinateMismatch,
     /// Settlement commitment height does not match the block header height.
     #[error("settlement commitment block height does not match block header")]
     SettlementBlockHeightMismatch,
@@ -745,6 +916,10 @@ impl PartialEq for LaneRelayError {
         match (self, other) {
             (NexusDisabled, NexusDisabled)
             | (SettlementHashMismatch, SettlementHashMismatch)
+            | (SettlementTotalsMismatch, SettlementTotalsMismatch)
+            | (SettlementTxCountMismatch, SettlementTxCountMismatch)
+            | (DuplicateSettlementSource, DuplicateSettlementSource)
+            | (SettlementReceiptCoordinateMismatch, SettlementReceiptCoordinateMismatch)
             | (SettlementBlockHeightMismatch, SettlementBlockHeightMismatch)
             | (BlockHeightMismatch, BlockHeightMismatch)
             | (SettlementLaneMismatch, SettlementLaneMismatch)
@@ -848,6 +1023,12 @@ impl LaneRelayError {
             LaneRelayError::StaleRelay { .. } => "stale_height",
             LaneRelayError::ConflictingRelay { .. } => "conflicting_relay",
             LaneRelayError::SettlementHashMismatch => "settlement_hash_mismatch",
+            LaneRelayError::SettlementTotalsMismatch => "settlement_totals_mismatch",
+            LaneRelayError::SettlementTxCountMismatch => "settlement_tx_count_mismatch",
+            LaneRelayError::DuplicateSettlementSource => "duplicate_settlement_source",
+            LaneRelayError::SettlementReceiptCoordinateMismatch => {
+                "settlement_receipt_coordinate_mismatch"
+            }
             LaneRelayError::SettlementBlockHeightMismatch => "settlement_block_height_mismatch",
             LaneRelayError::BlockHeightMismatch => "block_height_mismatch",
             LaneRelayError::SettlementLaneMismatch => "settlement_lane_mismatch",
@@ -895,7 +1076,14 @@ mod tests {
             total_xor_after_haircut_micro: 4,
             total_xor_variance_micro: 1,
             swap_metadata: None,
-            receipts: Vec::new(),
+            receipts: vec![crate::block::consensus::LaneSettlementReceipt {
+                source_id: [0xA5; 32],
+                local_amount_micro: 10,
+                xor_due_micro: 5,
+                xor_after_haircut_micro: 4,
+                xor_variance_micro: 1,
+                timestamp_ms: 1_700_000_000_000,
+            }],
             nexus_fee_receipts: Vec::new(),
             native_amx_receipts: Vec::new(),
         }
@@ -918,6 +1106,52 @@ mod tests {
         let settlement = sample_commitment(height, 3, 2);
         let header = sample_header(height, None);
         LaneRelayEnvelope::new(header, qc, None, settlement, 0).expect("envelope")
+    }
+
+    #[test]
+    fn proof_status_distinguishes_pending_and_verified_relays() {
+        let pending = build_envelope(6, None);
+        assert_eq!(pending.proof_status(), LaneRelayProofStatus::Pending);
+        assert!(!pending.is_merge_admissible());
+
+        let verified = pending.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+            proof_digest: Hash::new(b"verified-relay-proof"),
+            verified_at_height: 6,
+        }));
+        assert_eq!(verified.proof_status(), LaneRelayProofStatus::Verified);
+        assert!(
+            !verified.is_merge_admissible(),
+            "QC is still required for merge"
+        );
+    }
+
+    #[test]
+    fn merge_hint_root_binds_qc_state_roots() {
+        let mut qc = qc_with_bitmap(vec![0b0000_0001], 6, vec![0xCC; 48]);
+        qc.parent_state_root = Hash::new(b"parent-a");
+        qc.post_state_root = Hash::new(b"post-a");
+        let envelope = build_envelope(6, Some(qc.clone()));
+        let first = envelope.merge_hint_root().expect("merge hint root");
+
+        qc.post_state_root = Hash::new(b"post-b");
+        let changed = build_envelope(6, Some(qc));
+        let second = changed.merge_hint_root().expect("changed merge hint root");
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn verify_rejects_settlement_total_mismatch_when_receipts_are_present() {
+        let mut envelope = build_envelope(6, None);
+        envelope.settlement_commitment.total_local_micro = envelope
+            .settlement_commitment
+            .total_local_micro
+            .saturating_add(1);
+
+        let err = envelope
+            .verify()
+            .expect_err("mismatched receipt totals must fail verification");
+        assert_eq!(err, LaneRelayError::SettlementTotalsMismatch);
     }
 
     #[test]

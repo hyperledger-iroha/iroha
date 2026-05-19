@@ -1,8 +1,6 @@
-// Dynamic range(start, end) example (requires `kotodama_dynamic_bounds`).
-// Semantics: iterate entries in [start, end). With dynamic bounds the compiler
-// inserts runtime guards and currently treats the dynamic start as 0 for
-// addressing, while using n = end - start for the iteration count.
-// Literal `start` continues to adjust the address base. See docs for details.
+// Dynamic range(start, end) example for durable state maps.
+// Semantics: iterate entries in [start, end). The compiler inserts runtime
+// guards and lowers at most 64 deterministic iterations.
 // Dynamic bounds are supported on state maps.
 
 seiyaku DynamicRange {

@@ -371,16 +371,31 @@ impl LiveQueryStore {
     ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<NonZeroU64>), QueryExecutionFail>
     {
         trace!(%query_id, "Advancing existing query");
-        let (next_batch, remaining, next_cursor) = {
+        let next = {
             let mut entry = self
                 .queries
                 .get_mut(query_id)
                 .ok_or(QueryExecutionFail::Expired)?;
-            let (next_batch, next_cursor) = entry.live_query.next_batch(cursor.get())?;
+            let (next_batch, next_cursor) = match entry.live_query.next_batch(cursor.get()) {
+                Ok(next) => next,
+                Err(err) => {
+                    return if matches!(
+                        err,
+                        QueryExecutionFail::Expired | QueryExecutionFail::CursorDone
+                    ) {
+                        drop(entry);
+                        self.remove(query_id);
+                        Err(err)
+                    } else {
+                        Err(err)
+                    };
+                }
+            };
             let remaining = entry.live_query.remaining();
             entry.last_access_time = Instant::now();
             (next_batch, remaining, next_cursor)
         };
+        let (next_batch, remaining, next_cursor) = next;
         if next_cursor.is_none() {
             self.remove(query_id);
         }
@@ -586,7 +601,7 @@ mod tests {
         num::NonZeroU64,
         sync::{
             Arc,
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
         },
         time::Duration,
     };
@@ -926,5 +941,454 @@ mod tests {
             !materialized.load(Ordering::SeqCst),
             "dropping a stored cursor should not force deferred materialization"
         );
+    }
+
+    #[test]
+    fn paged_cursor_mismatch_does_not_call_batcher_or_evict_query() {
+        let handle = LiveQueryStore::start_test();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_for_batcher = Arc::clone(&calls);
+
+        let prepared = PreparedPagedQueryStart {
+            first_batch: permission_batch(["p0"]),
+            paged_continuation: Some(PagedQueryContinuation::new(
+                nonzero!(1_u64),
+                move |cursor| {
+                    calls_for_batcher.fetch_add(1, Ordering::SeqCst);
+                    assert_eq!(cursor, 1);
+                    Ok((permission_batch(["p1"]), None))
+                },
+            )),
+        };
+
+        let (_batch, remaining, cursor) = handle
+            .handle_iter_start_paged_prepared(prepared, &ALICE_ID, Some(9))
+            .expect("paged start")
+            .into_parts();
+        assert_eq!(remaining, 0);
+        let cursor = cursor.expect("paged cursor");
+
+        let mut bad_cursor = cursor.clone();
+        bad_cursor.cursor =
+            NonZeroU64::new(cursor.cursor.get().saturating_add(1)).expect("non-zero");
+        let err = handle
+            .handle_iter_continue(bad_cursor)
+            .expect_err("cursor mismatch");
+        assert_eq!(err, QueryExecutionFail::CursorMismatch);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "mismatched paged cursors must be rejected before replay work starts"
+        );
+
+        let (batch, remaining, next) = handle
+            .handle_iter_continue(cursor.clone())
+            .expect("original cursor remains valid")
+            .into_parts();
+        assert_eq!(batch.len(), 1);
+        assert_eq!(remaining, 0);
+        assert!(next.is_none(), "query should be drained");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        let err = handle
+            .handle_iter_continue(cursor)
+            .expect_err("drained cursor expires");
+        assert_eq!(err, QueryExecutionFail::Expired);
+    }
+
+    #[test]
+    fn paged_prepared_start_enforces_capacity_limit() {
+        let config = Config {
+            idle_time: Duration::from_secs(60),
+            capacity: nonzero!(1_usize),
+            capacity_per_user: nonzero!(4_usize),
+        };
+        let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
+        let handle = LiveQueryStoreHandle::new(store);
+
+        handle
+            .handle_iter_start_paged_prepared(
+                prepared_paged_permission_query("first"),
+                &ALICE_ID,
+                None,
+            )
+            .expect("first query fits");
+        let err = handle
+            .handle_iter_start_paged_prepared(
+                prepared_paged_permission_query("second"),
+                &ALICE_ID,
+                None,
+            )
+            .expect_err("capacity");
+        assert_eq!(err, QueryExecutionFail::CapacityLimit);
+    }
+
+    #[test]
+    fn exhausted_paged_start_does_not_consume_capacity_or_quota() {
+        let config = Config {
+            idle_time: Duration::from_secs(60),
+            capacity: nonzero!(1_usize),
+            capacity_per_user: nonzero!(1_usize),
+        };
+        let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
+        let handle = LiveQueryStoreHandle::new(store);
+
+        for label in ["first", "second"] {
+            let (batch, remaining, cursor) = handle
+                .handle_iter_start_paged_prepared(
+                    PreparedPagedQueryStart {
+                        first_batch: permission_batch([label]),
+                        paged_continuation: None,
+                    },
+                    &ALICE_ID,
+                    None,
+                )
+                .expect("exhausted starts should not allocate live-query slots")
+                .into_parts();
+            assert_eq!(batch.len(), 1);
+            assert_eq!(remaining, 0);
+            assert!(cursor.is_none());
+        }
+
+        handle
+            .handle_iter_start_paged_prepared(
+                prepared_paged_permission_query("third"),
+                &ALICE_ID,
+                None,
+            )
+            .expect("exhausted starts should leave capacity available");
+    }
+
+    #[test]
+    fn paged_expired_error_evicts_cursor_and_releases_capacity() {
+        let config = Config {
+            idle_time: Duration::from_secs(60),
+            capacity: nonzero!(1_usize),
+            capacity_per_user: nonzero!(4_usize),
+        };
+        let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
+        let handle = LiveQueryStoreHandle::new(store);
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let (_batch, _remaining, cursor) = handle
+            .handle_iter_start_paged_prepared(
+                prepared_failing_paged_permission_query(
+                    "expired",
+                    QueryExecutionFail::Expired,
+                    Arc::clone(&calls),
+                ),
+                &ALICE_ID,
+                None,
+            )
+            .expect("first query fits")
+            .into_parts();
+        let cursor = cursor.expect("stored cursor");
+
+        let err = handle
+            .handle_iter_continue(cursor.clone())
+            .expect_err("expired continuation");
+        assert_eq!(err, QueryExecutionFail::Expired);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        handle
+            .handle_iter_start_paged_prepared(
+                prepared_paged_permission_query("replacement"),
+                &ALICE_ID,
+                None,
+            )
+            .expect("expired paged cursor should release capacity");
+
+        let err = handle
+            .handle_iter_continue(cursor)
+            .expect_err("evicted cursor is expired");
+        assert_eq!(err, QueryExecutionFail::Expired);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "evicted permanent failures must not call replay work again"
+        );
+    }
+
+    #[test]
+    fn paged_cursor_done_error_evicts_cursor_and_releases_capacity() {
+        let config = Config {
+            idle_time: Duration::from_secs(60),
+            capacity: nonzero!(1_usize),
+            capacity_per_user: nonzero!(4_usize),
+        };
+        let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
+        let handle = LiveQueryStoreHandle::new(store);
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let (_batch, _remaining, cursor) = handle
+            .handle_iter_start_paged_prepared(
+                prepared_failing_paged_permission_query(
+                    "done",
+                    QueryExecutionFail::CursorDone,
+                    Arc::clone(&calls),
+                ),
+                &ALICE_ID,
+                None,
+            )
+            .expect("first query fits")
+            .into_parts();
+        let cursor = cursor.expect("stored cursor");
+
+        let err = handle
+            .handle_iter_continue(cursor.clone())
+            .expect_err("done continuation");
+        assert_eq!(err, QueryExecutionFail::CursorDone);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        handle
+            .handle_iter_start_paged_prepared(
+                prepared_paged_permission_query("replacement"),
+                &ALICE_ID,
+                None,
+            )
+            .expect("cursor-done paged cursor should release capacity");
+
+        let err = handle
+            .handle_iter_continue(cursor)
+            .expect_err("evicted cursor is expired");
+        assert_eq!(err, QueryExecutionFail::Expired);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "evicted done cursors must not call replay work again"
+        );
+    }
+
+    #[test]
+    fn paged_permanent_error_releases_per_authority_quota() {
+        let config = Config {
+            idle_time: Duration::from_secs(60),
+            capacity: nonzero!(4_usize),
+            capacity_per_user: nonzero!(1_usize),
+        };
+        let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
+        let handle = LiveQueryStoreHandle::new(store);
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let (_batch, _remaining, cursor) = handle
+            .handle_iter_start_paged_prepared(
+                prepared_failing_paged_permission_query(
+                    "expired",
+                    QueryExecutionFail::Expired,
+                    Arc::clone(&calls),
+                ),
+                &ALICE_ID,
+                None,
+            )
+            .expect("first query fits quota")
+            .into_parts();
+        let cursor = cursor.expect("stored cursor");
+
+        let err = handle
+            .handle_iter_start_paged_prepared(
+                prepared_paged_permission_query("blocked"),
+                &ALICE_ID,
+                None,
+            )
+            .expect_err("authority quota should be occupied before terminal error");
+        assert_eq!(err, QueryExecutionFail::AuthorityQuotaExceeded);
+
+        let err = handle
+            .handle_iter_continue(cursor)
+            .expect_err("expired continuation");
+        assert_eq!(err, QueryExecutionFail::Expired);
+
+        handle
+            .handle_iter_start_paged_prepared(
+                prepared_paged_permission_query("replacement"),
+                &ALICE_ID,
+                None,
+            )
+            .expect("terminal paged error should release authority quota");
+    }
+
+    #[test]
+    fn paged_transient_error_does_not_release_capacity_or_quota() {
+        let config = Config {
+            idle_time: Duration::from_secs(60),
+            capacity: nonzero!(1_usize),
+            capacity_per_user: nonzero!(1_usize),
+        };
+        let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
+        let handle = LiveQueryStoreHandle::new(store);
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let (_batch, _remaining, cursor) = handle
+            .handle_iter_start_paged_prepared(
+                prepared_failing_paged_permission_query(
+                    "gas",
+                    QueryExecutionFail::GasBudgetExceeded,
+                    Arc::clone(&calls),
+                ),
+                &ALICE_ID,
+                None,
+            )
+            .expect("first query fits")
+            .into_parts();
+        let cursor = cursor.expect("stored cursor");
+
+        let err = handle
+            .handle_iter_continue(cursor.clone())
+            .expect_err("transient continuation error");
+        assert_eq!(err, QueryExecutionFail::GasBudgetExceeded);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        let err = handle
+            .handle_iter_start_paged_prepared(
+                prepared_paged_permission_query("blocked"),
+                &ALICE_ID,
+                None,
+            )
+            .expect_err("transient error should keep the cursor resident");
+        assert_eq!(err, QueryExecutionFail::CapacityLimit);
+
+        let err = handle
+            .handle_iter_continue(cursor)
+            .expect_err("resident cursor can be retried");
+        assert_eq!(err, QueryExecutionFail::GasBudgetExceeded);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "non-terminal replay errors must not evict or disable the cursor"
+        );
+    }
+
+    #[test]
+    fn dropping_paged_cursor_releases_capacity_and_quota_without_replay() {
+        let config = Config {
+            idle_time: Duration::from_secs(60),
+            capacity: nonzero!(1_usize),
+            capacity_per_user: nonzero!(1_usize),
+        };
+        let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
+        let handle = LiveQueryStoreHandle::new(store);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_for_batcher = Arc::clone(&calls);
+
+        let (_batch, _remaining, cursor) = handle
+            .handle_iter_start_paged_prepared(
+                PreparedPagedQueryStart {
+                    first_batch: permission_batch(["first"]),
+                    paged_continuation: Some(PagedQueryContinuation::new(
+                        nonzero!(1_u64),
+                        move |_| {
+                            calls_for_batcher.fetch_add(1, Ordering::SeqCst);
+                            Ok((permission_batch(["second"]), None))
+                        },
+                    )),
+                },
+                &ALICE_ID,
+                None,
+            )
+            .expect("first query fits")
+            .into_parts();
+        let cursor = cursor.expect("stored cursor");
+        handle.drop_query(cursor.query());
+        handle.drop_query(cursor.query());
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "dropping a paged cursor must not run replay work"
+        );
+
+        handle
+            .handle_iter_start_paged_prepared(
+                prepared_paged_permission_query("replacement"),
+                &ALICE_ID,
+                None,
+            )
+            .expect("dropping paged cursor should release capacity and quota");
+
+        let err = handle
+            .handle_iter_continue(cursor)
+            .expect_err("dropped cursor should expire");
+        assert_eq!(err, QueryExecutionFail::Expired);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn paged_transient_error_does_not_release_per_authority_quota() {
+        let config = Config {
+            idle_time: Duration::from_secs(60),
+            capacity: nonzero!(4_usize),
+            capacity_per_user: nonzero!(1_usize),
+        };
+        let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
+        let handle = LiveQueryStoreHandle::new(store);
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let (_batch, _remaining, cursor) = handle
+            .handle_iter_start_paged_prepared(
+                prepared_failing_paged_permission_query(
+                    "gas",
+                    QueryExecutionFail::GasBudgetExceeded,
+                    Arc::clone(&calls),
+                ),
+                &ALICE_ID,
+                None,
+            )
+            .expect("first query fits")
+            .into_parts();
+        let cursor = cursor.expect("stored cursor");
+
+        let err = handle
+            .handle_iter_continue(cursor.clone())
+            .expect_err("transient continuation error");
+        assert_eq!(err, QueryExecutionFail::GasBudgetExceeded);
+
+        let err = handle
+            .handle_iter_start_paged_prepared(
+                prepared_paged_permission_query("blocked"),
+                &ALICE_ID,
+                None,
+            )
+            .expect_err("same-authority quota should remain occupied");
+        assert_eq!(err, QueryExecutionFail::AuthorityQuotaExceeded);
+
+        let err = handle
+            .handle_iter_continue(cursor)
+            .expect_err("resident cursor can still be retried");
+        assert_eq!(err, QueryExecutionFail::GasBudgetExceeded);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    fn prepared_paged_permission_query(label: &'static str) -> PreparedPagedQueryStart {
+        PreparedPagedQueryStart {
+            first_batch: permission_batch([label]),
+            paged_continuation: Some(PagedQueryContinuation::new(nonzero!(1_u64), move |_| {
+                Ok((permission_batch([label]), None))
+            })),
+        }
+    }
+
+    fn prepared_failing_paged_permission_query(
+        label: &'static str,
+        err: QueryExecutionFail,
+        calls: Arc<AtomicUsize>,
+    ) -> PreparedPagedQueryStart {
+        PreparedPagedQueryStart {
+            first_batch: permission_batch([label]),
+            paged_continuation: Some(PagedQueryContinuation::new(nonzero!(1_u64), move |_| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err(err.clone())
+            })),
+        }
+    }
+
+    fn permission_batch(names: impl IntoIterator<Item = &'static str>) -> QueryOutputBatchBoxTuple {
+        QueryOutputBatchBoxTuple {
+            tuple: vec![iroha_data_model::query::QueryOutputBatchBox::Permission(
+                names
+                    .into_iter()
+                    .map(|name| Permission::new(name.to_owned(), Json::from(false)))
+                    .collect(),
+            )],
+        }
     }
 }

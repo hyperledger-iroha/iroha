@@ -14,7 +14,7 @@ Paths for reference:
 ## Summary
 - The current implementation parses and lowers both free and contract functions (including `seiyaku`, `kotoage`, `hajimari`, and `kaizen` items), performs type checking for ints/bools/strings/pointer-ABI handles/structs/maps, and emits full multi-function IVM bytecode with durable `state` overlays when ABI v1 is selected. ✔
 - Contract-level localization (`kotoba { ... }`) is parsed, validated for duplicates/empties, and emitted into manifest translation tables for tooling. ✔
-- Metadata and manifest wiring now surface `meta { features: ["zk","simd"] }` toggles plus per-entrypoint permission/read/write hints. Static ISI keys (including literal `create_trigger` specs and `transfer_domain`), literal map keys (including hashed pointer keys), dynamic map paths (map-level `state:<name>` conflicts), explicit `#[access(read=..., write=...)]` annotations, and literal `execute_instruction` payloads plus `execute_query` payloads for supported queries (InstructionBox/QueryRequest decode, currently `FindAssetById`) are included in access hints; non-literal trigger specs and opaque host access patterns (including non-literal `execute_instruction`/`execute_query` payloads) emit lints unless explicit access hints are provided, and opaque host reads now fall back to conservative wildcard hints (`*`) with diagnostics so schedulers can opt into a dynamic prepass when finer-grained keys are needed (entrypoint manifests emit hints when enabled; `access_hints_skipped` is empty, and fallback counts are reported via diagnostics). ⚠
+- Metadata and manifest wiring now surface `meta { features: ["zk","simd"] }` toggles plus compiler-generated per-entrypoint permission/read/write hints. Static ISI keys, literal map keys, dynamic map paths, and bounded dynamic state-map iteration are represented without production wildcard hints. Manual `#[access(...)]` annotations are rejected, and production compilation fails when opaque host access would require a wildcard fallback. ✔
 - The compiler scans emitted bytecode for ZK/vector opcodes, auto-enables header bits, and rejects `meta` feature requests that do not match actual opcode usage. ✔
 - Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct `Numeric`-backed scalar types (mantissa+scale) restricted to unsigned, scale‑0 values. Decimal literals are rejected in v1; arithmetic preserves the alias and mixing aliases is rejected unless routed through an `int` binding. Conversions to/from `int` are checked at runtime (range‑limited, non‑negative). Trigger declarations (`register_trigger`) now parse time/execute/data/pipeline filters, lower structured data-trigger blocks into manifest `EventFilterBox` values, support explicit trigger authority overrides, attach metadata to entrypoint manifests, and are auto-registered when a contract instance is activated (removed on deactivation); cross-contract callbacks are rejected. ✔
 
@@ -49,7 +49,7 @@ Note: Kotodama compiles to Iroha Virtual Machine (IVM) bytecode (`.to`). It does
   - Emitted bytecode is scanned for ZK/vector opcodes; header bits are auto-enabled and mismatched `meta` requests are rejected.
 - Missing:
   - Cross-contract callback wiring (`call domain::fn`) is recorded but currently rejected by runtime tooling.
-- Access-set hints now include static ISI WSV keys (including literal `create_trigger` specs and `transfer_domain`), literal map keys, dynamic map paths (map-level conflict keys), explicit `#[access]` annotations, and literal `execute_instruction` payloads plus `execute_query` payloads for supported queries (currently `FindAssetById`); non-literal trigger specs and opaque helper syscalls (including non-literal `execute_instruction`/`execute_query` payloads) emit lints unless explicit access hints are provided, and opaque host reads now fall back to conservative wildcard hints (`*`).
+- Access-set hints now include static ISI WSV keys, literal map keys, dynamic map paths via map-level conflict keys, and bounded dynamic state-map iteration descriptors. Manual access annotations and production wildcard fallbacks are no longer part of the release language.
 
 ## Samples vs. Implementation
 Modern samples compile, but the following grammar-level expectations remain unmet:
@@ -61,9 +61,8 @@ Modern samples compile, but the following grammar-level expectations remain unme
 Short-to-mid term steps to align implementation with the designed grammar and safety goals:
 
 1) Metadata + manifest parity
-- Extend the current best-effort read/write hints beyond static ISI targets to cover dynamic map key patterns and host-driven reads so schedulers can do conflict analysis directly from manifests (dynamic map keys now emit map-level hints; literal `execute_instruction` payloads and supported `execute_query` payloads are decoded; opaque host reads now fall back to conservative wildcard hints with lints unless explicit access hints are provided).
-- Done: lints now report dynamic state paths and opaque host reads; opaque host reads now fall back to wildcard hints.
-- Done: entrypoint manifests emit hints when enabled; wildcard keys cover opaque access, and diagnostics counters report fallback usage.
+- Done: compiler-generated hints cover static ISI targets, literal state paths, dynamic map-level state keys, and bounded dynamic state-map iteration descriptors.
+- Done: production compilation rejects incomplete access derivation instead of emitting wildcard manifests.
 
 2) Permission and trigger plumbing
 - Done: extend trigger DSL support to data/pipeline filters and explicit authority overrides.
@@ -74,8 +73,8 @@ Short-to-mid term steps to align implementation with the designed grammar and sa
 - Teach the type checker how to reason about Norito pointer wrappers (`Json`, `Blob`, `NoritoBytes`) beyond simple assignment so builders from the grammar work without manual casts.
 
 4) Access hints and host integration
-- Done: opaque host-driven reads now emit conservative wildcard hints (`*`) instead of skipping access hints entirely.
-- Next: refine wildcard access hints into precise per-key coverage for dynamic maps and host-driven reads so schedulers can safely preplan execution.
+- Done: production artifacts must carry complete compiler-generated access metadata.
+- Next: add precise descriptors for remaining opaque helper syscalls so they can compile in production without falling back to test-mode wildcard diagnostics.
 - Keep warning when `create_trigger` specs cannot be decoded for access hints (lint already covers non-literal trigger specs).
 
 5) Tooling separation
@@ -86,8 +85,8 @@ Short-to-mid term steps to align implementation with the designed grammar and sa
 - Emit a compiler hint when literal trigger specs cannot be decoded for access hints.
 
 ## Known Limitations to Call Out in Docs
-- Access hints cover static ISI targets (including literal trigger specs and `transfer_domain`), dynamic map paths via map-level keys, explicit `#[access]` annotations, and literal `execute_instruction` payloads plus supported `execute_query` payloads; opaque helper syscalls and non-literal host reads now emit conservative wildcard hints (`*`) with lints unless explicit access hints are provided, so schedulers should still prefer the dynamic prepass for higher precision.
-- Entrypoint manifests emit hints when enabled; fallback usage is surfaced via diagnostics rather than skip reasons.
+- Access hints cover static ISI targets, dynamic map paths via map-level keys, and bounded dynamic state-map iteration. Opaque helper syscalls remain test-mode-only until they have precise compiler-derived access descriptors.
+- Entrypoint manifests emit complete hints for production artifacts.
 - Meta feature flags (`zk`, `vector`, `features`) are validated against emitted opcodes; requesting features that are unused now fails compilation.
 - Numeric aliases (e.g., `fixed_u128`) are distinct `Numeric` types; v1 restricts them to unsigned integers (scale = 0), rejecting fractional values and decimal literals.
 - `permission(...)` annotations are enforced by compiler diagnostics and written into manifests; runtime enforcement depends on consuming the metadata.

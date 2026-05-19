@@ -6,6 +6,10 @@ class IdentifierResolutionExecutionPayload(
     @JvmField val programDigest: String,
     @JvmField val backend: String,
     @JvmField val verificationMode: String,
+    @JvmField val inputCiphertextHash: String,
+    @JvmField val outputCiphertextHash: String,
+    @JvmField val parameterDigest: String,
+    @JvmField val evaluationKeyDigest: String,
     @JvmField val outputHash: String,
     @JvmField val associatedDataHash: String,
     @JvmField val executedAtMs: Long,
@@ -16,6 +20,7 @@ class IdentifierResolutionExecutionPayload(
 class IdentifierResolutionPayload(
     @JvmField val policyId: String,
     @JvmField val execution: IdentifierResolutionExecutionPayload,
+    @JvmField val opening: RamLfeOutputOpening,
     @JvmField val opaqueId: String,
     @JvmField val receiptHash: String,
     @JvmField val uaid: String,

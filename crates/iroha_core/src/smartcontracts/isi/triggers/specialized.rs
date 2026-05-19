@@ -179,7 +179,6 @@ where
         let mut metadata: Option<Metadata> = None;
 
         while let Some(key) = visitor.next_key()? {
-            eprintln!("LoadedAction::json_deserialize field {}", key.as_str());
             match key.as_str() {
                 "executable" => {
                     if executable.is_some() {

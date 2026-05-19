@@ -337,7 +337,7 @@ impl QueryExecutor for Client {
     fn start_query(
         &self,
         query: QueryWithParams,
-    ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+    ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
         self.ensure_data_model_compatibility()
             .map_err(QueryError::from)?;
         let requested_fetch_size = query
@@ -354,7 +354,7 @@ impl QueryExecutor for Client {
         let make_request = || Ok(request_head.assemble_body(body.clone()));
         let response = retry_decode_with_send(make_request, decode_iterable_query_response)?;
 
-        let (batch, remaining_items, cursor) = response.into_parts();
+        let (batch, remaining_items, _has_more, cursor) = response.into_parts_with_count_mode();
 
         let cursor = cursor.map(|cursor| QueryCursor {
             request_head,
@@ -366,7 +366,7 @@ impl QueryExecutor for Client {
 
     fn continue_query(
         cursor: Self::Cursor,
-    ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+    ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
         let QueryCursor {
             request_head,
             cursor,
@@ -377,7 +377,7 @@ impl QueryExecutor for Client {
         let make_request = || Ok(request_head.assemble_body(body.clone()));
         let response = retry_decode_with_send(make_request, decode_iterable_query_response)?;
 
-        let (batch, remaining_items, cursor) = response.into_parts();
+        let (batch, remaining_items, _has_more, cursor) = response.into_parts_with_count_mode();
 
         let cursor = cursor.map(|cursor| QueryCursor {
             request_head,

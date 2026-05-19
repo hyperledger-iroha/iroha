@@ -37,6 +37,42 @@ endpoints:
 Registration fails when the referenced SoraFS manifest digest is missing,
 pending, retired, or does not match the committed bundle metadata.
 
+## Operator Pin-And-Register Checklist
+
+Before enabling an uploaded-model registration corridor, operators should
+prepare the storage, runtime, and signing surfaces as one controlled change.
+
+1. Build the encrypted model package locally and record the plaintext package
+   root, encrypted bundle root, chunk-manifest root, ciphertext byte count, and
+   chunk count. These values must match `SoraUploadedModelBundleV1`; model
+   bytes and plaintext inputs stay off-chain.
+2. Pin the encrypted package through SoraFS and wait for the pin registry to
+   report an active approved manifest. Treat the approved
+   `sorafs_manifest_digest`, content length, chunker profile, policy, and
+   approval sequence as release evidence for the model bundle.
+3. Configure the Soracloud runtime submission gas asset before accepting
+   production traffic. The gas asset must be present in runtime configuration
+   and funded for the accounts that will submit the returned receipt-recording
+   transaction.
+4. Submit the signed `POST /v1/soracloud/model/upload/register` request with
+   the uploaded bundle, model artifact metadata, weight-version metadata, and
+   provenance signatures. The bundle provenance and final registry provenance
+   must cover the exact committed roots, artifact id, weight version, dataset
+   reference, policy id, and SoraFS digest.
+5. For private execution, require clients to call
+   `POST /v1/soracloud/model/upload/private/execute`, inspect the returned
+   receipt, and sign the returned
+   `RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction through
+   their normal transaction-signing flow. The JavaScript helper returns an
+   unsigned instruction skeleton only; raw private keys must not be embedded in
+   helper inputs, browser payloads, logs, or repository files.
+6. After submission, query
+   `GET /v1/soracloud/model/upload/private/receipts` with the expected service,
+   model id, weight version, and `count_mode=exact` when an operator needs an
+   audited total. Compare the committed receipt commitments and encrypted
+   artifact references with the runtime response before marking the release
+   complete.
+
 ## Chain State
 
 `SoraUploadedModelBundleV1` is the canonical storage reference. It contains:

@@ -9,7 +9,7 @@ use ivm::{
     kotodama::{
         ast as kd_ast,
         ast::{BinaryOp, Expr, Function, Item, Statement},
-        compiler::{Compiler, CompilerOptions},
+        compiler::{Compiler, CompilerMode, CompilerOptions},
         lexer::{TokenKind, lex},
         parser::parse,
         semantic::{Type, analyze},
@@ -28,6 +28,13 @@ fn hex(bytes: &[u8]) -> String {
         let _ = write!(&mut s, "{b:02x}");
     }
     s
+}
+
+fn test_compiler() -> Compiler {
+    Compiler::new_with_options(CompilerOptions {
+        mode: CompilerMode::Test,
+        ..CompilerOptions::default()
+    })
 }
 
 #[test]
@@ -128,7 +135,7 @@ fn string_equality_compiles() {
 #[test]
 fn irohaswap_sample_compiles() {
     let src = include_str!("../../kotodama_lang/src/samples/irohaswap.ko");
-    let code = Compiler::new()
+    let code = test_compiler()
         .compile_source(src)
         .expect("irohaswap sample should compile");
     assert!(!code.is_empty());
@@ -137,7 +144,7 @@ fn irohaswap_sample_compiles() {
 #[test]
 fn prediction_market_demo_compiles() {
     let src = include_str!("../../../demo/prediction_market.ko");
-    let code = Compiler::new()
+    let code = test_compiler()
         .compile_source(src)
         .expect("prediction market demo should compile");
     assert!(!code.is_empty());
@@ -335,7 +342,7 @@ fn prelude_macros_compile() {
             }
         }
     "#;
-    Compiler::new()
+    test_compiler()
         .compile_source(src)
         .expect("compile macros from the Kotodama prelude");
 }
@@ -438,7 +445,7 @@ fn public_function_with_permission_is_allowed() {
 }
 
 #[test]
-fn on_chain_profile_rejects_string_key_maps() {
+fn durable_state_rejects_string_key_maps() {
     let src = r#"
         seiyaku Demo {
             state Map<string, int> detail;
@@ -453,19 +460,9 @@ fn on_chain_profile_rejects_string_key_maps() {
         .compile_source(src)
         .expect_err("expected on-chain profile error for Map<string, int>");
     assert!(
-        err.contains("on-chain profile")
-            && (err.contains("Map<string, int>") || err.contains("key type `string`")),
+        err.contains("state Map key type `string`") || err.contains("key type `string`"),
         "unexpected error: {err}"
     );
-
-    let opts = CompilerOptions {
-        enforce_on_chain_profile: false,
-        ..CompilerOptions::default()
-    };
-    let relaxed = Compiler::new_with_options(opts);
-    relaxed
-        .compile_source(src)
-        .expect("compilation should succeed when on-chain profile disabled");
 }
 
 #[test]
@@ -773,7 +770,7 @@ fn state_allocations_do_not_clobber_params() {
 #[test]
 fn compile_builtin_create_nfts_and_depth_and_set_detail() {
     let src = "fn main() { create_nfts_for_all_users(); set_execution_depth(111); set_account_detail(authority(), name(\"cursor\"), json(\"{\\\"query\\\":\\\"sc_dummy\\\",\\\"cursor\\\":1}\")); }";
-    let code = Compiler::new().compile_source(src).expect("compile failed");
+    let code = test_compiler().compile_source(src).expect("compile failed");
     // Sanity: code contains at least three syscalls (order preserved)
     // Byte-pattern search for SCALL encodings (LE): [imm8, 0x00, 0x00, 0x60]
     let (_meta, off) = parse_meta_offset(&code).unwrap();
@@ -802,10 +799,9 @@ fn call_sugar_parses_and_compiles_equivalently() {
     let src_plain = "fn f() { set_account_detail(authority(), name(\"k\"), json(\"1\")); }";
     // With `call` sugar
     let src_call = "fn f() { call set_account_detail(authority(), name(\"k\"), json(\"1\")); }";
-    let code_plain = Compiler::new()
-        .compile_source(src_plain)
-        .expect("compile plain");
-    let code_call = Compiler::new()
+    let compiler = test_compiler();
+    let code_plain = compiler.compile_source(src_plain).expect("compile plain");
+    let code_call = compiler
         .compile_source(src_call)
         .expect("compile call sugar");
     assert_eq!(
@@ -943,7 +939,7 @@ fn name_constructor_accepts_norito_bytes_pointer() {
             transfer_domain(authority(), nm, aid.account_id());
         }
     "#;
-    let code = ivm::KotodamaCompiler::new()
+    let code = test_compiler()
         .compile_source(src)
         .expect("compile name from norito bytes");
     let (_m, off) = parse_meta_offset(&code).unwrap();
@@ -970,7 +966,7 @@ fn method_sugar_name_on_norito_bytes_variable() {
             transfer_domain(authority(), nm, aid.account_id());
         }
     "#;
-    let code = ivm::KotodamaCompiler::new()
+    let code = test_compiler()
         .compile_source(src)
         .expect("compile name method on norito bytes");
     let (_m, off) = parse_meta_offset(&code).unwrap();
@@ -1509,7 +1505,7 @@ fn range_end_less_than_start_rejected() {
 
 #[test]
 fn range_non_integer_args_rejected() {
-    let src = r#"fn f(m: Map<int, int>) { for (k, v) in m.range("a", "b") { let z = v; } }"#;
+    let src = r#"state Map<int, int> m; fn f() { for (k, v) in m.range("a", "b") { let z = v; } }"#;
     let prog = parse(src).expect("parse");
     let err = analyze(&prog).expect_err("expected non-integer rejection");
     assert!(err.message.contains("range(start, end)"));
@@ -1517,8 +1513,7 @@ fn range_non_integer_args_rejected() {
 
 #[cfg(feature = "kotodama_dynamic_bounds")]
 #[test]
-fn dynamic_take_n1_executes_once() {
-    // Program: sum first n values from a minimal map
+fn dynamic_take_on_in_memory_map_is_rejected() {
     let src = r#"
         fn bounded_take_sum(m: Map<int, int>, n: int) -> int {
             let acc = 0;
@@ -1526,29 +1521,18 @@ fn dynamic_take_n1_executes_once() {
             return acc;
         }
     "#;
-    let code = ivm::KotodamaCompiler::new()
+    let err = ivm::KotodamaCompiler::new()
         .compile_source(src)
-        .expect("compile dyn take");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    // Allocate two buckets (32 bytes): (k0=7,v0=111), (k1=8,v1=222)
-    let base = vm.alloc_heap(32).expect("alloc");
-    vm.store_u64(base + 0, 7).expect("store k0");
-    vm.store_u64(base + 8, 111).expect("store v0");
-    vm.store_u64(base + 16, 8).expect("store k1");
-    vm.store_u64(base + 24, 222).expect("store v1");
-    // Args: m=base, n=1
-    vm.set_register(10, base);
-    vm.set_register(11, 1);
-    vm.run().expect("execute");
-    // Expect only first bucket counted: acc == 111
-    assert_eq!(vm.register(10), 111);
+        .expect_err("dynamic bounds on in-memory maps must be rejected");
+    assert!(
+        err.contains("dynamic bounds on in-memory Map iteration are unsupported"),
+        "unexpected error: {err}"
+    );
 }
 
 #[cfg(feature = "kotodama_dynamic_bounds")]
 #[test]
-fn dynamic_range_start1_end2_executes_second_only() {
-    // Program: sum entries in range [start, end)
+fn dynamic_range_on_in_memory_map_is_rejected() {
     let src = r#"
         fn bounded_range_sum(m: Map<int, int>, start: int, end: int) -> int {
             let acc = 0;
@@ -1556,24 +1540,13 @@ fn dynamic_range_start1_end2_executes_second_only() {
             return acc;
         }
     "#;
-    let code = ivm::KotodamaCompiler::new()
+    let err = ivm::KotodamaCompiler::new()
         .compile_source(src)
-        .expect("compile dyn range");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    // Allocate two buckets (32 bytes): (k0=7,v0=111), (k1=8,v1=222)
-    let base = vm.alloc_heap(32).expect("alloc");
-    vm.store_u64(base + 0, 7).expect("store k0");
-    vm.store_u64(base + 8, 111).expect("store v0");
-    vm.store_u64(base + 16, 8).expect("store k1");
-    vm.store_u64(base + 24, 222).expect("store v1");
-    // Args: m=base, start=1, end=2  => n = 1, only index 1 bucket counted
-    vm.set_register(10, base);
-    vm.set_register(11, 1);
-    vm.set_register(12, 2);
-    vm.run().expect("execute");
-    // Expect only second bucket counted: acc == 222
-    assert_eq!(vm.register(10), 222);
+        .expect_err("dynamic bounds on in-memory maps must be rejected");
+    assert!(
+        err.contains("dynamic bounds on in-memory Map iteration are unsupported"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
@@ -2031,7 +2004,7 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
 }
 
 #[test]
-fn manifest_emits_wildcard_hints_when_isi_targets_are_opaque() {
+fn production_manifest_accepts_authority_placeholder_isi_access() {
     let src = r#"
         fn main() {
             transfer_domain(
@@ -2043,19 +2016,57 @@ fn manifest_emits_wildcard_hints_when_isi_targets_are_opaque() {
     "#;
     let (_code, manifest) = Compiler::new()
         .compile_source_with_manifest(src)
-        .expect("compile manifest with opaque ISI");
+        .expect("production compile must accept authority placeholder access");
     let hints = manifest
         .access_set_hints
-        .expect("opaque ISI targets should emit wildcard hints");
-    assert_eq!(hints.read_keys, vec!["*".to_string()]);
-    assert_eq!(hints.write_keys, vec!["*".to_string()]);
+        .expect("access_set_hints must be present");
+    assert!(hints.read_keys.contains(&"account:$authority".to_string()));
+    assert!(
+        hints
+            .read_keys
+            .contains(&"domain:wonderland.universal".to_string())
+    );
+    assert!(
+        hints
+            .write_keys
+            .contains(&"domain:wonderland.universal".to_string())
+    );
+    assert!(!hints.read_keys.contains(&"*".to_string()));
+    assert!(!hints.write_keys.contains(&"*".to_string()));
+
     let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
     let main = entrypoints
         .iter()
         .find(|entry| entry.name == "main")
         .expect("main entrypoint");
-    assert_eq!(main.read_keys, vec!["*".to_string()]);
-    assert_eq!(main.write_keys, vec!["*".to_string()]);
+    assert_eq!(main.access_hints_complete, Some(true));
+    assert!(main.read_keys.contains(&"account:$authority".to_string()));
+    assert!(
+        main.read_keys
+            .contains(&"domain:wonderland.universal".to_string())
+    );
+    assert!(
+        main.write_keys
+            .contains(&"domain:wonderland.universal".to_string())
+    );
+}
+
+#[test]
+fn production_manifest_rejects_opaque_parameter_isi_access() {
+    let src = r#"
+        seiyaku Test {
+            kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: int) permission(Admin) {
+                transfer_asset(from, to, asset, amount);
+            }
+        }
+    "#;
+    let err = Compiler::new()
+        .compile_source_with_manifest(src)
+        .expect_err("production compile must reject opaque parameter ISI access");
+    assert!(
+        err.contains("E_ACCESS_INCOMPLETE"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
@@ -2837,7 +2848,7 @@ fn parse_mfc_example() {
 #[test]
 fn compile_kotodama_samples_supported() {
     use std::path::Path;
-    let compiler = Compiler::new();
+    let compiler = test_compiler();
     let samples_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../kotodama_lang/src/samples");
     // Compile a curated subset of samples supported by the current compiler
     let files = [
@@ -3084,7 +3095,7 @@ fn axt_intrinsics_lower_to_syscalls() {
         }}
     "#
     );
-    let code = ivm::KotodamaCompiler::new()
+    let code = test_compiler()
         .compile_source(&src)
         .expect("compile axt intrinsics");
     let (_meta, off) = parse_meta_offset(&code).unwrap();

@@ -3390,8 +3390,21 @@ mod tests {
         signer: &iroha_crypto::PrivateKey,
         executable: iroha_data_model::transaction::Executable,
     ) -> AcceptedTransaction<'static> {
+        sample_executable_transaction_with_metadata(
+            authority,
+            signer,
+            executable,
+            Metadata::default(),
+        )
+    }
+
+    fn sample_executable_transaction_with_metadata(
+        authority: &AccountId,
+        signer: &iroha_crypto::PrivateKey,
+        executable: iroha_data_model::transaction::Executable,
+        mut metadata: Metadata,
+    ) -> AcceptedTransaction<'static> {
         let chain_id = ChainId::from("chain");
-        let mut metadata = Metadata::default();
         metadata.insert(
             "gas_limit".parse().expect("gas_limit key"),
             iroha_primitives::json::Json::new(10_000_u64),
@@ -7329,6 +7342,244 @@ mod tests {
                     second_dataspace_id: second_dataspace,
                 }
             )
+        );
+    }
+
+    #[test]
+    fn strict_amx_policy_rejects_mixed_proved_overlay_write_targets() {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let first_dataspace = DataSpaceId::new(7);
+        let second_dataspace = DataSpaceId::new(8);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(first_dataspace, "acme"), (second_dataspace, "bank")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(2), first_dataspace),
+                (LaneId::new(3), second_dataspace),
+            ]),
+        );
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
+            iroha_primitives::json::Json::new(AMX_POLICY_REJECT_CROSS_DATASPACE),
+        );
+        let tx = sample_executable_transaction_with_metadata(
+            &authority_id,
+            authority_keypair.private_key(),
+            sample_proved_executable(vec![
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("merchant", "acme").expect("domain id"),
+                ))),
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("treasury", "bank").expect("domain id"),
+                ))),
+            ]),
+            metadata,
+        );
+
+        assert_eq!(
+            router.try_route(&tx),
+            Err(
+                RoutingResolveError::ConflictingTransactionDataspaceTargets {
+                    first_dataspace_id: first_dataspace,
+                    second_dataspace_id: second_dataspace,
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn strict_amx_policy_value_is_trimmed_and_case_insensitive() {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let first_dataspace = DataSpaceId::new(7);
+        let second_dataspace = DataSpaceId::new(8);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(first_dataspace, "acme"), (second_dataspace, "bank")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(2), first_dataspace),
+                (LaneId::new(3), second_dataspace),
+            ]),
+        );
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
+            iroha_primitives::json::Json::new("  ReJeCt_CrOsS_DaTaSpAcE  "),
+        );
+        let tx = sample_transaction_with_metadata(
+            &authority_id,
+            authority_keypair.private_key(),
+            vec![
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("merchant", "acme").expect("domain id"),
+                ))),
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("treasury", "bank").expect("domain id"),
+                ))),
+            ],
+            metadata,
+        );
+
+        assert_eq!(
+            router.try_route(&tx),
+            Err(
+                RoutingResolveError::ConflictingTransactionDataspaceTargets {
+                    first_dataspace_id: first_dataspace,
+                    second_dataspace_id: second_dataspace,
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn strict_amx_policy_rejects_mixed_dataspace_scoped_permissions() {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let first_dataspace = DataSpaceId::new(7);
+        let second_dataspace = DataSpaceId::new(8);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(first_dataspace, "acme"), (second_dataspace, "bank")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(2), first_dataspace),
+                (LaneId::new(3), second_dataspace),
+            ]),
+        );
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
+            iroha_primitives::json::Json::new(AMX_POLICY_REJECT_CROSS_DATASPACE),
+        );
+        let first_permission: Permission = CanPublishSpaceDirectoryManifest {
+            dataspace: first_dataspace,
+        }
+        .into();
+        let second_permission: Permission = CanPublishSpaceDirectoryManifest {
+            dataspace: second_dataspace,
+        }
+        .into();
+        let tx = sample_transaction_with_metadata(
+            &authority_id,
+            authority_keypair.private_key(),
+            vec![
+                InstructionBox::from(Grant::account_permission(
+                    first_permission,
+                    authority_id.clone(),
+                )),
+                InstructionBox::from(Revoke::account_permission(
+                    second_permission,
+                    authority_id.clone(),
+                )),
+            ],
+            metadata,
+        );
+
+        assert_eq!(
+            router.try_route(&tx),
+            Err(RoutingResolveError::ConflictingDataspaceScopedPermissions {
+                first_dataspace_id: first_dataspace,
+                second_dataspace_id: second_dataspace,
+            })
+        );
+    }
+
+    #[test]
+    fn mixed_dataspace_scoped_permissions_without_universal_lane_fail_closed() {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let first_dataspace = DataSpaceId::new(7);
+        let second_dataspace = DataSpaceId::new(8);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::new(2),
+                default_dataspace: first_dataspace,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(first_dataspace, "acme"), (second_dataspace, "bank")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::new(2), first_dataspace),
+                (LaneId::new(3), second_dataspace),
+            ]),
+        );
+        let first_permission: Permission = CanPublishSpaceDirectoryManifest {
+            dataspace: first_dataspace,
+        }
+        .into();
+        let second_permission: Permission = CanPublishSpaceDirectoryManifest {
+            dataspace: second_dataspace,
+        }
+        .into();
+        let tx = sample_transaction(
+            &authority_id,
+            authority_keypair.private_key(),
+            vec![
+                InstructionBox::from(Grant::account_permission(
+                    first_permission,
+                    authority_id.clone(),
+                )),
+                InstructionBox::from(Revoke::account_permission(
+                    second_permission,
+                    authority_id.clone(),
+                )),
+            ],
+        );
+
+        assert_eq!(
+            router.try_route(&tx),
+            Err(RoutingResolveError::NoLaneForDataspace {
+                dataspace_id: DataSpaceId::UNIVERSAL,
+            })
+        );
+    }
+
+    #[test]
+    fn mixed_domain_write_targets_without_universal_lane_fail_closed() {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let first_dataspace = DataSpaceId::new(7);
+        let second_dataspace = DataSpaceId::new(8);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::new(2),
+                default_dataspace: first_dataspace,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(first_dataspace, "acme"), (second_dataspace, "bank")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::new(2), first_dataspace),
+                (LaneId::new(3), second_dataspace),
+            ]),
+        );
+        let tx = sample_transaction(
+            &authority_id,
+            authority_keypair.private_key(),
+            vec![
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("merchant", "acme").expect("domain id"),
+                ))),
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("treasury", "bank").expect("domain id"),
+                ))),
+            ],
+        );
+
+        assert_eq!(
+            router.try_route(&tx),
+            Err(RoutingResolveError::NoLaneForDataspace {
+                dataspace_id: DataSpaceId::UNIVERSAL,
+            })
         );
     }
 

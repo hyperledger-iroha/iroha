@@ -39,6 +39,13 @@ use norito::json::{self, native::Number as JsonNumber};
 use super::ast::*;
 use crate::builtins::Builtin;
 
+/// First-release dynamic state-map iteration limit.
+///
+/// Dynamic `.take(n)` and `.range(start, end)` are release features, but every
+/// deployed contract still carries a deterministic upper bound so peers execute
+/// the same finite lowering.
+pub const DYNAMIC_ITERATION_LIMIT: i64 = 64;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FunctionEffects {
     host_side_effects: bool,
@@ -1469,8 +1476,7 @@ fn is_supported_durable_value_type(ty: &Type) -> bool {
 
 fn is_supported_durable_key_type(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
-        ty if is_numeric_type(&ty) => true,
-        Type::String => true,
+        Type::Int => true,
         other if is_pointer_type(&other) => true,
         _ => false,
     }
@@ -2723,10 +2729,16 @@ fn analyze_statement(
                     }
                     let body_t =
                         analyze_block(body, &mut local_vars, expected_ret, loop_depth + 1)?;
-                    // Build a typed assert: n <= 2 && n >= 0
+                    // Build a typed assert: n <= DYNAMIC_ITERATION_LIMIT && n >= 0
                     let n_t = analyze_expr(&args[1], &mut vars.clone())?;
-                    let two = TypedExpr {
-                        expr: ExprKind::Number(2),
+                    if n_t.ty != Type::Int {
+                        return Err(SemanticError {
+                            message: "E_UNBOUNDED_ITERATION: `.take(n)` requires an integer bound"
+                                .into(),
+                        });
+                    }
+                    let limit = TypedExpr {
+                        expr: ExprKind::Number(DYNAMIC_ITERATION_LIMIT),
                         ty: Type::Int,
                     };
                     let zero = TypedExpr {
@@ -2737,7 +2749,7 @@ fn analyze_statement(
                         expr: ExprKind::Binary {
                             op: BinaryOp::Le,
                             left: Box::new(n_t.clone()),
-                            right: Box::new(two),
+                            right: Box::new(limit),
                         },
                         ty: Type::Bool,
                     };
@@ -2844,7 +2856,7 @@ fn analyze_statement(
                 }
                 #[cfg(feature = "kotodama_dynamic_bounds")]
                 if name == "range" && args.len() == 3 {
-                    // Dynamic: accept non-literal bounds with runtime asserts; lower to cap of 2 from start=0
+                    // Dynamic: accept non-literal bounds with runtime asserts.
                     if !map_expr_is_state(&args[0]) {
                         return Err(SemanticError {
                             message: "E_MAP_BOUNDS: dynamic bounds on in-memory Map iteration are unsupported; move the map into `state`."
@@ -2867,7 +2879,14 @@ fn analyze_statement(
                         analyze_block(body, &mut local_vars, expected_ret, loop_depth + 1)?;
                     let start_t = analyze_expr(&args[1], &mut vars.clone())?;
                     let end_t = analyze_expr(&args[2], &mut vars.clone())?;
-                    // assert(start >= 0 && end >= start && end - start <= 2)
+                    if start_t.ty != Type::Int || end_t.ty != Type::Int {
+                        return Err(SemanticError {
+                            message:
+                                "E_UNBOUNDED_ITERATION: `.range(start, end)` requires integer bounds"
+                                    .into(),
+                        });
+                    }
+                    // assert(start >= 0 && end >= start && end - start <= DYNAMIC_ITERATION_LIMIT)
                     let zero = TypedExpr {
                         expr: ExprKind::Number(0),
                         ty: Type::Int,
@@ -2896,15 +2915,15 @@ fn analyze_statement(
                         },
                         ty: Type::Int,
                     };
-                    let two = TypedExpr {
-                        expr: ExprKind::Number(2),
+                    let limit = TypedExpr {
+                        expr: ExprKind::Number(DYNAMIC_ITERATION_LIMIT),
                         ty: Type::Int,
                     };
                     let le2 = TypedExpr {
                         expr: ExprKind::Binary {
                             op: BinaryOp::Le,
                             left: Box::new(diff),
-                            right: Box::new(two),
+                            right: Box::new(limit),
                         },
                         ty: Type::Bool,
                     };
@@ -6532,12 +6551,12 @@ pub enum TypedStatement {
         start: usize,
         /// Optional upper bound on iterations (e.g., from `.take(n)`).
         bound: Option<usize>,
-        /// Dynamic count expression (feature-gated). When present, IR lowering
-        /// emits up to K guarded iterations with `i < n` checks.
+        /// Dynamic count expression. When present, IR lowering emits up to the
+        /// fixed release limit with `i < n` checks.
         #[cfg(feature = "kotodama_dynamic_bounds")]
         dyn_count: Option<TypedExpr>,
-        /// Dynamic start expression (feature-gated). When present, IR computes
-        /// the address offset based on `start + i`.
+        /// Dynamic start expression. When present, IR computes the address
+        /// offset based on `start + i`.
         #[cfg(feature = "kotodama_dynamic_bounds")]
         dyn_start: Option<TypedExpr>,
     },
@@ -7915,10 +7934,8 @@ mod tests {
 
     #[test]
     fn public_entrypoints_reject_trigger_event() {
-        let program = parse(
-            "seiyaku Demo { #[access(read=\"*\", write=\"*\")] kotoage fn f() { let _ev = trigger_event(); } }",
-        )
-        .expect("parse public trigger_event");
+        let program = parse("seiyaku Demo { kotoage fn f() { let _ev = trigger_event(); } }")
+            .expect("parse public trigger_event");
         let err = analyze(&program).expect_err("public trigger_event should fail");
         assert!(
             err.message.contains("cannot use `trigger_event` here"),
@@ -7932,7 +7949,6 @@ mod tests {
         let program = parse(
             r#"
             seiyaku Demo {
-                #[access(read="*", write="*")]
                 kotoage fn run(count: int) -> int { return count + 1; }
 
                 #[test]
@@ -7952,7 +7968,6 @@ mod tests {
         let program = parse(
             r#"
             seiyaku Demo {
-                #[access(read="*", write="*")]
                 kotoage fn run(count: int) -> int { return count; }
 
                 fn helper() {
@@ -7971,7 +7986,6 @@ mod tests {
         let program = parse(
             r#"
             seiyaku Demo {
-                #[access(read="*", write="*")]
                 kotoage fn run(count: int) -> int { return count + 1; }
 
                 #[test]
@@ -7991,7 +8005,6 @@ mod tests {
         let program = parse(
             r#"
             seiyaku Demo {
-                #[access(read="*", write="*")]
                 kotoage fn run(count: int) -> int { return count; }
 
                 #[test]
@@ -8012,7 +8025,6 @@ mod tests {
         let program = parse(
             r#"
             seiyaku Demo {
-                #[access(read="*", write="*")]
                 kotoage fn run(count: int) -> int { return count; }
 
                 #[test]
@@ -8054,7 +8066,6 @@ mod tests {
         let program = parse(
             r#"
             seiyaku Demo {
-                #[access(read="*", write="*")]
                 kotoage fn run(count: int) -> int { return count + 1; }
 
                 #[test]
@@ -8078,7 +8089,6 @@ mod tests {
         let program = parse(
             r#"
             seiyaku Demo {
-                #[access(read="*", write="*")]
                 kotoage fn run(count: int) -> (int, int) { return (count, count + 1); }
 
                 #[test]
@@ -8115,7 +8125,7 @@ mod tests {
     #[test]
     fn view_entrypoints_reject_get_int_helper() {
         let program = parse(
-            "seiyaku Demo { #[access(read=\"*\", write=\"*\")] view fn f(ev: Json) -> int { return ev.get_int(name(\"n\")); } }",
+            "seiyaku Demo { view fn f(ev: Json) -> int { return ev.get_int(name(\"n\")); } }",
         )
         .expect("parse view get_int");
         let err = analyze(&program).expect_err("view get_int should fail");

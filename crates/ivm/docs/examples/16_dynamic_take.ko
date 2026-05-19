@@ -1,7 +1,7 @@
-// Dynamic take(n) example (requires `kotodama_dynamic_bounds` feature).
-// Demonstrates guarded unrolling: the compiler emits up to K guarded
+// Dynamic take(n) example for durable state maps.
+// Demonstrates guarded unrolling: the compiler emits up to 64 guarded
 // iterations with a runtime check `if (i < n)` to avoid extra body runs.
-// Default K = 2; see README for tuning via CompilerOptions.
+// First-release Kotodama fixes the iteration cap at 64.
 // Dynamic bounds are supported on state maps.
 
 seiyaku DynamicTake {

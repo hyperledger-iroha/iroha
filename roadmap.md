@@ -1,8 +1,49 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-05-18
+Last updated: 2026-05-19
 
 Completed history lives in `status.md`. This file should only track unfinished work.
+
+## FHE/RAM-LFE first-release follow-ups
+
+- Replace the current deterministic in-repo BFV evaluator with the full
+  BFV-RNS engine planned for release: RNS modulus chains, real relinearization,
+  packed-slot Galois-key switching, and full BFV bootstrapping. The current pass
+  makes Torii/Soracloud consume and persist real ciphertext envelopes; Soracloud
+  RotateLeft now requires public rotation-key refresh material for the outer
+  ciphertext-slot envelope, and Bootstrap applies a validated public
+  encrypted-zero refresh key. Those refresh paths are still not a complete
+  BFV-RNS bootstrap or packed-polynomial Galois-switching circuit.
+- Broaden the cross-SDK deterministic BFV-RNS vector corridor: Kotlin, Java,
+  Swift, and JavaScript now require `RamLfeOutputOpening` on identifier
+  claim/resolve helpers and their focused suites are green, but shared release
+  vectors still need to cover the full RNS parameter/key bundle and Soracloud
+  Bootstrap output shape.
+- Broaden validation from the green focused crypto/data-model/core/Torii/daemon
+  checks into the next full workspace and SDK corridor, including malformed
+  opening signatures, wrong opening verifier keys, parameter/evaluation-key
+  mismatches, and Soracloud Add/Multiply/RotateLeft/Bootstrap multi-input
+  fixtures.
+
+## Kotodama first-release follow-ups
+
+- Add precise compiler-derived access descriptors for the remaining opaque host
+  helper syscalls so they can graduate from test-mode-only diagnostics into
+  production-safe manifests without wildcard fallbacks.
+
+## Nexus independent lane consensus follow-ups
+
+- Replace the current global proposal-path lane lookahead with the full
+  per-lane proposal/vote scheduler so lane blocks are proposed, executed, and
+  QC-sealed by their own lane committees instead of being emitted as relay
+  metadata from the global block path.
+- Wire lane-local DA/RBC payload ownership into that scheduler and persist lane
+  block artifacts independently from global block sealing.
+- Add a multi-peer integration corridor proving two active lanes can advance at
+  different heights, produce lane-domain QCs, upgrade FastPQ relay proofs, and
+  merge without waiting for an idle configured lane. Broaden the unit-level
+  committed-record hydration coverage into restart/replay coverage for
+  persisted verified relay records.
 
 ## Cross-dataspace AMX follow-ups
 
@@ -55,26 +96,8 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## ZK audit validation follow-ups
 
-- Fold the now-green focused ZK cleanup corridor into the next long
-  `cargo test --workspace` / CI validation budget.
-
-## Soracloud production follow-ups
-
-- Broaden the deterministic quantized CPU uploaded-model route into the full
-  production request/status/receipt corridor. The core evaluator, receipt
-  schema, and guarded Torii execute route now exist with active SoraFS
-  artifact-pin admission. Committed receipt state and the
-  `RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction now exist;
-  Torii exposes both the private execution route and committed receipt query
-  route, and the JavaScript SDK exposes unsigned execute/query helpers plus
-  receipt-instruction extraction. Kotlin core and Java Android now mirror the
-  response parsers and receipt-instruction extraction helper. The OpenAPI route
-  schemas and Torii decryption-request release hook are now implemented.
-  Remaining work is JDK-backed mobile SDK validation and multi-peer private
-  execution integration coverage.
-- Add operator documentation for the SoraFS pin-and-register upload workflow,
-  including approved-pin evidence, runtime submission gas-asset config, and
-  external signing of JavaScript Soracloud provenance payloads.
+- Fold the now-green focused ZK cleanup and adversarial negative corridor into
+  the next long `cargo test --workspace` / CI validation budget.
 
 ## TradFi ISO 20022 interop follow-ups
 
@@ -104,15 +127,36 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## FASTPQ GPU acceleration follow-ups
 
-- Fix Metal/CUDA Poseidon Merkle parent-pair batch parity so the guarded
-  FASTPQ trace Merkle-pair accelerator can enable on real GPU backends. Keep
-  the scalar fallback active until the preflight passes.
+- Keep the conservative one-state Metal Poseidon dispatch until vectorized
+  multi-state column and Merkle-pair batches have real parity evidence. CUDA
+  parent-pair parity still needs real-host validation before enabling a guarded
+  accelerator there. Keep the scalar fallback active until each backend's
+  preflight passes.
 - Runtime Poseidon parity gates now fail closed: column hashing disables the GPU
   path after dispatch/self-test/count/parity mismatches, and Merkle parent-pair
   hashing disables its GPU path after sampled CPU parity mismatch. Prometheus
   telemetry now records accelerator disable counters and sampled parity-failure
-  counters. Remaining work is hardware proof on real Metal and CUDA hosts plus
-  dashboard/alert wiring for those counters.
+  counters. Metal proof is green on Apple M1 Ultra for the conservative
+  dispatch, high-level Poseidon GPU gates, first-level fused gate, and BN254
+  word-batch gate. Dashboard and alert wiring for the disable/parity counters
+  is now in place; remaining work is CUDA hardware proof.
+- On a CUDA host, capture the hardware inventory (`nvidia-smi`, CUDA toolkit
+  version, driver version, compute capability, and selected gencode), then run
+  the required FASTPQ CUDA parity corridor with `FASTPQ_GPU=gpu` and the
+  appropriate CUDA arch flags. At minimum, cover generic Poseidon GPU filters,
+  BN254 Poseidon word-batch filters, trace Merkle parent-pair parity filters,
+  and the fail-closed telemetry counters. Record exact commands, host details,
+  and pass/fail output in `status.md`.
+- On the same CUDA host, run a release-mode FASTPQ prover comparison with CPU
+  scalar as the reference and CUDA enabled only after preflight passes. Capture
+  a bench/profile sample for `poseidon_merkle_pairs`, confirm no sampled parity
+  failures or accelerator-disable alerts fire during the accepted run, and keep
+  scalar CPU as the authoritative fallback for every mismatch or dispatch
+  error.
+- If CUDA parity fails, leave the CUDA path fail-closed, file the failing vector
+  shape in `status.md`, and add a focused regression before attempting to
+  re-enable larger CUDA batches. Do not treat macOS Metal evidence, CUDA
+  compile-only evidence, or manifest/table checks as CUDA runtime proof.
 - Rebuild the parked low-level Poseidon fused column+parent kernels with real
   Metal and CUDA parity proof before putting them back on the hot path. The
   acceptance run needs scalar-equivalent leaf/parent vectors, a bench sample
@@ -158,9 +202,12 @@ Completed history lives in `status.md`. This file should only track unfinished w
   dispatch/start/result, proposal-backed validation gates, validation
   accept/reject/defer handling, re-chain/view-change aggregation, sidecar
   replay, and commit-persistence completion now run directly through `Actor`.
-  The remaining work is to delete any legacy cooperative commit sweep paths
-  that become redundant once the actor-owned vNext state has equivalent model
-  and integration coverage.
+  Block-sync BlockCreated recovery now also uses named payload-only,
+  requested-payload, signed-quorum, and commit-evidence recovery modes instead
+  of broad stale/authoritative/revival bypass booleans. The remaining work is
+  to delete any legacy cooperative commit sweep paths that become redundant
+  once the actor-owned vNext state has equivalent model and integration
+  coverage.
 - Finish auditing chain-order hash and `rechain_seq` binding in deferred
   vote/QC caches, signer-tally/cache keys, and evidence replay paths used by
   the replacement shell. Vote/QC preimages, precommit signer history,
@@ -1152,9 +1199,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - Add a multi-block replay fixture that replays committed blocks into a fresh
     state and compares canonical WSV snapshot bytes against the originally
     committed WSV.
-  - Add a real 4-peer restart integration test that commits route-sensitive
-    asset, account, alias, and domain-owned state, rebuilds from Kura, and
-    compares canonical WSV snapshot bytes across the restarted peers.
+  - The real 4-peer restart integration test now commits route-sensitive
+    asset, account, alias, and domain-owned state, removes optional sidecar
+    metadata, rebuilds from Kura, and compares the restarted peers' rebuilt
+    query surface.
   - Keep the fixture on the replay-specific validation entrypoint so legacy
     blocks without embedded context remain covered separately from newly
     proposed blocks.

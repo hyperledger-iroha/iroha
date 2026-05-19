@@ -1,6 +1,569 @@
 # Status
 
-Last updated: 2026-05-18
+Last updated: 2026-05-19
+
+## 2026-05-19 WSV/Kura and query pipeline refactor closeout
+
+- WSV remains memory-only: durable block state stays in Kura, while query,
+  pagination, SNS mutation/readback, Torii error reporting, and integration
+  tests were hardened around committed in-memory state instead of ad hoc
+  persistence paths.
+- Query pagination now carries unknown remaining-count semantics through the
+  Rust client, smart-contract query builder, and integration tests, avoiding
+  misleading totals when the WSV snapshot cannot cheaply prove them.
+- SNS client helpers now submit consensus mutations and poll committed reads;
+  Torii JSON error paths preserve validation details for query conversion and
+  read failures.
+- IVM contract artifact validation now rejects global `*` and scoped `state:*`
+  access hints in first-release artifacts. Test-mode wildcard diagnostics remain
+  compiler/report-only, invalid dynamic hints are rejected, and threshold escrow
+  deploy paths are covered by focused integration validation.
+- Focused validation is green with `cargo check -p kotodama_lang --lib`,
+  `cargo test -p ivm --test contract_artifact -- --nocapture`,
+  `cargo test -p integration_tests --test core_api threshold_escrow:: -- --nocapture`,
+  and the full `cargo test -p integration_tests --test core_api -- --nocapture`
+  suite (`171 passed; 0 failed; 4 ignored`).
+- Hygiene is green with `cargo fmt --all -- --check` and `git diff --check`.
+
+## 2026-05-19 First-release FHE/RAM-LFE correctness pass
+
+- RAM-LFE app execution is now encrypted-only. Torii rejects plaintext
+  `input_hex` / identifier `input` requests, evaluates the programmed BFV path
+  over ciphertext envelopes, and signs receipts that bind input/output
+  ciphertext hashes, program digest, parameter digest, evaluation-key digest,
+  backend, verification mode, and timestamps.
+- Identifier claim/resolve receipts now require a signed
+  `RamLfeOutputOpening`. Torii derives `opaque:` identifiers from the verified
+  opened-output hash instead of decrypting locally or deriving directly from a
+  ciphertext hash, and on-chain `ClaimIdentifier` validation rechecks the
+  opening against the execution receipt and the configured opening verifier
+  key.
+- Soracloud FHE state mutation and job execution now persist full ciphertext
+  payloads, verify stored payload commitments before execution, run Add,
+  Multiply, RotateLeft, and Bootstrap over encoded BFV ciphertext envelopes,
+  and commit the encoded output ciphertext bytes back into authoritative state.
+  Bootstrap uses a validated public encrypted-zero refresh key so evaluators
+  remain secret-key free while ciphertext bytes are actually transformed.
+  RotateLeft now also requires public rotation-key refresh material and
+  re-randomizes every moved ciphertext slot after the envelope slot rotation.
+- OpenAPI/static portal specs and the universal-account/Soracloud docs now
+  describe the encrypted-only RAM-LFE flow, encrypted output ciphertexts, and
+  opening-required identifier resolution. The translated universal-account
+  guide variants now carry the same canonical encrypted-only RAM-LFE section.
+- Kotlin, Java, Swift, and JavaScript SDK helpers now require encrypted
+  identifier requests plus `RamLfeOutputOpening`; the JavaScript helper emits the
+  257-prime BFV envelope vector and parses nested `{ payload, attestation }`
+  receipts.
+- Focused validation is green with
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_crypto ram_lfe -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_data_model soracloud -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_core run_soracloud_fhe_job_records_ciphertext_output_state --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo check -p iroha_torii`, and
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo check -p irohad`, plus
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_torii
+  identifier_resolution --lib -- --nocapture` and
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_torii
+  openapi --lib -- --nocapture`, and
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_torii
+  encrypted_only_request_dtos_reject_plaintext_fields --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_torii
+  ram_lfe_execute_returns_receipt --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_torii
+  identifier_resolve --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_torii
+  identifier_claim_receipt --lib -- --nocapture`, and
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_core
+  claim_identifier --lib -- --nocapture`.
+- Additional SDK/fixture validation is green with `swift test --filter
+  ToriiClientTests --filter TxBuilderTests`, `node --test
+  test/toriiClient.identifier.test.js test/toriiClient.ramLfe.test.js`,
+  `npm run lint`, `npm run build:dist`, `CARGO_TARGET_DIR=target/codex-fhe-fix
+  cargo check -p kotlin-fixture-gen`, and `CARGO_TARGET_DIR=target/codex-fhe-fix
+  cargo test -p iroha_core claim_identifier_rejects_invalid_output_opening_signature
+  --lib -- --nocapture`. After staging Temurin 21 under `/tmp/temurin21`,
+  `JAVA_HOME=/tmp/temurin21/Contents/Home ./gradlew :core-jvm:test --console=plain`
+  is green from `kotlin/`, and
+  `JAVA_HOME=/tmp/temurin21/Contents/Home ANDROID_HOME=~/Library/Android/sdk
+  ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain` is green
+  from `java/iroha_android/`.
+- Follow-up focused Bootstrap validation is green with
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_crypto
+  bootstrap_refresh_preserves_plaintext_and_changes_ciphertext -- --nocapture`
+  and `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_core
+  soracloud_bootstrap_uses_refresh_key --lib -- --nocapture`.
+- Follow-up rotation-key validation is green with
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_crypto rotation_key
+  -- --nocapture` and `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p
+  iroha_core soracloud_rotate_left_uses_rotation_key_refresh --lib --
+  --nocapture`.
+
+## 2026-05-19 Structural hardening validation closeout
+
+- Fixed the new BFV rotation-key metadata lint by making
+  `BfvRotationKey` `Copy`; it is a single `u32` metadata wrapper and remains
+  Norito/schema-compatible.
+- Added the Soracloud uploaded-model operator pin-and-register checklist to
+  `docs/source/soracloud/uploaded_private_models.md`, covering approved SoraFS
+  pin evidence, runtime submission gas-asset readiness, provenance binding,
+  external JavaScript signing, and committed receipt audit queries.
+- Focused validation is green on the current dirty tree with
+  `CARGO_TARGET_DIR=target/codex-struct-hardening-check cargo check -p
+  iroha_core -p iroha_torii -p irohad -p iroha_data_model`, the stale
+  commit-inflight and exact-frontier Sumeragi filters, the 4-peer Kura/WSV
+  restart test, the 4-peer Soracloud private uploaded-model receipt restart
+  test, `cargo test -p ivm --test contract_artifact
+  verify_rejects_invalid_dynamic_access_hints`, and `cargo test -p
+  iroha_data_model lane_relay -- --nocapture`.
+- Hygiene is green with `cargo fmt --all -- --check`, `git diff --check`,
+  dashboard JSON parsing, Ruby YAML parsing for the FASTPQ alert files, and the
+  no-`Cargo.lock`/`dist` diff check. `promtool` is not installed on this host,
+  and CUDA runtime parity still requires a CUDA host.
+
+## 2026-05-18 Kotodama first-release hardening
+
+- Kotodama access metadata is now compiler-owned for the first release:
+  user-written `#[access(...)]` attributes are rejected, production compilation
+  fails when access cannot be derived without wildcard fallbacks, and test mode
+  remains the only place where incomplete opaque host-call hints are tolerated.
+- Dynamic state-map iteration is first-release behavior with a fixed limit of
+  64 guarded iterations. The compiler emits structured dynamic access
+  descriptors in manifests, admission/pipeline code normalizes those
+  descriptors to map-level state keys, and artifact validation rejects wildcard
+  or zero-bound dynamic descriptors.
+- Durable state map keys are restricted to `int` and pointer-ABI key types, and
+  samples, portal snippets, and Kotodama docs no longer advertise manual access
+  annotations or a tunable dynamic-iteration cap.
+- Validation: `cargo test -p kotodama_lang --lib`,
+  `cargo test -p iroha_data_model access_set_hints_roundtrip --lib`,
+  `cargo test -p iroha_core access_set_hints --lib`,
+  `cargo test -p ivm --test manifest_roundtrip`,
+  `cargo test -p ivm --test contract_artifact`, and the full
+  `cargo test -p ivm` crate corridor passed. The previously blocked focused
+  `cargo test -p ivm --test contract_artifact
+  verify_rejects_invalid_dynamic_access_hints -- --nocapture` check is now
+  green after the BFV rotation-key lint fix.
+- Closeout validation also passed with `cargo fmt --all -- --check`,
+  `git diff --check`, `scripts/check_no_scale.sh`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-build cargo build --workspace`,
+  and `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-build cargo test --workspace
+  --no-run`. The full workspace test execution remains a separate multi-hour
+  corridor.
+
+## 2026-05-19 Trigger implementation completion
+
+- Finished the v1 trigger semantics pass: deterministic pipeline triggers now
+  execute only for transaction `Approved`/`Rejected` and block `Approved`
+  validation facts, by-call trigger chaining propagates data-trigger failures,
+  missing trigger bytecode fails closed, and enabled metadata now fails closed
+  when malformed.
+- Active trigger ID caches now track enabled-and-not-depleted triggers, trigger
+  action construction exposes a fallible `Action::try_new(...)`, and
+  action Norito/JSON deserialization now routes invalid payloads through
+  fallible validation instead of panicking. Trigger-completion events use
+  `trigger_execution_hash` for the invocation identity.
+- `ExecuteTrigger::new(...)` now uses an empty JSON object for its default args
+  so no-argument by-call instructions encode cleanly through Norito. Integration
+  trigger fixtures now construct typed `InstructionBox` values instead of
+  erasing payload type information through `Box<dyn Instruction>`, and
+  timing-sensitive trigger integration checks now wait for committed trigger
+  side effects before asserting.
+- Negative/adversarial trigger coverage now includes mismatched execute-trigger
+  authority and invalid retry-policy payloads during Norito/JSON action decode,
+  malformed `__enabled` active-cache behavior, rejected/applied block pipeline
+  registration filters, malformed-enabled pipeline execution, and pipeline
+  trigger rollback when chained data triggers fail. Follow-up adversarial cases
+  also cover direct `Action::try_new(...)` rejection of trigger-completion
+  filters, JSON decode rejection of retry policies on pre-commit time triggers,
+  constrained pipeline transaction filters ignoring hash/height near-misses, and
+  fail-closed pipeline IVM execution when registered bytecode is missing. The
+  latest coverage adds non-base64 Action JSON rejection, active-cache recovery
+  after replacing malformed `__enabled` with `true`, and block-approved pipeline
+  filters ignoring wrong-height approved events. Additional adversarial coverage
+  rejects valid-base64 Action JSON with invalid Norito bytes, verifies removing
+  a false `__enabled` flag restores default-active behavior, and proves
+  one-shot pipeline triggers execute only once when multiple matching pipeline
+  events arrive in the same batch. Follow-up adversarial cases reject non-string
+  Action JSON payloads, verify setting `__enabled=false` removes an active
+  trigger from active queries, and prove direct pipeline action failure rolls
+  back without consuming repeats. The newest coverage exercises numeric
+  `__enabled=0/1` transitions in active queries, confirms numeric-zero pipeline
+  triggers stay inactive without consuming repeats even under matching approved
+  block facts, and proves one-shot transaction pipeline triggers execute only
+  once when duplicate approved transaction facts arrive in one batch. The latest
+  adversarial pass adds fail-closed TriggerCompleted JSON decoding for
+  non-string, non-base64, and invalid Norito payloads, rejects unknown
+  trigger-completion outcome discriminants, and verifies by-call triggers with
+  numeric-zero or malformed `__enabled` metadata reject execution without
+  consuming repeats or appearing active. The newest negative data-trigger cases
+  verify numeric-zero and malformed `__enabled` metadata skip DFS execution
+  without mutation, repeat consumption, or active-cache exposure, and that
+  corrupted depleted data-trigger entries are pruned without executing.
+- Validation: `cargo check -p iroha_core --lib`;
+  `CARGO_TARGET_DIR=/tmp/iroha-trigger-tests cargo test -p iroha_core --lib
+  trigger -- --nocapture` (`153` passed);
+  `CARGO_TARGET_DIR=/tmp/iroha-trigger-dm cargo test -p iroha_data_model
+  trigger -- --nocapture` (`35` passed in lib plus filtered integration-test
+  binaries); and `CARGO_TARGET_DIR=/tmp/iroha-trigger-it cargo test -p
+  integration_tests --test events_and_triggers triggers:: -- --nocapture` (`26`
+  passed) are green. `cargo fmt --all -- --check`, `git diff --check` on the
+  touched files, and `scripts/check_no_scale.sh` are also green. Focused
+  `NORITO_SKIP_BINDINGS_SYNC=1 cargo clippy -p iroha_data_model --lib --
+  -D warnings`, `NORITO_SKIP_BINDINGS_SYNC=1 cargo clippy -p iroha_core --lib
+  -- -D warnings`, and the earlier
+  `cargo clippy -p integration_tests --test events_and_triggers -- -D warnings`
+  are green after narrow lint cleanups in dependency files, including a tiny
+  Kotodama borrow-order fix and local `too_many_arguments` allow needed to keep
+  the dirty dependency tree compiling under strict clippy. Unskipped clippy is
+  currently blocked in this dirty tree by unrelated Kotlin Norito binding-sync
+  test compilation errors in `HttpClientTransportTest.kt`.
+
+## 2026-05-19 Soracloud SDK parser adversarial hardening
+
+- Tightened Kotlin/JVM and Java Android Soracloud private uploaded-model JSON
+  parsers so receipt-list pagination counts, artifact ciphertext byte counts,
+  and receipt emitted sequence numbers are rejected when negative instead of
+  being accepted as structurally valid signed-response data.
+- Added adversarial parser coverage for negative `total`, `returned_items`,
+  `remaining_items`, `ciphertext_bytes`, and `emitted_sequence`, plus blank
+  receipt identity/policy fields on the execute-response path. Java Android
+  mirrors the Kotlin behavior through the existing Gradle harness entry point.
+- Validation: `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home
+  ./gradlew :core-jvm:test --tests
+  org.hyperledger.iroha.sdk.client.SoracloudPrivateUploadedModelJsonParserTest
+  --no-daemon --console=plain` from `kotlin`, and
+  `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home
+  ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.SoracloudPrivateUploadedModelJsonParserTests
+  ./gradlew :core:test --tests
+  org.hyperledger.iroha.android.GradleHarnessTests --no-daemon
+  --console=plain` from `java/iroha_android` are green.
+
+## 2026-05-19 Nexus proposal lane lookahead
+
+- Proposal assembly now fetches up to the configured scan budget before
+  applying the block slot cap, then orders fetched transactions with
+  slot-rotated lane interleaving. This lets a small proposal reach a ready
+  transaction from a later lane instead of being monopolized by the first lane
+  in queue order.
+- Transactions fetched during lookahead but not admitted because of the slot,
+  gas, or IVM-heavy transaction budgets release their lane TEU accounting and
+  enter the existing deterministic deferred requeue path.
+- The roadmap now names the remaining work as replacing this bounded global
+  proposal-path lookahead with the full independent per-lane proposal/vote
+  scheduler.
+- Focused validation with `CARGO_TARGET_DIR=target/codex-lane-consensus` is
+  green for `cargo check -p iroha_core`,
+  `cargo test -p iroha_core --lib interleave_lane_indices -- --nocapture`,
+  `cargo test -p iroha_core --lib proposal_queue_scan_budget -- --nocapture`,
+  `cargo test -p iroha_core --lib proposal_gas_budget_limits_fetch --
+  --nocapture`, and `cargo test -p iroha_core --lib
+  proposal_ivm_budget_defers_extra_ivm_and_keeps_cheap_slots -- --nocapture`.
+  Touched-file `rustfmt --edition 2024 --check` and `git diff --check` are
+  also green.
+
+## 2026-05-19 Nexus verified relay commit hydration
+
+- `RegisterVerifiedLaneRelay` execution now stages the verified relay record on
+  the transaction, carries successful transactions into the block accumulator,
+  and hydrates the runtime lane-relay cache immediately after the block's
+  contract-visible state commits.
+- The shared hydration path still validates relay-ref, proof digest,
+  verification-height, manifest-root, FastPQ effect type, and claim digest
+  before recording a relay. Invalid or stale staged records are logged and do
+  not enter the merge-admissible relay set.
+- Added adversarial hydration coverage proving bad claim digests are ignored,
+  staged records missing FastPQ proof material or carrying zeroed manifest roots
+  are ignored, dropped transactions neither persist nor hydrate relay records,
+  conflicting cached relay material is not overwritten, and older committed
+  records cannot regress a newer cached lane relay.
+- Added admission-boundary negative coverage for missing/zero manifest roots,
+  disabled Nexus, unknown lane ids, lane/dataspace mismatches, unknown
+  dataspaces, empty or malformed proof payloads, proof manifest-root mismatches,
+  expired proof blobs, missing FastPQ bindings, source dataspace mismatches,
+  wrong FastPQ effect types, malformed stored relay state, and conflicting
+  stored relay state.
+- Added persisted-state corruption coverage proving merge-candidate hydration
+  ignores verified relay records whose relay ref, proof payload hash,
+  verification height, manifest root, FastPQ source dataspace, or FastPQ effect
+  type no longer match the embedded relay envelope.
+- Added key-space and sibling-corruption coverage proving noncanonical
+  prefix-matching verified relay keys cannot hydrate relays, malformed or
+  corrupted prefixed sibling records cannot block a valid canonical record,
+  self-consistent records stored under another relay's canonical key are
+  ignored, spoofed-key siblings cannot replace the valid canonical relay, and
+  unrelated malformed contract state is ignored by the relay scanner.
+- Fixed an existing Soracloud BFV bootstrap `Result` inference blocker that was
+  preventing current dirty-tree `iroha_core` tests from compiling.
+- Fixed an existing block-test pipeline-trigger helper compile blocker by
+  staging synthetic pipeline triggers through the trigger storage transaction
+  API.
+- Focused validation with `CARGO_TARGET_DIR=target/codex-lane-consensus` is
+  green for `cargo check -p iroha_core`,
+  `cargo test -p iroha_core --lib merge_candidates -- --nocapture` (14 tests),
+  `cargo test -p iroha_core --lib merge_candidates_ignore_contract_state_record
+  -- --nocapture`,
+  `cargo test -p iroha_core --lib verified_lane_relay -- --nocapture` (35
+  tests),
+  `cargo test -p iroha_core --lib
+  committed_verified_lane_relay_record_hydrates_runtime_cache -- --nocapture`,
+  `cargo test -p iroha_core --lib register_verified_lane_relay -- --nocapture`
+  (19 tests), `cargo test -p iroha_core --lib record_lane_relay -- --nocapture`,
+  and `cargo test -p iroha_core --lib
+  block_validation_sequential_entrypoints_execute_pipeline_triggers --
+  --nocapture`.
+
+## 2026-05-19 Nexus lane relay merge hardening
+
+- Changed lane relay handling to two-stage FastPQ admission. Structurally valid
+  relays are retained and gossiped as pending; relays with valid FastPQ material
+  upgrade the same `(lane_id,dataspace_id,height,settlement_hash)` key to
+  verified status. Merge candidate synthesis only uses verified relays.
+- Block sealing now emits pending lane relay envelopes without copying the
+  global block commit QC into the lane QC field, so relays require real
+  lane-domain finality before they can enter the merge path.
+- Merge candidates now use active lanes only. Configured lanes without a new
+  verified relay no longer block candidate construction, and merge roots are
+  derived from lane QC state roots, tip hash, DA commitment, settlement hash,
+  and RBC byte totals instead of the settlement hash alone.
+- Lane relay QC verification now uses a lane/dataspace domain-separated mode
+  tag, so a global block QC cannot be copied into a lane relay and accepted as
+  lane-final evidence. Merge entry commit validation also checks that every
+  snapshot is backed by a stored verified relay with matching tip and
+  merge-hint root.
+- Merge candidate synthesis now hydrates persisted verified lane relay records
+  from contract state into the runtime relay cache before selecting active
+  lanes. Hydrated records are checked for relay-ref, proof digest,
+  verification-height, manifest-root, FastPQ effect type, and claim-digest
+  consistency before they can become merge-admissible.
+- Fixed Soracloud FHE/state-entry test fixtures to match the already-updated
+  provenance payload and service-state payload schemas, unblocking data-model
+  test-profile builds on the current dirty tree.
+- Focused validation with `CARGO_TARGET_DIR=target/codex-lane-consensus` is
+  green for `cargo check -p iroha_data_model`, `cargo check -p iroha_core`,
+  `cargo test -p iroha_data_model --lib nexus::relay::tests -- --nocapture`,
+  `cargo test -p iroha_core --lib nexus::lane_relay -- --nocapture`,
+  `cargo test -p iroha_core --lib record_lane_relay -- --nocapture`,
+  `cargo test -p iroha_core --lib lane_relay_store_upgrades -- --nocapture`,
+  `cargo test -p iroha_core --lib lane_relay_envelopes -- --nocapture`,
+  `cargo test -p iroha_core --lib lane_relay_helper -- --nocapture`,
+  `cargo test -p iroha_core --lib commit_merge_entry -- --nocapture`,
+  `cargo test -p iroha_core --lib merge_candidate -- --nocapture`, and
+  `cargo test -p iroha_core --lib merge_committee -- --nocapture`. The
+  contract-state hydration regression
+  `cargo test -p iroha_core --lib
+  merge_candidates_hydrate_verified_lane_relay_records_from_contract_state --
+  --nocapture` is green. Touched-file `rustfmt --edition 2024 --check` and
+  `git diff --check` are also green.
+
+## 2026-05-18 Negative/adversarial test addendum
+
+- Added Sumeragi unit coverage for the named block-sync recovery modes. The
+  negative cases assert that payload-only recovery enables no bypasses,
+  requested-payload repair only permits stale payload recovery, and signed
+  quorum repair cannot impersonate commit evidence or revive aborted work
+  without local commit-QC policy. The same module now also pins the full stale
+  `BlockCreated` admission truth table so a stale payload is rejected unless a
+  missing request, retained match, or recovery evidence is present.
+- Added FASTPQ alert-rule negative coverage for present-but-flat GPU disable
+  and sampled parity-failure counters, proving scraped historical counter
+  values do not alert unless the counter increases inside the rule window. It
+  also covers old increments outside the five-minute alert window and exact
+  queue/zero-fill thresholds that must not page.
+- Added sidecar-pruning negative coverage proving optional recovery metadata
+  removal preserves non-sidecar payload directories and files. Additional
+  adversarial helper coverage proves similarly named payload directories are
+  preserved, missing roots are ignored, and Soracloud canonical signing URIs
+  bind path/query bytes without including origin or fragments.
+- Validation: `CARGO_TARGET_DIR=target/codex-struct-hardening-check cargo test
+  -p iroha_core proposal_handlers::tests --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-struct-hardening-check cargo test -p
+  integration_tests --test network_functional remove_optional_recovery_sidecars
+  -- --nocapture`, `CARGO_TARGET_DIR=target/codex-struct-hardening-check cargo
+  test -p integration_tests --test network_functional signing_uri --
+  --nocapture`, `cargo fmt --all --check`, touched-file `git diff --check`,
+  dashboard JSON/YAML parsing, and the no-`Cargo.lock`/`dist` diff check are
+  green.
+
+## 2026-05-18 Structural hardening completion pass
+
+- Sumeragi's block-sync-to-BlockCreated handoff now uses named recovery modes
+  (`PayloadOnly`, `RequestedPayloadRepair`, `SignedQuorumFrontierRepair`, and
+  `CommitEvidenceRepair`) instead of passing broad stale/authoritative/revival
+  bypass booleans through the exact-frontier path. The cleanup preserves the
+  existing payload-only, signed-quorum, and commit-evidence behavior while
+  making the certified recovery corridor explicit at the actor-owned handoff.
+- Added focused 4-peer restart coverage for the memory-only WSV model:
+  route-sensitive account, alias, asset, and domain-owned state is committed,
+  optional checkpoint/manifest sidecars are removed, peers restart from Kura
+  blocks, and the rebuilt query surface is compared across all restarted peers.
+- Added focused 4-peer Soracloud private uploaded-model runtime coverage:
+  approved SoraFS artifacts are registered, the deterministic quantized CPU
+  private execute route returns a receipt instruction, the receipt is committed,
+  peers restart from Kura blocks, and the committed receipt query remains
+  deterministic across restarted peers.
+- FASTPQ operator coverage now includes Prometheus alerts and Grafana panels
+  for `fastpq_gpu_disable_total` and `fastpq_gpu_parity_failure_total`, so GPU
+  disable events and sampled runtime parity failures are visible as fail-closed
+  rollout signals. The alert YAML and dashboard JSON parse cleanly; `promtool`
+  was not installed on this host for rule-test execution.
+- Focused validation is green with
+  `CARGO_TARGET_DIR=target/codex-struct-hardening-check cargo check -p
+  iroha_core -p iroha_torii -p irohad -p iroha_data_model`,
+  `CARGO_TARGET_DIR=target/codex-struct-hardening-check cargo test -p
+  iroha_core stale_commit_inflight -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-struct-hardening-check cargo test -p
+  iroha_core block_sync_update_commit_qc_supersedes_stale_same_height_frontier_owner
+  --lib -- --nocapture`, `CARGO_TARGET_DIR=target/codex-struct-hardening-check
+  cargo test -p iroha_core
+  block_sync_payload_with_cached_commit_qc_supersedes_lock_conflicting_stale_frontier_owner
+  --lib -- --nocapture`, `CARGO_TARGET_DIR=target/codex-struct-hardening-check
+  cargo test -p iroha_core
+  block_sync_update_accepts_stale_exact_frontier_payload_repair_with_da --lib
+  -- --nocapture`, the focused 4-peer Kura/WSV restart test, the focused
+  4-peer Soracloud private receipt restart test, the FASTPQ Metal Poseidon
+  gates, the Kotlin `:core-jvm:test` gate, and the Java Android Soracloud
+  parser harness. `cargo fmt --all --check`, `git diff --check` on touched
+  files, dashboard JSON/YAML parsing, and the no-`Cargo.lock`/`dist` diff check
+  are also clean. CUDA runtime parity remains pending on a real CUDA host.
+
+## 2026-05-18 Torii query adversarial cursor coverage
+
+- Added negative coverage for replay-backed bounded stored query cursors:
+  mismatched paged cursors fail before invoking replay work and do not evict the
+  valid cursor, permanent paged failures (`Expired`/`CursorDone`) evict the
+  dead cursor and release live-query capacity plus per-authority quota,
+  transient paged failures remain resident, retryable, and quota-consuming,
+  exhausted paged starts do not consume capacity or quota, dropped paged cursors
+  release capacity and quota without invoking replay work, paged starts still
+  enforce live-query-store capacity, explicit pagination limits do not force
+  probe reads or cursor storage, forged returned offsets at the limit fail
+  before reading source rows, and oversized fetch requests fail before reading
+  source rows.
+- Added Arc snapshot-lane coverage for the Torii path: wrong continuation
+  cursors and forged query ids do not consume the original cursor, and
+  limit-bound bounded queries return no cursor even when more source rows exist
+  past the requested limit. The Arc path also rejects ephemeral continuations,
+  rejects underfunded stored continuations before store lookup, proves those
+  validation failures do not consume real cursors, lets sufficiently funded
+  missing cursors reach the store and expire, and evicts replay cursors once
+  their owning state handle is gone. It also documents the intended
+  fresh-view replay behavior by proving bounded continuations can observe later
+  state changes.
+- Validation: `CARGO_INCREMENTAL=0
+  CARGO_TARGET_DIR=/tmp/iroha-query-api-check cargo test -p iroha_core --lib
+  paged_ -- --nocapture`,
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-query-api-check cargo test
+  -p iroha_core --lib stored_unsorted_bounded_replay_ -- --nocapture`,
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-query-api-check cargo test
+  -p iroha_core --lib collect_unsorted_bounded_page_rejects_ -- --nocapture`,
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-query-api-check cargo test
+  -p iroha_core --lib arc_ -- --nocapture`,
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-query-api-check cargo check
+  -p iroha_torii --tests` (passes with an unrelated dirty-worktree warning in
+  `crates/iroha_core/src/smartcontracts/isi/sns.rs`), and
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-query-api-check cargo clippy
+  -p iroha_core --all-targets -- -D warnings` are green.
+  `rustfmt --edition 2024 --check` on the touched query files and
+  `git diff --check` are also green; package/workspace-wide `cargo fmt
+  --check` is blocked by unrelated existing format diffs in other dirty
+  workspace files.
+
+## 2026-05-18 ZK adversarial negative coverage follow-up
+
+- Legacy Halo2 vote-circuit matching now accepts only the exact
+  `vote-bool-commit-merkle{2,8,16}` families or hyphen-suffixed variants,
+  closing prefix-smuggling shapes such as `vote-bool-commit-merkle8evil` while
+  preserving intended legacy ids.
+- Added adversarial coverage for preverified proof cache keys binding proof
+  backend and bytes, poisoned preverified cache entries failing to bypass the
+  registered verifying-key commitment, poisoned preverified entries failing to
+  bypass `OpenVerifyEnvelope` backend-tag mismatches, cross-family envelope
+  backend tags being rejected before cache lookup, malformed proof attachment
+  triples failing early, same-name VK refs under different backend namespaces
+  missing preverified cache hits, proof and verifying-key hash boundaries
+  resisting backend/payload concatenation ambiguity, poisoned preverified
+  entries failing to bypass public-input schema, envelope VK-hash, inactive-VK,
+  circuit-index, or stored-key-backend registry mismatches, preverified replay
+  attempts failing before an existing proof record can be overwritten, preverify
+  dedup keys resisting backend/payload boundary ambiguity and
+  missing-vs-present commitment ambiguity, failed preverify attempts not
+  poisoning later valid dedup entries even for wrong VK bytes or unsupported
+  empty backends, and P2P confidential handshakes rejecting peers whose ZK
+  policy hashes, confidential rules versions, VK-set hashes,
+  Poseidon/Pedersen parameter ids, enabled flags, `assume_valid` flags,
+  verifier backends, or required confidential metadata are missing or mismatched.
+- Validation: focused coverage is green with `CARGO_BUILD_JOBS=2
+  CARGO_TARGET_DIR=/tmp/iroha-codex-zk-more cargo test -p iroha_core
+  preverified_key_tests --lib -- --nocapture`, `CARGO_BUILD_JOBS=2
+  CARGO_TARGET_DIR=/tmp/iroha-codex-zk-more cargo test -p iroha_core
+  preverified_proof_key --lib -- --nocapture`,
+  `CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/tmp/iroha-codex-zk-more cargo test -p
+  iroha_core normalize_halo2_circuit_id_and_match_variants --lib --
+  --nocapture`, `CARGO_BUILD_JOBS=2
+  CARGO_TARGET_DIR=/tmp/iroha-codex-zk-more cargo test -p iroha_core
+  verify_proof_preverified_cache_does_not_bypass_wrong_vk_commitment_key --lib
+  -- --nocapture`, and `CARGO_BUILD_JOBS=2
+  CARGO_TARGET_DIR=/tmp/iroha-codex-zk-more cargo test -p iroha_core
+  verify_proof_preverified_cache_does_not_bypass_wrong_envelope_backend_tag
+  --lib -- --nocapture`, `CARGO_BUILD_JOBS=2
+  CARGO_TARGET_DIR=/tmp/iroha-codex-zk-more cargo test -p iroha_core
+  open_verify_backend_tag_matches_rejects_cross_family_tags --lib --
+  --nocapture`, `CARGO_BUILD_JOBS=2
+  CARGO_TARGET_DIR=/tmp/iroha-codex-zk-more cargo test -p iroha_core
+  validate_proof_attachment_rejects_mismatched_attachment_triples --lib --
+  --nocapture`, `CARGO_BUILD_JOBS=2
+  CARGO_TARGET_DIR=/tmp/iroha-codex-zk-more cargo test -p iroha_core
+  verify_proof_preverified_cache_does_not_bypass_envelope_metadata_mismatches
+  --lib -- --nocapture`, `CARGO_BUILD_JOBS=2
+  CARGO_TARGET_DIR=/tmp/iroha-codex-zk-more cargo test -p iroha_core
+  verify_proof_preverified_cache --lib -- --nocapture`, `CARGO_BUILD_JOBS=2
+  CARGO_TARGET_DIR=/tmp/iroha-codex-zk-more cargo test -p iroha_core
+  verify_proof_preverified_cache_does_not_bypass_existing_proof_record --lib
+  -- --nocapture`, `CARGO_BUILD_JOBS=2
+  CARGO_TARGET_DIR=/tmp/iroha-codex-zk-more cargo test -p iroha_core
+  verifying_key_hash_length_prefixes_backend_and_payload --lib --
+  --nocapture`, `CARGO_BUILD_JOBS=2
+  CARGO_TARGET_DIR=/tmp/iroha-codex-zk-more cargo test -p iroha_core
+  preverify_ --lib -- --nocapture`, `CARGO_BUILD_JOBS=2
+  CARGO_TARGET_DIR=/tmp/iroha-codex-zk-more cargo test -p iroha_core
+  preverify_dedup_key_length_prefixes_backend_and_payload --lib --
+  --nocapture`, `CARGO_BUILD_JOBS=2
+  CARGO_TARGET_DIR=/tmp/iroha-codex-zk-more cargo test -p iroha_core
+  failed_preverify_attempts_do_not_poison_dedup_cache --lib -- --nocapture`,
+  `CARGO_BUILD_JOBS=2
+  CARGO_TARGET_DIR=/tmp/iroha-codex-zk-more cargo test -p iroha_p2p
+  handshake_rejects --lib -- --nocapture`.
+
+## 2026-05-18 FASTPQ Metal parity and mobile SDK validation follow-up
+
+- The Java Android Gradle harness now runs
+  `SoracloudPrivateUploadedModelJsonParserTests`, so the Java mirror parser
+  coverage is part of the normal targeted harness instead of remaining an
+  orphaned main-style test.
+- JDK-backed mobile SDK validation is green under Homebrew OpenJDK 21:
+  `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home
+  ./gradlew :core-jvm:cleanTest :core-jvm:test --no-daemon --console=plain`
+  passed from `kotlin`, and
+  `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home
+  ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.SoracloudPrivateUploadedModelJsonParserTests
+  ./gradlew :core:test --tests
+  org.hyperledger.iroha.android.GradleHarnessTests --no-daemon
+  --console=plain` passed from `java/iroha_android`.
+- FASTPQ's generic Metal Poseidon column path now dispatches one state per
+  batch until vectorized multi-state parity is proven for both column and
+  Merkle-pair workloads. The scalar sponge remains authoritative, and the
+  conservative Metal path now has direct CPU-equivalence coverage for
+  multi-column and Merkle parent-pair self-test vectors.
+- Hardware evidence was collected on this host's Apple M1 Ultra GPU. The
+  Metal-focused gates are green with `FASTPQ_GPU=gpu` and
+  `CARGO_TARGET_DIR=target/codex-struct-hardening-check`:
+  `cargo test -p fastpq_prover --features fastpq-gpu metal_poseidon --
+  --nocapture`, `cargo test -p fastpq_prover --features fastpq-gpu
+  poseidon_gpu -- --nocapture`, `cargo test -p fastpq_prover --features
+  fastpq-gpu poseidon_fused_gpu_matches_cpu_first_level -- --nocapture`, and
+  `cargo test -p fastpq_prover --features fastpq-gpu metal_bn254_poseidon --
+  --nocapture`.
+- CUDA runtime parity remains pending because no CUDA device/toolchain was
+  available on this macOS host.
 
 ## 2026-05-18 Soracloud private route hardening and FASTPQ telemetry
 
@@ -30,6 +593,11 @@ Last updated: 2026-05-18
   height `1098`, final approved transactions `214572`, zero rejected
   transactions, and no `VRF epoch seal conflicts`, pending-block validation
   reject, `NposEffectsInvalid`, or panic signatures in peer logs.
+- Negative/adversarial VRF staging coverage now rejects same-signer
+  commitment rewrites, conflicting late reveals, penalty marker rewrites,
+  overlapping finalized offender categories, bad snapshots over compatible
+  pending state, and bad pending records when a committed-compatible snapshot
+  is available.
 - Validation: `cargo fmt --all`,
   `CARGO_TARGET_DIR=target/codex-struct-hardening-check cargo test -p
   iroha_torii openapi --lib -- --nocapture`,
@@ -43,11 +611,13 @@ Last updated: 2026-05-18
   `CARGO_TARGET_DIR=target/codex-struct-hardening-check cargo check -p
   iroha_core -p iroha_torii -p irohad -p iroha_data_model`,
   `CARGO_TARGET_DIR=target/codex-struct-hardening-check cargo test -p
-  iroha_core stage_vrf_snapshot --lib -- --nocapture`, and
-  `CARGO_TARGET_DIR=target/codex-struct-hardening-check cargo test -p
+  iroha_core stage_vrf_snapshot --lib -- --nocapture`,
+  `cargo test -p iroha_core --lib merge_vrf_epoch_records -- --nocapture`,
+  and `CARGO_TARGET_DIR=target/codex-struct-hardening-check cargo test -p
   integration_tests --test consensus_and_da
   joint_consensus_switches_mode_at_activation_height -- --nocapture` are green.
-  Real Metal/CUDA hardware parity remains pending on suitable hosts.
+  The conservative Metal parity corridor is now green; CUDA runtime parity
+  remains pending on a suitable host.
 
 ## 2026-05-18 Torii bounded stored query continuations
 
@@ -134,8 +704,8 @@ Last updated: 2026-05-18
   crates/fastpq_prover/src/backend.rs` are green. Focused FASTPQ fallback
   coverage passes with `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds
   cargo test -p fastpq_prover poseidon_policy_labels_cpu_fallbacks --
-  --nocapture`. Hardware-backed Metal/CUDA parity tests still need to run on
-  hosts with those accelerators available.
+  --nocapture`. The conservative Metal parity follow-up is now green on Apple
+  M1 Ultra; CUDA runtime parity remains pending on a suitable host.
 
 ## 2026-05-18 Soracloud private uploaded-model CPU runtime slice
 
@@ -151,9 +721,9 @@ Last updated: 2026-05-18
   operations, nearest-away-from-zero rounding, saturating bounds, and rejects
   bundles whose admitted runtime format or policy id does not match the private
   execution request.
-- The v1 runtime keeps plaintext input/output inside the runtime call result;
-  the receipt is deliberately hash/artifact-ref only so plaintext does not enter
-  chain state.
+- This non-FHE uploaded-model runtime confines plaintext input/output to the
+  private service call boundary; receipts remain hash/artifact-ref only so
+  plaintext does not enter chain state.
 - Torii now exposes `/v1/soracloud/model/upload/private/execute` as the first
   guarded private execution surface. The route resolves a finalized uploaded
   model from authoritative state, requires the model format to be
@@ -193,10 +763,10 @@ Last updated: 2026-05-18
   -- --nocapture` is also green. `cargo check -p iroha_core` is green with the
   committed receipt store wired into world views/transactions.
   `npm run build:dist` and `node --test test/soracloud.test.js` are green from
-  `javascript/iroha_js`. Local Kotlin/Java Gradle parser validation was
-  attempted but blocked in this shell because no Java runtime is installed.
-  OpenAPI snapshots, JDK-backed mobile SDK validation, and multi-peer private
-  execution integration coverage remain open.
+  `javascript/iroha_js`. JDK-backed Kotlin and Java Android parser validation
+  is now green under Homebrew OpenJDK 21, and OpenAPI route coverage is green
+  in the Soracloud route-hardening entry. Multi-peer private execution
+  integration coverage remains open.
 
 ## 2026-05-18 Torii space-directory pagination metadata
 
@@ -231,6 +801,26 @@ Last updated: 2026-05-18
   can merge without `fee_postprocessing` fallback and then run fee/gas/Nexus
   postprocessing in the same `StateTransaction`; data-trigger-sensitive or more
   complex fee-bearing detached deltas still fall back deliberately.
+- Added adversarial coverage around that boundary: a supported non-transfer
+  fee-bearing delta now proves the `fee_postprocessing` fallback counter, and
+  an insufficient-fee single transfer proves failed fee charging does not leak
+  the detached business transfer into state. Additional negative coverage now
+  proves active data triggers keep simple fee-bearing transfers on the
+  sequential fee-postprocessing path, and missing payer fee-asset state rejects
+  without creating a fee asset or leaking the business transfer. Further
+  adversarial coverage now exercises same-asset transfer/fee rollback, shared
+  fee-balance exhaustion across two transfers, and rollback of a valid transfer
+  followed by a failing instruction while still charging the rejected-transaction
+  Nexus fee. A third negative batch now covers stateful sequence-admission
+  rejection before any transfer or fee debit, invalid pre-burn fee-sink routing
+  rollback, and unauthorized sponsor metadata rollback without debiting the
+  sponsor. Additional sponsor/config adversarial coverage now proves disabled
+  sponsorship, sponsor fee caps, and malformed fee-asset configuration reject
+  without leaking the detached transfer or debiting the requested fee payer.
+  Follow-up malformed metadata and gas-policy coverage now proves invalid
+  `fee_sponsor` metadata does not fall back to payer debit, required
+  `gas_asset_id` metadata is enforced, and accepted gas assets without
+  `units_per_gas` mappings reject without leaking detached transfer effects.
 - Validation: `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo check
   -p iroha_telemetry`, targeted
   `rustfmt --edition 2024 --check`, and `git diff --check` on the touched
@@ -241,6 +831,50 @@ Last updated: 2026-05-18
   `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
   fee_enabled_single_transfer_uses_detached_merge_without_fee_fallback --lib --
   --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
+  fee_enabled_supported_non_transfer_uses_fee_postprocessing_fallback --lib --
+  --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
+  fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing
+  --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
+  fee_enabled_single_transfer_with_active_data_trigger_uses_fee_fallback --lib
+  -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
+  fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_missing
+  --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
+  fee_enabled_transfer_then_failing_instruction_falls_back_without_leaking_transfer
+  --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
+  fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee --lib --
+  --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
+  fee_enabled_invalid_sink_before_burn_rejects_without_partial_transfer_or_fee
+  --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
+  fee_enabled_unauthorized_sponsor_rejects_without_transfer_or_sponsor_debit
+  --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
+  fee_enabled_disabled_sponsor_rejects_without_transfer_or_sponsor_debit --lib
+  -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
+  fee_enabled_sponsor_cap_rejects_without_transfer_or_sponsor_debit --lib --
+  --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
+  fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee --lib
+  -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
+  fee_enabled_malformed_sponsor_metadata_rejects_without_transfer_or_fee
+  --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
+  fee_enabled_missing_gas_asset_metadata_rejects_without_partial_transfer
+  --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
+  fee_enabled_missing_gas_rate_mapping_rejects_without_partial_transfer
+  --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
+  fee_enabled_ --lib -- --nocapture`,
   `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
   scheduler_variant_tests --lib -- --nocapture`,
   `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-pipeline-core cargo test -p iroha_core
@@ -308,6 +942,64 @@ Last updated: 2026-05-18
     while linking; stale generated `target/codex-*` artifacts were partially
     cleared to restore working space. The earlier focused test result above is
     the recorded pass for this change set.
+
+## 2026-05-18 Cross-dataspace adversarial coverage
+
+- Native AMX receipt coverage now includes negative cases: non-universal
+  routing for mixed participants emits no native AMX receipt, and a universal
+  route with only one non-universal participant also emits no receipt. Unknown
+  dataspace aliases do not synthesize receipt legs, and repeated references to
+  one dataspace do not count as a multi-leg AMX batch.
+- Router adversarial coverage now also rejects strict-policy mixed native
+  targets hidden inside IVM-proved overlays, and fails closed when mixed native
+  targets need the universal AMX coordinator but no universal lane is present.
+  Strict `amx_policy` matching is covered for whitespace/case normalization,
+  mixed dataspace-scoped permissions, and missing universal-lane permission
+  batches.
+- Restricted transparent asset transfer resolution now cross-checks direct UAID
+  dataspace bindings in addition to the account-scope directory, so a
+  multi-bound destination account fails closed instead of implicitly choosing a
+  dataspace bucket. Source-side ambiguity is covered too: a global-looking
+  source asset id for a multi-bound account now rejects before debit, leaves the
+  source balance untouched, and does not materialize a destination balance.
+  Non-universal execution routes now also reject destination accounts whose
+  unique binding points at a different dataspace, preventing cross-dataspace
+  credits outside the universal AMX coordinator. The transfer-batch execution
+  surface has matching negative coverage for that same cross-dataspace credit
+  attempt, plus explicit empty-batch rejection coverage.
+- Query tests now use explicit `#[tokio::test]` on async cases instead of
+  shadowing the builtin `#[test]` attribute, keeping sync negative tests
+  compilable under `iroha_core --lib`.
+- Focused validation is green with
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test
+  -p iroha_core --lib native_amx_receipt -- --nocapture`,
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test
+  -p iroha_core --lib strict_amx_policy -- --nocapture`,
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test
+  -p iroha_core --lib
+  mixed_dataspace_scoped_permissions_without_universal_lane_fail_closed --
+  --nocapture`,
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test
+  -p iroha_core --lib mixed_domain_write_targets_without_universal_lane_fail_closed
+  -- --nocapture`,
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test
+  -p iroha_core --lib transfer_batch_rejects -- --nocapture`,
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test
+  -p iroha_core --lib ambiguous_source_dataspace_binding -- --nocapture`,
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test
+  -p iroha_core --lib
+  transfer_restricted_asset_rejects_destination_binding_outside_non_universal_route
+  -- --nocapture`,
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test
+  -p iroha_core --lib
+  transfer_restricted_asset_rejects_ambiguous_destination_dataspace_binding --
+  --nocapture`, `CARGO_INCREMENTAL=0
+  CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test -p iroha_core --lib
+  transfer_restricted_asset_uses_destination_dataspace_binding_and_policy --
+  --nocapture`, and `CARGO_INCREMENTAL=0
+  CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test -p iroha_core --lib
+  collect_unsorted_bounded_page_rejects_returned_offset_at_limit_without_reading
+  -- --nocapture`. Full workspace testing remains a long-corridor follow-up.
 
 ## 2026-05-17 Cross-dataspace native routing and XOR gas
 

@@ -388,7 +388,6 @@ seiyaku ContractCallConfigureAccountMapTest {
 
   kotoage fn main() {}
 
-  #[access(read="*", write="*")]
   kotoage fn configure(admin: AccountId, inori: AccountId) permission(Admin) {
     let has_admin = ConfigAccount.contains(key_admin());
     if (has_admin) {

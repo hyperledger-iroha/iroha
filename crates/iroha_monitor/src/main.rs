@@ -39,7 +39,7 @@ use tokio::{signal, sync::mpsc, time, time::MissedTickBehavior};
 use crate::{
     fetch::{
         NoticeLevel, PeerFetcher, PeerNotice, PeerSnapshot, PeerUpdate, STATUS_BODY_LIMIT,
-        spawn_stub_cluster,
+        StatusPayload, spawn_stub_cluster,
     },
     theme::{ThemeIntro, ThemeOptions},
 };
@@ -216,6 +216,43 @@ fn normalize_endpoint(raw: &str) -> Result<String> {
 /// just over three minutes, which is long enough for demos yet short enough to
 /// avoid CI hangs when raw terminal access is unavailable.
 const DEFAULT_HEADLESS_MAX_FRAMES: usize = 240;
+
+#[derive(Clone, Copy)]
+struct MonitorTheme {
+    background: Color,
+    panel: Color,
+    panel_alt: Color,
+    border: Color,
+    text: Color,
+    muted: Color,
+    title: Color,
+    accent: Color,
+    accent_alt: Color,
+    healthy: Color,
+    warning: Color,
+    danger: Color,
+    pending: Color,
+    selected_bg: Color,
+    selected_fg: Color,
+}
+
+const MONITOR_THEME: MonitorTheme = MonitorTheme {
+    background: Color::Rgb(5, 9, 18),
+    panel: Color::Rgb(10, 17, 30),
+    panel_alt: Color::Rgb(14, 24, 40),
+    border: Color::Rgb(54, 71, 92),
+    text: Color::Rgb(221, 230, 239),
+    muted: Color::Rgb(123, 139, 158),
+    title: Color::Rgb(247, 249, 251),
+    accent: Color::Rgb(94, 211, 255),
+    accent_alt: Color::Rgb(255, 184, 108),
+    healthy: Color::Rgb(69, 213, 155),
+    warning: Color::Rgb(247, 202, 99),
+    danger: Color::Rgb(255, 106, 122),
+    pending: Color::Rgb(137, 150, 166),
+    selected_bg: Color::Rgb(94, 211, 255),
+    selected_fg: Color::Black,
+};
 
 fn headless_limit_from_args(args: &Args) -> Option<usize> {
     match args.headless_max_frames {
@@ -777,12 +814,7 @@ impl EventSeverity {
     }
 
     fn style(self) -> Style {
-        match self {
-            Self::Info => Style::default().fg(Color::Cyan),
-            Self::Recovery => Style::default().fg(Color::Green),
-            Self::Warning => Style::default().fg(Color::Yellow),
-            Self::Critical => Style::default().fg(Color::LightRed),
-        }
+        Style::default().fg(event_color(self))
     }
 }
 
@@ -817,15 +849,6 @@ impl PeerHealth {
             Self::Healthy => "OK",
             Self::Degraded => "WARN",
             Self::Offline => "DOWN",
-        }
-    }
-
-    fn style(self) -> Style {
-        match self {
-            Self::Pending => Style::default().fg(Color::DarkGray),
-            Self::Healthy => Style::default().fg(Color::Green),
-            Self::Degraded => Style::default().fg(Color::Yellow),
-            Self::Offline => Style::default().fg(Color::LightRed),
         }
     }
 }
@@ -970,6 +993,7 @@ fn push_event(queue: &mut VecDeque<EventEntry>, severity: EventSeverity, msg: St
 
 fn render_ui(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     let size = frame.area();
+    paint_background(frame, size);
     if size.width < 90 || size.height < 20 {
         render_compact_ui(frame, app);
         return;
@@ -1052,12 +1076,283 @@ fn format_summary_text(app: &AppState) -> String {
     )
 }
 
+fn peer_table_title(
+    app: &AppState,
+    visible: &[usize],
+    start: usize,
+    end: usize,
+    capacity: usize,
+) -> String {
+    if visible.is_empty() {
+        if app.peers.is_empty() {
+            return "Peer Mesh".to_string();
+        }
+        return format!("Peer Mesh  no matches  {}", app.search_status());
+    }
+
+    let row_span = if capacity == 0 {
+        format!("1-{}", visible.len().min(1))
+    } else {
+        format!("{}-{end}", start + 1)
+    };
+    format!(
+        "Peer Mesh  rows {row_span}/{}  sort {}  filter {}  {}",
+        visible.len(),
+        app.sort.label(),
+        if app.filter_issues_only {
+            "issues"
+        } else {
+            "all"
+        },
+        app.search_status()
+    )
+}
+
 fn format_headless_line(app: &AppState) -> String {
     let summary = format_summary_text(app);
     app.latest_event().map_or_else(
         || format!("[headless] {summary}"),
         |event| format!("[headless] {summary} • {event}"),
     )
+}
+
+fn paint_background(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect) {
+    frame.render_widget(
+        Block::default().style(Style::default().bg(MONITOR_THEME.background)),
+        area,
+    );
+}
+
+fn panel_block(title: impl Into<String>, border: Color) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border))
+        .style(
+            Style::default()
+                .fg(MONITOR_THEME.text)
+                .bg(MONITOR_THEME.panel),
+        )
+        .title(Span::styled(
+            title.into(),
+            Style::default()
+                .fg(MONITOR_THEME.title)
+                .add_modifier(Modifier::BOLD),
+        ))
+}
+
+fn label_span(label: impl Into<String>) -> Span<'static> {
+    Span::styled(
+        label.into(),
+        Style::default()
+            .fg(MONITOR_THEME.muted)
+            .add_modifier(Modifier::BOLD),
+    )
+}
+
+fn value_span(value: impl Into<String>, color: Color) -> Span<'static> {
+    Span::styled(
+        value.into(),
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    )
+}
+
+fn muted_span(value: impl Into<String>) -> Span<'static> {
+    Span::styled(value.into(), Style::default().fg(MONITOR_THEME.muted))
+}
+
+fn separator_span() -> Span<'static> {
+    Span::styled("  |  ", Style::default().fg(MONITOR_THEME.border))
+}
+
+fn push_metric(
+    spans: &mut Vec<Span<'static>>,
+    label: &'static str,
+    value: impl Into<String>,
+    color: Color,
+) {
+    if !spans.is_empty() {
+        spans.push(separator_span());
+    }
+    spans.push(label_span(label));
+    spans.push(Span::raw(" "));
+    spans.push(value_span(value.into(), color));
+}
+
+fn health_color(health: PeerHealth) -> Color {
+    match health {
+        PeerHealth::Pending => MONITOR_THEME.pending,
+        PeerHealth::Healthy => MONITOR_THEME.healthy,
+        PeerHealth::Degraded => MONITOR_THEME.warning,
+        PeerHealth::Offline => MONITOR_THEME.danger,
+    }
+}
+
+fn event_color(severity: EventSeverity) -> Color {
+    match severity {
+        EventSeverity::Info => MONITOR_THEME.accent,
+        EventSeverity::Recovery => MONITOR_THEME.healthy,
+        EventSeverity::Warning => MONITOR_THEME.warning,
+        EventSeverity::Critical => MONITOR_THEME.danger,
+    }
+}
+
+fn overview_lines(app: &AppState) -> Vec<Line<'static>> {
+    let stats = collect_summary(app);
+    vec![
+        overview_network_line(&stats),
+        overview_ledger_line(&stats),
+        overview_flow_line(&stats),
+        overview_view_line(app),
+        overview_focus_line(app),
+    ]
+}
+
+fn overview_network_line(stats: &SummaryStats) -> Line<'static> {
+    let mut network = Vec::new();
+    push_metric(
+        &mut network,
+        "NETWORK",
+        format!("{}/{} online", stats.online, stats.peer_count),
+        MONITOR_THEME.accent,
+    );
+    push_metric(
+        &mut network,
+        "OK",
+        stats.healthy.to_string(),
+        MONITOR_THEME.healthy,
+    );
+    push_metric(
+        &mut network,
+        "WARN",
+        stats.degraded.to_string(),
+        MONITOR_THEME.warning,
+    );
+    push_metric(
+        &mut network,
+        "DOWN",
+        stats.offline.to_string(),
+        MONITOR_THEME.danger,
+    );
+    push_metric(
+        &mut network,
+        "REPORTED",
+        stats.reported.to_string(),
+        MONITOR_THEME.text,
+    );
+    Line::from(network)
+}
+
+fn overview_ledger_line(stats: &SummaryStats) -> Line<'static> {
+    let mut ledger = Vec::new();
+    push_metric(
+        &mut ledger,
+        "LEDGER",
+        format!(
+            "{} blocks / {} non-empty",
+            compact_u64(stats.blocks),
+            compact_u64(stats.non_empty)
+        ),
+        MONITOR_THEME.text,
+    );
+    push_metric(
+        &mut ledger,
+        "QUEUE",
+        compact_u64(stats.queue),
+        MONITOR_THEME.accent_alt,
+    );
+    Line::from(ledger)
+}
+
+fn overview_flow_line(stats: &SummaryStats) -> Line<'static> {
+    let mut flow = Vec::new();
+    push_metric(
+        &mut flow,
+        "FLOW",
+        format!(
+            "{} ok / {} rej",
+            compact_u64(stats.approved),
+            compact_u64(stats.rejected)
+        ),
+        MONITOR_THEME.text,
+    );
+    push_metric(
+        &mut flow,
+        "GAS",
+        compact_u64(stats.gas),
+        MONITOR_THEME.accent,
+    );
+    push_metric(
+        &mut flow,
+        "AVG LAT",
+        stats
+            .avg_latency_ms
+            .map_or_else(|| "-".to_string(), |value| format!("{value} ms")),
+        MONITOR_THEME.text,
+    );
+    Line::from(flow)
+}
+
+fn overview_view_line(app: &AppState) -> Line<'static> {
+    let mut view = Vec::new();
+    push_metric(
+        &mut view,
+        "VIEW",
+        format!("sort {}", app.sort.label()),
+        MONITOR_THEME.text,
+    );
+    push_metric(
+        &mut view,
+        "FILTER",
+        if app.filter_issues_only {
+            "issues".to_string()
+        } else {
+            "all".to_string()
+        },
+        if app.filter_issues_only {
+            MONITOR_THEME.warning
+        } else {
+            MONITOR_THEME.text
+        },
+    );
+    push_metric(
+        &mut view,
+        "SEARCH",
+        app.search_status(),
+        if app.search_editing {
+            MONITOR_THEME.accent
+        } else {
+            MONITOR_THEME.text
+        },
+    );
+    push_metric(
+        &mut view,
+        "REFRESH",
+        format!("{} ms", app.refresh.as_millis()),
+        MONITOR_THEME.muted,
+    );
+    Line::from(view)
+}
+
+fn overview_focus_line(app: &AppState) -> Line<'static> {
+    let mut focus = Vec::new();
+    focus.push(label_span("FOCUS"));
+    focus.push(Span::raw(" "));
+    if let Some((_, slot)) = app.selected_peer() {
+        let health = peer_health(slot);
+        focus.push(value_span(slot.display_name(), MONITOR_THEME.title));
+        focus.push(Span::raw("  "));
+        focus.push(value_span(health.label(), health_color(health)));
+        focus.push(Span::raw("  "));
+        focus.push(Span::styled(
+            peer_note(slot),
+            Style::default().fg(MONITOR_THEME.text),
+        ));
+    } else if app.peers.is_empty() {
+        focus.push(muted_span("no peers configured"));
+    } else {
+        focus.push(muted_span("no peers match the current view"));
+    }
+    Line::from(focus)
 }
 
 fn render_peer_table(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, app: &AppState) {
@@ -1067,42 +1362,21 @@ fn render_peer_table(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect
 
     let visible = app.visible_peer_indices();
     let (start, end, capacity) = visible_peer_window(app, &visible, area.height);
-    let title = if visible.is_empty() {
-        if app.peers.is_empty() {
-            "Peers".to_string()
-        } else {
-            "Peers (no matches)".to_string()
-        }
-    } else if capacity == 0 {
-        format!("Peers 1-{}/{}", visible.len().min(1), visible.len())
-    } else {
-        format!(
-            "Peers {}-{}/{}  sort {}{}",
-            start + 1,
-            end,
-            visible.len(),
-            app.sort.label(),
-            if app.filter_issues_only {
-                "  issues only"
-            } else {
-                ""
-            }
-        )
-    };
+    let title = peer_table_title(app, &visible, start, end, capacity);
 
     let header = Row::new(vec![
         Cell::from("Peer"),
         Cell::from("Height"),
-        Cell::from("Tx"),
-        Cell::from("Queue"),
+        Cell::from("Tx ok/rej"),
+        Cell::from("Q"),
         Cell::from("Gas"),
-        Cell::from("Latency"),
-        Cell::from("Status"),
+        Cell::from("RTT"),
+        Cell::from("Signal"),
     ])
     .style(
         Style::default()
-            .fg(Color::Black)
-            .bg(Color::Gray)
+            .fg(MONITOR_THEME.selected_fg)
+            .bg(MONITOR_THEME.accent)
             .add_modifier(Modifier::BOLD),
     );
 
@@ -1110,58 +1384,79 @@ fn render_peer_table(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect
         .iter()
         .skip(start)
         .take(end.saturating_sub(start))
-        .map(|&idx| {
+        .enumerate()
+        .map(|(row_offset, &idx)| {
             let slot = &app.peers[idx];
             let highlight = app.focus == Some(idx);
             let (name, blocks, txs, queue, gas, latency, note, health) = peer_row_data(slot);
+            let health_color = health_color(health);
             let mut row = Row::new(vec![
-                Cell::from(name),
-                Cell::from(blocks),
-                Cell::from(txs),
-                Cell::from(queue),
-                Cell::from(gas),
-                Cell::from(latency),
-                Cell::from(note),
+                Cell::from(Span::styled(
+                    name,
+                    Style::default()
+                        .fg(if matches!(health, PeerHealth::Healthy) {
+                            MONITOR_THEME.title
+                        } else {
+                            health_color
+                        })
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Cell::from(Span::styled(
+                    blocks,
+                    Style::default().fg(MONITOR_THEME.text),
+                )),
+                Cell::from(Span::styled(txs, Style::default().fg(MONITOR_THEME.text))),
+                Cell::from(Span::styled(
+                    queue,
+                    Style::default().fg(MONITOR_THEME.accent_alt),
+                )),
+                Cell::from(Span::styled(gas, Style::default().fg(MONITOR_THEME.accent))),
+                Cell::from(Span::styled(
+                    latency,
+                    Style::default().fg(MONITOR_THEME.text),
+                )),
+                Cell::from(Span::styled(
+                    note,
+                    Style::default()
+                        .fg(health_color)
+                        .add_modifier(Modifier::BOLD),
+                )),
             ]);
             if highlight {
                 row = row.style(
                     Style::default()
-                        .fg(Color::Black)
-                        .bg(match health {
-                            PeerHealth::Healthy => Color::Green,
-                            PeerHealth::Degraded => Color::Yellow,
-                            PeerHealth::Offline => Color::LightRed,
-                            PeerHealth::Pending => Color::Gray,
-                        })
+                        .fg(MONITOR_THEME.selected_fg)
+                        .bg(MONITOR_THEME.selected_bg)
                         .add_modifier(Modifier::BOLD),
                 );
             } else {
-                row = row.style(health.style());
+                let background = if row_offset % 2 == 0 {
+                    MONITOR_THEME.panel
+                } else {
+                    MONITOR_THEME.panel_alt
+                };
+                row = row.style(Style::default().fg(MONITOR_THEME.text).bg(background));
             }
             row
         })
         .collect::<Vec<_>>();
 
     let widths = [
-        Constraint::Percentage(20),
+        Constraint::Percentage(22),
         Constraint::Percentage(10),
         Constraint::Percentage(15),
         Constraint::Percentage(10),
         Constraint::Percentage(10),
-        Constraint::Percentage(10),
-        Constraint::Percentage(25),
+        Constraint::Percentage(9),
+        Constraint::Percentage(24),
     ];
 
     let table = Table::new(rows, widths).header(header).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
-            .title(Span::styled(
-                title,
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            )),
+        panel_block(title, MONITOR_THEME.border).style(
+            Style::default()
+                .fg(MONITOR_THEME.text)
+                .bg(MONITOR_THEME.panel),
+        ),
     );
 
     frame.render_widget(table, area);
@@ -1187,27 +1482,27 @@ fn render_gas_trend(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect,
         compact_u64(max),
         compact_u64(latest)
     );
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title(Span::styled(
-            title,
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ));
+    let block = panel_block(title, MONITOR_THEME.accent);
 
     if data.is_empty() {
         let help = Paragraph::new("Waiting for gas metrics...")
             .block(block)
-            .style(Style::default().fg(Color::DarkGray));
+            .style(
+                Style::default()
+                    .fg(MONITOR_THEME.muted)
+                    .bg(MONITOR_THEME.panel),
+            );
         frame.render_widget(help, area);
         return;
     }
 
     let spark = Sparkline::default()
         .block(block)
-        .style(Style::default().fg(Color::Cyan).bg(Color::Black))
+        .style(
+            Style::default()
+                .fg(MONITOR_THEME.accent)
+                .bg(MONITOR_THEME.panel),
+        )
         .data(&data)
         .max(max);
     frame.render_widget(spark, area);
@@ -1277,7 +1572,7 @@ fn render_events(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, ap
     let lines: Vec<Line<'_>> = if app.events.is_empty() {
         vec![Line::from(Span::styled(
             "Waiting for peer activity...",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(MONITOR_THEME.muted),
         ))]
     } else {
         app.events
@@ -1289,23 +1584,21 @@ fn render_events(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, ap
                         format!("[{}] ", msg.severity.label()),
                         msg.severity.style().add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(&msg.message, Style::default().fg(Color::White)),
+                    Span::styled(&msg.message, Style::default().fg(MONITOR_THEME.text)),
                 ])
             })
             .collect()
     };
 
     let events = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray))
-                .title(Span::styled(
-                    "Alerts & Activity",
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                )),
+        .block(panel_block(
+            format!("Alerts & Activity  last {}", app.events.len()),
+            MONITOR_THEME.border,
+        ))
+        .style(
+            Style::default()
+                .fg(MONITOR_THEME.text)
+                .bg(MONITOR_THEME.panel),
         )
         .wrap(Wrap { trim: true });
     frame.render_widget(events, area);
@@ -1313,12 +1606,14 @@ fn render_events(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, ap
 
 fn render_compact_ui(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     let size = frame.area();
+    paint_background(frame, size);
     if size.height < 8 || size.width < 42 {
         let summary = Paragraph::new(format_summary_text(app))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Iroha Monitor"),
+            .block(panel_block("Iroha Monitor", MONITOR_THEME.accent))
+            .style(
+                Style::default()
+                    .fg(MONITOR_THEME.text)
+                    .bg(MONITOR_THEME.panel),
             )
             .wrap(Wrap { trim: true });
         frame.render_widget(summary, size);
@@ -1351,68 +1646,15 @@ fn render_overview_panel(
     if area.height < 3 || area.width < 20 {
         return;
     }
-    let stats = collect_summary(app);
-    let focus_line = app.selected_peer().map_or_else(
-        || "Focus none".to_string(),
-        |(_, slot)| {
-            let health = peer_health(slot);
-            format!(
-                "Focus {}  {}  {}",
-                slot.display_name(),
-                health.label(),
-                peer_note(slot)
-            )
-        },
-    );
-    let lines = vec![
-        Line::from(format!(
-            "Peers {}/{} online  Healthy {}  Degraded {}  Down {}  Reported {}",
-            stats.online,
-            stats.peer_count,
-            stats.healthy,
-            stats.degraded,
-            stats.offline,
-            stats.reported
-        )),
-        Line::from(format!(
-            "Blocks {} total / {} non-empty  Tx {} ok / {} rej",
-            compact_u64(stats.blocks),
-            compact_u64(stats.non_empty),
-            compact_u64(stats.approved),
-            compact_u64(stats.rejected)
-        )),
-        Line::from(format!(
-            "Queue {}  Gas {}  Avg latency {}  Refresh {} ms",
-            compact_u64(stats.queue),
-            compact_u64(stats.gas),
-            stats
-                .avg_latency_ms
-                .map_or_else(|| "-".to_string(), |value| format!("{value} ms")),
-            app.refresh.as_millis()
-        )),
-        Line::from(format!(
-            "Sort {}  Filter {}  {}",
-            app.sort.label(),
-            if app.filter_issues_only {
-                "issues"
-            } else {
-                "all"
-            },
-            app.search_status()
-        )),
-        Line::from(focus_line),
-    ];
-    let overview = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray))
-                .title(Span::styled(
-                    "Iroha Monitor",
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                )),
+    let overview = Paragraph::new(overview_lines(app))
+        .block(panel_block(
+            "Iroha Monitor - Live Network",
+            MONITOR_THEME.accent,
+        ))
+        .style(
+            Style::default()
+                .fg(MONITOR_THEME.text)
+                .bg(MONITOR_THEME.panel),
         )
         .wrap(Wrap { trim: true });
     frame.render_widget(overview, area);
@@ -1431,18 +1673,12 @@ fn render_banner_panel(
         Some(area.height.saturating_sub(2)),
     );
     let banner = Paragraph::new(banner_lines.join("\n"))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray))
-                .title(Span::styled(
-                    "Festival Signal",
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                )),
-        )
-        .style(Style::default().fg(Color::Gray));
+        .block(panel_block("Festival Signal", MONITOR_THEME.accent_alt))
+        .style(
+            Style::default()
+                .fg(MONITOR_THEME.muted)
+                .bg(MONITOR_THEME.panel),
+        );
     frame.render_widget(banner, area);
 }
 
@@ -1451,119 +1687,232 @@ fn render_focus_panel(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rec
         return;
     }
 
-    let lines = if let Some((index, slot)) = app.selected_peer() {
-        let health = peer_health(slot);
-        let name = slot.display_name();
-        let endpoint = slot.endpoint.as_str();
-        let mut rows = vec![
-            Line::from(vec![
-                Span::styled("Peer ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    name,
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("  "),
-                Span::styled(health.label(), health.style().add_modifier(Modifier::BOLD)),
-                Span::raw(format!("  ({}/{})", index + 1, app.peers.len())),
-            ]),
-            Line::from(vec![
-                Span::styled("Endpoint ", Style::default().fg(Color::DarkGray)),
-                Span::styled(endpoint, Style::default().fg(Color::White)),
-            ]),
-        ];
+    let panel = Paragraph::new(focus_panel_lines(app))
+        .block(panel_block(focus_panel_title(app), focus_panel_border(app)))
+        .style(
+            Style::default()
+                .fg(MONITOR_THEME.text)
+                .bg(MONITOR_THEME.panel),
+        )
+        .wrap(Wrap { trim: true });
+    frame.render_widget(panel, area);
+}
 
-        if let Some(snapshot) = &slot.latest
-            && let Some(status) = &snapshot.status
-        {
-            rows.push(Line::from(format!(
-                "Height {}  Tx {} / {}  Queue {}",
-                status.blocks.map_or_else(|| "-".to_string(), compact_u64),
+fn focus_panel_lines(app: &AppState) -> Vec<Line<'static>> {
+    app.selected_peer().map_or_else(
+        || empty_focus_panel_lines(app),
+        |(index, slot)| selected_peer_focus_lines(app, index, slot),
+    )
+}
+
+fn focus_panel_border(app: &AppState) -> Color {
+    app.selected_peer()
+        .map_or(MONITOR_THEME.border, |(_, slot)| {
+            health_color(peer_health(slot))
+        })
+}
+
+fn focus_panel_title(app: &AppState) -> String {
+    app.selected_peer().map_or_else(
+        || "Selected Peer".to_string(),
+        |(_, slot)| format!("Selected Peer - {}", peer_health(slot).label()),
+    )
+}
+
+fn empty_focus_panel_lines(app: &AppState) -> Vec<Line<'static>> {
+    vec![Line::from(if app.peers.is_empty() {
+        muted_span("No peers configured")
+    } else {
+        muted_span("No peers match the current view")
+    })]
+}
+
+fn selected_peer_focus_lines(app: &AppState, index: usize, slot: &PeerSlot) -> Vec<Line<'static>> {
+    let health = peer_health(slot);
+    let status_color = health_color(health);
+    let mut rows = vec![
+        selected_peer_header_line(app, index, slot),
+        endpoint_line(slot),
+    ];
+    push_selected_peer_snapshot_lines(&mut rows, slot);
+    rows.push(Line::from(vec![
+        label_span("NOTE"),
+        Span::raw(" "),
+        Span::styled(peer_note(slot), Style::default().fg(status_color)),
+    ]));
+    rows
+}
+
+fn selected_peer_header_line(app: &AppState, index: usize, slot: &PeerSlot) -> Line<'static> {
+    let health = peer_health(slot);
+    Line::from(vec![
+        label_span("PEER"),
+        Span::raw(" "),
+        Span::styled(
+            slot.display_name(),
+            Style::default()
+                .fg(MONITOR_THEME.title)
+                .add_modifier(Modifier::BOLD),
+        ),
+        separator_span(),
+        value_span(health.label(), health_color(health)),
+        Span::raw(format!("  {}/{}", index + 1, app.peers.len())),
+    ])
+}
+
+fn endpoint_line(slot: &PeerSlot) -> Line<'static> {
+    Line::from(vec![
+        label_span("ENDPOINT"),
+        Span::raw(" "),
+        Span::styled(
+            slot.endpoint.clone(),
+            Style::default().fg(MONITOR_THEME.text),
+        ),
+    ])
+}
+
+fn push_selected_peer_snapshot_lines(rows: &mut Vec<Line<'static>>, slot: &PeerSlot) {
+    if let Some(snapshot) = &slot.latest
+        && let Some(status) = &snapshot.status
+    {
+        let mut ledger = Vec::new();
+        push_metric(
+            &mut ledger,
+            "HEIGHT",
+            status.blocks.map_or_else(|| "-".to_string(), compact_u64),
+            MONITOR_THEME.text,
+        );
+        push_metric(
+            &mut ledger,
+            "TX",
+            format!(
+                "{} / {}",
                 status
                     .txs_approved
                     .map_or_else(|| "-".to_string(), compact_u64),
                 status
                     .txs_rejected
-                    .map_or_else(|| "-".to_string(), compact_u64),
-                status
-                    .queue_size
-                    .map_or_else(|| "-".to_string(), compact_u64),
-            )));
-            rows.push(Line::from(format!(
-                "Latency {}  Commit {}  Views {}",
-                snapshot.latency.map_or_else(
-                    || "-".to_string(),
-                    |value| format!("{} ms", value.as_millis())
-                ),
-                status
-                    .commit_time_ms
-                    .map_or_else(|| "-".to_string(), |value| format!("{value} ms")),
-                status
-                    .view_changes
-                    .map_or_else(|| "-".to_string(), |value| value.to_string()),
-            )));
-            rows.push(Line::from(format!(
-                "Uptime {}  Gas {}  Fees {}",
-                status
-                    .uptime
-                    .map_or_else(|| "-".to_string(), |value| format!("{value} s")),
-                snapshot
-                    .metrics
-                    .gas_used
-                    .map_or_else(|| "-".to_string(), compact_u64),
-                snapshot
-                    .metrics
-                    .fee_units
-                    .map_or_else(|| "-".to_string(), compact_u64),
-            )));
-        }
-        rows.push(Line::from(format!("Note {}", peer_note(slot))));
-        rows
-    } else {
-        vec![Line::from(if app.peers.is_empty() {
-            "No peers configured"
-        } else {
-            "No peers match the current view"
-        })]
-    };
+                    .map_or_else(|| "-".to_string(), compact_u64)
+            ),
+            MONITOR_THEME.text,
+        );
+        push_metric(
+            &mut ledger,
+            "QUEUE",
+            status
+                .queue_size
+                .map_or_else(|| "-".to_string(), compact_u64),
+            MONITOR_THEME.accent_alt,
+        );
+        rows.push(Line::from(ledger));
+        rows.push(selected_peer_timing_line(snapshot, status));
+        rows.push(selected_peer_resource_line(snapshot, status));
+    }
+}
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title(Span::styled(
-            "Selected Peer",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ));
-    let panel = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
-    frame.render_widget(panel, area);
+fn selected_peer_timing_line(snapshot: &PeerSnapshot, status: &StatusPayload) -> Line<'static> {
+    let mut timing = Vec::new();
+    push_metric(
+        &mut timing,
+        "LATENCY",
+        snapshot.latency.map_or_else(
+            || "-".to_string(),
+            |value| format!("{} ms", value.as_millis()),
+        ),
+        MONITOR_THEME.text,
+    );
+    push_metric(
+        &mut timing,
+        "COMMIT",
+        status
+            .commit_time_ms
+            .map_or_else(|| "-".to_string(), |value| format!("{value} ms")),
+        MONITOR_THEME.text,
+    );
+    push_metric(
+        &mut timing,
+        "VIEWS",
+        status
+            .view_changes
+            .map_or_else(|| "-".to_string(), |value| value.to_string()),
+        MONITOR_THEME.warning,
+    );
+    Line::from(timing)
+}
+
+fn selected_peer_resource_line(snapshot: &PeerSnapshot, status: &StatusPayload) -> Line<'static> {
+    let mut resources = Vec::new();
+    push_metric(
+        &mut resources,
+        "UPTIME",
+        status
+            .uptime
+            .map_or_else(|| "-".to_string(), |value| format!("{value} s")),
+        MONITOR_THEME.text,
+    );
+    push_metric(
+        &mut resources,
+        "GAS",
+        snapshot
+            .metrics
+            .gas_used
+            .map_or_else(|| "-".to_string(), compact_u64),
+        MONITOR_THEME.accent,
+    );
+    push_metric(
+        &mut resources,
+        "FEES",
+        snapshot
+            .metrics
+            .fee_units
+            .map_or_else(|| "-".to_string(), compact_u64),
+        MONITOR_THEME.text,
+    );
+    Line::from(resources)
 }
 
 fn render_footer(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, app: &AppState) {
     if area.height == 0 {
         return;
     }
-    let help = app.selected_peer().map_or_else(
-        || format!(
-            "q quit | arrows n/p focus | s sort:{} | f issues:{} | / search | x clear | {}",
-            app.sort.label(),
-            if app.filter_issues_only { "on" } else { "off" },
-            app.search_status()
-        ),
-        |(_, slot)| {
-            format!(
-                "q quit | arrows n/p focus | s sort:{} | f issues:{} | / search | x clear | selected {} | {} | body limit {} bytes",
-                app.sort.label(),
-                if app.filter_issues_only { "on" } else { "off" },
-                slot.display_name(),
-                app.search_status(),
-                STATUS_BODY_LIMIT
-            )
-        },
+    let selected = app
+        .selected_peer()
+        .map(|(_, slot)| format!("selected {}", slot.display_name()));
+    let mut spans = vec![
+        label_span("q"),
+        muted_span(" quit"),
+        separator_span(),
+        label_span("arrows n/p"),
+        muted_span(" focus"),
+        separator_span(),
+        label_span("s"),
+        muted_span(format!(" sort:{}", app.sort.label())),
+        separator_span(),
+        label_span("f"),
+        muted_span(format!(
+            " issues:{}",
+            if app.filter_issues_only { "on" } else { "off" }
+        )),
+        separator_span(),
+        label_span("/"),
+        muted_span(" search"),
+        separator_span(),
+        label_span("x"),
+        muted_span(" clear"),
+        separator_span(),
+        muted_span(app.search_status()),
+    ];
+    if let Some(selected) = selected {
+        spans.push(separator_span());
+        spans.push(value_span(selected, MONITOR_THEME.text));
+        spans.push(separator_span());
+        spans.push(muted_span(format!("body limit {STATUS_BODY_LIMIT} bytes")));
+    }
+    let footer = Paragraph::new(Line::from(spans)).style(
+        Style::default()
+            .fg(MONITOR_THEME.muted)
+            .bg(MONITOR_THEME.background),
     );
-    let footer = Paragraph::new(help).style(Style::default().fg(Color::DarkGray));
     frame.render_widget(footer, area);
 }
 
@@ -1745,6 +2094,13 @@ mod tests {
         MetricsSnapshot, NoticeKind, PeerNotice, PeerSnapshot, PeerUpdate, StatusPayload,
     };
 
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
     #[test]
     fn normalize_endpoint_adds_http_scheme() {
         let endpoint = normalize_endpoint("torii.local:8080").expect("normalize endpoint");
@@ -1861,6 +2217,68 @@ mod tests {
             headless_line.contains("telemetry online"),
             "expected join event in `{headless_line}`"
         );
+    }
+
+    #[test]
+    fn overview_lines_surface_health_and_controls() {
+        let mut app = AppState::new(
+            vec!["http://peer-a".to_string(), "http://peer-b".to_string()],
+            Duration::from_millis(800),
+            ascii::AsciiConfig::default(),
+            false,
+        );
+
+        app.update_peer(PeerUpdate {
+            index: 0,
+            snapshot: PeerSnapshot {
+                status: Some(StatusPayload {
+                    alias: Some("alpha".to_string()),
+                    peers: Some(2),
+                    blocks: Some(42),
+                    blocks_non_empty: Some(40),
+                    txs_approved: Some(12),
+                    queue_size: Some(3),
+                    ..Default::default()
+                }),
+                metrics: MetricsSnapshot {
+                    gas_used: Some(900),
+                    fee_units: None,
+                    fee_scale: None,
+                },
+                latency: Some(Duration::from_millis(25)),
+                notices: Vec::new(),
+            },
+        });
+        app.update_peer(PeerUpdate {
+            index: 1,
+            snapshot: PeerSnapshot {
+                status: None,
+                metrics: MetricsSnapshot::default(),
+                latency: None,
+                notices: vec![PeerNotice {
+                    level: NoticeLevel::Critical,
+                    kind: NoticeKind::StatusFetchFailed,
+                    message: "status unreachable".to_string(),
+                }],
+            },
+        });
+
+        let lines = overview_lines(&app)
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>();
+
+        assert!(
+            lines[0].contains("NETWORK 1/2 online")
+                && lines[0].contains("OK 1")
+                && lines[0].contains("DOWN 1"),
+            "unexpected network line: {}",
+            lines[0]
+        );
+        assert!(lines[1].contains("LEDGER 42 blocks / 40 non-empty"));
+        assert!(lines[2].contains("GAS 900"));
+        assert!(lines[3].contains("VIEW sort health"));
+        assert!(lines[4].contains("FOCUS"));
     }
 
     #[test]
@@ -2001,5 +2419,32 @@ mod tests {
         app.sort = PeerSort::Name;
         app.normalize_focus();
         assert_eq!(app.visible_peer_indices(), vec![1, 2]);
+    }
+
+    #[test]
+    fn peer_table_title_tracks_window_filter_and_search() {
+        let mut app = AppState::new(
+            vec![
+                "http://peer-a".to_string(),
+                "http://peer-b".to_string(),
+                "http://peer-c".to_string(),
+            ],
+            Duration::from_millis(500),
+            ascii::AsciiConfig::default(),
+            false,
+        );
+        app.filter_issues_only = true;
+        app.search_query = "beta".to_string();
+        let visible = vec![1usize];
+
+        let title = peer_table_title(&app, &visible, 0, 1, 4);
+        assert!(title.contains("Peer Mesh  rows 1-1/1"));
+        assert!(title.contains("filter issues"));
+        assert!(title.contains("search /beta"));
+
+        app.search_query = "missing".to_string();
+        let title = peer_table_title(&app, &[], 0, 0, 4);
+        assert!(title.contains("no matches"));
+        assert!(title.contains("search /missing"));
     }
 }

@@ -12304,6 +12304,8 @@ mod tests {
             access_set_hints: Some(AccessSetHints {
                 read_keys: vec!["account:alice".to_owned()],
                 write_keys: vec!["contract:foo".to_owned()],
+                dynamic_reads: Vec::new(),
+                dynamic_writes: Vec::new(),
             }),
             entrypoints: Some(vec![EntrypointDescriptor {
                 name: "upgrade_ledger".to_owned(),

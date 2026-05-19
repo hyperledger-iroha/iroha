@@ -212,9 +212,6 @@ fn is_allowed_map_key_type(ty: &Type) -> bool {
     matches!(
         semantic::resolve_struct_type(ty),
         Type::Int
-            | Type::FixedU128
-            | Type::Amount
-            | Type::Balance
             | Type::AccountId
             | Type::AssetDefinitionId
             | Type::AssetId

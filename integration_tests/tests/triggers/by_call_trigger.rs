@@ -171,10 +171,8 @@ async fn call_execute_trigger() -> Result<()> {
         .await??;
 
         let instruction = Mint::asset_numeric(1u32, asset_id.clone());
-        let register_trigger = build_register_trigger_isi(
-            asset_id.account(),
-            vec![Instruction::into_instruction_box(Box::new(instruction))],
-        );
+        let register_trigger =
+            build_register_trigger_isi(asset_id.account(), vec![instruction.into()]);
         submit_instruction_and_wait(
             &network,
             test_client.clone(),
@@ -225,10 +223,8 @@ async fn execute_trigger_should_produce_event() -> Result<()> {
             let asset_id = AssetId::new(asset_definition_id, account_id.clone());
 
             let instruction = Mint::asset_numeric(1u32, asset_id.clone());
-            let register_trigger = build_register_trigger_isi(
-                asset_id.account(),
-                vec![Instruction::into_instruction_box(Box::new(instruction))],
-            );
+            let register_trigger =
+                build_register_trigger_isi(asset_id.account(), vec![instruction.into()]);
             submit_instruction_and_wait(
                 &network,
                 test_client.clone(),

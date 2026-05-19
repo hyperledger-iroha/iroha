@@ -6,7 +6,10 @@ use executor_custom_data_model::permissions::CanControlDomainLives;
 use eyre::Result;
 use futures_util::future::join_all;
 use integration_tests::{metrics::MetricsReader, sandbox};
-use iroha::data_model::{prelude::*, transaction::error::TransactionRejectionReason};
+use iroha::{
+    client::Client,
+    data_model::{prelude::*, transaction::error::TransactionRejectionReason},
+};
 use iroha_executor_data_model::permission::account::CanModifyAccountMetadata;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, gen_account_in};
@@ -43,6 +46,34 @@ fn poll_detached_metrics(rt: &Runtime, metrics_url: &reqwest::Url) -> Result<(f6
 
 fn err_chain_contains(err: &eyre::Report, needle: &str) -> bool {
     err.chain().any(|cause| cause.to_string().contains(needle))
+}
+
+fn wait_for_role(client: &Client, role_id: &RoleId, context: &str) -> Role {
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    const TIMEOUT: Duration = Duration::from_secs(30);
+
+    let deadline = Instant::now() + TIMEOUT;
+    let mut last_observed = "roles were not queried".to_owned();
+
+    while Instant::now() < deadline {
+        match client.query(FindRoles::new()).execute_all() {
+            Ok(roles) => {
+                last_observed = format!("role_count={}", roles.len());
+                if let Some(role) = roles.into_iter().find(|role| role.id() == role_id) {
+                    return role;
+                }
+            }
+            Err(err) => {
+                last_observed = format!("query failed: {err}");
+            }
+        }
+
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    panic!(
+        "timed out waiting for role after {context}; role_id={role_id}; last_observed={last_observed}"
+    );
 }
 
 #[test]
@@ -256,13 +287,7 @@ fn role_permissions_are_deduplicated() {
         .submit_blocking(Register::role(role))
         .expect("failed to register role");
 
-    let role = test_client
-        .query(FindRoles::new())
-        .execute_all()
-        .expect("failed to find role")
-        .into_iter()
-        .find(|role| role.id() == &role_id)
-        .expect("failed to find role");
+    let role = wait_for_role(&test_client, &role_id, "role registration");
 
     // Permissions are unified so only one is left
     assert_eq!(

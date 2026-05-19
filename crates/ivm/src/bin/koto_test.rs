@@ -1969,17 +1969,14 @@ mod tests {
                     counter = 1;
                 }
 
-                #[access(read="*", write="*")]
                 kotoage fn increment() {
                     counter = counter + 4;
                 }
 
-                #[access(read="*", write="*")]
                 kotoage fn remember_caller() {
                     last_actor = authority();
                 }
 
-                #[access(read="*", write="*")]
                 kotoage fn reject_me() {
                     assert_eq(1, 2);
                 }
@@ -2166,17 +2163,14 @@ mod tests {
                     counter = 1;
                 }
 
-                #[access(read="*", write="*")]
                 kotoage fn increment() {
                     counter = counter + 4;
                 }
 
-                #[access(read="*", write="*")]
                 kotoage fn remember_caller() {
                     last_actor = authority();
                 }
 
-                #[access(read="*", write="*")]
                 kotoage fn reject_me() {
                     assert_eq(1, 2);
                 }
@@ -2297,7 +2291,6 @@ mod tests {
         let program = parser::parse(
             r#"
             seiyaku Demo {
-                #[access(read="*", write="*")]
                 kotoage fn run(count: int) -> int { return count + 1; }
 
                 #[test]

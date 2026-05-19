@@ -6,17 +6,50 @@ use ivm::{encoding, instruction::wide, syscalls};
 #[test]
 fn compile_zk_verify_and_execute_instruction() {
     // Program: verify transfer with a NoritoBytes env, then enqueue an instruction via vendor syscall
-    // The env payloads are provided as string literals and wrapped via norito_bytes("...")
-    let src = r#"
-fn main() {
+    // The vendor payloads are complete canonical Norito literals so production access metadata stays complete.
+    use iroha_data_model::{
+        account::AccountId,
+        asset::id::{AssetDefinitionId, AssetId},
+        domain::DomainId,
+        isi::{InstructionBox, Mint},
+        query::{QueryRequest, SingularQueryBox, asset::FindAssetById},
+    };
+
+    let account = AccountId::new(
+        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            .parse()
+            .expect("public key"),
+    );
+    let asset_def = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal").expect("domain id"),
+        "rose".parse().expect("asset name"),
+    );
+    let asset_id = AssetId::of(asset_def, account);
+    let instruction = InstructionBox::from(Mint::asset_numeric(1_u32, asset_id.clone()));
+    let instruction_payload = format!(
+        "0x{}",
+        hex::encode(norito::to_bytes(&instruction).expect("encode InstructionBox"))
+    );
+    let query = QueryRequest::Singular(SingularQueryBox::FindAssetById(FindAssetById::new(
+        asset_id,
+    )));
+    let query_payload = format!(
+        "0x{}",
+        hex::encode(norito::to_bytes(&query).expect("encode QueryRequest"))
+    );
+
+    let src = format!(
+        r#"
+fn main() {{
   let ok = zk_verify_transfer(norito_bytes("ENV1"));
   let ok2 = zk_verify_unshield(norito_bytes("ENV2"));
-  execute_instruction(norito_bytes("IB0"));
-  execute_query(norito_bytes("QB0"));
-}
-"#;
+  execute_instruction(norito_bytes("{instruction_payload}"));
+  execute_query(norito_bytes("{query_payload}"));
+}}
+"#
+    );
     let code = ivm::kotodama::compiler::Compiler::new()
-        .compile_source(src)
+        .compile_source(&src)
         .expect("compile zk program");
     let off = ivm::ProgramMetadata::parse(&code).unwrap().code_offset;
     let mut words = Vec::new();

@@ -92,7 +92,7 @@ translator: machine-google-reviewed
 
 Күренеш
 - `kotoage fn` йәмәғәт инеү нөктәһен билдәләй; күренеш диспетчер рөхсәттәренә йоғонто яһай, ә коденға түгел.
-- Опциональ рөхсәт кәңәштәре: `#[access(read=..., write=...)]` `fn`/`kotoage fn` алдынан асыҡ уҡыу/яҙыу асҡыстарын тәьмин итеү өсөн мөмкин. Компилятор шулай уҡ консультатив кәңәштәрҙе автоматик рәүештә сығара; opaque хост шылтыратыуҙары кире консерватив peymable асҡыстарына төшә (`*`) һәм өҫкө диагностик, әгәр ҙә асыҡ рөхсәт итеү кәңәштәре бирелмәһә, шуға күрә графиктар нескәрәк асҡыстар өсөн динамик пресписаниеға инә ала.
+- Access metadata is compiler-owned. Manual `#[access(...)]` attributes are rejected; deployable compilation succeeds only when the compiler can emit complete read/write metadata without wildcard keys.
 
 ## Контейнер һәм метамағлүмәт
 
@@ -308,7 +308,7 @@ register_trigger wake {
 - `.take(n)`: старттан башлап тәүге Kotodama яҙмаларын итера.
 - `.range(start, end)`: Norito яртылаш асыҡ интервалында итераты. Семантика `start` һәм `n = end - start` X-ға тиң.Динамик сиктәрҙәге иҫкәрмәләр
 - Һөйләм сиктәре: `n`, `start`, һәм `end` бөтөн һан литералдары булараҡ тулыһынса нығытыла һәм итерациондар һаны нығытылған һанына төҙөлә.
-- Һеҙ `kotodama_dynamic_bounds` функцияһы `ivm` йәшниктә эшләй, компилятор динамик `n`, `\r` һәм `end` экспрессияһын һәм хәүефһеҙлек өсөн эшләү ваҡытында раҫлауҙарҙы индерә. (тиҫкәре булмаған, Norito). Lowering K-ға тиклем `if (i < n)` чектары менән итерацион рәүештә өҫтәмә тәнде үтәүҙән ҡотолоу өсөн сығарыла (күбәләк K=2). Һеҙ K программалы көйләй аласыз аша `CompilerOptions { dynamic_iter_cap, .. }`.
+- Non-literal bounds are first-release behavior. The compiler accepts dynamic `n`, `start`, and `end` expressions for durable `state Map<int, V>` iteration, inserts runtime assertions for safety (non-negative, `end >= start`, bounded by the fixed release limit), and emits structured dynamic access metadata. The first-release limit is 64 guarded iterations and is not runtime-configurable.
 - `koto_lint` Run Kotodama линт иҫкәртмәләрен тикшерергә тиклем йыйылмаға тиклем; төп компилятор һәр ваҡыт анализ һәм тип-тикшеренеүҙән һуң түбәнәйтеү менән бара.
 - Хаталар кодтары [Kotodama компилятор хаталар кодтары] (./kotodama_error_codes.mdX) документлаштырылған); тиҙ аңлатмалар өсөн `koto_compile --explain <code>` ҡулланыу.
 

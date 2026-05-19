@@ -264,7 +264,7 @@ register_trigger wake {
 
 ### גבולות דינמיים
 - גבולות ליטרליים: ‎`n`, ‏`start`, ‏`end` כקבועים מספריים → איטרציה במספר קבוע של צעדים.
-- גבולות לא ליטרליים: עם הפעלת הפיצ'ר `kotodama_dynamic_bounds` בקרייט `ivm`, הקומפיילר מקבל ביטויים דינמיים ומוסיף בדיקות ריצה (אי-שליליות ו-`end >= start`). ההורדה מפיקה עד K חזרות מוגנות עם תנאי ‎`if (i < n)` (ברירת מחדל K=2). K ניתן לכיוון דרך ‎`CompilerOptions { dynamic_iter_cap, .. }`.
+- Non-literal bounds are first-release behavior. The compiler accepts dynamic `n`, `start`, and `end` expressions for durable `state Map<int, V>` iteration, inserts runtime assertions for safety (non-negative, `end >= start`, bounded by the fixed release limit), and emits structured dynamic access metadata. The first-release limit is 64 guarded iterations and is not runtime-configurable.
 - מומלץ להריץ ‎`koto_lint` לקבלת אזהרות לפני קומפילציה; הקומפיילר ממשיך להורדה לאחר פרסינג וטייפינג.
 - קודי שגיאה מתועדים ב-[Kotodama Compiler Error Codes](./kotodama_error_codes.md); הפקודה ‎`koto_compile --explain <code>` מספקת הסברים.
 

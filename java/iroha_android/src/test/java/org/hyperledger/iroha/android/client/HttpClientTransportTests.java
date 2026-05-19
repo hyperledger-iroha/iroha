@@ -108,7 +108,6 @@ public final class HttpClientTransportTests {
     resolveAccountAliasRejectsNonIntegerIndex();
     resolveAccountAliasFailsOnMalformedJson();
     identifierNormalizationCanonicalizesInputs();
-    identifierResolveRequestBuilderCanonicalizesPolicyInput();
     identifierBfvEnvelopeBuilderProducesDeterministicCiphertext();
     identifierReceiptVerifierAcceptsEd25519Receipt();
     invalidateAndCancelDelegatesToExecutor();
@@ -1128,6 +1127,8 @@ public final class HttpClientTransportTests {
         + jsonString(payload.policyId())
         + ",\"execution\":"
         + identifierExecutionJson(payload.execution())
+        + ",\"opening\":"
+        + identifierOpeningJson(payload.opening())
         + ",\"opaque_id\":"
         + jsonString(payload.opaqueId())
         + ",\"receipt_hash\":"
@@ -1152,6 +1153,14 @@ public final class HttpClientTransportTests {
         + jsonString(execution.backend())
         + ",\"verification_mode\":"
         + jsonString(execution.verificationMode())
+        + ",\"input_ciphertext_hash\":"
+        + jsonString(execution.inputCiphertextHash())
+        + ",\"output_ciphertext_hash\":"
+        + jsonString(execution.outputCiphertextHash())
+        + ",\"parameter_digest\":"
+        + jsonString(execution.parameterDigest())
+        + ",\"evaluation_key_digest\":"
+        + jsonString(execution.evaluationKeyDigest())
         + ",\"output_hash\":"
         + jsonString(execution.outputHash())
         + ",\"associated_data_hash\":"
@@ -1162,8 +1171,48 @@ public final class HttpClientTransportTests {
         + "}";
   }
 
+  private static String identifierOpeningJson(final RamLfeOutputOpening opening) {
+    final RamLfeOutputOpeningPayload payload = opening.payload();
+    final String expires =
+        payload.expiresAtMs() == null ? "" : ",\"expires_at_ms\":" + payload.expiresAtMs();
+    return "{"
+        + "\"payload\":{"
+        + "\"program_id\":"
+        + jsonString(payload.programId())
+        + ",\"input_ciphertext_hash\":"
+        + jsonString(payload.inputCiphertextHash())
+        + ",\"output_ciphertext_hash\":"
+        + jsonString(payload.outputCiphertextHash())
+        + ",\"parameter_digest\":"
+        + jsonString(payload.parameterDigest())
+        + ",\"evaluation_key_digest\":"
+        + jsonString(payload.evaluationKeyDigest())
+        + ",\"opened_output_hash\":"
+        + jsonString(payload.openedOutputHash())
+        + ",\"opened_at_ms\":"
+        + payload.openedAtMs()
+        + expires
+        + "},\"signature\":"
+        + jsonString(opening.signature())
+        + "}";
+  }
+
   private static String jsonString(final String value) {
     return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+  }
+
+  private static RamLfeOutputOpening sampleOpening(final String programId) {
+    return new RamLfeOutputOpening(
+        new RamLfeOutputOpeningPayload(
+            programId,
+            "aa".repeat(32),
+            "bb".repeat(32),
+            "cc".repeat(32),
+            "dd".repeat(32),
+            "ee".repeat(32),
+            42L,
+            142L),
+        "ff".repeat(64));
   }
 
   private static void identifierResolveRequestParsesResponse() {
@@ -1176,10 +1225,15 @@ public final class HttpClientTransportTests {
                 "11".repeat(32),
                 "bfv-affine-sha3-256-v1",
                 "signed",
+                "aa".repeat(32),
+                "bb".repeat(32),
+                "cc".repeat(32),
+                "dd".repeat(32),
                 "22".repeat(32),
                 "33".repeat(32),
                 42L,
                 142L),
+            sampleOpening("identifier_lookup_retail"),
             "opaque:" + "11".repeat(32),
             "22".repeat(32),
             "uaid:" + "33".repeat(31) + "35",
@@ -1194,7 +1248,7 @@ public final class HttpClientTransportTests {
             ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
 
     final Optional<IdentifierResolutionReceipt> response =
-        transport.resolveIdentifier(" phone#retail ", " +1 (555) 123-4567 ", null).join();
+        transport.resolveIdentifier(" phone#retail ", "0xABCD", payload.opening()).join();
     assert response.isPresent() : "Expected identifier resolution receipt";
     final IdentifierResolutionReceipt receipt = response.orElseThrow();
     assert "phone#retail".equals(receipt.policyId()) : "Policy id mismatch";
@@ -1225,9 +1279,13 @@ public final class HttpClientTransportTests {
         : "Identifier resolve URI mismatch";
     assert request.headers().getOrDefault("Content-Type", List.of()).contains("application/json")
         : "Identifier resolve must send JSON";
-    assert readBody(request)
-        .equals("{\"input\":\"+1 (555) 123-4567\",\"policy_id\":\"phone#retail\"}")
-        : "Identifier resolve payload mismatch";
+    final String requestBody = readBody(request);
+    assert requestBody.contains("\"policy_id\":\"phone#retail\"")
+        : "Identifier resolve payload must include policy id";
+    assert requestBody.contains("\"encrypted_input\":\"abcd\"")
+        : "Identifier resolve payload must include encrypted input";
+    assert requestBody.contains("\"output_opening\":")
+        : "Identifier resolve payload must include output opening";
   }
 
   private static void identifierResolveRequestParsesProgrammedReceiptResponse() {
@@ -1241,10 +1299,15 @@ public final class HttpClientTransportTests {
                 "44".repeat(32),
                 "bfv-programmed-sha3-256-v1",
                 "signed",
+                "aa".repeat(32),
+                "bb".repeat(32),
+                "cc".repeat(32),
+                "dd".repeat(32),
                 "55".repeat(32),
                 "66".repeat(32),
                 42L,
                 142L),
+            sampleOpening("email_retail"),
             "opaque:" + "11".repeat(32),
             "22".repeat(32),
             "uaid:" + "33".repeat(31) + "35",
@@ -1259,7 +1322,7 @@ public final class HttpClientTransportTests {
             ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
 
     final Optional<IdentifierResolutionReceipt> response =
-        transport.resolveIdentifier("email#retail", "alice@example.com", null).join();
+        transport.resolveIdentifier("email#retail", "ABCD", payload.opening()).join();
     assert response.isPresent() : "Expected structured identifier resolution receipt";
     final IdentifierResolutionReceipt receipt = response.orElseThrow();
     assert "email#retail".equals(receipt.policyId()) : "Structured policy id mismatch";
@@ -1297,13 +1360,13 @@ public final class HttpClientTransportTests {
             ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
 
     final Optional<IdentifierResolutionReceipt> response =
-        transport.resolveIdentifier("phone#retail", null, "0xABCD").join();
+        transport.resolveIdentifier("phone#retail", "0xABCD", sampleOpening("identifier_lookup_retail")).join();
     assert response.isEmpty() : "404 identifier resolution should return Optional.empty";
 
     final TransportRequest request = executor.lastRequest();
     assert request != null : "Identifier resolve request must be captured";
-    assert readBody(request).equals("{\"encrypted_input\":\"abcd\",\"policy_id\":\"phone#retail\"}")
-        : "Encrypted identifier resolve payload mismatch";
+    assert readBody(request).contains("\"output_opening\":")
+        : "Encrypted identifier resolve payload must include output opening";
   }
 
   private static void identifierClaimLookupAllowsNotFound() {
@@ -1333,10 +1396,15 @@ public final class HttpClientTransportTests {
                 "44".repeat(32),
                 "bfv-affine-sha3-256-v1",
                 "signed",
+                "aa".repeat(32),
+                "bb".repeat(32),
+                "cc".repeat(32),
+                "dd".repeat(32),
                 "55".repeat(32),
                 "66".repeat(32),
                 7L,
                 null),
+            sampleOpening("identifier_lookup_retail"),
             "opaque:" + "44".repeat(32),
             "55".repeat(32),
             "uaid:" + "66".repeat(31) + "67",
@@ -1351,7 +1419,7 @@ public final class HttpClientTransportTests {
             ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
 
     final Optional<IdentifierResolutionReceipt> response =
-        transport.issueIdentifierClaimReceipt(accountId, "phone#retail", null, "ABCD").join();
+        transport.issueIdentifierClaimReceipt(accountId, "phone#retail", "ABCD", payload.opening()).join();
     assert response.isPresent() : "Claim receipt should parse";
     assert ("opaque:" + "44".repeat(32)).equals(response.orElseThrow().opaqueId())
         : "Opaque id mismatch";
@@ -1368,8 +1436,8 @@ public final class HttpClientTransportTests {
                 + encodedAccountId
                 + "/identifiers/claim-receipt")
         : "Identifier claim receipt path must encode account id";
-    assert readBody(request).equals("{\"encrypted_input\":\"abcd\",\"policy_id\":\"phone#retail\"}")
-        : "Identifier claim payload mismatch";
+    assert readBody(request).contains("\"output_opening\":")
+        : "Identifier claim payload must include output opening";
   }
 
   private static void ramLfeExecuteRequestParsesResponse() {
@@ -1414,7 +1482,7 @@ public final class HttpClientTransportTests {
             ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
 
     final Optional<RamLfeExecuteResponse> response =
-        transport.executeRamLfeProgram("identifier_lookup_retail", "0xABCD", null).join();
+        transport.executeRamLfeProgram("identifier_lookup_retail", "0xABCD").join();
     assert response.isPresent() : "Expected RAM-LFE execute response";
     final RamLfeExecuteResponse execute = response.orElseThrow();
     assert "identifier_lookup_retail".equals(execute.programId()) : "Program id mismatch";
@@ -1430,7 +1498,8 @@ public final class HttpClientTransportTests {
         .toString()
         .equals("https://torii.example/v1/ram-lfe/programs/identifier_lookup_retail/execute")
         : "RAM-LFE execute URI mismatch";
-    assert readBody(request).equals("{\"input_hex\":\"abcd\"}") : "RAM-LFE execute payload mismatch";
+    assert readBody(request).equals("{\"encrypted_input\":\"abcd\"}")
+        : "RAM-LFE execute payload mismatch";
   }
 
   private static void ramLfeExecuteRequestAllowsNotFound() {
@@ -1441,7 +1510,7 @@ public final class HttpClientTransportTests {
             ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
 
     final Optional<RamLfeExecuteResponse> response =
-        transport.executeRamLfeProgram("identifier_lookup_retail", null, "ABCD").join();
+        transport.executeRamLfeProgram("identifier_lookup_retail", "ABCD").join();
     assert response.isEmpty() : "404 RAM-LFE execute should return Optional.empty";
 
     final TransportRequest request = executor.lastRequest();
@@ -2025,25 +2094,6 @@ public final class HttpClientTransportTests {
         : "Account normalization mismatch";
   }
 
-  private static void identifierResolveRequestBuilderCanonicalizesPolicyInput() {
-    final IdentifierPolicySummary policy =
-        new IdentifierPolicySummary(
-            "phone#retail",
-            "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-            true,
-            IdentifierNormalization.PHONE_E164,
-            "ed25519:ed0120" + "11".repeat(32),
-            "bfv-affine-sha3-256-v1",
-            "bfv-v1",
-            null,
-            null,
-            null);
-    final IdentifierResolveRequest request = policy.plaintextRequest(" +1 (555) 123-4567 ");
-    assert "phone#retail".equals(request.policyId()) : "Identifier request policy id mismatch";
-    assert "+15551234567".equals(request.input()) : "Identifier request input mismatch";
-    assert request.encryptedInputHex() == null : "Encrypted input must be absent";
-  }
-
   private static void identifierBfvEnvelopeBuilderProducesDeterministicCiphertext() {
     final IdentifierPolicySummary policy =
         new IdentifierPolicySummary(
@@ -2068,11 +2118,12 @@ public final class HttpClientTransportTests {
 
     assert expected.equals(policy.encryptInput("ab", seed))
         : "Deterministic BFV ciphertext mismatch";
-    final IdentifierResolveRequest request = policy.encryptedRequestFromInput("ab", seed);
+    final RamLfeOutputOpening opening = sampleOpening("identifier_lookup_retail");
+    final IdentifierResolveRequest request = policy.encryptedRequestFromInput("ab", opening, seed);
     assert "string#retail".equals(request.policyId()) : "Encrypted request policy id mismatch";
-    assert request.input() == null : "Encrypted request plaintext must be absent";
     assert expected.equals(request.encryptedInputHex())
         : "Encrypted request ciphertext mismatch";
+    assert request.outputOpening() == opening : "Encrypted request must keep output opening";
   }
 
   private static void identifierReceiptVerifierAcceptsEd25519Receipt() {
@@ -2085,10 +2136,15 @@ public final class HttpClientTransportTests {
                 "11".repeat(32),
                 "bfv-affine-sha3-256-v1",
                 "signed",
+                "aa".repeat(32),
+                "bb".repeat(32),
+                "cc".repeat(32),
+                "dd".repeat(32),
                 "22".repeat(32),
                 "33".repeat(32),
                 42L,
                 142L),
+            sampleOpening("identifier_lookup_retail"),
             "opaque:" + "11".repeat(32),
             "22".repeat(32),
             "uaid:" + "33".repeat(31) + "35",

@@ -4,12 +4,8 @@
 use std::sync::OnceLock;
 
 use iroha_data_model::{
-    ValidationFail,
-    isi::error::MathError,
-    prelude::*,
-    query::error::FindError,
+    ValidationFail, isi::error::MathError, prelude::*, query::error::FindError,
     transaction::error::prelude::TransactionRejectionReason,
-    trigger::action, // for constructing adjusted Action
 };
 use iroha_telemetry::metrics;
 
@@ -28,7 +24,8 @@ fn trigger_enabled_metadata_key() -> &'static Name {
     })
 }
 
-/// Read the trigger enabled flag from metadata, defaulting to `true` when absent or malformed.
+/// Read the trigger enabled flag from metadata, defaulting to `true` when absent.
+/// Malformed values fail closed and disable the trigger.
 pub(crate) fn trigger_is_enabled(metadata: &Metadata) -> bool {
     let Some(value) = metadata.get(trigger_enabled_metadata_key()) else {
         return true;
@@ -39,7 +36,7 @@ pub(crate) fn trigger_is_enabled(metadata: &Metadata) -> bool {
     if let Ok(raw) = value.clone().try_into_any_norito::<u64>() {
         return raw != 0;
     }
-    true
+    false
 }
 
 /// All instructions related to triggers.
@@ -274,34 +271,23 @@ pub mod isi {
             ));
         }
 
-        // If a time trigger is scheduled at or before the current block creation time,
-        // shift its start strictly after the current block to prevent immediate firing.
-        if let EventFilterBox::Time(time_filter) = new_trigger.action().filter()
-            && let ExecutionTime::Schedule(mut schedule) = time_filter.0
-        {
-            let block_time = state_transaction._curr_block.creation_time();
-            let start = schedule.start();
-            if start <= block_time {
-                let adjusted_start = block_time
-                    .checked_add(core::time::Duration::from_millis(1))
-                    .unwrap_or(block_time);
-                schedule.start_ms = adjusted_start
-                    .as_millis()
-                    .try_into()
-                    .expect("INTERNAL BUG: Unix timestamp exceeds u64::MAX");
-                // Rebuild the action with the adjusted schedule while preserving other fields and metadata
-                let act = new_trigger.action().clone();
-                let updated = action::Action {
-                    executable: act.executable,
-                    repeats: act.repeats,
-                    authority: act.authority,
-                    filter: EventFilterBox::Time(TimeEventFilter(ExecutionTime::Schedule(
-                        schedule,
-                    ))),
-                    retry_policy: act.retry_policy,
-                    metadata: act.metadata,
-                };
-                new_trigger = Trigger::new(new_trigger.id().clone(), updated);
+        if let EventFilterBox::Pipeline(filter) = new_trigger.action().filter() {
+            match filter {
+                PipelineEventFilterBox::Transaction(filter)
+                    if matches!(
+                        filter.status().as_ref(),
+                        Some(TransactionStatus::Approved | TransactionStatus::Rejected(_))
+                    ) => {}
+                PipelineEventFilterBox::Block(filter)
+                    if matches!(filter.status().as_ref(), Some(BlockStatus::Approved)) => {}
+                _ => {
+                    return Err(Error::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "pipeline triggers may only target deterministic transaction Approved/Rejected or block Approved events"
+                                .into(),
+                        ),
+                    ));
+                }
             }
         }
 
@@ -1230,6 +1216,20 @@ mod tests {
     }
 
     #[test]
+    fn trigger_is_enabled_rejects_malformed_metadata_flag() {
+        let mut metadata = Metadata::default();
+        let key = TRIGGER_ENABLED_METADATA_KEY
+            .parse::<Name>()
+            .expect("valid metadata key");
+        metadata.insert(key, Json::from(norito::json!("not-a-bool")));
+
+        assert!(
+            !trigger_is_enabled(&metadata),
+            "malformed enabled flags must fail closed"
+        );
+    }
+
+    #[test]
     fn execute_trigger_requires_owner_or_permission() {
         use iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter;
         use iroha_executor_data_model::permission::trigger::CanExecuteTrigger;
@@ -1636,6 +1636,525 @@ mod tests {
         {
             let ids2 = collect_active_trigger_ids(&state);
             assert!(ids2.iter().all(|id| id != &trig_id));
+        }
+    }
+
+    #[test]
+    fn active_trigger_ids_excludes_disabled_trigger() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let mut state_block = state.block(BlockHeader::new(
+            NonZeroU64::new(1).unwrap(),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = state_block.transaction();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        Register::domain(Domain::new(domain_id))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let trigger_id: TriggerId = "disabled_not_active".parse().unwrap();
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            TRIGGER_ENABLED_METADATA_KEY
+                .parse::<Name>()
+                .expect("valid metadata key"),
+            Json::from(false),
+        );
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+            )
+            .with_metadata(metadata),
+        );
+        Register::trigger(trigger)
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let ids = collect_active_trigger_ids(&state);
+        assert!(
+            ids.iter().all(|id| id != &trigger_id),
+            "disabled trigger must not be reported active"
+        );
+    }
+
+    #[test]
+    fn active_trigger_ids_excludes_malformed_enabled_metadata() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let mut state_block = state.block(BlockHeader::new(
+            NonZeroU64::new(1).unwrap(),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = state_block.transaction();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        Register::domain(Domain::new(domain_id))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let trigger_id: TriggerId = "malformed_enabled_not_active".parse().unwrap();
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            TRIGGER_ENABLED_METADATA_KEY
+                .parse::<Name>()
+                .expect("valid metadata key"),
+            Json::from(norito::json!("definitely-not-a-bool")),
+        );
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+            )
+            .with_metadata(metadata),
+        );
+        Register::trigger(trigger)
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let ids = collect_active_trigger_ids(&state);
+        assert!(
+            ids.iter().all(|id| id != &trigger_id),
+            "malformed enabled metadata must fail closed and not be active"
+        );
+    }
+
+    #[test]
+    fn active_trigger_ids_recover_after_malformed_enabled_is_set_true() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let mut state_block = state.block(BlockHeader::new(
+            NonZeroU64::new(1).unwrap(),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = state_block.transaction();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        Register::domain(Domain::new(domain_id))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let trigger_id: TriggerId = "malformed_enabled_recovers".parse().unwrap();
+        let enabled_key = TRIGGER_ENABLED_METADATA_KEY
+            .parse::<Name>()
+            .expect("valid metadata key");
+        let mut metadata = Metadata::default();
+        metadata.insert(enabled_key.clone(), Json::from(norito::json!([true])));
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+            )
+            .with_metadata(metadata),
+        );
+        Register::trigger(trigger)
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let ids = collect_active_trigger_ids(&state);
+        assert!(
+            ids.iter().all(|id| id != &trigger_id),
+            "malformed enabled metadata must initially fail closed"
+        );
+
+        let mut state_block = state.block(BlockHeader::new(
+            NonZeroU64::new(2).unwrap(),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = state_block.transaction();
+        SetKeyValue::trigger(trigger_id.clone(), enabled_key, Json::from(true))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let ids = collect_active_trigger_ids(&state);
+        assert!(
+            ids.iter().any(|id| id == &trigger_id),
+            "setting enabled=true must restore the trigger to active ids"
+        );
+    }
+
+    #[test]
+    fn active_trigger_ids_recover_after_disabled_enabled_flag_is_removed() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let mut state_block = state.block(BlockHeader::new(
+            NonZeroU64::new(1).unwrap(),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = state_block.transaction();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        Register::domain(Domain::new(domain_id))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let trigger_id: TriggerId = "disabled_enabled_flag_removed".parse().unwrap();
+        let enabled_key = TRIGGER_ENABLED_METADATA_KEY
+            .parse::<Name>()
+            .expect("valid metadata key");
+        let mut metadata = Metadata::default();
+        metadata.insert(enabled_key.clone(), Json::from(false));
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+            )
+            .with_metadata(metadata),
+        );
+        Register::trigger(trigger)
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let ids = collect_active_trigger_ids(&state);
+        assert!(
+            ids.iter().all(|id| id != &trigger_id),
+            "disabled trigger must initially be inactive"
+        );
+
+        let mut state_block = state.block(BlockHeader::new(
+            NonZeroU64::new(2).unwrap(),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = state_block.transaction();
+        RemoveKeyValue::trigger(trigger_id.clone(), enabled_key)
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let ids = collect_active_trigger_ids(&state);
+        assert!(
+            ids.iter().any(|id| id == &trigger_id),
+            "removing __enabled must restore the default enabled state"
+        );
+    }
+
+    #[test]
+    fn active_trigger_ids_exclude_trigger_after_enabled_is_set_false() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let mut state_block = state.block(BlockHeader::new(
+            NonZeroU64::new(1).unwrap(),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = state_block.transaction();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        Register::domain(Domain::new(domain_id))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let trigger_id: TriggerId = "enabled_flag_set_false".parse().unwrap();
+        let enabled_key = TRIGGER_ENABLED_METADATA_KEY
+            .parse::<Name>()
+            .expect("valid metadata key");
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+            ),
+        );
+        Register::trigger(trigger)
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let ids = collect_active_trigger_ids(&state);
+        assert!(
+            ids.iter().any(|id| id == &trigger_id),
+            "fresh trigger must initially be active"
+        );
+
+        let mut state_block = state.block(BlockHeader::new(
+            NonZeroU64::new(2).unwrap(),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = state_block.transaction();
+        SetKeyValue::trigger(trigger_id.clone(), enabled_key, Json::from(false))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let ids = collect_active_trigger_ids(&state);
+        assert!(
+            ids.iter().all(|id| id != &trigger_id),
+            "setting __enabled=false must remove the trigger from active ids"
+        );
+    }
+
+    #[test]
+    fn active_trigger_ids_follow_numeric_enabled_flag_transitions() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let mut state_block = state.block(BlockHeader::new(
+            NonZeroU64::new(1).unwrap(),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = state_block.transaction();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        Register::domain(Domain::new(domain_id))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let trigger_id: TriggerId = "numeric_enabled_flag".parse().unwrap();
+        let enabled_key = TRIGGER_ENABLED_METADATA_KEY
+            .parse::<Name>()
+            .expect("valid metadata key");
+        let mut metadata = Metadata::default();
+        metadata.insert(enabled_key.clone(), Json::from(0_u64));
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+            )
+            .with_metadata(metadata),
+        );
+        Register::trigger(trigger)
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let ids = collect_active_trigger_ids(&state);
+        assert!(
+            ids.iter().all(|id| id != &trigger_id),
+            "__enabled=0 must disable active queries"
+        );
+
+        let mut state_block = state.block(BlockHeader::new(
+            NonZeroU64::new(2).unwrap(),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = state_block.transaction();
+        SetKeyValue::trigger(trigger_id.clone(), enabled_key.clone(), Json::from(1_u64))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let ids = collect_active_trigger_ids(&state);
+        assert!(
+            ids.iter().any(|id| id == &trigger_id),
+            "__enabled=1 must restore active queries"
+        );
+
+        let mut state_block = state.block(BlockHeader::new(
+            NonZeroU64::new(3).unwrap(),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = state_block.transaction();
+        SetKeyValue::trigger(trigger_id.clone(), enabled_key, Json::from(0_u64))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let ids = collect_active_trigger_ids(&state);
+        assert!(
+            ids.iter().all(|id| id != &trigger_id),
+            "returning __enabled to 0 must remove the trigger from active ids"
+        );
+    }
+
+    #[test]
+    fn register_trigger_rejects_nondeterministic_pipeline_filter() {
+        use iroha_data_model::events::pipeline::{
+            BlockEventFilter, BlockStatus, MergeLedgerEventFilter, PipelineEventFilterBox,
+            TransactionEventFilter, TransactionStatus, WitnessEventFilter,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let mut state_block = state.block(BlockHeader::new(
+            NonZeroU64::new(1).unwrap(),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = state_block.transaction();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        Register::domain(Domain::new(domain_id))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        for (name, filter) in [
+            (
+                "pipeline_block_any",
+                PipelineEventFilterBox::from(BlockEventFilter::new()),
+            ),
+            (
+                "pipeline_block_created",
+                PipelineEventFilterBox::from(
+                    BlockEventFilter::new().for_status(BlockStatus::Created),
+                ),
+            ),
+            (
+                "pipeline_block_committed",
+                PipelineEventFilterBox::from(
+                    BlockEventFilter::new().for_status(BlockStatus::Committed),
+                ),
+            ),
+            (
+                "pipeline_block_applied",
+                PipelineEventFilterBox::from(
+                    BlockEventFilter::new().for_status(BlockStatus::Applied),
+                ),
+            ),
+            (
+                "pipeline_block_rejected",
+                PipelineEventFilterBox::from(BlockEventFilter::new().for_status(
+                    BlockStatus::Rejected(
+                        iroha_data_model::block::error::BlockRejectionReason::EmptyBlock,
+                    ),
+                )),
+            ),
+            (
+                "pipeline_tx_any",
+                PipelineEventFilterBox::from(TransactionEventFilter::new()),
+            ),
+            (
+                "pipeline_tx_queued",
+                PipelineEventFilterBox::from(
+                    TransactionEventFilter::new().for_status(TransactionStatus::Queued),
+                ),
+            ),
+            (
+                "pipeline_tx_expired",
+                PipelineEventFilterBox::from(
+                    TransactionEventFilter::new().for_status(TransactionStatus::Expired),
+                ),
+            ),
+            (
+                "pipeline_merge",
+                PipelineEventFilterBox::from(MergeLedgerEventFilter::default()),
+            ),
+            (
+                "pipeline_witness",
+                PipelineEventFilterBox::from(WitnessEventFilter::default()),
+            ),
+        ] {
+            let trigger_id: TriggerId = name.parse().unwrap();
+            let trigger = Trigger::new(
+                trigger_id,
+                Action::new(
+                    Vec::<InstructionBox>::new(),
+                    Repeats::Exactly(1),
+                    ALICE_ID.clone(),
+                    filter,
+                ),
+            );
+
+            Register::trigger(trigger)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("non-deterministic pipeline filter must be rejected");
         }
     }
 

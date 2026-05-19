@@ -4,7 +4,7 @@
 use std::{
     convert::TryFrom,
     sync::{Mutex, OnceLock},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use eyre::{Result, eyre};
@@ -15,7 +15,7 @@ use iroha::{
         metadata::Metadata,
         prelude::*,
         query::repo::prelude::FindRepoAgreements,
-        repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
+        repo::{RepoAgreement, RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     },
 };
 use iroha_crypto::{Algorithm, KeyPair};
@@ -104,6 +104,134 @@ where
 
 fn error_chain_contains(err: &eyre::Report, needle: &str) -> bool {
     err.chain().any(|cause| cause.to_string().contains(needle))
+}
+
+fn asset_value(assets: &[Asset], asset_id: &AssetId) -> Option<Numeric> {
+    assets
+        .iter()
+        .find(|asset| asset.id() == asset_id)
+        .map(|asset| asset.value().clone())
+}
+
+fn wait_for_assets(
+    client: &Client,
+    expected: &[(&AssetId, Option<Numeric>)],
+    context: &str,
+) -> Result<Vec<Asset>> {
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    const TIMEOUT: Duration = Duration::from_secs(30);
+
+    let deadline = Instant::now() + TIMEOUT;
+    let mut last_observed = "assets were not queried".to_owned();
+
+    while Instant::now() < deadline {
+        match client.query(FindAssets::new()).execute_all() {
+            Ok(assets) => {
+                let all_match = expected.iter().all(|(asset_id, expected_value)| {
+                    let observed = asset_value(&assets, asset_id);
+                    match expected_value {
+                        Some(value) => observed.as_ref() == Some(value),
+                        None => observed.is_none(),
+                    }
+                });
+                last_observed = expected
+                    .iter()
+                    .map(|(asset_id, _)| format!("{asset_id}={:?}", asset_value(&assets, asset_id)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if all_match {
+                    return Ok(assets);
+                }
+            }
+            Err(err) => {
+                last_observed = format!("query failed: {err}");
+            }
+        }
+
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    Err(eyre!(
+        "timed out waiting for assets after {context}; last_observed={last_observed}"
+    ))
+}
+
+fn wait_for_repo_agreement(
+    client: &Client,
+    agreement_id: &RepoAgreementId,
+    context: &str,
+) -> Result<RepoAgreement> {
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    const TIMEOUT: Duration = Duration::from_secs(30);
+
+    let deadline = Instant::now() + TIMEOUT;
+    let mut last_observed = "repo agreements were not queried".to_owned();
+
+    while Instant::now() < deadline {
+        match client.query(FindRepoAgreements::new()).execute_all() {
+            Ok(agreements) => {
+                last_observed = agreements
+                    .iter()
+                    .map(|agreement| agreement.id().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if let Some(agreement) = agreements
+                    .into_iter()
+                    .find(|agreement| agreement.id() == agreement_id)
+                {
+                    return Ok(agreement);
+                }
+            }
+            Err(err) => {
+                last_observed = format!("query failed: {err}");
+            }
+        }
+
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    Err(eyre!(
+        "timed out waiting for repo agreement after {context}; id={agreement_id}; last_observed={last_observed}"
+    ))
+}
+
+fn wait_for_repo_agreement_absent(
+    client: &Client,
+    agreement_id: &RepoAgreementId,
+    context: &str,
+) -> Result<()> {
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    const TIMEOUT: Duration = Duration::from_secs(30);
+
+    let deadline = Instant::now() + TIMEOUT;
+    let mut last_observed = "repo agreements were not queried".to_owned();
+
+    while Instant::now() < deadline {
+        match client.query(FindRepoAgreements::new()).execute_all() {
+            Ok(agreements) => {
+                if agreements
+                    .iter()
+                    .all(|agreement| agreement.id() != agreement_id)
+                {
+                    return Ok(());
+                }
+                last_observed = agreements
+                    .iter()
+                    .map(|agreement| agreement.id().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+            }
+            Err(err) => {
+                last_observed = format!("query failed: {err}");
+            }
+        }
+
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    Err(eyre!(
+        "timed out waiting for repo agreement removal after {context}; id={agreement_id}; last_observed={last_observed}"
+    ))
 }
 
 #[test]
@@ -199,11 +327,16 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
     let alice_collateral_id = AssetId::new(collateral_def_id.clone(), ALICE_ID.clone());
     let bob_collateral_id = AssetId::new(collateral_def_id.clone(), BOB_ID.clone());
 
-    let assets_after_repo = client
-        .query(FindAssets::new())
-        .execute_all()?
-        .into_iter()
-        .collect::<Vec<_>>();
+    let assets_after_repo = wait_for_assets(
+        &client,
+        &[
+            (&alice_cash_id, Some(numeric!(1000))),
+            (&bob_cash_id, Some(numeric!(1000))),
+            (&alice_collateral_id, Some(numeric!(400))),
+            (&bob_collateral_id, Some(numeric!(1100))),
+        ],
+        "repo initiation",
+    )?;
 
     let alice_cash = assets_after_repo
         .iter()
@@ -270,11 +403,16 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
     );
     client.submit_transaction_blocking(&reverse_tx)?;
 
-    let assets_after_reverse = client
-        .query(FindAssets::new())
-        .execute_all()?
-        .into_iter()
-        .collect::<Vec<_>>();
+    let assets_after_reverse = wait_for_assets(
+        &client,
+        &[
+            (&alice_cash_id, None),
+            (&bob_cash_id, Some(numeric!(2000))),
+            (&alice_collateral_id, Some(numeric!(1500))),
+            (&bob_collateral_id, None),
+        ],
+        "reverse repo",
+    )?;
 
     let alice_cash_post = assets_after_reverse
         .iter()
@@ -330,12 +468,7 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         client.build_transaction(vec![repo_instr_box(reopened_repo)], metadata.clone());
     client.submit_transaction_blocking(&reopened_tx)?;
 
-    let repo_snapshot = client
-        .query(FindRepoAgreements::new())
-        .execute_all()?
-        .into_iter()
-        .find(|agreement| agreement.id() == &agreement_id)
-        .expect("repo agreement should persist after reopen");
+    let repo_snapshot = wait_for_repo_agreement(&client, &agreement_id, "repo reopen")?;
     assert_ne!(
         *repo_snapshot.initiated_timestamp_ms(),
         0,
@@ -400,11 +533,14 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         client.build_transaction(vec![repo_instr_box(substitution_reverse)], metadata.clone());
     client.submit_transaction_blocking(&substitution_tx)?;
 
-    let assets_after_substitution = client
-        .query(FindAssets::new())
-        .execute_all()?
-        .into_iter()
-        .collect::<Vec<_>>();
+    let assets_after_substitution = wait_for_assets(
+        &client,
+        &[
+            (&bob_cash_id, Some(numeric!(2000))),
+            (&alice_collateral_id, Some(numeric!(1550))),
+        ],
+        "substitution unwind",
+    )?;
 
     let bob_cash_after_substitution = assets_after_substitution
         .iter()
@@ -418,13 +554,7 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         .expect("alice collateral after substitution unwind");
     assert_eq!(*alice_collateral_after_substitution.value(), numeric!(1550));
 
-    let remaining_agreements = client.query(FindRepoAgreements::new()).execute_all()?;
-    assert!(
-        remaining_agreements
-            .iter()
-            .all(|agreement| agreement.id() != &agreement_id),
-        "repo agreement should be cleared after substitution unwind"
-    );
+    wait_for_repo_agreement_absent(&client, &agreement_id, "substitution unwind")?;
 
     Ok(())
 }
@@ -507,12 +637,7 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
         client.build_transaction(vec![repo_instr_box(repo_instruction)], metadata.clone());
     client.submit_transaction_blocking(&repo_tx)?;
 
-    let repo_snapshot = client
-        .query(FindRepoAgreements::new())
-        .execute_all()?
-        .into_iter()
-        .find(|agreement| agreement.id() == &agreement_id)
-        .expect("repo agreement should exist after initiation");
+    let repo_snapshot = wait_for_repo_agreement(&client, &agreement_id, "margin repo initiation")?;
     let initial_last_margin_ms = *repo_snapshot.last_margin_check_timestamp_ms();
     let expected_first_due = repo_snapshot
         .next_margin_check_after(initial_last_margin_ms)
@@ -533,12 +658,7 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
         "expected cadence enforcement error, got {premature_err:?}"
     );
 
-    let after_reject = client
-        .query(FindRepoAgreements::new())
-        .execute_all()?
-        .into_iter()
-        .find(|agreement| agreement.id() == &agreement_id)
-        .expect("repo agreement should persist after rejected margin call");
+    let after_reject = wait_for_repo_agreement(&client, &agreement_id, "rejected margin call")?;
     assert_eq!(
         *after_reject.last_margin_check_timestamp_ms(),
         initial_last_margin_ms,
@@ -644,11 +764,17 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
     let custodian_collateral_id = AssetId::new(collateral_def_id.clone(), custodian_id.clone());
     let bob_collateral_id = AssetId::new(collateral_def_id.clone(), BOB_ID.clone());
 
-    let assets_after_repo = client
-        .query(FindAssets::new())
-        .execute_all()?
-        .into_iter()
-        .collect::<Vec<_>>();
+    let assets_after_repo = wait_for_assets(
+        &client,
+        &[
+            (&alice_cash_id, Some(numeric!(1000))),
+            (&bob_cash_id, Some(numeric!(1000))),
+            (&alice_collateral_id, Some(numeric!(400))),
+            (&bob_collateral_id, None),
+            (&custodian_collateral_id, Some(numeric!(1100))),
+        ],
+        "tri-party repo initiation",
+    )?;
 
     let alice_cash = assets_after_repo
         .iter()
@@ -681,12 +807,8 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         .expect("custodian collateral after repo");
     assert_eq!(*custodian_collateral.value(), numeric!(1100));
 
-    let stored_agreement = client
-        .query(FindRepoAgreements::new())
-        .execute_all()?
-        .into_iter()
-        .find(|agreement| agreement.id() == &agreement_id)
-        .expect("repo agreement recorded");
+    let stored_agreement =
+        wait_for_repo_agreement(&client, &agreement_id, "tri-party repo initiation")?;
     assert_eq!(
         stored_agreement.custodian(),
         &Some(custodian_id.clone()),
@@ -713,11 +835,16 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
     );
     client.submit_transaction_blocking(&reverse_tx)?;
 
-    let assets_after_reverse = client
-        .query(FindAssets::new())
-        .execute_all()?
-        .into_iter()
-        .collect::<Vec<_>>();
+    let assets_after_reverse = wait_for_assets(
+        &client,
+        &[
+            (&alice_cash_id, None),
+            (&bob_cash_id, Some(numeric!(2000))),
+            (&alice_collateral_id, Some(numeric!(1500))),
+            (&custodian_collateral_id, None),
+        ],
+        "tri-party reverse repo",
+    )?;
 
     let alice_cash_after_reverse = assets_after_reverse
         .iter()
@@ -746,13 +873,7 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         "custodian collateral asset should be pruned after unwind"
     );
 
-    let remaining_agreements = client.query(FindRepoAgreements::new()).execute_all()?;
-    assert!(
-        remaining_agreements
-            .iter()
-            .all(|agreement| agreement.id() != &agreement_id),
-        "repo agreement should be cleared after reverse repo"
-    );
+    wait_for_repo_agreement_absent(&client, &agreement_id, "tri-party reverse repo")?;
 
     Ok(())
 }

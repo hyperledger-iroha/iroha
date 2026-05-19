@@ -151,7 +151,7 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
             .map(|x| Peer::new(x.p2p_address(), x.id()))
             .collect();
 
-        let response_body = reqwest::get(peer.client().torii_url.join("/peers").unwrap())
+        let response_body = reqwest::get(peer.client().torii_url.join("/v1/peers").unwrap())
             .await?
             .text()
             .await?;

@@ -1437,6 +1437,8 @@ pub struct SoracloudDeterministicStateMutation {
     pub encryption: SoraStateEncryptionV1,
     /// Declared payload size when the mutation upserts content.
     pub payload_bytes: Option<u64>,
+    /// Full payload bytes when the mutation upserts content.
+    pub payload: Option<Vec<u8>>,
     /// Deterministic commitment over the opaque payload.
     pub payload_commitment: Option<Hash>,
 }

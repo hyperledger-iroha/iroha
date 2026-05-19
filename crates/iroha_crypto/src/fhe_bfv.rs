@@ -33,6 +33,17 @@ const KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.keygen.v1";
 const ENCRYPT_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.encrypt.v1";
 const IDENTIFIER_KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.identifier.keygen.v1";
 const IDENTIFIER_SLOT_ENCRYPT_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.identifier.slot.v1";
+const BFV_PARAMETER_DIGEST_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.parameter_digest.v1";
+const BFV_EVALUATION_KEY_DIGEST_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.eval_key_digest.v1";
+
+/// Registered RAM-LFE BFV plaintext modulus.
+///
+/// RAM-LFE byte predicates evaluate `eq0(x) = 1 - x^256`; this requires a
+/// prime plaintext field that contains every byte value as a field element.
+pub const RAM_LFE_BFV_PLAINTEXT_MODULUS: u64 = 257;
+
+/// Registered RAM-LFE BFV ciphertext modulus.
+pub const RAM_LFE_BFV_CIPHERTEXT_MODULUS: u64 = RAM_LFE_BFV_PLAINTEXT_MODULUS * (1_u64 << 44);
 
 type Polynomial = Vec<u64>;
 
@@ -229,6 +240,99 @@ pub struct BfvRelinearizationKey {
     pub entries: Vec<BfvRelinearizationKeyEntry>,
 }
 
+/// Public rotation key admitted for deterministic ciphertext-slot rotations.
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct BfvRotationKey {
+    /// Positive left-rotation step supported by this key.
+    pub rotation_steps: u32,
+    /// Encryption of zero added to each moved slot during rotation refresh.
+    ///
+    /// Soracloud `RotateLeft` is defined over the outer identifier ciphertext
+    /// envelope, where each logical byte slot is an independent scalar BFV
+    /// ciphertext. The key holder prepares this mask with the BFV public key so
+    /// evaluators can rotate and refresh slots without holding the secret key.
+    pub zero_refresh: BfvCiphertext,
+}
+
+/// Public bootstrap key admitted for deterministic ciphertext refresh.
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct BfvBootstrapKey {
+    /// Stable bootstrap-key identifier.
+    pub key_id: String,
+    /// Encryption of zero added during refresh.
+    ///
+    /// The key holder prepares this ciphertext with the BFV public key for the
+    /// registered parameter set. Evaluators can refresh/re-randomize a
+    /// ciphertext by homomorphically adding this mask without holding the secret
+    /// key or observing the plaintext.
+    pub zero_refresh: BfvCiphertext,
+}
+
+/// Evaluation keys required by public BFV evaluators.
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct BfvEvaluationKeyBundle {
+    /// Relinearization key used after ciphertext-ciphertext multiplication.
+    pub relinearization_key: BfvRelinearizationKey,
+    /// Rotation keys admitted for slot rotation.
+    #[norito(default)]
+    pub rotation_keys: Vec<BfvRotationKey>,
+    /// Optional bootstrap key used to refresh ciphertexts.
+    #[norito(default)]
+    pub bootstrap_key: Option<BfvBootstrapKey>,
+}
+
+impl BfvEvaluationKeyBundle {
+    /// Validate evaluation-key shapes against BFV parameters.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when key material is malformed or duplicated.
+    pub fn validate(&self, params: &BfvParameters) -> Result<(), BfvError> {
+        params.validate()?;
+        validate_relinearization_key(params, &self.relinearization_key)?;
+        let mut seen_rotations = std::collections::BTreeSet::new();
+        for key in &self.rotation_keys {
+            if key.rotation_steps == 0 {
+                return Err(BfvError::InvalidParameters(
+                    "rotation key steps must be greater than zero".to_owned(),
+                ));
+            }
+            if !seen_rotations.insert(key.rotation_steps) {
+                return Err(BfvError::InvalidParameters(format!(
+                    "duplicate rotation key for {} steps",
+                    key.rotation_steps
+                )));
+            }
+            validate_ciphertext(params, &key.zero_refresh)?;
+        }
+        if let Some(bootstrap_key) = self.bootstrap_key.as_ref() {
+            if bootstrap_key.key_id.trim().is_empty() {
+                return Err(BfvError::InvalidParameters(
+                    "bootstrap key id must not be empty".to_owned(),
+                ));
+            }
+            validate_ciphertext(params, &bootstrap_key.zero_refresh)?;
+        }
+        Ok(())
+    }
+
+    /// Return a stable digest over the evaluation-key bundle.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when validation or canonical encoding fails.
+    pub fn digest(&self, params: &BfvParameters) -> Result<Hash, BfvError> {
+        self.validate(params)?;
+        let bytes = norito::to_bytes(self).map_err(|err| {
+            BfvError::InvalidParameters(format!("evaluation key encoding failed: {err}"))
+        })?;
+        Ok(Hash::new(
+            [BFV_EVALUATION_KEY_DIGEST_DOMAIN, bytes.as_slice()].concat(),
+        ))
+    }
+}
+
 /// BFV ciphertext with two components.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -279,6 +383,44 @@ impl BfvIdentifierPublicParameters {
         }
         Ok(())
     }
+}
+
+/// Return the registered BFV parameter set used by RAM-LFE byte-slot programs.
+#[must_use]
+pub const fn ram_lfe_bfv_parameters_v1() -> BfvParameters {
+    BfvParameters {
+        polynomial_degree: 64,
+        ciphertext_modulus: RAM_LFE_BFV_CIPHERTEXT_MODULUS,
+        plaintext_modulus: RAM_LFE_BFV_PLAINTEXT_MODULUS,
+        decomposition_base_log: 12,
+    }
+}
+
+/// Validate that parameters match a registered production BFV profile.
+///
+/// # Errors
+/// Returns [`BfvError`] when the parameter set is malformed or not registered.
+pub fn validate_registered_bfv_parameters(params: &BfvParameters) -> Result<(), BfvError> {
+    params.validate()?;
+    if *params != ram_lfe_bfv_parameters_v1() {
+        return Err(BfvError::InvalidParameters(
+            "BFV parameter set is not registered for production FHE evaluation".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Return the stable digest for a registered BFV parameter set.
+///
+/// # Errors
+/// Returns [`BfvError`] when the parameter set is not registered.
+pub fn registered_bfv_parameter_digest(params: &BfvParameters) -> Result<Hash, BfvError> {
+    validate_registered_bfv_parameters(params)?;
+    let bytes = norito::to_bytes(params)
+        .map_err(|err| BfvError::InvalidParameters(format!("parameter encoding failed: {err}")))?;
+    Ok(Hash::new(
+        [BFV_PARAMETER_DIGEST_DOMAIN, bytes.as_slice()].concat(),
+    ))
 }
 
 /// Public affine circuit over scalar ciphertext inputs.
@@ -449,6 +591,126 @@ pub fn encrypt_from_seed(
     Ok(BfvCiphertext { c0, c1 })
 }
 
+/// Derive a deterministic public bootstrap refresh key from a BFV public key.
+///
+/// The resulting key contains an encryption of zero. Adding it to any
+/// ciphertext under the same parameters preserves the plaintext while changing
+/// the ciphertext bytes. This is the deterministic in-repo refresh primitive
+/// used by Soracloud Bootstrap jobs; it keeps evaluators secret-key free.
+/// TODO: Replace this encrypted-zero refresh with full BFV-RNS bootstrapping
+/// once the RNS modulus-chain engine lands.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameter or public-key validation fails.
+pub fn bootstrap_key_from_seed(
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+    key_id: impl Into<String>,
+    seed: &[u8],
+) -> Result<BfvBootstrapKey, BfvError> {
+    let zero_refresh = encrypt_from_seed(params, public_key, &[0], seed)?;
+    let bootstrap_key = BfvBootstrapKey {
+        key_id: key_id.into(),
+        zero_refresh,
+    };
+    if bootstrap_key.key_id.trim().is_empty() {
+        return Err(BfvError::InvalidParameters(
+            "bootstrap key id must not be empty".to_owned(),
+        ));
+    }
+    validate_ciphertext(params, &bootstrap_key.zero_refresh)?;
+    Ok(bootstrap_key)
+}
+
+/// Refresh a ciphertext with a public bootstrap key.
+///
+/// # Errors
+/// Returns [`BfvError`] when the input or refresh key does not match the
+/// parameter set.
+pub fn bootstrap_ciphertext(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    ciphertext: &BfvCiphertext,
+) -> Result<BfvCiphertext, BfvError> {
+    params.validate()?;
+    if bootstrap_key.key_id.trim().is_empty() {
+        return Err(BfvError::InvalidParameters(
+            "bootstrap key id must not be empty".to_owned(),
+        ));
+    }
+    validate_ciphertext(params, &bootstrap_key.zero_refresh)?;
+    add_ciphertexts(params, ciphertext, &bootstrap_key.zero_refresh)
+}
+
+/// Derive a deterministic public slot-rotation key from a BFV public key.
+///
+/// The resulting key contains an encryption of zero used to refresh every
+/// ciphertext moved by an outer envelope slot rotation.
+///
+/// # Errors
+/// Returns [`BfvError`] when the rotation step, parameter set, or public-key
+/// shape is invalid.
+pub fn rotation_key_from_seed(
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+    rotation_steps: u32,
+    seed: &[u8],
+) -> Result<BfvRotationKey, BfvError> {
+    if rotation_steps == 0 {
+        return Err(BfvError::InvalidParameters(
+            "rotation key steps must be greater than zero".to_owned(),
+        ));
+    }
+    let zero_refresh = encrypt_from_seed(params, public_key, &[0], seed)?;
+    let rotation_key = BfvRotationKey {
+        rotation_steps,
+        zero_refresh,
+    };
+    validate_ciphertext(params, &rotation_key.zero_refresh)?;
+    Ok(rotation_key)
+}
+
+/// Rotate an identifier ciphertext-slot envelope left and refresh each moved slot.
+///
+/// This helper implements Soracloud `RotateLeft`: it rotates the outer vector of
+/// BFV scalar ciphertext slots by the key's declared step count, then adds the
+/// key's encrypted-zero refresh mask to every output slot. The plaintext slot
+/// order changes, ciphertext bytes change, and the evaluator never needs a
+/// BFV secret key.
+///
+/// # Errors
+/// Returns [`BfvError`] when the key or any ciphertext slot does not match the
+/// parameter set.
+pub fn rotate_ciphertext_slots_left(
+    params: &BfvParameters,
+    rotation_key: &BfvRotationKey,
+    slots: &[BfvCiphertext],
+) -> Result<Vec<BfvCiphertext>, BfvError> {
+    params.validate()?;
+    if rotation_key.rotation_steps == 0 {
+        return Err(BfvError::InvalidParameters(
+            "rotation key steps must be greater than zero".to_owned(),
+        ));
+    }
+    validate_ciphertext(params, &rotation_key.zero_refresh)?;
+    for slot in slots {
+        validate_ciphertext(params, slot)?;
+    }
+    if slots.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut rotated = slots.to_vec();
+    let slot_count = rotated.len();
+    rotated.rotate_left(
+        usize::try_from(rotation_key.rotation_steps).unwrap_or(usize::MAX) % slot_count,
+    );
+    rotated
+        .iter()
+        .map(|slot| add_ciphertexts(params, slot, &rotation_key.zero_refresh))
+        .collect()
+}
+
 /// Decrypt a ciphertext back into plaintext coefficients.
 ///
 /// # Errors
@@ -485,6 +747,24 @@ pub fn add_ciphertexts(
     Ok(BfvCiphertext {
         c0: poly_add_mod(params, &lhs.c0, &rhs.c0),
         c1: poly_add_mod(params, &lhs.c1, &rhs.c1),
+    })
+}
+
+/// Homomorphically subtract one ciphertext from another.
+///
+/// # Errors
+/// Returns [`BfvError`] when ciphertext shapes do not match the parameter set.
+pub fn subtract_ciphertexts(
+    params: &BfvParameters,
+    lhs: &BfvCiphertext,
+    rhs: &BfvCiphertext,
+) -> Result<BfvCiphertext, BfvError> {
+    params.validate()?;
+    validate_ciphertext(params, lhs)?;
+    validate_ciphertext(params, rhs)?;
+    Ok(BfvCiphertext {
+        c0: poly_sub_mod(params, &lhs.c0, &rhs.c0),
+        c1: poly_sub_mod(params, &lhs.c1, &rhs.c1),
     })
 }
 
@@ -1316,6 +1596,83 @@ mod tests {
         let sum = add_ciphertexts(&params, &lhs, &rhs).expect("add");
         let plaintext = decrypt(&params, &secret_key, &sum).expect("decrypt");
         assert_eq!(plaintext[0], 46);
+    }
+
+    #[test]
+    fn bootstrap_refresh_preserves_plaintext_and_changes_ciphertext() {
+        let params = params();
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-bootstrap-keygen").expect("keygen");
+        let ciphertext = encrypt_from_seed(
+            &params,
+            &public_key,
+            &[77],
+            b"bfv-bootstrap-input-ciphertext",
+        )
+        .expect("encrypt");
+        let bootstrap_key = bootstrap_key_from_seed(
+            &params,
+            &public_key,
+            "bootstrap-refresh-key",
+            b"bfv-bootstrap-zero-refresh",
+        )
+        .expect("bootstrap key");
+        let refreshed =
+            bootstrap_ciphertext(&params, &bootstrap_key, &ciphertext).expect("bootstrap refresh");
+
+        assert_ne!(refreshed, ciphertext);
+        let plaintext = decrypt(&params, &secret_key, &refreshed).expect("decrypt");
+        assert_eq!(plaintext[0], 77);
+    }
+
+    #[test]
+    fn rotation_key_rotates_and_refreshes_ciphertext_slots() {
+        let params = params();
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-rotation-keygen").expect("keygen");
+        let slots = [10_u64, 20, 30]
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                encrypt_from_seed(
+                    &params,
+                    &public_key,
+                    &[value],
+                    format!("bfv-rotation-slot-{index}").as_bytes(),
+                )
+                .expect("encrypt slot")
+            })
+            .collect::<Vec<_>>();
+        let rotation_key =
+            rotation_key_from_seed(&params, &public_key, 1, b"bfv-rotation-zero-refresh")
+                .expect("rotation key");
+
+        let rotated =
+            rotate_ciphertext_slots_left(&params, &rotation_key, &slots).expect("rotate slots");
+
+        assert_eq!(rotated.len(), slots.len());
+        assert_ne!(
+            rotated,
+            vec![slots[1].clone(), slots[2].clone(), slots[0].clone()]
+        );
+        let plaintexts = rotated
+            .iter()
+            .map(|slot| decrypt(&params, &secret_key, slot).expect("decrypt")[0])
+            .collect::<Vec<_>>();
+        assert_eq!(plaintexts, vec![20, 30, 10]);
+    }
+
+    #[test]
+    fn rotation_key_rejects_zero_steps() {
+        let params = params();
+        let (_, public_key, _) =
+            keygen_from_seed(&params, b"bfv-rotation-zero-keygen").expect("keygen");
+        let err = rotation_key_from_seed(&params, &public_key, 0, b"bfv-rotation-zero")
+            .expect_err("zero-step rotation keys must fail");
+        assert_eq!(
+            err,
+            BfvError::InvalidParameters("rotation key steps must be greater than zero".to_owned())
+        );
     }
 
     #[cfg(feature = "bfv-accel")]

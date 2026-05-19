@@ -38,7 +38,6 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 ```text
 // Register a new asset and mint some to the specified account.
 seiyaku RegisterAndMint {
-  #[access(read="*", write="*")]
   kotoage fn register_and_mint() permission(AssetManager) {
     // name, symbol, quantity (precision or supply depending on host), mintable flag
     let name = "rose";

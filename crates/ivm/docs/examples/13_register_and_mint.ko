@@ -1,6 +1,5 @@
 // Register a new asset and mint some to the specified account.
 seiyaku RegisterAndMint {
-  #[access(read="*", write="*")]
   kotoage fn register_and_mint() permission(AssetManager) {
     // name, symbol, quantity (precision or supply depending on host), mintable flag
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");

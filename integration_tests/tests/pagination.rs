@@ -32,21 +32,25 @@ fn pagination_behaves() -> Result<()> {
     // limits_should_work
     let vec = client
         .query(FindAssetsDefinitions::new())
-        .with_pagination(Pagination::new(Some(nonzero!(7_u64)), 1))
+        .with_pagination(Pagination::new(Some(nonzero!(7_u64)), 0))
         .execute_all()?;
     assert_eq!(vec.len(), 7);
 
-    // reported_length_should_be_accurate
+    // Stored bounded cursors intentionally omit exact remaining counts so the
+    // first response can stay cheap; the iterator reports the current batch as
+    // the lower bound and streams the rest through cursors.
     let mut iter = client
         .query(FindAssetsDefinitions::new())
-        .with_pagination(Pagination::new(Some(nonzero!(7_u64)), 1))
+        .with_pagination(Pagination::new(Some(nonzero!(7_u64)), 0))
         .with_fetch_size(FetchSize::new(Some(nonzero!(3_u64))))
         .execute()?;
-    assert_eq!(iter.len(), 7);
+    assert_eq!(iter.size_hint(), (3, None));
     for _ in 0..4 {
         iter.next().unwrap().unwrap();
     }
-    assert_eq!(iter.len(), 3);
+    assert_eq!(iter.size_hint(), (2, None));
+    let remaining = iter.collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(remaining.len(), 3);
 
     // fetch_size_should_work
     {
@@ -63,7 +67,7 @@ fn pagination_behaves() -> Result<()> {
         let query = QueryWithParams::new(
             &qbox,
             QueryParams::new(
-                Pagination::new(Some(nonzero!(7_u64)), 1),
+                Pagination::new(Some(nonzero!(7_u64)), 0),
                 Sorting::default(),
                 FetchSize::new(Some(nonzero!(3_u64))),
             ),
@@ -71,7 +75,7 @@ fn pagination_behaves() -> Result<()> {
         let (first_batch, remaining_items, _continue_cursor) = client.start_query(query)?;
 
         assert_eq!(first_batch.len(), 3);
-        assert_eq!(remaining_items, 4);
+        assert_eq!(remaining_items, None);
     }
 
     Ok(())

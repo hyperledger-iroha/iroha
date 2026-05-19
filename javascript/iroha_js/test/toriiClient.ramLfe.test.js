@@ -90,7 +90,7 @@ test("listRamLfeProgramPolicies normalizes BFV metadata", async () => {
   );
 });
 
-test("executeRamLfeProgram posts plaintext input and preserves raw receipt", async () => {
+test("executeRamLfeProgram posts encrypted input and preserves raw receipt", async () => {
   const client = new ToriiClient("https://example.test", {
     fetchImpl: async (input, init) => {
       assert.equal(init.method, "POST");
@@ -100,12 +100,13 @@ test("executeRamLfeProgram posts plaintext input and preserves raw receipt", asy
       );
       const payload = JSON.parse(init.body);
       assert.deepEqual(payload, {
-        input_hex: "ABCD",
+        encrypted_input: "ABCD",
       });
       return jsonResponse(200, {
         program_id: PROGRAM_ID,
         opaque_hash: "opaque-hash-literal",
         receipt_hash: "receipt-hash-literal",
+        output_ciphertext: "C0FFEE",
         output_hash: "output-hash-literal",
         associated_data_hash: "associated-data-hash-literal",
         executed_at_ms: 42,
@@ -118,9 +119,10 @@ test("executeRamLfeProgram posts plaintext input and preserves raw receipt", asy
   });
 
   const result = await client.executeRamLfeProgram(PROGRAM_ID, {
-    inputHex: "ABCD",
+    encryptedInput: "ABCD",
   });
   assert.equal(result.program_id, PROGRAM_ID);
+  assert.equal(result.output_ciphertext, "C0FFEE");
   assert.equal(result.output_hash, "output-hash-literal");
   assert.equal(result.verification_mode, "signed");
   assert.deepEqual(result.receipt, RECEIPT);
@@ -139,6 +141,19 @@ test("executeRamLfeProgram returns null for missing programs", async () => {
     encryptedInput: "ABCD",
   });
   assert.equal(result, null);
+});
+
+test("executeRamLfeProgram rejects unsupported inputHex option", async () => {
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl: async () => {
+      throw new Error("request should not be sent");
+    },
+  });
+
+  await assert.rejects(
+    () => client.executeRamLfeProgram(PROGRAM_ID, { inputHex: "ABCD" }),
+    (error) => error.name === "ValidationError",
+  );
 });
 
 test("verifyRamLfeReceipt posts raw receipt payloads", async () => {

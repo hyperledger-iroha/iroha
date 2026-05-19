@@ -125,6 +125,7 @@ public final class SorafsRegisterPinManifestBuilderTests {
             .setNamespace("sorafs")
             .setName("sf1")
             .setSemver("1.0.0")
+            .setMultihashCode(0)
             .build();
     boolean threw = false;
     try {

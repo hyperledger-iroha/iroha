@@ -522,9 +522,9 @@
         "type": "object"
       },
       "BfvRamEncryptedInputMode": {
-        "description": "Canonicalization mode applied before the programmed RAM-FHE backend executes.",
+        "description": "Encrypted-only RAM-FHE input envelope mode.",
         "enum": [
-          "resolver_canonicalized_envelope_v1"
+          "encrypted_envelope_v1"
         ],
         "type": "string"
       },
@@ -1218,6 +1218,10 @@
           "resolver_public_key": {
             "description": "Public key used to verify resolution receipts.",
             "type": "string"
+          },
+          "output_opening_public_key": {
+            "type": "string",
+            "description": "Public key used to verify externally signed RAM-LFE output openings."
           }
         },
         "required": [
@@ -1226,7 +1230,8 @@
           "active",
           "normalization",
           "resolver_public_key",
-          "backend"
+          "backend",
+          "output_opening_public_key"
         ],
         "type": "object"
       },
@@ -1255,6 +1260,9 @@
           "uaid": {
             "description": "UAID currently bound to the opaque identifier.",
             "type": "string"
+          },
+          "opening": {
+            "$ref": "#/components/schemas/RamLfeOutputOpening"
           }
         },
         "required": [
@@ -1263,7 +1271,8 @@
           "opaque_id",
           "receipt_hash",
           "uaid",
-          "account_id"
+          "account_id",
+          "opening"
         ],
         "type": "object"
       },
@@ -1271,20 +1280,21 @@
         "additionalProperties": false,
         "properties": {
           "encrypted_input": {
-            "description": "Hex-encoded Norito BFV ciphertext envelope. Supply exactly one of `input` or `encrypted_input`.",
-            "type": "string"
-          },
-          "input": {
-            "description": "Plaintext identifier input. Supply exactly one of `input` or `encrypted_input`.",
+            "description": "Hex-encoded Norito BFV ciphertext envelope. Plaintext hidden-function inputs are rejected.",
             "type": "string"
           },
           "policy_id": {
             "description": "Identifier policy namespace literal (`<kind>#<business_rule>`).",
             "type": "string"
+          },
+          "output_opening": {
+            "$ref": "#/components/schemas/RamLfeOutputOpening"
           }
         },
         "required": [
-          "policy_id"
+          "policy_id",
+          "encrypted_input",
+          "output_opening"
         ],
         "type": "object"
       },
@@ -2789,15 +2799,14 @@
         "additionalProperties": false,
         "properties": {
           "encrypted_input": {
-            "description": "Hex-encoded Norito BFV ciphertext envelope. Supply exactly one of `input_hex` or `encrypted_input`.",
-            "type": "string"
-          },
-          "input_hex": {
-            "description": "Hex-encoded plaintext input bytes. Supply exactly one of `input_hex` or `encrypted_input`.",
+            "description": "Hex-encoded Norito BFV ciphertext envelope. Plaintext RAM-LFE inputs are rejected.",
             "type": "string"
           }
         },
-        "type": "object"
+        "type": "object",
+        "required": [
+          "encrypted_input"
+        ]
       },
       "RamLfeExecuteResponse": {
         "additionalProperties": false,
@@ -2825,7 +2834,7 @@
             "type": "string"
           },
           "output_hash": {
-            "description": "Hash of the plaintext output bytes.",
+            "description": "Hash of the encrypted output ciphertext bytes.",
             "type": "string"
           },
           "program_id": {
@@ -2842,6 +2851,10 @@
           "verification_mode": {
             "description": "Receipt attestation mode (`signed` or `proof`).",
             "type": "string"
+          },
+          "output_ciphertext": {
+            "type": "string",
+            "description": "Hex-encoded Norito BFV ciphertext envelope produced by the RAM-LFE evaluator."
           }
         },
         "required": [
@@ -2853,7 +2866,8 @@
           "executed_at_ms",
           "backend",
           "verification_mode",
-          "receipt"
+          "receipt",
+          "output_ciphertext"
         ],
         "type": "object"
       },
@@ -2895,7 +2909,7 @@
             "type": "integer"
           },
           "output_hash": {
-            "description": "Hash of the plaintext output bytes.",
+            "description": "Hash of the encrypted output bytes; Torii execution never returns plaintext output.",
             "type": "string"
           },
           "program_digest": {
@@ -2909,6 +2923,22 @@
           "verification_mode": {
             "description": "Receipt attestation mode (`signed` or `proof`).",
             "type": "string"
+          },
+          "input_ciphertext_hash": {
+            "type": "string",
+            "description": "Hash of the encrypted input envelope evaluated by the program."
+          },
+          "output_ciphertext_hash": {
+            "type": "string",
+            "description": "Hash of the encrypted output envelope produced by the program."
+          },
+          "parameter_digest": {
+            "type": "string",
+            "description": "Digest of the registered BFV parameter set used for execution."
+          },
+          "evaluation_key_digest": {
+            "type": "string",
+            "description": "Digest of the BFV evaluation-key bundle used for execution."
           }
         },
         "required": [
@@ -2918,7 +2948,11 @@
           "verification_mode",
           "output_hash",
           "associated_data_hash",
-          "executed_at_ms"
+          "executed_at_ms",
+          "input_ciphertext_hash",
+          "output_ciphertext_hash",
+          "parameter_digest",
+          "evaluation_key_digest"
         ],
         "type": "object"
       },
@@ -2991,6 +3025,10 @@
           "verification_mode": {
             "description": "Receipt attestation mode (`signed` or `proof`).",
             "type": "string"
+          },
+          "output_opening_public_key": {
+            "type": "string",
+            "description": "Public key used to verify externally signed RAM-LFE output openings."
           }
         },
         "required": [
@@ -2999,7 +3037,8 @@
           "active",
           "resolver_public_key",
           "backend",
-          "verification_mode"
+          "verification_mode",
+          "output_opening_public_key"
         ],
         "type": "object"
       },
@@ -3070,7 +3109,7 @@
         "additionalProperties": false,
         "properties": {
           "output_hex": {
-            "description": "Optional hex-encoded plaintext output bytes to compare against `receipt.payload.output_hash`.",
+            "description": "Optional hex-encoded encrypted output ciphertext bytes to compare against `receipt.payload.output_hash`.",
             "type": "string"
           },
           "receipt": {
@@ -3706,6 +3745,72 @@
         "description": "XML payload returned as UTF-8 text.",
         "format": "xml",
         "type": "string"
+      },
+      "RamLfeOutputOpeningPayload": {
+        "type": "object",
+        "required": [
+          "program_id",
+          "input_ciphertext_hash",
+          "output_ciphertext_hash",
+          "parameter_digest",
+          "evaluation_key_digest",
+          "opened_output_hash",
+          "opened_at_ms"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "program_id": {
+            "type": "string",
+            "description": "RAM-LFE program identifier whose encrypted output was opened."
+          },
+          "input_ciphertext_hash": {
+            "type": "string",
+            "description": "Hash of the encrypted input envelope from the execution receipt."
+          },
+          "output_ciphertext_hash": {
+            "type": "string",
+            "description": "Hash of the encrypted output envelope from the execution receipt."
+          },
+          "parameter_digest": {
+            "type": "string",
+            "description": "Digest of the registered BFV parameter set used for execution."
+          },
+          "evaluation_key_digest": {
+            "type": "string",
+            "description": "Digest of the BFV evaluation-key bundle used for execution."
+          },
+          "opened_output_hash": {
+            "type": "string",
+            "description": "Hash of the plaintext output bytes opened by the external authority."
+          },
+          "opened_at_ms": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "Opening timestamp in milliseconds since Unix epoch."
+          },
+          "expires_at_ms": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "Optional opening expiry timestamp in milliseconds since Unix epoch."
+          }
+        }
+      },
+      "RamLfeOutputOpening": {
+        "type": "object",
+        "required": [
+          "payload",
+          "signature"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "payload": {
+            "$ref": "#/components/schemas/RamLfeOutputOpeningPayload"
+          },
+          "signature": {
+            "type": "string",
+            "description": "Hex-encoded signature from the configured output-opening authority."
+          }
+        }
       }
     }
   },
@@ -4214,7 +4319,7 @@
     },
     "/v1/accounts/{account_id}/identifiers/claim-receipt": {
       "post": {
-        "description": "Normalize a raw identifier input under a hidden-function policy and return an attested receipt that can be embedded into `ClaimIdentifier`.",
+        "description": "Issue an attested identifier claim receipt from encrypted input and a verified RAM-LFE output opening that can be embedded into `ClaimIdentifier`.",
         "parameters": [
           {
             "description": "Canonical target account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace` for the claim receipt.",
@@ -8661,7 +8766,7 @@
     },
     "/v1/identifiers/resolve": {
       "post": {
-        "description": "Resolve a normalized identifier input under a hidden-function policy and return the bound canonical account target when a live claim exists.",
+        "description": "Resolve an encrypted identifier input under a hidden-function policy using a verified RAM-LFE output opening, then return the bound canonical account target when a live claim exists.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -11463,7 +11568,7 @@
     },
     "/v1/ram-lfe/programs/{program_id}/execute": {
       "post": {
-        "description": "Execute a RAM-LFE program from plaintext or BFV-encrypted input and return the stateless execution receipt.",
+        "description": "Execute a RAM-LFE program from a BFV ciphertext envelope and return the encrypted output ciphertext plus stateless execution receipt.",
         "parameters": [
           {
             "description": "RAM-LFE program identifier.",

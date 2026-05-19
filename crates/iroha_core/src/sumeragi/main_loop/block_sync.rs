@@ -11,6 +11,7 @@ use crate::sumeragi::message::BlockMessageWire;
 
 use super::locked_qc::qc_satisfies_locked_with_lookup;
 use super::message::FetchPendingBlockPriority;
+use super::proposal_handlers::BlockSyncRecoveryMode;
 use super::*;
 
 fn allow_uncertified_block_sync_roster(
@@ -2266,6 +2267,18 @@ impl Actor {
                 "routing frontier-lane BlockSyncUpdate through BlockCreated owner"
             );
             let recovery_block = block.clone();
+            let recovery_mode =
+                if has_commit_votes || incoming_qc.is_some() || validator_checkpoint.is_some() {
+                    BlockSyncRecoveryMode::CommitEvidenceRepair {
+                        observed_commit_qc_epoch: incoming_qc
+                            .as_ref()
+                            .map(|qc| qc.epoch)
+                            .or_else(|| validator_checkpoint.as_ref().map(|_| expected_epoch)),
+                        allow_aborted_revival_without_local_commit_qc: true,
+                    }
+                } else {
+                    BlockSyncRecoveryMode::PayloadOnly
+                };
             let result = self.handle_block_created_from_block_sync(
                 super::message::BlockCreated {
                     block,
@@ -2273,13 +2286,7 @@ impl Actor {
                 },
                 sender.clone(),
                 incoming_qc.is_none() && validator_checkpoint.is_none(),
-                incoming_qc.is_some() || validator_checkpoint.is_some(),
-                has_commit_votes || incoming_qc.is_some() || validator_checkpoint.is_some(),
-                has_commit_votes || incoming_qc.is_some() || validator_checkpoint.is_some(),
-                incoming_qc
-                    .as_ref()
-                    .map(|qc| qc.epoch)
-                    .or_else(|| validator_checkpoint.as_ref().map(|_| expected_epoch)),
+                recovery_mode,
             );
             let payload_materialized = result.is_ok()
                 && self.materialize_frontier_block_sync_payload_for_qc_recovery(
@@ -2825,10 +2832,11 @@ impl Actor {
                 },
                 sender.clone(),
                 true,
-                false,
-                requested_missing_block,
-                false,
-                None,
+                if requested_missing_block {
+                    BlockSyncRecoveryMode::RequestedPayloadRepair
+                } else {
+                    BlockSyncRecoveryMode::PayloadOnly
+                },
             );
             let mut recovery_targets = Vec::new();
             let aborted_pending_without_commit_evidence = self
@@ -3402,10 +3410,7 @@ impl Actor {
                             created,
                             sender.clone(),
                             true,
-                            false,
-                            false,
-                            false,
-                            None,
+                            BlockSyncRecoveryMode::PayloadOnly,
                         );
                         return Ok(());
                     }
@@ -3973,6 +3978,25 @@ impl Actor {
             || commit_cert_present
             || checkpoint_present
             || (block_quorum_met && !quorum_only_same_height_frontier_conflict);
+        let recovery_mode = if has_commit_votes
+            || incoming_qc_usable
+            || commit_cert_present
+            || checkpoint_present
+        {
+            BlockSyncRecoveryMode::CommitEvidenceRepair {
+                observed_commit_qc_epoch: incoming_qc
+                    .as_ref()
+                    .map(|qc| qc.epoch)
+                    .or_else(|| checkpoint_present.then_some(expected_epoch)),
+                allow_aborted_revival_without_local_commit_qc: has_commit_votes
+                    || commit_cert_present
+                    || checkpoint_present,
+            }
+        } else if allow_authoritative_frontier_owner_supersede {
+            BlockSyncRecoveryMode::SignedQuorumFrontierRepair
+        } else {
+            BlockSyncRecoveryMode::PayloadOnly
+        };
         let created = super::message::BlockCreated {
             block,
             frontier: None,
@@ -3982,13 +4006,7 @@ impl Actor {
             created,
             sender.clone(),
             allow_frontier_owner_preserve_on_payload_mismatch,
-            allow_authoritative_frontier_owner_supersede,
-            has_commit_votes || incoming_qc_usable || commit_cert_present || checkpoint_present,
-            has_commit_votes || commit_cert_present || checkpoint_present,
-            incoming_qc
-                .as_ref()
-                .map(|qc| qc.epoch)
-                .or_else(|| checkpoint_present.then_some(expected_epoch)),
+            recovery_mode,
         );
         let block_apply_ms =
             u64::try_from(block_apply_start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -5164,10 +5182,14 @@ impl Actor {
                         block_created,
                         sender,
                         /*allow_frontier_owner_preserve_on_payload_mismatch*/ true,
-                        observed_commit_qc_epoch.is_some(),
-                        observed_commit_qc_epoch.is_some(),
-                        observed_commit_qc_epoch.is_some(),
-                        observed_commit_qc_epoch,
+                        if observed_commit_qc_epoch.is_some() {
+                            BlockSyncRecoveryMode::CommitEvidenceRepair {
+                                observed_commit_qc_epoch,
+                                allow_aborted_revival_without_local_commit_qc: true,
+                            }
+                        } else {
+                            BlockSyncRecoveryMode::PayloadOnly
+                        },
                     )
                 } else {
                     self.handle_block_created(block_created, sender)

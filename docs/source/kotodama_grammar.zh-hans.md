@@ -92,7 +92,7 @@ translator: machine-google-reviewed
 
 能见度
 - `kotoage fn` 表示公共入口点；可见性影响调度程序权限，而不是代码生成。
-- 可选访问提示：`#[access(read=..., write=...)]` 可以在 `fn`/`kotoage fn` 之前提供清单读/写密钥。编译器还会自动发出咨询提示；不透明的主机调用会回退到保守的通配符密钥 (`*`) 并显示诊断，除非提供显式访问提示，因此调度程序可以选择动态预传递以获得更细粒度的密钥。
+- Access metadata is compiler-owned. Manual `#[access(...)]` attributes are rejected; deployable compilation succeeds only when the compiler can emit complete read/write metadata without wildcard keys.
 
 ## 合约容器和元数据
 
@@ -308,7 +308,7 @@ register_trigger wake {
 - `.take(n)`：从头开始迭代第一个 `n` 条目。
 - `.range(start, end)`：迭代半开区间 `[start, end)` 中的条目。语义相当于 `start` 和 `n = end - start`。关于动态边界的注释
 - 文字边界：完全支持 `n`、`start` 和 `end` 作为整数文字，并编译为固定的迭代次数。
-- 非文字边界：当在 `ivm` 包中启用 `kotodama_dynamic_bounds` 功能时，编译器接受动态 `n`、`start` 和 `end` 表达式，并插入运行时断言以确保安全（非负、 `end >= start`）。降低会通过 `if (i < n)` 检查发出最多 K 个受保护的迭代，以避免额外的主体执行（默认 K=2）。您可以通过 `CompilerOptions { dynamic_iter_cap, .. }` 以编程方式调整 K。
+- Non-literal bounds are first-release behavior. The compiler accepts dynamic `n`, `start`, and `end` expressions for durable `state Map<int, V>` iteration, inserts runtime assertions for safety (non-negative, `end >= start`, bounded by the fixed release limit), and emits structured dynamic access metadata. The first-release limit is 64 guarded iterations and is not runtime-configurable.
 - 在编译前运行 `koto_lint` 检查 Kotodama lint 警告；主编译器总是在解析和类型检查后继续进行降低。
 - 错误代码记录在 [Kotodama 编译器错误代码](./kotodama_error_codes.md) 中；使用 `koto_compile --explain <code>` 进行快速解释。
 

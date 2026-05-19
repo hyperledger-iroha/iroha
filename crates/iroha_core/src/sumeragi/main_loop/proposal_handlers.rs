@@ -33,6 +33,57 @@ pub(super) fn allow_stale_block_created(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BlockSyncRecoveryMode {
+    PayloadOnly,
+    RequestedPayloadRepair,
+    SignedQuorumFrontierRepair,
+    CommitEvidenceRepair {
+        observed_commit_qc_epoch: Option<u64>,
+        allow_aborted_revival_without_local_commit_qc: bool,
+    },
+}
+
+impl BlockSyncRecoveryMode {
+    const fn allows_authoritative_frontier_owner_supersede(self) -> bool {
+        matches!(
+            self,
+            Self::SignedQuorumFrontierRepair | Self::CommitEvidenceRepair { .. }
+        )
+    }
+
+    const fn allows_stale_recovery_without_request(self) -> bool {
+        matches!(
+            self,
+            Self::RequestedPayloadRepair | Self::CommitEvidenceRepair { .. }
+        )
+    }
+
+    const fn allows_aborted_revival_without_local_commit_qc(self) -> bool {
+        match self {
+            Self::CommitEvidenceRepair {
+                allow_aborted_revival_without_local_commit_qc,
+                ..
+            } => allow_aborted_revival_without_local_commit_qc,
+            Self::PayloadOnly | Self::RequestedPayloadRepair | Self::SignedQuorumFrontierRepair => {
+                false
+            }
+        }
+    }
+
+    const fn observed_commit_qc_epoch(self) -> Option<u64> {
+        match self {
+            Self::CommitEvidenceRepair {
+                observed_commit_qc_epoch,
+                ..
+            } => observed_commit_qc_epoch,
+            Self::PayloadOnly | Self::RequestedPayloadRepair | Self::SignedQuorumFrontierRepair => {
+                None
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
 pub(super) struct MissingProposalContext {
     pub(super) hint_seen: bool,
@@ -1901,7 +1952,11 @@ impl Actor {
         sender: Option<PeerId>,
     ) -> Result<()> {
         self.handle_block_created_with_preserve_policy(
-            msg, sender, false, true, false, false, false, None,
+            msg,
+            sender,
+            false,
+            true,
+            BlockSyncRecoveryMode::PayloadOnly,
         )
     }
 
@@ -1911,20 +1966,14 @@ impl Actor {
         msg: super::message::BlockCreated,
         sender: Option<PeerId>,
         allow_frontier_owner_preserve_on_payload_mismatch: bool,
-        allow_authoritative_frontier_owner_supersede: bool,
-        allow_stale_recovery_without_request: bool,
-        allow_aborted_revival_without_local_commit_qc: bool,
-        observed_commit_qc_epoch: Option<u64>,
+        recovery_mode: BlockSyncRecoveryMode,
     ) -> Result<()> {
         self.handle_block_created_with_preserve_policy(
             msg,
             sender,
             true,
             allow_frontier_owner_preserve_on_payload_mismatch,
-            allow_authoritative_frontier_owner_supersede,
-            allow_stale_recovery_without_request,
-            allow_aborted_revival_without_local_commit_qc,
-            observed_commit_qc_epoch,
+            recovery_mode,
         )
     }
 
@@ -1961,10 +2010,7 @@ impl Actor {
         sender: Option<PeerId>,
         allow_when_local_removed: bool,
         allow_frontier_owner_preserve_on_payload_mismatch: bool,
-        allow_authoritative_frontier_owner_supersede: bool,
-        allow_stale_recovery_without_request: bool,
-        allow_aborted_revival_without_local_commit_qc: bool,
-        observed_commit_qc_epoch: Option<u64>,
+        recovery_mode: BlockSyncRecoveryMode,
     ) -> Result<()> {
         if crate::sumeragi::status::local_peer_removed() && !allow_when_local_removed {
             debug!(
@@ -2069,7 +2115,8 @@ impl Actor {
                         && pending.height == height
                         && pending.view == view
                 });
-        let authoritative_frontier_owner_supersede = allow_authoritative_frontier_owner_supersede
+        let authoritative_frontier_owner_supersede = recovery_mode
+            .allows_authoritative_frontier_owner_supersede()
             && height == committed_height.saturating_add(1);
         let frontier_highest_qc = frontier.as_ref().map(|frontier| frontier.highest_qc);
         let local_conflicting_same_height_vote =
@@ -2158,7 +2205,7 @@ impl Actor {
                     ))
         });
         let quorum_locked_same_height_conflict = !authoritative_frontier_owner_supersede
-            && observed_commit_qc_epoch.is_none()
+            && recovery_mode.observed_commit_qc_epoch().is_none()
             && same_height_vote_lock.is_some()
             && !new_view_qc_supersedes_vote_lock
             && !stale_vote_lock_can_rotate;
@@ -2175,7 +2222,7 @@ impl Actor {
         let stale_recovery_has_commit_evidence = stale_view.is_some()
             && !passive_conflicting_same_height_vote
             && contiguous_frontier_extends_tip
-            && (observed_commit_qc_epoch.is_some()
+            && (recovery_mode.observed_commit_qc_epoch().is_some()
                 || self.pending_block_has_commit_votes(block_hash, height, view)
                 || self.pending_block_has_qc(block_hash, height, view));
         if authoritative_frontier_owner_supersede {
@@ -2217,7 +2264,8 @@ impl Actor {
             if !allow_stale_block_created(
                 missing_request,
                 stale_retired_match,
-                allow_stale_recovery_without_request || stale_recovery_has_commit_evidence,
+                recovery_mode.allows_stale_recovery_without_request()
+                    || stale_recovery_has_commit_evidence,
             ) {
                 debug!(
                     height,
@@ -2442,7 +2490,7 @@ impl Actor {
                         // checkpoint is applied locally. Keep that authoritative recovery traffic
                         // from getting stuck on an aborted placeholder that would otherwise be
                         // treated as a duplicate.
-                        || allow_aborted_revival_without_local_commit_qc)
+                        || recovery_mode.allows_aborted_revival_without_local_commit_qc())
             });
         if pending_status.is_some() && !revive_aborted && !stale_payload_only {
             if da_enabled {
@@ -3869,7 +3917,10 @@ impl Actor {
         match self.pending.pending_blocks.entry(block_hash) {
             Entry::Occupied(mut occ) => {
                 if revive_aborted {
-                    let commit_qc_epoch = occ.get().commit_qc_epoch.or(observed_commit_qc_epoch);
+                    let commit_qc_epoch = occ
+                        .get()
+                        .commit_qc_epoch
+                        .or(recovery_mode.observed_commit_qc_epoch());
                     let pending = occ.get_mut();
                     pending.revive_after_abort_with_payload_bytes(
                         block,
@@ -3921,7 +3972,7 @@ impl Actor {
                 );
                 if stale_payload_only {
                     pending.retire_same_height();
-                } else if let Some(epoch) = observed_commit_qc_epoch {
+                } else if let Some(epoch) = recovery_mode.observed_commit_qc_epoch() {
                     pending.note_commit_qc_observed(epoch);
                 }
                 vac.insert(pending);
@@ -4330,7 +4381,7 @@ impl Actor {
 
 #[cfg(test)]
 mod tests {
-    use super::stale_height;
+    use super::{BlockSyncRecoveryMode, allow_stale_block_created, stale_height};
 
     #[test]
     fn stale_height_rejects_committed_or_lower() {
@@ -4343,5 +4394,71 @@ mod tests {
     fn stale_height_allows_above_committed() {
         assert!(!stale_height(2, 1));
         assert!(!stale_height(6, 5));
+    }
+
+    #[test]
+    fn stale_block_created_admission_requires_a_recovery_signal() {
+        for missing_request in [false, true] {
+            for retained_match in [false, true] {
+                for recovery_evidence_present in [false, true] {
+                    let expected = missing_request || retained_match || recovery_evidence_present;
+                    assert_eq!(
+                        allow_stale_block_created(
+                            missing_request,
+                            retained_match,
+                            recovery_evidence_present,
+                        ),
+                        expected,
+                        "unexpected stale admission decision for missing_request={missing_request}, retained_match={retained_match}, recovery_evidence_present={recovery_evidence_present}",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn payload_only_recovery_mode_does_not_enable_bypasses() {
+        let mode = BlockSyncRecoveryMode::PayloadOnly;
+        assert!(!mode.allows_authoritative_frontier_owner_supersede());
+        assert!(!mode.allows_stale_recovery_without_request());
+        assert!(!mode.allows_aborted_revival_without_local_commit_qc());
+        assert_eq!(mode.observed_commit_qc_epoch(), None);
+    }
+
+    #[test]
+    fn requested_payload_repair_only_allows_stale_payload_recovery() {
+        let mode = BlockSyncRecoveryMode::RequestedPayloadRepair;
+        assert!(!mode.allows_authoritative_frontier_owner_supersede());
+        assert!(mode.allows_stale_recovery_without_request());
+        assert!(!mode.allows_aborted_revival_without_local_commit_qc());
+        assert_eq!(mode.observed_commit_qc_epoch(), None);
+    }
+
+    #[test]
+    fn signed_quorum_repair_cannot_impersonate_commit_evidence() {
+        let mode = BlockSyncRecoveryMode::SignedQuorumFrontierRepair;
+        assert!(mode.allows_authoritative_frontier_owner_supersede());
+        assert!(!mode.allows_stale_recovery_without_request());
+        assert!(!mode.allows_aborted_revival_without_local_commit_qc());
+        assert_eq!(mode.observed_commit_qc_epoch(), None);
+    }
+
+    #[test]
+    fn commit_evidence_repair_preserves_epoch_and_revival_policy() {
+        let mode = BlockSyncRecoveryMode::CommitEvidenceRepair {
+            observed_commit_qc_epoch: Some(42),
+            allow_aborted_revival_without_local_commit_qc: false,
+        };
+        assert!(mode.allows_authoritative_frontier_owner_supersede());
+        assert!(mode.allows_stale_recovery_without_request());
+        assert!(!mode.allows_aborted_revival_without_local_commit_qc());
+        assert_eq!(mode.observed_commit_qc_epoch(), Some(42));
+
+        let revival_mode = BlockSyncRecoveryMode::CommitEvidenceRepair {
+            observed_commit_qc_epoch: None,
+            allow_aborted_revival_without_local_commit_qc: true,
+        };
+        assert!(revival_mode.allows_aborted_revival_without_local_commit_qc());
+        assert_eq!(revival_mode.observed_commit_qc_epoch(), None);
     }
 }

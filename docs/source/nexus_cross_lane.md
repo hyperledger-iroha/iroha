@@ -10,7 +10,7 @@ description: Proof pipeline, relay responsibilities, and evidence requirements f
 > **Owners:** Nexus Core WG · Cryptography WG · Networking TL.  
 > **Related roadmap items:** NX-1 (lane geometry), NX-3 (settlement router), NX-4 (this document), NX-8 (global scheduler), NX-11 (SDK conformance).
 
-This note describes how per-lane execution data becomes a verifiable global commitment. It ties together the existing settlement router (`crates/settlement_router`), the lane block builder (`crates/iroha_core/src/block.rs`), telemetry/status surfaces, and the planned LaneRelay/DA hooks that still need to land for roadmap **NX-4**.
+This note describes how per-lane execution data becomes a verifiable global commitment. It ties together the existing settlement router (`crates/settlement_router`), the lane block builder (`crates/iroha_core/src/block.rs`), telemetry/status surfaces, the LaneRelay path, and the remaining DA artifact-proof hooks for roadmap **NX-4**.
 
 ## Goals
 
@@ -105,15 +105,17 @@ applied (`applied`) or missing/expired/insufficient/disabled during validation.
 
 2. **Seal receipts into the block.**  
    During `BlockBuilder::finalize`, each `(lane_id, dataspace_id)` pair drains its accumulator. The builder instantiates a `LaneBlockCommitment`, copies the receipt list, accumulates totals, stores optional swap metadata (via `SwapEvidence`), and appends native AMX prepare/commit receipts for universal-coordinator transactions that touch multiple non-universal dataspaces. The resulting vector is pushed to the Sumeragi status slot (`crates/iroha_core/src/sumeragi/status.rs`) so Torii and telemetry can expose it immediately.
+   Before sealing, proposal assembly scans a bounded window of routed queue
+   entries and applies slot-rotated lane interleaving. This keeps the current
+   global block path from starving later lanes when the block slot count is
+   smaller than the queue lookahead budget; overflow transactions are deferred
+   for deterministic requeueing.
 
 3. **Relay packaging & DA attestations.**  
-   `LaneRelayBroadcaster` now consumes the `LaneRelayEnvelope`s emitted during block sealing and gossips them as high-priority `NetworkMessage::LaneRelay` frames. Envelopes are verified, de-duplicated by `(lane_id,dataspace_id,height,settlement_hash)`, and persisted in the Sumeragi status snapshot (`/v1/sumeragi/status`) for operators and auditors. The broadcaster will continue to evolve to attach DA artefacts (RBC chunk proofs, Norito headers, SoraFS/Object manifests) and feed the merge ring without head-of-line blocking.
+   `LaneRelayBroadcaster` consumes the `LaneRelayEnvelope`s emitted during block sealing and gossips them as high-priority `NetworkMessage::LaneRelay` frames. Block sealing emits these as pending relays without copying the global block commit QC into the lane QC field. Structurally valid envelopes are de-duplicated by `(lane_id,dataspace_id,height,settlement_hash)` and persisted in the Sumeragi status snapshot (`/v1/sumeragi/status`) even while lane QC and FastPQ proof material are still pending. A later relay for the same key upgrades the snapshot to FastPQ-verified status. The broadcaster will continue to evolve to attach DA artefacts (RBC chunk proofs, Norito headers, SoraFS/Object manifests) and feed the merge ring without head-of-line blocking.
 
 4. **Global ordering & merge ledger.**  
-   The NPoS ring validates each relay envelope: check `lane_qc` against the per-dataspace committee,
-   recompute settlement totals, verify DA proofs, then feed the lane tip into the merge ledger
-   reduction described in `docs/source/merge_ledger.md`. When the merge entry is sealed the
-   world-state hash (`global_state_root`) now commits to every `LaneBlockCommitment`.
+   The NPoS ring validates each FastPQ-verified relay envelope: check `lane_qc` against the per-dataspace committee, recompute settlement totals, verify DA proofs, and feed the lane merge-hint root into the merge-ledger reduction described in `docs/source/merge_ledger.md`. Persisted verified relay records are also hydrated from contract state into the runtime relay cache after their relay reference, proof digest, verification height, manifest root, FastPQ effect type, and claim digest are checked. Newly committed `RegisterVerifiedLaneRelay` records stage the same hydration at block commit, after the contract-visible state is durable. Configured lanes without a verified relay are idle for that merge entry rather than blocking active lanes. When the merge entry is sealed the world-state hash (`global_state_root`) commits to the active lane merge-hint roots.
 
 5. **Persistence & exposure.**  
    Kura writes the lane block, merge entry, and `LaneBlockCommitment` atomically so replay can reconstruct the same reduction. `/v1/sumeragi/status` exposes:
@@ -143,8 +145,8 @@ The merge ring MUST enforce the following before accepting a lane commitment:
   `nexus_scheduler_lane_teu_*`, `nexus_scheduler_dataspace_*`, `sumeragi_rbc_da_reschedule_total`,
   `da_reschedule_total`, `sumeragi_da_gate_block_total{reason="missing_local_data"}`,
   `lane_relay_invalid_total{error}`, `lane_relay_emergency_override_total{outcome}`, and
-  `nexus_audit_outcome_total` already exist in `crates/iroha_telemetry/src/metrics.rs`. Operators
-  zero), and `lane_relay_invalid_total` should stay at zero outside adversarial drills.
+  `nexus_audit_outcome_total` already exist in `crates/iroha_telemetry/src/metrics.rs`.
+  Operators should keep `lane_relay_invalid_total` at zero outside adversarial drills.
 - **Torii surfaces:**  
   `/v1/sumeragi/status` includes `lane_commitments`, `lane_settlement_commitments`, and dataspace snapshots. `/v1/nexus/lane-config` (planned) will publish the `LaneConfig` geometry so clients can match `lane_id` ↔ dataspace labels.
 - **Dashboards:**  
@@ -164,7 +166,7 @@ The merge ring MUST enforce the following before accepting a lane commitment:
    - Integrate RBC / SoraFS chunk proofs with relay envelopes and store summary metrics in `SumeragiStatus`.
    - Expose DA status via Torii and Grafana for operators.
 3. **Merge-ledger validation**
-   - Extend the merge entry validator to require relay envelopes, not raw lane headers.
+   - Implemented in `State::commit_merge_entry`: merge entries require stored verified relay envelopes with matching lane tips, merge-hint roots, and reduction roots.
    - Add replay tests (`integration_tests/tests/nexus/*.rs`) that feed synthetic commitments through the merge ledger and assert deterministic reduction.
 4. **SDK & tooling updates**
    - Document the `LaneBlockCommitment` Norito layout for SDK consumers (`docs/portal/docs/nexus/lane-model.md` already links here; extend it with API snippets).

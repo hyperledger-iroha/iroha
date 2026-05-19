@@ -50,19 +50,19 @@ use iroha::{
         peer::PeerId,
         prelude::{FindAccountById, FindAssetById, Numeric},
         ram_lfe::{
-            RamLfeExecutionReceiptPayload, RamLfeProgramId, RamLfeProgramPolicy,
-            RamLfeReceiptAttestation,
+            RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeOutputOpeningPayload,
+            RamLfeProgramId, RamLfeProgramPolicy, RamLfeReceiptAttestation,
         },
     },
 };
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
 use iroha_core::da::proof_policy_bundle;
 use iroha_crypto::{
-    BfvParameters, Hash, RamLfeBackend, RamLfeVerificationMode, Signature, SignatureOf,
-    bfv_programmed_policy_commitment_with_program, bfv_programmed_public_parameters_with_program,
-    decode_bfv_programmed_public_parameters, default_bfv_programmed_hidden_program,
-    derive_identifier_key_material_from_seed, identifier_hashes_from_output_hash,
-    ram_lfe_output_hash,
+    BfvEvaluationKeyBundle, BfvParameters, Hash, RamLfeBackend, RamLfeVerificationMode, Signature,
+    SignatureOf, bfv_programmed_policy_commitment_with_program,
+    bfv_programmed_public_parameters_with_program, decode_bfv_programmed_public_parameters,
+    default_bfv_programmed_hidden_program, derive_identifier_key_material_from_seed,
+    identifier_hashes_from_output_hash, ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
 };
 use iroha_test_network::{
     Network, NetworkBuilder, genesis_factory_with_post_topology, init_instruction_registry,
@@ -493,6 +493,8 @@ struct RamLfeEmailPolicyContext {
     program_id: RamLfeProgramId,
     program_id_bytes: Vec<u8>,
     program_digest: Hash,
+    parameter_digest: Hash,
+    evaluation_key_digest: Hash,
     backend: RamLfeBackend,
     verification_mode: RamLfeVerificationMode,
 }
@@ -534,12 +536,7 @@ fn realistic_ram_lfe_email_program_id() -> RamLfeProgramId {
 }
 
 fn realistic_ram_lfe_email_bfv_parameters() -> BfvParameters {
-    BfvParameters {
-        polynomial_degree: 64,
-        ciphertext_modulus: 1_u64 << 52,
-        plaintext_modulus: 256,
-        decomposition_base_log: 12,
-    }
+    ram_lfe_bfv_parameters_v1()
 }
 
 fn realistic_ram_lfe_email_policy_bundle(
@@ -551,15 +548,21 @@ fn realistic_ram_lfe_email_policy_bundle(
     let secret = b"realistic-email-resolver-secret";
     let hidden_program = default_bfv_programmed_hidden_program();
     let program_id_bytes = norito::to_bytes(&program_id).expect("encode RAM-LFE program id");
-    let (public_parameters, _, _) = derive_identifier_key_material_from_seed(
+    let (public_parameters, _, relinearization_key) = derive_identifier_key_material_from_seed(
         &realistic_ram_lfe_email_bfv_parameters(),
         63,
         secret,
         &program_id_bytes,
     )
     .expect("derive RAM-LFE email public parameters");
+    let evaluation_keys = BfvEvaluationKeyBundle {
+        relinearization_key,
+        rotation_keys: Vec::new(),
+        bootstrap_key: None,
+    };
     let programmed_public_parameters = bfv_programmed_public_parameters_with_program(
         public_parameters,
+        evaluation_keys,
         &hidden_program,
         RamLfeVerificationMode::Signed,
         None,
@@ -605,6 +608,8 @@ fn realistic_ram_lfe_email_policy_context(
         program_id: program_policy.program_id.clone(),
         program_id_bytes,
         program_digest: programmed.hidden_program_digest,
+        parameter_digest: programmed.parameter_digest,
+        evaluation_key_digest: programmed.evaluation_key_digest,
         backend: program_policy.backend,
         verification_mode: program_policy.verification_mode,
     })
@@ -715,22 +720,45 @@ fn realistic_ram_lfe_email_receipt(
     let normalized_email = IdentifierNormalization::EmailAddress
         .normalize(&realistic_ram_lfe_email_address(index, rng_seed))
         .expect("generated email address should normalize");
-    let output_hash = ram_lfe_output_hash(normalized_email.as_bytes());
+    let opened_output_hash = ram_lfe_output_hash(normalized_email.as_bytes());
     let (opaque_id, receipt_hash) =
-        identifier_hashes_from_output_hash(&context.program_id_bytes, &output_hash);
+        identifier_hashes_from_output_hash(&context.program_id_bytes, &opened_output_hash);
+    let input_ciphertext_hash =
+        Hash::new(format!("{normalized_email}:encrypted-input:{index}").as_bytes());
+    let output_ciphertext_hash =
+        Hash::new(format!("{normalized_email}:encrypted-output:{index}").as_bytes());
     let execution = RamLfeExecutionReceiptPayload {
         program_id: context.program_id.clone(),
         program_digest: context.program_digest,
         backend: context.backend,
         verification_mode: context.verification_mode,
-        output_hash,
+        input_ciphertext_hash,
+        output_ciphertext_hash,
+        parameter_digest: context.parameter_digest,
+        evaluation_key_digest: context.evaluation_key_digest,
+        output_hash: output_ciphertext_hash,
         associated_data_hash: Hash::new(&context.program_id_bytes),
         executed_at_ms: 0,
         expires_at_ms: None,
     };
+    let opening_payload = RamLfeOutputOpeningPayload {
+        program_id: context.program_id.clone(),
+        input_ciphertext_hash,
+        output_ciphertext_hash,
+        parameter_digest: context.parameter_digest,
+        evaluation_key_digest: context.evaluation_key_digest,
+        opened_output_hash,
+        opened_at_ms: 0,
+        expires_at_ms: None,
+    };
+    let opening = RamLfeOutputOpening {
+        signature: SignatureOf::new(resolver.private_key(), &opening_payload).into(),
+        payload: opening_payload,
+    };
     let payload = IdentifierResolutionReceiptPayload {
         policy_id: context.policy_id.clone(),
         execution,
+        opening,
         opaque_id: OpaqueAccountId::from(opaque_id),
         receipt_hash,
         uaid,

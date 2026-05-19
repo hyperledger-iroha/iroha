@@ -10,7 +10,7 @@ use crate::query::{
 #[derive(Debug)]
 pub struct QueryIterator<E: QueryExecutor, T: HasTypedBatchIter> {
     current_batch_iter: T::TypedBatchIter,
-    remaining_items: u64,
+    remaining_items: Option<u64>,
     continue_cursor: Option<E::Cursor>,
 }
 
@@ -26,7 +26,7 @@ where
     /// Returns an error if the type of the batch does not match the expected type `T`.
     pub fn new(
         first_batch: QueryOutputBatchBoxTuple,
-        remaining_items: u64,
+        remaining_items: Option<u64>,
         continue_cursor: Option<E::Cursor>,
     ) -> Result<Self, TypedBatchDowncastError> {
         let batch_iter = T::downcast(first_batch)?;
@@ -81,19 +81,22 @@ where
             // Loop and attempt to yield from the refreshed batch.
         }
     }
-}
 
-impl<E, T> ExactSizeIterator for QueryIterator<E, T>
-where
-    E: QueryExecutor,
-    T: HasTypedBatchIter,
-{
-    fn len(&self) -> usize {
-        self.remaining_items
-            .try_into()
-            .ok()
-            .and_then(|r: usize| r.checked_add(self.current_batch_iter.len()))
-            .expect("should be within the range of usize")
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let current_batch_len = self.current_batch_iter.len();
+        match self.remaining_items {
+            Some(remaining_items) => {
+                let exact = remaining_items
+                    .try_into()
+                    .ok()
+                    .and_then(|remaining_items: usize| {
+                        remaining_items.checked_add(current_batch_len)
+                    });
+                exact.map_or((current_batch_len, None), |exact| (exact, Some(exact)))
+            }
+            None if self.continue_cursor.is_none() => (current_batch_len, Some(current_batch_len)),
+            None => (current_batch_len, None),
+        }
     }
 }
 
@@ -122,19 +125,21 @@ mod tests {
         fn start_query(
             &self,
             _query: crate::query::QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             unreachable!()
         }
 
         fn continue_query(
             cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             if cursor > 0 {
                 Ok((
                     QueryOutputBatchBoxTuple {
                         tuple: vec![QueryOutputBatchBox::Numeric(vec![])],
                     },
-                    1,
+                    Some(1),
                     Some(cursor - 1),
                 ))
             } else {
@@ -142,7 +147,7 @@ mod tests {
                     QueryOutputBatchBoxTuple {
                         tuple: vec![QueryOutputBatchBox::Numeric(vec![Numeric::new(42, 0)])],
                     },
-                    0,
+                    Some(0),
                     None,
                 ))
             }
@@ -155,12 +160,26 @@ mod tests {
         let first = QueryOutputBatchBoxTuple {
             tuple: vec![QueryOutputBatchBox::Numeric(vec![])],
         };
-        let mut iter = QueryIterator::<DummyExec, Numeric>::new(first, 1, Some(64))
+        let mut iter = QueryIterator::<DummyExec, Numeric>::new(first, Some(1), Some(64))
             .expect("downcast should succeed");
 
         let item = iter.next().expect("some result").expect("ok result");
         assert_eq!(item, Numeric::new(42, 0));
         // Now iterator should be exhausted
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn iterator_size_hint_preserves_unknown_remaining_count() {
+        let first = QueryOutputBatchBoxTuple {
+            tuple: vec![QueryOutputBatchBox::Numeric(vec![
+                Numeric::new(1, 0),
+                Numeric::new(2, 0),
+            ])],
+        };
+        let iter = QueryIterator::<DummyExec, Numeric>::new(first, None, Some(0))
+            .expect("downcast should succeed");
+
+        assert_eq!(iter.size_hint(), (2, None));
     }
 }

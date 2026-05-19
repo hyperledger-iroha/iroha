@@ -121,7 +121,7 @@ seiyaku Name {
 Semantics
 - `meta { ... }` emitted IVM header کے لیے compiler defaults کو override کرتا ہے: `abi_version`, `vector_length` (0 کا مطلب unset)، `max_cycles` (0 کا مطلب compiler default)، `features` header feature bits (ZK tracing, vector announce) کو toggle کرتا ہے۔ unsupported features warning کے ساتھ ignore ہوتے ہیں۔ جب `meta {}` موجود نہ ہو تو compiler `abi_version = 1` emit کرتا ہے اور باقی fields کے لیے option defaults استعمال کرتا ہے۔
 - `features: ["zk", "simd"]` (aliases: `"vector"`) متعلقہ header bits کی صریح درخواست ہے۔ نامعلوم feature strings اب ignore ہونے کے بجائے parser error دیتی ہیں۔
-- `state` contract variables durable declare کرتا ہے۔ compiler accesses کو `STATE_GET/STATE_SET/STATE_DEL` syscalls میں lower کرتا ہے اور host انہیں per-transaction overlay میں stage کرتا ہے (rollback کیلئے checkpoint/restore، اور commit پر WSV میں flush). literal paths کیلئے access hints emit ہوتے ہیں؛ dynamic keys map-level conflict keys پر fall back ہوتے ہیں۔ explicit host reads/writes کیلئے `state_get/state_set/state_del` اور map helpers `map.ensure(...)` استعمال کریں؛ یہ Norito TLVs سے گزرتے ہیں اور نام/فیلڈ آرڈر کو stable رکھتے ہیں۔
+- `state` declares durable contract variables. The compiler lowers accesses into `STATE_GET/STATE_SET/STATE_DEL` syscalls and the host stages them in a per-transaction overlay (checkpoint/restore rollback, flush-on-commit into WSV). Literal state paths emit exact keys, dynamic state-map keys emit map-level conflict keys, and bounded dynamic iteration emits structured dynamic access descriptors. Raw dynamic `state_get/state_set/state_del` paths are rejected for production artifacts unless the compiler can prove a precise state key.
 - `state` identifiers reserved ہیں؛ parameters یا `let` bindings میں `state` نام کو shadow کرنا مسترد ہے (`E_STATE_SHADOWED`)۔
 - State map values first‑class نہیں ہیں: map operations اور iteration کے لیے state identifier کو براہِ راست استعمال کریں۔ user‑defined functions کو state maps bind یا pass کرنا مسترد ہے (`E_STATE_MAP_ALIAS`)۔
 - Durable state maps فی الحال صرف `int` اور pointer‑ABI key types کو سپورٹ کرتے ہیں؛ دیگر key types compile‑time پر reject ہوتے ہیں۔
@@ -298,7 +298,7 @@ Bounds helpers
 
 Dynamic bounds پر نوٹس
 - Literal bounds: `n`, `start`, `end` اگر integer literals ہوں تو پوری طرح سپورٹ ہیں اور fixed iterations میں compile ہوتے ہیں۔
-- Non‑literal bounds: جب `kotodama_dynamic_bounds` فیچر `ivm` crate میں فعال ہو، compiler dynamic `n`, `start`, `end` expressions قبول کرتا ہے اور runtime assertions (non‑negative, `end >= start`) داخل کرتا ہے۔ Lowering زیادہ سے زیادہ K guarded iterations emit کرتا ہے `if (i < n)` کے ساتھ تاکہ اضافی body executions نہ ہوں (default K=2)۔ آپ K کو `CompilerOptions { dynamic_iter_cap, .. }` سے programmatically tune کر سکتے ہیں۔
+- Non-literal bounds are first-release behavior. The compiler accepts dynamic `n`, `start`, and `end` expressions for durable `state Map<int, V>` iteration, inserts runtime assertions for safety (non-negative, `end >= start`, bounded by the fixed release limit), and emits structured dynamic access metadata. The first-release limit is 64 guarded iterations and is not runtime-configurable.
 - `koto_lint` چلائیں تاکہ compile سے پہلے Kotodama lint warnings دیکھ سکیں؛ main compiler parsing اور type‑checking کے بعد lowering جاری رکھتا ہے۔
 - Error codes کی دستاویز [Kotodama Compiler Error Codes](./kotodama_error_codes.md) میں ہے؛ فوری وضاحت کے لیے `koto_compile --explain <code>` استعمال کریں۔
 

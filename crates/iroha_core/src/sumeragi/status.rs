@@ -6802,10 +6802,13 @@ fn record_relay_error(err: &LaneRelayError) {
 }
 
 fn upsert_lane_relay_envelope(storage: &mut Vec<LaneRelayEnvelope>, envelope: LaneRelayEnvelope) {
-    match envelope
-        .verify()
-        .and_then(|()| envelope.verify_fastpq_proof_material())
-    {
+    match envelope.verify().and_then(|()| {
+        if envelope.fastpq_proof.is_some() {
+            envelope.verify_fastpq_proof_material()
+        } else {
+            Ok(())
+        }
+    }) {
         Ok(()) => {}
         Err(err) => {
             record_relay_error(&err);
@@ -6815,7 +6818,7 @@ fn upsert_lane_relay_envelope(storage: &mut Vec<LaneRelayEnvelope>, envelope: La
                 block_height = envelope.block_height,
                 error_kind = err.as_label(),
                 error = %err,
-                "dropping lane relay envelope with failed verification"
+                "dropping lane relay envelope with failed structural verification"
             );
             return;
         }
@@ -10439,6 +10442,20 @@ mod tests {
         super::push_lane_relay_envelope(envelope);
         // No entries should have been stored because verification failed.
         assert!(super::lane_relay_envelopes_snapshot().is_empty());
+    }
+
+    #[test]
+    fn lane_relay_envelopes_store_pending_without_fastpq_proof() {
+        let _guard = super::lane_relay_test_guard();
+        super::set_lane_relay_envelopes(Vec::new());
+        let mut envelope = lane_relay_envelope(6, 10);
+        envelope.fastpq_proof = None;
+
+        super::push_lane_relay_envelope(envelope);
+
+        let snapshot = super::lane_relay_envelopes_snapshot();
+        assert_eq!(snapshot.len(), 1);
+        assert!(snapshot[0].fastpq_proof.is_none());
     }
 
     #[test]

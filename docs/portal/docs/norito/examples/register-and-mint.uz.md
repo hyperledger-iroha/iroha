@@ -38,7 +38,6 @@ Ruxsat berilgan domen yaratish, aktivlarni ro'yxatdan o'tkazish va deterministik
 ```text
 // Register a new asset and mint some to the specified account.
 seiyaku RegisterAndMint {
-  #[access(read="*", write="*")]
   kotoage fn register_and_mint() permission(AssetManager) {
     // name, symbol, quantity (precision or supply depending on host), mintable flag
     let name = "rose";

@@ -259,6 +259,10 @@ private struct NativeClaimIdentifierExecutionEnvelope: Encodable, Sendable {
     let programDigest: String
     let backend: String
     let verificationMode: String
+    let inputCiphertextHash: String
+    let outputCiphertextHash: String
+    let parameterDigest: String
+    let evaluationKeyDigest: String
     let outputHash: String
     let associatedDataHash: String
     let executedAtMs: UInt64
@@ -269,6 +273,10 @@ private struct NativeClaimIdentifierExecutionEnvelope: Encodable, Sendable {
         case programDigest = "program_digest"
         case backend
         case verificationMode = "verification_mode"
+        case inputCiphertextHash = "input_ciphertext_hash"
+        case outputCiphertextHash = "output_ciphertext_hash"
+        case parameterDigest = "parameter_digest"
+        case evaluationKeyDigest = "evaluation_key_digest"
         case outputHash = "output_hash"
         case associatedDataHash = "associated_data_hash"
         case executedAtMs = "executed_at_ms"
@@ -279,6 +287,7 @@ private struct NativeClaimIdentifierExecutionEnvelope: Encodable, Sendable {
 private struct NativeClaimIdentifierPayloadEnvelope: Encodable, Sendable {
     let policyId: String
     let execution: NativeClaimIdentifierExecutionEnvelope
+    let opening: ToriiRamLfeOutputOpening
     let opaqueId: String
     let receiptHash: String
     let uaid: String
@@ -287,6 +296,7 @@ private struct NativeClaimIdentifierPayloadEnvelope: Encodable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case policyId = "policy_id"
         case execution
+        case opening
         case opaqueId = "opaque_id"
         case receiptHash = "receipt_hash"
         case uaid
@@ -343,11 +353,16 @@ private func encodeNativeClaimIdentifierReceiptJSON(
             programDigest: execution.programDigest,
             backend: execution.backend,
             verificationMode: execution.verificationMode,
+            inputCiphertextHash: execution.inputCiphertextHash,
+            outputCiphertextHash: execution.outputCiphertextHash,
+            parameterDigest: execution.parameterDigest,
+            evaluationKeyDigest: execution.evaluationKeyDigest,
             outputHash: execution.outputHash,
             associatedDataHash: execution.associatedDataHash,
             executedAtMs: execution.executedAtMs,
             expiresAtMs: execution.expiresAtMs
         ),
+        opening: receipt.payload.opening,
         opaqueId: receipt.payload.opaqueId,
         receiptHash: receipt.payload.receiptHash,
         uaid: receipt.payload.uaid,

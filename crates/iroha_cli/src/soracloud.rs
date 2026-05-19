@@ -19900,7 +19900,7 @@ mod tests {
         SoraInrouGuestImageV1, SoraInrouGuestIsaV1, SoraServiceExecutionPlaneV1,
     };
     use std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, BTreeSet},
         io::Write as _,
         net::{TcpListener, TcpStream},
         path::Path,
@@ -20266,6 +20266,7 @@ mod tests {
             let stop_flag = Arc::clone(&stop);
             let captured_requests = Arc::clone(&requests);
             let handle = thread::spawn(move || {
+                let mut registered_pin_manifests = BTreeSet::<String>::new();
                 while !stop_flag.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((mut stream, _)) => {
@@ -20275,19 +20276,39 @@ mod tests {
                                 continue;
                             }
                             let path = request.path.clone();
+                            let registered_manifest_digest =
+                                mock_sorafs_pin_register_digest(&request);
                             captured_requests
                                 .lock()
                                 .expect("lock captured requests")
                                 .push(request);
-                            let response = routes.get(&path).cloned().unwrap_or(MockHttpResponse {
-                                content_type: "text/plain",
-                                body: b"not found".to_vec(),
-                            });
-                            let status = if routes.contains_key(&path) {
+                            let routed_response = routes.get(&path).cloned();
+                            let pin_registry_response = if routed_response.is_none() {
+                                mock_sorafs_pin_registry_response(
+                                    &path,
+                                    &registered_pin_manifests,
+                                )
+                            } else {
+                                None
+                            };
+                            let request_matched =
+                                routed_response.is_some() || pin_registry_response.is_some();
+                            let response = routed_response
+                                .or(pin_registry_response)
+                                .unwrap_or(MockHttpResponse {
+                                    content_type: "text/plain",
+                                    body: b"not found".to_vec(),
+                                });
+                            let status = if request_matched {
                                 "200 OK"
                             } else {
                                 "404 Not Found"
                             };
+                            if status == "200 OK" {
+                                if let Some(digest) = registered_manifest_digest {
+                                    registered_pin_manifests.insert(digest);
+                                }
+                            }
                             if let Err(error) = write!(
                                 stream,
                                 "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n",
@@ -20328,6 +20349,75 @@ mod tests {
                 .expect("lock captured requests")
                 .clone()
         }
+    }
+
+    fn mock_sorafs_pin_register_digest(request: &CapturedHttpRequest) -> Option<String> {
+        if request.method != "POST" || request.path != "/v1/sorafs/pin/register" {
+            return None;
+        }
+        let body: norito::json::Value = json::from_slice(&request.body).ok()?;
+        let digest = body.get("manifest_digest_hex")?.as_str()?;
+        let digest = digest.to_ascii_lowercase();
+        (digest.len() == 64 && digest.chars().all(|ch| ch.is_ascii_hexdigit())).then_some(digest)
+    }
+
+    fn mock_sorafs_pin_registry_response(
+        path: &str,
+        registered_pin_manifests: &BTreeSet<String>,
+    ) -> Option<MockHttpResponse> {
+        let digest = mock_sorafs_pin_registry_path_is_registered(path, registered_pin_manifests)?;
+        Some(MockHttpResponse {
+            content_type: "application/json",
+            body: json::to_vec(&norito::json!({ "manifest_digest_hex": digest }))
+                .expect("encode mock SoraFS pin registry response"),
+        })
+    }
+
+    fn mock_sorafs_pin_registry_path_is_registered<'a>(
+        path: &'a str,
+        registered_pin_manifests: &'a BTreeSet<String>,
+    ) -> Option<&'a str> {
+        let digest = path.strip_prefix("/v1/sorafs/pin/")?;
+        if digest.contains('/') || digest.contains('?') {
+            return None;
+        }
+        registered_pin_manifests
+            .get(&digest.to_ascii_lowercase())
+            .map(String::as_str)
+    }
+
+    #[test]
+    fn mock_http_server_helpers_track_sorafs_pin_registration_digest() {
+        let digest = "A".repeat(64);
+        let request = CapturedHttpRequest {
+            method: "POST".to_owned(),
+            path: "/v1/sorafs/pin/register".to_owned(),
+            body: json::to_vec(&norito::json!({ "manifest_digest_hex": digest }))
+                .expect("encode mock register body"),
+        };
+        let normalized_digest = digest.to_ascii_lowercase();
+
+        assert_eq!(
+            mock_sorafs_pin_register_digest(&request).as_deref(),
+            Some(normalized_digest.as_str())
+        );
+
+        let mut registered_pin_manifests = BTreeSet::new();
+        let path = format!("/v1/sorafs/pin/{digest}");
+        assert!(
+            mock_sorafs_pin_registry_response(&path, &registered_pin_manifests).is_none(),
+            "unregistered mock pin records should return 404"
+        );
+
+        registered_pin_manifests.insert(normalized_digest.clone());
+        assert_eq!(
+            mock_sorafs_pin_registry_path_is_registered(&path, &registered_pin_manifests),
+            Some(normalized_digest.as_str())
+        );
+        assert!(
+            mock_sorafs_pin_registry_response(&path, &registered_pin_manifests).is_some(),
+            "registered mock pin records should be visible to polling GETs"
+        );
     }
 
     impl Drop for MockHttpServer {

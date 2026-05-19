@@ -53,14 +53,21 @@ in the block.
   `post_state_root`, height/view/epoch, chain_id, and mode tag).
 
 Merge nodes maintain the latest admissible relay snapshot per active
-`(lane_id, dataspace_id)` pair. A merge candidate is emitted:
+`(lane_id, dataspace_id)` pair. A relay becomes admissible only after it carries
+a lane QC and verified FastPQ material. A merge candidate is emitted whenever
+one or more active lanes have advanced beyond the previous merge entry.
+Before selecting candidates, nodes also scan persisted verified lane relay
+records in smart-contract state and hydrate any valid records into the runtime
+relay cache. Hydrated records must match their relay reference, proof digest,
+verification height, manifest root, FastPQ effect type, and claim digest before
+they can enter the active relay set. When a `RegisterVerifiedLaneRelay`
+instruction commits, the verified record is staged through the block commit and
+hydrates the same runtime cache immediately after the contract-visible state is
+durable.
 
-- once for bootstrap after every active lane has produced at least one finalized
-  relay snapshot, and
-- thereafter whenever any lane advances.
-
-Unchanged lanes are carried forward from the previous merge entry. Merge epochs
-increase monotonically and are independent of per-lane block heights.
+Configured lanes that did not produce a verified relay for the current merge
+window are omitted rather than carried forward. Merge epochs increase
+monotonically and are independent of per-lane block heights.
 
 **Merge Entry (MUST):**
 
@@ -83,8 +90,8 @@ MergeLedgerEntry {
 
 - `lane_snapshots` is canonically sorted by `(lane_id, dataspace_id)` and MUST
   not contain duplicates.
-- `lane_snapshots[*].tip_hash` and `lane_snapshots[*].merge_hint_root` repeat
-  unchanged values when that lane did not advance since the previous entry.
+- `lane_snapshots[*].tip_hash` and `lane_snapshots[*].merge_hint_root` describe
+  the verified relay selected for that active lane in this entry.
 - `global_state_root` equals `ReduceMergeHints(lane_snapshots[*].merge_hint_root)`, a
   Poseidon2 fold with domain separation tag
   `"iroha:merge:reduce:v1\0"`. The reduction is deterministic and MUST
@@ -147,7 +154,12 @@ operational visibility.
 
 ### 3.1 Lane-Level Finality
 
-1. Transactions are scheduled per lane in deterministic slots.
+1. Transactions are scheduled per lane in deterministic slots. The current
+   global proposal path uses bounded queue lookahead and slot-rotated lane
+   interleaving so a small block proposal can still reach a ready transaction
+   from a later lane instead of being monopolized by the first queued lane.
+   Transactions fetched during lookahead but not selected for the slot are
+   deferred and requeued with their lane budget released.
 2. The executor applies overlays into `StateBlock`, producing deltas and
 artifacts.
 3. Upon validation, the lane committee signs the execution-vote preimage that
@@ -169,8 +181,8 @@ pauses until quorum is restored (emergency recovery is handled separately).
 
 ### 3.2 Merge-Ledger Finality
 
-1. Merge committee collects the rolling lane snapshots, verifies each relay (QC
-   + FastPQ), and constructs the `MergeLedgerEntry` as defined above.
+1. Merge committee collects active lane snapshots, verifies each relay (QC +
+   FastPQ), and constructs the `MergeLedgerEntry` as defined above.
 2. After verifying the deterministic reduction, the merge committee signs the
 entry (`merge_qc`).
 3. Nodes append the entry to the merge ledger log and persist it alongside the
@@ -185,8 +197,8 @@ value; deterministic replay must reproduce the same reduction.
   final `global_state_root`, bridging lane execution with the global checksum.
 - Kura persists `MergeLedgerEntry` adjacent to the lane block artifacts so a
   replay can reconstruct both lane-level and global finality sequences.
-- When a lane skips a slot, storage retains the previous snapshot for that lane.
-  Merge entries still advance whenever at least one other lane produces a new
+- When a configured lane skips a slot, it is absent from that merge entry.
+  Merge entries still advance whenever at least one active lane produces a new
   admissible relay.
 - API surfaces (Torii, telemetry) expose both lane tips and the latest merge
   entry so operators and clients can reconcile per-lane and global views.
@@ -194,11 +206,10 @@ value; deterministic replay must reproduce the same reduction.
 ## 4. Implementation Notes
 
 - `crates/iroha_core/src/state.rs`: merge-candidate synthesis tracks the latest
-  finalized relay per active `(lane_id, dataspace_id)` pair, carries forward
-  unchanged snapshots, and emits a new candidate only when at least one lane
-  advances after bootstrap. `State::commit_merge_entry` validates the reduction
-  and wires lane/global metadata into the world state so queries and observers
-  can access merge hints and the authoritative global hash.
+  FastPQ-verified relay per active `(lane_id, dataspace_id)` pair and emits a
+  new candidate for lanes that advanced beyond the previous merge entry.
+  `State::commit_merge_entry` validates relay backing, merge-hint roots, and
+  the global reduction before wiring lane/global metadata into the world state.
 - `crates/iroha_core/src/kura.rs`: `Kura::store_block_with_merge_entry` enqueues
   the block and persists the associated merge entry in one step, rolling back
   the in-memory block when the append fails so storage never records a block

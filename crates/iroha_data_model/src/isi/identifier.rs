@@ -132,7 +132,10 @@ mod tests {
     use super::*;
     use crate::{
         nexus::UniversalAccountId,
-        ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId, RamLfeReceiptAttestation},
+        ram_lfe::{
+            RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeOutputOpeningPayload,
+            RamLfeProgramId, RamLfeReceiptAttestation,
+        },
     };
 
     fn public_key(seed: u8) -> PublicKey {
@@ -164,6 +167,23 @@ mod tests {
 
     fn receipt() -> IdentifierResolutionReceipt {
         let account_id = account(0xF2);
+        let opening_payload = RamLfeOutputOpeningPayload {
+            program_id: program_id(),
+            input_ciphertext_hash: Hash::new(b"input-ciphertext"),
+            output_ciphertext_hash: Hash::new(b"output-ciphertext"),
+            parameter_digest: Hash::new(b"parameters"),
+            evaluation_key_digest: Hash::new(b"evaluation-keys"),
+            opened_output_hash: Hash::new(b"opened-output"),
+            opened_at_ms: 1_777_777_777_001,
+            expires_at_ms: Some(1_777_777_877_000),
+        };
+        let opening_signer = KeyPair::from_seed(vec![0xF4; 32], Algorithm::Ed25519);
+        let opening = RamLfeOutputOpening {
+            signature: Signature::from_bytes(
+                SignatureOf::new(opening_signer.private_key(), &opening_payload).payload(),
+            ),
+            payload: opening_payload,
+        };
         let payload = crate::identifier::IdentifierResolutionReceiptPayload {
             policy_id: policy_id(),
             execution: RamLfeExecutionReceiptPayload {
@@ -171,11 +191,16 @@ mod tests {
                 program_digest: Hash::new(b"program"),
                 backend: RamLfeBackend::BfvProgrammedSha3_256V1,
                 verification_mode: RamLfeVerificationMode::Signed,
+                input_ciphertext_hash: Hash::new(b"input-ciphertext"),
+                output_ciphertext_hash: Hash::new(b"output-ciphertext"),
+                parameter_digest: Hash::new(b"parameters"),
+                evaluation_key_digest: Hash::new(b"evaluation-keys"),
                 output_hash: Hash::new(b"output"),
                 associated_data_hash: Hash::new(b"associated-data"),
                 executed_at_ms: 1_777_777_777_000,
                 expires_at_ms: Some(1_777_777_877_000),
             },
+            opening,
             opaque_id: OpaqueAccountId::from_hash(Hash::new(b"opaque")),
             receipt_hash: Hash::new(b"receipt"),
             uaid: UniversalAccountId::from_hash(Hash::new(b"uaid")),

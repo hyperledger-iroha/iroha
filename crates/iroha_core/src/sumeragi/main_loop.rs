@@ -4906,7 +4906,34 @@ fn build_commitment_snapshots_from_totals(
     (lane_commitments, dataspace_commitments)
 }
 
+#[cfg(test)]
 fn interleave_lane_indices(routing_decisions: &[RoutingDecision]) -> Vec<usize> {
+    interleave_lane_indices_from_offset(routing_decisions, 0)
+}
+
+fn interleave_lane_indices_for_slot(
+    routing_decisions: &[RoutingDecision],
+    height: u64,
+    view: u64,
+) -> Vec<usize> {
+    let lane_count = routing_decisions
+        .iter()
+        .map(|decision| decision.lane_id)
+        .collect::<BTreeSet<_>>()
+        .len();
+    if lane_count <= 1 {
+        return interleave_lane_indices_from_offset(routing_decisions, 0);
+    }
+    let lane_count_u64 = u64::try_from(lane_count).expect("lane count fits in u64");
+    let start_offset =
+        usize::try_from(height.wrapping_add(view) % lane_count_u64).unwrap_or_default();
+    interleave_lane_indices_from_offset(routing_decisions, start_offset)
+}
+
+fn interleave_lane_indices_from_offset(
+    routing_decisions: &[RoutingDecision],
+    start_offset: usize,
+) -> Vec<usize> {
     let total = routing_decisions.len();
     if total <= 1 {
         return (0..total).collect();
@@ -4915,11 +4942,20 @@ fn interleave_lane_indices(routing_decisions: &[RoutingDecision]) -> Vec<usize> 
     for (idx, decision) in routing_decisions.iter().enumerate() {
         per_lane.entry(decision.lane_id).or_default().push_back(idx);
     }
+    let lane_ids: Vec<LaneId> = per_lane.keys().copied().collect();
+    if lane_ids.is_empty() {
+        return (0..total).collect();
+    }
+    let start_offset = start_offset % lane_ids.len();
 
     let mut order = Vec::with_capacity(total);
     while order.len() < total {
         let mut progress = false;
-        for indices in per_lane.values_mut() {
+        for offset in 0..lane_ids.len() {
+            let lane_id = lane_ids[(start_offset + offset) % lane_ids.len()];
+            let Some(indices) = per_lane.get_mut(&lane_id) else {
+                continue;
+            };
             if let Some(idx) = indices.pop_front() {
                 order.push(idx);
                 progress = true;

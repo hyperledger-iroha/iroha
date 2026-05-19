@@ -1,5 +1,5 @@
 use iroha_data_model::{
-    smart_contract::manifest::EntryPointKind,
+    smart_contract::manifest::{AccessSetHints, DynamicAccessHint, EntryPointKind},
     trigger::{TriggerId, action::Repeats},
 };
 
@@ -27,6 +27,14 @@ fn contract_artifact(
     abi_version: u8,
     entrypoints: Vec<ivm::EmbeddedEntrypointDescriptor>,
 ) -> Vec<u8> {
+    contract_artifact_with_access_hints(abi_version, entrypoints, None)
+}
+
+fn contract_artifact_with_access_hints(
+    abi_version: u8,
+    entrypoints: Vec<ivm::EmbeddedEntrypointDescriptor>,
+    access_set_hints: Option<AccessSetHints>,
+) -> Vec<u8> {
     let meta = ivm::ProgramMetadata {
         version_major: 1,
         version_minor: 1,
@@ -38,7 +46,7 @@ fn contract_artifact(
     let interface = ivm::EmbeddedContractInterfaceV1 {
         compiler_fingerprint: "ivm-tests".to_owned(),
         features_bitmap: 0,
-        access_set_hints: None,
+        access_set_hints,
         kotoba: Vec::new(),
         entrypoints,
         states: Vec::new(),
@@ -222,6 +230,97 @@ fn verify_rejects_invalid_trigger_callback_target() {
     let err = ivm::verify_contract_artifact(&bytes)
         .expect_err("invalid trigger callback target must fail");
     assert!(err.to_string().contains("callback target `missing`"));
+}
+
+#[test]
+fn verify_rejects_global_access_wildcard_hints() {
+    let hints = AccessSetHints {
+        read_keys: vec!["*".to_owned()],
+        write_keys: vec!["*".to_owned()],
+        dynamic_reads: Vec::new(),
+        dynamic_writes: Vec::new(),
+    };
+    let bytes = contract_artifact_with_access_hints(
+        1,
+        vec![entrypoint("main", EntryPointKind::Public, 0)],
+        Some(hints),
+    );
+
+    let err =
+        ivm::verify_contract_artifact(&bytes).expect_err("global wildcard access hints must fail");
+    assert!(
+        err.to_string()
+            .contains("unsupported wildcard access_set_hints.read_keys entry `*`")
+    );
+}
+
+#[test]
+fn verify_rejects_state_access_wildcard_hints() {
+    let hints = AccessSetHints {
+        read_keys: vec!["state:*".to_owned()],
+        write_keys: vec!["state:*".to_owned()],
+        dynamic_reads: Vec::new(),
+        dynamic_writes: Vec::new(),
+    };
+    let bytes = contract_artifact_with_access_hints(
+        1,
+        vec![entrypoint("main", EntryPointKind::Public, 0)],
+        Some(hints),
+    );
+
+    let err =
+        ivm::verify_contract_artifact(&bytes).expect_err("state wildcard access hints must fail");
+    assert!(
+        err.to_string()
+            .contains("unsupported wildcard access_set_hints.read_keys entry `state:*`")
+    );
+}
+
+#[test]
+fn verify_rejects_invalid_dynamic_access_hints() {
+    let hints = AccessSetHints {
+        read_keys: Vec::new(),
+        write_keys: Vec::new(),
+        dynamic_reads: vec![DynamicAccessHint {
+            base_key: "state:*".to_owned(),
+            key_type: "int".to_owned(),
+            bound_kind: "take".to_owned(),
+            max_keys: 64,
+        }],
+        dynamic_writes: Vec::new(),
+    };
+    let bytes = contract_artifact_with_access_hints(
+        1,
+        vec![entrypoint("main", EntryPointKind::Public, 0)],
+        Some(hints),
+    );
+    let err = ivm::verify_contract_artifact(&bytes).expect_err("wildcard dynamic hint must fail");
+    assert!(
+        err.to_string()
+            .contains("unsupported dynamic access base `state:*`")
+    );
+
+    let hints = AccessSetHints {
+        read_keys: Vec::new(),
+        write_keys: Vec::new(),
+        dynamic_reads: Vec::new(),
+        dynamic_writes: vec![DynamicAccessHint {
+            base_key: "state:Orders".to_owned(),
+            key_type: "int".to_owned(),
+            bound_kind: "range".to_owned(),
+            max_keys: 0,
+        }],
+    };
+    let bytes = contract_artifact_with_access_hints(
+        1,
+        vec![entrypoint("main", EntryPointKind::Public, 0)],
+        Some(hints),
+    );
+    let err = ivm::verify_contract_artifact(&bytes).expect_err("zero dynamic hint must fail");
+    assert!(
+        err.to_string()
+            .contains("zero-bound dynamic access hint `state:Orders`")
+    );
 }
 
 #[test]

@@ -1,5 +1,10 @@
 package org.hyperledger.iroha.android.model.instructions;
 
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.client.IdentifierReceiptAttestation;
@@ -7,6 +12,8 @@ import org.hyperledger.iroha.android.client.IdentifierReceiptCanonicalEncoder;
 import org.hyperledger.iroha.android.client.IdentifierResolutionExecutionPayload;
 import org.hyperledger.iroha.android.client.IdentifierResolutionPayload;
 import org.hyperledger.iroha.android.client.IdentifierResolutionReceipt;
+import org.hyperledger.iroha.android.client.RamLfeOutputOpening;
+import org.hyperledger.iroha.android.client.RamLfeOutputOpeningPayload;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoHeader;
@@ -18,12 +25,8 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
   private static final String PARITY_SIGNATURE_HEX = "CD".repeat(64);
   private static final String PARITY_HASH_HEX =
       "C6A23EC291940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E084D3BD944C3";
-  private static final String PARITY_RUST_BARE_HEX =
-      "4C00000000474665643031323043453746413436433944434537454134423132354532453336424442363345413333303733453735393041433932383136414531453836314237303438423033DA03C8020D060570686F6E6505046531363486010D0C0B7061726974795F7465737420C6A23EC291940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E084D3BD944C30400000000040000000020C6A23EC291940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E084D3BD944C320C6A23EC291940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E084D3BD944C30800060FF69301000001002120C6A23EC291940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E084D3BD944C320C6A23EC291940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E084D3BD944C32120C6A23EC291940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E084D3BD944C34C000000004746656430313230434537464134364339444345374541344231323545324533364244423633454133333037334537353930414339323831364145314538363142373034384230338E01000000008801400000000000000001CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD";
-  private static final String PARITY_RUST_FRAMED_HEX =
-      "4E525430000020EF6431870B986820EF6431870B9868002902000000000000A4872DE026608AA0024C00000000474665643031323043453746413436433944434537454134423132354532453336424442363345413333303733453735393041433932383136414531453836314237303438423033DA03C8020D060570686F6E6505046531363486010D0C0B7061726974795F7465737420C6A23EC291940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E084D3BD944C30400000000040000000020C6A23EC291940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E084D3BD944C320C6A23EC291940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E084D3BD944C30800060FF69301000001002120C6A23EC291940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E084D3BD944C320C6A23EC291940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E084D3BD944C32120C6A23EC291940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E084D3BD944C34C000000004746656430313230434537464134364339444345374541344231323545324533364244423633454133333037334537353930414339323831364145314538363142373034384230338E01000000008801400000000000000001CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD";
 
-  public static void main(String[] args) {
+  public static void main(String[] args) throws Exception {
     claimIdentifierEncodesExpectedWirePayload();
     claimIdentifierMatchesRustCanonicalFixture();
     printClaimIdentifierWirePayloadHex();
@@ -39,10 +42,15 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
                 "11".repeat(32),
                 "bfv-affine-sha3-256-v1",
                 "signed",
+                "AA".repeat(32),
+                "BB".repeat(32),
+                "CC".repeat(32),
+                "DD".repeat(32),
                 "22".repeat(32),
                 "33".repeat(32),
                 42L,
                 142L),
+            sampleOpening("identifier_lookup_retail", signatureHex),
             "opaque:" + "44".repeat(32),
             "55".repeat(32),
             "uaid:" + "66".repeat(32),
@@ -94,10 +102,15 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
                 "11".repeat(32),
                 "bfv-affine-sha3-256-v1",
                 "signed",
+                "AA".repeat(32),
+                "BB".repeat(32),
+                "CC".repeat(32),
+                "DD".repeat(32),
                 "22".repeat(32),
                 "33".repeat(32),
                 42L,
                 142L),
+            sampleOpening("email_retail", signatureHex),
             "opaque:" + "44".repeat(32),
             "55".repeat(32),
             "uaid:" + "66".repeat(32),
@@ -118,7 +131,9 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
     System.out.println("JAVA_CLAIM_FRAMED_HEX=" + toHex(wirePayload.payloadBytes()));
   }
 
-  private static void claimIdentifierMatchesRustCanonicalFixture() {
+  private static void claimIdentifierMatchesRustCanonicalFixture() throws Exception {
+    final String rustFramedHex =
+        runFixtureGenerator("claim-identifier")[0].toUpperCase(Locale.ROOT);
     final String liveAccountId = canonicalI105AccountId(PARITY_ACCOUNT_MULTIHASH);
     final IdentifierResolutionPayload payload =
         new IdentifierResolutionPayload(
@@ -130,8 +145,13 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
                 "signed",
                 PARITY_HASH_HEX,
                 PARITY_HASH_HEX,
+                PARITY_HASH_HEX,
+                PARITY_HASH_HEX,
+                PARITY_HASH_HEX,
+                PARITY_HASH_HEX,
                 1_735_000_000_000L,
                 null),
+            sampleOpening("parity_test", PARITY_SIGNATURE_HEX, PARITY_HASH_HEX),
             "opaque:" + PARITY_HASH_HEX,
             PARITY_HASH_HEX,
             "uaid:" + PARITY_HASH_HEX,
@@ -150,49 +170,32 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
 
     assert ClaimIdentifierWirePayloadEncoder.WIRE_NAME.equals(instruction.name())
         : "ClaimIdentifier parity wire name mismatch";
-    final String actualBareHex = toHex(decoded.payload());
     final String actualFramedHex = toHex(wirePayload.payloadBytes());
-    assert parityRustBareHex().equals(actualBareHex)
-        : "ClaimIdentifier parity bare payload drifted from Rust\nexpected="
-            + parityRustBareHex()
-            + "\nactual="
-            + actualBareHex;
-    assert parityRustFramedHex().equals(actualFramedHex)
+    assert rustFramedHex.equals(actualFramedHex)
         : "ClaimIdentifier parity framed payload drifted from Rust\nexpected="
-            + parityRustFramedHex()
+            + rustFramedHex
             + "\nactual="
             + actualFramedHex;
   }
 
-  private static String parityRustBareHex() {
-    return "4F000000004A2100000000000000010001CE017F01A4016C019D01CE017E01A401B1012501E201E3016B01DB016301EA"
-        + "01330107013E0175019001AC01920181016A01E101E8016101B70104018B0103DD03CB020D060570686F6E6505046531"
-        + "363486010D0C0B7061726974795F7465737420C6A23EC291940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E084D3B"
-        + "D944C30400000000040000000020C6A23EC291940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E084D3BD944C320C6"
-        + "A23EC291940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E084D3BD944C30800060FF69301000001002120C6A23EC2"
-        + "91940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E084D3BD944C320C6A23EC291940DF33EF948BCE1DF0FC42B8108"
-        + "661529A4E4CD6E084D3BD944C32120C6A23EC291940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E084D3BD944C34F"
-        + "000000004A2100000000000000010001CE017F01A4016C019D01CE017E01A401B1012501E201E3016B01DB016301EA01"
-        + "330107013E0175019001AC01920181016A01E101E8016101B70104018B01038E01000000008801400000000000000001"
-        + "CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01"
-        + "CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01"
-        + "CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD";
+  private static RamLfeOutputOpening sampleOpening(
+      final String programId, final String signatureHex) {
+    return sampleOpening(programId, signatureHex, "EE".repeat(32));
   }
 
-  private static String parityRustFramedHex() {
-    return "4E5254300000D7895D1E8DAC6978699D9011F54021FB002F020000000000008BCC60A66DEAC9CB024F000000004A2100"
-        + "000000000000010001CE017F01A4016C019D01CE017E01A401B1012501E201E3016B01DB016301EA01330107013E0175"
-        + "019001AC01920181016A01E101E8016101B70104018B0103DD03CB020D060570686F6E6505046531363486010D0C0B70"
-        + "61726974795F7465737420C6A23EC291940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E084D3BD944C30400000000"
-        + "040000000020C6A23EC291940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E084D3BD944C320C6A23EC291940DF33E"
-        + "F948BCE1DF0FC42B8108661529A4E4CD6E084D3BD944C30800060FF69301000001002120C6A23EC291940DF33EF948BC"
-        + "E1DF0FC42B8108661529A4E4CD6E084D3BD944C320C6A23EC291940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E08"
-        + "4D3BD944C32120C6A23EC291940DF33EF948BCE1DF0FC42B8108661529A4E4CD6E084D3BD944C34F000000004A210000"
-        + "0000000000010001CE017F01A4016C019D01CE017E01A401B1012501E201E3016B01DB016301EA01330107013E017501"
-        + "9001AC01920181016A01E101E8016101B70104018B01038E01000000008801400000000000000001CD01CD01CD01CD01"
-        + "CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01"
-        + "CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01"
-        + "CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD";
+  private static RamLfeOutputOpening sampleOpening(
+      final String programId, final String signatureHex, final String hashHex) {
+    return new RamLfeOutputOpening(
+        new RamLfeOutputOpeningPayload(
+            programId,
+            hashHex,
+            hashHex,
+            hashHex,
+            hashHex,
+            hashHex,
+            1_735_000_000_000L,
+            null),
+        signatureHex);
   }
 
   private static byte[] readSizedField(final NoritoDecoder decoder) {
@@ -206,6 +209,63 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
       out.append(String.format("%02X", current));
     }
     return out.toString();
+  }
+
+  private static String[] runFixtureGenerator(final String subcommand) throws Exception {
+    final File repoRoot = locateRepoRoot();
+    final File targetDir = new File(repoRoot, "target/kotlin-fixture-gen-test");
+    final File binary = new File(targetDir, "debug/kotlin-fixture-gen");
+    if (!binary.exists()) {
+      final ProcessBuilder build =
+          new ProcessBuilder("cargo", "build", "-p", "kotlin-fixture-gen")
+              .directory(repoRoot)
+              .redirectErrorStream(true);
+      build.environment().put("CARGO_TARGET_DIR", targetDir.getAbsolutePath());
+      final Process process = build.start();
+      final String output = readStream(process.getInputStream());
+      final int exit = process.waitFor();
+      if (exit != 0) {
+        throw new IllegalStateException("cargo build failed (" + exit + "): " + output);
+      }
+    }
+
+    final Process process =
+        new ProcessBuilder(binary.getAbsolutePath(), subcommand)
+            .directory(repoRoot)
+            .redirectErrorStream(false)
+            .start();
+    final String stdout = readStream(process.getInputStream()).trim();
+    final String stderr = readStream(process.getErrorStream()).trim();
+    final int exit = process.waitFor();
+    if (exit != 0) {
+      throw new IllegalStateException(
+          "kotlin-fixture-gen " + subcommand + " failed (" + exit + "): " + stderr);
+    }
+    if (stdout.isEmpty()) {
+      throw new IllegalStateException("kotlin-fixture-gen " + subcommand + " produced no output");
+    }
+    return stdout.split("\\R");
+  }
+
+  private static String readStream(final InputStream stream) throws IOException {
+    final byte[] buffer = new byte[8192];
+    final StringBuilder out = new StringBuilder();
+    int read;
+    while ((read = stream.read(buffer)) != -1) {
+      out.append(new String(buffer, 0, read, StandardCharsets.UTF_8));
+    }
+    return out.toString();
+  }
+
+  private static File locateRepoRoot() throws IOException {
+    File dir = new File("").getAbsoluteFile();
+    while (!new File(dir, "Cargo.toml").exists()) {
+      dir = dir.getParentFile();
+      if (dir == null) {
+        throw new IOException("Could not locate Iroha repo root from current directory");
+      }
+    }
+    return dir;
   }
 
   private static String canonicalAccountId() {

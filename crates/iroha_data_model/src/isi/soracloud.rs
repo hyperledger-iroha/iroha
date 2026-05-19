@@ -6,7 +6,7 @@
 use core::cmp::Ordering;
 use std::collections::BTreeMap;
 
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, fhe_bfv::BfvEvaluationKeyBundle};
 use iroha_primitives::json::Json;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -224,6 +224,9 @@ pub struct MutateSoracloudState {
     /// Declared payload size for upsert operations.
     #[norito(default)]
     pub value_size_bytes: Option<u64>,
+    /// Full payload bytes for upsert operations.
+    #[norito(default)]
+    pub value_payload: Option<Vec<u8>>,
     /// Expected binding encryption mode.
     pub encryption: SoraStateEncryptionV1,
     /// Governance transaction hash attached to the mutation.
@@ -257,6 +260,8 @@ pub struct RunSoracloudFheJob {
     pub policy: FheExecutionPolicyV1,
     /// Parameter set validated for this job.
     pub param_set: FheParamSetV1,
+    /// Public evaluation keys used for homomorphic execution.
+    pub evaluation_keys: BfvEvaluationKeyBundle,
     /// Governance transaction hash attached to the job.
     pub governance_tx_hash: Hash,
     /// Provenance attestation over the job payload.
@@ -1436,6 +1441,7 @@ impl_soracloud_decode_from_slice!(MutateSoracloudState {
     state_key: String,
     operation: SoraStateMutationOperationV1,
     value_size_bytes: Option<u64>,
+    value_payload: Option<Vec<u8>>,
     encryption: SoraStateEncryptionV1,
     governance_tx_hash: Hash,
     provenance: ManifestProvenance,
@@ -1447,6 +1453,7 @@ impl_soracloud_decode_from_slice!(RunSoracloudFheJob {
     job: FheJobSpecV1,
     policy: FheExecutionPolicyV1,
     param_set: FheParamSetV1,
+    evaluation_keys: BfvEvaluationKeyBundle,
     governance_tx_hash: Hash,
     provenance: ManifestProvenance,
 });

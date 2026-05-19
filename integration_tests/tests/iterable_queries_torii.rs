@@ -91,8 +91,12 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
         other => panic!("unexpected batch variant: {other:?}"),
     };
     assert_eq!(v.len(), 1, "expected single header in first batch");
-    // We should have at least one remaining header to fetch (genesis + new block)
-    assert!(remaining >= 1);
+    // Stored cursors may not expose an exact remaining count, but the first
+    // page should still advertise continuation for genesis + the new block.
+    if let Some(remaining) = remaining {
+        assert!(remaining >= 1);
+    }
+    assert!(cursor.is_some(), "expected continuation cursor");
 
     if let Some(cur) = cursor {
         let (next_batch, _rem2, _next) = <iroha::client::Client as iroha::data_model::query::builder::QueryExecutor>::continue_query(cur)?;

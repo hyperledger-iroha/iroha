@@ -7,7 +7,7 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 
-/** Builds framed Norito BFV identifier ciphertext envelopes from plaintext input. */
+/** Builds framed Norito BFV identifier ciphertext envelopes from client-side input. */
 internal object IdentifierBfvEnvelopeBuilder {
     private const val SCHEMA_NAME = "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext"
     private val PRG_DOMAIN = "iroha.sdk.identifier.bfv.prg.v1".toByteArray(StandardCharsets.UTF_8)

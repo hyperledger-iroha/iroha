@@ -6,6 +6,7 @@ import java.util.Objects;
 public final class IdentifierResolutionPayload {
   private final String policyId;
   private final IdentifierResolutionExecutionPayload execution;
+  private final RamLfeOutputOpening opening;
   private final String opaqueId;
   private final String receiptHash;
   private final String uaid;
@@ -14,12 +15,14 @@ public final class IdentifierResolutionPayload {
   public IdentifierResolutionPayload(
       final String policyId,
       final IdentifierResolutionExecutionPayload execution,
+      final RamLfeOutputOpening opening,
       final String opaqueId,
       final String receiptHash,
       final String uaid,
       final String accountId) {
     this.policyId = Objects.requireNonNull(policyId, "policyId");
     this.execution = Objects.requireNonNull(execution, "execution");
+    this.opening = Objects.requireNonNull(opening, "opening");
     this.opaqueId = Objects.requireNonNull(opaqueId, "opaqueId");
     this.receiptHash = Objects.requireNonNull(receiptHash, "receiptHash");
     this.uaid = Objects.requireNonNull(uaid, "uaid");
@@ -32,6 +35,10 @@ public final class IdentifierResolutionPayload {
 
   public IdentifierResolutionExecutionPayload execution() {
     return execution;
+  }
+
+  public RamLfeOutputOpening opening() {
+    return opening;
   }
 
   public String opaqueId() {
