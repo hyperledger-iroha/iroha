@@ -10,6 +10,7 @@ public final class RamLfeExecuteResponse {
   private final String programId;
   private final String opaqueHash;
   private final String receiptHash;
+  private final String outputCiphertext;
   private final String outputHash;
   private final String associatedDataHash;
   private final long executedAtMs;
@@ -17,21 +18,25 @@ public final class RamLfeExecuteResponse {
   private final String backend;
   private final String verificationMode;
   private final Map<String, Object> receipt;
+  private final RamLfeOutputOpening outputOpening;
 
   public RamLfeExecuteResponse(
       final String programId,
       final String opaqueHash,
       final String receiptHash,
+      final String outputCiphertext,
       final String outputHash,
       final String associatedDataHash,
       final long executedAtMs,
       final Long expiresAtMs,
       final String backend,
       final String verificationMode,
-      final Map<String, Object> receipt) {
+      final Map<String, Object> receipt,
+      final RamLfeOutputOpening outputOpening) {
     this.programId = Objects.requireNonNull(programId, "programId");
     this.opaqueHash = Objects.requireNonNull(opaqueHash, "opaqueHash");
     this.receiptHash = Objects.requireNonNull(receiptHash, "receiptHash");
+    this.outputCiphertext = Objects.requireNonNull(outputCiphertext, "outputCiphertext");
     this.outputHash = Objects.requireNonNull(outputHash, "outputHash");
     this.associatedDataHash = Objects.requireNonNull(associatedDataHash, "associatedDataHash");
     this.executedAtMs = executedAtMs;
@@ -40,6 +45,7 @@ public final class RamLfeExecuteResponse {
     this.verificationMode = Objects.requireNonNull(verificationMode, "verificationMode");
     this.receipt =
         Collections.unmodifiableMap(new LinkedHashMap<>(Objects.requireNonNull(receipt, "receipt")));
+    this.outputOpening = Objects.requireNonNull(outputOpening, "outputOpening");
   }
 
   public String programId() {
@@ -52,6 +58,10 @@ public final class RamLfeExecuteResponse {
 
   public String receiptHash() {
     return receiptHash;
+  }
+
+  public String outputCiphertext() {
+    return outputCiphertext;
   }
 
   public String outputHash() {
@@ -80,5 +90,9 @@ public final class RamLfeExecuteResponse {
 
   public Map<String, Object> receipt() {
     return receipt;
+  }
+
+  public RamLfeOutputOpening outputOpening() {
+    return outputOpening;
   }
 }

@@ -6191,6 +6191,7 @@ fn identifier_policy_summary_dto(
         .flatten();
     routing::IdentifierPolicySummaryDto {
         policy_id: policy.id.to_string(),
+        program_id: policy.program_id.to_string(),
         owner: policy.owner.to_string(),
         active: policy.active,
         normalization: identifier_normalization_label(policy.normalization).to_owned(),
@@ -6227,6 +6228,7 @@ fn identifier_policy_summary_dto(
 fn ram_lfe_execute_response(
     receipt: &iroha_data_model::ram_lfe::RamLfeExecutionReceipt,
     draft: &identifier_resolution::RamLfeExecutionDraft,
+    output_opening: iroha_data_model::ram_lfe::RamLfeOutputOpening,
 ) -> routing::RamLfeExecuteResponseDto {
     routing::RamLfeExecuteResponseDto {
         program_id: receipt.payload.program_id.to_string(),
@@ -6240,6 +6242,7 @@ fn ram_lfe_execute_response(
         backend: draft.backend.as_str().to_owned(),
         verification_mode: ram_lfe_verification_mode_label(draft.verification_mode).to_owned(),
         receipt: ram_lfe_execution_receipt_dto(receipt),
+        output_opening,
     }
 }
 
@@ -31921,7 +31924,10 @@ async fn handler_ram_lfe_execute(
     let receipt = resolver
         .issue_execution_receipt(&program_policy, &draft)
         .map_err(|err| identifier_internal_error(err.to_string()))?;
-    json_ok(ram_lfe_execute_response(&receipt, &draft))
+    let output_opening = resolver
+        .issue_output_opening(&program_policy, &draft)
+        .map_err(|err| identifier_internal_error(err.to_string()))?;
+    json_ok(ram_lfe_execute_response(&receipt, &draft, output_opening))
 }
 
 #[cfg(feature = "app_api")]

@@ -156,7 +156,7 @@ public final class ContractJsonParser {
                 requiredString(root.get("executed_tx_hash_hex"), "multisig response.executed_tx_hash_hex"),
                 "executedTxHashHex")
             : null,
-        asOptionalLong(root.get("creation_time_ms"), "multisig response.creation_time_ms"),
+        asOptionalNonNegativeLong(root.get("creation_time_ms"), "multisig response.creation_time_ms"),
         optionalBase64(root.get("signing_message_b64"), "multisig response.signing_message_b64"));
   }
 
@@ -235,6 +235,14 @@ public final class ContractJsonParser {
       return null;
     }
     return asLong(value, path);
+  }
+
+  private static Long asOptionalNonNegativeLong(final Object value, final String path) {
+    final Long parsed = asOptionalLong(value, path);
+    if (parsed != null && parsed.longValue() < 0L) {
+      throw new IllegalStateException(path + " must be non-negative");
+    }
+    return parsed;
   }
 
   @SuppressWarnings("unchecked")

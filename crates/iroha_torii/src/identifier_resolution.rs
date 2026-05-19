@@ -23,8 +23,8 @@ use iroha_data_model::{
     nexus::UniversalAccountId,
     prelude::*,
     ram_lfe::{
-        RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeProgramId, RamLfeProgramPolicy,
-        RamLfeReceiptAttestation,
+        RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeOutputOpeningPayload,
+        RamLfeProgramId, RamLfeProgramPolicy, RamLfeReceiptAttestation,
     },
 };
 use thiserror::Error;
@@ -301,6 +301,31 @@ impl IdentifierResolutionService {
             payload,
             attestation: RamLfeReceiptAttestation::Signed(signature),
         })
+    }
+
+    /// Sign the externally verifiable opening for an executed RAM-LFE output.
+    pub fn issue_output_opening(
+        &self,
+        program_policy: &RamLfeProgramPolicy,
+        draft: &RamLfeExecutionDraft,
+    ) -> Result<RamLfeOutputOpening, IdentifierResolutionError> {
+        let runtime = self.runtime(program_policy)?;
+        if runtime.signer.public_key() != &program_policy.output_opening_public_key {
+            return Err(IdentifierResolutionError::SignerMismatch);
+        }
+
+        let payload = RamLfeOutputOpeningPayload {
+            program_id: program_policy.program_id.clone(),
+            input_ciphertext_hash: draft.input_ciphertext_hash,
+            output_ciphertext_hash: draft.output_ciphertext_hash,
+            parameter_digest: draft.parameter_digest,
+            evaluation_key_digest: draft.evaluation_key_digest,
+            opened_output_hash: ram_lfe_output_hash(&draft.output),
+            opened_at_ms: draft.executed_at_ms,
+            expires_at_ms: draft.expires_at_ms,
+        };
+        let signature: Signature = SignatureOf::new(runtime.signer.private_key(), &payload).into();
+        Ok(RamLfeOutputOpening { payload, signature })
     }
 
     fn issue_receipt(

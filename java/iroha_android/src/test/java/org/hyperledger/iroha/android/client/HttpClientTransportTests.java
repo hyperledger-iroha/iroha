@@ -102,6 +102,8 @@ public final class HttpClientTransportTests {
     deployContractRequestParsesResponse();
     callContractRequestParsesResponse();
     proposeMultisigRequestParsesResponse();
+    proposeMultisigRejectsAdversarialRequestShapes();
+    multisigResponseParserRejectsMalformedFields();
     callContractRejectsAmbiguousTarget();
     governanceContractRequestParsesResponse();
     resolveAccountAliasRequestParsesResponse();
@@ -1481,6 +1483,7 @@ public final class HttpClientTransportTests {
             + "\"program_id\":\"identifier_lookup_retail\","
             + "\"opaque_hash\":\"opaque-hash-literal\","
             + "\"receipt_hash\":\"receipt-hash-literal\","
+            + "\"output_ciphertext\":\"abcd\","
             + "\"output_hash\":\"output-hash-literal\","
             + "\"associated_data_hash\":\"associated-data-hash-literal\","
             + "\"executed_at_ms\":42,"
@@ -1507,7 +1510,9 @@ public final class HttpClientTransportTests {
             + "\"signature\":\""
             + "aa".repeat(64)
             + "\""
-            + "}"
+            + "},"
+            + "\"output_opening\":"
+            + identifierOpeningJson(sampleOpening("identifier_lookup_retail"))
             + "}";
     final StubResponseExecutor executor =
         new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
@@ -1522,8 +1527,11 @@ public final class HttpClientTransportTests {
     final RamLfeExecuteResponse execute = response.orElseThrow();
     assert "identifier_lookup_retail".equals(execute.programId()) : "Program id mismatch";
     assert "output-hash-literal".equals(execute.outputHash()) : "Output hash mismatch";
+    assert "abcd".equals(execute.outputCiphertext()) : "Output ciphertext mismatch";
     assert "signed".equals(execute.verificationMode()) : "Verification mode mismatch";
     assert execute.receipt().containsKey("payload") : "Raw receipt payload must be preserved";
+    assert "identifier_lookup_retail".equals(execute.outputOpening().payload().programId())
+        : "Output opening must be parsed";
 
     final TransportRequest request = executor.lastRequest();
     assert request != null : "RAM-LFE execute request must be captured";
@@ -2006,6 +2014,97 @@ public final class HttpClientTransportTests {
     assert failed : "Empty instruction bytes should be rejected";
   }
 
+  private static void proposeMultisigRejectsAdversarialRequestShapes() {
+    final byte[] instruction = new byte[] {1};
+    expectIllegalArgument(
+        () ->
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest.builder()
+                    .setMultisigAccountId("aid:multisig")
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId("alice")
+                    .addInstructionBytes(instruction)
+                    .build()),
+        "ambiguous multisig selector must be rejected");
+    expectIllegalArgument(
+        () ->
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest.builder()
+                    .setSignerAccountId("alice")
+                    .addInstructionBytes(instruction)
+                    .build()),
+        "missing multisig selector must be rejected");
+    expectIllegalArgument(
+        () ->
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest.builder()
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId("alice")
+                    .addInstructionBytes(instruction)
+                    .setSignatureB64("not base64")
+                    .build()),
+        "malformed detached signature must be rejected");
+    expectIllegalArgument(
+        () ->
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest.builder()
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId("alice")
+                    .addInstructionBytes(instruction)
+                    .setPublicKeyHex("aa")
+                    .build()),
+        "short detached public key must be rejected");
+    expectIllegalArgument(
+        () ->
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest.builder()
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId("alice")
+                    .addInstructionBytes(instruction)
+                    .setCreationTimeMs(-1L)
+                    .build()),
+        "negative creation time must be rejected");
+  }
+
+  private static void multisigResponseParserRejectsMalformedFields() {
+    expectRuntimeException(
+        () ->
+            ContractJsonParser.parseMultisigResponse(
+                ("{"
+                        + "\"ok\":true,"
+                        + "\"resolved_multisig_account_id\":\"multisig\","
+                        + "\"submitted\":\"false\"}")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "string submitted flag must be rejected");
+    expectRuntimeException(
+        () ->
+            ContractJsonParser.parseMultisigResponse(
+                ("{"
+                        + "\"ok\":true,"
+                        + "\"resolved_multisig_account_id\":\"multisig\","
+                        + "\"instructions_hash\":\"aa\"}")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "short instructions hash must be rejected");
+    expectRuntimeException(
+        () ->
+            ContractJsonParser.parseMultisigResponse(
+                ("{"
+                        + "\"ok\":true,"
+                        + "\"resolved_multisig_account_id\":\"multisig\","
+                        + "\"signing_message_b64\":\"not base64\"}")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "malformed signing message must be rejected");
+    expectRuntimeException(
+        () ->
+            ContractJsonParser.parseMultisigResponse(
+                ("{"
+                        + "\"ok\":true,"
+                        + "\"resolved_multisig_account_id\":\"multisig\","
+                        + "\"creation_time_ms\":-1}")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "negative creation time must be rejected");
+  }
+
   private static void callContractRejectsAmbiguousTarget() {
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
@@ -2374,6 +2473,16 @@ public final class HttpClientTransportTests {
     try {
       action.run();
     } catch (final IllegalArgumentException expected) {
+      failed = true;
+    }
+    assert failed : message;
+  }
+
+  private static void expectRuntimeException(final Runnable action, final String message) {
+    boolean failed = false;
+    try {
+      action.run();
+    } catch (final RuntimeException expected) {
       failed = true;
     }
     assert failed : message;

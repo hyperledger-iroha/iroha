@@ -156,6 +156,62 @@ def test_propose_multisig_inherited_helper_posts_native_instruction_payload() ->
     assert payload["instructions"] == [base64.b64encode(b"\x01\x02\x03").decode("ascii")]
 
 
+def test_propose_multisig_inherited_helper_rejects_bad_payload_shape() -> None:
+    client = ToriiClient("http://node.test", session=RecordingSession())
+
+    with pytest.raises(ValueError, match="exactly one"):
+        client.propose_multisig(
+            multisig_account_id="ops@universal",
+            multisig_account_alias="ops@universal",
+            signer_account_id="signer@universal",
+            instructions=[b"\x01"],
+        )
+    with pytest.raises(RuntimeError, match="valid base64"):
+        client.propose_multisig(
+            multisig_account_alias="ops@universal",
+            signer_account_id="signer@universal",
+            instructions=["not base64"],
+        )
+
+
+def test_propose_multisig_inherited_helper_rejects_malformed_response() -> None:
+    session = RecordingSession()
+    session._response = StubResponse(
+        payload={
+            "ok": True,
+            "resolved_multisig_account_id": "ops@universal",
+            "signing_message_b64": "not base64",
+        }
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="valid base64"):
+        client.propose_multisig(
+            multisig_account_alias="ops@universal",
+            signer_account_id="signer@universal",
+            instructions=[b"\x01"],
+        )
+
+
+def test_propose_multisig_inherited_helper_rejects_negative_response_time() -> None:
+    session = RecordingSession()
+    session._response = StubResponse(
+        payload={
+            "ok": True,
+            "resolved_multisig_account_id": "ops@universal",
+            "creation_time_ms": -1,
+        }
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="non-negative"):
+        client.propose_multisig(
+            multisig_account_alias="ops@universal",
+            signer_account_id="signer@universal",
+            instructions=[b"\x01"],
+        )
+
+
 def test_i105_roundtrip_uses_halfwidth_iroha_poem_alphabet() -> None:
     address = AccountAddress.from_account(domain="wonderland", public_key=bytes([0x11] * 32))
     literal = address.to_i105(0x02F1)

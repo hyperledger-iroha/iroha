@@ -17408,6 +17408,94 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
   );
 });
 
+test("proposeMultisig rejects adversarial request shapes before fetch", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not be invoked");
+    },
+  });
+  const request = {
+    multisigAccountAlias: "cbdc@banka",
+    signerAccountId: FIXTURE_ALICE_ID,
+    instructions: [{ Custom: { payload: { probe: true } } }],
+  };
+
+  await assert.rejects(
+    () => client.proposeMultisig({ ...request, multisigAccountId: FIXTURE_ALICE_ID }),
+    /requires exactly one/,
+  );
+  await assert.rejects(
+    () => client.proposeMultisig({ ...request, instructions: [] }),
+    /non-empty array/,
+  );
+  await assert.rejects(
+    () => client.proposeMultisig({ ...request, signatureB64: "not base64" }),
+    /valid base64/,
+  );
+  await assert.rejects(
+    () => client.proposeMultisig({ ...request, creationTimeMs: -1 }),
+    /non-negative integer/,
+  );
+  await assert.rejects(
+    () => client.proposeMultisig({ ...request, instructions: [Buffer.from("NRT0")] }),
+    /overran payload/,
+  );
+  await assert.rejects(
+    () => client.proposeMultisig(request, { retry: true }),
+    /unsupported fields: retry/,
+  );
+  assert.throws(
+    () => buildMultisigProposeRequest({ ...request, instructions: [null] }),
+    /multisigPropose\.instructions\[0\]/,
+  );
+});
+
+test("proposeMultisig rejects malformed success responses", async () => {
+  const request = {
+    multisigAccountAlias: "cbdc@banka",
+    signerAccountId: FIXTURE_ALICE_ID,
+    instructions: [{ Custom: { payload: { probe: true } } }],
+  };
+
+  const clientWithResponse = (jsonData) =>
+    new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+  await assert.rejects(
+    () =>
+      clientWithResponse({
+        ok: true,
+        resolved_multisig_account_id: FIXTURE_ALICE_ID,
+        instructions_hash: "aa",
+      }).proposeMultisig(request),
+    /instructions_hash/,
+  );
+  await assert.rejects(
+    () =>
+      clientWithResponse({
+        ok: true,
+        resolved_multisig_account_id: FIXTURE_ALICE_ID,
+        signing_message_b64: "not base64",
+      }).proposeMultisig(request),
+    /signing_message_b64/,
+  );
+  await assert.rejects(
+    () =>
+      clientWithResponse({
+        ok: true,
+        resolved_multisig_account_id: FIXTURE_ALICE_ID,
+        creation_time_ms: -1,
+      }).proposeMultisig(request),
+    /creation_time_ms/,
+  );
+});
+
 test("proposeMultisigContractCall posts alias selector and normalizes response", async () => {
   let captured;
   const responsePayload = {

@@ -117,7 +117,7 @@ object ContractJsonParser {
             executedTxHashHex = if (root.containsKey("executed_tx_hash_hex") && root["executed_tx_hash_hex"] != null)
                 HttpClientTransport.normalizeHex32(requiredString(root["executed_tx_hash_hex"], "multisig response.executed_tx_hash_hex"), "executedTxHashHex")
             else null,
-            creationTimeMs = asOptionalLong(root["creation_time_ms"], "multisig response.creation_time_ms"),
+            creationTimeMs = asOptionalNonNegativeLong(root["creation_time_ms"], "multisig response.creation_time_ms"),
             signingMessageB64 = optionalBase64(root["signing_message_b64"], "multisig response.signing_message_b64"),
         )
     }
@@ -172,6 +172,12 @@ object ContractJsonParser {
     private fun asOptionalLong(value: Any?, path: String): Long? {
         if (value == null) return null
         return asLong(value, path)
+    }
+
+    private fun asOptionalNonNegativeLong(value: Any?, path: String): Long? {
+        val parsed = asOptionalLong(value, path) ?: return null
+        check(parsed >= 0) { "$path must be non-negative" }
+        return parsed
     }
 
     @Suppress("UNCHECKED_CAST")

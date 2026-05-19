@@ -2847,6 +2847,7 @@ pub struct RamLfeExecuteResponseDto {
     pub backend: String,
     pub verification_mode: String,
     pub receipt: RamLfeExecutionReceiptDto,
+    pub output_opening: iroha_data_model::ram_lfe::RamLfeOutputOpening,
 }
 
 #[cfg(feature = "app_api")]
@@ -2962,6 +2963,7 @@ pub struct RamLfeReceiptVerifyResponseDto {
 /// Summary information for a registered identifier policy.
 pub struct IdentifierPolicySummaryDto {
     pub policy_id: String,
+    pub program_id: String,
     pub owner: String,
     pub active: bool,
     pub normalization: String,
@@ -19766,6 +19768,141 @@ seiyaku BlobPayloadNormalizeTest {
         assert!(payload["signing_message_b64"].as_str().is_some());
     }
 
+    #[tokio::test]
+    async fn multisig_generic_propose_rejects_incomplete_detached_signature_fields() {
+        let (state, _multisig_account_id, _authority_account_id, signer_two_id, alias_literal, _) =
+            multisig_contract_test_fixture();
+        let instruction: dm::InstructionBox =
+            dm::Log::new(dm::Level::INFO, "multisig propose".to_owned()).into();
+
+        let err = handle_post_multisig_propose(
+            Arc::new("multisig-generic-propose-test".parse().expect("chain id")),
+            build_queue(),
+            state.clone(),
+            MaybeTelemetry::disabled(),
+            NoritoJson(MultisigProposeDto {
+                selector: alias_selector(&alias_literal),
+                signer_account_id: signer_two_id.clone(),
+                private_key: None,
+                public_key_hex: None,
+                signature_b64: Some("AQID".to_owned()),
+                creation_time_ms: Some(1_700_000_000_345),
+                fee_sponsor: None,
+                instructions: vec![instruction.clone()],
+            }),
+        )
+        .await
+        .expect_err("missing public key must be rejected");
+        assert!(expect_conversion(err).contains("public_key_hex is required"));
+
+        let err = handle_post_multisig_propose(
+            Arc::new("multisig-generic-propose-test".parse().expect("chain id")),
+            build_queue(),
+            state,
+            MaybeTelemetry::disabled(),
+            NoritoJson(MultisigProposeDto {
+                selector: alias_selector(&alias_literal),
+                signer_account_id: signer_two_id,
+                private_key: None,
+                public_key_hex: Some("00".repeat(32)),
+                signature_b64: None,
+                creation_time_ms: Some(1_700_000_000_345),
+                fee_sponsor: None,
+                instructions: vec![instruction],
+            }),
+        )
+        .await
+        .expect_err("missing signature must be rejected");
+        assert!(expect_conversion(err).contains("signature_b64 is required"));
+    }
+
+    #[tokio::test]
+    async fn multisig_generic_propose_rejects_malformed_detached_signature_fields() {
+        let (state, _multisig_account_id, _authority_account_id, signer_two_id, alias_literal, _) =
+            multisig_contract_test_fixture();
+        let instruction: dm::InstructionBox =
+            dm::Log::new(dm::Level::INFO, "multisig propose".to_owned()).into();
+
+        let err = handle_post_multisig_propose(
+            Arc::new("multisig-generic-propose-test".parse().expect("chain id")),
+            build_queue(),
+            state.clone(),
+            MaybeTelemetry::disabled(),
+            NoritoJson(MultisigProposeDto {
+                selector: alias_selector(&alias_literal),
+                signer_account_id: signer_two_id.clone(),
+                private_key: None,
+                public_key_hex: Some("not hex".to_owned()),
+                signature_b64: Some("AQID".to_owned()),
+                creation_time_ms: Some(1_700_000_000_345),
+                fee_sponsor: None,
+                instructions: vec![instruction.clone()],
+            }),
+        )
+        .await
+        .expect_err("malformed public key must be rejected");
+        assert!(expect_conversion(err).contains("invalid public_key_hex"));
+
+        let signer_public_key_hex = hex::encode(signer_two_id.signatory().to_bytes().1);
+        let err = handle_post_multisig_propose(
+            Arc::new("multisig-generic-propose-test".parse().expect("chain id")),
+            build_queue(),
+            state,
+            MaybeTelemetry::disabled(),
+            NoritoJson(MultisigProposeDto {
+                selector: alias_selector(&alias_literal),
+                signer_account_id: signer_two_id,
+                private_key: None,
+                public_key_hex: Some(signer_public_key_hex),
+                signature_b64: Some("not base64".to_owned()),
+                creation_time_ms: Some(1_700_000_000_345),
+                fee_sponsor: None,
+                instructions: vec![instruction],
+            }),
+        )
+        .await
+        .expect_err("malformed signature must be rejected");
+        assert!(expect_conversion(err).contains("invalid signature_b64"));
+    }
+
+    #[tokio::test]
+    async fn multisig_generic_propose_rejects_private_key_server_side_signing() {
+        let (
+            state,
+            _multisig_account_id,
+            _authority_account_id,
+            signer_two_id,
+            alias_literal,
+            authority_keypair,
+        ) = multisig_contract_test_fixture();
+        let instruction: dm::InstructionBox =
+            dm::Log::new(dm::Level::INFO, "multisig propose".to_owned()).into();
+
+        let err = handle_post_multisig_propose(
+            Arc::new("multisig-generic-propose-test".parse().expect("chain id")),
+            build_queue(),
+            state,
+            MaybeTelemetry::disabled(),
+            NoritoJson(MultisigProposeDto {
+                selector: alias_selector(&alias_literal),
+                signer_account_id: signer_two_id,
+                private_key: Some(dm::ExposedPrivateKey(
+                    authority_keypair.private_key().clone(),
+                )),
+                public_key_hex: None,
+                signature_b64: None,
+                creation_time_ms: Some(1_700_000_000_345),
+                fee_sponsor: None,
+                instructions: vec![instruction],
+            }),
+        )
+        .await
+        .expect_err("private_key must be rejected");
+        let message = expect_conversion(err);
+        assert!(message.contains("/v1/multisig/propose"));
+        assert!(message.contains("no longer accepts private_key"));
+    }
+
     #[test]
     fn multisig_generic_propose_json_accepts_native_norito_instruction_strings() {
         let (
@@ -19824,6 +19961,54 @@ seiyaku BlobPayloadNormalizeTest {
         let message = err.to_string();
         assert!(
             message.contains("base64") || message.contains("Invalid"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn multisig_generic_propose_json_rejects_mixed_batch_with_malformed_native_frame() {
+        use base64::Engine as _;
+
+        let (
+            _state,
+            _multisig_account_id,
+            _authority_account_id,
+            signer_two_id,
+            alias_literal,
+            _authority_keypair,
+        ) = multisig_contract_test_fixture();
+        let instruction: dm::InstructionBox =
+            dm::Log::new(dm::Level::INFO, "valid instruction".to_owned()).into();
+        let request = MultisigProposeDto {
+            selector: alias_selector(&alias_literal),
+            signer_account_id: signer_two_id.clone(),
+            private_key: None,
+            public_key_hex: None,
+            signature_b64: None,
+            creation_time_ms: Some(1_700_000_000_345),
+            fee_sponsor: None,
+            instructions: vec![instruction],
+        };
+        let raw = norito::json::to_string(&request).expect("serialize multisig propose dto");
+        let value: norito::json::Value =
+            norito::json::from_str(&raw).expect("parse serialized request");
+        let valid_instruction = value["instructions"][0]
+            .as_str()
+            .expect("native instruction base64");
+        let malformed_frame =
+            base64::engine::general_purpose::STANDARD.encode([b'N', b'R', b'T', b'0', 0, 0]);
+        let raw = format!(
+            "{{\"multisig_account_alias\":\"{alias_literal}\",\"signer_account_id\":\"{signer_two_id}\",\"instructions\":[\"{valid_instruction}\",\"{malformed_frame}\"]}}"
+        );
+
+        let err = norito::json::from_str::<MultisigProposeDto>(&raw)
+            .expect_err("malformed native instruction frame");
+        let message = err.to_string();
+        assert!(
+            message.contains("decode")
+                || message.contains("Decode")
+                || message.contains("failed")
+                || message.contains("Norito"),
             "unexpected error: {message}"
         );
     }

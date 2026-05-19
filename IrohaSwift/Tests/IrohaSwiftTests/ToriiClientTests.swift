@@ -10076,6 +10076,109 @@ id: 88
         }
     }
 
+    func testProposeMultisigRejectsEmptyInstructionBytesAndBadRequestShape() {
+        XCTAssertThrowsError(try ToriiMultisigProposeInstruction(noritoInstructionBoxBytes: Data())) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+        }
+
+        let signer = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+        let instruction = try! ToriiMultisigProposeInstruction(base64: "AQID")
+        let ambiguousSelectorRequest = ToriiMultisigProposeRequest(
+            selector: ToriiMultisigAccountSelector(
+                multisigAccountId: signer,
+                multisigAccountAlias: "cbdc@banka"
+            ),
+            signerAccountId: signer,
+            instructions: [instruction]
+        )
+        XCTAssertThrowsError(try JSONEncoder().encode(ambiguousSelectorRequest)) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+        }
+
+        let emptyBatchRequest = ToriiMultisigProposeRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
+            signerAccountId: signer,
+            instructions: []
+        )
+        XCTAssertThrowsError(try JSONEncoder().encode(emptyBatchRequest)) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+        }
+    }
+
+    func testProposeMultisigRejectsMalformedResponseFields() {
+        let expectation = expectation(description: "propose multisig malformed response")
+        let instruction = try! ToriiMultisigProposeInstruction(base64: "AQID")
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/multisig/propose")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let bodyData = """
+            {"ok":true,"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","instructions_hash":"aa","signing_message_b64":"not base64"}
+            """.data(using: .utf8)!
+            return (response, bodyData)
+        }
+
+        let request = ToriiMultisigProposeRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
+            signerAccountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            instructions: [instruction]
+        )
+        makeClient().proposeMultisig(request) { result in
+            switch result {
+            case .success:
+                XCTFail("Malformed multisig response should be rejected")
+            case .failure(let error):
+                guard case ToriiClientError.decoding = error else {
+                    return XCTFail("Expected decoding error, got \(error)")
+                }
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    func testProposeMultisigRejectsNegativeResponseCreationTime() {
+        let expectation = expectation(description: "propose multisig negative creation time")
+        let instruction = try! ToriiMultisigProposeInstruction(base64: "AQID")
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/multisig/propose")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let bodyData = """
+            {"ok":true,"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","creation_time_ms":-1}
+            """.data(using: .utf8)!
+            return (response, bodyData)
+        }
+
+        let request = ToriiMultisigProposeRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
+            signerAccountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            instructions: [instruction]
+        )
+        makeClient().proposeMultisig(request) { result in
+            switch result {
+            case .success:
+                XCTFail("Negative response creation time should be rejected")
+            case .failure(let error):
+                guard case ToriiClientError.decoding = error else {
+                    return XCTFail("Expected decoding error, got \(error)")
+                }
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
     func testProposeMultisigContractCallEncodesAliasSelector() {
         let expectation = expectation(description: "propose multisig contract call")
         let proposalId = String(repeating: "a", count: 64)
