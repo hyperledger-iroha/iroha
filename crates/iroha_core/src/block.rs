@@ -14364,7 +14364,11 @@ pub(crate) mod valid {
                 result.expect("rejection-only block should not be treated as empty");
             assert_eq!(valid_block.as_ref().external_transactions().count(), 1);
             assert!(valid_block.as_ref().error(0).is_some());
-            assert!(!state_block.has_committed_fragments());
+            assert_eq!(
+                state_block.committed_fragment_count(),
+                1,
+                "accepted blocks still commit the deterministic pipeline-event fragment"
+            );
         }
 
         #[test]

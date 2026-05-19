@@ -368,9 +368,21 @@ impl ConfidentialFeatureDigest {
 /// Ruleset version embedded into [`ConfidentialFeatureDigest::conf_rules_version`] for v1 networks.
 pub const CONFIDENTIAL_RULES_VERSION: u32 = 1;
 
-/// Default digest advertising only the confidential ruleset version.
+/// Default ZK consensus-policy hash for v1 networks using bundled defaults.
+pub const DEFAULT_ZK_CONSENSUS_POLICY_HASH: [u8; 32] = [
+    0xb5, 0x5c, 0x83, 0xca, 0x83, 0x5f, 0x19, 0xd1, 0x03, 0x04, 0xd3, 0x53, 0xb7, 0x86, 0x44, 0xf0,
+    0x00, 0x64, 0x28, 0xb2, 0x39, 0x48, 0xa5, 0xdf, 0x61, 0xad, 0xe3, 0x04, 0x0e, 0xa4, 0xaa, 0x4c,
+];
+
+/// Default digest advertising the v1 confidential ruleset and default ZK consensus policy.
 pub const DEFAULT_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
-    ConfidentialFeatureDigest::new(None, None, None, Some(CONFIDENTIAL_RULES_VERSION), None);
+    ConfidentialFeatureDigest::new(
+        None,
+        None,
+        None,
+        Some(CONFIDENTIAL_RULES_VERSION),
+        Some(DEFAULT_ZK_CONSENSUS_POLICY_HASH),
+    );
 
 /// Identifier for confidential parameter registries (Pedersen/Poseidon).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]

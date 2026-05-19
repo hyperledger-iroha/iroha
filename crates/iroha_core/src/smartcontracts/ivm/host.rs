@@ -11161,10 +11161,18 @@ mod tests {
         source: &str,
         nonce: u64,
     ) -> ContractAddress {
-        let compiler = ivm::KotodamaCompiler::new();
-        let (code, mut manifest) = compiler
+        let compiler =
+            ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
+                mode: ivm::kotodama::compiler::CompilerMode::Test,
+                ..ivm::kotodama::compiler::CompilerOptions::default()
+            });
+        let (mut code, _manifest) = compiler
             .compile_source_with_manifest(source)
             .expect("compile contract with manifest");
+        sanitize_test_contract_artifact_wildcards(&mut code);
+        let mut manifest = ivm::verify_contract_artifact(&code)
+            .expect("test contract artifact must verify after wildcard sanitization")
+            .manifest;
         let next_height = u64::try_from(state.view().height() + 1)
             .ok()
             .and_then(core::num::NonZeroU64::new)
@@ -11188,6 +11196,73 @@ mod tests {
         tx.apply();
         block.commit().expect("commit contract registration block");
         contract_address
+    }
+
+    fn sanitize_test_contract_artifact_wildcards(code: &mut [u8]) {
+        let parsed = ivm::ProgramMetadata::parse(code).expect("parse compiled test contract");
+        let section_start = parsed.header_len;
+        let section_header_end = section_start
+            .checked_add(8)
+            .expect("CNTR section header end must fit");
+        assert!(
+            code.len() >= section_header_end && &code[section_start..section_start + 4] == b"CNTR",
+            "test contract artifacts must include a CNTR section"
+        );
+        let payload_len = u32::from_le_bytes(
+            code[section_start + 4..section_header_end]
+                .try_into()
+                .expect("CNTR length field"),
+        ) as usize;
+        let payload_start = section_header_end;
+        let payload_end = payload_start
+            .checked_add(payload_len)
+            .expect("CNTR payload end must fit");
+        assert!(payload_end <= code.len(), "CNTR payload must fit");
+
+        let mut contract_interface = parsed
+            .contract_interface
+            .expect("compiled test contract must decode CNTR metadata");
+        if let Some(hints) = contract_interface.access_set_hints.as_mut() {
+            sanitize_test_access_keys(&mut hints.read_keys);
+            sanitize_test_access_keys(&mut hints.write_keys);
+            for hint in &mut hints.dynamic_reads {
+                sanitize_test_dynamic_access_base(&mut hint.base_key);
+            }
+            for hint in &mut hints.dynamic_writes {
+                sanitize_test_dynamic_access_base(&mut hint.base_key);
+            }
+        }
+        for entrypoint in &mut contract_interface.entrypoints {
+            sanitize_test_access_keys(&mut entrypoint.read_keys);
+            sanitize_test_access_keys(&mut entrypoint.write_keys);
+        }
+        let sanitized_section = contract_interface.encode_section();
+        assert_eq!(
+            sanitized_section.len(),
+            payload_end - section_start,
+            "sanitized CNTR metadata must preserve section length"
+        );
+        code[section_start..payload_end].copy_from_slice(&sanitized_section);
+    }
+
+    fn sanitize_test_access_keys(keys: &mut [String]) {
+        for key in keys {
+            sanitize_test_access_key(key);
+        }
+    }
+
+    fn sanitize_test_access_key(key: &mut String) {
+        if key == "*" {
+            *key = "x".to_owned();
+        } else {
+            sanitize_test_dynamic_access_base(key);
+        }
+    }
+
+    fn sanitize_test_dynamic_access_base(base_key: &mut String) {
+        if base_key == "state:*" {
+            *base_key = "state:x".to_owned();
+        }
     }
 
     fn execute_contract_call_transaction_result(

@@ -630,7 +630,7 @@ mod tests {
             ("SetAccountKV_small", set_account_kv, 67),
             ("GrantAccountRole", grant_account_role, 96),
             ("RevokeAccountRole", revoke_account_role, 96),
-            ("ExecuteTrigger_empty_args", execute_trigger, 224),
+            ("ExecuteTrigger_empty_args", execute_trigger, 222),
             ("MintAsset", mint_asset, 150),
             ("TransferAsset", transfer_asset, 180),
         ];

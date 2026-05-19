@@ -2348,6 +2348,10 @@ fn nexus_staking_slot() -> &'static Mutex<BTreeMap<LaneId, NexusStakingLaneSnaps
 
 /// Record a Nexus fee debit outcome for later status/telemetry surfacing.
 pub fn record_nexus_fee_event(event: NexusFeeEvent) {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&RBC_STATUS_TEST_LOCK) else {
+        return;
+    };
     let mut guard = nexus_fee_slot()
         .lock()
         .expect("nexus fee status mutex poisoned");
@@ -2427,6 +2431,10 @@ fn update_staking_lane<F>(lane_id: LaneId, mut update: F)
 where
     F: FnMut(&mut NexusStakingLaneSnapshot),
 {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&RBC_STATUS_TEST_LOCK) else {
+        return;
+    };
     let mut guard = nexus_staking_slot()
         .lock()
         .expect("nexus staking status mutex poisoned");
@@ -2507,13 +2515,23 @@ pub fn nexus_staking_snapshot() -> NexusStakingSnapshot {
 }
 
 /// Shared lock for tests that mutate global Nexus fee state.
+#[cfg(not(test))]
 pub fn nexus_fee_test_lock() -> &'static std::sync::Mutex<()> {
     static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }
 
+/// Shared lock for tests that mutate global Nexus fee state.
+#[cfg(test)]
+pub(crate) fn nexus_fee_test_lock() -> &'static NexusFeeTestLock {
+    static LOCK: NexusFeeTestLock = NexusFeeTestLock;
+    &LOCK
+}
+
 /// Clear Nexus economics snapshots (test-only helper).
 pub fn reset_nexus_economics_for_tests() {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     {
         let mut guard = nexus_fee_slot()
             .lock()
@@ -6700,6 +6718,10 @@ pub fn set_lane_activity_snapshot(entries: Vec<LaneActivitySnapshot>) {
 
 /// Replace the aggregate pipeline-execution snapshot used by `/v1/sumeragi/status`.
 pub fn set_pipeline_execution_snapshot(snapshot: PipelineExecutionSnapshot) {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&RBC_STATUS_TEST_LOCK) else {
+        return;
+    };
     *pipeline_execution_slot().lock().unwrap() = snapshot;
 }
 
@@ -7957,6 +7979,7 @@ pub(crate) fn reset_qc_latency_stats_for_tests() {
 
 #[cfg(test)]
 pub(crate) fn reset_rbc_backlog_stats_for_tests() {
+    let _guard = rbc_status_test_guard();
     *rbc_backlog_slot().lock().unwrap() = RbcBacklogSnapshot::default();
     lane_activity_slot().lock().unwrap().clear();
     *pipeline_execution_slot().lock().unwrap() = PipelineExecutionSnapshot::default();
@@ -8027,11 +8050,50 @@ enum TestLockOwner {
 }
 
 #[cfg(test)]
+thread_local! {
+    static TEST_LOCK_OWNER_OVERRIDE: std::cell::Cell<Option<TestLockOwner>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub(crate) struct TestLockOwnerToken(TestLockOwner);
+
+#[cfg(test)]
 impl TestLockOwner {
     fn current() -> Self {
+        if let Some(owner) = TEST_LOCK_OWNER_OVERRIDE.with(std::cell::Cell::get) {
+            return owner;
+        }
         // Use task IDs so the guard remains reentrant even when async tests hop threads.
         tokio::task::try_id().map_or_else(|| Self::Thread(std::thread::current().id()), Self::Task)
     }
+}
+
+#[cfg(test)]
+pub(crate) fn current_test_lock_owner_token() -> TestLockOwnerToken {
+    TestLockOwnerToken(TestLockOwner::current())
+}
+
+#[cfg(test)]
+struct TestLockOwnerOverrideGuard(Option<TestLockOwner>);
+
+#[cfg(test)]
+impl Drop for TestLockOwnerOverrideGuard {
+    fn drop(&mut self) {
+        TEST_LOCK_OWNER_OVERRIDE.with(|slot| slot.set(self.0));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_lock_owner<R>(token: TestLockOwnerToken, f: impl FnOnce() -> R) -> R {
+    let previous = TEST_LOCK_OWNER_OVERRIDE.with(|slot| {
+        let previous = slot.get();
+        slot.set(Some(token.0));
+        previous
+    });
+    let _guard = TestLockOwnerOverrideGuard(previous);
+    f()
 }
 
 #[cfg(test)]
@@ -8053,6 +8115,23 @@ struct TestLock {
 pub(crate) struct TestLockGuard {
     lock: &'static TestLock,
     owner: TestLockOwner,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NexusFeeTestLock;
+
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) struct NexusFeeTestGuard(TestLockGuard);
+
+#[cfg(test)]
+impl NexusFeeTestLock {
+    pub(crate) fn lock(&'static self) -> Result<NexusFeeTestGuard, std::convert::Infallible> {
+        Ok(NexusFeeTestGuard(reentrant_test_guard(
+            &RBC_STATUS_TEST_LOCK,
+        )))
+    }
 }
 
 #[cfg(test)]
@@ -8868,6 +8947,22 @@ mod tests {
         assert_eq!(super::test_lock_depth(&super::COMMIT_HISTORY_TEST_LOCK), 1);
         drop(outer);
         assert_eq!(super::test_lock_depth(&super::COMMIT_HISTORY_TEST_LOCK), 0);
+    }
+
+    #[test]
+    fn test_lock_owner_token_allows_spawned_thread_to_reenter() {
+        let outer = super::commit_timing_test_guard();
+        let token = super::current_test_lock_owner_token();
+        let handle = std::thread::spawn(move || {
+            super::with_test_lock_owner(token, || {
+                let _inner = super::commit_timing_test_guard();
+                super::test_lock_depth(&super::COMMIT_TIMING_TEST_LOCK)
+            })
+        });
+
+        assert_eq!(handle.join().expect("thread should finish"), 2);
+        assert_eq!(super::test_lock_depth(&super::COMMIT_TIMING_TEST_LOCK), 1);
+        drop(outer);
     }
 
     #[test]

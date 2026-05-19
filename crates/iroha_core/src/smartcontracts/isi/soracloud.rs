@@ -10895,11 +10895,17 @@ mod tests {
         let params = ram_lfe_bfv_parameters_v1();
         let (_secret_key, _public_key, relinearization_key) =
             keygen_from_seed(&params, b"soracloud-fhe-test-keygen").expect("keygen");
+        let degree = usize::from(params.polynomial_degree);
+        let zero_refresh = BfvCiphertext {
+            c0: vec![0; degree],
+            c1: vec![0; degree],
+        };
         BfvEvaluationKeyBundle {
             relinearization_key,
             rotation_keys: vec![BfvRotationKey { rotation_steps: 1 }],
             bootstrap_key: Some(BfvBootstrapKey {
                 key_id: "bootstrap-test-key".to_string(),
+                zero_refresh,
             }),
         }
     }

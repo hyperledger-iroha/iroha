@@ -1025,7 +1025,7 @@ mod tests {
             program_id.clone(),
         );
 
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         register_and_activate_program_policy(&owner, &mut tx, program_policy.clone());
@@ -1150,7 +1150,7 @@ mod tests {
             program_id.clone(),
         );
 
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         register_and_activate_program_policy(&owner, &mut tx, program_policy.clone());
@@ -1206,7 +1206,7 @@ mod tests {
             program_id.clone(),
         );
 
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         register_and_activate_program_policy(&owner, &mut tx, program_policy.clone());
@@ -1448,7 +1448,7 @@ mod tests {
         );
         let output_seed = b"shared-identifier-value";
 
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         register_and_activate_program_policy(&owner, &mut tx, program_policy.clone());
@@ -1480,7 +1480,7 @@ mod tests {
         tx.apply();
         block.commit().expect("commit first block");
 
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 100, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 101, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let replacement_receipt = claim_receipt(
