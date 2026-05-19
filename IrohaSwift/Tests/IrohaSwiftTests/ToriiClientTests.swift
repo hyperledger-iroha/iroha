@@ -698,7 +698,9 @@ final class ToriiClientTests: XCTestCase {
                                                     outputHashHex: String = String(repeating: "22", count: 31) + "23",
                                                     associatedDataHashHex: String = String(repeating: "33", count: 32),
                                                     resolvedAtMs: UInt64 = 42,
-                                                    expiresAtMs: UInt64? = 142) -> ToriiIdentifierResolutionPayload {
+                                                    expiresAtMs: UInt64? = 142,
+                                                    openingSignatureHex: String = String(repeating: "ff", count: 64))
+                                                    -> ToriiIdentifierResolutionPayload {
         ToriiIdentifierResolutionPayload(
             policyId: policyId,
             opaqueId: opaqueId,
@@ -727,7 +729,8 @@ final class ToriiClientTests: XCTestCase {
                 evaluationKeyDigest: evaluationKeyDigestHex,
                 openedOutputHash: outputHashHex,
                 openedAtMs: resolvedAtMs,
-                expiresAtMs: expiresAtMs
+                expiresAtMs: expiresAtMs,
+                signatureHex: openingSignatureHex
             )
         )
     }
@@ -1425,6 +1428,27 @@ final class ToriiClientTests: XCTestCase {
             note: nil
         )
         XCTAssertEqual(try receipt?.verifyAttestation(using: policy), true)
+    }
+
+    func testIdentifierReceiptOpeningSignatureUsesConstVecEncoding() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1",
+            openingSignatureHex: "FAFBFC"
+        )
+
+        let encoded = try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(payload)
+
+        XCTAssertNotNil(
+            encoded.range(of: Data([0x07, 0x03, 0x01, 0xFA, 0x01, 0xFB, 0x01, 0xFC]))
+        )
+        XCTAssertNil(
+            encoded.range(of: Data([0x04, 0x03, 0xFA, 0xFB, 0xFC]))
+        )
     }
 
     func testIdentifierReceiptCanonicalPayloadMatchesLiveToriiFixtureAndRejectsLegacySignature() throws {

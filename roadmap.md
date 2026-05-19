@@ -8,15 +8,17 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 - Replace the current deterministic in-repo BFV evaluator with the full
   BFV-RNS engine planned for release: RNS modulus chains, real relinearization,
-  rotation/Galois-key switching, and cryptographic bootstrap refresh. The
-  current pass makes Torii/Soracloud consume and persist real ciphertext
-  envelopes, but the bootstrap operation is still a validated deterministic
-  refresh placeholder rather than a complete BFV bootstrap circuit.
-- Finish the cross-SDK deterministic BFV-RNS vector corridor once Java tooling is
-  available locally: Kotlin, Java, Swift, and JavaScript now require
-  `RamLfeOutputOpening` on identifier claim/resolve helpers, but the Java/Kotlin
-  suites still need to be run under a JDK and compared against the Rust-generated
-  release vectors.
+  packed-slot Galois-key switching, and full BFV bootstrapping. The current pass
+  makes Torii/Soracloud consume and persist real ciphertext envelopes; Soracloud
+  RotateLeft now requires public rotation-key refresh material for the outer
+  ciphertext-slot envelope, and Bootstrap applies a validated public
+  encrypted-zero refresh key. Those refresh paths are still not a complete
+  BFV-RNS bootstrap or packed-polynomial Galois-switching circuit.
+- Broaden the cross-SDK deterministic BFV-RNS vector corridor: Kotlin, Java,
+  Swift, and JavaScript now require `RamLfeOutputOpening` on identifier
+  claim/resolve helpers and their focused suites are green, but shared release
+  vectors still need to cover the full RNS parameter/key bundle and Soracloud
+  Bootstrap output shape.
 - Broaden validation from the green focused crypto/data-model/core/Torii/daemon
   checks into the next full workspace and SDK corridor, including malformed
   opening signatures, wrong opening verifier keys, parameter/evaluation-key
@@ -39,8 +41,9 @@ Completed history lives in `status.md`. This file should only track unfinished w
   block artifacts independently from global block sealing.
 - Add a multi-peer integration corridor proving two active lanes can advance at
   different heights, produce lane-domain QCs, upgrade FastPQ relay proofs, and
-  merge without waiting for an idle configured lane, including restart/replay
-  coverage for persisted verified relay record hydration.
+  merge without waiting for an idle configured lane. Broaden the unit-level
+  committed-record hydration coverage into restart/replay coverage for
+  persisted verified relay records.
 
 ## Cross-dataspace AMX follow-ups
 
@@ -137,6 +140,23 @@ Completed history lives in `status.md`. This file should only track unfinished w
   dispatch, high-level Poseidon GPU gates, first-level fused gate, and BN254
   word-batch gate. Dashboard and alert wiring for the disable/parity counters
   is now in place; remaining work is CUDA hardware proof.
+- On a CUDA host, capture the hardware inventory (`nvidia-smi`, CUDA toolkit
+  version, driver version, compute capability, and selected gencode), then run
+  the required FASTPQ CUDA parity corridor with `FASTPQ_GPU=gpu` and the
+  appropriate CUDA arch flags. At minimum, cover generic Poseidon GPU filters,
+  BN254 Poseidon word-batch filters, trace Merkle parent-pair parity filters,
+  and the fail-closed telemetry counters. Record exact commands, host details,
+  and pass/fail output in `status.md`.
+- On the same CUDA host, run a release-mode FASTPQ prover comparison with CPU
+  scalar as the reference and CUDA enabled only after preflight passes. Capture
+  a bench/profile sample for `poseidon_merkle_pairs`, confirm no sampled parity
+  failures or accelerator-disable alerts fire during the accepted run, and keep
+  scalar CPU as the authoritative fallback for every mismatch or dispatch
+  error.
+- If CUDA parity fails, leave the CUDA path fail-closed, file the failing vector
+  shape in `status.md`, and add a focused regression before attempting to
+  re-enable larger CUDA batches. Do not treat macOS Metal evidence, CUDA
+  compile-only evidence, or manifest/table checks as CUDA runtime proof.
 - Rebuild the parked low-level Poseidon fused column+parent kernels with real
   Metal and CUDA parity proof before putting them back on the hot path. The
   acceptance run needs scalar-equivalent leaf/parent vectors, a bench sample

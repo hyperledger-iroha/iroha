@@ -1482,7 +1482,7 @@ public final class HttpClientTransportTests {
             ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
 
     final Optional<RamLfeExecuteResponse> response =
-        transport.executeRamLfeProgram("identifier_lookup_retail", null, "0xABCD").join();
+        transport.executeRamLfeProgram("identifier_lookup_retail", "0xABCD").join();
     assert response.isPresent() : "Expected RAM-LFE execute response";
     final RamLfeExecuteResponse execute = response.orElseThrow();
     assert "identifier_lookup_retail".equals(execute.programId()) : "Program id mismatch";
@@ -1510,7 +1510,7 @@ public final class HttpClientTransportTests {
             ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
 
     final Optional<RamLfeExecuteResponse> response =
-        transport.executeRamLfeProgram("identifier_lookup_retail", null, "ABCD").join();
+        transport.executeRamLfeProgram("identifier_lookup_retail", "ABCD").join();
     assert response.isEmpty() : "404 RAM-LFE execute should return Optional.empty";
 
     final TransportRequest request = executor.lastRequest();

@@ -62,7 +62,7 @@ use iroha_crypto::{
     SignatureOf, bfv_programmed_policy_commitment_with_program,
     bfv_programmed_public_parameters_with_program, decode_bfv_programmed_public_parameters,
     default_bfv_programmed_hidden_program, derive_identifier_key_material_from_seed,
-    identifier_hashes_from_output_hash, ram_lfe_output_hash,
+    identifier_hashes_from_output_hash, ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
 };
 use iroha_test_network::{
     Network, NetworkBuilder, genesis_factory_with_post_topology, init_instruction_registry,
@@ -536,12 +536,7 @@ fn realistic_ram_lfe_email_program_id() -> RamLfeProgramId {
 }
 
 fn realistic_ram_lfe_email_bfv_parameters() -> BfvParameters {
-    BfvParameters {
-        polynomial_degree: 64,
-        ciphertext_modulus: 1_u64 << 52,
-        plaintext_modulus: 256,
-        decomposition_base_log: 12,
-    }
+    ram_lfe_bfv_parameters_v1()
 }
 
 fn realistic_ram_lfe_email_policy_bundle(

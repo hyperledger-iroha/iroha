@@ -7090,6 +7090,8 @@ pub struct StateBlock<'state> {
     fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>,
     /// AXT envelope records captured while executing this block.
     axt_envelopes: Vec<AxtEnvelopeRecord>,
+    /// Verified lane relay records captured while executing this block.
+    verified_lane_relay_records: Vec<VerifiedLaneRelayRecord>,
     /// Captured execution witness for the block (SBV‑AM).
     pub(crate) exec_witness: Option<crate::sumeragi::consensus::ExecWitness>,
     /// Gas used so far by accepted transactions in this block.
@@ -7531,6 +7533,11 @@ pub struct StateTransaction<'block, 'state> {
     block_axt_envelopes: &'block mut Vec<AxtEnvelopeRecord>,
     /// Pending AXT envelopes captured during this transaction execution.
     pending_axt_envelopes: Vec<AxtEnvelopeRecord>,
+    /// Block-level accumulator for verified lane relay records that should
+    /// hydrate the runtime relay cache after the block commits.
+    block_verified_lane_relay_records: &'block mut Vec<VerifiedLaneRelayRecord>,
+    /// Verified lane relay records captured during this transaction execution.
+    pending_verified_lane_relay_records: Vec<VerifiedLaneRelayRecord>,
     /// Per-transaction cache to speed up hot permission checks (e.g., trigger authz).
     pub(crate) perm_cache: PermissionCheckCache,
     /// Cache of numeric specs per asset definition id within this transaction.
@@ -19911,6 +19918,7 @@ impl State {
             fastpq_entry_dataspaces: BTreeMap::new(),
             fastpq_witness_context: None,
             axt_envelopes: Vec::new(),
+            verified_lane_relay_records: Vec::new(),
             touched_lanes: BTreeSet::new(),
             exec_witness: None,
             gas_used_in_block: 0,
@@ -20392,6 +20400,7 @@ impl State {
             fastpq_entry_dataspaces: BTreeMap::new(),
             fastpq_witness_context: None,
             axt_envelopes: Vec::new(),
+            verified_lane_relay_records: Vec::new(),
             touched_lanes: BTreeSet::new(),
             exec_witness: None,
             gas_used_in_block: 0,
@@ -21498,8 +21507,10 @@ impl State {
         records
     }
 
-    fn hydrate_verified_lane_relay_records_from_contract_state(&self) -> usize {
-        let records = self.verified_lane_relay_records_from_contract_state();
+    fn hydrate_verified_lane_relay_records(
+        &self,
+        records: impl IntoIterator<Item = VerifiedLaneRelayRecord>,
+    ) -> usize {
         let mut hydrated = 0;
         for record in records {
             if let Err(err) = Self::verify_lane_relay_fastpq_record_fields(&record) {
@@ -21530,6 +21541,12 @@ impl State {
             }
         }
         hydrated
+    }
+
+    fn hydrate_verified_lane_relay_records_from_contract_state(&self) -> usize {
+        self.hydrate_verified_lane_relay_records(
+            self.verified_lane_relay_records_from_contract_state(),
+        )
     }
 
     /// Record a lane relay envelope in the in-memory store after validation.
@@ -25164,6 +25181,8 @@ impl<'state> StateBlock<'state> {
             pending_transfer_transcripts: Vec::new(),
             block_axt_envelopes: &mut self.axt_envelopes,
             pending_axt_envelopes: Vec::new(),
+            block_verified_lane_relay_records: &mut self.verified_lane_relay_records,
+            pending_verified_lane_relay_records: Vec::new(),
             perm_cache: PermissionCheckCache::default(),
             numeric_spec_cache: std::collections::BTreeMap::default(),
             mintable_cache: std::collections::BTreeMap::default(),
@@ -25196,6 +25215,7 @@ impl<'state> StateBlock<'state> {
             confidential_registry_dirty,
             view_lock,
             tiered_backend,
+            verified_lane_relay_records,
             _curr_block,
             #[cfg(feature = "zk-preverify")]
                 zk_dedup: _,
@@ -25291,6 +25311,14 @@ impl<'state> StateBlock<'state> {
             if let Some(err) = commit_error {
                 return Err(err);
             }
+        }
+        if !verified_lane_relay_records.is_empty() {
+            let hydrated =
+                state_ref.hydrate_verified_lane_relay_records(verified_lane_relay_records);
+            debug!(
+                block_height,
+                hydrated, "hydrated verified lane relay records after block commit"
+            );
         }
         state_ref.update_latest_block_header_cache(_curr_block);
         if confidential_registry_dirty {
@@ -31166,6 +31194,12 @@ impl StateTransaction<'_, '_> {
         self.pending_axt_envelopes.push(record);
     }
 
+    /// Stage a verified lane relay record so the committed block can hydrate
+    /// the runtime relay cache after its contract-visible state is durable.
+    pub(crate) fn stage_verified_lane_relay_record(&mut self, record: VerifiedLaneRelayRecord) {
+        self.pending_verified_lane_relay_records.push(record);
+    }
+
     fn update_axt_policies_from_envelope(&mut self, record: &AxtEnvelopeRecord) {
         for handle in &record.handles {
             let dsid = handle.intent.asset_dsid;
@@ -31287,6 +31321,8 @@ impl StateTransaction<'_, '_> {
             mut pending_transfer_transcripts,
             block_axt_envelopes,
             mut pending_axt_envelopes,
+            block_verified_lane_relay_records,
+            mut pending_verified_lane_relay_records,
             implicit_account_creations_in_block,
             implicit_account_creations_in_tx,
             current_lane_id,
@@ -31374,6 +31410,9 @@ impl StateTransaction<'_, '_> {
         }
         if !pending_axt_envelopes.is_empty() {
             block_axt_envelopes.append(&mut pending_axt_envelopes);
+        }
+        if !pending_verified_lane_relay_records.is_empty() {
+            block_verified_lane_relay_records.append(&mut pending_verified_lane_relay_records);
         }
         if implicit_account_creations_in_tx > 0 {
             let new_total = (*implicit_account_creations_in_block)
@@ -38623,6 +38662,39 @@ mod tests {
         envelope.with_fastpq_proof_material(Some(fastpq_proof))
     }
 
+    fn sample_lane_relay_envelope_for_dataspace(
+        height: u64,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) -> LaneRelayEnvelope {
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("non-zero height"),
+            None,
+            None,
+            None,
+            1_700_000_000_000,
+            0,
+        );
+        let settlement = LaneBlockCommitment {
+            block_height: height,
+            lane_id,
+            dataspace_id,
+            tx_count: 1,
+            total_local_micro: 0,
+            total_xor_due_micro: 0,
+            total_xor_after_haircut_micro: 0,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        };
+        let envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
+            .expect("valid dataspace-specific envelope");
+        let fastpq_proof = sample_fastpq_proof_material(&envelope, 0);
+        envelope.with_fastpq_proof_material(Some(fastpq_proof))
+    }
+
     fn sample_fastpq_proof_material(
         envelope: &LaneRelayEnvelope,
         view: u64,
@@ -38663,7 +38735,7 @@ mod tests {
         }
     }
 
-    fn seed_verified_lane_relay_record(state: &State, envelope: &LaneRelayEnvelope) {
+    fn sample_verified_lane_relay_record(envelope: &LaneRelayEnvelope) -> VerifiedLaneRelayRecord {
         let material = envelope
             .fastpq_proof
             .expect("sample envelope must carry FastPQ proof material");
@@ -38674,7 +38746,7 @@ mod tests {
         let claim_digest =
             lane_relay_fastpq_claim_digest(envelope).expect("lane relay claim digest");
         fastpq_binding.claim_digest = hex::encode(claim_digest.as_ref());
-        let record = VerifiedLaneRelayRecord::new(
+        VerifiedLaneRelayRecord::new(
             envelope.clone(),
             material.proof_digest,
             Hash::new(b"state-test-lane-relay-statement").into(),
@@ -38682,13 +38754,124 @@ mod tests {
             material.verified_at_height,
             manifest_root,
             fastpq_binding,
-        );
+        )
+    }
+
+    fn seed_verified_lane_relay_record(
+        state: &State,
+        envelope: &LaneRelayEnvelope,
+    ) -> VerifiedLaneRelayRecord {
+        let record = sample_verified_lane_relay_record(envelope);
         let key = State::verified_lane_relay_state_key(envelope).expect("state key");
-        let json = Json::try_new(record).expect("verified relay record JSON");
+        let json = Json::try_new(record.clone()).expect("verified relay record JSON");
         let encoded = norito::to_bytes(&json).expect("verified relay record state");
         let mut world_block = state.world.block();
         world_block.smart_contract_state.insert(key, encoded);
         world_block.commit();
+        record
+    }
+
+    fn setup_lane_relay_burn_state() -> (State, Vec<KeyPair>) {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.fees.settlement_mode =
+                iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
+            nexus.fees.fee_receipts_activation_height = 2;
+        }
+        let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
+        install_lane_manifest_registry(
+            &state,
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
+        );
+        configure_commit_topology(&state, 1);
+        (state, validator_keypairs)
+    }
+
+    fn encode_verified_lane_relay_record(record: &VerifiedLaneRelayRecord) -> Vec<u8> {
+        let json = Json::try_new(record.clone()).expect("verified relay record JSON");
+        norito::to_bytes(&json).expect("verified relay record state")
+    }
+
+    fn commit_staged_verified_lane_relay_record(state: &State, record: VerifiedLaneRelayRecord) {
+        let key = State::verified_lane_relay_state_key(&record.relay_envelope).expect("state key");
+        let encoded = encode_verified_lane_relay_record(&record);
+        let block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let mut state_block = state.block(block.as_ref().header().clone());
+        let mut state_transaction = state_block.transaction();
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(key, encoded);
+        state_transaction.stage_verified_lane_relay_record(record);
+        state_transaction.apply();
+        state_block.commit().expect("block commit");
+    }
+
+    fn insert_smart_contract_state_payload(state: &State, key: Name, payload: Vec<u8>) {
+        let mut world_block = state.world.block();
+        world_block.smart_contract_state.insert(key, payload);
+        world_block.commit();
+    }
+
+    fn insert_verified_lane_relay_record_state(
+        state: &State,
+        key: Name,
+        record: &VerifiedLaneRelayRecord,
+    ) {
+        insert_smart_contract_state_payload(state, key, encode_verified_lane_relay_record(record));
+    }
+
+    fn noncanonical_verified_lane_relay_state_key(suffix: &str) -> Name {
+        format!("{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_{suffix}")
+            .parse()
+            .expect("noncanonical verified relay state key")
+    }
+
+    fn assert_corrupted_contract_state_relay_record_is_ignored(
+        mutate: impl FnOnce(&mut VerifiedLaneRelayRecord),
+    ) {
+        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+        let envelope = sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap)
+            .with_manifest_root(Some([0x44; 32]));
+        let mut record = sample_verified_lane_relay_record(&envelope);
+        mutate(&mut record);
+        let key = State::verified_lane_relay_state_key(&envelope).expect("state key");
+        let encoded = encode_verified_lane_relay_record(&record);
+
+        let mut world_block = state.world.block();
+        world_block.smart_contract_state.insert(key, encoded);
+        world_block.commit();
+
+        assert!(
+            state.merge_entry_candidates_from_lane_relays().is_empty(),
+            "corrupted persisted relay record must not produce merge candidates"
+        );
+        assert!(
+            state.lane_relay_snapshot().is_empty(),
+            "corrupted persisted relay record must not hydrate runtime relay cache"
+        );
+    }
+
+    fn sample_verified_lane_relay_record_for_merge_candidate_test()
+    -> (State, LaneRelayEnvelope, VerifiedLaneRelayRecord) {
+        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+        let envelope = sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap)
+            .with_manifest_root(Some([0x44; 32]));
+        let record = sample_verified_lane_relay_record(&envelope);
+        (state, envelope, record)
     }
 
     #[test]
@@ -38949,6 +39132,410 @@ mod tests {
             snapshot.merge_hint_root,
             envelope.merge_hint_root().expect("merge hint root")
         );
+    }
+
+    #[test]
+    fn committed_verified_lane_relay_record_hydrates_runtime_cache() {
+        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+
+        let envelope = sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap)
+            .with_manifest_root(Some([0x44; 32]));
+        let record = sample_verified_lane_relay_record(&envelope);
+
+        assert!(state.lane_relay_snapshot().is_empty());
+        commit_staged_verified_lane_relay_record(&state, record);
+
+        assert_eq!(state.lane_relay_snapshot(), vec![envelope]);
+    }
+
+    #[test]
+    fn committed_verified_lane_relay_record_rejects_bad_claim_digest() {
+        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+
+        let envelope = sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap)
+            .with_manifest_root(Some([0x44; 32]));
+        let mut record = sample_verified_lane_relay_record(&envelope);
+        record.fastpq_binding.claim_digest = "00".repeat(32);
+
+        commit_staged_verified_lane_relay_record(&state, record);
+
+        assert!(
+            state.lane_relay_snapshot().is_empty(),
+            "bad claim digest must not hydrate the runtime relay cache"
+        );
+        assert!(
+            state.merge_entry_candidates_from_lane_relays().is_empty(),
+            "bad persisted record must also be ignored by contract-state hydration"
+        );
+        assert!(state.lane_relay_snapshot().is_empty());
+    }
+
+    #[test]
+    fn committed_verified_lane_relay_record_rejects_missing_fastpq_proof() {
+        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+
+        let envelope = sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap)
+            .with_manifest_root(Some([0x44; 32]));
+        let mut record = sample_verified_lane_relay_record(&envelope);
+        record.relay_envelope.fastpq_proof = None;
+
+        commit_staged_verified_lane_relay_record(&state, record);
+
+        assert!(
+            state.lane_relay_snapshot().is_empty(),
+            "staged records missing FastPQ proof material must not hydrate"
+        );
+        assert!(state.merge_entry_candidates_from_lane_relays().is_empty());
+    }
+
+    #[test]
+    fn committed_verified_lane_relay_record_rejects_zero_manifest_root() {
+        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+
+        let envelope = sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap)
+            .with_manifest_root(Some([0x44; 32]));
+        let mut record = sample_verified_lane_relay_record(&envelope);
+        record.relay_envelope.manifest_root = Some([0; 32]);
+        record.manifest_root = [0; 32];
+
+        commit_staged_verified_lane_relay_record(&state, record);
+
+        assert!(
+            state.lane_relay_snapshot().is_empty(),
+            "staged records with zeroed manifest roots must not hydrate"
+        );
+        assert!(state.merge_entry_candidates_from_lane_relays().is_empty());
+    }
+
+    #[test]
+    fn dropped_verified_lane_relay_transaction_does_not_hydrate_runtime_cache() {
+        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+
+        let envelope = sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap)
+            .with_manifest_root(Some([0x44; 32]));
+        let record = sample_verified_lane_relay_record(&envelope);
+        let key = State::verified_lane_relay_state_key(&envelope).expect("state key");
+        let encoded = encode_verified_lane_relay_record(&record);
+        let block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let mut state_block = state.block(block.as_ref().header().clone());
+        {
+            let mut state_transaction = state_block.transaction();
+            state_transaction
+                .world
+                .smart_contract_state
+                .insert(key.clone(), encoded);
+            state_transaction.stage_verified_lane_relay_record(record);
+        }
+
+        state_block.commit().expect("empty block commit");
+
+        assert!(
+            state.lane_relay_snapshot().is_empty(),
+            "records from dropped transactions must not hydrate runtime relays"
+        );
+        let view = state.view();
+        assert!(
+            view.world.smart_contract_state().get(&key).is_none(),
+            "dropped transaction must not persist the relay record either"
+        );
+    }
+
+    #[test]
+    fn committed_verified_lane_relay_record_does_not_replace_conflicting_cached_relay() {
+        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+
+        let conflicting =
+            sample_lane_relay_envelope_with_view(2, LaneId::new(0), 1, &signers, signers_bitmap)
+                .with_manifest_root(Some([0x44; 32]));
+        state
+            .lane_relays
+            .write()
+            .insert(conflicting.clone())
+            .expect("seed conflicting cached relay");
+        let verified =
+            sample_lane_relay_envelope(2, LaneId::new(0), &signers, full_signer_bitmap(4))
+                .with_manifest_root(Some([0x44; 32]));
+        let record = sample_verified_lane_relay_record(&verified);
+
+        commit_staged_verified_lane_relay_record(&state, record);
+
+        assert_eq!(
+            state.lane_relay_snapshot(),
+            vec![conflicting],
+            "commit hydration must not overwrite conflicting cached relay material"
+        );
+    }
+
+    #[test]
+    fn committed_verified_lane_relay_record_does_not_regress_newer_cached_relay() {
+        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+
+        let newer = sample_lane_relay_envelope(3, LaneId::new(0), &signers, signers_bitmap.clone())
+            .with_manifest_root(Some([0x44; 32]));
+        state
+            .lane_relays
+            .write()
+            .insert(newer.clone())
+            .expect("seed newer cached relay");
+        let older = sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap)
+            .with_manifest_root(Some([0x44; 32]));
+        let record = sample_verified_lane_relay_record(&older);
+
+        commit_staged_verified_lane_relay_record(&state, record);
+
+        assert_eq!(
+            state.lane_relay_snapshot(),
+            vec![newer],
+            "commit hydration must not regress a lane relay cache to an older height"
+        );
+    }
+
+    #[test]
+    fn merge_candidates_ignore_contract_state_record_with_relay_ref_mismatch() {
+        assert_corrupted_contract_state_relay_record_is_ignored(|record| {
+            record.relay_ref.block_height = record.relay_ref.block_height.saturating_add(1);
+        });
+    }
+
+    #[test]
+    fn merge_candidates_ignore_contract_state_record_with_proof_hash_mismatch() {
+        assert_corrupted_contract_state_relay_record_is_ignored(|record| {
+            record.proof_payload_hash = Hash::new(b"corrupted-proof-payload-hash");
+        });
+    }
+
+    #[test]
+    fn merge_candidates_ignore_contract_state_record_with_verified_height_mismatch() {
+        assert_corrupted_contract_state_relay_record_is_ignored(|record| {
+            record.verified_at_height = record.verified_at_height.saturating_add(1);
+        });
+    }
+
+    #[test]
+    fn merge_candidates_ignore_contract_state_record_with_manifest_root_mismatch() {
+        assert_corrupted_contract_state_relay_record_is_ignored(|record| {
+            record.manifest_root[0] ^= 0xFF;
+        });
+    }
+
+    #[test]
+    fn merge_candidates_ignore_contract_state_record_with_source_dsid_mismatch() {
+        assert_corrupted_contract_state_relay_record_is_ignored(|record| {
+            record.fastpq_binding.source_dsid = record.fastpq_binding.source_dsid.saturating_add(1);
+        });
+    }
+
+    #[test]
+    fn merge_candidates_ignore_contract_state_record_with_effect_type_mismatch() {
+        assert_corrupted_contract_state_relay_record_is_ignored(|record| {
+            record.fastpq_binding.verified_effect_type = "nexus_fee_budget".to_owned();
+        });
+    }
+
+    #[test]
+    fn merge_candidates_ignore_contract_state_record_with_noncanonical_claim_digest_case() {
+        assert_corrupted_contract_state_relay_record_is_ignored(|record| {
+            let uppercase = record.fastpq_binding.claim_digest.to_ascii_uppercase();
+            record.fastpq_binding.claim_digest = if uppercase == record.fastpq_binding.claim_digest
+            {
+                "A".repeat(64)
+            } else {
+                uppercase
+            };
+        });
+    }
+
+    #[test]
+    fn merge_candidates_ignore_verified_lane_relay_record_stored_under_another_relay_key() {
+        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+        let key_envelope =
+            sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap.clone())
+                .with_manifest_root(Some([0x44; 32]));
+        let payload_envelope =
+            sample_lane_relay_envelope(3, LaneId::new(0), &signers, signers_bitmap)
+                .with_manifest_root(Some([0x44; 32]));
+        let payload_record = sample_verified_lane_relay_record(&payload_envelope);
+        let key = State::verified_lane_relay_state_key(&key_envelope).expect("state key");
+
+        insert_verified_lane_relay_record_state(&state, key, &payload_record);
+
+        assert!(
+            state.merge_entry_candidates_from_lane_relays().is_empty(),
+            "self-consistent records stored under a different relay key must not hydrate"
+        );
+        assert!(state.lane_relay_snapshot().is_empty());
+    }
+
+    #[test]
+    fn merge_candidates_hydrate_verified_lane_relay_record_despite_spoofed_key_sibling() {
+        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+        let valid_envelope =
+            sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap.clone())
+                .with_manifest_root(Some([0x44; 32]));
+        let spoofed_key_envelope =
+            sample_lane_relay_envelope(3, LaneId::new(0), &signers, signers_bitmap.clone())
+                .with_manifest_root(Some([0x44; 32]));
+        let spoofed_payload_envelope =
+            sample_lane_relay_envelope(4, LaneId::new(0), &signers, signers_bitmap)
+                .with_manifest_root(Some([0x44; 32]));
+        let valid_record = sample_verified_lane_relay_record(&valid_envelope);
+        let spoofed_record = sample_verified_lane_relay_record(&spoofed_payload_envelope);
+
+        insert_verified_lane_relay_record_state(
+            &state,
+            State::verified_lane_relay_state_key(&valid_envelope).expect("valid state key"),
+            &valid_record,
+        );
+        insert_verified_lane_relay_record_state(
+            &state,
+            State::verified_lane_relay_state_key(&spoofed_key_envelope).expect("spoofed state key"),
+            &spoofed_record,
+        );
+
+        let candidates = state.merge_entry_candidates_from_lane_relays();
+
+        assert_eq!(
+            state.lane_relay_snapshot(),
+            vec![valid_envelope],
+            "spoofed sibling state must not block or replace the valid canonical relay"
+        );
+        assert_eq!(candidates.len(), 1);
+    }
+
+    #[test]
+    fn merge_candidates_ignore_verified_lane_relay_record_for_unknown_lane() {
+        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+        let envelope = sample_lane_relay_envelope(2, LaneId::new(1), &signers, signers_bitmap)
+            .with_manifest_root(Some([0x44; 32]));
+        let record = sample_verified_lane_relay_record(&envelope);
+
+        insert_verified_lane_relay_record_state(
+            &state,
+            State::verified_lane_relay_state_key(&envelope).expect("state key"),
+            &record,
+        );
+
+        assert!(
+            state.merge_entry_candidates_from_lane_relays().is_empty(),
+            "records for lanes absent from the runtime Nexus config must not hydrate"
+        );
+        assert!(state.lane_relay_snapshot().is_empty());
+    }
+
+    #[test]
+    fn merge_candidates_ignore_verified_lane_relay_record_for_unexpected_dataspace() {
+        let (state, _) = setup_lane_relay_burn_state();
+        let envelope =
+            sample_lane_relay_envelope_for_dataspace(2, LaneId::new(0), DataSpaceId::new(99))
+                .with_manifest_root(Some([0x44; 32]));
+        let record = sample_verified_lane_relay_record(&envelope);
+
+        insert_verified_lane_relay_record_state(
+            &state,
+            State::verified_lane_relay_state_key(&envelope).expect("state key"),
+            &record,
+        );
+
+        assert!(
+            state.merge_entry_candidates_from_lane_relays().is_empty(),
+            "records whose dataspace disagrees with the runtime lane config must not hydrate"
+        );
+        assert!(state.lane_relay_snapshot().is_empty());
+    }
+
+    #[test]
+    fn merge_candidates_ignore_verified_lane_relay_record_under_noncanonical_state_key() {
+        let (state, _, record) = sample_verified_lane_relay_record_for_merge_candidate_test();
+        let key = noncanonical_verified_lane_relay_state_key("999_999_999_deadbeef");
+
+        insert_verified_lane_relay_record_state(&state, key, &record);
+
+        assert!(
+            state.merge_entry_candidates_from_lane_relays().is_empty(),
+            "prefix-matching records must not hydrate unless the canonical key exists"
+        );
+        assert!(
+            state.lane_relay_snapshot().is_empty(),
+            "noncanonical relay state keys must not populate the runtime relay cache"
+        );
+    }
+
+    #[test]
+    fn merge_candidates_hydrate_verified_lane_relay_record_despite_malformed_prefixed_sibling() {
+        let (state, envelope, record) =
+            sample_verified_lane_relay_record_for_merge_candidate_test();
+        let key = State::verified_lane_relay_state_key(&envelope).expect("state key");
+        let malformed_key = noncanonical_verified_lane_relay_state_key("malformed_1");
+
+        insert_verified_lane_relay_record_state(&state, key, &record);
+        insert_smart_contract_state_payload(&state, malformed_key, vec![0xFF, 0x00, 0xFE]);
+
+        let candidates = state.merge_entry_candidates_from_lane_relays();
+
+        assert_eq!(
+            state.lane_relay_snapshot(),
+            vec![envelope],
+            "malformed prefixed sibling state must not block valid relay hydration"
+        );
+        assert_eq!(candidates.len(), 1);
+    }
+
+    #[test]
+    fn merge_candidates_hydrate_verified_lane_relay_record_despite_corrupted_prefixed_sibling() {
+        let (state, envelope, record) =
+            sample_verified_lane_relay_record_for_merge_candidate_test();
+        let key = State::verified_lane_relay_state_key(&envelope).expect("state key");
+        let corrupted_key = noncanonical_verified_lane_relay_state_key("corrupted_1");
+        let mut corrupted = record.clone();
+        corrupted.proof_payload_hash = Hash::new(b"corrupted-prefixed-sibling");
+
+        insert_verified_lane_relay_record_state(&state, key, &record);
+        insert_verified_lane_relay_record_state(&state, corrupted_key, &corrupted);
+
+        let candidates = state.merge_entry_candidates_from_lane_relays();
+
+        assert_eq!(
+            state.lane_relay_snapshot(),
+            vec![envelope],
+            "corrupted prefixed sibling state must not block valid relay hydration"
+        );
+        assert_eq!(candidates.len(), 1);
+    }
+
+    #[test]
+    fn merge_candidates_ignore_nonprefix_malformed_verified_lane_relay_payload() {
+        let (state, _, _) = sample_verified_lane_relay_record_for_merge_candidate_test();
+        let key: Name = "unrelated_verified_lane_relay_junk"
+            .parse()
+            .expect("unrelated state key");
+
+        insert_smart_contract_state_payload(&state, key, vec![0xFF, 0x00, 0xFE]);
+
+        assert!(
+            state.merge_entry_candidates_from_lane_relays().is_empty(),
+            "non-prefix malformed state must not be scanned as a relay record"
+        );
+        assert!(state.lane_relay_snapshot().is_empty());
     }
 
     #[test]

@@ -1025,7 +1025,7 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
         var openingWriter = OfflineCompactNoritoWriter()
         openingWriter.writeField(openingPayload.data)
         openingWriter.writeField(
-            encodeBytesVec(
+            encodeConstVec(
                 try decodeHex(opening.signature, field: "payload.opening.signature")
             )
         )
@@ -1130,10 +1130,13 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
         return bytes
     }
 
-    private static func encodeBytesVec(_ bytes: Data) -> Data {
+    private static func encodeConstVec(_ bytes: Data) -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeLength(UInt64(bytes.count))
-        writer.writeBytes(bytes)
+        for byte in bytes {
+            writer.writeLength(1)
+            writer.writeUInt8(byte)
+        }
         return writer.data
     }
 
