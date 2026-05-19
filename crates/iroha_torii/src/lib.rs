@@ -3108,6 +3108,15 @@ async fn enforce_json_utf8_charset(
     Ok(response)
 }
 
+async fn capture_response_format(
+    req: axum::http::Request<Body>,
+    next: Next,
+) -> Result<axum::response::Response, Infallible> {
+    let format = utils::negotiate_response_format(req.headers().get(axum::http::header::ACCEPT))
+        .unwrap_or(utils::ResponseFormat::Norito);
+    Ok(utils::with_current_response_format(format, next.run(req)).await)
+}
+
 fn route_timeout_for_path(path: &str) -> Duration {
     match path {
         "/v1/contracts/deploy" | "/v1/contracts/deploy-bundle" | "/v1/contracts/aliases" => {
@@ -11579,6 +11588,7 @@ fn transaction_submission_response(
     routing_decision: RoutingDecision,
     routed_by: &'static str,
     minimal_response: bool,
+    format: ResponseFormat,
 ) -> Response {
     let tx_hash =
         HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint_hash.clone()));
@@ -11606,7 +11616,7 @@ fn transaction_submission_response(
             signer: app.da_receipt_signer.public_key().clone(),
         };
         let receipt = TransactionSubmissionReceipt::sign(payload, &app.da_receipt_signer);
-        (StatusCode::ACCEPTED, NoritoBody(receipt)).into_response()
+        utils::respond_with_status_and_format(StatusCode::ACCEPTED, receipt, format)
     };
     if let Ok(header) = HeaderValue::from_str(&tx_hash_header) {
         response.headers_mut().insert(
@@ -14489,9 +14499,7 @@ fn error_response_with_format(error: Error, format: ResponseFormat) -> Response 
         }
         other => other.into_envelope(),
     };
-    let mut response = crate::utils::respond_with_format(envelope, format);
-    *response.status_mut() = status;
-    response
+    crate::utils::respond_with_status_and_format(status, envelope, format)
 }
 
 #[cfg(feature = "app_api")]
@@ -20750,6 +20758,7 @@ async fn execute_incoming_torii_proxy_request(
                                     routing_decision,
                                     "proxy",
                                     false,
+                                    utils::current_response_format(),
                                 ),
                                 Err(error) => error.into_response(),
                             }
@@ -29344,8 +29353,17 @@ async fn handler_post_vk_update(
 async fn handler_post_transaction(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
-    NoritoVersionedBytes(transaction_bytes): NoritoVersionedBytes,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    crate::utils::extractors::JsonOrNoritoVersioned(transaction): crate::utils::extractors::JsonOrNoritoVersioned<
+        SignedTransaction,
+    >,
 ) -> Result<impl IntoResponse, Error> {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(format) => format,
+        Err(resp) => return Ok(resp),
+    };
+    let transaction_bytes =
+        <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&transaction);
     let transaction = DecodedVersionedSignedTransaction::decode_versioned(&transaction_bytes)
         .map_err(|error| Error::AppQueryValidation {
             code: "invalid_transaction_payload",
@@ -29421,6 +29439,7 @@ async fn handler_post_transaction(
         routing_decision,
         "local",
         transaction_submission_prefers_minimal_response(&headers),
+        format,
     );
     Ok(response)
 }
@@ -29428,8 +29447,15 @@ async fn handler_post_transaction(
 async fn handler_post_transaction_entrypoint(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
-    NoritoVersioned(transaction): NoritoVersioned<TransactionEntrypoint>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    crate::utils::extractors::JsonOrNoritoVersioned(transaction): crate::utils::extractors::JsonOrNoritoVersioned<
+        TransactionEntrypoint,
+    >,
 ) -> Result<impl IntoResponse, Error> {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(format) => format,
+        Err(resp) => return Ok(resp),
+    };
     let token_hdr = headers.get("x-api-token").and_then(|v| v.to_str().ok());
     if app.require_api_token && !app.api_tokens_set.is_empty() {
         let ok = token_hdr.is_some_and(|t| app.api_tokens_set.contains(t));
@@ -29498,6 +29524,7 @@ async fn handler_post_transaction_entrypoint(
         routing_decision,
         "local",
         transaction_submission_prefers_minimal_response(&headers),
+        format,
     );
     Ok(response)
 }
@@ -30779,7 +30806,9 @@ async fn handler_signed_query(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
     crate::NoritoQuery(query_options): crate::NoritoQuery<QueryOptions>,
-    NoritoVersioned(query_request): NoritoVersioned<iroha_data_model::query::SignedQuery>,
+    crate::utils::extractors::JsonOrNoritoVersioned(query_request): crate::utils::extractors::JsonOrNoritoVersioned<
+        iroha_data_model::query::SignedQuery,
+    >,
 ) -> Result<Response, Error> {
     let tel = app.telemetry.clone();
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
@@ -36666,6 +36695,7 @@ impl Torii {
                 inject_remote_addr_header,
             ))
             .layer(axum::middleware::from_fn(enforce_json_utf8_charset))
+            .layer(axum::middleware::from_fn(capture_response_format))
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 record_http_metrics,
@@ -38429,6 +38459,7 @@ fn validation_fail_message(fail: &iroha_data_model::ValidationFail) -> String {
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
+        let format = utils::current_response_format();
         match self {
             Self::Query(err) => {
                 let status = Self::query_status_code(&err);
@@ -38456,7 +38487,7 @@ impl IntoResponse for Error {
                 if !details.is_empty() {
                     envelope = envelope.with_details(details);
                 }
-                let mut response = (status, utils::NoritoBody(envelope)).into_response();
+                let mut response = utils::respond_with_status_and_format(status, envelope, format);
                 let headers = response.headers_mut();
                 if let Some(ctx) = axt {
                     headers.insert(
@@ -38519,28 +38550,28 @@ impl IntoResponse for Error {
                 } else {
                     StatusCode::BAD_REQUEST
                 };
-                (status, utils::NoritoBody(payload)).into_response()
+                utils::respond_with_status_and_format(status, payload, format)
             }
             #[cfg(feature = "app_api")]
             Self::AccountOnboardingValidation { code, message, .. } => {
                 let payload = ErrorEnvelope::new(code, message);
-                (StatusCode::BAD_REQUEST, utils::NoritoBody(payload)).into_response()
+                utils::respond_with_status_and_format(StatusCode::BAD_REQUEST, payload, format)
             }
             Self::AppForbidden { code, message } => {
                 let payload = ErrorEnvelope::new(code, message);
-                (StatusCode::FORBIDDEN, utils::NoritoBody(payload)).into_response()
+                utils::respond_with_status_and_format(StatusCode::FORBIDDEN, payload, format)
             }
             Self::AppNotFound { code, message } => {
                 let payload = ErrorEnvelope::new(code, message);
-                (StatusCode::NOT_FOUND, utils::NoritoBody(payload)).into_response()
+                utils::respond_with_status_and_format(StatusCode::NOT_FOUND, payload, format)
             }
             Self::AppConflict { code, message } => {
                 let payload = ErrorEnvelope::new(code, message);
-                (StatusCode::CONFLICT, utils::NoritoBody(payload)).into_response()
+                utils::respond_with_status_and_format(StatusCode::CONFLICT, payload, format)
             }
             Self::AppServiceUnavailable { code, message } => {
                 let payload = ErrorEnvelope::new(code, message);
-                (StatusCode::SERVICE_UNAVAILABLE, utils::NoritoBody(payload)).into_response()
+                utils::respond_with_status_and_format(StatusCode::SERVICE_UNAVAILABLE, payload, format)
             }
             Self::ProofRateLimited {
                 endpoint,
@@ -38557,26 +38588,29 @@ impl IntoResponse for Error {
                     retry_after_seconds: Some(retry_after_secs),
                     ..Default::default()
                 });
-                let mut resp = utils::NoritoBody(payload).into_response();
-                *resp.status_mut() = StatusCode::TOO_MANY_REQUESTS;
+                let mut resp = utils::respond_with_status_and_format(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    payload,
+                    format,
+                );
                 if let Ok(header) = HeaderValue::from_str(&retry_after_secs.to_string()) {
                     resp.headers_mut()
                         .insert(axum::http::header::RETRY_AFTER, header);
                 }
                 resp
             }
-            Self::LaneLifecycle { reason } => (
+            Self::LaneLifecycle { reason } => utils::respond_with_status_and_format(
                 StatusCode::BAD_REQUEST,
-                utils::NoritoBody(ErrorEnvelope::new("lane_lifecycle_error", reason)),
-            )
-                .into_response(),
+                ErrorEnvelope::new("lane_lifecycle_error", reason),
+                format,
+            ),
             Self::PushIntoQueue {
                 source,
                 backpressure,
             } => {
                 let status = Self::status_code_for_queue_error(source.as_ref());
                 let envelope = Self::queue_error_envelope(source.as_ref(), backpressure);
-                let mut response = (status, utils::NoritoBody(envelope)).into_response();
+                let mut response = utils::respond_with_status_and_format(status, envelope, format);
                 let headers = response.headers_mut();
                 let (reject_code, _detail) = queue_rejection_metadata(source.as_ref());
                 if let Ok(header) = HeaderValue::from_str(reject_code) {
@@ -38617,11 +38651,11 @@ impl IntoResponse for Error {
                     reject_code: Some(code.to_owned()),
                     ..Default::default()
                 };
-                let mut response = (
+                let mut response = utils::respond_with_status_and_format(
                     StatusCode::BAD_REQUEST,
-                    utils::NoritoBody(ErrorEnvelope::new(code, detail).with_details(details)),
-                )
-                    .into_response();
+                    ErrorEnvelope::new(code, detail).with_details(details),
+                    format,
+                );
                 if let Ok(header) = HeaderValue::from_str(code) {
                     response
                         .headers_mut()
@@ -38632,7 +38666,7 @@ impl IntoResponse for Error {
             other => {
                 let status = other.status_code();
                 let payload = other.into_envelope();
-                (status, utils::NoritoBody(payload)).into_response()
+                utils::respond_with_status_and_format(status, payload, format)
             }
         }
     }

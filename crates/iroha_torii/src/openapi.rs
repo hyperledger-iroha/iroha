@@ -1299,20 +1299,24 @@ fn transaction_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
         uri::TRANSACTION.to_owned(),
-        Value::Object(binary_post_operation(
+        Value::Object(versioned_dual_format_post_operation(
             "Transactions",
             "Submit a versioned signed transaction.",
-            "Submit a versioned SignedTransaction encoded as Norito bytes. Internal TransactionEntrypoint envelopes are not accepted on this public route.",
-            "#/components/schemas/JsonValue",
+            "Submit a versioned SignedTransaction encoded as Norito bytes or as canonical Norito JSON. Internal TransactionEntrypoint envelopes are not accepted on this public route.",
+            "#/components/schemas/VersionedSignedTransactionJson",
+            "#/components/schemas/TransactionSubmissionReceipt",
+            202,
         )),
     );
     paths.insert(
         uri::TRANSACTION_ENTRYPOINT.to_owned(),
-        Value::Object(binary_post_operation(
+        Value::Object(versioned_dual_format_post_operation(
             "Transactions",
             "Submit a versioned transaction entrypoint.",
-            "Submit a versioned TransactionEntrypoint encoded as Norito bytes. This route accepts sealed commitment/reveal entrypoints and other non-legacy transaction envelopes.",
-            "#/components/schemas/JsonValue",
+            "Submit a versioned TransactionEntrypoint encoded as Norito bytes or as canonical Norito JSON. This route accepts sealed commitment/reveal entrypoints and other non-legacy transaction envelopes.",
+            "#/components/schemas/VersionedTransactionEntrypointJson",
+            "#/components/schemas/TransactionSubmissionReceipt",
+            202,
         )),
     );
     paths.insert(
@@ -1490,11 +1494,13 @@ fn query_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
         uri::QUERY.to_owned(),
-        Value::Object(binary_post_operation(
+        Value::Object(versioned_dual_format_post_operation(
             "Queries",
             "Submit a signed query.",
-            "Submit a SignedQuery encoded as Norito bytes.",
+            "Submit a SignedQuery encoded as Norito bytes or as canonical Norito JSON.",
+            "#/components/schemas/VersionedSignedQueryJson",
             "#/components/schemas/JsonValue",
+            200,
         )),
     );
     paths
@@ -5599,6 +5605,20 @@ fn single_dual_format_response(schema_ref: &str) -> Map {
     responses
 }
 
+fn dual_format_response(description: &str, schema_ref: &str) -> Value {
+    norito::json!({
+        "description": description,
+        "content": {
+            "application/json": {
+                "schema": { "$ref": schema_ref }
+            },
+            "application/x-norito": {
+                "schema": { "$ref": schema_ref }
+            }
+        }
+    })
+}
+
 fn json_request_body(schema_ref: &str) -> Map {
     let mut body = Map::new();
     body.insert("required".into(), Value::Bool(true));
@@ -5641,7 +5661,6 @@ fn binary_request_body(description: &str) -> Value {
     media.insert("schema".into(), Value::Object(schema));
     let mut content = Map::new();
     content.insert("application/x-norito".into(), Value::Object(media.clone()));
-    content.insert("application/octet-stream".into(), Value::Object(media));
     let mut body = Map::new();
     body.insert("required".into(), Value::Bool(true));
     body.insert("description".into(), Value::String(description.to_owned()));
@@ -5802,6 +5821,48 @@ fn binary_post_operation(
         "responses".into(),
         Value::Object(single_json_response(response_schema_ref)),
     );
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn versioned_dual_format_post_operation(
+    tag: &str,
+    summary: &str,
+    description: &str,
+    request_schema_ref: &str,
+    response_schema_ref: &str,
+    success_status: u16,
+) -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String(tag.to_owned())]),
+    );
+    operation.insert("summary".into(), Value::String(summary.to_owned()));
+    operation.insert("description".into(), Value::String(description.to_owned()));
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_or_norito_request_body(request_schema_ref)),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        success_status.to_string(),
+        dual_format_response("Successful response", response_schema_ref),
+    );
+    responses.insert("400".to_owned(), dual_format_response("Bad request", "#/components/schemas/ErrorResponse"));
+    responses.insert(
+        "406".to_owned(),
+        dual_format_response(
+            "Requested content type is not acceptable; supported: application/json, application/x-norito.",
+            "#/components/schemas/ErrorResponse",
+        ),
+    );
+    responses.insert(
+        "415".to_owned(),
+        dual_format_response("Unsupported request content type.", "#/components/schemas/ErrorResponse"),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
     let mut methods = Map::new();
     methods.insert("post".to_owned(), Value::Object(operation));
     methods
@@ -7613,6 +7674,27 @@ fn health_responses() -> Map {
     responses
 }
 
+fn versioned_json_payload_schema(content_description: &str) -> Value {
+    norito::json!({
+        "type": "object",
+        "required": ["version", "content"],
+        "additionalProperties": false,
+        "properties": {
+            "version": {
+                "oneOf": [
+                    { "type": "integer", "enum": [1] },
+                    { "type": "string", "enum": ["1"] }
+                ],
+                "description": "Versioned JSON payload version."
+            },
+            "content": {
+                "$ref": "#/components/schemas/JsonValue",
+                "description": content_description
+            }
+        }
+    })
+}
+
 fn openapi_schemas() -> Map {
     let mut schemas = Map::new();
     schemas.insert(
@@ -7893,6 +7975,60 @@ fn openapi_schemas() -> Map {
                     "enum": ["cache", "queue", "state"],
                     "description": "Source used by Torii to resolve the status."
                 }
+            }
+        }),
+    );
+    schemas.insert(
+        "VersionedSignedTransactionJson".to_owned(),
+        versioned_json_payload_schema(
+            "Canonical Norito JSON representation of `SignedTransaction`.",
+        ),
+    );
+    schemas.insert(
+        "VersionedTransactionEntrypointJson".to_owned(),
+        versioned_json_payload_schema(
+            "Canonical Norito JSON representation of `TransactionEntrypoint`.",
+        ),
+    );
+    schemas.insert(
+        "VersionedSignedQueryJson".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["version", "content"],
+            "additionalProperties": false,
+            "properties": {
+                "version": {
+                    "type": "string",
+                    "enum": ["canonical"],
+                    "description": "Signed query JSON wire version."
+                },
+                "content": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Canonical SignedQuery payload."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "TransactionSubmissionReceipt".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["payload", "signature"],
+            "additionalProperties": false,
+            "properties": {
+                "payload": {
+                    "type": "object",
+                    "required": ["tx_hash", "entrypoint_hash", "submitted_at_ms", "submitted_at_height", "signer"],
+                    "properties": {
+                        "tx_hash": { "type": "string" },
+                        "entrypoint_hash": { "type": "string" },
+                        "signed_transaction_hash": { "type": ["string", "null"] },
+                        "submitted_at_ms": { "type": "integer", "format": "uint64" },
+                        "submitted_at_height": { "type": "integer", "format": "uint64" },
+                        "signer": { "$ref": "#/components/schemas/JsonValue" }
+                    }
+                },
+                "signature": { "$ref": "#/components/schemas/JsonValue" }
             }
         }),
     );

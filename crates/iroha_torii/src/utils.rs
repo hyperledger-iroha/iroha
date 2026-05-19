@@ -1,14 +1,19 @@
 //! Utilities for Norito encoding and Axum integration.
 
 use std::any::TypeId;
+use std::future::Future;
 
 use axum::{
     http::{HeaderValue, StatusCode, header::CONTENT_TYPE},
     response::{IntoResponse, Response},
 };
-use iroha_data_model::{query::SignedQuery, transaction::SignedTransaction};
+use iroha_data_model::{
+    query::{SignedQuery, json_wrappers::SignedQueryJson},
+    transaction::{SignedTransaction, TransactionEntrypoint},
+};
+use iroha_version::Version;
 use norito::{
-    json::{self, JsonSerialize, Value},
+    json::{self, JsonDeserializeOwned, JsonSerialize, Value},
     prelude::*,
 };
 
@@ -46,6 +51,27 @@ pub enum ResponseFormat {
     Json,
 }
 
+tokio::task_local! {
+    static CURRENT_RESPONSE_FORMAT: ResponseFormat;
+}
+
+/// Run a future with the response format negotiated for the current request.
+pub async fn with_current_response_format<F>(format: ResponseFormat, future: F) -> F::Output
+where
+    F: Future,
+{
+    CURRENT_RESPONSE_FORMAT.scope(format, future).await
+}
+
+/// Return the response format associated with the current request.
+///
+/// Code paths outside an HTTP request use Norito, matching Torii's default wire preference.
+pub fn current_response_format() -> ResponseFormat {
+    CURRENT_RESPONSE_FORMAT
+        .try_with(|format| *format)
+        .unwrap_or(ResponseFormat::Norito)
+}
+
 impl ResponseFormat {
     fn prefer(a: Self, b: Self) -> bool {
         matches!((a, b), (Self::Norito, Self::Json))
@@ -59,7 +85,7 @@ impl ResponseFormat {
 #[allow(clippy::result_large_err)] // callers expect to bubble the full HTTP response on negotiation failure
 pub fn negotiate_response_format(accept: Option<&HeaderValue>) -> Result<ResponseFormat, Response> {
     let Some(header) = accept else {
-        return Ok(ResponseFormat::Json);
+        return Ok(ResponseFormat::Norito);
     };
 
     let raw = match header.to_str() {
@@ -119,9 +145,11 @@ pub fn negotiate_response_format(accept: Option<&HeaderValue>) -> Result<Respons
 
         let format = if is_norito_media_type(media_type) {
             Some(ResponseFormat::Norito)
-        } else if is_json_media_type(media_type)
-            || media_type.eq_ignore_ascii_case("application/*")
+        } else if media_type.eq_ignore_ascii_case("application/*")
             || media_type.eq_ignore_ascii_case("*/*")
+        {
+            Some(ResponseFormat::Norito)
+        } else if is_json_media_type(media_type)
         {
             Some(ResponseFormat::Json)
         } else {
@@ -167,12 +195,24 @@ pub fn respond_with_format<T>(value: T, format: ResponseFormat) -> Response
 where
     T: JsonSerialize + norito::core::NoritoSerialize,
 {
+    respond_with_status_and_format(StatusCode::OK, value, format)
+}
+
+/// Encode a response payload using the given HTTP status and negotiated format.
+pub fn respond_with_status_and_format<T>(
+    status: StatusCode,
+    value: T,
+    format: ResponseFormat,
+) -> Response
+where
+    T: JsonSerialize + norito::core::NoritoSerialize,
+{
     match format {
         ResponseFormat::Norito => {
             let mut bytes = Vec::new();
             match norito::core::to_bytes_in(&value, &mut bytes) {
                 Ok(()) => Response::builder()
-                    .status(StatusCode::OK)
+                    .status(status)
                     .header(CONTENT_TYPE, HeaderValue::from_static(NORITO_MIME_TYPE))
                     .body(axum::body::Body::from(bytes))
                     .expect("build Norito response"),
@@ -186,8 +226,12 @@ where
                 }
             }
         }
-        ResponseFormat::Json => match norito::json::to_value(&value) {
-            Ok(payload) => JsonBody(payload).into_response(),
+        ResponseFormat::Json => match norito::json::to_vec(&value) {
+            Ok(bytes) => Response::builder()
+                .status(status)
+                .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+                .body(axum::body::Body::from(bytes))
+                .expect("build JSON response"),
             Err(err) => {
                 iroha_logger::error!(?err, "failed to serialise response payload");
                 (
@@ -546,6 +590,162 @@ pub mod extractors {
                 )
                     .into_response()),
             }
+        }
+    }
+
+    fn version_from_json_value(value: &Value) -> Option<u8> {
+        match value {
+            Value::Number(number) => u8::try_from(number.as_u64()?).ok(),
+            Value::String(raw) => raw.parse::<u8>().ok(),
+            _ => None,
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn decode_versioned_json<T>(body: &Bytes, expected: &'static str) -> Result<T, Response>
+    where
+        T: JsonDeserializeOwned + Version,
+    {
+        let value = json::from_slice::<Value>(body.as_ref()).map_err(|e| {
+            (StatusCode::BAD_REQUEST, format!("invalid JSON body: {e}")).into_response()
+        })?;
+        let object = value.as_object().ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("invalid JSON body: expected versioned {expected} object"),
+            )
+                .into_response()
+        })?;
+        let version = object
+            .get("version")
+            .and_then(version_from_json_value)
+            .ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    "invalid JSON body: missing numeric `version` field",
+                )
+                    .into_response()
+            })?;
+        if !T::supported_versions().contains(&version) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("unsupported JSON payload version `{version}` for {expected}"),
+            )
+                .into_response());
+        }
+        let content = object.get("content").ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                "invalid JSON body: missing `content` field",
+            )
+                .into_response()
+        })?;
+        json::from_value::<T>(content.clone()).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("invalid JSON {expected} content: {e}"),
+            )
+                .into_response()
+        })
+    }
+
+    /// Helper trait exposing versioned JSON decoding for selected Torii ingress payloads.
+    pub trait SupportsVersionedJsonDecode: Sized {
+        /// Decode a JSON request body carrying a versioned payload.
+        fn decode_versioned_json_body(body: &Bytes) -> Result<Self, Response>;
+    }
+
+    impl SupportsVersionedJsonDecode for SignedTransaction {
+        fn decode_versioned_json_body(body: &Bytes) -> Result<Self, Response> {
+            decode_versioned_json::<Self>(body, "SignedTransaction")
+        }
+    }
+
+    impl SupportsVersionedJsonDecode for TransactionEntrypoint {
+        fn decode_versioned_json_body(body: &Bytes) -> Result<Self, Response> {
+            decode_versioned_json::<Self>(body, "TransactionEntrypoint")
+        }
+    }
+
+    impl SupportsVersionedJsonDecode for SignedQuery {
+        fn decode_versioned_json_body(body: &Bytes) -> Result<Self, Response> {
+            let json = json::from_slice::<SignedQueryJson>(body.as_ref()).map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid JSON SignedQuery body: {e}"),
+                )
+                    .into_response()
+            })?;
+            json.try_into().map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid JSON SignedQuery content: {e}"),
+                )
+                    .into_response()
+            })
+        }
+    }
+
+    /// Extractor for versioned request bodies supporting both Norito and JSON payloads.
+    #[derive(Clone, Copy, Debug)]
+    pub struct JsonOrNoritoVersioned<T>(pub T);
+
+    impl<S, T> FromRequest<S> for JsonOrNoritoVersioned<T>
+    where
+        Bytes: FromRequest<S>,
+        S: Send + Sync,
+        T: iroha_version::codec::DecodeVersioned + SupportsVersionedJsonDecode + 'static,
+    {
+        type Rejection = Response;
+
+        async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+            let declared = req
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|hv| hv.to_str().ok())
+                .map(str::trim)
+                .filter(|ct| !ct.is_empty())
+                .map(str::to_owned);
+
+            let Some(raw) = declared.as_deref() else {
+                return Err((
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    format!(
+                        "versioned requests must set `Content-Type: {}` or `Content-Type: application/json`",
+                        super::NORITO_MIME_TYPE
+                    ),
+                )
+                    .into_response());
+            };
+
+            let body = Bytes::from_request(req, state)
+                .await
+                .map_err(IntoResponse::into_response)?;
+
+            if super::is_norito_media_type(raw) {
+                return <T as iroha_version::codec::DecodeVersioned>::decode_all_versioned(&body)
+                    .map(JsonOrNoritoVersioned)
+                    .map_err(|versioned_err| {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            format!("Could not decode versioned request: {versioned_err}"),
+                        )
+                            .into_response()
+                    });
+            }
+
+            if super::is_json_media_type(raw) {
+                return T::decode_versioned_json_body(&body).map(JsonOrNoritoVersioned);
+            }
+
+            Err((
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                format!(
+                    "unsupported Content-Type `{raw}`; use application/json or {}",
+                    super::NORITO_MIME_TYPE
+                ),
+            )
+                .into_response())
         }
     }
 

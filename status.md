@@ -42,13 +42,16 @@ Last updated: 2026-05-19
   samples. The local test profile uses a larger autoscale target window to
   reflect observed DA/NPoS localnet commit jitter while preserving
   `scale_in_latency_ratio < scale_out_latency_ratio`.
+- A public-testnet-shaped strict localnet variant now starts from three base
+  lanes, expands to elastic lane `3`, waits for expansion status quorum before
+  contraction, and verifies scale-in quorum without retiring base lanes `0..2`.
 - Focused validation is green with
   `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_core --lib autoscale -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_core --lib lane_lifecycle -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-autoscale-params/iroha-test-network cargo build -p irohad --bin iroha3d`,
-  and the single-cycle, repeated-cycle, and strict localnet autoscale tests in
-  `integration_tests --test nexus_and_streaming` using the freshly built
-  `iroha3d` binary.
+  and the single-cycle, repeated-cycle, strict, and public-profile strict
+  localnet autoscale tests in `integration_tests --test nexus_and_streaming`
+  using the freshly built `iroha3d` binary.
 
 ## 2026-05-19 Torii queue default headroom
 
