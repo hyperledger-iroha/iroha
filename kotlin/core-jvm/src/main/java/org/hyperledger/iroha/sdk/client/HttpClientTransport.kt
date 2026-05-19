@@ -69,6 +69,7 @@ class HttpClientTransport(
             encodedVersionedEntrypoint,
             config.requestTimeout(),
             config.defaultHeaders(),
+            config.wireFormatPreference().acceptHeader(),
         )
         notifyRequest(request)
         return executor.execute(request).handle { response, throwable ->
@@ -303,7 +304,13 @@ class HttpClientTransport(
 
     private fun submitWithRetryInternal(transaction: SignedTransaction, hashHex: String, attempt: Int, skipFlush: Boolean): CompletableFuture<ClientResponse> {
         if (!skipFlush) return flushPendingQueue().exceptionally { null }.thenCompose { submitWithRetryInternal(transaction, hashHex, attempt, true) }
-        val request = ToriiRequestBuilder.buildSubmitRequest(config.baseUri(), transaction, config.requestTimeout(), config.defaultHeaders())
+        val request = ToriiRequestBuilder.buildSubmitRequest(
+            config.baseUri(),
+            transaction,
+            config.requestTimeout(),
+            config.defaultHeaders(),
+            config.wireFormatPreference().acceptHeader(),
+        )
         notifyRequest(request)
         return executor.execute(request).handle { response, throwable ->
             if (throwable != null) {

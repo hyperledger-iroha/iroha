@@ -29363,7 +29363,9 @@ async fn handler_post_transaction(
         Err(resp) => return Ok(resp),
     };
     let transaction_bytes =
-        <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&transaction);
+        <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
+            &transaction,
+        );
     let transaction = DecodedVersionedSignedTransaction::decode_versioned(&transaction_bytes)
         .map_err(|error| Error::AppQueryValidation {
             code: "invalid_transaction_payload",
@@ -38571,7 +38573,11 @@ impl IntoResponse for Error {
             }
             Self::AppServiceUnavailable { code, message } => {
                 let payload = ErrorEnvelope::new(code, message);
-                utils::respond_with_status_and_format(StatusCode::SERVICE_UNAVAILABLE, payload, format)
+                utils::respond_with_status_and_format(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    payload,
+                    format,
+                )
             }
             Self::ProofRateLimited {
                 endpoint,

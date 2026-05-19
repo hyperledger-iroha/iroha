@@ -102,7 +102,8 @@ public final class HttpClientTransport implements IrohaClient {
             config.baseUri(),
             encodedVersionedEntrypoint,
             config.requestTimeout(),
-            config.defaultHeaders());
+            config.defaultHeaders(),
+            config.wireFormatPreference().acceptHeader());
     notifyRequest(request);
     return executor
         .execute(request)
@@ -714,7 +715,11 @@ public final class HttpClientTransport implements IrohaClient {
 
     final TransportRequest request =
         ToriiRequestBuilder.buildSubmitRequest(
-            config.baseUri(), transaction, config.requestTimeout(), config.defaultHeaders());
+            config.baseUri(),
+            transaction,
+            config.requestTimeout(),
+            config.defaultHeaders(),
+            config.wireFormatPreference().acceptHeader());
 
     notifyRequest(request);
     return executor

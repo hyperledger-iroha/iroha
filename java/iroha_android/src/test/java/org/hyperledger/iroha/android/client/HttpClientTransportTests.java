@@ -151,7 +151,7 @@ public final class HttpClientTransportTests {
         : "Content-Type header must be Norito";
     final List<String> acceptHeaders = request.headers().get("Accept");
     assert acceptHeaders != null
-        && acceptHeaders.contains("application/x-norito, application/json")
+        && acceptHeaders.contains(WireFormatPreference.NORITO_PREFERRED.acceptHeader())
         : "Accept header must include Norito";
     assert request.uri().toString().equals("https://127.0.0.1:8080/v1/pipeline/transactions")
         : "Submit endpoint must target Torii pipeline route";

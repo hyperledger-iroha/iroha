@@ -24705,6 +24705,12 @@ fn autoscale_managed_lane_for_retire(
             lane.metadata
                 .get(AUTOSCALE_META_MANAGED)
                 .is_some_and(|value| value == "true")
+                && lane.alias == format!("elastic-lane-{}", lane.id.as_u32())
+                && lane
+                    .metadata
+                    .get(AUTOSCALE_META_CREATED_HEIGHT)
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .is_some_and(|height| height > 0)
         })
         .map(|lane| lane.id)
         .max_by_key(|lane| lane.as_u32())
@@ -36521,11 +36527,61 @@ mod tests {
     }
 
     #[test]
+    fn autoscale_scale_in_triggered_rejects_public_window_shortfall_even_with_zero_metrics() {
+        assert!(!autoscale_scale_in_triggered(
+            true,
+            191,
+            192,
+            Some(0),
+            1_100,
+            Some(0),
+            250
+        ));
+        assert!(autoscale_scale_in_triggered(
+            true,
+            192,
+            192,
+            Some(0),
+            1_100,
+            Some(0),
+            250
+        ));
+    }
+
+    #[test]
+    fn autoscale_ratio_permille_sanitizes_adversarial_values() {
+        assert_eq!(autoscale_ratio_permille(f64::NAN), 0);
+        assert_eq!(autoscale_ratio_permille(f64::NEG_INFINITY), 0);
+        assert_eq!(autoscale_ratio_permille(f64::INFINITY), 0);
+        assert_eq!(autoscale_ratio_permille(-0.001), 0);
+        assert_eq!(autoscale_ratio_permille(f64::MAX), u64::MAX);
+        assert_eq!(autoscale_ratio_permille(1.2345), 1_235);
+    }
+
+    #[test]
     fn autoscale_cooldown_active_suppresses_repeated_transitions() {
         assert!(!autoscale_cooldown_active(0, 128, 1));
         assert!(autoscale_cooldown_active(10, 128, 138));
         assert!(!autoscale_cooldown_active(10, 128, 139));
         assert!(autoscale_cooldown_active(u64::MAX - 1, 128, u64::MAX));
+    }
+
+    #[test]
+    fn autoscale_cooldown_zero_only_suppresses_same_height_transition() {
+        assert!(autoscale_cooldown_active(10, 0, 10));
+        assert!(!autoscale_cooldown_active(10, 0, 11));
+    }
+
+    #[test]
+    fn autoscale_p95_rejects_empty_and_uses_ceiling_rank() {
+        assert_eq!(p95_u64(&[]), None);
+        assert_eq!(p95_u64(&[42]), Some(42));
+        assert_eq!(
+            p95_u64(&[
+                100, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19
+            ]),
+            Some(19)
+        );
     }
 
     #[test]
@@ -36538,6 +36594,9 @@ mod tests {
         managed_lane_3
             .metadata
             .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        managed_lane_3
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "42".to_owned());
         let mut managed_lane_4 = LaneConfig {
             id: LaneId::new(4),
             alias: "elastic-lane-4".to_owned(),
@@ -36546,6 +36605,9 @@ mod tests {
         managed_lane_4
             .metadata
             .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        managed_lane_4
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "43".to_owned());
 
         let lanes = vec![
             LaneConfig {
@@ -36574,6 +36636,135 @@ mod tests {
     }
 
     #[test]
+    fn autoscale_retire_selection_rejects_spoofed_managed_metadata_values() {
+        let spoofed_values = ["True", " true", "true ", "1", "yes", ""];
+        let lanes = spoofed_values
+            .iter()
+            .enumerate()
+            .map(|(idx, value)| {
+                let mut lane = LaneConfig {
+                    id: LaneId::new(u32::try_from(idx).expect("lane index")),
+                    alias: format!("spoofed-lane-{idx}"),
+                    ..LaneConfig::default()
+                };
+                lane.metadata
+                    .insert(AUTOSCALE_META_MANAGED.to_owned(), (*value).to_owned());
+                lane.metadata
+                    .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "42".to_owned());
+                lane
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(autoscale_managed_lane_for_retire(&lanes), None);
+    }
+
+    #[test]
+    fn autoscale_retire_selection_requires_valid_created_height_marker() {
+        let mut missing_created_height = LaneConfig {
+            id: LaneId::new(3),
+            alias: "missing-created-height".to_owned(),
+            ..LaneConfig::default()
+        };
+        missing_created_height
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+
+        let mut invalid_created_height = LaneConfig {
+            id: LaneId::new(4),
+            alias: "invalid-created-height".to_owned(),
+            ..LaneConfig::default()
+        };
+        invalid_created_height
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        invalid_created_height
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "later".to_owned());
+
+        let mut zero_created_height = LaneConfig {
+            id: LaneId::new(5),
+            alias: "zero-created-height".to_owned(),
+            ..LaneConfig::default()
+        };
+        zero_created_height
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        zero_created_height
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "0".to_owned());
+
+        let mut valid_elastic_lane = LaneConfig {
+            id: LaneId::new(6),
+            alias: "elastic-lane-6".to_owned(),
+            ..LaneConfig::default()
+        };
+        valid_elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        valid_elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "44".to_owned());
+
+        let lanes = vec![
+            missing_created_height,
+            invalid_created_height,
+            zero_created_height,
+            valid_elastic_lane,
+        ];
+
+        assert_eq!(
+            autoscale_managed_lane_for_retire(&lanes),
+            Some(LaneId::new(6))
+        );
+    }
+
+    #[test]
+    fn autoscale_retire_selection_rejects_alias_spoofing() {
+        let mut spoofed_base_lane = LaneConfig {
+            id: LaneId::new(2),
+            alias: "zk".to_owned(),
+            ..LaneConfig::default()
+        };
+        spoofed_base_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        spoofed_base_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "42".to_owned());
+
+        let mut renamed_elastic_lane = LaneConfig {
+            id: LaneId::new(3),
+            alias: "renamed-elastic".to_owned(),
+            ..LaneConfig::default()
+        };
+        renamed_elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        renamed_elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "43".to_owned());
+
+        let mut valid_elastic_lane = LaneConfig {
+            id: LaneId::new(4),
+            alias: "elastic-lane-4".to_owned(),
+            ..LaneConfig::default()
+        };
+        valid_elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        valid_elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "44".to_owned());
+
+        let lanes = vec![spoofed_base_lane, renamed_elastic_lane, valid_elastic_lane];
+
+        assert_eq!(
+            autoscale_managed_lane_for_retire(&lanes),
+            Some(LaneId::new(4))
+        );
+    }
+
+    #[test]
     fn autoscale_public_testnet_profile_retire_preserves_base_lanes() {
         let mut elastic_lane = LaneConfig {
             id: LaneId::new(3),
@@ -36583,6 +36774,9 @@ mod tests {
         elastic_lane
             .metadata
             .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "42".to_owned());
         let catalog = LaneCatalog::new(
             nonzero!(4_u32),
             vec![

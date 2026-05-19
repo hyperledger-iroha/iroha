@@ -2589,7 +2589,7 @@ final class ToriiClientTests: XCTestCase {
             case "/v1/pipeline/transactions":
                 XCTAssertEqual(request.httpMethod, "POST")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
-                XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito, application/json")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), ToriiWireFormatPreference.noritoPreferred.acceptHeader)
                 let response = HTTPURLResponse(url: request.url!,
                                                statusCode: 202,
                                                httpVersion: nil,
@@ -2614,6 +2614,49 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testSubmitTransactionJsonUsesConfiguredWirePreference() async throws {
+        StubURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/v1/node/capabilities":
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, self.nodeCapabilitiesBody())
+            case "/v1/pipeline/transactions":
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), ToriiWireFormatPreference.jsonOnly.acceptHeader)
+                XCTAssertEqual(self.bodyData(from: request), Data("{\"version\":1,\"content\":{}}".utf8))
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 202,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                let body = """
+                {"payload":{"tx_hash":"json","submitted_at_ms":1,"submitted_at_height":2,"signer":"json-signer"},"signature":"cafe"}
+                """.data(using: .utf8)!
+                return (response, body)
+            default:
+                XCTFail("unexpected request: \(request.url?.path ?? "")")
+                let response = HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!
+                return (response, Data())
+            }
+        }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = ToriiClient(baseURL: URL(string: "https://example.test")!,
+                                 session: session,
+                                 wireFormatPreference: .jsonOnly)
+
+        let payload = try await client.submitTransaction(jsonData: Data("{\"version\":1,\"content\":{}}".utf8))
+        XCTAssertEqual(payload?.hash, "json")
+        XCTAssertEqual(payload?.payload.signer, "json-signer")
+        XCTAssertEqual(payload?.signature, "cafe")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testSubmitTransactionEntrypointAsync() async throws {
         StubURLProtocol.handler = { request in
             switch request.url?.path {
@@ -2626,7 +2669,7 @@ final class ToriiClientTests: XCTestCase {
             case "/v1/pipeline/transaction-entrypoints":
                 XCTAssertEqual(request.httpMethod, "POST")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
-                XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito, application/json")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), ToriiWireFormatPreference.noritoPreferred.acceptHeader)
                 XCTAssertEqual(self.bodyData(from: request), Data([0xAA, 0xBB]))
                 let response = HTTPURLResponse(url: request.url!,
                                                statusCode: 202,
@@ -2663,7 +2706,7 @@ final class ToriiClientTests: XCTestCase {
                 return (response, self.nodeCapabilitiesBody())
             case "/v1/pipeline/transactions":
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
-                XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito, application/json")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), ToriiWireFormatPreference.noritoPreferred.acceptHeader)
                 let headers = [
                     "Content-Type": "application/json",
                     "x-iroha-reject-code": "PRTRY:TX_SIGNATURE_MISSING"
@@ -10415,7 +10458,7 @@ id: 88
             case "/v1/pipeline/transactions":
                 XCTAssertEqual(request.httpMethod, "POST")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
-                XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito, application/json")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), ToriiWireFormatPreference.noritoPreferred.acceptHeader)
                 XCTAssertEqual(self.bodyData(from: request), Data([0x01, 0x02]))
                 let response = HTTPURLResponse(url: request.url!,
                                                statusCode: 202,

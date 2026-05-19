@@ -149,8 +149,7 @@ pub fn negotiate_response_format(accept: Option<&HeaderValue>) -> Result<Respons
             || media_type.eq_ignore_ascii_case("*/*")
         {
             Some(ResponseFormat::Norito)
-        } else if is_json_media_type(media_type)
-        {
+        } else if is_json_media_type(media_type) {
             Some(ResponseFormat::Json)
         } else {
             None
@@ -1272,10 +1271,23 @@ pub mod extractors {
         }
 
         #[test]
-        fn negotiate_accept_header_defaults_json() {
+        fn negotiate_accept_header_honors_json() {
             let header = HeaderValue::from_static("application/json");
             let format = super::super::negotiate_response_format(Some(&header)).expect("format");
             assert_eq!(format, super::super::ResponseFormat::Json);
+        }
+
+        #[test]
+        fn negotiate_accept_header_defaults_norito() {
+            let format = super::super::negotiate_response_format(None).expect("format");
+            assert_eq!(format, super::super::ResponseFormat::Norito);
+        }
+
+        #[test]
+        fn negotiate_accept_header_wildcard_defaults_norito() {
+            let header = HeaderValue::from_static("*/*");
+            let format = super::super::negotiate_response_format(Some(&header)).expect("format");
+            assert_eq!(format, super::super::ResponseFormat::Norito);
         }
 
         #[test]

@@ -39,7 +39,7 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
  */
 public final class NoritoRpcClient {
 
-  static final String DEFAULT_ACCEPT = "application/x-norito";
+  static final String DEFAULT_ACCEPT = WireFormatPreference.NORITO_PREFERRED.acceptHeader();
   private static final String DEFAULT_CONTENT_TYPE = "application/x-norito";
   private static final String RPC_CALL_SIGNAL = "android.norito_rpc.call";
   private static final String REDACTION_FAILURE_SIGNAL = "android.telemetry.redaction.failure";
@@ -54,6 +54,7 @@ public final class NoritoRpcClient {
   private final HttpTransportExecutor transportExecutor;
   private final List<ClientObserver> observers;
   private final NoritoRpcFlowController flowController;
+  private final WireFormatPreference wireFormatPreference;
   private final AtomicBoolean deviceProfileEmitted = new AtomicBoolean(false);
 
   private NoritoRpcClient(final Builder builder) {
@@ -88,6 +89,7 @@ public final class NoritoRpcClient {
         builder.flowController != null
             ? builder.flowController
             : NoritoRpcFlowController.unlimited();
+    this.wireFormatPreference = builder.wireFormatPreference;
   }
 
   /** Creates a new builder for {@link NoritoRpcClient}. */
@@ -98,6 +100,11 @@ public final class NoritoRpcClient {
   /** Returns the base URI used to resolve request paths. */
   public URI baseUri() {
     return baseUri;
+  }
+
+  /** Returns the request negotiation preference used when no Accept override is supplied. */
+  public WireFormatPreference wireFormatPreference() {
+    return wireFormatPreference;
   }
 
   /** Issues a Norito RPC call with default request options. */
@@ -138,9 +145,7 @@ public final class NoritoRpcClient {
           final String message =
               "Norito RPC request failed with status "
                   + response.statusCode()
-                  + (response.body().length == 0
-                      ? ""
-                      : ": " + new String(response.body(), StandardCharsets.UTF_8));
+                  + responseBodyDetail(response.body());
           final NoritoRpcException error = new NoritoRpcException(message);
           notifyFailure(request, error);
           emitRpcCallTelemetry(
@@ -357,7 +362,7 @@ public final class NoritoRpcClient {
     final Map<String, String> merged = new LinkedHashMap<>(defaultHeaders);
     options.headers().forEach(merged::put);
     ensureContentType(merged);
-    applyAcceptHeader(merged, options);
+    applyAcceptHeader(merged, options, wireFormatPreference);
     return merged;
   }
 
@@ -368,7 +373,9 @@ public final class NoritoRpcClient {
   }
 
   private static void applyAcceptHeader(
-      final Map<String, String> headers, final NoritoRpcRequestOptions options) {
+      final Map<String, String> headers,
+      final NoritoRpcRequestOptions options,
+      final WireFormatPreference wireFormatPreference) {
     if (options.acceptConfigured()) {
       final String currentKey = findHeader(headers, "Accept");
       if (options.accept() == null) {
@@ -385,8 +392,34 @@ public final class NoritoRpcClient {
       return;
     }
     if (findHeader(headers, "Accept") == null) {
-      headers.put("Accept", DEFAULT_ACCEPT);
+      headers.put("Accept", wireFormatPreference.acceptHeader());
     }
+  }
+
+  private static String responseBodyDetail(final byte[] body) {
+    if (body.length == 0) {
+      return "";
+    }
+    final String text = new String(body, StandardCharsets.UTF_8).trim();
+    if (!text.isEmpty() && isPrintableText(text)) {
+      return ": " + text;
+    }
+    final int limit = Math.min(body.length, 256);
+    final StringBuilder hex = new StringBuilder(limit * 2);
+    for (int i = 0; i < limit; i++) {
+      hex.append(String.format("%02x", body[i] & 0xff));
+    }
+    return body.length > limit ? ": body_hex=" + hex + "..." : ": body_hex=" + hex;
+  }
+
+  private static boolean isPrintableText(final String text) {
+    for (int i = 0; i < text.length(); i++) {
+      final char ch = text.charAt(i);
+      if (Character.isISOControl(ch) && ch != '\n' && ch != '\r' && ch != '\t') {
+        return false;
+      }
+    }
+    return true;
   }
 
   private static String findHeader(final Map<String, String> headers, final String needle) {
@@ -472,6 +505,7 @@ public final class NoritoRpcClient {
     private HttpTransportExecutor transportExecutor;
     private final List<ClientObserver> observers = new ArrayList<>();
     private NoritoRpcFlowController flowController = NoritoRpcFlowController.unlimited();
+    private WireFormatPreference wireFormatPreference = WireFormatPreference.NORITO_PREFERRED;
 
     private Builder() {}
 
@@ -548,6 +582,11 @@ public final class NoritoRpcClient {
 
     public Builder setMaxConcurrentRequests(final int maxConcurrentRequests) {
       this.flowController = NoritoRpcFlowController.semaphore(maxConcurrentRequests);
+      return this;
+    }
+
+    public Builder setWireFormatPreference(final WireFormatPreference preference) {
+      this.wireFormatPreference = Objects.requireNonNull(preference, "preference");
       return this;
     }
 

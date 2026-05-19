@@ -22,7 +22,8 @@ final class ToriiRequestBuilder {
       final URI baseUri,
       final SignedTransaction transaction,
       final Duration timeout,
-      final Map<String, String> extraHeaders) {
+      final Map<String, String> extraHeaders,
+      final String acceptHeader) {
     Objects.requireNonNull(baseUri, "baseUri");
     Objects.requireNonNull(transaction, "transaction");
     final URI target = resolve(baseUri, SUBMIT_PATH);
@@ -39,7 +40,7 @@ final class ToriiRequestBuilder {
             .setUri(target)
             .setMethod("POST")
             .addHeader("Content-Type", "application/x-norito")
-            .addHeader("Accept", "application/x-norito, application/json")
+            .addHeader("Accept", acceptHeader)
             .setBody(norito);
     applyHeaders(builder, extraHeaders);
     applyTimeout(builder, timeout);
@@ -50,7 +51,8 @@ final class ToriiRequestBuilder {
       final URI baseUri,
       final byte[] encodedVersionedEntrypoint,
       final Duration timeout,
-      final Map<String, String> extraHeaders) {
+      final Map<String, String> extraHeaders,
+      final String acceptHeader) {
     Objects.requireNonNull(baseUri, "baseUri");
     Objects.requireNonNull(encodedVersionedEntrypoint, "encodedVersionedEntrypoint");
     if (encodedVersionedEntrypoint.length == 0) {
@@ -66,7 +68,7 @@ final class ToriiRequestBuilder {
             .setUri(target)
             .setMethod("POST")
             .addHeader("Content-Type", "application/x-norito")
-            .addHeader("Accept", "application/x-norito, application/json")
+            .addHeader("Accept", acceptHeader)
             .setBody(body);
     applyHeaders(builder, extraHeaders);
     applyTimeout(builder, timeout);

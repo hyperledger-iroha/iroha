@@ -18,7 +18,8 @@ internal object ToriiRequestBuilder {
         baseUri: URI,
         transaction: SignedTransaction,
         timeout: Duration?,
-        extraHeaders: Map<String, String>?
+        extraHeaders: Map<String, String>?,
+        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader()
     ): TransportRequest {
         val target = resolve(baseUri, SUBMIT_PATH)
         val norito: ByteArray
@@ -38,7 +39,7 @@ internal object ToriiRequestBuilder {
             .setUri(target)
             .setMethod("POST")
             .addHeader("Content-Type", "application/x-norito")
-            .addHeader("Accept", "application/x-norito, application/json")
+            .addHeader("Accept", acceptHeader)
             .setBody(norito)
         applyHeaders(builder, extraHeaders)
         applyTimeout(builder, timeout)
@@ -50,7 +51,8 @@ internal object ToriiRequestBuilder {
         baseUri: URI,
         encodedVersionedEntrypoint: ByteArray,
         timeout: Duration?,
-        extraHeaders: Map<String, String>?
+        extraHeaders: Map<String, String>?,
+        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader()
     ): TransportRequest {
         require(encodedVersionedEntrypoint.isNotEmpty()) {
             "encodedVersionedEntrypoint must not be empty"
@@ -68,7 +70,7 @@ internal object ToriiRequestBuilder {
             .setUri(target)
             .setMethod("POST")
             .addHeader("Content-Type", "application/x-norito")
-            .addHeader("Accept", "application/x-norito, application/json")
+            .addHeader("Accept", acceptHeader)
             .setBody(body)
         applyHeaders(builder, extraHeaders)
         applyTimeout(builder, timeout)
